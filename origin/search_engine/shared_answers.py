@@ -27,6 +27,16 @@ summary is not a tool result, so it is no "source" and narrows no audience. An
 answer quoting it would be collected for whoever can see the other things the
 run read. See `is_scoped_session`.
 
+An @/# mention is no source either (MIP-980): the server puts the mentioned
+object's canonical title into the system prompt, so an answer can repeat the
+title of a private note the run never read. The persisted mentions
+(`AgentRun.mentions`) are therefore audited like sources the run had read
+(`source_visibility.audit_run`): a private note narrows the audience to its
+readers, a to-do to its owner, a mention that cannot be classified withholds the
+answer, and a mention alone never makes a run collectable. A user or a mention
+group is a name every team member can see and narrows nothing among them.
+`rejudge_team_answers` applies the rule to answers collected before it.
+
 Turning the preference back on makes the user's runs COLLECT again, and
 `reshare_team_lane_for_user` (started in the background by the preference
 endpoint, after the commit) indexes their newest ones at once, so the list and
@@ -131,7 +141,14 @@ def still_shareable(runs: QuerySet) -> QuerySet:
     withdrawn, not owned by an opted-out user and not part of a scoped session.
     (The expensive half -- the sources' audience -- needs `judge_run`.) The
     sweep uses this to keep exactly the chunks the chunker would still emit, so
-    it also removes copies collected before a rule existed."""
+    it also removes copies collected before a rule existed.
+
+    It CANNOT re-audit the sources, mentions included (MIP-980): a collected
+    answer whose audience a mention should have narrowed, or whose mentioned
+    object is unclassifiable, stays in the index with its old, wider ACL after
+    this sweep. A reindex pass re-judges the runs it visits (an incremental one
+    only the recent ones), and `rejudge_team_answers` does it for every
+    collected run that carries mentions."""
     return (
         runs.filter(withheld_from_team_answers=False)
         .exclude(user_id__in=opted_out_user_ids())
@@ -179,20 +196,15 @@ def judge_run(run: AgentRun, *, opted_out: set[str]) -> Verdict:
     if is_scoped_session(run.session):
         return Verdict(WITHHELD)
 
-    # Lazy imports: `controller` pulls in the LLM client stack; keep it off
-    # this module's import path (and out of any ingestion import cycle).
-    from origin.search_engine.agent.controller import (  # noqa: PLC0415
-        _hydrate_task_display_ids,
-        reconstruct_sources_for_run,
-    )
-    from origin.search_engine.agent.source_visibility import (  # noqa: PLC0415
-        shareable_acl_for_sources,
-    )
+    # The source audit: the audience is the intersection of what the run READ
+    # and what it was HANDED by @/# mention (MIP-980). Lazy import:
+    # `source_visibility` reaches the controller (the LLM client stack); keep
+    # that off this module's import path and out of any ingestion import cycle.
+    from origin.search_engine.agent.source_visibility import audit_run  # noqa: PLC0415
 
-    sources = _hydrate_task_display_ids(reconstruct_sources_for_run(run))
-    acl = shareable_acl_for_sources(sources, asker_id=str(run.user_id) if run.user_id else None)
+    sources, acl = audit_run(run)
     if acl is None:
-        # Built from private / unclassifiable sources.
+        # Built from private / unclassifiable sources or mentions.
         return Verdict(WITHHELD, sources=sources)
     return Verdict(COLLECT, sources=sources, acl=acl)
 

@@ -649,6 +649,99 @@ def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str
     return out
 
 
+# What each persisted kind must carry to be classified at all (`as_json` keys).
+# Anything missing, or a kind not listed, is not guessed at: the caller
+# withholds the answer.
+_PERSISTED_REQUIRED_KEYS = {
+    "user": ("user_id",),
+    "group": ("group_id",),
+    "task": ("task_id",),
+    "note": ("note_type_label", "note_id"),
+    "chat": ("chat_type_label", "chat_id"),
+    "project": ("project_id",),
+    "todo": ("todo_item_id",),
+}
+
+# Kinds that are a name, not an object: they never become a source. They name a
+# person or a mention group, which the whole (non-guest) team can see.
+_NAME_KINDS = frozenset({"user", "group"})
+
+# The `as_json` keys read back when a mention is rebuilt from the run row.
+_PERSISTED_FIELDS = (
+    "user_id",
+    "task_id",
+    "display_id",
+    "project_id",
+    "milestone_id",
+    "note_type_label",
+    "note_id",
+    "chat_type_label",
+    "chat_id",
+    "group_id",
+    "todo_item_id",
+    "todo_local_date",
+    "todo_completed",
+)
+
+
+def _resolved_from_json(entry: Any) -> ResolvedMention | None:
+    """Rebuild a `ResolvedMention` from its persisted `as_json()` dict, or
+    None when the entry cannot be classified (not a dict, unknown kind, a
+    missing id or label code). Only the keys `as_json` writes are read."""
+    if not isinstance(entry, dict):
+        return None
+    kind = entry.get("kind")
+    required = _PERSISTED_REQUIRED_KEYS.get(kind) if isinstance(kind, str) else None
+    if required is None:
+        return None
+    for key in required:
+        value = entry.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+    if kind == "note" and entry["note_type_label"] not in NOTE_TYPE_LABEL.values():
+        return None
+    if kind == "chat" and entry["chat_type_label"] not in CHAT_TYPE_LABEL.values():
+        return None
+    fields = {key: entry[key] for key in _PERSISTED_FIELDS if key in entry}
+    return ResolvedMention(kind=kind, label=str(entry.get("label") or ""), **fields)
+
+
+def mention_audit_sources(mentions_json: Any, *, team_id: str) -> list[dict[str, Any]] | None:
+    """The sources a run's PERSISTED mentions stand for, for the audience audit
+    of a collected answer (`source_visibility.audit_run`). None means "cannot
+    classify a mention": the caller must not collect the answer.
+
+    A mention puts the object's canonical title in the system prompt, so an
+    answer can repeat it exactly as if the run had read the object with a tool.
+    Task / note / chat / project / to-do mentions therefore become the same
+    source dicts the seed chips use (`build_mention_seed_sources`, i.e. the
+    controller's `_task_source` ... `_todo_source`) and are audited like any
+    other source -- a private note narrows the audience to its readers, a
+    to-do to its owner.
+
+    A user or a mention group is a NAME, visible to the team directory
+    (`_resolve_group`: tenancy is the whole ACL; `_resolve_user` needs a team
+    membership) and refused to guests, who have no `TeamMembers` row. They add
+    one `team_directory` pseudo-source: no narrowing among team members, but a
+    guest who can read the other sources is not shown a name from a directory
+    that is hidden from them.
+    """
+    if mentions_json is None:
+        return []
+    if not isinstance(mentions_json, list):
+        return None  # {} / "" / 0 are not "no mentions": fail closed
+    resolved: list[ResolvedMention] = []
+    for entry in mentions_json:
+        mention = _resolved_from_json(entry)
+        if mention is None:
+            return None
+        resolved.append(mention)
+    sources = build_mention_seed_sources(resolved)
+    if any(m.kind in _NAME_KINDS for m in resolved):
+        sources.append({"entity_type": "team_directory", "team_id": str(team_id)})
+    return sources
+
+
 def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, list[str]]:
     """Derive the `search()` soft-boost params from resolved-mention
     dicts (the `ResolvedMention.as_json()` shape — the same data carried

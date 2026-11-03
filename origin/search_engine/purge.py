@@ -34,7 +34,9 @@ the cheap, DB-only half of the collection rule, `shared_answers.still_shareable`
 An old answer whose *sources* were since deleted keeps its (already-collected)
 text until the run itself is deleted — re-auditing every run's source ACLs per
 sweep is deliberately out of scope (see `source_visibility.py` for the
-collection-time rule).
+collection-time rule). That includes the run's @/# mentions (MIP-980): the sweep
+will not narrow or remove an already-collected answer because of a mention; the
+`rejudge_team_answers` command does that on demand.
 """
 
 from __future__ import annotations
