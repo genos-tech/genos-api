@@ -17,8 +17,10 @@ import hmac
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from django.conf import settings
@@ -64,8 +66,51 @@ def _not_connected() -> Response:
     return Response({"detail": "github_not_connected"}, status=status.HTTP_400_BAD_REQUEST)
 
 
-def _github_get(account: ConnectedAccount, path: str, params: dict | None = None):
-    token = get_valid_access_token(account)
+class _GithubCredential:
+    """A connected GitHub account as ONE request uses it: what the cache keys
+    need (`id`, `ts_updated_at`), the access token, and a tally of the GitHub
+    calls made, for the `gh.links` log line.
+
+    The token is resolved once, by the thread that built this object (the
+    request thread). `get_valid_access_token` can refresh a token and save the
+    account row, which is database work a pool worker must never do; a worker
+    only reads `.token`, and trying to resolve from another thread is an error
+    rather than a silent decrypt (or a save) off the request thread.
+    """
+
+    def __init__(self, account: ConnectedAccount):
+        self.id = account.id
+        self.ts_updated_at = account.ts_updated_at
+        self._account = account
+        self._owner_thread = threading.get_ident()
+        self._token: str | None = None
+        self.upstream = 0
+
+    def resolve(self) -> "_GithubCredential":
+        if self._token is None:
+            if threading.get_ident() != self._owner_thread:
+                raise RuntimeError("GitHub token must be resolved in the request thread")
+            self._token = get_valid_access_token(self._account)
+        return self
+
+    @property
+    def token(self) -> str:
+        if self._token is None:
+            raise RuntimeError("GitHub token not resolved")
+        return self._token
+
+
+def _credential(account) -> _GithubCredential:
+    return account if isinstance(account, _GithubCredential) else _GithubCredential(account)
+
+
+def _github_get(
+    account: ConnectedAccount | _GithubCredential, path: str, params: dict | None = None
+):
+    if isinstance(account, _GithubCredential):
+        token = account.resolve().token
+    else:
+        token = get_valid_access_token(account)
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -954,12 +999,13 @@ class GithubWebhookView(APIView):
             head_ref = ((pr.get("head") or {}).get("ref")) or ""
             html_url = pr.get("html_url") or ""
 
-            # Drop our Redis-cached lookups of this PR / its head branch
-            # so the UI sees the new state on the next fetch. Done for
-            # every `pull_request` action (opened, ready_for_review,
-            # closed, reopened, edited, synchronize, …) since each can
-            # mutate state we cache (state, draft, merged_at, head sha).
-            # Comment events skip this — they don't touch cached fields.
+            # Drop our Redis-cached lookups of this repo's PRs (and, when a
+            # PR is opened or reopened, its branch list) so the UI sees the
+            # new state on the next fetch. Only for the actions that change
+            # what we cache (state, draft, merged_at, title); a push to an
+            # existing PR (`synchronize`) changes none of it, and used to
+            # throw the branch list away on every push. Comment events skip
+            # this too — they don't touch cached fields.
             ref = parse_pr_url_full(html_url)
             # Which tenant this repo may write into. Derived from the PR
             # url rather than trusted from the payload's `repository`
@@ -969,7 +1015,10 @@ class GithubWebhookView(APIView):
             team_ids = []
             if ref is not None:
                 owner_inv, repo_inv, number_inv = ref
-                _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
+                if action in _PR_DATA_ACTIONS:
+                    _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
+                if action in _BRANCH_LIST_ACTIONS:
+                    _invalidate_branch_list(owner_inv, repo_inv)
                 team_ids = _repo_team_ids(owner_inv, repo_inv)
 
             deliveries = None
@@ -1152,14 +1201,30 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 # limit, a 5xx or a timeout says nothing about access and is never cached.
 #
 # Invalidation. A webhook event can no longer name the keys to delete
-# (it does not know which accounts have entries), so each repo carries a
-# generation number that is part of every key; a bump orphans everything
-# cached for that repo, whichever account wrote it. The helpers read the
+# (it does not know which accounts have entries), so each repo carries two
+# generation numbers that are part of the keys: one for its PR lookups, one
+# for its branch list. A bump orphans everything cached under that number
+# for that repo, whichever account wrote it. The helpers read the
 # generation BEFORE calling GitHub and write under that same key, so a
 # fetch that straddles a bump lands under a key nobody reads again.
+#
+# What an event bumps (see `_invalidate_pr_caches`, `_invalidate_branch_list`):
+# a PR changing state, draft flag or title drops the PR lookups; a PR being
+# opened or reopened also drops the branch list; a push (`synchronize`)
+# changes neither, so a busy branch no longer throws the branch list away.
+# GitHub sends no event when a branch is created or deleted, so the branch
+# list is otherwise only ever refreshed by its TTL: a new branch shows up, and
+# a deleted one disappears, within `_BRANCH_CACHE_TTL`, and its head
+# `commit_sha` can be that old.
+#
+# A miss fetches the registered repos in parallel (`_get_all`), so it costs
+# about one GitHub round trip however many repos are registered.
 
-_BRANCH_CACHE_TTL = 60  # seconds — matches the frontend prStatusCache
-_PULL_CACHE_TTL = 60
+_BRANCH_CACHE_TTL = 5 * 60  # seconds; per repo and account, shared by every task
+_PULL_CACHE_TTL = 60  # matches the frontend prStatusCache
+# Most repos fetched at once on a miss. Per request, so the process-wide
+# ceiling is this times the concurrent requests that miss.
+_FETCH_MAX_WORKERS = 6
 # How long "this account can't read that" is remembered. `fresh=1` skips it.
 _DENIED_CACHE_TTL = 10 * 60
 
@@ -1173,45 +1238,55 @@ def _is_denied(cached) -> bool:
     return isinstance(cached, dict) and cached.get("github_refused") is True
 
 
-def _account_scope(account: ConnectedAccount) -> str:
+def _account_scope(account) -> str:
     stamp = account.ts_updated_at
     return f"{account.id}.{int(stamp.timestamp() * 1_000_000) if stamp else 0}"
 
 
-def _generation_key(owner: str, repo: str) -> str:
-    return f"gh:v2:gen:{owner.lower()}:{repo.lower()}"
+# The two counters a repo has: its PR lookups, and its branch list.
+_PRS = "prs"
+_BRANCHES = "branches"
+# `pull_request` webhook actions that change what the PR lookups cache
+# (state, draft flag, merged_at, title), and the ones that may bring a branch
+# the cached branch list does not have. `synchronize` is in neither.
+_PR_DATA_ACTIONS = frozenset(
+    {"opened", "reopened", "closed", "edited", "ready_for_review", "converted_to_draft"}
+)
+_BRANCH_LIST_ACTIONS = frozenset({"opened", "reopened"})
 
 
-def _repo_generation(owner: str, repo: str) -> int:
-    """The repo's current generation; 0 until the first bump (and again if
-    Redis loses the key, which can only resurrect entries no older than
-    their TTL)."""
-    return cache.get(_generation_key(owner, repo)) or 0
+def _generation_key(which: str, owner: str, repo: str) -> str:
+    return f"gh:v2:gen:{which}:{owner.lower()}:{repo.lower()}"
 
 
-def _bump_repo_generation(owner: str, repo: str) -> None:
+def _bump_repo_generation(which: str, owner: str, repo: str) -> None:
     # A fresh timestamp rather than `incr`: it needs no read-modify-write,
     # works on a missing key, and two bumps never collide. No expiry, so the
-    # key is never the first thing a `volatile-*` eviction policy drops.
-    cache.set(_generation_key(owner, repo), time.time_ns(), None)
+    # key is never the first thing a `volatile-*` eviction policy drops. A
+    # repo's missing counter reads as 0 (also if Redis loses the key, which
+    # can only resurrect entries no older than their TTL).
+    cache.set(_generation_key(which, owner, repo), time.time_ns(), None)
 
 
-def _scoped_key(kind: str, account: ConnectedAccount, owner: str, repo: str, *rest) -> str:
-    gen = _repo_generation(owner, repo)
+def _scoped_key(
+    kind: str, which: str, account, owner: str, repo: str, *rest, gen: int | None = None
+) -> str:
+    if gen is None:
+        gen = cache.get(_generation_key(which, owner, repo)) or 0
     tail = "".join(f":{part}" for part in rest)
     return f"gh:v2:{kind}:{_account_scope(account)}:{gen}:{owner.lower()}:{repo.lower()}{tail}"
 
 
-def _branch_cache_key(account: ConnectedAccount, owner: str, repo: str) -> str:
-    return _scoped_key("branches", account, owner, repo)
+def _branch_cache_key(account, owner: str, repo: str, *, gen: int | None = None) -> str:
+    return _scoped_key("branches", _BRANCHES, account, owner, repo, gen=gen)
 
 
-def _pull_cache_key(account: ConnectedAccount, owner: str, repo: str, branch: str) -> str:
-    return _scoped_key("head_pull", account, owner, repo, branch)
+def _pull_cache_key(account, owner: str, repo: str, branch: str) -> str:
+    return _scoped_key("head_pull", _PRS, account, owner, repo, branch)
 
 
-def _pr_by_number_cache_key(account: ConnectedAccount, owner: str, repo: str, number: int) -> str:
-    return _scoped_key("pr_by_number", account, owner, repo, number)
+def _pr_by_number_cache_key(account, owner: str, repo: str, number: int) -> str:
+    return _scoped_key("pr_by_number", _PRS, account, owner, repo, number)
 
 
 def _is_rate_limited(resp) -> bool:
@@ -1245,32 +1320,89 @@ def _is_refusal(resp) -> bool:
     return resp.status_code == 403 and not _is_rate_limited(resp)
 
 
+def _call_github(account, path: str, params: dict | None = None):
+    """One GitHub call from the request thread, tallied on the request's
+    credential (if it has one)."""
+    if isinstance(account, _GithubCredential):
+        account.upstream += 1
+    return _github_get(account, path, params)
+
+
+def _get_all(account: _GithubCredential, calls: list[tuple[str, dict | None]]):
+    """GET each `(path, params)` from GitHub and return the answers in the
+    order asked. More than one runs on a small pool, so N repos cost one
+    round trip, not N.
+
+    The workers only call `_github_get`, with a token resolved here first:
+    no ORM, no cache, no logging off the request thread. An exception in a
+    call is raised from here once the others have finished, as it was when
+    the calls ran one by one."""
+    account.resolve()
+    account.upstream += len(calls)
+    if len(calls) == 1:
+        return [_github_get(account, *calls[0])]
+    with ThreadPoolExecutor(
+        max_workers=min(_FETCH_MAX_WORKERS, len(calls)), thread_name_prefix="gh-links"
+    ) as pool:
+        futures = [pool.submit(_github_get, account, path, params) for path, params in calls]
+        return [future.result() for future in futures]
+
+
+def _branch_lists(
+    account, repos: list[tuple[str, str]], *, bypass_cache: bool = False
+) -> list[list[dict] | None]:
+    """Each repo's branch list, in the order of `repos`: None where GitHub
+    refused this account or errored (the caller skips the repo).
+
+    Cached lists come from two Redis round trips for all the repos together;
+    the repos that miss are fetched in parallel.
+
+    When `bypass_cache=True`, skips the read but still writes the fresh
+    result so subsequent natural fetches within the TTL benefit.
+    """
+    if not repos:
+        return []
+    account = _credential(account)
+    gen_keys = [_generation_key(_BRANCHES, owner, repo) for owner, repo in repos]
+    gens = cache.get_many(gen_keys) or {}
+    keys = [
+        _branch_cache_key(account, owner, repo, gen=gens.get(gen_key) or 0)
+        for (owner, repo), gen_key in zip(repos, gen_keys)
+    ]
+    cached = {} if bypass_cache else (cache.get_many(keys) or {})
+    out: list[list[dict] | None] = [None] * len(repos)
+    misses: list[int] = []
+    for i, key in enumerate(keys):
+        value = cached.get(key)
+        if value is None:
+            misses.append(i)
+        elif not _is_denied(value):
+            out[i] = value
+    if not misses:
+        return out
+    answers = _get_all(
+        account,
+        [(f"/repos/{repos[i][0]}/{repos[i][1]}/branches", {"per_page": 100}) for i in misses],
+    )
+    for i, resp in zip(misses, answers):
+        if resp.ok:
+            out[i] = resp.json() or []
+            cache.set(keys[i], out[i], _BRANCH_CACHE_TTL)
+        elif _is_refusal(resp):
+            cache.set(keys[i], _DENIED, _DENIED_CACHE_TTL)
+    return out
+
+
 def _list_repo_branches(
-    account: ConnectedAccount,
+    account,
     owner: str,
     repo: str,
     *,
     bypass_cache: bool = False,
 ) -> list[dict] | None:
-    """Cached wrapper over `GET /repos/{o}/{r}/branches`. Returns None on
-    upstream error so callers can skip the repo silently.
-
-    When `bypass_cache=True`, skips the read but still writes the fresh
-    result so subsequent natural fetches within the TTL benefit.
-    """
-    key = _branch_cache_key(account, owner, repo)
-    if not bypass_cache:
-        cached = cache.get(key)
-        if cached is not None:
-            return None if _is_denied(cached) else cached
-    resp = _github_get(account, f"/repos/{owner}/{repo}/branches", params={"per_page": 100})
-    if not resp.ok:
-        if _is_refusal(resp):
-            cache.set(key, _DENIED, _DENIED_CACHE_TTL)
-        return None
-    branches = resp.json() or []
-    cache.set(key, branches, _BRANCH_CACHE_TTL)
-    return branches
+    """Cached `GET /repos/{o}/{r}/branches` for one repo. Returns None on
+    upstream error so callers can skip the repo silently."""
+    return _branch_lists(account, [(owner, repo)], bypass_cache=bypass_cache)[0]
 
 
 def _find_pr_for_branch(
@@ -1297,7 +1429,7 @@ def _find_pr_for_branch(
             # Cached payload may legitimately be the sentinel `{}` meaning
             # "this branch has no PR" — normalize that back to None.
             return cached or None
-    resp = _github_get(
+    resp = _call_github(
         account,
         f"/repos/{owner}/{repo}/pulls",
         params={
@@ -1361,7 +1493,7 @@ def _fetch_pr_by_number(
             # transient failure is never mistaken for one and is not
             # cached at all.
             return None if _is_denied(cached) else (cached or None)
-    resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
+    resp = _call_github(account, f"/repos/{owner}/{repo}/pulls/{number}")
     if not resp.ok:
         if _is_refusal(resp):
             cache.set(key, _DENIED, _DENIED_CACHE_TTL)
@@ -1383,16 +1515,18 @@ def _fetch_pr_by_number(
 
 
 def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: str | None) -> None:
-    """Make the next branch / PR lookup for this repo go to GitHub (rather
-    than waiting up to the TTL for the new PR state to show).
+    """Make the next PR lookup for this repo go to GitHub (rather than
+    waiting up to the TTL for the new PR state to show). The branch list is
+    NOT touched: see `_invalidate_branch_list`.
 
-    Called from the `pull_request` webhook dispatch and from
+    Called from the `pull_request` webhook dispatch for the actions that
+    change what we cache (state, draft, title: not `synchronize`) and from
     `reconcile_pr_deliveries`. Comment events (`issue_comment`,
     `pull_request_review_comment`) don't trigger this because they don't
     mutate any of the fields we cache.
 
     The lookups are cached per GitHub account, so their keys cannot be
-    named from here; bumping the repo's generation orphans all of them at
+    named from here; bumping the repo's PR generation orphans all of them at
     once. That is repo-wide: an event for one PR refreshes the repo's other
     PR lookups too, once. `head_ref` is kept for the callers' sake; nothing
     is keyed by it any more. The one per-PR key we still delete is the
@@ -1403,7 +1537,7 @@ def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: s
     invalidation just means an extra TTL cycle of staleness.
     """
     try:
-        _bump_repo_generation(owner, repo)
+        _bump_repo_generation(_PRS, owner, repo)
         if number is not None:
             cache.delete(_pr_head_ref_cache_key(owner, repo, number))
         logger.info("ensure_repo_webhook: invalidated PR caches for %s/%s#%s", owner, repo, number)
@@ -1411,22 +1545,44 @@ def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: s
         logger.exception("PR cache invalidation failed for %s/%s#%s", owner, repo, number)
 
 
+def _invalidate_branch_list(owner: str, repo: str) -> None:
+    """Drop the repo's cached branch lists (every account's). Called when a
+    PR is opened or reopened, which usually means a branch was just pushed;
+    never for a push to an existing PR (`synchronize`)."""
+    try:
+        _bump_repo_generation(_BRANCHES, owner, repo)
+    except Exception:
+        logger.exception("Branch list invalidation failed for %s/%s", owner, repo)
+
+
 def _collect_repo_branches(
-    account: ConnectedAccount,
+    account,
     repos,
     *,
     bypass_cache: bool = False,
 ) -> list[tuple[str, str, list[dict]]]:
-    """Fetch each registered repo's branch list once (Redis-cached).
-    Repos whose branch listing errors (404 no access / 403 rate limit)
-    are skipped silently so one bad repo doesn't poison the result."""
-    out: list[tuple[str, str, list[dict]]] = []
-    for owner, repo in repos:
-        branches = _list_repo_branches(account, owner, repo, bypass_cache=bypass_cache)
-        if branches is None:
-            continue
-        out.append((owner, repo, branches))
-    return out
+    """Fetch each registered repo's branch list once (Redis-cached; the
+    misses in parallel). Repos whose branch listing errors (404 no access /
+    403 rate limit) are skipped silently so one bad repo doesn't poison the
+    result. Output is in the order of `repos`."""
+    repos = list(repos)
+    lists = _branch_lists(account, repos, bypass_cache=bypass_cache)
+    return [
+        (owner, repo, branches)
+        for (owner, repo), branches in zip(repos, lists)
+        if branches is not None
+    ]
+
+
+def _log_links(route: str, account: _GithubCredential) -> None:
+    """One line per request that reached the cache: `hit` when every answer
+    came from Redis, `miss` when GitHub was called, and how many calls."""
+    logger.info(
+        "gh.links route=%s outcome=%s upstream=%d",
+        route,
+        "miss" if account.upstream else "hit",
+        account.upstream,
+    )
 
 
 def _pulls_for_task(
@@ -1536,18 +1692,18 @@ class GithubBranchesForTaskView(APIView):
         account = _connected_account(request.user)
         if account is None:
             return Response({"branches": []})
+        account = _GithubCredential(account)
 
         pattern = _branch_match_re(display_id)
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
 
         matches: list[dict] = []
-        for owner, repo in repos:
-            branches = _list_repo_branches(account, owner, repo, bypass_cache=bypass_cache)
-            if branches is None:
-                # 404 (no access) / 403 (rate limit) / etc. — skip the
-                # repo silently so one bad repo doesn't poison the list.
-                continue
+        # A repo that answers 404 (no access) / 403 (rate limit) / etc. is
+        # left out, so one bad repo doesn't poison the list.
+        for owner, repo, branches in _collect_repo_branches(
+            account, repos, bypass_cache=bypass_cache
+        ):
             for branch in branches:
                 name = branch.get("name") or ""
                 if not pattern.search(name):
@@ -1562,6 +1718,7 @@ class GithubBranchesForTaskView(APIView):
                         "commit_sha": sha,
                     }
                 )
+        _log_links("branches_for_task", account)
         return Response({"branches": matches})
 
 
@@ -1616,11 +1773,13 @@ class GithubPullsForTaskView(APIView):
         account = _connected_account(request.user)
         if account is None:
             return Response({"pulls": []})
+        account = _GithubCredential(account)
 
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
         repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
         pulls = _pulls_for_task(account, task, display_id, repo_branches, bypass_cache=bypass_cache)
+        _log_links("pulls_for_task", account)
         return Response({"pulls": pulls})
 
 
@@ -1684,6 +1843,7 @@ class GithubPullsForTasksView(APIView):
             with_display.append((task, display_id))
         if not with_display:
             return Response({"pulls_by_task": pulls_by_task})
+        account = _GithubCredential(account)
 
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
@@ -1693,4 +1853,5 @@ class GithubPullsForTasksView(APIView):
             pulls_by_task[str(task.task_id)] = _pulls_for_task(
                 account, task, display_id, repo_branches, bypass_cache=bypass_cache
             )
+        _log_links("pulls_for_tasks", account)
         return Response({"pulls_by_task": pulls_by_task})

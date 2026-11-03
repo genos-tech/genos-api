@@ -36,6 +36,7 @@ from origin.views.common import github_views
 from origin.views.common.github_views import (
     _fetch_pr_by_number,
     _find_pr_for_branch,
+    _invalidate_branch_list,
     _invalidate_pr_caches,
     _list_repo_branches,
 )
@@ -563,7 +564,12 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
     def _straddle(self, kind, request, expect_new):
         """An event arrives while the fetch is in flight: GitHub's answer was
         taken before it, so it must not be served after it."""
-        self.world.hooks[kind] = lambda: _invalidate_pr_caches("acme", "rocket", 7, BRANCH)
+
+        def event():  # a PR opened: both counters move
+            _invalidate_pr_caches("acme", "rocket", 7, BRANCH)
+            _invalidate_branch_list("acme", "rocket")
+
+        self.world.hooks[kind] = event
         request()  # answered from the pre-event data
         del self.world.hooks[kind]
         n = self.world.calls_by(TOK_A, kind)
@@ -603,6 +609,10 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
         pulls = self.pulls(self.client_a)
         self.assertEqual({p["state"] for p in pulls}, {"closed"})
         self.assertEqual({p["merged_at"] for p in pulls}, {"2026-11-01T00:00:00Z"})
+        # A close does not add a branch: the branch list is still the cached one.
+        self.assertEqual(len(self.branches(self.client_a)), 1)
+        # A PR being opened does (the new branch just got pushed).
+        self.assertEqual(self.post_webhook("opened").status_code, 200)
         self.assertEqual(len(self.branches(self.client_a)), 2)
 
     def test_an_event_also_drops_the_repos_other_pr_lookups(self):
@@ -636,7 +646,7 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
         )
         self.pulls(self.client_a)
         self.assertEqual(self.world.calls_by(TOK_A, "pulls", "/acme/rocket/"), 1)
-        self.post_webhook("closed", url="https://github.com/acme/other/pull/3", head="x")
+        self.post_webhook("opened", url="https://github.com/acme/other/pull/3", head="x")
         self.assertEqual(self.pulls(self.client_a)[0]["number"], 7)
         # acme/rocket's branch list and PR lookup came from the cache; only
         # the repo that had the event was asked again.

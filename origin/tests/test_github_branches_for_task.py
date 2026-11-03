@@ -65,6 +65,12 @@ class TestBranchesForTaskView(TestCase):
         # Branch list is now Redis-cached. Clear between tests so a
         # cached payload from a prior test doesn't shadow this test's mock.
         cache.clear()
+        # The view resolves the user's GitHub token itself (once per request,
+        # before any parallel fetch), and these accounts store a placeholder
+        # that cannot be decrypted. `_github_get` is what each test fakes.
+        self.enterContext(
+            patch("origin.views.common.github_views.get_valid_access_token", return_value="tok")
+        )
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="branch-test",

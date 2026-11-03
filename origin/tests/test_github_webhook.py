@@ -461,23 +461,28 @@ class TestPullRequestWebhookInvalidatesCaches(TestCase):
     # The branch / PR lookups are cached per connected GitHub account
     # (`gh:v2:<kind>:<account>:<generation>:<owner>:<repo>...`) and the
     # repo's generation is part of every key, so a webhook event can drop
-    # them all without knowing which accounts wrote them: it bumps
-    # `gh:v2:gen:<owner>:<repo>`, and the entries cached under the old
-    # number are never read again. ACCOUNT below is `<id>.<ts_updated_at in
-    # microseconds>` for a row with no timestamp.
+    # them without knowing which accounts wrote them: it bumps
+    # `gh:v2:gen:prs:<owner>:<repo>` (PR lookups) or
+    # `gh:v2:gen:branches:<owner>:<repo>` (the branch list), and the entries
+    # cached under the old number are never read again. ACCOUNT below is
+    # `<id>.<ts_updated_at in microseconds>` for a row with no timestamp.
     ACCOUNT = "00000000-0000-0000-0000-000000000001.0"
 
     @staticmethod
-    def _generation(owner: str, repo: str):
-        return cache.get(f"gh:v2:gen:{owner.lower()}:{repo.lower()}") or 0
+    def _generation(which: str, owner: str, repo: str):
+        return cache.get(f"gh:v2:gen:{which}:{owner.lower()}:{repo.lower()}") or 0
 
     @classmethod
     def _scoped_keys(cls, owner: str, repo: str, branch: str, number: int) -> list[str]:
-        base = f"{cls.ACCOUNT}:{cls._generation(owner, repo)}:{owner.lower()}:{repo.lower()}"
+        """Branch list, branch-based PR lookup, PR by number: each at its
+        counter's CURRENT generation."""
+        tail = f"{owner.lower()}:{repo.lower()}"
+        prs = f"{cls.ACCOUNT}:{cls._generation('prs', owner, repo)}:{tail}"
+        branches = f"{cls.ACCOUNT}:{cls._generation('branches', owner, repo)}:{tail}"
         return [
-            f"gh:v2:branches:{base}",
-            f"gh:v2:head_pull:{base}:{branch}",
-            f"gh:v2:pr_by_number:{base}:{number}",
+            f"gh:v2:branches:{branches}",
+            f"gh:v2:head_pull:{prs}:{branch}",
+            f"gh:v2:pr_by_number:{prs}:{number}",
         ]
 
     @classmethod
@@ -510,12 +515,25 @@ class TestPullRequestWebhookInvalidatesCaches(TestCase):
         # The webhook's own head-ref key is deleted by name, not orphaned.
         self.assertIsNone(cache.get("gh:pr_head_ref:owner:repo:42"))
 
-    def test_pull_request_merged_invalidates_all_pr_caches(self):
+    def test_pull_request_merged_invalidates_the_pr_lookups_but_not_the_branch_list(self):
         # The merge path also needs invalidation — without it the UI
-        # would render "open" for up to 60s after the merge fires.
+        # would render "open" for up to 60s after the merge fires. A merge
+        # does not add a branch, so the repo's branch list is kept.
         self._seed_pr_caches("owner", "repo", "feature/abc", 42)
         self._post(_pr_payload(action="closed", merged=True, head_ref="feature/abc"))
-        self.assertEqual(self._cached_keys_present("owner", "repo", "feature/abc", 42), [])
+        self.assertEqual(
+            self._cached_keys_present("owner", "repo", "feature/abc", 42),
+            [self._scoped_keys("owner", "repo", "feature/abc", 42)[0]],
+        )
+        self.assertIsNone(cache.get("gh:pr_head_ref:owner:repo:42"))
+
+    def test_a_push_to_a_pull_request_drops_nothing(self):
+        # `synchronize` is every push: it changes none of what we cache
+        # (state, draft, merged_at, title, the branch's existence), and it
+        # used to throw the repo's branch list away each time.
+        self._seed_pr_caches("owner", "repo", "feature/abc", 42)
+        self._post(_pr_payload(action="synchronize", merged=False, head_ref="feature/abc"))
+        self.assertEqual(len(self._cached_keys_present("owner", "repo", "feature/abc", 42)), 4)
 
     def test_pull_request_event_only_touches_its_own_repo(self):
         # Seed caches for a second PR in the same repo and for a PR in a
