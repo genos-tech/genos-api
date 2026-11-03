@@ -57,7 +57,13 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
-from apis.request_id import bind_request_id, current_request_id, log_failure, reset_request_id
+from apis.request_id import (
+    bind_request_id,
+    current_request_id,
+    error_response,
+    log_failure,
+    reset_request_id,
+)
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
 from origin.search_engine.agent.controller import (
@@ -1573,6 +1579,48 @@ class AgentAskView(AuthenticatedAPIView):
 # --------------------------------------------------------------------------- #
 
 
+def _approval_gate(run: AgentRun, approval_token: str) -> Response | None:
+    """Why `run` cannot be resumed with `approval_token` right now, or None.
+
+    Status first, then the token: the order the endpoint has always answered
+    in. Shared by the request's first look at the run and by the answer to a
+    request that lost the race to consume the token, so the loser is told
+    exactly what a request arriving a moment later would be told.
+    """
+    if run.status != "awaiting_approval":
+        return Response(
+            {"error": f"run is not awaiting approval (status={run.status})."},
+            status=status.HTTP_409_CONFLICT,
+        )
+    if str(run.pending_approval_token) != approval_token:
+        return Response(
+            {"error": "approval_token does not match."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _lost_the_approval(run_id, approval_token: str) -> Response:
+    """The answer for a /decide/ whose token was consumed (or whose run was
+    changed or deleted) between its read of the run and its own consume.
+
+    Re-reads the run for the current truth: the snapshot the request holds
+    still says "awaiting approval" and would produce a contradictory message.
+    """
+    try:
+        current = AgentRun.objects.filter(run_id=run_id).first()
+    except Exception:  # noqa: BLE001 — the loser's answer is a refusal either way
+        log.exception("Could not re-read run %s after losing its approval", run_id)
+        return Response({"error": "run is not awaiting approval."}, status=status.HTTP_409_CONFLICT)
+    if current is None:
+        # A conversation delete removed the paused run mid-request.
+        return Response({"error": "run not found."}, status=status.HTTP_404_NOT_FOUND)
+    return _approval_gate(current, approval_token) or Response(
+        {"error": "run is not awaiting approval (the approval was already used)."},
+        status=status.HTTP_409_CONFLICT,
+    )
+
+
 class AgentDecideView(AuthenticatedAPIView):
     throttle_classes = with_defaults(AgentThrottle)
 
@@ -1610,26 +1658,41 @@ class AgentDecideView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if run.status != "awaiting_approval":
-            return Response(
-                {"error": f"run is not awaiting approval (status={run.status})."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        if str(run.pending_approval_token) != approval_token:
-            return Response(
-                {"error": "approval_token does not match."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        refusal = _approval_gate(run, approval_token)
+        if refusal is not None:
+            return refusal
 
-        # Consume the token immediately — single-shot. From now on this
-        # run is "running" again; if we crash mid-resume the status
-        # reflects that rather than leaving the row half-stuck.
+        # Consume the token — single-shot, and ATOMIC. The checks above ran
+        # on a snapshot; two requests for one approval (two tabs, a client
+        # retry) can both hold it. So the consume is a compare-and-swap in
+        # one UPDATE: it matches only while the row is STILL awaiting
+        # approval on THIS token, and exactly one request gets the row.
+        # Whoever gets 0 rows lost and must not run the approved write: a
+        # second resume would execute the tool twice.
+        #
+        # From here the run is "running" again; if we crash mid-resume the
+        # status reflects that rather than leaving the row half-stuck.
         try:
-            run.pending_approval_token = None
-            run.status = "running"
-            run.save(update_fields=["pending_approval_token", "status"])
-        except Exception:  # noqa: BLE001
-            log.exception("Failed to consume approval token for run %s", run.run_id)
+            consumed = AgentRun.objects.filter(
+                run_id=run.run_id,
+                status="awaiting_approval",
+                pending_approval_token=run.pending_approval_token,
+            ).update(pending_approval_token=None, status="running")
+        except Exception as e:  # noqa: BLE001
+            # Nothing was consumed, so nothing may resume: the run is still
+            # awaiting approval and the same click can simply be retried.
+            return error_response(
+                f"Failed to consume approval token for run {run.run_id}",
+                e,
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                message="Could not resume this run just now. Nothing was executed; try again.",
+            )
+        if consumed != 1:
+            return _lost_the_approval(run.run_id, approval_token)
+        # Keep the in-memory run in step with the row: it is what the
+        # resumed leg and the stream's close go on to use.
+        run.pending_approval_token = None
+        run.status = "running"
 
         # Touch session last_active_at so the approval round-trip
         # doesn't count against the TTL window.
