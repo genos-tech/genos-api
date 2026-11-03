@@ -310,6 +310,11 @@ def _resolve_user_names(raw: Any, access: LabelAccess) -> list[Any] | None:
     return [names.get(str(item), item) for item in raw]
 
 
+def _resolve_join_request(raw: Any, access: LabelAccess) -> str | None:
+    """`inbox_item_id` of a project join request: who is asking to join what."""
+    return access.join_request_label(raw)
+
+
 def _resolve_label_names(raw: Any, access: LabelAccess) -> list[Any] | None:
     """`label_ids`: a list of project labels, one query. Each id the caller may see
     becomes a name; every other entry stays as the model wrote it."""
@@ -368,6 +373,8 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     "member_ids": _resolve_user_names,
     # `manage_project_labels`: the labels it puts on a project or takes off.
     "label_ids": _resolve_label_names,
+    # `approve_join_request` / `decline_join_request`. Not `item_id`: that name is a to-do.
+    "inbox_item_id": _resolve_join_request,
     "item_id": _resolve_todo_item_title,
     "parent_item_id": _resolve_todo_item_title,
     "milestone_id": _resolve_milestone_title,

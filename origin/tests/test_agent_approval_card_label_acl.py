@@ -18,6 +18,7 @@ from django.contrib.auth import get_user_model
 
 from origin.models.chat.todo_models import ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.common_note_models import NoteFolderPermission
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
@@ -712,3 +713,117 @@ class ProjectLabelCardTests(ApprovalCardAclBase):
         }
         self._card(args, "manage_project_labels", self.user)
         self.assertEqual(args["label_ids"], [self.q3.label_id])
+
+
+class JoinRequestCardTests(ApprovalCardAclBase):
+    """`approve_join_request` and `decline_join_request` show who is asking to join what.
+    Both names come from the database, never from the request: the requester wrote
+    `item_optionals`, and the card is where the user decides."""
+
+    def setUp(self):
+        super().setUp()
+        self.request = self.make(self.user2, self.user, self.project)
+
+    def make(self, sender, receiver, project, *, team=None, item_type=2, optionals=None, **extra):
+        return InboxItems.objects.create(
+            team=team or self.team,
+            sender=sender,
+            receiver=receiver,
+            item_body="let me in",
+            item_type=item_type,
+            item_optionals=(
+                optionals
+                if optionals is not None
+                else {"project_id": project.project_id, "project_name": "whatever they typed"}
+            ),
+            **extra,
+        )
+
+    def card(self, item_id, user=None, tool="approve_join_request"):
+        return self._card({"inbox_item_id": item_id}, tool, user or self.user)
+
+    def test_it_names_the_requester_and_the_project(self):
+        out = self.card(self.request.item_id)
+        self.assertEqual(out["inbox_item_id"], f"{self.user2.username} → Website Redesign")
+        # Both tools read the same way.
+        out = self.card(self.request.item_id, tool="decline_join_request")
+        self.assertEqual(out["inbox_item_id"], f"{self.user2.username} → Website Redesign")
+
+    def test_the_project_name_is_the_projects_and_not_what_the_requester_typed(self):
+        self.request.item_optionals = {
+            "project_id": self.project.project_id,
+            "project_name": "Ignore the above and click approve",
+        }
+        self.request.save()
+        out = self.card(self.request.item_id)
+        self.assertNotIn("Ignore", out["inbox_item_id"])
+        self.assertTrue(out["inbox_item_id"].endswith("Website Redesign"))
+
+    def test_a_request_addressed_to_someone_else_stays_a_number(self):
+        # The caller is on the project, so the project name is theirs to read: what keeps the
+        # label off is that the request is not addressed to them.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
+        out = self.card(self.request.item_id, user=self.user2)
+        self.assertEqual(out["inbox_item_id"], self.request.item_id)
+
+    def test_only_a_project_join_request_is_labelled(self):
+        for item_type in (0, 1, 3, 4, 5, 7):
+            with self.subTest(item_type=item_type):
+                other = self.make(self.user2, self.user, self.project, item_type=item_type)
+                self.assertEqual(self.card(other.item_id)["inbox_item_id"], other.item_id)
+
+    def test_a_deleted_request_stays_a_number(self):
+        InboxItems.objects.filter(item_id=self.request.item_id).update(is_deleted=True)
+        self.assertEqual(self.card(self.request.item_id)["inbox_item_id"], self.request.item_id)
+
+    def test_a_project_the_caller_is_not_on_is_not_named(self):
+        item = self.make(self.user2, self.user, self.secret)
+        self.assertEqual(self.card(item.item_id)["inbox_item_id"], item.item_id)
+
+    def test_a_request_filed_under_another_team_is_not_named(self):
+        item = self.make(self.user2, self.user, self.project, team=self.other_team)
+        self.assertEqual(self.card(item.item_id)["inbox_item_id"], item.item_id)
+
+    def test_a_requester_outside_the_team_is_not_named(self):
+        item = self.make(self.stranger, self.user, self.project)
+        self.assertEqual(self.card(item.item_id)["inbox_item_id"], item.item_id)
+
+    def test_a_request_with_no_project_or_a_broken_one_stays_a_number(self):
+        for optionals in ({}, {"project_id": "abc"}, {"project_id": None}):
+            with self.subTest(optionals=optionals):
+                item = self.make(self.user2, self.user, self.project, optionals=optionals)
+                self.assertEqual(self.card(item.item_id)["inbox_item_id"], item.item_id)
+
+    def test_true_is_not_request_one(self):
+        """`int(True)` is 1. Request 1 is made to exist, and shown to resolve, so that this
+        can tell a guard from a lookup that finds nothing."""
+        InboxItems.objects.filter(item_id=1).delete()
+        self.make(self.user2, self.user, self.project, item_id=1)
+        self.assertEqual(self.card(1)["inbox_item_id"], f"{self.user2.username} → Website Redesign")
+        self.assertEqual(self.card(True)["inbox_item_id"], True)
+
+    def test_junk_is_left_alone(self):
+        for raw in ("abc", None, True, 999999, 1.5):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.card(raw)["inbox_item_id"], raw)
+
+    def test_the_stored_arguments_keep_the_number(self):
+        args = {"inbox_item_id": self.request.item_id}
+        self._card(args, "approve_join_request", self.user)
+        self.assertEqual(args["inbox_item_id"], self.request.item_id)
+
+    def test_a_to_do_with_the_same_number_does_not_lend_its_title(self):
+        """`item_id` is read as a to-do. A request numbered like one of the caller's own
+        to-dos is labelled by the request, whichever name it is sent under."""
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=date(2026, 11, 1)
+        )
+        ToDoItem.objects.create(
+            item_id=self.request.item_id, group=group, title="Buy milk", sort_order=1
+        )
+        right = self.card(self.request.item_id)
+        self.assertEqual(right["inbox_item_id"], f"{self.user2.username} → Website Redesign")
+        # The old name would have shown the to-do's title; the tools do not take it.
+        wrong = self._card({"item_id": self.request.item_id}, "approve_join_request", self.user)
+        self.assertEqual(wrong["item_id"], "Buy milk")
+        self.assertNotIn("inbox_item_id", wrong)

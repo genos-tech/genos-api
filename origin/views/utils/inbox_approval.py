@@ -44,6 +44,19 @@ def already_answered() -> Response:
     )
 
 
+def find_request_item(user, item_id: int, *, item_type: int) -> InboxItems | None:
+    """The request of `item_type` addressed to `user` that `item_id` names, or None.
+
+    The one place that says what counts as a request, for the pages (through
+    `load_request_item`) and for the agent's tools (MIP-882)."""
+    item = InboxItems.objects.filter(
+        item_id=item_id, receiver=user, item_type=item_type, is_deleted=False
+    ).first()
+    if item is None or item.sender_id is None or item.team_id is None:
+        return None
+    return item
+
+
 def load_request_item(request, *, item_type: int) -> tuple[InboxItems | None, Response | None]:
     """The request item `request.data["item_id"]` names, or the response to send."""
     try:
@@ -51,10 +64,8 @@ def load_request_item(request, *, item_type: int) -> tuple[InboxItems | None, Re
     except (TypeError, ValueError):
         return None, Response({"error": "item_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    item = InboxItems.objects.filter(
-        item_id=item_id, receiver=request.user, item_type=item_type, is_deleted=False
-    ).first()
-    if item is None or item.sender_id is None or item.team_id is None:
+    item = find_request_item(request.user, item_id, item_type=item_type)
+    if item is None:
         return None, not_found()
     return item, None
 

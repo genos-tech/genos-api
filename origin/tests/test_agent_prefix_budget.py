@@ -28,9 +28,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # before), and to 122,000 for MIP-882's sprint and project tools (119,270 measured
 # with the project tools), and to 126,000 for MIP-883's note folder, favorite and
 # delete tools (123,487 measured), and to 130,000 for the note sharing, history and
-# restore tools (127,860 measured), each time with the routing cases for them in both
-# languages, as the rule above asks.
-BUDGET_CHARS = 130_000
+# restore tools (127,860 measured), and to 133,000 for the rest of MIP-882's project
+# tools (129,821 measured with the tag and label tools, 130,993 with the join-request
+# ones), each time with the routing cases for them in both languages, as the rule above
+# asks.
+BUDGET_CHARS = 133_000
 
 
 def _declared_chars() -> int:

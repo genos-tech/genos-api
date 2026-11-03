@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 84 agent tools. This exposes 80. The four it leaves out are left out
+Genos has 86 agent tools. This exposes 82. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -1463,6 +1463,37 @@ CATALOG: tuple[McpTool, ...] = (
             "unique in the team) and an optional hex `color`. 'assign' / 'unassign': "
             "`label_ids` on `project_id`. Only the project's owner or an editor may. "
             "Labels can't be renamed or deleted here. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    # Gated like `manage_project_members`, and for the same reason: it lets someone into a
+    # project and this surface has no approval step (MIP-882, Ken's decision 2).
+    McpTool(
+        name="approve_join_request",
+        registry_name="approve_join_request",
+        description=(
+            "Approve someone's request to join a project: they are added and told. "
+            "**This changes who can see and edit the project, and nothing on this "
+            "surface asks the user first**, so it needs a write-scoped API key that its "
+            "owner also opted into destructive tools, the same opt-in a delete needs. "
+            "Read `list_my_inbox` first (`category` 'requests'): a "
+            "join_project_request that is still pending has an `item_id`, which is "
+            "`inbox_item_id` here. Project requests only; team and group-chat "
+            "requests stay in the app. Use `decline_join_request` to say no."
+        ),
+        write=True,
+        destructive=True,
+    ),
+    McpTool(
+        name="decline_join_request",
+        registry_name="decline_join_request",
+        description=(
+            "Decline someone's request to join a project: the request closes and "
+            "they are told. Read `list_my_inbox` first (`category` 'requests'): a "
+            "join_project_request that is still pending has an `item_id`, which is "
+            "`inbox_item_id` here. A request that was already answered can't be "
+            "changed. Project requests only. Use `approve_join_request` to say yes. "
+            "Requires a write-scoped API key."
         ),
         write=True,
     ),
