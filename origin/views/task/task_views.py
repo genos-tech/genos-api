@@ -1149,9 +1149,13 @@ _TEAM_TASK_ROW_FIELDS = (
 
 def _team_task_rows(scope):
     """The tasks of a team-wide list as a queryset, with exactly the columns and
-    the two joins (assignee, and project for `displayId`) that `_team_task_row` uses."""
+    the two joins (assignee, and project for `displayId`) that `_team_task_row` uses.
+
+    Soft-deleted tasks are left out (MIP-984): a row carries nothing to tell a
+    deleted task from a live one, and the client replaces its local list from
+    this response, so a deleted task used to come back as a live one."""
     return (
-        TaskMaster.objects.filter(scope, is_init_task=False)
+        TaskMaster.objects.filter(scope, is_init_task=False, is_deleted=False)
         .select_related("assignee", "project")
         .only(*_TEAM_TASK_ROW_FIELDS)
     )
