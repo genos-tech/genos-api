@@ -47,6 +47,15 @@ Every new-tool PR ships with:
   If you list a field, its rule must be at least as strict as the tool's own
   (the parity tables in that test run the same value through both).
 
+- [ ] **Undo (approval-gated tools)** — add the tool to `UNDO_SUPPORT` in
+  [`../undo.py`](../undo.py): `full`, `partial` (decided per call from its
+  arguments) or `none` with a reason code (`UNDO_REASONS`), which the approval
+  card shows BEFORE the person approves. `test_agent_undo_map` fails with the
+  missing name spelled out until you do. A tool that can be undone returns its
+  pre-image under `__undo__` (only when `ctx.capture_undo`; the controller pops it,
+  like `__summary__`, and it is never in the result the model reads); a tool
+  that deletes for good, notifies people, or keeps no old values is `none`.
+
 - [ ] **Quota / tier accounting** — external or per-call-expensive tools
   (network APIs, LLM-heavy work) are wired into the tier quotas
   (`SEARCH_ENGINE["TIER_QUOTAS"]` in `apis/settings.py`), not left

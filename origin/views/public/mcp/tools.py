@@ -1984,6 +1984,10 @@ def call(
     # UI. Promoted to the first line here so the answer leads with what
     # happened, and dropped from the body so it isn't said twice.
     summary = payload.pop("__summary__", None)
+    # The in-app "undo" pre-image (`agent/undo.py`). A tool only returns one when its
+    # context asks, and this surface never does; dropped anyway so that none can
+    # ever reach an external client.
+    payload.pop("__undo__", None)
 
     body = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
     text = f"{summary}\n\n{body}" if summary else body

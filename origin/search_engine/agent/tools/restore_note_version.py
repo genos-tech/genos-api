@@ -24,6 +24,7 @@ from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.note_access import has_write_permission, load_readable_note
 from origin.search_engine.agent.tools.task_access import as_int
+from origin.search_engine.agent.undo import UNDO_KEY, live_note_state, note_restore_capture
 from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.services.note_version_restore import RestoreRefused, restore_note_version
 
@@ -40,6 +41,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ctx=ctx,
     ):
         raise ToolForbidden(f'Not authorized: you can read "{title}" but not edit it.')
+
+    # Undo (`agent/undo.py`): what the note is, before the restore replaces it.
+    before_state = live_note_state(ref.family, ref.note_id) if ctx.capture_undo else None
 
     try:
         new_version, source = restore_note_version(
@@ -67,7 +71,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             " The restore is saved, but the live editor could not be updated, so an open "
             "editor may still show the old text and overwrite the restore."
         )
-    return {
+    result = {
         "note_type": ref.family,
         "note_id": ref.note_id,
         "restored_from_version_no": version_no,
@@ -78,6 +82,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "live_editor": outcome.value,
         "__summary__": summary,
     }
+    if ctx.capture_undo and (
+        image := note_restore_capture(
+            ref.family,
+            ref.note_id,
+            source.title or title,
+            before_state=before_state,
+            restored=new_version,
+        )
+    ):
+        result[UNDO_KEY] = image
+    return result
 
 
 RESTORE_NOTE_VERSION = Tool(

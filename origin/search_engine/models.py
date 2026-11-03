@@ -388,6 +388,17 @@ class AgentStep(models.Model):
     # anyone else.
     decision = models.CharField(max_length=16, blank=True, default="")
     decided_at = models.DateTimeField(blank=True, null=True)
+    # "Undo" for an approved write (`agent/undo.py`): what it takes to put back
+    # what the write changed (the pre-image, and a stamp of the state the write
+    # left behind). It is NEVER in `result_json`: that is replayed to the model
+    # as the tool's own output and is blanked by retention, and the pre-image is
+    # neither. Null on every step that cannot be undone (a read, a rejected
+    # write, a tool with no undo, a write that changed nothing). A person's
+    # Undo click runs it, with no model in the loop.
+    undo_json = models.JSONField(blank=True, null=True)
+    # When it was undone. Set once, in the transaction that does the undoing, so
+    # a second click is `already_undone` and the first one's work runs once.
+    undone_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -48,6 +48,7 @@ from origin.search_engine.agent.tools.task_custom_fields import (
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
 from origin.search_engine.agent.tools.task_people import plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
+from origin.search_engine.agent.undo import UNDO_KEY, TaskUpdateCapture
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_collaborators import sync_task_collaborators
@@ -119,6 +120,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
 
     display_id_before = task.display_id
+    # Undo (`agent/undo.py`): the values this call is about to replace, taken
+    # before the first one changes. A call that touches what undo cannot put
+    # back (collaborators, custom fields, a move) captures nothing.
+    undo_capture = TaskUpdateCapture(task, args) if ctx.capture_undo else None
 
     # --- body guards (MIP-824): validated before anything is touched ---
     edit_modes = [
@@ -500,7 +505,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             **hash_field,
             "__summary__": f"No changes applied to task {task.display_id}.",
         }
-    return {
+    result = {
         "task_id": task_id,
         "changed_fields": changed,
         "status": task.status,
@@ -515,6 +520,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             + (f" (was {display_id_before})" if task.display_id != display_id_before else "")
         ),
     }
+    if undo_capture is not None and (image := undo_capture.finish(update_fields)):
+        result[UNDO_KEY] = image
+    return result
 
 
 UPDATE_TASK = Tool(

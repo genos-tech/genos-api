@@ -28,6 +28,7 @@ from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.agent.undo import UNDO_KEY, comment_capture
 from origin.services.task_comment_fanout import fan_out_task_comment
 
 _PARA_PROPS = {
@@ -128,11 +129,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # committed and must not be undone by an observer failing.
     fan_out_task_comment(comment)
 
-    return {
+    result = {
         "task_id": task_id,
         "comment_id": comment.comment_id,
         "__summary__": (f"Added comment #{comment.comment_id} to task {task.display_id}"),
     }
+    # Undo (`agent/undo.py`): the comment as written, so it is deleted only while
+    # nobody has edited it.
+    if ctx.capture_undo and (image := comment_capture(task, comment)):
+        result[UNDO_KEY] = image
+    return result
 
 
 ADD_COMMENT = Tool(

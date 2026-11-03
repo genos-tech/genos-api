@@ -19,6 +19,7 @@ no longer inherited.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import re
 from unittest.mock import MagicMock, patch
@@ -688,6 +689,36 @@ class TestToolCalls(McpBase):
         self.assertTrue(text.startswith("Added comment"), text[:80])
         self.assertNotIn("__summary__", text)
         self.assertTrue(TaskComments.objects.filter(task=self.task).exists())
+
+    def test_an_undo_pre_image_never_reaches_a_client(self):
+        """The in-app "undo" keeps a pre-image under `__undo__` (`agent/undo.py`). A tool
+        returns one only when its context asks, and MCP never asks: but if one ever did
+        return it, it is dropped here, not sent to an external client."""
+        self._key()
+        real = REGISTRY["add_comment"]
+
+        def leaky(args, ctx):
+            return {**real.run(args, ctx), "__undo__": {"image": {"body_hash": "secret-ish"}}}
+
+        with patch.dict(REGISTRY, {"add_comment": dataclasses.replace(real, run=leaky)}):
+            result = self._result(
+                self._call("add_comment", {"task_id": "WRD-7", "body_text": "PR is up"})
+            )
+        self.assertNotIn("__undo__", result["content"][0]["text"])
+        self.assertNotIn("secret-ish", result["content"][0]["text"])
+        self.assertNotIn("__undo__", result["structuredContent"])
+        self.assertTrue(TaskComments.objects.filter(task=self.task).exists())
+
+    def test_a_real_write_over_mcp_carries_no_pre_image(self):
+        self._key()
+        for name, args in (
+            ("add_comment", {"task_id": "WRD-7", "body_text": "PR is up"}),
+            ("update_task", {"task_id": "WRD-7", "title": "A new title"}),
+            ("create_task", {"title": "Made over MCP", "project_id": self.project.project_id}),
+        ):
+            with self.subTest(tool=name):
+                result = self._result(self._call(name, args))
+                self.assertNotIn("__undo__", json.dumps(result))
 
     def test_structured_content_accompanies_the_text(self):
         self._key()
