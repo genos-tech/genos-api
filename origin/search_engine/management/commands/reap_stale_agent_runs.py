@@ -26,24 +26,32 @@ from the live handler.
     python manage.py reap_stale_agent_runs --hours 6
     python manage.py reap_stale_agent_runs --dry-run
 
-Scheduled hourly (genos-platform `jobs.tf`). Safe to re-run: it only
-ever touches rows still in `running`, so a second pass finds nothing.
+Scheduled hourly by the `reap-stale-agent-runs` cron service in
+`.railway/railway.ts`, which beats as `reap-stale-agent-runs` so a missed run
+raises an ops alert. Safe to re-run: it only ever touches rows still in
+`running`, so a second pass finds nothing.
 
 The threshold must comfortably exceed the longest legitimate run. A run
 is bounded by AGENT_MAX_STEPS model calls plus tools; two hours is
 orders of magnitude above that, because the cost of reaping a LIVE run
 (a user watching their answer get marked failed underneath them) is far
 worse than the cost of a stale row living an extra hour.
+
+What "stale" means (`STALE_RUN_HOURS`, `stale_running_q`) lives in
+`origin.search_engine.stale_runs`, because deleting a person's conversations
+asks the same question and must not wait for this job: a `running` run older
+than the threshold does not block that delete. The `--hours` default is that
+same constant.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
+from origin.search_engine import stale_runs
 from origin.search_engine.models import AgentRun
 
 log = logging.getLogger(__name__)
@@ -61,8 +69,11 @@ class Command(CronCommand):
         parser.add_argument(
             "--hours",
             type=int,
-            default=2,
-            help="Age in hours past which a still-running run is considered stale (default 2).",
+            default=stale_runs.STALE_RUN_HOURS,
+            help=(
+                "Age in hours past which a still-running run is considered stale "
+                f"(default {stale_runs.STALE_RUN_HOURS})."
+            ),
         )
         parser.add_argument(
             "--dry-run",
@@ -73,9 +84,9 @@ class Command(CronCommand):
     def handle(self, *args, **options):
         hours = max(1, int(options["hours"]))
         dry_run = bool(options["dry_run"])
-        cutoff = timezone.now() - timedelta(hours=hours)
+        cutoff = stale_runs.stale_cutoff(hours)
 
-        stale = AgentRun.objects.filter(status="running", started_at__lt=cutoff)
+        stale = AgentRun.objects.filter(stale_runs.stale_running_q(cutoff))
         rows = list(stale.values_list("run_id", "team_id", "started_at")[:200])
         if not rows:
             self.stdout.write(f"No runs stuck in 'running' older than {hours}h.")
@@ -83,7 +94,9 @@ class Command(CronCommand):
 
         self.stdout.write(f"Found {len(rows)} stale run(s) older than {hours}h:")
         for run_id, team_id, started in rows:
-            self.stdout.write(f"  {run_id}  team={team_id or '(none)'}  started={started:%Y-%m-%d %H:%M}")
+            self.stdout.write(
+                f"  {run_id}  team={team_id or '(none)'}  started={started:%Y-%m-%d %H:%M}"
+            )
 
         if dry_run:
             self.stdout.write(self.style.NOTICE("--dry-run: nothing written."))

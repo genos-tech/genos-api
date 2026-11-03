@@ -73,6 +73,7 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     "agent-digest": timedelta(hours=3),
     "agent-judge-sampler": timedelta(hours=3),
     "email-digest": timedelta(hours=3),
+    "reap-stale-agent-runs": timedelta(hours=3),
     # daily
     "ai-cost-dashboard-daily": timedelta(hours=26),
     "demo-user-cleanup": timedelta(hours=26),

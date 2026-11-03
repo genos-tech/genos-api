@@ -65,6 +65,14 @@ def _ts_crons() -> dict[str, str]:
     return dict(_TS_SERVICE.findall(text))
 
 
+def _ts_blocks() -> dict[str, str]:
+    """Each `service("name", { ... });` block of `.railway/railway.ts`, by
+    service name, for the settings `_ts_crons` does not return (its schedule)."""
+    text = (REPO / ".railway" / "railway.ts").read_text()
+    blocks = re.finditer(r'  const \w+ = service\("([a-z0-9-]+)",.*?\n  \}\);', text, re.S)
+    return {m.group(1): m.group(0) for m in blocks}
+
+
 def _crons() -> list[tuple[str, str]]:
     """(label, start command) of every cron: the railway.ts services, plus
     the railway-*.toml files (still read by Railway until each service is
@@ -113,6 +121,35 @@ class TestEveryCronReports(TestCase):
             "reconcile-pr-deliveries",
             _heartbeat_names(s for _l, s in _crons() if _l.endswith(".toml")),
         )
+
+    def test_the_stale_run_reaper_is_an_hourly_cron_that_beats_and_is_watched(self):
+        # MIP-964: `reap_stale_agent_runs` was never scheduled (its docstring
+        # pointed at a destroyed GCP stack), so a run whose worker died stayed
+        # `running` for good. It is defined in railway.ts only (a new service
+        # cannot have a toml), hourly, under its own heartbeat name, and
+        # watched with the same slack as the other hourly crons.
+        name = "reap-stale-agent-runs"
+        self.assertIn(name, _ts_blocks())
+        block = _ts_blocks()[name]
+        self.assertIn('cronSchedule: "0 * * * *"', block)
+        self.assertIn(
+            f'startCommand: "python /app/manage.py reap_stale_agent_runs --heartbeat {name}"',
+            block,
+        )
+        self.assertIn('restartPolicyType: "NEVER"', block)
+        self.assertEqual(_HEARTBEAT.findall(_ts_crons()[name]), [name])
+        self.assertNotIn(name, _heartbeat_names(s for _l, s in _crons() if _l.endswith(".toml")))
+        self.assertEqual(ops_alerts.CRON_SCHEDULES[name], timedelta(hours=3))
+
+    def test_every_railway_ts_service_is_in_the_project(self):
+        # A `service(...)` that `project(...)` does not list is never planned:
+        # `railway config plan` would show nothing to add and the cron would
+        # silently never exist.
+        text = (REPO / ".railway" / "railway.ts").read_text()
+        declared = set(re.findall(r"  const (\w+) = service\(", text))
+        listed = set(re.findall(r"\w+", re.search(r"resources: \[([^\]]*)\]", text).group(1)))
+        self.assertIn("reapStaleAgentRuns", declared)
+        self.assertEqual(declared, listed)
 
     def test_every_watched_cron_has_a_schedule_and_every_schedule_a_cron(self):
         # The tick is the one cron nothing inside can watch: the outside

@@ -17,22 +17,33 @@ reads as a standalone first turn to the team-lane chunker; the history window
 is not a reason to keep a row; and the index purge must run after the commit
 and must never be able to fail the delete.
 
+A run still `running` blocks the delete (409, nothing deleted) only while it
+is young. One older than the reaper's stale threshold is abandoned (its worker
+died), and the delete takes it like any other: erasing a conversation must not
+wait for the `reap_stale_agent_runs` cron, or depend on it being scheduled at
+all (`StaleRunTests`).
+
 No LLM and no OpenSearch: the bulk client is replaced by an in-memory index
 (`FakeIndex`) that honours deletes, and `search` is replaced by a lookup into it.
 """
 
+from contextlib import contextmanager
 from datetime import timedelta
+from io import StringIO
 from unittest import mock
 from urllib.parse import urlencode
 
+from django.core.management import call_command
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine import purge, quota
+from origin.search_engine import purge, quota, stale_runs
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.search_past_conversations import (
     _run as search_past_conversations_run,
@@ -404,7 +415,7 @@ class DeleteSessionTests(ConversationDeleteTestCase):
     def test_a_running_run_blocks_the_delete_and_nothing_is_deleted(self):
         session = self.make_session()
         done = self.make_run(session)
-        live = self.make_run(session, status="running", answer="")
+        live = self.make_run(session, status="running", answer="", age=timedelta(minutes=5))
 
         res = self.delete(_detail_url(session))
 
@@ -508,7 +519,7 @@ class DeleteAllTests(ConversationDeleteTestCase):
     def test_a_running_run_blocks_everything(self):
         session = self.make_session()
         done = self.make_run(session)
-        self.make_run(None, status="running", answer="")
+        self.make_run(None, status="running", answer="", age=timedelta(minutes=5))
 
         res = self.delete(LIST_URL, {"team_id": self.tid})
 
@@ -526,6 +537,280 @@ class DeleteAllTests(ConversationDeleteTestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertFalse(self.run_exists(mine))
+
+
+# ---------------------------------------------------------------------------
+# A `running` run past the stale threshold is abandoned: it does not block
+# ---------------------------------------------------------------------------
+
+# The reaper's threshold, written out here rather than read from `stale_runs`,
+# so changing the shared constant fails these tests instead of moving them.
+_STALE_AFTER = timedelta(hours=2)
+
+
+@contextmanager
+def _frozen_stale_clock():
+    """Freeze the clock the stale rule reads and yield that instant.
+
+    Only `stale_runs` sees it: auth, `auto_now_add` and the rest keep real time,
+    so a row can be put exactly on the cutoff, which is what tells `<` from
+    `<=`."""
+    now = timezone.now()
+    with mock.patch.object(stale_runs, "timezone", mock.Mock(now=lambda: now)):
+        yield now
+
+
+class StaleRunTests(ConversationDeleteTestCase):
+    """A worker that died leaves its run `running` forever. Before this, one
+    such run answered 409 to every delete until the reaper cron closed it, and
+    the cron was not scheduled anywhere."""
+
+    def make_running(self, session=None, *, age, **kwargs):
+        """A run left `running` by a worker that died, with both index lanes.
+
+        The chunkers only index `done` runs, so it is indexed as one and then put
+        back to `running`. The purge goes by run id, not by status: whatever
+        chunks a deleted run has go, which is what the assertions below check."""
+        run = self.make_run(session, status="done", answer="Half an answer.", age=age, **kwargs)
+        AgentRun.objects.filter(pk=run.pk).update(status="running")
+        run.refresh_from_db()
+        self.assertEqual(run.status, "running")
+        # Not vacuous: the purge assertions below mean something.
+        self.assertEqual(self.indexed(run), self.lane_ids(run))
+        self.assertEqual(self.tracked(run), self.lane_ids(run))
+        return run
+
+    def deleted_index_ids(self):
+        return {a["_id"] for call in self.bulk.call_args_list for a in call.args[1]}
+
+    # ---- a stale run does not block ---------------------------------------
+
+    def test_a_stale_running_run_does_not_block_deleting_a_session(self):
+        session = self.make_session(rolling_summary_text="STALE-SUMMARY")
+        done = self.make_run(session)
+        stale = self.make_running(session, age=_STALE_AFTER + timedelta(hours=1))
+
+        res = self.delete(_detail_url(session))
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data, {"deleted_sessions": 1, "deleted_runs": 2})
+        self.assertFalse(self.session_exists(session))
+        for run in (done, stale):
+            self.assertFalse(self.run_exists(run))
+            self.assertEqual(self.indexed(run), set())
+            self.assertEqual(self.tracked(run), set())
+        # Purged by the same path as any other run: both lanes of both runs.
+        self.assertEqual(self.deleted_index_ids(), self.lane_ids(done) | self.lane_ids(stale))
+        self.assertFalse(AgentSession.objects.filter(rolling_summary_text="STALE-SUMMARY").exists())
+
+    def test_a_stale_running_run_does_not_block_delete_all(self):
+        session = self.make_session()
+        in_session = self.make_running(session, age=timedelta(hours=5))
+        standalone = self.make_running(None, age=timedelta(days=3))
+        done = self.make_run(session)
+
+        res = self.delete(LIST_URL, {"team_id": self.tid})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data, {"deleted_sessions": 1, "deleted_runs": 3})
+        self.assertFalse(self.session_exists(session))
+        for run in (in_session, standalone, done):
+            self.assertFalse(self.run_exists(run))
+            self.assertEqual(self.indexed(run), set())
+            self.assertEqual(self.tracked(run), set())
+        self.assertEqual(
+            self.deleted_index_ids(),
+            self.lane_ids(in_session) | self.lane_ids(standalone) | self.lane_ids(done),
+        )
+
+    def test_a_stale_run_is_deleted_even_when_the_reaper_never_ran(self):
+        # The point of the change: no cron in the loop, the run is still `running`.
+        session = self.make_session()
+        stale = self.make_running(session, age=timedelta(days=30))
+        self.assertEqual(AgentRun.objects.get(pk=stale.pk).status, "running")
+
+        self.assertEqual(self.delete(_detail_url(session)).status_code, 200)
+
+        self.assertFalse(self.run_exists(stale))
+
+    # ---- a young run still does ------------------------------------------
+
+    def test_a_young_run_still_blocks_next_to_a_stale_one_and_nothing_is_deleted(self):
+        session = self.make_session()
+        done = self.make_run(session)
+        stale = self.make_running(session, age=timedelta(hours=3))
+        young = self.make_running(session, age=timedelta(hours=1))
+
+        res = self.delete(_detail_url(session))
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "run_in_flight")
+        self.assertTrue(self.session_exists(session))
+        for run in (done, stale, young):  # all or nothing: the stale one stays too
+            self.assertTrue(self.run_exists(run))
+            self.assertEqual(self.indexed(run), self.lane_ids(run))
+        self.bulk.assert_not_called()
+
+    def test_a_young_run_still_blocks_delete_all_next_to_a_stale_one(self):
+        session = self.make_session()
+        done = self.make_run(session)
+        stale = self.make_running(None, age=timedelta(hours=3))
+        young = self.make_running(None, age=timedelta(minutes=30))
+
+        res = self.delete(LIST_URL, {"team_id": self.tid})
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data["code"], "run_in_flight")
+        self.assertTrue(self.session_exists(session))
+        for run in (done, stale, young):
+            self.assertTrue(self.run_exists(run))
+            self.assertEqual(self.indexed(run), self.lane_ids(run))
+        self.bulk.assert_not_called()
+
+    def test_a_run_just_inside_the_threshold_blocks(self):
+        session = self.make_session()
+        run = self.make_running(session, age=_STALE_AFTER - timedelta(minutes=1))
+
+        self.assertEqual(self.delete(_detail_url(session)).status_code, 409)
+        self.assertEqual(self.delete(LIST_URL, {"team_id": self.tid}).status_code, 409)
+
+        self.assertTrue(self.run_exists(run))
+
+    # ---- the boundary: the reaper's own comparison -------------------------
+
+    def put_run_on_the_boundary(self, now, offset):
+        """A `running` run that started `_STALE_AFTER + offset` before `now`."""
+        run = self.make_run(None, status="running", answer="x", index=False)
+        AgentRun.objects.filter(pk=run.pk).update(started_at=now - _STALE_AFTER - offset)
+        return run
+
+    def delete_status(self, via, run):
+        """Delete `run`'s conversation by the single or the all-conversations form.
+        Returns the status code, with the run's own session when `via` is single."""
+        if via == "single":
+            session = self.make_session()
+            AgentRun.objects.filter(pk=run.pk).update(session=session)
+            return self.delete(_detail_url(session)).status_code
+        return self.delete(LIST_URL, {"team_id": self.tid}).status_code
+
+    def test_the_boundary_exactly_at_the_cutoff_is_not_stale_yet(self):
+        # The reaper reaps `started_at < cutoff`, strictly: a run that started
+        # exactly `_STALE_AFTER` ago is not stale, so the delete still waits.
+        for via in ("single", "all"):
+            with self.subTest(via=via), _frozen_stale_clock() as now:
+                run = self.put_run_on_the_boundary(now, timedelta(0))
+                self.assertEqual(self.delete_status(via, run), 409)
+                self.assertTrue(self.run_exists(run))
+                AgentRun.objects.filter(pk=run.pk).delete()
+
+    def test_the_boundary_just_under_the_cutoff_is_in_flight(self):
+        for via in ("single", "all"):
+            with self.subTest(via=via), _frozen_stale_clock() as now:
+                run = self.put_run_on_the_boundary(now, -timedelta(seconds=1))
+                self.assertEqual(self.delete_status(via, run), 409)
+                self.assertTrue(self.run_exists(run))
+                AgentRun.objects.filter(pk=run.pk).delete()
+
+    def test_the_boundary_just_over_the_cutoff_is_stale(self):
+        for via in ("single", "all"):
+            with self.subTest(via=via), _frozen_stale_clock() as now:
+                run = self.put_run_on_the_boundary(now, timedelta(microseconds=1))
+                self.assertEqual(self.delete_status(via, run), 200)
+                self.assertFalse(self.run_exists(run))
+
+    # ---- the lock is still taken -----------------------------------------
+
+    def test_the_runs_are_still_locked_while_they_are_checked(self):
+        session = self.make_session()
+        self.make_run(session)
+
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(self.delete(_detail_url(session)).status_code, 200)
+
+        self.assertTrue(
+            any("FOR UPDATE" in q["sql"] for q in queries.captured_queries),
+            "the delete must lock the runs it inspects (a resumed approval can flip one to running)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# One rule: the delete and the reaper cannot drift
+# ---------------------------------------------------------------------------
+
+
+class SharedStaleRuleTests(ConversationDeleteTestCase):
+    """`reap_stale_agent_runs` closes a run if and only if the delete stops
+    blocking on it: both read `origin.search_engine.stale_runs`."""
+
+    def test_the_delete_and_the_reaper_agree_on_every_age(self):
+        ages = {
+            "new": timedelta(0),
+            "one hour": timedelta(hours=1),
+            "a second under": _STALE_AFTER - timedelta(seconds=1),
+            "exactly": _STALE_AFTER,
+            "a microsecond over": _STALE_AFTER + timedelta(microseconds=1),
+            "a second over": _STALE_AFTER + timedelta(seconds=1),
+            "five hours": timedelta(hours=5),
+            "two days": timedelta(days=2),
+        }
+        with _frozen_stale_clock() as now:
+            runs = {}
+            for label, age in ages.items():
+                session = self.make_session()
+                run = self.make_run(session, status="running", answer="x", index=False)
+                AgentRun.objects.filter(pk=run.pk).update(started_at=now - age)
+                runs[label] = (session, run)
+
+            out = StringIO()
+            call_command("reap_stale_agent_runs", "--dry-run", stdout=out)
+            reaped = {
+                label for label, (_, run) in runs.items() if str(run.run_id) in out.getvalue()
+            }
+            # Pinned against the real rule, not just against each other.
+            self.assertEqual(
+                reaped, {"a microsecond over", "a second over", "five hours", "two days"}
+            )
+
+            for label, (session, _run) in runs.items():
+                with self.subTest(age=label):
+                    status_code = self.delete(_detail_url(session)).status_code
+                    self.assertEqual(status_code, 200 if label in reaped else 409)
+
+    def test_both_follow_the_shared_constant_when_it_is_raised(self):
+        # Four hours old: stale at the real two, young at six. Neither the
+        # delete nor a bare `reap_stale_agent_runs` (whose `--hours` defaults to
+        # the constant) may still treat it as stale: a hardcoded 2h in either
+        # one shows up here.
+        session = self.make_session()
+        run = self.make_run(session, status="running", answer="x", age=timedelta(hours=4))
+
+        with mock.patch.object(stale_runs, "STALE_RUN_HOURS", 6):
+            self.assertEqual(self.delete(_detail_url(session)).status_code, 409)
+            call_command("reap_stale_agent_runs", stdout=StringIO())
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, "running")
+        self.assertTrue(self.run_exists(run))
+
+    def test_both_follow_the_shared_constant_when_it_is_lowered(self):
+        # Ninety minutes old: young at the real two hours, stale at one. The
+        # same age is tried by the delete and by the reaper.
+        deleting = self.make_session()
+        deleted_run = self.make_run(
+            deleting, status="running", answer="x", age=timedelta(minutes=90)
+        )
+        reaping = self.make_run(None, status="running", answer="x", age=timedelta(minutes=90))
+        self.assertEqual(
+            self.delete(_detail_url(deleting)).status_code, 409
+        )  # at the real constant
+
+        with mock.patch.object(stale_runs, "STALE_RUN_HOURS", 1):
+            self.assertEqual(self.delete(_detail_url(deleting)).status_code, 200)
+            call_command("reap_stale_agent_runs", stdout=StringIO())
+
+        self.assertFalse(self.run_exists(deleted_run))
+        reaping.refresh_from_db()
+        self.assertEqual(reaping.status, "error")
 
 
 # ---------------------------------------------------------------------------

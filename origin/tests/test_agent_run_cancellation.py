@@ -25,7 +25,9 @@ from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from origin.search_engine import agent_views as views
+from origin.search_engine import stale_runs
 from origin.search_engine.agent_views import _stream_ndjson
+from origin.search_engine.management.commands.reap_stale_agent_runs import Command
 from origin.search_engine.models import AgentRun
 
 
@@ -228,3 +230,65 @@ class ReapStaleRunsTests(TestCase):
         out = StringIO()
         call_command("reap_stale_agent_runs", "--hours", "2", stdout=out)
         self.assertIn("No runs stuck", out.getvalue())
+
+    # ---- the threshold is the shared one (stale_runs) ----------------------
+
+    def test_the_default_threshold_is_two_hours(self):
+        """`--hours` is optional and the cron passes none, so the default IS the
+        production threshold: pinned, with no `--hours` given."""
+        self.assertEqual(stale_runs.STALE_RUN_HOURS, 2)
+        parser = Command().create_parser("manage.py", "reap_stale_agent_runs")
+        self.assertEqual(parser.get_default("hours"), 2)
+
+        just_inside = self._run(age_hours=1.9)
+        just_outside = self._run(age_hours=2.1)
+        call_command("reap_stale_agent_runs", stdout=StringIO())
+        just_inside.refresh_from_db()
+        just_outside.refresh_from_db()
+        self.assertEqual(just_inside.status, "running")
+        self.assertEqual(just_outside.status, "error")
+
+    def test_a_run_exactly_at_the_cutoff_is_not_stale_and_a_microsecond_older_is(self):
+        """`started_at < cutoff`, strictly. The delete's 409 uses the same
+        comparison, so a run on the line is "in flight" to both."""
+        now = timezone.now()
+        on_the_line = self._run()
+        past_the_line = self._run()
+        AgentRun.objects.filter(pk=on_the_line.pk).update(started_at=now - timedelta(hours=2))
+        AgentRun.objects.filter(pk=past_the_line.pk).update(
+            started_at=now - timedelta(hours=2, microseconds=1)
+        )
+
+        with mock.patch.object(stale_runs, "timezone", mock.Mock(now=lambda: now)):
+            call_command("reap_stale_agent_runs", stdout=StringIO())
+
+        on_the_line.refresh_from_db()
+        past_the_line.refresh_from_db()
+        self.assertEqual(on_the_line.status, "running")
+        self.assertEqual(past_the_line.status, "error")
+
+    def test_hours_still_overrides_the_default(self):
+        three_hours = self._run(age_hours=3)
+        call_command("reap_stale_agent_runs", "--hours", "6", stdout=StringIO())
+        three_hours.refresh_from_db()
+        self.assertEqual(three_hours.status, "running")
+
+    def test_hours_below_one_is_clamped_to_one(self):
+        ninety_minutes = self._run(age_hours=1.5)
+        thirty_minutes = self._run(age_hours=0.5)
+        call_command("reap_stale_agent_runs", "--hours", "0", stdout=StringIO())
+        ninety_minutes.refresh_from_db()
+        thirty_minutes.refresh_from_db()
+        self.assertEqual(ninety_minutes.status, "error")
+        self.assertEqual(thirty_minutes.status, "running")
+
+    def test_the_default_follows_the_shared_constant(self):
+        four_hours = self._run(age_hours=4)
+        with mock.patch.object(stale_runs, "STALE_RUN_HOURS", 6):
+            call_command("reap_stale_agent_runs", stdout=StringIO())
+        four_hours.refresh_from_db()
+        self.assertEqual(four_hours.status, "running")
+        with mock.patch.object(stale_runs, "STALE_RUN_HOURS", 3):
+            call_command("reap_stale_agent_runs", stdout=StringIO())
+        four_hours.refresh_from_db()
+        self.assertEqual(four_hours.status, "error")
