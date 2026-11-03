@@ -31,7 +31,7 @@ from origin.models.common.team_models import TeamMembers
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectLabel, ProjectMembers
 from origin.models.task.milestone_models import (
     MilestoneAssignees,
     MilestoneFolder,
@@ -218,6 +218,20 @@ class LabelAccess:
             )
             .values_list("project__project_name", flat=True)
             .first()
+        )
+
+    # ---- project labels -------------------------------------------------
+
+    def project_label_names(self, raw_ids: Iterable[Any]) -> dict[int, str]:
+        """`label_id → name` for the team's project labels. `ProjectLabelsView.get` lists
+        them to any member of the team, so the rule is that check and nothing finer."""
+        ids = {i for i in (_as_int(raw) for raw in raw_ids) if i is not None}
+        if not ids or not self.usable or not is_team_member(self.team_id, self.user_id):
+            return {}
+        return dict(
+            ProjectLabel.objects.filter(team=self.team_id, label_id__in=ids).values_list(
+                "label_id", "name"
+            )
         )
 
     # ---- people --------------------------------------------------------

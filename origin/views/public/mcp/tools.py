@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 82 agent tools. This exposes 78. The four it leaves out are left out
+Genos has 84 agent tools. This exposes 80. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -539,7 +539,8 @@ CATALOG: tuple[McpTool, ...] = (
             "its tasks can have: read them before setting `tags` on "
             "`create_task`, `create_task_plan` or `update_task`, and pick only "
             "tags that genuinely describe the task; if none fits, leave it "
-            "untagged. Tags can't be created through this connection. "
+            "untagged. To add a tag use `add_project_tag`; `labels` are the team's "
+            "project labels, with their `label_id`. "
             "`custom_fields` are the project's own fields: each one's "
             "`field_name`, its `type` (`tag`, `text`, `date` or `member`) and, "
             "for a tag field, the `options` a value is chosen from; `get_task` "
@@ -1437,6 +1438,33 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
         destructive=True,
+    ),
+    McpTool(
+        name="add_project_tag",
+        registry_name="add_project_tag",
+        description=(
+            "Add a tag to a project's tag list, so its tasks can carry it. Call "
+            "`list_project_tags` first: it shows the tags that exist, and a name "
+            "that differs only in case is refused. Any member of the project may "
+            "add one (`project_id` from `list_projects`); `tag_name` is up to 20 "
+            "characters and `color` an optional hex like #3b82f6. Tags can't be "
+            "renamed or deleted here. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="manage_project_labels",
+        registry_name="manage_project_labels",
+        description=(
+            "Create a project label, or put labels on a project or take them off. "
+            "Labels group PROJECTS and belong to the team; tasks carry tags "
+            "(`add_project_tag`). Read the team's labels and their `label_id` from "
+            "`list_project_tags`. `action` 'create': `name` (up to 30 characters, "
+            "unique in the team) and an optional hex `color`. 'assign' / 'unassign': "
+            "`label_ids` on `project_id`. Only the project's owner or an editor may. "
+            "Labels can't be renamed or deleted here. Requires a write-scoped API key."
+        ),
+        write=True,
     ),
     McpTool(
         name="manage_note_folder",

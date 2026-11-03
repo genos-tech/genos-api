@@ -42,6 +42,7 @@ general "which milestones is Alice on?" case.
 
 from origin.search_engine.agent.model_fence import with_unfenced_arguments
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
+from origin.search_engine.agent.tools.add_project_tag import ADD_PROJECT_TAG
 from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
 from origin.search_engine.agent.tools.base import (
@@ -123,6 +124,7 @@ from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.manage_note_folder import MANAGE_NOTE_FOLDER
 from origin.search_engine.agent.tools.manage_note_sharing import MANAGE_NOTE_SHARING
 from origin.search_engine.agent.tools.manage_project import MANAGE_PROJECT
+from origin.search_engine.agent.tools.manage_project_labels import MANAGE_PROJECT_LABELS
 from origin.search_engine.agent.tools.manage_project_members import MANAGE_PROJECT_MEMBERS
 from origin.search_engine.agent.tools.manage_sprint import MANAGE_SPRINT
 from origin.search_engine.agent.tools.remove_task_delivery import REMOVE_TASK_DELIVERY
@@ -247,6 +249,8 @@ for _t in (
     # --- Write tools (MIP-882) — projects and who is in them ---
     MANAGE_PROJECT,
     MANAGE_PROJECT_MEMBERS,
+    ADD_PROJECT_TAG,
+    MANAGE_PROJECT_LABELS,
     # --- Write tools (MIP-883) — organizing notes ---
     MANAGE_NOTE_FOLDER,
     FAVORITE_NOTE,
@@ -272,6 +276,8 @@ __all__ = [
     "DELETE_SPRINT",
     "MANAGE_PROJECT",
     "MANAGE_PROJECT_MEMBERS",
+    "ADD_PROJECT_TAG",
+    "MANAGE_PROJECT_LABELS",
     "MANAGE_NOTE_FOLDER",
     "FAVORITE_NOTE",
     "DELETE_NOTE",

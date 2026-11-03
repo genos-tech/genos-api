@@ -11,7 +11,7 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel
 from origin.models.common.security_event_models import SecurityAction
-from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
+from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
@@ -20,6 +20,12 @@ from origin.services.member_roles import (
     OWNER,
     can_manage,
     resolve_project_role,
+)
+from origin.services.project_catalog import (
+    CatalogRefused,
+    create_label,
+    invalidate_label_project_list,
+    replace_project_labels,
 )
 from origin.services.project_code import derive_project_code
 from origin.services.project_manage import (
@@ -1949,31 +1955,8 @@ def _require_project_manager(request, project_id):
     return project, None
 
 
-def _invalidate_label_project_list(team_id):
-    """Wipe every team member's cached `/project/projects/` payload.
-
-    That payload embeds `projectLabels`, so any catalog rename/recolor/
-    delete or assignment change makes it stale for up to the 60s TTL.
-    Enumerated + `delete_many` rather than `delete_pattern`, matching
-    `_invalidate_project_list`: exact, and it works on the LocMemCache
-    the test suite uses (where `delete_pattern` is a silent no-op).
-
-    Called explicitly from the mutating views rather than wired as a
-    `post_save`/`post_delete` receiver in `signals/cache_invalidation.py`
-    like the other project keys. Two reasons: the assignment replace path
-    uses `bulk_create`, which fires NO `post_save` at all (a receiver
-    would silently miss exactly the most common mutation); and
-    `ProjectLabelAssignment` carries no `team` column, so a `post_delete`
-    receiver firing under a label cascade would have to re-read a row
-    that is being deleted to find the team. The views already hold
-    `project.team_id`, so doing it here is both correct and cheaper.
-    """
-    if team_id is None:
-        return
-    attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
-    keys = [f"project:list:{team_id}:{attendee_id}" for attendee_id in attendee_ids if attendee_id]
-    if keys:
-        cache.delete_many(keys)
+# The invalidation lives with the other label operations; kept under its old name here.
+_invalidate_label_project_list = invalidate_label_project_list
 
 
 class ProjectLabelsView(AuthenticatedAPIView):
@@ -2021,34 +2004,16 @@ class ProjectLabelsView(AuthenticatedAPIView):
         if err:
             return err
 
-        name = (request.data.get("name") or "").strip()
-        if not name:
-            return Response(
-                {"error": "name is required."},
-                status=status.HTTP_400_BAD_REQUEST,
+        try:
+            label = create_label(
+                team_id=project.team_id,
+                user=request.user,
+                raw_name=request.data.get("name"),
+                color=request.data.get("color"),
+                text_color=request.data.get("text_color"),
             )
-        if len(name) > 30:
-            return Response(
-                {"error": "name must be 30 characters or fewer."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        # The DB constraint is case-sensitive; block case-variant
-        # duplicates here so "Client" / "client" can't both exist.
-        if ProjectLabel.objects.filter(team=project.team_id, name__iexact=name).exists():
-            return Response(
-                {"error": "A label with that name already exists in this team."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        label = ProjectLabel.objects.create(
-            team_id=project.team_id,
-            name=name,
-            color=request.data.get("color") or "#7c3aed",
-            text_color=request.data.get("text_color") or "#ffffff",
-            created_by=request.user,
-        )
-        # A brand-new label is unassigned, so no project's payload
-        # changed yet — nothing to invalidate here (assign does it).
+        except CatalogRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
         return Response(
             {**_label_payload(label), "projectCount": 0},
             status=status.HTTP_201_CREATED,
@@ -2156,31 +2121,11 @@ class ProjectLabelAssignmentView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Scope to the project's OWN team so a caller can't attach
+        # Scoped to the project's OWN team in the service, so a caller can't attach
         # another team's label by guessing an id.
-        valid_labels = ProjectLabel.objects.filter(team=project.team_id, label_id__in=raw_ids)
-        valid_ids = set(valid_labels.values_list("label_id", flat=True))
-
-        with transaction.atomic():
-            ProjectLabelAssignment.objects.filter(project=project.project_id).exclude(
-                label_id__in=valid_ids
-            ).delete()
-            existing = set(
-                ProjectLabelAssignment.objects.filter(project=project.project_id).values_list(
-                    "label_id", flat=True
-                )
-            )
-            ProjectLabelAssignment.objects.bulk_create(
-                [
-                    ProjectLabelAssignment(label_id=lid, project_id=project.project_id)
-                    for lid in valid_ids - existing
-                ],
-                ignore_conflicts=True,
-            )
-
-        _invalidate_label_project_list(project.team_id)
+        labels = replace_project_labels(project, raw_ids)
         return Response(
-            [_label_payload(label) for label in valid_labels.order_by("name")],
+            [_label_payload(label) for label in labels],
             status=status.HTTP_200_OK,
         )
 

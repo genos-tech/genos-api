@@ -29,6 +29,8 @@ from typing import Any
 from django.db.models.functions import Lower
 
 from origin.models.project.prj_models import (
+    ProjectLabel,
+    ProjectLabelAssignment,
     ProjectMaster,
     ProjectMembers,
     ProjectSavedTaskFilter,
@@ -123,6 +125,28 @@ def saved_filters(project_id: int, team_id: str, tag_names: set[str]) -> list[di
     return out
 
 
+def _team_labels(project: ProjectMaster) -> list[dict[str, Any]]:
+    """The team's project labels, and whether this project carries each. Labels group
+    projects and belong to the team, so every member of the team can read the catalogue
+    (`ProjectLabelsView.get`); it rides here because `manage_project_labels` needs the
+    ids. The name is user text the model reads and never passes back (it passes the id),
+    so it is under its own key, `label_name`, which the result fence wraps."""
+    on_project = set(
+        ProjectLabelAssignment.objects.filter(project=project.project_id).values_list(
+            "label_id", flat=True
+        )
+    )
+    return [
+        {
+            "label_id": label.label_id,
+            "label_name": label.name,
+            "color": label.color,
+            "on_this_project": label.label_id in on_project,
+        }
+        for label in ProjectLabel.objects.filter(team=project.team_id).order_by("name")
+    ]
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     raw_project_id = args.get("project_id")
     try:
@@ -158,15 +182,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ]
     custom_fields = field_definitions(project_fields(project_id))
     filters = saved_filters(project_id, ctx.team_id, {tag["tagName"] for tag in catalogue})
+    labels = _team_labels(project)
     return {
         "project_id": project_id,
         "project_name": project.project_name,
         "tags": tags,
+        "labels": labels,
         "custom_fields": custom_fields,
         "saved_filters": filters,
         "__summary__": (
-            f"{len(tags)} tag(s), {len(custom_fields)} custom field(s) and "
-            f"{len(filters)} saved filter(s) on {project.project_name}"
+            f"{len(tags)} tag(s), {len(labels)} label(s), {len(custom_fields)} custom field(s) "
+            f"and {len(filters)} saved filter(s) on {project.project_name}"
         ),
     }
 
@@ -179,7 +205,9 @@ LIST_PROJECT_TAGS = Tool(
         "tags a task there can have: call it before setting `tags` on "
         "create_task / create_task_plan / update_task, and pick the tags that "
         "genuinely describe the task; if none fits, leave the task untagged. "
-        "Tags can't be created here. `custom_fields` lists each field the "
+        "To add a tag use `add_project_tag`. `labels` are the team's project "
+        "labels, with their `label_id` (`on_this_project` says whether this one "
+        "has it). `custom_fields` lists each field the "
         "project defines: `field_name`, `type` (`tag`, `text`, `date` or "
         "`member`) and, for a tag field, the `options` a value is chosen from. "
         "`saved_filters` are the named filter selections the project's members "

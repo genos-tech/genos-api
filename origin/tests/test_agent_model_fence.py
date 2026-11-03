@@ -179,7 +179,29 @@ class FenceByToolTests(SimpleTestCase):
 
     def test_the_tag_exemption_is_declared_and_not_fenced(self):
         self.assertIn(("list_project_tags", "name"), EXEMPT_TOOL_KEYS)
-        self.assertNotIn("list_project_tags", FENCED_KEYS_BY_TOOL)
+        # The tag `name` stays bare. (The tool does fence another key: see the next test.)
+        self.assertNotIn("name", FENCED_KEYS_BY_TOOL.get("list_project_tags", frozenset()))
+
+    def test_a_label_name_is_fenced_while_a_tag_name_is_not(self):
+        """`list_project_tags` returns both. A tag name is an identifier the model passes
+        back as `tags=[...]`; a project label is addressed by id, so its name is display
+        text, under its own key so the two can be told apart."""
+        both = {
+            "tags": [{"name": "bugfix"}],
+            "labels": [{"label_id": 3, "label_name": INJECTION, "on_this_project": True}],
+        }
+
+        out = fence_for_model(both, "list_project_tags")
+
+        self.assertEqual(out["tags"], [{"name": "bugfix"}])
+        self.assertEqual(out["labels"][0]["label_name"], wrap_workspace_content(INJECTION))
+        self.assertEqual(out["labels"][0]["label_id"], 3)
+        self.assertEqual(out["labels"][0]["on_this_project"], True)
+
+    def test_a_label_name_is_fenced_in_the_labels_tools_result_too(self):
+        out = fence_for_model({"labels": [{"label_name": INJECTION}]}, "manage_project_labels")
+
+        self.assertEqual(out["labels"][0]["label_name"], wrap_workspace_content(INJECTION))
 
     def test_it_reaches_nested_people(self):
         history = {"entries": [{"actor": {"user_id": "u1", "username": INJECTION}}]}
@@ -230,6 +252,8 @@ class FenceByToolTests(SimpleTestCase):
         self.assertEqual(
             {tool: sorted(keys) for tool, keys in FENCED_KEYS_BY_TOOL.items()},
             {
+                "list_project_tags": ["label_name"],
+                "manage_project_labels": ["label_name"],
                 "get_sprint_summary": ["name"],
                 "list_sprints": ["name"],
                 "list_note_folders": ["name"],

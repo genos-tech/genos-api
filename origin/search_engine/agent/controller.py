@@ -310,6 +310,24 @@ def _resolve_user_names(raw: Any, access: LabelAccess) -> list[Any] | None:
     return [names.get(str(item), item) for item in raw]
 
 
+def _resolve_label_names(raw: Any, access: LabelAccess) -> list[Any] | None:
+    """`label_ids`: a list of project labels, one query. Each id the caller may see
+    becomes a name; every other entry stays as the model wrote it."""
+    if not isinstance(raw, list):
+        return None
+    names = access.project_label_names(raw)
+    return [names.get(_label_key(item), item) for item in raw]
+
+
+def _label_key(item: Any) -> int | None:
+    if isinstance(item, bool):  # `True` is not label 1
+        return None
+    try:
+        return int(item)
+    except (TypeError, ValueError):
+        return None
+
+
 def _resolve_todo_item_title(raw: Any, access: LabelAccess) -> str | None:
     """`ToDoItem.title` for a raw item primary key so the approval card
     surfaces the human-readable todo instead of "73". None when the id
@@ -348,6 +366,8 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     # starts with. (Only the project tools take either argument.)
     "user_id": _resolve_user_name,
     "member_ids": _resolve_user_names,
+    # `manage_project_labels`: the labels it puts on a project or takes off.
+    "label_ids": _resolve_label_names,
     "item_id": _resolve_todo_item_title,
     "parent_item_id": _resolve_todo_item_title,
     "milestone_id": _resolve_milestone_title,

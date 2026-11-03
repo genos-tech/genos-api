@@ -6,10 +6,11 @@ tag in the UI. The agent tools take plain tag NAMES and copy the colours
 across the same way, so an agent-set tag renders identically to a
 hand-picked one.
 
-A name the catalogue doesn't have is refused, never created: the
+A name the catalogue doesn't have is refused, never created here: the
 catalogue is the project's vocabulary, curated in project settings, and
-an agent minting tags would litter it. The model picks from
-`list_project_tags` or leaves the task untagged.
+an agent minting tags as a side effect of tagging a task would litter it.
+The model picks from `list_project_tags` or leaves the task untagged; adding
+a tag is its own approved step, `add_project_tag` (MIP-882).
 
 The `tags_changed` history row needs nothing here — `task_signals`
 diffs `tags` on every save, as it does for a UI edit.

@@ -22,7 +22,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.common_note_models import NoteFolderPermission
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.project.prj_models import ProjectLabel, ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent import controller
@@ -629,3 +629,86 @@ class FailClosedTests(ApprovalCardAclBase):
         raw = {"task_id": self.task.task_id, "project_id": self.project.project_id}
         self._card(raw, "update_task", self.user)
         self.assertEqual(raw, {"task_id": self.task.task_id, "project_id": self.project.project_id})
+
+
+class ProjectLabelCardTests(ApprovalCardAclBase):
+    """`manage_project_labels` names the labels it puts on a project or takes off. Labels
+    belong to the team, and the label catalogue is readable by any member of it, so the rule
+    is the team check and nothing finer."""
+
+    def setUp(self):
+        super().setUp()
+        self.client_work = ProjectLabel.objects.create(
+            team=self.team, name="Client Work", color="#7c3aed", text_color="white"
+        )
+        self.q3 = ProjectLabel.objects.create(
+            team=self.team, name="Q3", color="#111111", text_color="white"
+        )
+        self.theirs = ProjectLabel.objects.create(
+            team=self.other_team, name="Theirs", color="#222222", text_color="white"
+        )
+
+    def card(self, ids, user=None, **extra):
+        return self._card(
+            {"action": "assign", "project_id": self.project.project_id, "label_ids": ids, **extra},
+            "manage_project_labels",
+            user or self.user,
+        )
+
+    def test_the_labels_are_named_in_the_order_given(self):
+        out = self.card([self.q3.label_id, self.client_work.label_id])
+        self.assertEqual(out["label_ids"], ["Q3", "Client Work"])
+        self.assertEqual(out["project_id"], "Website Redesign")
+
+    def test_a_teammate_who_is_not_on_the_project_sees_the_names_too(self):
+        # The catalogue is the team's: reading it needs the team, not the project.
+        out = self.card([self.client_work.label_id], self.user2)
+        self.assertEqual(out["label_ids"], ["Client Work"])
+
+    def test_another_teams_label_and_an_unknown_id_stay_as_written(self):
+        out = self.card([self.client_work.label_id, self.theirs.label_id, 999999])
+        self.assertEqual(out["label_ids"], ["Client Work", self.theirs.label_id, 999999])
+
+    def test_someone_outside_the_team_gets_no_names(self):
+        out = self.card([self.client_work.label_id], self.stranger)
+        self.assertEqual(out["label_ids"], [self.client_work.label_id])
+
+    def test_digits_as_text_resolve_and_junk_stays(self):
+        out = self.card([str(self.q3.label_id), "junk", None, True, 1.5])
+        self.assertEqual(out["label_ids"], ["Q3", "junk", None, True, 1.5])
+
+    def test_true_is_not_label_one(self):
+        """`int(True)` is 1. Label 1 is made to exist, and shown to resolve, so that this can
+        tell a guard from a lookup that finds nothing."""
+        ProjectLabel.objects.filter(label_id=1).delete()
+        ProjectLabel.objects.create(
+            label_id=1, team=self.team, name="Label One", color="#111111", text_color="white"
+        )
+        self.assertEqual(self.card([1])["label_ids"], ["Label One"])
+        self.assertEqual(self.card([True])["label_ids"], [True])
+        self.assertEqual(self.card([False, 1])["label_ids"], [False, "Label One"])
+
+    def test_something_that_is_not_a_list_is_left_alone(self):
+        out = self.card(str(self.q3.label_id))
+        self.assertEqual(out["label_ids"], str(self.q3.label_id))
+
+    def test_an_empty_list_stays_empty(self):
+        self.assertEqual(self.card([])["label_ids"], [])
+
+    def test_the_label_name_in_a_create_is_left_as_the_model_wrote_it(self):
+        out = self._card(
+            {"action": "create", "project_id": self.project.project_id, "name": "New one"},
+            "manage_project_labels",
+            self.user,
+        )
+        self.assertEqual(out["name"], "New one")
+        self.assertEqual(out["project_id"], "Website Redesign")
+
+    def test_the_stored_arguments_keep_the_ids(self):
+        args = {
+            "action": "assign",
+            "project_id": self.project.project_id,
+            "label_ids": [self.q3.label_id],
+        }
+        self._card(args, "manage_project_labels", self.user)
+        self.assertEqual(args["label_ids"], [self.q3.label_id])
