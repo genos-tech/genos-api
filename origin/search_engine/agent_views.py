@@ -59,7 +59,7 @@ from rest_framework.response import Response
 from apis.llm_catalog import EFFORTS
 from apis.request_id import bind_request_id, current_request_id, log_failure, reset_request_id
 from origin.middleware.current_user import clear_current_user, set_current_user
-from origin.search_engine import metered, shared_answers, spend_recorder
+from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -2902,7 +2902,8 @@ _PINNED_LIST_LIMIT = 50
 
 
 class _RunInFlight(Exception):
-    """A run of the conversations being deleted is still streaming."""
+    """A run of the conversations being deleted may still be streaming: it is
+    `running` and younger than the stale threshold (`stale_runs`)."""
 
 
 def _delete_agent_conversations(
@@ -2929,10 +2930,16 @@ def _delete_agent_conversations(
     survives. The rolling summary is a column on the session, so it goes
     with it.
 
-    Refuses (`_RunInFlight`, nothing deleted) while any of those runs is
-    `running`: its worker thread is still writing steps and spend rows to it.
-    An `awaiting_approval` run is paused with no worker alive, so it is
-    deleted (a later /decide/ for it answers 404).
+    Refuses (`_RunInFlight`, nothing deleted) while any of those runs is in
+    flight: `running` and younger than the stale threshold, so its worker
+    thread may still be writing steps and spend rows to it. A `running` run
+    OLDER than that threshold is abandoned (its worker died: gunicorn
+    recycle, deploy, OOM) and is deleted like any other, so a dead run can
+    never block someone from erasing their conversations, with or without
+    the `reap_stale_agent_runs` cron. "Stale" is decided by
+    `stale_runs.in_flight_q`, the very rule that job reaps by. An
+    `awaiting_approval` run is paused with no worker alive, so it is deleted
+    (a later /decide/ for it answers 404).
 
     The index chunks (both lanes) are purged after the DB transaction commits,
     best-effort -- see `purge.purge_agent_runs`.
@@ -2952,12 +2959,16 @@ def _delete_agent_conversations(
     with transaction.atomic():
         # Locked, so a run cannot slip from `done` to `running` (a resumed
         # approval) between the check and the delete.
-        runs = list(
-            AgentRun.objects.select_for_update().filter(run_q).values_list("run_id", "status")
+        run_ids = list(
+            AgentRun.objects.select_for_update().filter(run_q).values_list("run_id", flat=True)
         )
-        if any(st == "running" for _, st in runs):
+        # In flight = `running` AND not stale, by the same rule (and the same
+        # threshold) the reaper closes by. The cutoff is taken after the lock.
+        in_flight = AgentRun.objects.filter(run_id__in=run_ids).filter(
+            stale_runs.in_flight_q(stale_runs.stale_cutoff())
+        )
+        if in_flight.exists():
             raise _RunInFlight()
-        run_ids = [rid for rid, _ in runs]
         AgentRun.objects.filter(run_id__in=run_ids).delete()
         deleted_sessions = AgentSession.objects.filter(session_q).delete()[0]
         transaction.on_commit(lambda: purge_agent_runs(run_ids))
@@ -3065,9 +3076,7 @@ class AgentSessionsListView(AuthenticatedAPIView):
         # pinned bucket by `-pinned_at` puts the most recently pinned at
         # the top, which is where the user just looked.
         pinned = list(
-            sessions_qs.filter(pinned_at__isnull=False).order_by("-pinned_at")[
-                :_PINNED_LIST_LIMIT
-            ]
+            sessions_qs.filter(pinned_at__isnull=False).order_by("-pinned_at")[:_PINNED_LIST_LIMIT]
         )
         recent = list(
             sessions_qs.filter(pinned_at__isnull=True).order_by("-last_active_at")[
@@ -3117,7 +3126,10 @@ class AgentSessionsListView(AuthenticatedAPIView):
 
         200 `{"deleted_sessions": int, "deleted_runs": int}`; deleting nothing
         is still 200 with zeros. 409 `{"error", "code": "run_in_flight"}`
-        with NOTHING deleted while one of those runs is still streaming.
+        with NOTHING deleted while one of those runs is in flight: `running`
+        and younger than the stale threshold (`stale_runs.STALE_RUN_HOURS`,
+        currently 2 hours). A `running` run older than that is abandoned and
+        is deleted with the rest.
         """
         user_id = str(getattr(request.user, "id", ""))
         if not user_id:
@@ -3236,7 +3248,9 @@ class AgentSessionDetailView(AuthenticatedAPIView):
 
         200 `{"deleted_sessions": 1, "deleted_runs": int}`; 409
         `{"error", "code": "run_in_flight"}` with nothing deleted while one
-        of its runs is still streaming.
+        of its runs is in flight: `running` and younger than the stale
+        threshold (`stale_runs.STALE_RUN_HOURS`, currently 2 hours). A
+        `running` run older than that is abandoned and is deleted with the rest.
         """
         user_id = str(getattr(request.user, "id", ""))
         if not user_id:
