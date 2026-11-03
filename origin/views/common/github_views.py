@@ -17,6 +17,8 @@ import hmac
 import json
 import logging
 import re
+import time
+from collections.abc import Mapping
 
 import requests
 from django.conf import settings
@@ -1130,26 +1132,117 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 # and the per-branch PR lookup in Redis with a short TTL so the table
 # load coalesces down to ~N calls and re-paints cost nothing.
 #
-# Cache scope: the data is *user-tokenable* (different users may have
-# different access to the same repo), but for our case all
-# webhook-registered repos are visible to the requesting user already
-# (otherwise the webhook would never have been registered for them).
-# Keying purely on (owner, repo) is safe and gives the highest hit rate.
+# Cache scope: ONE CONNECTED GITHUB ACCOUNT, never the repo alone.
+# The repos scanned are every `GithubWebhookRegistration` in the install,
+# not the repos the requesting user can see (a registration only says some
+# user once pasted a PR from that repo), and every call is made with the
+# REQUESTING user's token. A private repo can therefore answer 200 for one
+# user and 404 for the next; a repo-only key handed the first user's branch
+# names, commit SHAs and PR titles to everyone whose token could not read
+# them (MIP-974). So every key carries
+#
+#   * the connected account's id AND its `ts_updated_at`: reconnecting
+#     GitHub writes the row, so a new token gets fresh keys, and a hit
+#     never has to decrypt a token;
+#   * the repo's GENERATION (below).
+#
+# GitHub's "no" is cached per account too (404, or a 403 that is not a rate
+# limit), for `_DENIED_CACHE_TTL`: the answer is stable, and every task
+# open used to pay it again for each repo the user can't read. A rate
+# limit, a 5xx or a timeout says nothing about access and is never cached.
+#
+# Invalidation. A webhook event can no longer name the keys to delete
+# (it does not know which accounts have entries), so each repo carries a
+# generation number that is part of every key; a bump orphans everything
+# cached for that repo, whichever account wrote it. The helpers read the
+# generation BEFORE calling GitHub and write under that same key, so a
+# fetch that straddles a bump lands under a key nobody reads again.
 
 _BRANCH_CACHE_TTL = 60  # seconds — matches the frontend prStatusCache
 _PULL_CACHE_TTL = 60
+# How long "this account can't read that" is remembered. `fresh=1` skips it.
+_DENIED_CACHE_TTL = 10 * 60
+
+# Stored in place of a payload when GitHub refused the account. A real
+# answer is never a dict with this key (a branch list is a list, "no PR"
+# is `{}`, a PR is a slim dict).
+_DENIED = {"github_refused": True}
 
 
-def _branch_cache_key(owner: str, repo: str) -> str:
-    return f"gh:branches:{owner.lower()}:{repo.lower()}"
+def _is_denied(cached) -> bool:
+    return isinstance(cached, dict) and cached.get("github_refused") is True
 
 
-def _pull_cache_key(owner: str, repo: str, branch: str) -> str:
-    return f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}"
+def _account_scope(account: ConnectedAccount) -> str:
+    stamp = account.ts_updated_at
+    return f"{account.id}.{int(stamp.timestamp() * 1_000_000) if stamp else 0}"
 
 
-def _pr_by_number_cache_key(owner: str, repo: str, number: int) -> str:
-    return f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}"
+def _generation_key(owner: str, repo: str) -> str:
+    return f"gh:v2:gen:{owner.lower()}:{repo.lower()}"
+
+
+def _repo_generation(owner: str, repo: str) -> int:
+    """The repo's current generation; 0 until the first bump (and again if
+    Redis loses the key, which can only resurrect entries no older than
+    their TTL)."""
+    return cache.get(_generation_key(owner, repo)) or 0
+
+
+def _bump_repo_generation(owner: str, repo: str) -> None:
+    # A fresh timestamp rather than `incr`: it needs no read-modify-write,
+    # works on a missing key, and two bumps never collide. No expiry, so the
+    # key is never the first thing a `volatile-*` eviction policy drops.
+    cache.set(_generation_key(owner, repo), time.time_ns(), None)
+
+
+def _scoped_key(kind: str, account: ConnectedAccount, owner: str, repo: str, *rest) -> str:
+    gen = _repo_generation(owner, repo)
+    tail = "".join(f":{part}" for part in rest)
+    return f"gh:v2:{kind}:{_account_scope(account)}:{gen}:{owner.lower()}:{repo.lower()}{tail}"
+
+
+def _branch_cache_key(account: ConnectedAccount, owner: str, repo: str) -> str:
+    return _scoped_key("branches", account, owner, repo)
+
+
+def _pull_cache_key(account: ConnectedAccount, owner: str, repo: str, branch: str) -> str:
+    return _scoped_key("head_pull", account, owner, repo, branch)
+
+
+def _pr_by_number_cache_key(account: ConnectedAccount, owner: str, repo: str, number: int) -> str:
+    return _scoped_key("pr_by_number", account, owner, repo, number)
+
+
+def _is_rate_limited(resp) -> bool:
+    """Is this failure GitHub throttling us rather than answering? Primary
+    limits come as 403 (or 429) with `X-RateLimit-Remaining: 0`, secondary
+    ones with `Retry-After` and/or a message saying so."""
+    if resp.status_code == 429:
+        return True
+    headers = getattr(resp, "headers", None)
+    if isinstance(headers, Mapping) and (
+        headers.get("Retry-After") is not None or headers.get("X-RateLimit-Remaining") == "0"
+    ):
+        return True
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 — not JSON: nothing more to read
+        return False
+    message = body.get("message") if isinstance(body, dict) else None
+    if not isinstance(message, str):
+        return False
+    message = message.lower()
+    return "rate limit" in message or "abuse detection" in message
+
+
+def _is_refusal(resp) -> bool:
+    """GitHub says THIS ACCOUNT cannot read the thing: 404 (also how it
+    hides a private repo) or a 403 that is not a rate limit. Anything else
+    (429, rate-limit 403, 5xx, 401) is transient or not about access."""
+    if resp.status_code == 404:
+        return True
+    return resp.status_code == 403 and not _is_rate_limited(resp)
 
 
 def _list_repo_branches(
@@ -1165,13 +1258,15 @@ def _list_repo_branches(
     When `bypass_cache=True`, skips the read but still writes the fresh
     result so subsequent natural fetches within the TTL benefit.
     """
-    key = _branch_cache_key(owner, repo)
+    key = _branch_cache_key(account, owner, repo)
     if not bypass_cache:
         cached = cache.get(key)
         if cached is not None:
-            return cached
+            return None if _is_denied(cached) else cached
     resp = _github_get(account, f"/repos/{owner}/{repo}/branches", params={"per_page": 100})
     if not resp.ok:
+        if _is_refusal(resp):
+            cache.set(key, _DENIED, _DENIED_CACHE_TTL)
         return None
     branches = resp.json() or []
     cache.set(key, branches, _BRANCH_CACHE_TTL)
@@ -1193,10 +1288,12 @@ def _find_pr_for_branch(
     When `bypass_cache=True`, skips the read but still writes the fresh
     result so subsequent natural fetches within the TTL benefit.
     """
-    key = _pull_cache_key(owner, repo, branch)
+    key = _pull_cache_key(account, owner, repo, branch)
     if not bypass_cache:
         cached = cache.get(key)
         if cached is not None:
+            if _is_denied(cached):
+                return None
             # Cached payload may legitimately be the sentinel `{}` meaning
             # "this branch has no PR" — normalize that back to None.
             return cached or None
@@ -1212,6 +1309,8 @@ def _find_pr_for_branch(
         },
     )
     if not resp.ok:
+        if _is_refusal(resp):
+            cache.set(key, _DENIED, _DENIED_CACHE_TTL)
         return None
     items = resp.json() or []
     if not items:
@@ -1254,16 +1353,18 @@ def _fetch_pr_by_number(
     When `bypass_cache=True`, skips the read but still writes the fresh
     result so subsequent natural fetches within the TTL benefit.
     """
-    key = _pr_by_number_cache_key(owner, repo, number)
+    key = _pr_by_number_cache_key(account, owner, repo, number)
     if not bypass_cache:
         cached = cache.get(key)
         if cached is not None:
-            # Empty dict is the sentinel for "we tried and failed" so we
-            # don't keep retrying inside the TTL window.
-            return cached or None
+            # A refusal is stored as a marker (see `_DENIED`), so a
+            # transient failure is never mistaken for one and is not
+            # cached at all.
+            return None if _is_denied(cached) else (cached or None)
     resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
     if not resp.ok:
-        cache.set(key, {}, _PULL_CACHE_TTL)
+        if _is_refusal(resp):
+            cache.set(key, _DENIED, _DENIED_CACHE_TTL)
         return None
     pr = resp.json() or {}
     slim = {
@@ -1282,32 +1383,30 @@ def _fetch_pr_by_number(
 
 
 def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: str | None) -> None:
-    """Drop the Redis-cached GitHub lookups for this PR so the UI sees
-    the new PR state on the next fetch (rather than waiting up to 60s
-    for TTL).
+    """Make the next branch / PR lookup for this repo go to GitHub (rather
+    than waiting up to the TTL for the new PR state to show).
 
-    Called from the `pull_request` webhook dispatch. Comment events
-    (`issue_comment`, `pull_request_review_comment`) don't trigger this
-    because they don't mutate any of the fields we cache.
+    Called from the `pull_request` webhook dispatch and from
+    `reconcile_pr_deliveries`. Comment events (`issue_comment`,
+    `pull_request_review_comment`) don't trigger this because they don't
+    mutate any of the fields we cache.
 
-    Best-effort: a cache-delete failure logs but never propagates — a
-    missed invalidation just means an extra TTL cycle of staleness.
+    The lookups are cached per GitHub account, so their keys cannot be
+    named from here; bumping the repo's generation orphans all of them at
+    once. That is repo-wide: an event for one PR refreshes the repo's other
+    PR lookups too, once. `head_ref` is kept for the callers' sake; nothing
+    is keyed by it any more. The one per-PR key we still delete is the
+    webhook's own head-ref lookup (`_pr_head_ref_cache_key`), which is not
+    per-user and is never served to a user.
+
+    Best-effort: a cache failure logs but never propagates — a missed
+    invalidation just means an extra TTL cycle of staleness.
     """
-    keys: list[str] = [_branch_cache_key(owner, repo)]
-    if head_ref:
-        keys.append(_pull_cache_key(owner, repo, head_ref))
-    if number is not None:
-        keys.append(_pr_by_number_cache_key(owner, repo, number))
-        keys.append(_pr_head_ref_cache_key(owner, repo, number))
     try:
-        cache.delete_many(keys)
-        logger.info(
-            "ensure_repo_webhook: invalidated %d PR cache key(s) for %s/%s#%s",
-            len(keys),
-            owner,
-            repo,
-            number,
-        )
+        _bump_repo_generation(owner, repo)
+        if number is not None:
+            cache.delete(_pr_head_ref_cache_key(owner, repo, number))
+        logger.info("ensure_repo_webhook: invalidated PR caches for %s/%s#%s", owner, repo, number)
     except Exception:
         logger.exception("PR cache invalidation failed for %s/%s#%s", owner, repo, number)
 

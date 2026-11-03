@@ -457,31 +457,46 @@ class TestPullRequestWebhookInvalidatesCaches(TestCase):
     # The cache key shapes here must stay aligned with the helpers in
     # `github_views.py`. We assert against the exact keys so a silent
     # rename of either side surfaces here instead of in prod.
+    #
+    # The branch / PR lookups are cached per connected GitHub account
+    # (`gh:v2:<kind>:<account>:<generation>:<owner>:<repo>...`) and the
+    # repo's generation is part of every key, so a webhook event can drop
+    # them all without knowing which accounts wrote them: it bumps
+    # `gh:v2:gen:<owner>:<repo>`, and the entries cached under the old
+    # number are never read again. ACCOUNT below is `<id>.<ts_updated_at in
+    # microseconds>` for a row with no timestamp.
+    ACCOUNT = "00000000-0000-0000-0000-000000000001.0"
+
     @staticmethod
-    def _seed_pr_caches(owner: str, repo: str, branch: str, number: int):
-        cache.set(f"gh:branches:{owner.lower()}:{repo.lower()}", [{"name": branch}], 60)
-        cache.set(
-            f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}",
-            {"number": number, "state": "open"},
-            60,
-        )
-        cache.set(
-            f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}",
-            {"number": number, "state": "open"},
-            60,
-        )
+    def _generation(owner: str, repo: str):
+        return cache.get(f"gh:v2:gen:{owner.lower()}:{repo.lower()}") or 0
+
+    @classmethod
+    def _scoped_keys(cls, owner: str, repo: str, branch: str, number: int) -> list[str]:
+        base = f"{cls.ACCOUNT}:{cls._generation(owner, repo)}:{owner.lower()}:{repo.lower()}"
+        return [
+            f"gh:v2:branches:{base}",
+            f"gh:v2:head_pull:{base}:{branch}",
+            f"gh:v2:pr_by_number:{base}:{number}",
+        ]
+
+    @classmethod
+    def _seed_pr_caches(cls, owner: str, repo: str, branch: str, number: int):
+        branches, head_pull, by_number = cls._scoped_keys(owner, repo, branch, number)
+        cache.set(branches, [{"name": branch}], 60)
+        cache.set(head_pull, {"number": number, "state": "open"}, 60)
+        cache.set(by_number, {"number": number, "state": "open"}, 60)
         cache.set(
             f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}",
             branch,
             60,
         )
 
-    @staticmethod
-    def _cached_keys_present(owner: str, repo: str, branch: str, number: int) -> list[str]:
-        keys = [
-            f"gh:branches:{owner.lower()}:{repo.lower()}",
-            f"gh:head_pull:{owner.lower()}:{repo.lower()}:{branch}",
-            f"gh:pr_by_number:{owner.lower()}:{repo.lower()}:{number}",
+    @classmethod
+    def _cached_keys_present(cls, owner: str, repo: str, branch: str, number: int) -> list[str]:
+        """What a lookup made NOW would find: the scoped keys are rebuilt at
+        the repo's current generation, the head-ref key is a plain name."""
+        keys = cls._scoped_keys(owner, repo, branch, number) + [
             f"gh:pr_head_ref:{owner.lower()}:{repo.lower()}:{number}",
         ]
         return [k for k in keys if cache.get(k) is not None]
@@ -490,8 +505,10 @@ class TestPullRequestWebhookInvalidatesCaches(TestCase):
         self._seed_pr_caches("owner", "repo", "feature/abc", 42)
         self.assertEqual(len(self._cached_keys_present("owner", "repo", "feature/abc", 42)), 4)
         self._post(_pr_payload(action="opened", merged=False, head_ref="feature/abc"))
-        # All four keys should be gone after invalidation.
+        # All four lookups should be gone after invalidation.
         self.assertEqual(self._cached_keys_present("owner", "repo", "feature/abc", 42), [])
+        # The webhook's own head-ref key is deleted by name, not orphaned.
+        self.assertIsNone(cache.get("gh:pr_head_ref:owner:repo:42"))
 
     def test_pull_request_merged_invalidates_all_pr_caches(self):
         # The merge path also needs invalidation — without it the UI
@@ -500,14 +517,15 @@ class TestPullRequestWebhookInvalidatesCaches(TestCase):
         self._post(_pr_payload(action="closed", merged=True, head_ref="feature/abc"))
         self.assertEqual(self._cached_keys_present("owner", "repo", "feature/abc", 42), [])
 
-    def test_pull_request_event_for_different_pr_does_not_touch_other_caches(self):
-        # Seed caches for two different PRs in the same repo. An event
-        # for PR #42 must only drop #42's keys; PR #99's stay.
+    def test_pull_request_event_only_touches_its_own_repo(self):
+        # Seed caches for a second PR in the same repo and for a PR in a
+        # different repo. An event for owner/repo#42 drops the repo's
+        # lookups, all of them: the entries are per account, so they cannot
+        # be told apart by PR any more (PR #99 is fetched once more). Another
+        # repo's entries are not touched.
         self._seed_pr_caches("owner", "repo", "feature/abc", 42)
         self._seed_pr_caches("owner", "repo", "feature/xyz", 99)
-        # An event for #42 still drops the per-repo branch list (which
-        # is shared — there's no way to invalidate just one branch's
-        # entry inside that list).
+        self._seed_pr_caches("owner", "other", "feature/abc", 42)
         self._post(
             _pr_payload(
                 action="opened",
@@ -516,13 +534,16 @@ class TestPullRequestWebhookInvalidatesCaches(TestCase):
                 html_url="https://github.com/owner/repo/pull/42",
             )
         )
-        # PR #99's per-PR keys survive.
-        self.assertIsNotNone(cache.get("gh:head_pull:owner:repo:feature/xyz"))
-        self.assertIsNotNone(cache.get("gh:pr_by_number:owner:repo:99"))
+        # The other repo's lookups survive.
+        self.assertEqual(len(self._cached_keys_present("owner", "other", "feature/abc", 42)), 4)
+        # This repo's are all re-fetched, PR #99's included ...
+        for key in self._scoped_keys("owner", "repo", "feature/xyz", 99):
+            self.assertIsNone(cache.get(key))
+        for key in self._scoped_keys("owner", "repo", "feature/abc", 42):
+            self.assertIsNone(cache.get(key))
+        # ... but the webhook's head-ref lookup is deleted per PR only.
         self.assertIsNotNone(cache.get("gh:pr_head_ref:owner:repo:99"))
-        # PR #42's keys are gone.
-        self.assertIsNone(cache.get("gh:head_pull:owner:repo:feature/abc"))
-        self.assertIsNone(cache.get("gh:pr_by_number:owner:repo:42"))
+        self.assertIsNone(cache.get("gh:pr_head_ref:owner:repo:42"))
 
     def test_unparseable_pr_url_skips_invalidation(self):
         # If the PR URL doesn't parse (malformed payload), we silently
