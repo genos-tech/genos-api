@@ -14,11 +14,18 @@ ONE definition, used by every consumer so they cannot drift:
             Nothing to emit, nothing to purge.
   WITHHELD  would otherwise be eligible, but is not collected NOW: the asker
             opted out (`CustomUser.share_answers_with_team` False), withdrew
-            this one answer (`AgentRun.withheld_from_team_answers`), or the
-            answer is built from sources no one else (or no one) may see.
+            this one answer (`AgentRun.withheld_from_team_answers`), asked it
+            from a thread or a note (`is_scoped_session`), or the answer is
+            built from sources no one else (or no one) may see.
             The chunker emits an empty tombstone so a full reindex purges any
             earlier copy.
   COLLECT   eligible. Carries the sources and the audience (ACL).
+
+A scoped ask is never collected (MIP-978): "Ask about this thread / note" puts
+an LLM-made summary of that thread / note into the model's system prompt, and a
+summary is not a tool result, so it is no "source" and narrows no audience. An
+answer quoting it would be collected for whoever can see the other things the
+run read. See `is_scoped_session`.
 
 Turning the preference back on makes the user's runs COLLECT again, and
 `reshare_team_lane_for_user` (started in the background by the preference
@@ -37,7 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from django.db import connection
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.models import AgentRun
@@ -64,8 +71,12 @@ class Verdict:
 def completed_runs() -> QuerySet:
     """Every run that is a candidate at all: a clean completion with an
     answer. The chunker iterates this and judges each; the list narrows it to
-    one user."""
-    return AgentRun.objects.filter(status=INDEXABLE_STATUS).exclude(final_answer_text="")
+    one user. The session rides along because the verdict reads its scope."""
+    return (
+        AgentRun.objects.filter(status=INDEXABLE_STATUS)
+        .exclude(final_answer_text="")
+        .select_related("session")
+    )
 
 
 def opted_out_user_ids() -> set[str]:
@@ -80,12 +91,52 @@ def opted_out_user_ids() -> set[str]:
     }
 
 
+# The `AgentSession` columns that bind a session to the thread or note it was
+# opened from ("Ask about this thread / note"). ANY of them set makes the
+# session scoped. A new kind of scope (a project, a task, ...) is one more name
+# here: `is_scoped_session` (a row) and `scoped_session_q` (a queryset) are
+# both built from this tuple, so the chunker, the list, the re-collection and
+# the sweep follow without another edit. (A test fails when `AgentSession`
+# gains a column that is in neither this tuple nor its known unscoped ones.)
+SESSION_SCOPE_COLUMNS = ("chat_type", "chat_id", "thread_id", "note_type", "note_id")
+
+
+def is_scoped_session(session) -> bool:
+    """True if `session` was opened from a specific thread or note.
+
+    The first turn of such a session is primed with a summary of that thread /
+    note in the system prompt. The summary is not a tool result, so
+    `reconstruct_sources_for_run` never sees it and the audience computed from
+    the run's sources says nothing about who may read it: the answer can quote
+    a private thread to everyone who can see some other object the run read.
+    No run of a scoped session is collected. A run with no session is a
+    standalone ask (nothing was injected) and is not scoped.
+    """
+    return session is not None and any(
+        getattr(session, column) is not None for column in SESSION_SCOPE_COLUMNS
+    )
+
+
+def scoped_session_q() -> Q:
+    """`is_scoped_session` as a filter on `AgentRun`: the runs whose session
+    is scoped (none of the session-less ones)."""
+    q = Q()
+    for column in SESSION_SCOPE_COLUMNS:
+        q |= Q(**{f"session__{column}__isnull": False})
+    return q
+
+
 def still_shareable(runs: QuerySet) -> QuerySet:
     """The cheap, DB-only half of the rule: the runs of `runs` that are not
-    withdrawn and not owned by an opted-out user. (The expensive half -- the
-    sources' audience -- needs `judge_run`.) The sweep uses this to keep
-    exactly the chunks the chunker would still emit."""
-    return runs.filter(withheld_from_team_answers=False).exclude(user_id__in=opted_out_user_ids())
+    withdrawn, not owned by an opted-out user and not part of a scoped session.
+    (The expensive half -- the sources' audience -- needs `judge_run`.) The
+    sweep uses this to keep exactly the chunks the chunker would still emit, so
+    it also removes copies collected before a rule existed."""
+    return (
+        runs.filter(withheld_from_team_answers=False)
+        .exclude(user_id__in=opted_out_user_ids())
+        .exclude(scoped_session_q())
+    )
 
 
 def is_first_turn(run: AgentRun) -> bool:
@@ -121,6 +172,12 @@ def judge_run(run: AgentRun, *, opted_out: set[str]) -> Verdict:
     # them outright rather than emitting a tombstone.
     if not is_first_turn(run):
         return Verdict(SKIP)
+
+    # Asked from a thread or a note: the prompt held a summary that is no
+    # source, so the audience below would not cover it. Withheld (a tombstone),
+    # not skipped: a copy collected before this rule is purged by it.
+    if is_scoped_session(run.session):
+        return Verdict(WITHHELD)
 
     # Lazy imports: `controller` pulls in the LLM client stack; keep it off
     # this module's import path (and out of any ingestion import cycle).
