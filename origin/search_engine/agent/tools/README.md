@@ -38,6 +38,15 @@ Every new-tool PR ships with:
   registry-generated prompt directory — pick the existing category that
   matches the tool's *purpose* (add a new one only with a real new domain).
 
+- [ ] **Editable fields (approval-gated tools)** — add the tool to
+  `EDITABLE_FIELDS` in [`../approval_edits.py`](../approval_edits.py): the plain
+  values a person may fix on the approval card before approving (a title, a
+  date, a body), or an explicit `_NONE` for "nothing". `test_agent_approval_edits`
+  fails with the missing name spelled out until you do. Never a target id, a
+  person, a pick from a list, or anything the tool resolves from a reference.
+  If you list a field, its rule must be at least as strict as the tool's own
+  (the parity tables in that test run the same value through both).
+
 - [ ] **Quota / tier accounting** — external or per-call-expensive tools
   (network APIs, LLM-heavy work) are wired into the tier quotas
   (`SEARCH_ENGINE["TIER_QUOTAS"]` in `apis/settings.py`), not left

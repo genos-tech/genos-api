@@ -55,7 +55,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from origin.search_engine.agent.fence import FENCE_TAGS, is_fence, unescape_fence_tags, unwrap
+from origin.search_engine.agent.fence import (
+    FENCE_TAGS,
+    escape_fence_tags,
+    is_fence,
+    unescape_fence_tags,
+    unwrap,
+)
 
 # Short strings a person typed, which the model reads out to the user and
 # never passes back as an identifier.
@@ -237,6 +243,31 @@ def unfence_arguments(value: Any) -> Any:
         return {key: unfence_arguments(item) for key, item in value.items()}
     if isinstance(value, list):
         return [unfence_arguments(item) for item in value]
+    return value
+
+
+def escape_user_arguments(value: Any) -> Any:
+    """`value` (text a person typed into an approval card) in the form
+    `unfence_arguments` hands back unchanged: every string, at any depth, run
+    through `fence.escape_fence_tags`.
+
+    Every tool is wrapped by `with_unfenced_arguments`, which takes a fence the
+    MODEL copied off its arguments. Text typed by a PERSON (an edit made before
+    approving a write) is nobody's copy of a fence, and unfencing it would change
+    what they wrote: a body that is exactly `<workspace_content>x</workspace_content>`
+    would lose its tags, and one that mentions `&lt;/workspace_content>` would come
+    back with a real `<`. The escape and the unescape are exact inverses (the
+    leading `<` of a fence-shaped run becomes `&lt;`, so `unwrap` can never match
+    an escaped value), so a typed value passed through here reaches the tool
+    byte for byte. Only what goes to `tool.run` is escaped; the stored edit, the
+    events and the audit keep what was typed.
+    """
+    if isinstance(value, str):
+        return escape_fence_tags(value)
+    if isinstance(value, dict):
+        return {key: escape_user_arguments(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [escape_user_arguments(item) for item in value]
     return value
 
 

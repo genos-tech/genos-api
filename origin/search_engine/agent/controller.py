@@ -21,10 +21,16 @@ Event types emitted (full NDJSON protocol):
   tool_call_start              read-only tool dispatch
   tool_call_result             read-only tool success (+ duration_ms
                                when the tool actually executed — absent
-                               on session-cache hits)
+                               on session-cache hits; an approved write
+                               the person edited first adds `edited:
+                               true` and `edited_arguments`, the
+                               {path: value} they typed)
   tool_call_error              tool error (incl. user-rejected writes;
                                + duration_ms when a tool ran)
-  tool_call_pending_approval   write tool — paused, awaiting user
+  tool_call_pending_approval   write tool — paused, awaiting user (+
+                               `editable`, the argument paths the card
+                               may let the person change before
+                               approving: `agent/approval_edits.py`)
   sources                      citation chips (after search calls)
   answer_delta                 streaming text from the final answer
   done                         final answer delivered (the streaming
@@ -51,7 +57,7 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
-from origin.search_engine.agent import tool_cache
+from origin.search_engine.agent import approval_edits, tool_cache
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.egress import EgressRefused, check_web_query
@@ -2020,25 +2026,57 @@ def resume_agent(
 
     step_index = pending_step.step_index
     call_name = pending_step.tool_name
+    # The model's own call, exactly as it proposed it. This, never the edited
+    # form, is what is replayed to the model as its function_call (with its
+    # thought_signature), so what the model sees does not change with an edit.
     call_args = dict(pending_step.arguments_json or {})
     function_call = FunctionCall(
         name=call_name,
         args=call_args,
         thought_signature=_coerce_signature(pending_step.thought_signature),
     )
+    # Edit before approve (`approval_edits`). `/decide/` stored the person's
+    # patch on the step, in the same transaction that spent the approval, and
+    # checked it before doing so. It is checked again here (this function is
+    # callable on its own, and the clock moves: a reminder can pass in between)
+    # and merged into the EFFECTIVE arguments the tool runs with:
+    #   run_args   what `tool.run` receives (typed text escaped so the tool's
+    #              unfencing hands it back unchanged);
+    #   shown_args the same, as typed, for the events.
+    # KNOWN LIMITATION: the model's replay (`function_call` above, and
+    # `_rebuild_messages` on a later pause) is still its original call beside
+    # the result of what ran, so its final answer can describe the proposal
+    # rather than the edit. Telling it what was edited changes what it sees,
+    # which needs an eval first; it is a follow-up.
+    run_args = call_args
+    shown_args = call_args
+    edit_patch: dict[str, Any] = {}
+    edit_error: str | None = None
+    stored_edits = pending_step.edited_arguments_json
+    if decision == DECISION_APPROVE and isinstance(stored_edits, dict) and stored_edits:
+        try:
+            edit_patch = approval_edits.prepare(call_name, call_args, stored_edits, ctx)
+        except approval_edits.EditRejected as exc:
+            edit_error = "Your edits could not be applied, so nothing was changed: " + "; ".join(
+                f"{path}: {message}" for path, message in exc.field_errors.items()
+            )
+        else:
+            if edit_patch:
+                run_args = approval_edits.apply_edits(call_args, edit_patch, for_run=True)
+                shown_args = approval_edits.apply_edits(call_args, edit_patch, for_run=False)
     # Chips created by an approved write (filled in the approve branch);
     # doubles as the continued loop's sources dedup seed.
     resumed_sources: dict[tuple[Any, Any], dict[str, Any]] = {}
 
     # Emit the start event the original run skipped. Same step index so
     # the frontend can correlate the approve/reject card with the row
-    # that's now actually executing.
+    # that's now actually executing. After an edit it shows what is running.
     emit(
         {
             "type": "tool_call_start",
             "step": step_index,
             "tool_name": call_name,
-            "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
+            "arguments": _friendly_arguments(shown_args, call_name, ctx=ctx),
         }
     )
 
@@ -2097,7 +2135,9 @@ def resume_agent(
             # that loop, so it times (and reports) its own run.
             _tool_started = time.monotonic()
             try:
-                result = tool.run(call_args, ctx)
+                if edit_error is not None:
+                    raise ToolError(edit_error)
+                result = tool.run(run_args, ctx)
             except ToolError as e:
                 dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 emit(
@@ -2155,6 +2195,13 @@ def resume_agent(
                     "summary": summary,
                     "duration_ms": dur_ms,
                 }
+                # An approve that carried edits says so, and with what the
+                # person typed, so the card can show what ran. For the browser
+                # only: it is on the event, never on `result`, which is
+                # persisted and replayed to the model.
+                if edit_patch:
+                    result_event["edited"] = True
+                    result_event["edited_arguments"] = edit_patch
                 # A deleted project leaves the sidebar and its page closes (MIP-882).
                 if call_name == "delete_project" and result.get("project_id") is not None:
                     result_event["project"] = {
@@ -3091,11 +3138,20 @@ def _drive_loop(
                 # needs to POST `/decide/`. When `run_id` is None (eval
                 # / test paths) we omit the field rather than serialize
                 # a `null` that the wire schema doesn't expect.
+                # Edit before approve: the paths of `arguments` the card may
+                # render as editable, and the only ones `/decide/` accepts in
+                # `edited_args`. `[]` when nothing in this call is. At those paths
+                # `arguments` carries the value as the tool will receive it (a
+                # fence the model copied taken off): the editor starts from it.
+                editable = approval_edits.editable_paths(call_name, call_args)
                 event: dict[str, Any] = {
                     "type": "tool_call_pending_approval",
                     "step": step,
                     "tool_name": call_name,
-                    "arguments": _friendly_arguments(call_args, call_name, ctx=ctx),
+                    "arguments": approval_edits.for_card(
+                        _friendly_arguments(call_args, call_name, ctx=ctx), call_args, editable
+                    ),
+                    "editable": editable,
                     "approval_token": str(approval_token),
                 }
                 if run_id is not None:
@@ -3772,6 +3828,34 @@ def _truncate_for_critique(value: Any) -> Any:
 # --------------------------------------------------------------------------- #
 
 
+def is_pending_step(step: AgentStep) -> bool:
+    """Whether `step` is a write the run paused on and nobody has answered yet:
+    the marker summary, and neither a result nor an error filled in. One
+    definition for the resume (`_rebuild_messages`) and for `/decide/`, which has
+    to find the same step to check an edit against it."""
+    return bool(
+        step.tool_name
+        and step.summary == PENDING_APPROVAL_MARKER
+        and not step.result_json
+        and not step.error
+    )
+
+
+def pending_step_of(run: AgentRun) -> AgentStep | None:
+    """The step `resume_agent` would resume `run` on, or None: the LAST one that
+    `is_pending_step`, in the order `_rebuild_messages` walks them."""
+    pending: AgentStep | None = None
+    candidates = (
+        run.steps.filter(summary=PENDING_APPROVAL_MARKER)
+        .exclude(tool_name="")
+        .order_by("step_index", "step_id")
+    )
+    for step in candidates:
+        if is_pending_step(step):
+            pending = step
+    return pending
+
+
 def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | None]:
     """Reconstruct the conversation up to (but not including) the pending step.
 
@@ -3787,12 +3871,7 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
     for step in run.steps.order_by("step_index", "step_id"):
         # Pending-write rows are skipped here — we hand them back to
         # the caller to resolve.
-        if (
-            step.tool_name
-            and step.summary == PENDING_APPROVAL_MARKER
-            and not step.result_json
-            and not step.error
-        ):
+        if is_pending_step(step):
             pending = step
             continue
 
