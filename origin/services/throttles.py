@@ -331,6 +331,15 @@ class AgentThrottle(WindowRateThrottle):
     methods = frozenset({"POST"})
 
 
+class AgentUndoThrottle(WindowRateThrottle):
+    """A person's click on Undo (`POST .../runs/<run>/steps/<step>/undo/`): a few
+    writes to the workspace and no LLM call. Its own scope, so it neither spends
+    the `agent` budget (which is for model calls) nor waits on it, while still
+    bounding a script that presses it in a loop."""
+
+    scope = "agent_undo"
+
+
 class SummaryThrottle(WindowRateThrottle):
     """The thread/note summary panels. An LLM call on a cache miss, and
     each open panel re-asks every 30 s to spot a changed fingerprint —

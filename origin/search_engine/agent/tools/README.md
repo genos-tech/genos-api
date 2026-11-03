@@ -53,8 +53,10 @@ Every new-tool PR ships with:
   card shows BEFORE the person approves. `test_agent_undo_map` fails with the
   missing name spelled out until you do. A tool that can be undone returns its
   pre-image under `__undo__` (only when `ctx.capture_undo`; the controller pops it,
-  like `__summary__`, and it is never in the result the model reads); a tool
-  that deletes for good, notifies people, or keeps no old values is `none`.
+  like `__summary__`, and it is never in the result the model reads) and gets a
+  handler in `HANDLERS` of [`../undo_apply.py`](../undo_apply.py) (the test holds the
+  two together); a tool that deletes for good, notifies people, or keeps no old
+  values is `none`.
 
 - [ ] **Quota / tier accounting** — external or per-call-expensive tools
   (network APIs, LLM-heavy work) are wired into the tier quotas

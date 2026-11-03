@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent import approval_edits, undo
+from origin.search_engine.agent import approval_edits, undo, undo_apply
 from origin.search_engine.agent.tools import REGISTRY
 from origin.views.public.mcp.tools import CATALOG
 
@@ -315,3 +315,26 @@ class StoredShapeTests(SimpleTestCase):
         )(1, 0, "x", None, None)
         self.assertIsNone(undo.step_info(step))
         self.assertIsNone(undo.event_info(step))
+
+
+class HandlersMatchTheMapTests(SimpleTestCase):
+    def test_every_tool_that_can_be_undone_has_a_handler_and_only_those(self):
+        can_be_undone = {name for name, level in undo.UNDO_SUPPORT.items() if level != undo.NONE}
+        missing = can_be_undone - set(undo_apply.HANDLERS)
+        self.assertFalse(missing, f"the map promises an undo no handler does: {sorted(missing)}")
+        extra = set(undo_apply.HANDLERS) - can_be_undone
+        self.assertFalse(
+            extra, f"a handler for a tool the map says cannot be undone: {sorted(extra)}"
+        )
+
+    def test_every_refusal_code_has_a_status(self):
+        self.assertEqual(
+            undo_apply.STATUS,
+            {
+                "expired": 410,
+                "changed_since": 409,
+                "already_undone": 409,
+                "not_undoable": 409,
+                "permission_lost": 403,
+            },
+        )

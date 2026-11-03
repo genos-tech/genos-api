@@ -23,6 +23,7 @@ from rest_framework.settings import api_settings
 from origin.search_engine.agent_views import (
     AgentAskView,
     AgentDecideView,
+    AgentStepUndoView,
     NoteSummaryView,
     ThreadSummaryView,
 )
@@ -295,6 +296,7 @@ class TestScopedThrottles(_ThrottleCase):
             SearchView: "search",
             AgentAskView: "agent",
             AgentDecideView: "agent",
+            AgentStepUndoView: "agent_undo",
             NoteSummaryView: "agent_summary",
             ThreadSummaryView: "agent_summary",
             AccountExportView: "export",
@@ -450,6 +452,7 @@ class TestRatesComeFromSettings(SimpleTestCase):
                 "search",
                 "agent",
                 "agent_summary",
+                "agent_undo",
                 "export",
                 "invite",
                 "batch_read",

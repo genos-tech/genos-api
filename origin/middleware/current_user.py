@@ -14,6 +14,7 @@ in by calling `set_current_user(user)` and clearing it in `finally`.
 """
 
 import threading
+from contextlib import contextmanager
 
 _state = threading.local()
 
@@ -53,7 +54,9 @@ def get_current_source():
         public-API or MCP call. DRF puts the `ApiKey` on `request.auth`
         (and mirrors it onto the Django request we hold), read lazily for
         the same reason `request.user` is;
-      * `{"kind": "app"}`     — a signed-in session/JWT request.
+      * `{"kind": "app"}`     — a signed-in session/JWT request;
+      * `{"kind": "app", "undo_of": {"run_id", "step"}}` — the person's own click
+        on Undo for an approved agent write (`via_override`, `agent/undo_apply.py`).
     """
     explicit = getattr(_state, "via", None)
     if explicit is not None:
@@ -81,6 +84,30 @@ def set_current_user(user, via=None):
     started from a request does NOT see that request's thread-local."""
     _state.user = user
     _state.via = via
+
+
+@contextmanager
+def via_override(via):
+    """Report `via` as how every write in the block arrived (`get_current_source`),
+    then put back what was reported before.
+
+    For a request that is the app, doing something the app does not do on its
+    own: undoing an agent's write (`{"kind": "app", "undo_of": {...}}`), so the
+    history can tell it from a plain edit by the same person. Only the source is
+    touched. The acting user still resolves from the request, and the request is
+    left in place (`clear_current_user` would drop it, and the signals still need
+    it for whatever the handler does next).
+    """
+    had = hasattr(_state, "via")
+    prior = getattr(_state, "via", None)
+    _state.via = via
+    try:
+        yield
+    finally:
+        if had:
+            _state.via = prior
+        elif hasattr(_state, "via"):
+            del _state.via
 
 
 def clear_current_user():

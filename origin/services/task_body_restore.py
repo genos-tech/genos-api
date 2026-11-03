@@ -24,28 +24,57 @@ class RestoreRefused(Exception):
         self.status = status
 
 
-def restore_task_body(*, task: TaskMaster, activity_id: int, actor_id: Any) -> dict[str, Any]:
-    """Restore the description a `description_edited` row of THIS task kept.
-
-    The row is looked up by task as well as by id, so an activity id from another
-    task, or one the caller cannot see, is "not found" and never a read of
-    someone else's body. It must be a description row that kept its body.
+def put_back_task_body(
+    *, task: TaskMaster, body: Any, actor_id: Any, notify_mentions: bool = True
+) -> bool:
+    """Make `body` the task's description. True when the body it replaced was kept
+    on the history row this writes (a body that was a list; a task with none has
+    nothing to keep).
 
     A restore is itself a body rewrite, and `app` autosave does not keep the
     previous body. So that a mistaken restore can be undone too, the body it
-    replaces is recorded explicitly on the row it writes. It also pushes the body
-    into the task's live Yjs document (MIP-694): the editor renders that, not
-    `content`, so without the push a task that was ever opened keeps showing the
-    rewrite.
+    replaces is recorded explicitly on the row it writes (`_keep_previous_body`).
+    It also pushes the body into the task's live Yjs document (MIP-694): the editor
+    renders that, not `content`, so without the push a task that was ever opened
+    keeps showing the rewrite. `ts_updated_at` is listed because `auto_now` only
+    runs for the fields a save names, and the incremental reindexer and the
+    browsers' sync both go by it.
+
+    `notify_mentions=False` is for undoing an agent's write (`agent/undo_apply.py`):
+    it is a way back, and files nobody's mention. The task's stored mention set is
+    brought in line with the body anyway, quietly, so that the next save of this
+    body is not taken for the first time anyone was mentioned in it.
     """
     # Local imports, as the view had them: the agent tools import services, so a
     # module-level import here would close a loop at startup, and a test that
     # patches `collab_push.push_task_body` only reaches a name read at call time.
     from origin.search_engine.agent.tools.body_mentions import (  # noqa: PLC0415
         notify_task_body_mentions,
+        store_task_mention_baseline,
     )
     from origin.services.collab_push import push_task_body  # noqa: PLC0415
 
+    replaced_body = task.content
+    # A restore must be restorable: the signal keeps the previous body only for
+    # agent and API-key writes, and the page's own restore arrives as the app.
+    task.content = body
+    task._keep_previous_body = True
+    task.save(update_fields=["content", "ts_updated_at"])
+    push_task_body(task.task_id, body if isinstance(body, list) else [])
+    if notify_mentions:
+        notify_task_body_mentions(task, actor_id=str(actor_id))
+    else:
+        store_task_mention_baseline(task)
+    return isinstance(replaced_body, list)
+
+
+def restore_task_body(*, task: TaskMaster, activity_id: int, actor_id: Any) -> dict[str, Any]:
+    """Restore the description a `description_edited` row of THIS task kept.
+
+    The row is looked up by task as well as by id, so an activity id from another
+    task, or one the caller cannot see, is "not found" and never a read of
+    someone else's body. It must be a description row that kept its body.
+    """
     row = TaskActivity.objects.filter(
         activity_id=activity_id,
         task_id=task.task_id,
@@ -56,19 +85,10 @@ def restore_task_body(*, task: TaskMaster, activity_id: int, actor_id: Any) -> d
     if not (row.metadata or {}).get("previousBodyKept") or not isinstance(row.old_value, list):
         raise RestoreRefused("That edit did not keep the previous description.", 400)
 
-    previous_body = row.old_value
-    replaced_body = task.content
-
-    # A restore must be restorable: the signal keeps the previous body only for
-    # agent and API-key writes, and the page's own restore arrives as the app.
-    task.content = previous_body
-    task._keep_previous_body = True
-    task.save(update_fields=["content"])
-    push_task_body(task.task_id, previous_body)
-    notify_task_body_mentions(task, actor_id=str(actor_id))
+    replaced_body_kept = put_back_task_body(task=task, body=row.old_value, actor_id=actor_id)
 
     return {
         "taskId": task.task_id,
         "restoredFrom": row.activity_id,
-        "replacedBodyKept": isinstance(replaced_body, list),
+        "replacedBodyKept": replaced_body_kept,
     }
