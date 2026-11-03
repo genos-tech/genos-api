@@ -144,6 +144,116 @@ class TestProjectLabels(TestCase):
         )
         self.assertEqual(res.status_code, 409)
 
+    # ── Colours (MIP-955) ──────────────────────────────────────────
+
+    def _post_label(self, **body):
+        body.setdefault("project_id", self.project.project_id)
+        body.setdefault("name", "Tinted")
+        return self.client.post("/api/v2/project/label/", body, format="json")
+
+    def _put_label(self, label_id, **body):
+        body.setdefault("project_id", self.project.project_id)
+        return self.client.put(
+            "/api/v2/project/label/", {"label_id": label_id, **body}, format="json"
+        )
+
+    def test_create_refuses_a_colour_that_cannot_fit_the_column(self):
+        """The column is 10 characters: a longer value used to reach Postgres and 500."""
+        res = self._post_label(color="this-is-too-long")
+        self.assertEqual(res.status_code, 400, getattr(res, "data", None))
+        self.assertEqual(res.data, {"error": "color must be a hex colour like #3b82f6."})
+        res = self._post_label(text_color="this-is-too-long")
+        self.assertEqual(res.status_code, 400, getattr(res, "data", None))
+        self.assertIn("text_color", res.data["error"])
+        self.assertFalse(ProjectLabel.objects.filter(name="Tinted").exists())
+
+    def test_create_refuses_a_value_the_picker_cannot_produce(self):
+        for body in (
+            {"color": "red"},
+            {"color": "#fff"},
+            {"color": "#12345g"},
+            {"color": "#3b82f6aa"},
+            {"color": 5},
+            {"color": ["#3b82f6"]},
+            {"text_color": "purple"},
+            {"text_color": 5},
+            {"text_color": "#fffffff"},
+        ):
+            with self.subTest(body=body):
+                res = self._post_label(**body)
+                self.assertEqual(res.status_code, 400, getattr(res, "data", None))
+                self.assertIn("error", res.data)
+        self.assertFalse(ProjectLabel.objects.filter(name="Tinted").exists())
+
+    def test_create_takes_what_the_picker_sends(self):
+        """`ColorPickerMenu` sends a lowercase `#rrggbb` and `black` / `white`; the
+        API's own default text colour is `#ffffff`."""
+        for i, (color, text) in enumerate(
+            [
+                ("#ffd93b", "black"),
+                ("#8e23ff", "white"),
+                ("#7c3aed", "#ffffff"),
+                ("#D3D3D3", "BLACK"),
+            ]
+        ):
+            with self.subTest(color=color, text=text):
+                res = self._post_label(name=f"Picked {i}", color=color, text_color=text)
+                self.assertEqual(res.status_code, 201, getattr(res, "data", None))
+                self.assertEqual(res.data["color"], color.lower())
+                self.assertEqual(res.data["textColor"], text.lower())
+
+    def test_create_without_colours_takes_the_defaults(self):
+        for i, body in enumerate(({}, {"color": None, "text_color": ""})):
+            with self.subTest(body=body):
+                res = self._post_label(name=f"Plain {i}", **body)
+                self.assertEqual(res.status_code, 201, getattr(res, "data", None))
+                self.assertEqual((res.data["color"], res.data["textColor"]), ("#7c3aed", "#ffffff"))
+
+    def test_recolour_refuses_a_colour_that_cannot_fit_and_changes_nothing(self):
+        label_id = self._create_label(name="Keep").data["labelId"]
+        for body in (
+            {"color": "this-is-too-long"},
+            {"text_color": "this-is-too-long"},
+            {"color": "red"},
+            {"name": "Renamed", "color": "#12345"},
+        ):
+            with self.subTest(body=body):
+                res = self._put_label(label_id, **body)
+                self.assertEqual(res.status_code, 400, getattr(res, "data", None))
+                self.assertIn("error", res.data)
+        label = ProjectLabel.objects.get(label_id=label_id)
+        self.assertEqual(
+            (label.name, label.color, label.text_color), ("Keep", "#7c3aed", "#ffffff")
+        )
+
+    def test_recolour_takes_what_the_picker_sends(self):
+        label_id = self._create_label(name="Picked").data["labelId"]
+        res = self._put_label(label_id, name="Picked too", color="#ffd93b", text_color="black")
+        self.assertEqual(res.status_code, 200, getattr(res, "data", None))
+        self.assertEqual((res.data["color"], res.data["textColor"]), ("#ffd93b", "black"))
+        label = ProjectLabel.objects.get(label_id=label_id)
+        self.assertEqual((label.color, label.text_color), ("#ffd93b", "black"))
+
+    def test_a_rename_that_sends_back_the_stored_colours_still_works(self):
+        """The edit row re-sends the label's current colours with a rename. A label
+        written before this check may hold a value the check would refuse; sending it
+        back unchanged must not lock the label out of a rename."""
+        legacy = ProjectLabel.objects.create(
+            team=self.team, name="Legacy", color="#abc", text_color="white", created_by=self.owner
+        )
+        res = self._put_label(legacy.label_id, name="Legacy 2", color="#abc", text_color="white")
+        self.assertEqual(res.status_code, 200, getattr(res, "data", None))
+        self.assertEqual(res.data["name"], "Legacy 2")
+        # ...but moving it to a different invalid value is still refused.
+        res = self._put_label(legacy.label_id, color="#abd")
+        self.assertEqual(res.status_code, 400)
+
+    def test_recolour_with_an_empty_colour_keeps_the_stored_one(self):
+        label_id = self._create_label(name="Keep colour").data["labelId"]
+        res = self._put_label(label_id, color="", text_color=None)
+        self.assertEqual(res.status_code, 200, getattr(res, "data", None))
+        self.assertEqual((res.data["color"], res.data["textColor"]), ("#7c3aed", "#ffffff"))
+
     def test_delete_label_detaches_from_every_project(self):
         label_id = self._create_label().data["labelId"]
         self._assign([label_id])

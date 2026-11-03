@@ -771,10 +771,15 @@ class ThePagesDidNotChange(CatalogBase):
     def test_a_page_create_trims_the_name_as_before(self):
         self.assertEqual(self.create(name="  Padded  ").data["name"], "Padded")
 
-    def test_the_page_does_not_check_colours_and_the_tool_does(self):
-        """The page stores whatever the client sends; the tool refuses anything but a hex
-        colour. They differ on purpose: a person picks from a palette, a model types."""
-        self.assertEqual(self.create(name="Odd", color="tomato").status_code, 201)
+    def test_the_page_and_the_tool_both_refuse_a_colour_that_is_not_hex(self):
+        """MIP-955: the page used to store whatever the client sent (a value past the
+        10-character column was a 500). It now refuses what the picker cannot produce,
+        as the tool always has; the tool's own behaviour is unchanged."""
+        res = self.create(name="Odd", color="tomato")
+        self.assertEqual(
+            (res.status_code, res.data),
+            (400, {"error": "color must be a hex colour like #3b82f6."}),
+        )
         self.refused(lambda: self.labels("create", name="Odd too", color="tomato"), "hex colour")
 
     def test_assign_still_replaces_the_whole_set_and_ignores_other_teams_labels(self):
