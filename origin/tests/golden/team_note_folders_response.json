@@ -1,0 +1,795 @@
+{
+ "folders/owner": [
+  {
+   "folderId": "folder:Board",
+   "parentFolderId": null,
+   "name": "Board",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 3,
+   "tags": [
+    {
+     "tagId": "tag:ops",
+     "name": "ops",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Day one",
+   "parentFolderId": "folder:Onboarding",
+   "name": "Day one",
+   "visibility": null,
+   "effectiveVisibility": "public",
+   "myRoleId": 1,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Drafts",
+   "parentFolderId": "folder:Board",
+   "name": "Drafts",
+   "visibility": null,
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 2,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Handbook",
+   "parentFolderId": null,
+   "name": "Handbook",
+   "visibility": "public",
+   "effectiveVisibility": "public",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Internal",
+   "parentFolderId": null,
+   "name": "Internal",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Minutes",
+   "parentFolderId": "folder:Board",
+   "name": "Minutes",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Onboarding",
+   "parentFolderId": "folder:Handbook",
+   "name": "Onboarding",
+   "visibility": null,
+   "effectiveVisibility": "public",
+   "myRoleId": 1,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [
+    {
+     "tagId": "tag:eng",
+     "name": "eng",
+     "color": null,
+     "textColor": null
+    },
+    {
+     "tagId": "tag:ops",
+     "name": "ops",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Shared Folder",
+   "parentFolderId": null,
+   "name": "Shared Folder",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 0,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Shared notes",
+   "parentFolderId": "folder:Shared with B",
+   "name": "Shared notes",
+   "visibility": null,
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Shared with B",
+   "parentFolderId": null,
+   "name": "Shared with B",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 3,
+   "tags": [
+    {
+     "tagId": "tag:eng",
+     "name": "eng",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  }
+ ],
+ "notes/owner": [
+  {
+   "noteType": 1,
+   "noteId": "note:Guest note",
+   "parentNoteId": null,
+   "folderId": "folder:Shared with B",
+   "title": "Guest note",
+   "tsUpdated": "<time>",
+   "ownerId": "b_viewer",
+   "ownerName": "b_viewer",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Salaries",
+   "parentNoteId": null,
+   "folderId": "folder:Internal",
+   "title": "Salaries",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Host note",
+   "parentNoteId": null,
+   "folderId": "folder:Shared notes",
+   "title": "Host note",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Kickoff",
+   "parentNoteId": null,
+   "folderId": "folder:Shared with B",
+   "title": "Kickoff",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Draft agenda",
+   "parentNoteId": null,
+   "folderId": "folder:Drafts",
+   "title": "Draft agenda",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Closed minutes",
+   "parentNoteId": null,
+   "folderId": "folder:Minutes",
+   "title": "Closed minutes",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Agenda",
+   "parentNoteId": null,
+   "folderId": "folder:Board",
+   "title": "Agenda",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Laptop setup",
+   "parentNoteId": null,
+   "folderId": "folder:Day one",
+   "title": "Laptop setup",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:First week",
+   "parentNoteId": null,
+   "folderId": "folder:Onboarding",
+   "title": "First week",
+   "tsUpdated": "<time>",
+   "ownerId": "a_viewer",
+   "ownerName": "otheruser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Style guide",
+   "parentNoteId": null,
+   "folderId": "folder:Handbook",
+   "title": "Style guide",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Welcome",
+   "parentNoteId": null,
+   "folderId": "folder:Handbook",
+   "title": "Welcome",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 1
+  }
+ ],
+ "folders/editor": [
+  {
+   "folderId": "folder:Board",
+   "parentFolderId": null,
+   "name": "Board",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 3,
+   "tags": [
+    {
+     "tagId": "tag:ops",
+     "name": "ops",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Day one",
+   "parentFolderId": "folder:Onboarding",
+   "name": "Day one",
+   "visibility": null,
+   "effectiveVisibility": "public",
+   "myRoleId": 1,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Drafts",
+   "parentFolderId": "folder:Board",
+   "name": "Drafts",
+   "visibility": null,
+   "effectiveVisibility": "private",
+   "myRoleId": 3,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 2,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Handbook",
+   "parentFolderId": null,
+   "name": "Handbook",
+   "visibility": "public",
+   "effectiveVisibility": "public",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Onboarding",
+   "parentFolderId": "folder:Handbook",
+   "name": "Onboarding",
+   "visibility": null,
+   "effectiveVisibility": "public",
+   "myRoleId": 1,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [
+    {
+     "tagId": "tag:eng",
+     "name": "eng",
+     "color": null,
+     "textColor": null
+    },
+    {
+     "tagId": "tag:ops",
+     "name": "ops",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Secret",
+   "parentFolderId": null,
+   "name": "Secret",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 1,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  }
+ ],
+ "notes/editor": [
+  {
+   "noteType": 1,
+   "noteId": "note:Draft agenda",
+   "parentNoteId": null,
+   "folderId": "folder:Drafts",
+   "title": "Draft agenda",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 3
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Private thoughts",
+   "parentNoteId": null,
+   "folderId": "folder:Secret",
+   "title": "Private thoughts",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Agenda",
+   "parentNoteId": null,
+   "folderId": "folder:Board",
+   "title": "Agenda",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Laptop setup",
+   "parentNoteId": null,
+   "folderId": "folder:Day one",
+   "title": "Laptop setup",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:First week",
+   "parentNoteId": null,
+   "folderId": "folder:Onboarding",
+   "title": "First week",
+   "tsUpdated": "<time>",
+   "ownerId": "a_viewer",
+   "ownerName": "otheruser",
+   "roleId": 1
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Style guide",
+   "parentNoteId": null,
+   "folderId": "folder:Handbook",
+   "title": "Style guide",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Welcome",
+   "parentNoteId": null,
+   "folderId": "folder:Handbook",
+   "title": "Welcome",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  }
+ ],
+ "folders/member": [
+  {
+   "folderId": "folder:Board",
+   "parentFolderId": null,
+   "name": "Board",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 3,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 3,
+   "tags": [
+    {
+     "tagId": "tag:ops",
+     "name": "ops",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Day one",
+   "parentFolderId": "folder:Onboarding",
+   "name": "Day one",
+   "visibility": null,
+   "effectiveVisibility": "public",
+   "myRoleId": 2,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Drafts",
+   "parentFolderId": "folder:Board",
+   "name": "Drafts",
+   "visibility": null,
+   "effectiveVisibility": "private",
+   "myRoleId": 3,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 2,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Handbook",
+   "parentFolderId": null,
+   "name": "Handbook",
+   "visibility": "public",
+   "effectiveVisibility": "public",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Onboarding",
+   "parentFolderId": "folder:Handbook",
+   "name": "Onboarding",
+   "visibility": null,
+   "effectiveVisibility": "public",
+   "myRoleId": 2,
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "memberCount": 1,
+   "tags": [
+    {
+     "tagId": "tag:eng",
+     "name": "eng",
+     "color": null,
+     "textColor": null
+    },
+    {
+     "tagId": "tag:ops",
+     "name": "ops",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  }
+ ],
+ "notes/member": [
+  {
+   "noteType": 1,
+   "noteId": "note:Draft agenda",
+   "parentNoteId": null,
+   "folderId": "folder:Drafts",
+   "title": "Draft agenda",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 3
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Agenda",
+   "parentNoteId": null,
+   "folderId": "folder:Board",
+   "title": "Agenda",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 3
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Laptop setup",
+   "parentNoteId": null,
+   "folderId": "folder:Day one",
+   "title": "Laptop setup",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:First week",
+   "parentNoteId": null,
+   "folderId": "folder:Onboarding",
+   "title": "First week",
+   "tsUpdated": "<time>",
+   "ownerId": "a_viewer",
+   "ownerName": "otheruser",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Style guide",
+   "parentNoteId": null,
+   "folderId": "folder:Handbook",
+   "title": "Style guide",
+   "tsUpdated": "<time>",
+   "ownerId": "a_editor",
+   "ownerName": "a_editor",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Welcome",
+   "parentNoteId": null,
+   "folderId": "folder:Handbook",
+   "title": "Welcome",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  }
+ ],
+ "folders/stranger": [],
+ "notes/stranger": [],
+ "folders/guest_own": [
+  {
+   "folderId": "folder:Shared notes",
+   "parentFolderId": "folder:Shared with B",
+   "name": "Shared notes",
+   "visibility": null,
+   "effectiveVisibility": "private",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>",
+   "isExternal": true,
+   "hostTeamId": "team_a",
+   "hostTeamName": "Test Team"
+  },
+  {
+   "folderId": "folder:Shared with B",
+   "parentFolderId": null,
+   "name": "Shared with B",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 3,
+   "tags": [
+    {
+     "tagId": "tag:eng",
+     "name": "eng",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>",
+   "isExternal": true,
+   "hostTeamId": "team_a",
+   "hostTeamName": "Test Team"
+  }
+ ],
+ "notes/guest_own": [
+  {
+   "noteType": 1,
+   "noteId": "note:Guest note",
+   "parentNoteId": null,
+   "folderId": "folder:Shared with B",
+   "title": "Guest note",
+   "tsUpdated": "<time>",
+   "ownerId": "b_viewer",
+   "ownerName": "b_viewer",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Host note",
+   "parentNoteId": null,
+   "folderId": "folder:Shared notes",
+   "title": "Host note",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Kickoff",
+   "parentNoteId": null,
+   "folderId": "folder:Shared with B",
+   "title": "Kickoff",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  }
+ ],
+ "folders/guest_host": [
+  {
+   "folderId": "folder:Shared notes",
+   "parentFolderId": "folder:Shared with B",
+   "name": "Shared notes",
+   "visibility": null,
+   "effectiveVisibility": "private",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 1,
+   "tags": [],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  },
+  {
+   "folderId": "folder:Shared with B",
+   "parentFolderId": null,
+   "name": "Shared with B",
+   "visibility": "private",
+   "effectiveVisibility": "private",
+   "myRoleId": 2,
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "memberCount": 3,
+   "tags": [
+    {
+     "tagId": "tag:eng",
+     "name": "eng",
+     "color": null,
+     "textColor": null
+    }
+   ],
+   "tsCreated": "<time>",
+   "tsUpdated": "<time>"
+  }
+ ],
+ "notes/guest_host": [
+  {
+   "noteType": 1,
+   "noteId": "note:Guest note",
+   "parentNoteId": null,
+   "folderId": "folder:Shared with B",
+   "title": "Guest note",
+   "tsUpdated": "<time>",
+   "ownerId": "b_viewer",
+   "ownerName": "b_viewer",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Host note",
+   "parentNoteId": null,
+   "folderId": "folder:Shared notes",
+   "title": "Host note",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  },
+  {
+   "noteType": 1,
+   "noteId": "note:Kickoff",
+   "parentNoteId": null,
+   "folderId": "folder:Shared with B",
+   "title": "Kickoff",
+   "tsUpdated": "<time>",
+   "ownerId": "a_owner",
+   "ownerName": "testuser",
+   "roleId": 2
+  }
+ ],
+ "folders/colleague_never_admitted": [],
+ "notes/colleague_never_admitted": [],
+ "folders/colleague_host": [],
+ "notes/colleague_host": []
+}

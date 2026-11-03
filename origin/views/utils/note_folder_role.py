@@ -58,11 +58,23 @@ def is_team_member(team_id, user_id) -> bool:
 
 
 def load_team_folder_index(team_id):
-    """All team-scoped folders for a team, as {folder_id: folder}."""
+    """All team-scoped folders for a team, as {folder_id: folder}.
+
+    Carries the two timestamps because the folder list puts them on the wire:
+    a column left out of `.only()` is fetched again, one query per folder per
+    column, the first time a row is asked for it (MIP-982).
+    """
     return {
         f.folder_id: f
         for f in PersonalNoteFolder.objects.filter(team=team_id, scope=SCOPE_TEAM).only(
-            "folder_id", "parent_folder_id", "name", "visibility", "owner_id", "team_id"
+            "folder_id",
+            "parent_folder_id",
+            "name",
+            "visibility",
+            "owner_id",
+            "team_id",
+            "ts_created_at",
+            "ts_updated_at",
         )
     }
 
@@ -147,15 +159,20 @@ def get_folder_role(user_id, folder_id, team_id=None):
     )
 
 
-def readable_team_folder_roles(user_id, team_id):
+def readable_team_folder_roles(user_id, team_id, folders=None):
     """Every team folder this user can reach → {folder_id: role_id}.
 
     Resolved from a single shared index so listing the whole space costs
     the same 3 queries as resolving one folder. Callers that then need
     the folders' NOTES must filter on these ids in one query — resolving
     per note would be an N+1 across the space.
+
+    `folders` is the team's `load_team_folder_index(team_id)` when the
+    caller already holds it, so a caller that also needs the index for
+    something else does not fetch it a second time.
     """
-    folders = load_team_folder_index(team_id)
+    if folders is None:
+        folders = load_team_folder_index(team_id)
     grants = load_my_folder_grants(team_id, user_id)
     member = is_team_member(team_id, user_id)
 
