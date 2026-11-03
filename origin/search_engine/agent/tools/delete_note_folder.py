@@ -35,6 +35,10 @@ from origin.services.note_delete import (
 from origin.services.note_favorites import can_see_folder
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL
 
+# How many deleted ids the result names (see the return below).
+_MAX_REPORTED_NOTES = 200
+_MAX_REPORTED_FOLDERS = 100
+
 
 def _folder(raw_id: Any, ctx: ToolContext) -> PersonalNoteFolder:
     try:
@@ -131,11 +135,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         failure = log_failure("delete_note_folder failed", e)
         raise ToolError(f"Failed to delete the folder (ref {failure}).")
 
+    # The ids go to the browser so it can close tabs and drop local copies (MIP-950),
+    # and they are in the result the model reads too, so they are capped. Past the cap
+    # `ids_truncated` tells the browser to reload its lists instead.
+    ids_truncated = (
+        len(gone_notes) > _MAX_REPORTED_NOTES or len(gone_folders) > _MAX_REPORTED_FOLDERS
+    )
     return {
         "folder_id": folder.folder_id,
         "name": name,
         "deleted_folders": len(gone_folders),
         "deleted_notes": len(gone_notes),
+        "deleted_note_ids": sorted(gone_notes)[:_MAX_REPORTED_NOTES],
+        "deleted_folder_ids": sorted(gone_folders)[:_MAX_REPORTED_FOLDERS],
+        "ids_truncated": ids_truncated,
         "__summary__": (
             f'Deleted the folder "{name}" with {_plural(len(gone_notes), "note")} and '
             f"{_plural(len(gone_folders) - 1, 'subfolder')}. This cannot be undone."
