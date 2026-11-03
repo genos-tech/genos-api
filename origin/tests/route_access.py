@@ -98,6 +98,8 @@ REGISTRY = {
     "origin.search_engine.agent_views.AgentSessionDetailView": self_only(_OWN_AGENT),
     "origin.search_engine.agent_views.AgentSessionPinView": self_only(_OWN_AGENT),
     "origin.search_engine.agent_views.AgentSessionsListView": self_only(_OWN_AGENT),
+    "origin.search_engine.agent_views.SharedAnswerDetailView": self_only(_OWN_AGENT),
+    "origin.search_engine.agent_views.SharedAnswersView": self_only(_OWN_AGENT),
     "origin.search_engine.agent_views.AgentUsageView": self_only(
         "the caller's own usage and quota"
     ),
@@ -396,6 +398,7 @@ REGISTRY = {
     "origin.views.common.user_views.DigestPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.LanguagePreferenceView": self_only(_PREF),
     "origin.views.common.user_views.LlmModelPreferenceView": self_only(_PREF),
+    "origin.views.common.user_views.ShareAnswersPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.SpotlightWebSearchPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.TimezonePreferenceView": self_only(_PREF),
     "origin.views.common.user_views.UiSettingsPreferenceView": self_only(_PREF),

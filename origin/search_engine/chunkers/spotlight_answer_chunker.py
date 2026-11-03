@@ -25,6 +25,16 @@ v1 collects single-turn runs only (the first/only run in a session): a
 follow-up turn can lean on a prior turn's private source its own steps don't
 record, so gating it from its own sources alone would be unsound.
 
+The asker can also keep an answer out of this lane (MIP-891): a per-user
+preference ("let my answers help teammates", `CustomUser.share_answers_with_team`,
+default on) and a per-run withdrawal (`AgentRun.withheld_from_team_answers`).
+Either one makes the run a tombstone here, and the API purges the existing
+chunk the moment the choice is made. Which runs are collected is decided in
+ONE place, `shared_answers.judge_run`, which the "answers shared with your
+team" list also uses. Turning the preference back on collects the runs again
+on the next reindex that visits them (an incremental pass only revisits recent
+runs, so older answers come back on a full reindex).
+
 Indexed by the batch reindex (`ingest_all(entity_types=["spotlight_answer"])` /
 `opensearch_reindex`), NOT on the answer path — zero added latency to the live
 ask. Runs that no longer qualify (e.g. a cited project later turned private)
@@ -47,14 +57,13 @@ import re
 from datetime import datetime
 from typing import Iterator, Optional
 
-from origin.search_engine.agent.source_visibility import shareable_acl_for_sources
+from origin.search_engine import shared_answers
 from origin.search_engine.chunkers.base import (
     Chunk,
     EntityChunks,
     iso,
     make_snippet,
 )
-from origin.search_engine.models import AgentRun
 
 # Inline citation tokens the agent embeds in answers (e.g. "[task:123]",
 # "[chat:dm:uuid]"). Mirrors the frontend's strip pattern. We drop them from
@@ -63,9 +72,13 @@ from origin.search_engine.models import AgentRun
 # token to a clickable source chip.
 _CITATION_TOKEN_RE = re.compile(r"\[(?:chat|task|note|project|todo):[^\]\s]+\]")
 
-# Only clean completions are worth collecting (mirrors the conversation lane /
-# the F2 sampler scope): rejected / step_cap / error runs are not durable.
-_INDEXABLE_STATUS = "done"
+
+def answer_snippet(answer: str) -> str:
+    """The one-line preview of a collected answer (typeahead result, and the
+    owner's "answers shared with your team" list): citation tokens dropped."""
+    return make_snippet(_CITATION_TOKEN_RE.sub("", answer or ""))
+
+
 # Bound the answer that feeds search_text/embedding (mirrors conversation lane).
 _MAX_ANSWER_SEARCH_CHARS = 4000
 # Bound the stored display copy. Generous — Spotlight answers are short — but
@@ -73,52 +86,32 @@ _MAX_ANSWER_SEARCH_CHARS = 4000
 _MAX_ANSWER_DISPLAY_CHARS = 12000
 
 
-def _is_first_turn(run: AgentRun) -> bool:
-    """True if `run` is the only/first turn in its session.
-
-    A follow-up turn shares its session with an earlier run; v1 does not
-    collect those (their answer can rely on a prior turn's private source).
-    A run with no session is a standalone ask — always single-turn.
-    """
-    if run.session_id is None:
-        return True
-    return not AgentRun.objects.filter(
-        session_id=run.session_id, started_at__lt=run.started_at
-    ).exists()
-
-
 def iter_spotlight_answer_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
-    # Lazy import: `controller` pulls in the LLM client stack; keep it off this
-    # module's import path (and out of any ingestion import cycle).
-    from origin.search_engine.agent.controller import (
-        _hydrate_task_display_ids,
-        reconstruct_sources_for_run,
-    )
-
-    qs = AgentRun.objects.filter(status=_INDEXABLE_STATUS).exclude(final_answer_text="")
+    qs = shared_answers.completed_runs()
     if since is not None:
         qs = qs.filter(started_at__gte=since)
     qs = qs.order_by("started_at")
+    opted_out = shared_answers.opted_out_user_ids()
 
     for run in qs.iterator():
         entity_id = f"spotlight_answer:{run.run_id}"
 
+        # Whether a run is collected at all is `shared_answers.judge_run`'s
+        # call, the same one the "answers shared with your team" list makes.
+        verdict = shared_answers.judge_run(run, opted_out=opted_out)
+        if verdict.state == shared_answers.SKIP:
+            continue
+        if verdict.state == shared_answers.WITHHELD:
+            # The asker opted out / withdrew this answer, or it is built from
+            # private / unclassifiable sources. Emit a tombstone so any
+            # previously-indexed copy is purged.
+            yield EntityChunks(entity_type="spotlight_answer", entity_id=entity_id, chunks=[])
+            continue
+        sources, acl = verdict.sources, verdict.acl
+
         query = (run.query or "").strip()
         answer = (run.final_answer_text or "").strip()
         team_id = str(run.team_id or "")
-        # Follow-up turns are never collected (and were never indexed), so skip
-        # them outright rather than emitting a tombstone.
-        if not query or not answer or not team_id or not _is_first_turn(run):
-            continue
-
-        sources = _hydrate_task_display_ids(reconstruct_sources_for_run(run))
-        acl = shareable_acl_for_sources(sources, asker_id=str(run.user_id) if run.user_id else None)
-        if acl is None:
-            # Built from private / unclassifiable / single-person sources.
-            # Emit a tombstone so any previously-indexed copy is purged.
-            yield EntityChunks(entity_type="spotlight_answer", entity_id=entity_id, chunks=[])
-            continue
-
         search_answer = (
             answer
             if len(answer) <= _MAX_ANSWER_SEARCH_CHARS
@@ -143,7 +136,7 @@ def iter_spotlight_answer_chunks(since: Optional[datetime] = None) -> Iterator[E
             # search_text carries BOTH question and answer so a recall query
             # matches on either side.
             search_text=f"Q: {query}\nA: {search_answer}",
-            snippet_text=make_snippet(_CITATION_TOKEN_RE.sub("", answer)),
+            snippet_text=answer_snippet(answer),
             related_entity_ids=[s["entity_id"] for s in sources if s.get("entity_id")],
             # Provenance for the frontend "Previous answer" card.
             answer_text=display_answer,

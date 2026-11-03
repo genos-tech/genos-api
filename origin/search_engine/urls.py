@@ -11,6 +11,8 @@ from origin.search_engine.agent_views import (
     AgentSessionsListView,
     AgentUsageView,
     NoteSummaryView,
+    SharedAnswerDetailView,
+    SharedAnswersView,
     ThreadSummaryView,
 )
 from origin.search_engine.views import SearchView
@@ -51,5 +53,15 @@ urlpatterns = [
         "api/v2/agent/sessions/<str:session_id>/pin/",
         AgentSessionPinView.as_view(),
         name="agent_session_pin",
+    ),
+    path(
+        "api/v2/agent/shared-answers/",
+        SharedAnswersView.as_view(),
+        name="agent_shared_answers",
+    ),
+    path(
+        "api/v2/agent/shared-answers/<str:run_id>/",
+        SharedAnswerDetailView.as_view(),
+        name="agent_shared_answer_detail",
     ),
 ]

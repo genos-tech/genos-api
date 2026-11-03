@@ -59,7 +59,7 @@ from rest_framework.response import Response
 from apis.llm_catalog import EFFORTS
 from apis.request_id import bind_request_id, current_request_id, log_failure, reset_request_id
 from origin.middleware.current_user import clear_current_user, set_current_user
-from origin.search_engine import metered, spend_recorder
+from origin.search_engine import metered, shared_answers, spend_recorder
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -100,6 +100,7 @@ from origin.search_engine.agent.thread_summary import (
 )
 from origin.search_engine.agent.tool_tiers import disabled_tools_for_user, tier_system_extra
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.chunkers.spotlight_answer_chunker import answer_snippet
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
     AUTO_EFFORT,
@@ -3306,6 +3307,128 @@ class AgentSessionPinView(AuthenticatedAPIView):
             session.save(update_fields=["pinned_at"])
 
         return Response({"session_id": str(session.session_id), "is_pinned": pinned_at is not None})
+
+
+# How many collected answers the shared-answers list returns, and how many
+# candidate runs it will audit to find them (each audit costs a few queries).
+_SHARED_ANSWERS_LIMIT = 50
+_SHARED_ANSWERS_SCAN_LIMIT = 500
+_SHARED_ANSWER_QUESTION_MAX = 300
+
+
+class SharedAnswersView(AuthenticatedAPIView):
+    """GET /api/v2/agent/shared-answers/[?team_id=<id>]
+
+    The caller's answers that are in the team-shared "Previous answer" lane
+    RIGHT NOW (collected from them by the spotlight_answer chunker, shown to
+    teammates anonymously). The rule is `shared_answers.judge_run`, the very
+    function the chunker applies: a clean first-turn answer, not withdrawn,
+    the caller's preference on, and built from sources someone may see. So
+    the list cannot show an answer the chunker would not collect, nor miss
+    one it would.
+
+    "Currently collectable" is what the list shows; whether the chunk has
+    been indexed yet depends on the reindex cadence. Runs hidden by the tier
+    history window are included (the lane never applied that window).
+
+    Newest first, at most `_SHARED_ANSWERS_LIMIT`; `has_more` is true when
+    that or the audit cap cut the list short. `team_id` is an optional filter.
+
+    Response schema:
+        {
+            "share_answers_with_team": bool,   # the preference; false => answers is []
+            "answers": [
+                {
+                    "run_id":        "<uuid>",
+                    "session_id":    "<uuid>" | null,
+                    "team_id":       "<id>",
+                    "question":      "...",       # run.query, cut at 300 chars
+                    "answer_snippet": "...",      # citations stripped, ~280 chars
+                    "started_at":    "<iso>",
+                    "audience_size": int          # people who can see it, YOU included
+                },
+                ...
+            ],
+            "has_more": bool
+        }
+    """
+
+    def get(self, request):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        team_id = request.GET.get("team_id") or None
+        items, has_more = shared_answers.collectable_runs_for_user(
+            user_id,
+            team_id=team_id,
+            limit=_SHARED_ANSWERS_LIMIT,
+            scan_limit=_SHARED_ANSWERS_SCAN_LIMIT,
+        )
+        answers = []
+        for run, verdict in items:
+            question = (run.query or "").strip()
+            if len(question) > _SHARED_ANSWER_QUESTION_MAX:
+                question = question[: _SHARED_ANSWER_QUESTION_MAX - 1].rstrip() + "…"
+            answers.append(
+                {
+                    "run_id": str(run.run_id),
+                    "session_id": str(run.session_id) if run.session_id else None,
+                    "team_id": str(run.team_id),
+                    "question": question,
+                    "answer_snippet": answer_snippet(run.final_answer_text),
+                    "started_at": run.started_at.isoformat(),
+                    "audience_size": len(verdict.acl or []),
+                }
+            )
+        return Response(
+            {
+                "share_answers_with_team": bool(request.user.share_answers_with_team),
+                "answers": answers,
+                "has_more": has_more,
+            }
+        )
+
+
+class SharedAnswerDetailView(AuthenticatedAPIView):
+    """DELETE /api/v2/agent/shared-answers/<run_id>/
+
+    Withdraw ONE of the caller's answers from the team-shared lane without
+    deleting the conversation: sets `AgentRun.withheld_from_team_answers`
+    (the chunker then never collects it, and the orphan sweep removes any
+    stray chunk) and, after the commit, purges its `spotlight_answer` chunk
+    (best-effort; the caller's private `conversation` memory chunk stays).
+    The conversation itself, and the run, are untouched.
+
+    Idempotent: withdrawing an answer that is already withdrawn, or was never
+    collected, is the same 200. There is no per-run "share again"; turning the
+    preference off and on does not clear it.
+
+    A run that is missing, malformed, or someone else's is the same 404.
+
+    200 `{"run_id": "<uuid>", "shared": false}`.
+    """
+
+    def delete(self, request, run_id: str):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            run = AgentRun.objects.only("run_id").get(run_id=run_id, user_id=user_id)
+        except (AgentRun.DoesNotExist, ValidationError, ValueError):
+            return Response({"error": "Answer not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        with transaction.atomic():
+            # `.update`, not `.save`: a full save could clobber a concurrent
+            # write to the same run (it is a live row).
+            AgentRun.objects.filter(run_id=run.run_id, user_id=user_id).update(
+                withheld_from_team_answers=True
+            )
+            transaction.on_commit(
+                lambda: purge_agent_runs([run.run_id], lanes=("spotlight_answer",))
+            )
+        return Response({"run_id": str(run.run_id), "shared": False})
 
 
 def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
