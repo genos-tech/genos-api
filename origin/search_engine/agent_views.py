@@ -20,7 +20,8 @@ NDJSON event types emitted:
     {"type": "tool_call_error",            "step": N, "tool_name": "...", "error": "...",
                                            "duration_ms": N}
     {"type": "tool_call_pending_approval", "step": N, "tool_name": "...", "arguments": {...},
-                                           "approval_token": "<uuid>"}   ← Phase 7
+                                           "approval_token": "<uuid>",
+                                           "editable": ["title", ...]}   ← Phase 7
     {"type": "sources",                    "sources": [...]}
     {"type": "answer_delta",               "text": "..."}
     {"type": "done",                       "session_id": "<uuid>", "elapsed_ms": N}  ← Phase 8
@@ -30,6 +31,13 @@ NDJSON event types emitted:
 `elapsed_ms` (whole-stream wall time, injected below) are additive and
 omitted where no execution happened (session-cache hits, rejects) —
 clients must treat them as optional.
+
+Edit before approve: `/decide/` takes an optional `edited_args` on an approve,
+`{path: new value}` for the paths the pending event listed in `editable`. It is
+checked against the paused step before the approval is spent (422
+`{error, field_errors}`, run still awaiting approval), and the approved
+`tool_call_result` then carries `edited: true` and `edited_arguments`. See
+`agent/approval_edits.py`.
 
 POST instead of SSE so query payloads aren't logged in access logs.
 `StreamingHttpResponse(application/x-ndjson)` flushes each event
@@ -66,12 +74,14 @@ from apis.request_id import (
 )
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
+from origin.search_engine.agent import approval_edits
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
     MODEL_REFUSAL_MESSAGE,
     _chat_source,
     _note_source,
+    pending_step_of,
     reconstruct_sources_for_run,
     resume_agent,
     run_agent,
@@ -1630,6 +1640,13 @@ class AgentDecideView(AuthenticatedAPIView):
         run_id = (data.get("run_id") or "").strip()
         approval_token = (data.get("approval_token") or "").strip()
         decision = (data.get("decision") or "").strip().lower()
+        # Edit before approve: `{path: new value}` for the card's editable
+        # fields (`agent/approval_edits.py`). Absent, null and `{}` all mean
+        # "approve as proposed". The tool is the PENDING STEP's, never a name
+        # the client sends.
+        edited_args = data.get("edited_args")
+        if edited_args in (None, {}):
+            edited_args = None
 
         if not run_id:
             return Response({"error": "run_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1643,6 +1660,22 @@ class AgentDecideView(AuthenticatedAPIView):
                 {"error": "decision must be 'approve' or 'reject'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if edited_args is not None:
+            if decision != "approve":
+                return Response(
+                    {
+                        "error": (
+                            "A rejected action can't carry edits: edited_args is only "
+                            "accepted with decision 'approve'."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not isinstance(edited_args, dict):
+                return Response(
+                    {"error": "edited_args must be an object of {path: new value}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         try:
             run = AgentRun.objects.get(run_id=run_id)
@@ -1662,6 +1695,57 @@ class AgentDecideView(AuthenticatedAPIView):
         if refusal is not None:
             return refusal
 
+        # Mentions v2 — rehydrate the run's resolved mentions from the
+        # persisted row so a leg resumed after write-approval keeps
+        # mention-aware search. `run.mentions` stores the exact
+        # as_json dicts the ask leg stashed on its ToolContext.
+        ctx = ToolContext(
+            team_id=run.team_id,
+            user_id=run.user_id,
+            resolved_mentions=tuple(run.mentions or ()),
+            # Answer-language parity (GENOS_CAPABILITY_ROADMAP §3.4): the
+            # /decide/ body carries no locale, so keep answering in the
+            # language the original ask leg resolved and persisted.
+            locale=run.locale or "",
+        )
+
+        # The step the run is paused on: what a decision is recorded against
+        # and, for an approve with edits, what the edits are checked against.
+        # Its tool name and arguments are the only ones used; the request
+        # names neither. Checked BEFORE the approval is spent, so a typo is a
+        # 422 on a card that still works and not a burnt approval.
+        try:
+            pending_step = pending_step_of(run)
+            edit_patch: dict[str, Any] = {}
+            if edited_args is not None:
+                if pending_step is None:
+                    return Response(
+                        {"error": "This run has no pending action to edit."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                try:
+                    edit_patch = approval_edits.prepare(
+                        pending_step.tool_name, pending_step.arguments_json, edited_args, ctx
+                    )
+                except approval_edits.EditRejected as exc:
+                    return Response(
+                        {
+                            "error": (
+                                "Some of your changes can't be applied. Nothing was "
+                                "approved or run: fix them and approve again."
+                            ),
+                            "field_errors": exc.field_errors,
+                        },
+                        status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    )
+        except Exception as e:  # noqa: BLE001
+            return error_response(
+                f"Failed to check the pending action of run {run.run_id}",
+                e,
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                message="Could not check this just now. Nothing was executed; try again.",
+            )
+
         # Consume the token — single-shot, and ATOMIC. The checks above ran
         # on a snapshot; two requests for one approval (two tabs, a client
         # retry) can both hold it. So the consume is a compare-and-swap in
@@ -1670,14 +1754,28 @@ class AgentDecideView(AuthenticatedAPIView):
         # Whoever gets 0 rows lost and must not run the approved write: a
         # second resume would execute the tool twice.
         #
+        # The decision (and the person's edits) are recorded on the step in
+        # the SAME transaction, and only by the request that won: the resumed
+        # leg reads its edits from that row, so a consume that went through
+        # with the edits lost would run the model's original arguments on an
+        # approval the person gave to different ones. If the write fails, the
+        # consume rolls back with it and the same click can be retried.
+        #
         # From here the run is "running" again; if we crash mid-resume the
         # status reflects that rather than leaving the row half-stuck.
         try:
-            consumed = AgentRun.objects.filter(
-                run_id=run.run_id,
-                status="awaiting_approval",
-                pending_approval_token=run.pending_approval_token,
-            ).update(pending_approval_token=None, status="running")
+            with transaction.atomic():
+                consumed = AgentRun.objects.filter(
+                    run_id=run.run_id,
+                    status="awaiting_approval",
+                    pending_approval_token=run.pending_approval_token,
+                ).update(pending_approval_token=None, status="running")
+                if consumed == 1 and pending_step is not None:
+                    AgentStep.objects.filter(step_id=pending_step.step_id).update(
+                        decision=decision,
+                        decided_at=timezone.now(),
+                        edited_arguments_json=edit_patch or None,
+                    )
         except Exception as e:  # noqa: BLE001
             # Nothing was consumed, so nothing may resume: the run is still
             # awaiting approval and the same click can simply be retried.
@@ -1703,20 +1801,6 @@ class AgentDecideView(AuthenticatedAPIView):
                 )
             except Exception:  # noqa: BLE001
                 pass
-
-        # Mentions v2 — rehydrate the run's resolved mentions from the
-        # persisted row so a leg resumed after write-approval keeps
-        # mention-aware search. `run.mentions` stores the exact
-        # as_json dicts the ask leg stashed on its ToolContext.
-        ctx = ToolContext(
-            team_id=run.team_id,
-            user_id=run.user_id,
-            resolved_mentions=tuple(run.mentions or ()),
-            # Answer-language parity (GENOS_CAPABILITY_ROADMAP §3.4): the
-            # /decide/ body carries no locale, so keep answering in the
-            # language the original ask leg resolved and persisted.
-            locale=run.locale or "",
-        )
 
         # Resolve the user's LLM choice for the resumed leg. No quota
         # increment here — the original /ask/ call already counted; a

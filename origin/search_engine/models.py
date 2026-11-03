@@ -374,6 +374,20 @@ class AgentStep(models.Model):
     # thought_signature in functionCall parts.` See
     # `FunctionCall.thought_signature` in llm/types.py.
     thought_signature = models.BinaryField(blank=True, null=True)
+    # "Edit before approve": what the person changed on the approval card.
+    # A flat `{path: value}` patch (`title`, `updates[3].priority`) as TYPED,
+    # null when they approved the proposal as it stood. `arguments_json` stays
+    # the model's own call: it is replayed to the model as ITS function call
+    # (with `thought_signature`), so the edit lives beside it rather than in
+    # it, and the audit can show proposed vs. what ran. The tool ran with
+    # `arguments_json` + this patch (`agent/approval_edits.py`).
+    edited_arguments_json = models.JSONField(blank=True, null=True)
+    # The answer to the approval card, "approve" / "reject", and when. Blank
+    # on a step that was never paused for approval, and on one decided before
+    # these columns existed. Who decided is `run.user_id`: `/decide/` refuses
+    # anyone else.
+    decision = models.CharField(max_length=16, blank=True, default="")
+    decided_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
