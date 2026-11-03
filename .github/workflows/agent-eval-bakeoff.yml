@@ -139,9 +139,15 @@ jobs:
           service_account: ${{ secrets.GCP_DEPLOY_SA }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
+      # From the Actions cache when it has the image, so a run doesn't pay for a pull
+      # from Artifact Registry (MIP-953). Keep the tag in step with the `docker run`.
+      - name: Fetch the prod OpenSearch image
+        uses: ./.github/actions/opensearch-image
+        with:
+          image: ${{ env.AR }}/opensearch-multilingual:3.6.0
+
       - name: Start multilingual OpenSearch (prod image)
         run: |
-          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
           docker run -d --name opensearch -p 9200:9200 \
             --ulimit memlock=-1:-1 --ulimit nofile=65536:65536 \
             -e discovery.type=single-node -e bootstrap.memory_lock=true \

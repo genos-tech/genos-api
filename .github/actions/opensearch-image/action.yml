@@ -1,0 +1,70 @@
+name: Prod OpenSearch image
+description: >-
+  Makes the multilingual OpenSearch image present on the runner, from the Actions
+  cache when it has it and from Artifact Registry otherwise (MIP-953). Leaves
+  `docker run <image>` to the caller. The caller must already be authenticated to
+  Google Cloud and have checked the repo out.
+
+# Why this exists. Every eval run starts the prod OpenSearch image, and pulling it
+# from Artifact Registry to a GitHub runner is billed internet egress: 250 GiB, about
+# 4,700 yen, in the 30 days to 2026-11-03, one 1.05 GiB pull per run. The cache is
+# keyed on the image DIGEST, so a re-pushed tag is never served stale, and every
+# failure here (no digest, cache miss, a cache that won't load, a save that is
+# refused) falls back to the plain pull the workflows did before.
+inputs:
+  image:
+    description: Full image reference, tag included.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Look up the image digest
+      id: digest
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        # Metadata only: no image bytes leave Artifact Registry for this call.
+        digest="$(gcloud artifacts docker images describe "$IMAGE" \
+          --format='value(image_summary.digest)' 2>/dev/null || true)"
+        echo "digest=${digest#sha256:}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the image from the Actions cache
+      id: cache
+      if: steps.digest.outputs.digest != ''
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/opensearch-image.tar.zst
+        key: opensearch-image-${{ steps.digest.outputs.digest }}
+
+    - name: Load the cached image, or pull it
+      id: image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ steps.digest.outputs.digest }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        ARCHIVE: ${{ runner.temp }}/opensearch-image.tar.zst
+      run: |
+        if [ "$CACHE_HIT" = "true" ] && zstd -dc "$ARCHIVE" | docker load; then
+          echo "Loaded $IMAGE from the Actions cache; nothing pulled from Artifact Registry."
+          echo "pulled=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        [ "$CACHE_HIT" = "true" ] && echo "::warning::The cached image would not load; pulling it instead."
+        gcloud auth configure-docker "${IMAGE%%/*}" --quiet
+        docker pull "$IMAGE"
+        if [ -n "$DIGEST" ] && docker save "$IMAGE" | zstd -T0 -3 -q -f -o "$ARCHIVE"; then
+          echo "pulled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "pulled=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Saved here, not in a post step, so a run cancelled later still leaves the cache.
+    - name: Save the image to the Actions cache
+      if: steps.image.outputs.pulled == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/opensearch-image.tar.zst
+        key: opensearch-image-${{ steps.digest.outputs.digest }}
