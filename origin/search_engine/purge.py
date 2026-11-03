@@ -100,6 +100,12 @@ def purge_chunks(chunk_ids: list[str], *, refresh: bool = True) -> int:
 def purge_entities(pairs: Iterable[tuple[str, str]], *, refresh: bool = True) -> int:
     """Delete every chunk tracked under the given (entity_type, entity_id)
     pairs. Returns the number of chunks removed."""
+    return purge_chunks(_tracked_chunk_ids(pairs), refresh=refresh)
+
+
+def _tracked_chunk_ids(pairs: Iterable[tuple[str, str]]) -> list[str]:
+    """Every chunk id `RagChunk` tracks under the given (entity_type,
+    entity_id) pairs."""
     by_type: dict[str, list[str]] = defaultdict(list)
     for etype, eid in pairs:
         by_type[etype].append(eid)
@@ -112,7 +118,7 @@ def purge_entities(pairs: Iterable[tuple[str, str]], *, refresh: bool = True) ->
                     entity_type=etype, entity_id__in=eids[i : i + _BATCH]
                 ).values_list("chunk_id", flat=True)
             )
-    return purge_chunks(chunk_ids, refresh=refresh)
+    return chunk_ids
 
 
 # --------------------------------------------------------------------------- #
@@ -195,6 +201,39 @@ def purge_task_comment(task_id, comment_id) -> None:
         log.exception(
             "Best-effort purge failed for task %s comment %s", task_id, comment_id
         )
+
+
+# The two index lanes an `AgentRun` can feed. Both name their single chunk
+# after the entity (`<lane>:<run_id>`; see the two chunkers).
+AGENT_RUN_LANES = ("conversation", "spotlight_answer")
+
+
+def purge_agent_runs(run_ids, *, lanes: Iterable[str] = AGENT_RUN_LANES) -> None:
+    """Agent runs deleted (or, with `lanes`, withdrawn from one lane): drop
+    their `conversation:<run_id>` and `spotlight_answer:<run_id>` chunks.
+
+    The caller passes ids it has already deleted, so this does not look the
+    runs up. It targets the tracked chunks AND the deterministic chunk ids:
+    a delete the user asked for must not depend on `RagChunk` having kept up
+    with the index (a document with no tracking row is invisible to the
+    sweep). Deleting an id that was never indexed is a 404, which
+    `purge_chunks` counts as success.
+
+    Best-effort like its siblings: OpenSearch being down must not fail the
+    caller. When the runs are gone, `sweep_orphans` retries what this
+    missed (the tracking rows of failed deletes are kept).
+    """
+    ids = [str(r) for r in run_ids]
+    lanes = tuple(lanes)
+    if not ids or not lanes:
+        return
+    try:
+        pairs = [(lane, f"{lane}:{rid}") for lane in lanes for rid in ids]
+        chunk_ids = dict.fromkeys(_tracked_chunk_ids(pairs))
+        chunk_ids.update(dict.fromkeys(eid for _, eid in pairs))
+        purge_chunks(list(chunk_ids))
+    except Exception:  # noqa: BLE001
+        log.exception("Best-effort purge failed for %d agent run(s)", len(ids))
 
 
 # --------------------------------------------------------------------------- #

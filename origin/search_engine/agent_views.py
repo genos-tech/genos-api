@@ -49,7 +49,8 @@ from typing import Any, Callable, Iterator
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db.models import Prefetch
+from django.db import transaction
+from django.db.models import Prefetch, Q
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -118,6 +119,7 @@ from origin.search_engine.models import (
     AgentStep,
     AiRequestCost,
 )
+from origin.search_engine.purge import purge_agent_runs
 from origin.search_engine.quota import (
     LLM_ASK_KEY,
     NOTE_CREATE_KEY,
@@ -2898,6 +2900,79 @@ _PINNED_LIST_LIMIT = 50
 # reuse it without importing this views module. Imported at the top of the file.
 
 
+class _RunInFlight(Exception):
+    """A run of the conversations being deleted is still streaming."""
+
+
+def _delete_agent_conversations(
+    *, user_id: str, session_id=None, team_id: str | None = None
+) -> dict[str, int]:
+    """Erase one of a user's conversations, or all of their conversations in
+    one team, together with every run they hold. Returns the counts.
+
+    `session_id` set: that one session (the caller has already checked it is
+    theirs) and its runs. Otherwise every session AND every run of
+    (`team_id`, `user_id`), including standalone runs with no session.
+
+    Deliberately NOT windowed by the tier history retention: that window
+    hides old rows, and a hidden row is still personal data the owner is
+    entitled to erase.
+
+    Runs are deleted BEFORE their sessions. `AgentRun.session` is SET_NULL,
+    so deleting the session first would leave every run alive with a NULL
+    session, and a former follow-up with no session reads as a standalone
+    first turn to the `spotlight_answer` chunker (`_is_first_turn`) -- it
+    could be collected into the team lane. `AgentStep` / `AgentLlmCall` /
+    `AgentRunJudgement` / `AgentRunFeedback` cascade from the run; the cost
+    ledger (`AiSpendEvent` / `AiRequestCost`) keeps a plain `run_id` and
+    survives. The rolling summary is a column on the session, so it goes
+    with it.
+
+    Refuses (`_RunInFlight`, nothing deleted) while any of those runs is
+    `running`: its worker thread is still writing steps and spend rows to it.
+    An `awaiting_approval` run is paused with no worker alive, so it is
+    deleted (a later /decide/ for it answers 404).
+
+    The index chunks (both lanes) are purged after the DB transaction commits,
+    best-effort -- see `purge.purge_agent_runs`.
+    """
+    if session_id is not None:
+        run_q = Q(session_id=session_id)
+        session_q = Q(session_id=session_id, user_id=user_id)
+    else:
+        session_q = Q(team_id=team_id, user_id=user_id)
+        # Also any run still attached to one of these sessions, whatever its
+        # own team column says: the session delete below would otherwise
+        # SET_NULL it and leave it alive.
+        run_q = Q(team_id=team_id, user_id=user_id) | Q(
+            session__in=AgentSession.objects.filter(session_q)
+        )
+
+    with transaction.atomic():
+        # Locked, so a run cannot slip from `done` to `running` (a resumed
+        # approval) between the check and the delete.
+        runs = list(
+            AgentRun.objects.select_for_update().filter(run_q).values_list("run_id", "status")
+        )
+        if any(st == "running" for _, st in runs):
+            raise _RunInFlight()
+        run_ids = [rid for rid, _ in runs]
+        AgentRun.objects.filter(run_id__in=run_ids).delete()
+        deleted_sessions = AgentSession.objects.filter(session_q).delete()[0]
+        transaction.on_commit(lambda: purge_agent_runs(run_ids))
+    return {"deleted_sessions": deleted_sessions, "deleted_runs": len(run_ids)}
+
+
+def _run_in_flight_response() -> Response:
+    return Response(
+        {
+            "error": "A conversation is still answering. Wait for it to finish, then try again.",
+            "code": "run_in_flight",
+        },
+        status=status.HTTP_409_CONFLICT,
+    )
+
+
 class AgentSessionsListView(AuthenticatedAPIView):
     """GET /api/v2/agent/sessions/?team_id=<id>[&search=<text>]
 
@@ -3028,6 +3103,37 @@ class AgentSessionsListView(AuthenticatedAPIView):
 
         return Response({"sessions": sessions_payload})
 
+    def delete(self, request):
+        """DELETE /api/v2/agent/sessions/?team_id=<id>
+
+        Erase ALL of the caller's Genos conversations in `team_id`: every
+        session (Spotlight, thread- and note-scoped alike) and every run,
+        including standalone runs that belong to no session and rows the tier
+        history window hides from the list. Scoped to (team_id, user_id) like
+        the list above, so another member's history, and the caller's history
+        in any OTHER team, are untouched. `team_id` is required (400 without
+        it): there is no "all teams" form.
+
+        200 `{"deleted_sessions": int, "deleted_runs": int}`; deleting nothing
+        is still 200 with zeros. 409 `{"error", "code": "run_in_flight"}`
+        with NOTHING deleted while one of those runs is still streaming.
+        """
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response(
+                {"error": "team_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            result = _delete_agent_conversations(user_id=user_id, team_id=str(team_id))
+        except _RunInFlight:
+            return _run_in_flight_response()
+        return Response(result)
+
 
 class AgentSessionDetailView(AuthenticatedAPIView):
     """GET /api/v2/agent/sessions/<session_id>/?team_id=<id>
@@ -3116,6 +3222,37 @@ class AgentSessionDetailView(AuthenticatedAPIView):
                 "turns": _build_turns_payload(session),
             }
         )
+
+    def delete(self, request, session_id: str):
+        """DELETE /api/v2/agent/sessions/<session_id>/
+
+        Erase one of the caller's own conversations and ALL of its runs
+        (including ones the tier history window hides), its rolling summary,
+        and the index chunks built from those runs. Addressed by its own id
+        like the pin endpoint, so no `team_id`, and NOT gated on the history
+        window: a downgraded user can still erase what they can no longer
+        see. A foreign, unknown or malformed id is the same 404.
+
+        200 `{"deleted_sessions": 1, "deleted_runs": int}`; 409
+        `{"error", "code": "run_in_flight"}` with nothing deleted while one
+        of its runs is still streaming.
+        """
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            session = AgentSession.objects.get(session_id=session_id, user_id=user_id)
+        except (AgentSession.DoesNotExist, ValidationError, ValueError):
+            return Response(
+                {"error": "Session not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            result = _delete_agent_conversations(user_id=user_id, session_id=session.session_id)
+        except _RunInFlight:
+            return _run_in_flight_response()
+        return Response(result)
 
 
 class AgentSessionPinView(AuthenticatedAPIView):
