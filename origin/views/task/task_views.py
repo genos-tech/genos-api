@@ -1021,7 +1021,7 @@ class TaskMetaView(AuthenticatedAPIView):
         return Response(personal_notes, status=status.HTTP_200_OK)
 
 
-def _team_task_scope(user_id, team_id) -> Q:
+def _team_task_scope(user_id, team_id, *, known_member: bool = False) -> Q:
     """Which tasks in `team_id` this member may see in a team-wide list.
 
     Their projects, plus tasks whose `project` is NULL. That second
@@ -1041,9 +1041,17 @@ def _team_task_scope(user_id, team_id) -> Q:
     team, and that extra clause is what left the dashboard, the table and
     the board empty in a project a guest could otherwise open. The scope
     is already per-person, so the team clause added nothing but that bug.
+
+    `known_member=True` is for a caller that has JUST checked, in this same
+    request, that `user_id` is a member of `team_id` (`require_team_member_or_response`).
+    Membership is then not read again here, which used to cost three more
+    queries per request: `is_team_member`, and `is_guest`, which asks
+    `is_team_member` itself. Nothing is lost by that: a member is by
+    definition not a guest, so the two conditions below reduce to the first.
+    Pass it ONLY where that check was made; the default still checks.
     """
     scope = Q(project_id__in=reachable_project_ids(user_id, team_id))
-    if is_team_member(team_id, user_id) and not is_guest(team_id, user_id):
+    if known_member or (is_team_member(team_id, user_id) and not is_guest(team_id, user_id)):
         scope |= Q(project__isnull=True, team=team_id)
     return scope
 
@@ -1082,7 +1090,9 @@ def _team_task_row(t) -> dict:
         "concatTags": (
             ("/" + "/".join([tag["tagName"] for tag in t.tags]) + "/") if t.tags else None
         ),
-        "teamId": str(t.team.team_id) if t.team else None,
+        # `team_id` holds the team's `team_id` (the FK's `to_field`): the same value
+        # without joining the team row and decrypting its email for every task.
+        "teamId": str(t.team_id) if t.team_id is not None else None,
         "projectId": t.project.project_id if t.project else None,
         "isMilestone": t.is_milestone,
         "milestoneId": t.milestone_id,
@@ -1094,6 +1104,57 @@ def _team_task_row(t) -> dict:
         "links": t.links or [],
         "customFieldValues": t.custom_field_values or {},
     }
+
+
+# What `_team_task_row` reads, and nothing else (MIP-966). A task row also carries its
+# whole body (`content`, a JSON document), and joining the assignee brings in the
+# user's encrypted personal fields, which are decrypted as the row is loaded: for a
+# page of 500 that was most of the time the request took, for fields the response does
+# not use. The assignee's `email` is the one encrypted field the response needs.
+#
+# ADDING A FIELD TO `_team_task_row`? Add it here too. A field read that is not listed
+# is not a bug in the response, it is one extra query per row; the query-count test in
+# `test_team_tasks_page_cost` fails when that happens.
+_TEAM_TASK_ROW_FIELDS = (
+    "task_id",
+    "project_task_number",
+    "title",
+    "priority",
+    "effort_level",
+    "ts_created_at",
+    "ts_updated_at",
+    "due_date",
+    "start_date",
+    "status",
+    "assignee",
+    "parent_task_id",
+    "root_task_id",
+    "thread_id",
+    "tags",
+    "team",
+    "project",
+    "is_milestone",
+    "milestone",
+    "sprint",
+    "links",
+    "custom_field_values",
+    "assignee__id",
+    "assignee__email",
+    "assignee__username",
+    "assignee__profile_image_file_name",
+    "project__project_id",
+    "project__code",
+)
+
+
+def _team_task_rows(scope):
+    """The tasks of a team-wide list as a queryset, with exactly the columns and
+    the two joins (assignee, and project for `displayId`) that `_team_task_row` uses."""
+    return (
+        TaskMaster.objects.filter(scope, is_init_task=False)
+        .select_related("assignee", "project")
+        .only(*_TEAM_TASK_ROW_FIELDS)
+    )
 
 
 # A page of the team's tasks. The paged route always answers with an envelope;
@@ -1155,14 +1216,9 @@ class GetTeamTasksPageView(AuthenticatedAPIView):
             )
         if res := require_team_member_or_response(request.user, team_id):
             return res
-        scope = _team_task_scope(request.user.id, team_id)
+        scope = _team_task_scope(request.user.id, team_id, known_member=True)
 
-        qs = (
-            TaskMaster.objects.filter(scope, is_init_task=False)
-            .select_related("assignee", "team", "project")
-            .prefetch_related("task_tags")
-            .order_by("task_id")
-        )
+        qs = _team_task_rows(scope).order_by("task_id")
         after = _decode_task_cursor(request.GET.get("cursor"))
         if after is not None:
             qs = qs.filter(task_id__gt=after)
@@ -1198,16 +1254,9 @@ class GetTeamTasksView(AuthenticatedAPIView):
         # shared helper is the same derivation.
         if res := require_team_member_or_response(request.user, team_id):
             return res
-        scope = _team_task_scope(request.user.id, team_id)
+        scope = _team_task_scope(request.user.id, team_id, known_member=True)
 
-        # select_related on the FKs accessed in the loop (assignee, team,
-        # project) collapses 3 per-row lookups into JOINs on the main query.
-        task_with_tags = (
-            TaskMaster.objects.filter(scope, is_init_task=False)
-            .select_related("assignee", "team", "project")
-            .prefetch_related("task_tags")
-        )
-        response_data = [_team_task_row(t) for t in task_with_tags]
+        response_data = [_team_task_row(t) for t in _team_task_rows(scope)]
 
         return Response(response_data, status=status.HTTP_200_OK)
 
