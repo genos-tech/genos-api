@@ -1,0 +1,492 @@
+[
+ {
+  "id": "<uuid:1>",
+  "kind": 1,
+  "title": "",
+  "profileImageUrl": "",
+  "projectId": null,
+  "ownerId": "<uuid:2>",
+  "isPrivate": false,
+  "isExternal": false,
+  "teamId": "<uuid:3>",
+  "hostTeamName": null,
+  "legacyChatId": null,
+  "latestMessage": {
+   "id": "<uuid:4>",
+   "channelId": "<uuid:1>",
+   "channelKind": 1,
+   "sender": {
+    "userId": "<uuid:5>",
+    "userName": "b_editor",
+    "userEmail": "b_editor@example.com",
+    "avatarImgPath": null,
+    "isSystemUser": false
+   },
+   "seq": 2,
+   "body": {
+    "text": "latest in dm"
+   },
+   "bodyText": "latest in dm",
+   "parentId": null,
+   "threadRootId": null,
+   "isThreadReply": false,
+   "replyCount": 0,
+   "reactions": [
+    {
+     "id": "<uuid:6>",
+     "user": {
+      "userId": "<uuid:5>",
+      "userName": "b_editor",
+      "userEmail": "b_editor@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "tada",
+     "tsSent": "<time>"
+    },
+    {
+     "id": "<uuid:7>",
+     "user": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "thumbsup",
+     "tsSent": "<time>"
+    }
+   ],
+   "mentions": [
+    {
+     "id": "<uuid:8>",
+     "mentionedUserId": "<uuid:2>",
+     "viaGroupId": null,
+     "tsCreated": "<time>"
+    }
+   ],
+   "attachments": [
+    {
+     "id": "<uuid:9>",
+     "fileUrl": "http://testserver/media/chats/<uuid:1>/messages/<uuid:4>/pic1.png",
+     "fileName": "pic1.png",
+     "mime": "image/png",
+     "sizeBytes": 100,
+     "uploader": {
+      "userId": "<uuid:5>",
+      "userName": "b_editor",
+      "userEmail": "b_editor@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    },
+    {
+     "id": "<uuid:10>",
+     "fileUrl": "http://testserver/media/chats/<uuid:1>/messages/<uuid:4>/pic2.png",
+     "fileName": "pic2.png",
+     "mime": "image/png",
+     "sizeBytes": 200,
+     "uploader": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    }
+   ],
+   "metadata": {},
+   "taskId": null,
+   "displayId": null,
+   "taskStatus": null,
+   "taskCommentCount": null,
+   "editedAt": null,
+   "deletedAt": null,
+   "tsSent": "<time>",
+   "tsUpdated": "<time>"
+  },
+  "unreadCount": 2,
+  "members": [
+   {
+    "id": "<uuid:11>",
+    "userId": "<uuid:2>",
+    "role": "member",
+    "memberRole": "viewer",
+    "tsJoined": "<time>",
+    "user": {
+     "userId": "<uuid:2>",
+     "userName": "b_owner",
+     "userEmail": "b_owner@example.com",
+     "avatarImgPath": null,
+     "isSystemUser": false
+    }
+   },
+   {
+    "id": "<uuid:12>",
+    "userId": "<uuid:5>",
+    "role": "member",
+    "memberRole": "viewer",
+    "tsJoined": "<time>",
+    "user": {
+     "userId": "<uuid:5>",
+     "userName": "b_editor",
+     "userEmail": "b_editor@example.com",
+     "avatarImgPath": null,
+     "isSystemUser": false
+    }
+   }
+  ],
+  "dmPartner": {
+   "userId": "<uuid:5>",
+   "userName": "b_editor",
+   "userEmail": "b_editor@example.com",
+   "avatarImgPath": ""
+  },
+  "tsCreated": "<time>",
+  "tsUpdated": "<time>"
+ },
+ {
+  "id": "<uuid:13>",
+  "kind": 2,
+  "title": "Cross-team room",
+  "profileImageUrl": "",
+  "projectId": null,
+  "ownerId": "<uuid:14>",
+  "isPrivate": true,
+  "isExternal": true,
+  "teamId": "<uuid:15>",
+  "hostTeamName": "Test Team",
+  "legacyChatId": null,
+  "latestMessage": {
+   "id": "<uuid:16>",
+   "channelId": "<uuid:13>",
+   "channelKind": 2,
+   "sender": {
+    "userId": "<uuid:14>",
+    "userName": "testuser",
+    "userEmail": "test@example.com",
+    "avatarImgPath": null,
+    "isSystemUser": false
+   },
+   "seq": 100,
+   "body": {
+    "text": "from the host"
+   },
+   "bodyText": "from the host",
+   "parentId": null,
+   "threadRootId": null,
+   "isThreadReply": false,
+   "replyCount": 0,
+   "reactions": [
+    {
+     "id": "<uuid:17>",
+     "user": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "tada",
+     "tsSent": "<time>"
+    },
+    {
+     "id": "<uuid:18>",
+     "user": {
+      "userId": "<uuid:14>",
+      "userName": "testuser",
+      "userEmail": "test@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "thumbsup",
+     "tsSent": "<time>"
+    }
+   ],
+   "mentions": [
+    {
+     "id": "<uuid:19>",
+     "mentionedUserId": "<uuid:2>",
+     "viaGroupId": null,
+     "tsCreated": "<time>"
+    }
+   ],
+   "attachments": [
+    {
+     "id": "<uuid:20>",
+     "fileUrl": "http://testserver/media/chats/<uuid:13>/messages/<uuid:16>/pic1.png",
+     "fileName": "pic1.png",
+     "mime": "image/png",
+     "sizeBytes": 100,
+     "uploader": {
+      "userId": "<uuid:14>",
+      "userName": "testuser",
+      "userEmail": "test@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    },
+    {
+     "id": "<uuid:21>",
+     "fileUrl": "http://testserver/media/chats/<uuid:13>/messages/<uuid:16>/pic2.png",
+     "fileName": "pic2.png",
+     "mime": "image/png",
+     "sizeBytes": 200,
+     "uploader": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    }
+   ],
+   "metadata": {},
+   "taskId": null,
+   "displayId": null,
+   "taskStatus": null,
+   "taskCommentCount": null,
+   "editedAt": null,
+   "deletedAt": null,
+   "tsSent": "<time>",
+   "tsUpdated": "<time>"
+  },
+  "unreadCount": 1,
+  "members": [],
+  "dmPartner": null,
+  "tsCreated": "<time>",
+  "tsUpdated": "<time>"
+ },
+ {
+  "id": "<uuid:22>",
+  "kind": 2,
+  "title": "Room",
+  "profileImageUrl": "",
+  "projectId": null,
+  "ownerId": "<uuid:2>",
+  "isPrivate": false,
+  "isExternal": false,
+  "teamId": "<uuid:3>",
+  "hostTeamName": null,
+  "legacyChatId": null,
+  "latestMessage": {
+   "id": "<uuid:23>",
+   "channelId": "<uuid:22>",
+   "channelKind": 2,
+   "sender": {
+    "userId": "<uuid:5>",
+    "userName": "b_editor",
+    "userEmail": "b_editor@example.com",
+    "avatarImgPath": null,
+    "isSystemUser": false
+   },
+   "seq": 2,
+   "body": {
+    "text": "latest in Room"
+   },
+   "bodyText": "latest in Room",
+   "parentId": null,
+   "threadRootId": null,
+   "isThreadReply": false,
+   "replyCount": 0,
+   "reactions": [
+    {
+     "id": "<uuid:24>",
+     "user": {
+      "userId": "<uuid:5>",
+      "userName": "b_editor",
+      "userEmail": "b_editor@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "tada",
+     "tsSent": "<time>"
+    },
+    {
+     "id": "<uuid:25>",
+     "user": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "thumbsup",
+     "tsSent": "<time>"
+    }
+   ],
+   "mentions": [
+    {
+     "id": "<uuid:26>",
+     "mentionedUserId": "<uuid:2>",
+     "viaGroupId": null,
+     "tsCreated": "<time>"
+    }
+   ],
+   "attachments": [
+    {
+     "id": "<uuid:27>",
+     "fileUrl": "http://testserver/media/chats/<uuid:22>/messages/<uuid:23>/pic1.png",
+     "fileName": "pic1.png",
+     "mime": "image/png",
+     "sizeBytes": 100,
+     "uploader": {
+      "userId": "<uuid:5>",
+      "userName": "b_editor",
+      "userEmail": "b_editor@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    },
+    {
+     "id": "<uuid:28>",
+     "fileUrl": "http://testserver/media/chats/<uuid:22>/messages/<uuid:23>/pic2.png",
+     "fileName": "pic2.png",
+     "mime": "image/png",
+     "sizeBytes": 200,
+     "uploader": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    }
+   ],
+   "metadata": {},
+   "taskId": null,
+   "displayId": null,
+   "taskStatus": null,
+   "taskCommentCount": null,
+   "editedAt": null,
+   "deletedAt": null,
+   "tsSent": "<time>",
+   "tsUpdated": "<time>"
+  },
+  "unreadCount": 2,
+  "members": [],
+  "dmPartner": null,
+  "tsCreated": "<time>",
+  "tsUpdated": "<time>"
+ },
+ {
+  "id": "<uuid:29>",
+  "kind": 3,
+  "title": "Host Project",
+  "profileImageUrl": "",
+  "projectId": "<int>",
+  "ownerId": "<uuid:14>",
+  "isPrivate": false,
+  "isExternal": false,
+  "teamId": "<uuid:15>",
+  "hostTeamName": "Test Team",
+  "legacyChatId": "<int>",
+  "latestMessage": {
+   "id": "<uuid:30>",
+   "channelId": "<uuid:29>",
+   "channelKind": 3,
+   "sender": {
+    "userId": "<uuid:14>",
+    "userName": "testuser",
+    "userEmail": "test@example.com",
+    "avatarImgPath": null,
+    "isSystemUser": false
+   },
+   "seq": 100,
+   "body": {
+    "text": "task header"
+   },
+   "bodyText": "task header",
+   "parentId": null,
+   "threadRootId": null,
+   "isThreadReply": false,
+   "replyCount": 0,
+   "reactions": [
+    {
+     "id": "<uuid:31>",
+     "user": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "tada",
+     "tsSent": "<time>"
+    },
+    {
+     "id": "<uuid:32>",
+     "user": {
+      "userId": "<uuid:14>",
+      "userName": "testuser",
+      "userEmail": "test@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "emoji": "thumbsup",
+     "tsSent": "<time>"
+    }
+   ],
+   "mentions": [
+    {
+     "id": "<uuid:33>",
+     "mentionedUserId": "<uuid:2>",
+     "viaGroupId": null,
+     "tsCreated": "<time>"
+    }
+   ],
+   "attachments": [
+    {
+     "id": "<uuid:34>",
+     "fileUrl": "http://testserver/media/chats/<uuid:29>/messages/<uuid:30>/pic1.png",
+     "fileName": "pic1.png",
+     "mime": "image/png",
+     "sizeBytes": 100,
+     "uploader": {
+      "userId": "<uuid:2>",
+      "userName": "b_owner",
+      "userEmail": "b_owner@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    },
+    {
+     "id": "<uuid:35>",
+     "fileUrl": "http://testserver/media/chats/<uuid:29>/messages/<uuid:30>/pic2.png",
+     "fileName": "pic2.png",
+     "mime": "image/png",
+     "sizeBytes": 200,
+     "uploader": {
+      "userId": "<uuid:14>",
+      "userName": "testuser",
+      "userEmail": "test@example.com",
+      "avatarImgPath": null,
+      "isSystemUser": false
+     },
+     "tsCreated": "<time>"
+    }
+   ],
+   "metadata": {},
+   "taskId": "<int>",
+   "displayId": "HOST-1",
+   "taskStatus": "Open",
+   "taskCommentCount": 0,
+   "editedAt": null,
+   "deletedAt": null,
+   "tsSent": "<time>",
+   "tsUpdated": "<time>"
+  },
+  "unreadCount": 1,
+  "members": [],
+  "dmPartner": null,
+  "tsCreated": "<time>",
+  "tsUpdated": "<time>"
+ }
+]

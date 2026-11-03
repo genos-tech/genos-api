@@ -306,8 +306,10 @@ class ChatTermTests(_Fixture):
         self.assertEqual(self.badge("a"), 0)
         shared = {str(hosted.id): object()}
         with mock.patch(
-            "origin.services.channel_scope.external_objects_for_member",
-            side_effect=lambda kind, team, user: shared if kind == "channel" else {},
+            "origin.services.channel_scope.external_objects_by_type",
+            side_effect=lambda kinds, team, user: {
+                kind: shared if kind == "channel" else {} for kind in kinds
+            },
         ):
             self.assertEqual(self.badge("a"), 1)
 
@@ -410,8 +412,9 @@ class TotalTests(_Fixture):
             self.inbox(JOIN_TEAM)
         big = (queries("a"), queries(None))
         self.assertEqual(small, big)  # no per-chat or per-row queries
-        # requests 1 + chats 1 + the team's two share lookups
-        self.assertEqual(big, (4, 2))
+        # requests 1 + chats 1 + the team's share lookup (shared chats and
+        # shared projects come from one grants query)
+        self.assertEqual(big, (3, 2))
 
 
 # ----------------------------------------------------------------------

@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, OuterRef, Subquery
+from django.db.models import Count, OuterRef, Prefetch, Subquery
 from django.db.models.functions import Coalesce
 from django.http import Http404
 from rest_framework import status
@@ -34,6 +34,8 @@ from origin.models.chat.unified_models import (
     ChannelKind,
     ChannelMember,
     Message,
+    MessageAttachment,
+    MessageReaction,
     ReadCursor,
 )
 from origin.models.common.team_models import ExternalGrant, TeamMaster
@@ -331,7 +333,13 @@ class ChannelListView(AuthenticatedAPIView):
         # Only the unread COUNT subquery is needed here — `latestMessage`
         # is resolved below by a single DISTINCT ON query, so we skip the
         # per-channel `_latest_seq` correlated subquery entirely.
-        qs = _annotate_unread(_user_channels_qs(user), user)
+        # `user_channels_qs` joins `project` and `owner` for its other callers.
+        # This serializer reads neither (`projectId` and `ownerId` are the id
+        # columns), and the owner join decrypts the owner's personal fields for
+        # every row, so both are dropped here; `team` stays because
+        # `hostTeamName` reads it.
+        channels_qs = _user_channels_qs(user).select_related(None).select_related("team")
+        qs = _annotate_unread(channels_qs, user)
         team_id = request.GET.get("team_id")
         if team_id:
             # Parse before filtering. `Channel.team` points at a UUID
@@ -395,7 +403,16 @@ class ChannelListView(AuthenticatedAPIView):
             .order_by("channel_id", "-seq")
             .distinct("channel_id")
             .select_related("sender", "channel", "task", "task__project")
-            .prefetch_related("reactions__user", "mentions", "attachments")
+            .prefetch_related(
+                # The serializer reads each reaction's user and each
+                # attachment's uploader; joining them here is one query per
+                # relation instead of one per attachment.
+                Prefetch("reactions", queryset=MessageReaction.objects.select_related("user")),
+                "mentions",
+                Prefetch(
+                    "attachments", queryset=MessageAttachment.objects.select_related("uploader")
+                ),
+            )
         )
         latest_by_channel = {m.channel_id: m for m in latest_messages}
 
