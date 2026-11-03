@@ -121,7 +121,7 @@ REGISTRY = {
     "origin.views.chat.channel_views.ChannelInlineUploadView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelJoinView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelListView": checked(
-        "external_objects_for_member", "_manager_or_raise"
+        "external_objects_by_type", "_manager_or_raise"
     ),
     "origin.views.chat.channel_views.ChannelMemberDetailView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelMembersView": checked("_get_channel_for_user"),

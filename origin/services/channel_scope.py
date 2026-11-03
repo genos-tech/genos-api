@@ -33,7 +33,7 @@ from django.db.models import Q
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import ExternalGrant
 from origin.models.project.prj_models import ProjectMembers
-from origin.services.external_grants import external_objects_for_member
+from origin.services.external_grants import external_objects_by_type
 
 
 def user_channels_qs(user):
@@ -63,7 +63,13 @@ def team_scope_q(team_id, user_id) -> Q:
     # the owning team's id was hiding them from the only sidebar the caller
     # looks at: an external chat showed up solely while viewing the host team,
     # which is not where anyone goes to read their messages.
-    shared = external_objects_for_member(ExternalGrant.ObjectType.CHANNEL, team_id, user_id)
+    #
+    # Shared chats and shared projects come from ONE grants lookup: this runs
+    # on every chat-list load, and two separate lookups paid for it twice.
+    reach = external_objects_by_type(
+        (ExternalGrant.ObjectType.CHANNEL, ExternalGrant.ObjectType.PROJECT), team_id, user_id
+    )
+    shared = reach[ExternalGrant.ObjectType.CHANNEL]
     scope = Q(team_id=team_id)
     if shared:
         scope |= Q(id__in=list(shared.keys()))
@@ -75,9 +81,7 @@ def team_scope_q(team_id, user_id) -> Q:
     # is where a project's avatar lives and the only route into the
     # project profile, so a shared project rendered with no icon and
     # no way to open its settings.
-    shared_projects = external_objects_for_member(
-        ExternalGrant.ObjectType.PROJECT, team_id, user_id
-    )
+    shared_projects = reach[ExternalGrant.ObjectType.PROJECT]
     if shared_projects:
         scope |= Q(kind=ChannelKind.PM, project_id__in=list(shared_projects.keys()))
     return scope

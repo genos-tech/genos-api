@@ -679,18 +679,40 @@ def external_objects_for_member(object_type, guest_team_id, user_id) -> dict[str
     that returned "everything my team was offered" would hand every list
     a set of objects most of its members may not open.
     """
-    if guest_team_id is None or user_id is None:
-        return {}
+    return external_objects_by_type([object_type], guest_team_id, user_id)[object_type]
+
+
+def external_objects_by_type(
+    object_types, guest_team_id, user_id
+) -> dict[str, dict[str, ExternalGrant]]:
+    """`external_objects_for_member` for several object types, in one grants query.
+
+    Returns `{object_type: {str(object_id): grant}}` with every requested type
+    present (empty when nothing is shared). The chat list needs two types (shared
+    chats and shared projects) on every load, and asking for each separately paid
+    for the grants lookup twice. The participation check stays one query per type
+    that has any grant, because each type lives in a different table.
+    """
+    object_types = list(object_types)
+    reach: dict[str, dict[str, ExternalGrant]] = {kind: {} for kind in object_types}
+    if guest_team_id is None or user_id is None or not object_types:
+        return reach
     grants = ExternalGrant.objects.filter(
         status=ShareStatus.ACTIVE,
         guest_team_id=guest_team_id,
-        object_type=object_type,
+        object_type__in=object_types,
     )
-    by_object = {str(g.object_id): g for g in grants}
-    if not by_object:
-        return {}
-    held = _objects_held_by(object_type, list(by_object.keys()), user_id)
-    return {object_id: by_object[object_id] for object_id in held if object_id in by_object}
+    offered: dict[str, dict[str, ExternalGrant]] = {kind: {} for kind in object_types}
+    for grant in grants:
+        offered[grant.object_type][str(grant.object_id)] = grant
+    for kind, by_object in offered.items():
+        if not by_object:
+            continue
+        held = _objects_held_by(kind, list(by_object.keys()), user_id)
+        reach[kind] = {
+            object_id: by_object[object_id] for object_id in held if object_id in by_object
+        }
+    return reach
 
 
 def _objects_held_by(object_type, object_ids: list[str], user_id) -> set[str]:
