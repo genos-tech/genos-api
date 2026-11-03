@@ -31,6 +31,7 @@ across a window boundary, which for a backstop limit is fine.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from django.core.cache import InvalidCacheBackendError, caches
@@ -363,3 +364,18 @@ class BatchReadThrottle(WindowRateThrottle):
     """Endpoints that take a list of ids and answer for every one."""
 
     scope = "batch_read"
+
+
+class ClientPerfThrottle(WindowRateThrottle):
+    """The browser's interaction timings (`POST /api/v2/client-perf/`).
+    Each batch is a few log lines, so this caps what a script can write
+    into the logs under a real user's name, not what a person does.
+
+    The rate sits on the class (as the page-title and auth throttles' do),
+    still tunable with `THROTTLE_CLIENT_PERF`, rather than in
+    `DEFAULT_THROTTLE_RATES`: any edit to `apis/settings.py` starts the
+    Vertex-billed agent evals on a PR (`agent-evals.yml`), and this rate
+    cannot move them."""
+
+    scope = "client_perf"
+    rate = os.environ.get("THROTTLE_CLIENT_PERF", "30/min")
