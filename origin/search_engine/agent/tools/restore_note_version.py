@@ -73,6 +73,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "restored_from_version_no": version_no,
         "new_version_no": new_version.version_no,
         "title": source.title or "",
+        # A restore replaces both, and the browser re-reads the note for it (MIP-951).
+        "changed_fields": ["title", "body"],
         "live_editor": outcome.value,
         "__summary__": summary,
     }

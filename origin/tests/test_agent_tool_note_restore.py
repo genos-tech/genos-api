@@ -201,6 +201,11 @@ class RestoringAVersion(RestoreBase):
         self.assertEqual(out["restored_from_version_no"], 1)
         self.assertIn('Restored "Plan v1" to version 1', out["__summary__"])
 
+    def test_the_result_says_the_title_and_the_body_changed(self):
+        # The browser re-reads the note for this (MIP-951): both were replaced.
+        out = self.restore(1)
+        self.assertEqual(out["changed_fields"], ["title", "body"])
+
     def test_what_it_replaced_is_kept_so_the_restore_can_be_undone(self):
         """The note says "third draft" and no version holds it."""
         self.assertNotIn("third draft", [words(r.body) for r in self.rows()])

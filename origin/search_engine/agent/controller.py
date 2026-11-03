@@ -2132,14 +2132,35 @@ def resume_agent(
                 # frontend can refresh caches and (for body updates) push
                 # the new blocks into the live Yjs doc. Additive — older
                 # frontends destructure known fields and ignore this.
-                if call_name in ("create_note", "update_note"):
+                # A delete carries `deleted` so the browser closes the note instead of
+                # refreshing it, and a restore carries both changed fields so it
+                # re-reads the note (MIP-950, MIP-951).
+                if call_name in (
+                    "create_note",
+                    "update_note",
+                    "delete_note",
+                    "restore_note_version",
+                ):
                     note_ref = {
                         k: result.get(k)
-                        for k in ("note_id", "note_type", "title", "changed_fields")
+                        for k in ("note_id", "note_type", "title", "changed_fields", "deleted")
                         if result.get(k) is not None
                     }
                     if note_ref.get("note_id"):
                         result_event["note"] = note_ref
+                # A folder delete names what went, so the browser can close tabs and drop
+                # local copies. `ids_truncated` means the lists were capped: reload instead.
+                if call_name == "delete_note_folder":
+                    result_event["note_folder"] = {
+                        k: result.get(k)
+                        for k in (
+                            "folder_id",
+                            "deleted_folder_ids",
+                            "deleted_note_ids",
+                            "ids_truncated",
+                        )
+                        if result.get(k) is not None
+                    }
                 emit(result_event)
                 # C3: an APPROVED write just changed the workspace, so
                 # every cached read this session made before it is now

@@ -376,6 +376,101 @@ class DeletingAMyNotesFolder(DeleteBase):
         )
         self.assertIn("cannot be undone", out["__summary__"])
 
+    def test_the_result_names_every_folder_and_note_that_went(self):
+        top = self.my_folder("Top")
+        sub = self.my_folder("Sub", parent=top)
+        a, b = self.note("A", folder=top), self.note("B", folder=sub)
+        child = self.note("Child of A", parent=a)
+        out = self.delete_folder({"folder_id": top.folder_id, "include_contents": True})
+        self.assertEqual(out["deleted_note_ids"], sorted([a.note_id, b.note_id, child.note_id]))
+        self.assertEqual(out["deleted_folder_ids"], sorted([top.folder_id, sub.folder_id]))
+        self.assertIs(out["ids_truncated"], False)
+
+    def test_past_the_cap_the_ids_are_cut_and_the_result_says_so(self):
+        top = self.my_folder("Top")
+        sub = self.my_folder("Sub", parent=top)
+        notes = [self.note(f"N{i}", folder=top) for i in range(3)]
+        with (
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_NOTES", 2
+            ),
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_FOLDERS", 1
+            ),
+        ):
+            out = self.delete_folder({"folder_id": top.folder_id, "include_contents": True})
+        # The counts stay whole; only the lists are cut, from the smallest id.
+        self.assertEqual((out["deleted_folders"], out["deleted_notes"]), (2, 3))
+        self.assertEqual(out["deleted_note_ids"], sorted(n.note_id for n in notes)[:2])
+        self.assertEqual(out["deleted_folder_ids"], [min(top.folder_id, sub.folder_id)])
+        self.assertIs(out["ids_truncated"], True)
+
+    def test_the_ids_are_reported_smallest_first_whatever_order_the_service_returns_them(self):
+        """The service hands back sets, and Python happens to iterate small whole numbers
+        in ascending order, so real ids can't tell a sorted list from an unsorted one.
+        These sets iterate out of order, which the test checks, so the cap cuts from the
+        smallest id and not from whichever the set yields first."""
+        folder = self.my_folder("Empty")
+        gone_notes, gone_folders = {16, 1, 8, 9}, {40, 3, 32}
+        self.assertNotEqual(list(gone_notes), sorted(gone_notes))
+        self.assertNotEqual(list(gone_folders), sorted(gone_folders))
+        with mock.patch(
+            "origin.search_engine.agent.tools.delete_note_folder.delete_personal_folder",
+            return_value=(gone_folders, gone_notes),
+        ):
+            out = self.delete_folder({"folder_id": folder.folder_id})
+        self.assertEqual(out["deleted_note_ids"], [1, 8, 9, 16])
+        self.assertEqual(out["deleted_folder_ids"], [3, 32, 40])
+        with (
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder.delete_personal_folder",
+                return_value=(gone_folders, gone_notes),
+            ),
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_NOTES", 2
+            ),
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_FOLDERS", 2
+            ),
+        ):
+            capped = self.delete_folder({"folder_id": folder.folder_id})
+        self.assertEqual(capped["deleted_note_ids"], [1, 8])
+        self.assertEqual(capped["deleted_folder_ids"], [3, 32])
+
+    def test_either_list_going_over_its_cap_is_enough_to_say_so(self):
+        for cap_notes, cap_folders in ((1, 100), (200, 1)):
+            with self.subTest(cap_notes=cap_notes, cap_folders=cap_folders):
+                top = self.my_folder(f"Top{cap_notes}")
+                self.my_folder(f"Sub{cap_notes}", parent=top)
+                [self.note(f"N{i}", folder=top) for i in range(2)]
+                with (
+                    mock.patch(
+                        "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_NOTES",
+                        cap_notes,
+                    ),
+                    mock.patch(
+                        "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_FOLDERS",
+                        cap_folders,
+                    ),
+                ):
+                    out = self.delete_folder({"folder_id": top.folder_id, "include_contents": True})
+                self.assertIs(out["ids_truncated"], True)
+
+    def test_exactly_at_the_cap_is_not_truncated(self):
+        top = self.my_folder("Top")
+        [self.note(f"N{i}", folder=top) for i in range(2)]
+        with (
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_NOTES", 2
+            ),
+            mock.patch(
+                "origin.search_engine.agent.tools.delete_note_folder._MAX_REPORTED_FOLDERS", 1
+            ),
+        ):
+            out = self.delete_folder({"folder_id": top.folder_id, "include_contents": True})
+        self.assertIs(out["ids_truncated"], False)
+        self.assertEqual(len(out["deleted_note_ids"]), 2)
+
     def test_a_note_shared_with_another_person_blocks_it_even_with_the_say_so(self):
         folder = self.my_folder("Shared out")
         note = self.note("Shared", folder=folder)
@@ -422,6 +517,14 @@ class DeletingATeamNotesFolder(DeleteBase):
         folder = self.team_folder("Empty")
         self.delete_folder({"folder_id": folder.folder_id})
         self.assertFalse(PersonalNoteFolder.objects.filter(folder_id=folder.folder_id).exists())
+
+    def test_the_result_names_the_team_folders_notes_and_folders_too(self):
+        top = self.team_folder("Handbook")
+        sub = self.team_folder("Sub", parent=top)
+        mine = self.note("Mine", folder=sub)
+        out = self.delete_folder({"folder_id": top.folder_id, "include_contents": True})
+        self.assertEqual(out["deleted_note_ids"], [mine.note_id])
+        self.assertEqual(out["deleted_folder_ids"], sorted([top.folder_id, sub.folder_id]))
 
     def test_the_owner_deletes_their_own_work_with_the_say_so_and_not_without(self):
         folder = self.team_folder("Mine")
