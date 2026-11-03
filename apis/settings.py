@@ -103,6 +103,11 @@ MIDDLEWARE = [
     # First, so every log line and error answer of the request shares
     # its reference (apis/request_id.py, MIP-622).
     "apis.request_id.RequestIdMiddleware",
+    # One `perf.request` log line per API request: wall time, thread CPU,
+    # queries, requests in flight (MIP-956). Right after the request id so
+    # it times every layer below and its line carries the reference.
+    # `REQUEST_PERF_LOG=0` removes it.
+    "origin.middleware.request_perf.RequestPerfMiddleware",
     # Counts 5xx answers for the ops alert (MIP-772). Outside everything
     # but the request id, so it sees a 500 from any layer below.
     "origin.services.ops_alerts.ServerErrorBurstMiddleware",
@@ -474,6 +479,21 @@ def _env_switch(name: str) -> bool:
 # for an emergency.
 PUBLIC_API_DISABLED = _env_switch("PUBLIC_API_DISABLED")
 MCP_DISABLED = _env_switch("MCP_DISABLED")
+
+# Per-request performance line and the once-a-minute CPU-throttling line
+# (MIP-956; origin/middleware/request_perf.py). ON unless set to 0, false,
+# no or off: it is an observability aid, so the default is to have it, and
+# switching it off removes the middleware at boot. The cgroup v2 file the
+# throttling counters are read from is a setting so a test can point it at
+# a temp file; a missing file turns that one sampler off, not the request
+# lines.
+REQUEST_PERF_LOG = os.environ.get("REQUEST_PERF_LOG", "").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+REQUEST_PERF_CPU_STAT_PATH = os.environ.get("REQUEST_PERF_CPU_STAT_PATH", "/sys/fs/cgroup/cpu.stat")
 
 SIMPLE_JWT = {
     # NOT shortened, deliberately. A shorter access token would be the
