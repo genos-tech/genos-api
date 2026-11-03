@@ -821,11 +821,8 @@ def rows_for_grant(grant: ExternalGrant) -> list:
     return []
 
 
-_BIGINT_LIMIT = 2**63
-
-
 def _object_key(object_type, object_id):
-    """`object_id` the way the database reads it, or `None` if no row can match.
+    """`object_id` the way the database reads it.
 
     `object_id` is text, stored as the client sent it, so `"0042"` or an
     upper-case UUID can be on file. A single-object lookup matches those
@@ -835,13 +832,12 @@ def _object_key(object_type, object_id):
 
     Raises `ValueError` for an id that is not an id of this type at all (what
     the single-object lookup raises too). An integer too large for the column
-    names nothing and answers `None`, as the single-object lookup does by
-    matching no row.
+    is not an error: it simply matches no row, in a lookup of one id and in an
+    `__in` of many.
     """
     if object_type == ExternalGrant.ObjectType.CHANNEL:
         return uuid.UUID(str(object_id))
-    value = int(object_id)
-    return value if -_BIGINT_LIMIT <= value < _BIGINT_LIMIT else None
+    return int(object_id)
 
 
 def rosters_of_held_objects(grants, user_id) -> dict:
@@ -883,13 +879,10 @@ def rosters_of_held_objects(grants, user_id) -> dict:
         keys = {}
         for grant in by_type.get(kind, ()):
             try:
-                key = _object_key(kind, grant.object_id)
+                keys[grant.id] = _object_key(kind, grant.object_id)
             except ValueError:
                 if not lenient:
                     raise
-                key = None
-            if key is not None:
-                keys[grant.id] = key
         return keys
 
     def collect(kind, keys, rows):

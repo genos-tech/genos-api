@@ -369,10 +369,12 @@ class RichWorld(SharingWorld):
         )
 
     def full_rows(self, response):
-        """The rows as sent: the team's own people in the order they came, the
-        other teams' people (whose order the database does not promise) sorted."""
+        """The rows as sent, each group sorted by name: the team's own people
+        come from a query ordered by the database's collation, and the other
+        teams' people from one that is not ordered at all, and neither is what
+        this test is about."""
         rows = response.json()["data"]["members"]
-        own = [r for r in rows if not r.get("isExternal")]
+        own = sorted((r for r in rows if not r.get("isExternal")), key=lambda r: r["userName"])
         external = sorted((r for r in rows if r.get("isExternal")), key=lambda r: r["userName"])
         for row in external:
             if row["userName"] in FIRST_WINS:
@@ -572,6 +574,13 @@ class MalformedGrantTests(SharingWorld):
         self.bad_grant(FOLDER, "abc")
         self.assertEqual(self.people(), set())
 
+    def test_an_integer_too_large_for_the_column_names_nothing(self):
+        """Not malformed, just matching no row: neither a project nor a note
+        folder grant with such an id disturbs the rest of the list."""
+        self.bad_grant(PROJECT, "99999999999999999999")
+        self.bad_grant(FOLDER, "99999999999999999999")
+        self.assertEqual(self.people(), {"b_owner", "b_editor"})
+
     def test_a_malformed_project_id_costs_only_that_grant(self):
         self.bad_grant(PROJECT, "abc")
         self.assertEqual(self.people(), {"b_owner", "b_editor"})
@@ -604,6 +613,14 @@ class MalformedGrantTests(SharingWorld):
         self.share(FOLDER, folder, self.team_a, self.a_owner, self.team_b, self.b_owner)
         self.bad_grant(FOLDER, "abc", guest_team=self.team_b)
         self.assertEqual(external_visible_user_ids(self.team_a.team_id, self.b_owner.id), set())
+
+    def test_an_integer_too_large_for_the_column_is_skipped_by_the_visible_set(self):
+        ch = self.new_channel(self.team_a, self.a_owner, "Good chat")
+        self.share(CHANNEL, ch, self.team_a, self.a_owner, self.team_b, self.b_owner)
+        self.put_on(ch, self.b_editor)
+        self.bad_grant(FOLDER, "99999999999999999999", guest_team=self.team_b)
+        seen = external_visible_user_ids(self.team_a.team_id, self.b_owner.id)
+        self.assertEqual({str(self.b_owner.id), str(self.b_editor.id)}, seen)
 
     def test_a_malformed_project_grant_is_skipped_by_the_visible_set(self):
         """Projects resolve through `guest_visible_user_ids`, never read here."""
