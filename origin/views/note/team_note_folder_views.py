@@ -30,7 +30,6 @@ alone, never on owner.
 
 from collections import defaultdict
 
-from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -39,13 +38,11 @@ from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import (
     NoteFolderPermission,
     NoteFolderTagLink,
-    NotePermissionMaster,
 )
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
-from origin.models.note.version_note_models import NoteVersionMaster
-from origin.search_engine.purge import purge_note_folders
 from origin.services.external_grants import external_objects_for_member, externally_shared
 from origin.services.group_expansion import expand_groups
+from origin.services.note_delete import DeleteRefused, delete_team_folder
 from origin.services.note_folder_manage import (
     VALID_VISIBILITIES,
     FolderRefused,
@@ -54,9 +51,6 @@ from origin.services.note_folder_manage import (
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.note.note_folder_tag_views import sync_folder_tags
 from origin.views.utils.note_acl_resync import (
-    collect_folder_subtree_ids,
-    collect_note_ids_in_folders,
-    purge_notes_from_index,
     resync_folder_subtree,
 )
 from origin.views.utils.note_folder_role import (
@@ -609,49 +603,18 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if folder is None:
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Owner of the folder — which an outsider is, for a subfolder they
-        # made inside a share. Nothing widens here: the refusal below still
-        # stands when anyone else's note or folder is inside, so this
-        # deletes only their own work, and the shared folder itself is
-        # owned by the host and stays out of reach.
-        if get_folder_role(request_user_id, folder.folder_id, owning_team_id) != ROLE_OWNER:
-            return Response(
-                {"error": "Only the folder owner can delete it."},
-                status=status.HTTP_403_FORBIDDEN,
+        # The folder's Owner (which an outsider is, for a subfolder they made inside a
+        # share) and nothing foreign inside: nothing widens, the refusal stands when
+        # anyone else's note or folder is in the subtree, and the shared folder itself
+        # is the host's and stays out of reach.
+        try:
+            folder_ids, note_ids = delete_team_folder(
+                team_id=owning_team_id, user_id=request_user_id, folder=folder
             )
-
-        folder_ids = collect_folder_subtree_ids(folder.folder_id, owning_team_id)
-        note_ids = collect_note_ids_in_folders(folder_ids, owning_team_id)
-
-        foreign_notes = (
-            PersonalNoteMaster.objects.filter(note_id__in=note_ids)
-            .exclude(owner=request_user_id)
-            .count()
-        )
-        foreign_folders = (
-            PersonalNoteFolder.objects.filter(folder_id__in=folder_ids)
-            .exclude(owner=request_user_id)
-            .count()
-        )
-        if foreign_notes or foreign_folders:
+        except DeleteRefused as refused:
             return Response(
-                {
-                    "error": "This folder still holds content owned by other people.",
-                    "foreignNoteCount": foreign_notes,
-                    "foreignFolderCount": foreign_folders,
-                },
-                status=status.HTTP_409_CONFLICT,
+                {"error": refused.message, **refused.extra}, status=refused.status
             )
-
-        with transaction.atomic():
-            PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
-            NotePermissionMaster.objects.filter(note_type=NOTE_TYPE, note_id__in=note_ids).delete()
-            NoteVersionMaster.objects.filter(note_type=NOTE_TYPE, note_id__in=note_ids).delete()
-            # NoteFolderPermission / NoteFolderTagLink cascade on the FK.
-            PersonalNoteFolder.objects.filter(folder_id__in=folder_ids).delete()
-
-        purge_notes_from_index(note_ids)
-        purge_note_folders(folder_ids)
 
         return Response(
             {

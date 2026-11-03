@@ -226,7 +226,8 @@ args, user sees them, user confirms):
   update_comment, delete_comment, restore_task_body,
   manage_sprint, delete_sprint,
   manage_project, manage_project_members,
-  manage_note_folder, favorite_note.
+  manage_note_folder, favorite_note,
+  delete_note, delete_note_folder.
 
   - Only call write tools when the user EXPLICITLY asks. Never edit
     or create things on the user's behalf without a clear request.
@@ -487,7 +488,8 @@ _WRITE_TOOLS_LEGACY_BLOCK = """\
   update_comment, delete_comment, restore_task_body,
   manage_sprint, delete_sprint,
   manage_project, manage_project_members,
-  manage_note_folder, favorite_note.
+  manage_note_folder, favorite_note,
+  delete_note, delete_note_folder.
 """
 
 

@@ -7,22 +7,20 @@ from rest_framework.response import Response
 from apis.request_id import error_response
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.purge import purge_note
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
+from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
     ROLE_OWNER,
     ROLE_VIEWER,
-    delete_note_permissions,
     get_effective_role,
     require_read_role,
     require_write_role,
 )
 from origin.views.utils.note_version import (
-    delete_note_versions,
     snapshot_note_version,
 )
 from origin.views.utils.quota_guards import check_monthly_creation_quota
@@ -508,24 +506,13 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             return res
 
         try:
-            with transaction.atomic():
-                note = TaskNoteMaster.objects.get(team=data["team"], note_id=data["note_id"])
-                note.delete()
-                delete_note_permissions(NOTE_TYPE, data["note_id"])
-                delete_note_versions(NOTE_TYPE, data["note_id"])
-            # Best-effort (after the commit): drop the note's chunks from
-            # OpenSearch — chunkers never revisit deleted rows. The orphan
-            # sweep in the reindex cron retries if this fails.
-            purge_note("task", data["note_id"])
-            return Response(
-                {"message": "Note deleted successfully."},
-                status=status.HTTP_204_NO_CONTENT,
-            )
-        except TaskNoteMaster.DoesNotExist:
-            return Response(
-                {"error": "Note not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            delete_note(team_id=data["team"], family="task", note_id=data["note_id"])
+        except DeleteRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
+        return Response(
+            {"message": "Note deleted successfully."},
+            status=status.HTTP_204_NO_CONTENT,
+        )
 
 
 class SingleTaskNoteView(AuthenticatedAPIView):

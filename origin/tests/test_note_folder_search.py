@@ -188,7 +188,7 @@ class FolderPurgeTests(FolderBase):
         top = self._folder("A")
         sub = self._folder("B", parent=top)
         self.authenticate()
-        with mock.patch("origin.views.note.personal_note_folder_views.purge_note_folders") as p:
+        with mock.patch("origin.services.note_delete.purge_note_folders") as p:
             res = self.client.delete(
                 "/api/v2/note/personal/folder/?"
                 + urlencode(
@@ -206,7 +206,7 @@ class FolderPurgeTests(FolderBase):
         top = self._folder("Handbook", scope="team", visibility="public")
         sub = self._folder("Policies", parent=top, scope="team")
         self.authenticate()
-        with mock.patch("origin.views.note.team_note_folder_views.purge_note_folders") as p:
+        with mock.patch("origin.services.note_delete.purge_note_folders") as p:
             res = self.client.delete(
                 "/api/v2/note/team/folder/?"
                 + urlencode(

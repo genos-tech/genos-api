@@ -25,14 +25,11 @@ Contract notes:
     move should neither reshuffle the list nor trigger a re-embed.
 """
 
-from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
-from origin.models.note.version_note_models import NoteVersionMaster
-from origin.search_engine.purge import purge_note_folders
+from origin.services.note_delete import DeleteRefused, delete_personal_folder
 from origin.services.note_folder_manage import (
     FolderRefused,
     clean_name,
@@ -208,71 +205,11 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
             return res
 
         try:
-            with transaction.atomic():
-                folder = _get_owned_folder(data["folder_id"], data["team_id"], data["user_id"])
-
-                # 1. The folder subtree (BFS; visited set guards against
-                #    pre-existing corrupt loops).
-                folder_ids = {folder.folder_id}
-                frontier = [folder.folder_id]
-                while frontier:
-                    child_ids = list(
-                        PersonalNoteFolder.objects.filter(
-                            team=data["team_id"],
-                            owner=data["user_id"],
-                            scope=SCOPE,
-                            parent_folder_id__in=frontier,
-                        )
-                        .exclude(folder_id__in=folder_ids)
-                        .values_list("folder_id", flat=True)
-                    )
-                    if not child_ids:
-                        break
-                    folder_ids.update(child_ids)
-                    frontier = child_ids
-
-                # 2. Root notes filed in any of those folders…
-                note_ids = set(
-                    PersonalNoteMaster.objects.filter(
-                        team=data["team_id"],
-                        owner=data["user_id"],
-                        folder_id__in=folder_ids,
-                    ).values_list("note_id", flat=True)
-                )
-                # …plus their child-note subtrees (children carry
-                # folder_id NULL and hang off parent_note_id).
-                frontier = list(note_ids)
-                while frontier:
-                    child_notes = list(
-                        PersonalNoteMaster.objects.filter(
-                            team=data["team_id"],
-                            owner=data["user_id"],
-                            parent_note_id__in=frontier,
-                        )
-                        .exclude(note_id__in=note_ids)
-                        .values_list("note_id", flat=True)
-                    )
-                    if not child_notes:
-                        break
-                    note_ids.update(child_notes)
-                    frontier = child_notes
-
-                # 3. Hard delete: notes, then their permission/version
-                #    rows (bulk form of what the single-note DELETE does
-                #    via delete_note_permissions/delete_note_versions),
-                #    then the folders.
-                PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
-                NotePermissionMaster.objects.filter(
-                    note_type=NOTE_TYPE, note_id__in=note_ids
-                ).delete()
-                NoteVersionMaster.objects.filter(
-                    note_type=NOTE_TYPE, note_id__in=note_ids
-                ).delete()
-                PersonalNoteFolder.objects.filter(folder_id__in=folder_ids).delete()
-        except PersonalNoteFolder.DoesNotExist:
-            return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        purge_note_folders(folder_ids)
+            folder_ids, note_ids = delete_personal_folder(
+                team_id=data["team_id"], owner_id=data["user_id"], folder_id=data["folder_id"]
+            )
+        except DeleteRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         # 200 with the deleted ids (not 204): the frontend uses them to
         # close tabs and purge local caches for every destroyed note.

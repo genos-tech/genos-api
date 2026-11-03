@@ -459,6 +459,18 @@
   en: "Star my Projects notes folder."
   ja: "ノートの「Projects」フォルダをお気に入りにして"
   ok: [list_note_folders, favorite_note]
+- id: note_delete
+  en: "Delete personal note 42."
+  ja: "個人ノート42を削除して"
+  ok: [delete_note, fetch_note]
+- id: note_delete_by_title
+  en: "Delete my note called Old ideas."
+  ja: "「Old ideas」というノートを削除して"
+  ok: [search_knowledge_base, list_note_folders, delete_note]
+- id: note_folder_delete
+  en: "Delete my Recipes notes folder and everything in it."
+  ja: "ノートの「Recipes」フォルダを中身ごと削除して"
+  ok: [list_note_folders, delete_note_folder]
 
 # --- search ----------------------------------------------------------------
 - id: workspace_decision
