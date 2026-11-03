@@ -1,6 +1,6 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 78 agent tools. This exposes 74. The four it leaves out are left out
+Genos has 80 agent tools. This exposes 76. The four it leaves out are left out
 on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, and the other two are
@@ -573,6 +573,19 @@ CATALOG: tuple[McpTool, ...] = (
             "folder NAME into the `folder_id` that `create_note` and "
             "`update_note` take."
         ),
+    ),
+    McpTool(
+        name="list_note_access",
+        registry_name="list_note_access",
+        description=(
+            "Who can open a note and with what role (owner, editor, viewer), whether "
+            "the caller may change it (`you_can_change_sharing`; only the note's owner "
+            "may), and, for a note filed in a Team Notes folder, which folder, since "
+            "that folder also decides who can open it. Name the note by its Genos "
+            "URL, or by its numeric id with `note_type`."
+        ),
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
     McpTool(
         name="list_uncompleted_todos",
@@ -1474,6 +1487,27 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
         destructive=True,
+    ),
+    # Not a delete, but gated like one: it changes who can read and edit a note, and
+    # this surface has no approval step (MIP-883, Ken's decision 2).
+    McpTool(
+        name="manage_note_sharing",
+        registry_name="manage_note_sharing",
+        description=(
+            "Share a note with a teammate, or stop sharing it. **This changes who can "
+            "read, and edit, the note, and nothing on this surface asks the user "
+            "first**, so it needs a write-scoped API key that its owner also opted "
+            "into destructive tools, the same opt-in a delete needs. `action` "
+            "'share' gives `user_id` (from `get_team_members`) the `role` 'editor' or "
+            "'viewer', never owner, or changes the role they have; 'unshare' takes "
+            "their share away. Only the note's owner may; `list_note_access` shows "
+            "the current shares and whether you may. The person is not notified. "
+            "Name the note by its Genos URL, or by its numeric id with `note_type`."
+        ),
+        write=True,
+        destructive=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
 )
 

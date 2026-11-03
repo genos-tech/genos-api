@@ -378,7 +378,8 @@ def _create_chat_note(
 CREATE_NOTE = Tool(
     name="create_note",
     description=(
-        "Create a new note. REQUIRES USER APPROVAL — the user sees your "
+        "Create a new note, right away: a personal note needs no lookup unless "
+        "the user names a folder. REQUIRES USER APPROVAL — the user sees your "
         "proposed title and body before it's saved. Kinds: "
         "'personal' (private to the creator; optionally filed into one of "
         "their My-Notes folders via folder_id), 'team' (in a Team Notes "
@@ -439,9 +440,10 @@ CREATE_NOTE = Tool(
                 "type": "INTEGER",
                 "description": (
                     "With note_type='personal' (optional): one of the user's "
-                    "My-Notes folders; omit for the top level. With "
-                    "note_type='team' (required): the Team Notes folder. "
-                    "Resolve the folder NAME to its id with "
+                    "My-Notes folders; omit for the top level, which is right "
+                    "unless the user names a folder. With note_type='team' "
+                    "(required): the Team Notes folder. When the user names a "
+                    "folder, resolve its NAME to its id with "
                     "`list_note_folders` first."
                 ),
             },
