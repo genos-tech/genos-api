@@ -274,7 +274,9 @@ def _external_reach(user_id, viewing_team_id) -> list:
         # folders out of an outsider's reach.
         reachable = {
             folder_id: role
-            for folder_id, role in readable_team_folder_roles(user_id, host_team_id).items()
+            for folder_id, role in readable_team_folder_roles(
+                user_id, host_team_id, folders=host_folders
+            ).items()
             if _walks_up_to(folder_id, roots, host_folders)
         }
         if reachable:
@@ -369,8 +371,8 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        roles = readable_team_folder_roles(request_user_id, data["team_id"])
         folders = load_team_folder_index(data["team_id"])
+        roles = readable_team_folder_roles(request_user_id, data["team_id"], folders=folders)
         payload = _serialize_folders(list(roles.keys()), roles, folders) if roles else []
         # Appended after the home team's own folders, and deliberately not
         # merged into the sort: someone else's folder is a different kind
