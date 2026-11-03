@@ -315,68 +315,72 @@ def external_people_for_member(team_id, user_id) -> dict:
     """
     if team_id is None or user_id is None:
         return {}
-    from origin.models.chat.unified_models import ChannelMember
     from origin.models.common.team_models import ExternalGrant, ShareStatus
-    from origin.models.note.common_note_models import NoteFolderPermission
-    from origin.services.external_grants import rows_for_grant
-
-    def _reaches(grant) -> bool:
-        """Is this person on the granted object themselves?"""
-        if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
-            return ChannelMember.objects.filter(
-                channel_id=grant.object_id, user_id=user_id, is_deleted=False
-            ).exists()
-        if grant.object_type == ExternalGrant.ObjectType.PROJECT:
-            return is_project_member(grant.object_id, user_id)
-        if grant.object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
-            return NoteFolderPermission.objects.filter(
-                folder_id=grant.object_id, user_id=user_id
-            ).exists()
-        return False
+    from origin.services.external_grants import rosters_of_held_objects
 
     def _query():
-        people: dict = {}
-        names: dict = {}
-
-        def team_name(tid):
-            if tid not in names:
-                names[tid] = (
-                    TeamMaster.objects.filter(team_id=tid)
-                    .values_list("team_name", flat=True)
-                    .first()
-                    or ""
-                )
-            return names[tid]
-
-        grants = ExternalGrant.objects.filter(
-            Q(owner_team_id=team_id) | Q(guest_team_id=team_id),
-            status=ShareStatus.ACTIVE,
+        # The cost of this roster must not depend on how many grants there
+        # are, so it is built a type at a time rather than a grant at a time.
+        # The grants are read once and walked in the order the database
+        # returned them, and that order is load-bearing: a person who sits on
+        # two grants naming different teams is shown under the FIRST.
+        grants = list(
+            ExternalGrant.objects.filter(
+                Q(owner_team_id=team_id) | Q(guest_team_id=team_id),
+                status=ShareStatus.ACTIVE,
+            )
         )
+        # Co-participation on a specific object is the unit: only the objects
+        # this person is on themselves are read, and only their rosters.
+        rosters = rosters_of_held_objects(grants, user_id)
+        on_object = []
         for grant in grants:
-            if not _reaches(grant):
-                continue
-            sides = [str(grant.owner_team_id), str(grant.guest_team_id)]
-            uids = {str(uid) for uid in rows_for_grant(grant)} - {str(user_id)}
-            if not uids:
-                continue
-            # Which of the two teams each person belongs to, in two
-            # queries rather than one per head: a busy channel makes the
-            # per-head form the most expensive thing on the roster path.
-            homes: dict = {}
+            uids = {str(uid) for uid in rosters.get(grant.id, ())} - {str(user_id)}
+            if uids:
+                on_object.append((grant, uids))
+        if not on_object:
+            return {}
+
+        # Which of its two teams each person belongs to, for every grant at
+        # once: two queries over all the teams and people involved, then each
+        # grant is narrowed to ITS two sides and ITS people in Python. A
+        # person on a grant between A and B is not placed in C because some
+        # other grant mentions C.
+        sides = {
+            side
+            for grant, _ in on_object
+            for side in (str(grant.owner_team_id), str(grant.guest_team_id))
+        }
+        everyone = set().union(*(uids for _, uids in on_object))
+        belongs = {
+            (str(tid), str(aid))
             for tid, aid in TeamMembers.objects.filter(
-                team_id__in=sides, attendee_id__in=uids, is_deleted=False
-            ).values_list("team_id", "attendee_id"):
-                homes.setdefault(str(aid), set()).add(str(tid))
-            for tid, oid in TeamMaster.objects.filter(
-                team_id__in=sides, owner_id__in=uids
-            ).values_list("team_id", "owner_id"):
-                homes.setdefault(str(oid), set()).add(str(tid))
-            for uid, member_of in homes.items():
+                team_id__in=sides, attendee_id__in=everyone, is_deleted=False
+            ).values_list("team_id", "attendee_id")
+        }
+        # One read of the teams answers both "who owns it" (an owner is a
+        # member without a membership row) and "what is it called". No
+        # `is_deleted` filter, as before: a deleted team still names its people.
+        team_rows = list(
+            TeamMaster.objects.filter(team_id__in=sides).values_list(
+                "team_id", "owner_id", "team_name"
+            )
+        )
+        belongs |= {(str(tid), str(oid)) for tid, oid, _ in team_rows if oid is not None}
+        names = {str(tid): name for tid, _, name in team_rows}
+
+        people: dict = {}
+        for grant, uids in on_object:
+            pair = (str(grant.owner_team_id), str(grant.guest_team_id))
+            for uid in sorted(uids):
+                member_of = {tid for tid in pair if (tid, uid) in belongs}
+                if not member_of:
+                    continue
                 # Anyone in the roster being asked about is already in it.
                 if str(team_id) in member_of or uid in people:
                     continue
                 home = sorted(member_of)[0]
-                people[uid] = {"teamId": home, "teamName": team_name(home)}
+                people[uid] = {"teamId": home, "teamName": names.get(home) or ""}
         return people
 
     return _no_such(_query, default={})
@@ -467,30 +471,48 @@ def external_visible_user_ids(team_id, user_id) -> set:
     """
     if team_id is None or user_id is None:
         return set()
-    from origin.models.chat.unified_models import ChannelMember
     from origin.models.common.team_models import ExternalGrant, ShareStatus
-    from origin.models.note.common_note_models import NoteFolderPermission
+    from origin.services.external_grants import rosters_of_held_objects
 
     def _query():
+        grants = list(
+            ExternalGrant.objects.filter(owner_team_id=team_id, status=ShareStatus.ACTIVE)
+        )
+        guest_teams = {grant.guest_team_id for grant in grants}
+        if not guest_teams:
+            return set()
+        # `is_team_member(guest_team, user)` for every guest team in two
+        # queries instead of two per grant: the team's owner (who needs no
+        # membership row), or an active membership row.
+        mine = {
+            str(tid)
+            for tid in TeamMaster.objects.filter(
+                team_id__in=guest_teams, owner=user_id
+            ).values_list("team_id", flat=True)
+        } | {
+            str(tid)
+            for tid in TeamMembers.objects.filter(
+                team_id__in=guest_teams, attendee=user_id, is_deleted=False
+            ).values_list("team_id", flat=True)
+        }
+        # Only channels and note folders are read here; projects already
+        # resolve through `guest_visible_user_ids` — an external project
+        # member holds a real `ProjectMembers` row. Only grants to a team the
+        # caller belongs to are read at all, so an unreadable id on someone
+        # else's grant cannot take this caller's answer down.
+        held = [
+            grant
+            for grant in grants
+            if str(grant.guest_team_id) in mine
+            and grant.object_type
+            in (ExternalGrant.ObjectType.CHANNEL, ExternalGrant.ObjectType.NOTE_FOLDER)
+        ]
+        rosters = rosters_of_held_objects(held, user_id)
         visible = set()
-        grants = ExternalGrant.objects.filter(owner_team_id=team_id, status=ShareStatus.ACTIVE)
-        for grant in grants:
-            if not is_team_member(grant.guest_team_id, user_id):
-                continue
-            if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
-                rows = ChannelMember.objects.filter(
-                    channel_id=grant.object_id, is_deleted=False
-                ).values_list("user_id", flat=True)
-            elif grant.object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
-                rows = NoteFolderPermission.objects.filter(folder_id=grant.object_id).values_list(
-                    "user_id", flat=True
-                )
-            else:
-                # Projects already resolve through
-                # `guest_visible_user_ids` — an external project member
-                # holds a real `ProjectMembers` row.
-                continue
-            ids = {str(uid) for uid in rows if uid}
+        for grant in held:
+            ids = {str(uid) for uid in rosters.get(grant.id, ()) if uid}
+            # The rosters only come back for objects the caller is on; the
+            # check stays so the rule reads as it always did.
             if str(user_id) in ids:
                 visible |= ids
         return visible
