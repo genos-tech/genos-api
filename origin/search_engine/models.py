@@ -231,6 +231,13 @@ class AgentRun(models.Model):
     # the same language. "" = no locale resolved → the model infers it
     # from the query as before.
     locale = models.CharField(max_length=16, blank=True, default="")
+    # The asker withdrew THIS answer from the team-shared `spotlight_answer`
+    # lane (DELETE /api/v2/agent/shared-answers/<run_id>/). The conversation
+    # itself stays, and so does the asker's private `conversation` memory;
+    # only the team lane stops collecting it. One-way: there is no "share
+    # again" for a single run (turning the per-user preference off and on
+    # does not clear it).
+    withheld_from_team_answers = models.BooleanField(default=False)
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(blank=True, null=True)
 

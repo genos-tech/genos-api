@@ -28,7 +28,9 @@ Fail-safe rules the sweep MUST keep:
     retries.
 
 Known limitation: a `spotlight_answer` / `conversation` chunk is purged
-only when its `AgentRun` row is gone. An old answer whose *sources* were
+only when its `AgentRun` row is gone (a `spotlight_answer` chunk also when its
+asker withdrew it or opted out of sharing: the cheap, DB-only half of the
+collection rule, `shared_answers.still_shareable`). An old answer whose *sources* were
 since deleted keeps its (already-collected) text until the run itself is
 deleted — re-auditing every run's source ACLs per sweep is deliberately
 out of scope (see `source_visibility.py` for the collection-time rule).
@@ -637,7 +639,13 @@ def _resolve_todos(eids: list[str]) -> tuple[set[str], int]:
     return dead, unparseable
 
 
-def _resolve_agent_runs(prefix: str):
+def _resolve_agent_runs(prefix: str, *, keep=None):
+    """Resolver for the two lanes built off `AgentRun`: a chunk is dead once
+    its run is gone. `keep`, when given, narrows the live runs further (it
+    receives the queryset of existing runs and returns the ones the lane
+    would still collect), so a chunk of a run that still exists but is no
+    longer collected is reported dead as well."""
+
     def resolve(eids: list[str]) -> tuple[set[str], int]:
         from origin.search_engine.models import AgentRun
 
@@ -649,12 +657,20 @@ def _resolve_agent_runs(prefix: str):
                 unparseable += 1
             else:
                 by_pk[run_uuid] = eid
-        live = set(
-            AgentRun.objects.filter(run_id__in=by_pk.keys()).values_list("run_id", flat=True)
-        )
+        runs = AgentRun.objects.filter(run_id__in=by_pk.keys())
+        if keep is not None:
+            runs = keep(runs)
+        live = set(runs.values_list("run_id", flat=True))
         return {eid for pk, eid in by_pk.items() if pk not in live}, unparseable
 
     return resolve
+
+
+def _still_shareable(runs):
+    # Lazy: the shared rule lives with the chunker's package.
+    from origin.search_engine import shared_answers
+
+    return shared_answers.still_shareable(runs)
 
 
 _RESOLVERS = {
@@ -667,5 +683,8 @@ _RESOLVERS = {
     "thread_summary": _resolve_thread_summaries,
     "todo": _resolve_todos,
     "conversation": _resolve_agent_runs("conversation:"),
-    "spotlight_answer": _resolve_agent_runs("spotlight_answer:"),
+    # Also dead: the asker withdrew the answer or opted out of sharing. The
+    # immediate purge on those actions can miss (OpenSearch down), and the run
+    # row survives, so without this the chunk would outlive the choice.
+    "spotlight_answer": _resolve_agent_runs("spotlight_answer:", keep=_still_shareable),
 }

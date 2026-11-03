@@ -381,6 +381,11 @@ urlpatterns = [
         name="llm_model_preference",
     ),
     path(
+        "api/v2/user/preferences/share-answers/",
+        ShareAnswersPreferenceView.as_view(),
+        name="share_answers_preference",
+    ),
+    path(
         "api/v2/user/calendar-sync/backfill/",
         CalendarSyncBackfillView.as_view(),
         name="calendar_sync_backfill",

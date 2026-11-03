@@ -351,6 +351,18 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
         help_text="'low', 'medium', 'high', or '' to derive from the legacy model pref.",
     )
 
+    # "Let my answers help teammates." When True (the default, and what
+    # every account did before this existed), a completed Spotlight answer
+    # of this user may be collected into the team-shared `spotlight_answer`
+    # lane (chunkers/spotlight_answer_chunker.py; ACL = the intersection of
+    # its sources' audiences, shown ANONYMOUSLY as a "Previous answer").
+    # When False the chunker collects none of their runs and the ones
+    # already collected are purged at the moment of the change. Turning it
+    # back on does not re-index by itself: the next reindex that visits a
+    # run collects it again (an incremental pass only sees recent runs, so
+    # older answers return on a full reindex).
+    share_answers_with_team = models.BooleanField(default=True)
+
     # Django Auth Fields
     is_active = models.BooleanField(default=True)  # Can be disabled
     is_staff = models.BooleanField(default=False)  # Access to admin panel

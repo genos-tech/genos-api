@@ -2,6 +2,7 @@ import json
 import logging
 import time
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -11,6 +12,7 @@ from apis.llm_catalog import EFFORTS
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.shared_answers import purge_team_lane_for_user
 from origin.serializers.common.user_serializers import UserSerializer
 from origin.services.calendar_sync import (
     LINK_ONLY_FIELDS,
@@ -634,6 +636,52 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class ShareAnswersPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH /api/v2/user/preferences/share-answers/
+
+    "Let my answers help teammates." Whether a completed Spotlight answer of
+    the caller may be collected into the team-shared "Previous answer" lane
+    (shown anonymously to teammates who can see all of the answer's
+    sources). Default True, which is what every account did before the
+    choice existed. Scoped to `request.user`, like the other preference views.
+
+    Body (PATCH): `{"share_answers_with_team": true | false}`, a real JSON
+    boolean (anything else is a 400).
+
+    Turning it OFF also purges, at once, every answer of the caller's that is
+    already in the team lane (best-effort: an unreachable search index is
+    logged and the periodic orphan sweep removes the chunks afterwards; the
+    preference is saved either way). The caller's private conversation memory
+    is untouched. Turning it back ON does not re-index by itself: the next
+    reindex that visits a run collects it again (an incremental pass only
+    revisits recent runs, so older answers return on a full reindex).
+    Answers the caller withdrew one by one stay withdrawn.
+    """
+
+    def get(self, request):
+        return Response(
+            {"share_answers_with_team": bool(request.user.share_answers_with_team)},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("share_answers_with_team")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "share_answers_with_team must be true or false."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user_id = str(request.user.id)
+        with transaction.atomic():
+            request.user.share_answers_with_team = value
+            request.user.save(update_fields=["share_answers_with_team"])
+            if not value:
+                # Every time it is set to false, not only on the change: a
+                # repeat is the user's way to retry a purge that failed.
+                transaction.on_commit(lambda: purge_team_lane_for_user(user_id))
+        return Response({"share_answers_with_team": value}, status=status.HTTP_200_OK)
 
 
 class CalendarSyncBackfillView(AuthenticatedAPIView):
