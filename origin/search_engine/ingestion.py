@@ -185,23 +185,50 @@ def _ingest_all_bound(
         log.info("Ingesting spotlight answers (since=%s, dry_run=%s)...", since, dry_run)
         _ingest_stream(iter_spotlight_answer_chunks(since=since), stats, dry_run=dry_run)
 
-    # Refresh-deferred bulk: with `RAG_BULK_REFRESH=false` (the default),
-    # individual `_bulk()` calls skip server-side refresh, leaving the
-    # written segments invisible to search until we call refresh here.
-    # One refresh at the end of the run beats ~N refreshes at one per
-    # entity batch — both for throughput AND for total wall-clock.
     # Skipped in dry_run since nothing was written.
-    if not dry_run and not settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False):
-        try:
-            client = get_client()
-            client.indices.refresh(index=get_index_alias())
-            log.info("Refresh complete (deferred-refresh mode).")
-        except Exception:  # noqa: BLE001 — refresh failure is non-fatal
-            log.exception(
-                "Final refresh failed; documents will become searchable on next refresh."
-            )
+    if not dry_run:
+        _refresh_if_deferred()
 
     log.info("Ingestion done: %s", stats.as_dict())
+    return stats
+
+
+def _refresh_if_deferred() -> None:
+    """Refresh-deferred bulk: with `RAG_BULK_REFRESH=false` (the default),
+    individual `_bulk()` calls skip server-side refresh, leaving the
+    written segments invisible to search until we call refresh here.
+    One refresh at the end of the run beats ~N refreshes at one per
+    entity batch — both for throughput AND for total wall-clock."""
+    if settings.SEARCH_ENGINE.get("RAG_BULK_REFRESH", False):
+        return
+    try:
+        client = get_client()
+        client.indices.refresh(index=get_index_alias())
+        log.info("Refresh complete (deferred-refresh mode).")
+    except Exception:  # noqa: BLE001 — refresh failure is non-fatal
+        log.exception("Final refresh failed; documents will become searchable on next refresh.")
+
+
+def ingest_entity_stream(
+    entities: Iterable[EntityChunks], *, abort_after_errors: Optional[int] = None
+) -> IngestionStats:
+    """Index an explicit stream of entities, e.g. one user's runs for a lane,
+    through the same per-entity path `ingest_all` uses (hash-diff against
+    `RagChunk`, embed only what is new or changed, bulk write, stale-chunk
+    delete, tracking rows for what landed), then refresh once.
+
+    For callers that already know WHICH entities to (re)write; `ingest_all`
+    remains the way to walk a whole lane. Never raises for one bad entity
+    (it lands in `stats.errors`), so a caller on a request's tail end can run
+    it best-effort. `abort_after_errors` stops the pass after that many
+    consecutive failed entities: an index that is down fails every entity, and
+    each one would otherwise be embedded (billed) before its write fails.
+    """
+    stats = IngestionStats()
+    # Same cost-meter binding as `ingest_all`: this is index work, not an ask.
+    with spend.spend_context(surface="index"), spend.spend_purpose("index"):
+        _ingest_stream(entities, stats, dry_run=False, abort_after_errors=abort_after_errors)
+    _refresh_if_deferred()
     return stats
 
 
@@ -247,15 +274,32 @@ def ingest_conversation_run(run) -> bool:
 
 
 def _ingest_stream(
-    stream: Iterable[EntityChunks], stats: IngestionStats, *, dry_run: bool
+    stream: Iterable[EntityChunks],
+    stats: IngestionStats,
+    *,
+    dry_run: bool,
+    abort_after_errors: Optional[int] = None,
 ) -> None:
+    consecutive_failures = 0
     for entity in stream:
+        errors_before = len(stats.errors)
         try:
             _ingest_entity(entity, stats, dry_run=dry_run)
             stats.entities_processed += 1
         except Exception as e:  # noqa: BLE001 — keep one bad entity from killing run
             log.exception("Failed to ingest entity %s/%s", entity.entity_type, entity.entity_id)
             stats.errors.append(f"{entity.entity_type}/{entity.entity_id}: {e}")
+        if abort_after_errors is None:
+            continue
+        # A bulk write that failed is an error entry without an exception.
+        consecutive_failures = consecutive_failures + 1 if len(stats.errors) > errors_before else 0
+        if consecutive_failures >= abort_after_errors:
+            log.error(
+                "Stopping the pass after %d consecutive failed entities; "
+                "the rest is left for the next pass.",
+                consecutive_failures,
+            )
+            break
 
 
 def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool) -> None:

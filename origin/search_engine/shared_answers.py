@@ -20,20 +20,29 @@ ONE definition, used by every consumer so they cannot drift:
             earlier copy.
   COLLECT   eligible. Carries the sources and the audience (ACL).
 
-Turning the preference back on, or an answer's sources becoming shareable,
-makes a run COLLECT again on the next reindex that visits it. An incremental
-pass only revisits recent runs, so older answers return on a full reindex.
+Turning the preference back on makes the user's runs COLLECT again, and
+`reshare_team_lane_for_user` (started in the background by the preference
+endpoint, after the commit) indexes their newest ones at once, so the list and
+the index agree without waiting for a reindex. It is bounded
+(`RESHARE_SCAN_LIMIT` newest runs); older runs return on the next full
+reindex, as does an answer whose sources only later became shareable (an
+incremental pass only revisits recent runs).
 """
 
 from __future__ import annotations
 
+import logging
+import threading
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from django.db import connection
 from django.db.models import QuerySet
 
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.models import AgentRun
+
+log = logging.getLogger(__name__)
 
 SKIP = "skip"
 WITHHELD = "withheld"
@@ -187,3 +196,133 @@ def purge_team_lane_for_user(user_id: str) -> None:
     from origin.search_engine.purge import purge_agent_runs  # noqa: PLC0415
 
     purge_agent_runs(run_ids_with_possible_team_chunks(user_id), lanes=("spotlight_answer",))
+
+
+# --------------------------------------------------------------------------- #
+# Turning sharing back ON: re-collect the user's answers                       #
+# --------------------------------------------------------------------------- #
+
+# How many of the user's newest completed runs the re-collection audits (each
+# costs a few queries for its sources' audience, plus one embedding call when
+# it is collected). Same idea as the list's scan cap: the newest first, so what
+# the person sees on the list is what gets indexed first. Older runs are not
+# visited; they return on the next full reindex.
+RESHARE_SCAN_LIMIT = 500
+
+# Stop after this many failed runs in a row: an unreachable index (or embedder)
+# fails every run, and each one would be embedded before its write failed.
+RESHARE_ABORT_AFTER_ERRORS = 3
+
+
+def _still_opted_in(user_id: str) -> bool:
+    return CustomUser.objects.filter(pk=user_id, share_answers_with_team=True).exists()
+
+
+def reshare_team_lane_for_user(user_id: str, *, scan_limit: Optional[int] = None) -> None:
+    """The user turned "let my answers help teammates" back on: put the answers
+    they are eligible to share into the team lane now, instead of leaving them
+    for a reindex that may not come (the cron pass is incremental and no cron
+    runs a full one), so the "answers shared with your team" list is not
+    ahead of what teammates can actually find.
+
+    The user's `scan_limit` (default `RESHARE_SCAN_LIMIT`) newest completed runs
+    go through the SAME builder as the batch reindex
+    (`iter_spotlight_answer_chunks_for_runs` -> `judge_run`) and the same
+    ingestion path, so a withdrawn run, a follow-up turn, a run built from
+    private sources and every other user's runs stay out exactly as they do
+    there, `RagChunk` tracking rows are written like any other chunk, and a
+    later full reindex finds everything `unchanged`.
+
+    Idempotent: ingestion hash-diffs against `RagChunk`, so a second pass
+    writes and embeds nothing. Best-effort: an unreachable index or embedder is
+    logged and the pass stops early (after `RESHARE_ABORT_AFTER_ERRORS` failures
+    in a row); runs not indexed here return on the next reindex that visits
+    them (runs from the last few minutes on the next incremental pass, older
+    ones on a full one) or on the next off -> on. Blocking: run it in the
+    background.
+
+    Turning sharing OFF again while this runs must win, so the preference is
+    re-read before each run is written and once more at the end, where
+    anything that slipped through is purged.
+    """
+    # Lazy: ingestion imports the chunker, which imports this module.
+    from origin.search_engine.chunkers.spotlight_answer_chunker import (  # noqa: PLC0415
+        iter_spotlight_answer_chunks_for_runs,
+    )
+    from origin.search_engine.ingestion import ingest_entity_stream  # noqa: PLC0415
+
+    user_id = str(user_id)
+    scan_limit = RESHARE_SCAN_LIMIT if scan_limit is None else scan_limit
+    if not _still_opted_in(user_id):
+        return
+
+    audited = 0
+    capped = False
+    # One row past the bound, only to learn whether anything older exists.
+    candidates = completed_runs().filter(user_id=user_id).order_by("-started_at")
+    candidates = candidates[: scan_limit + 1]
+
+    def newest_runs():
+        nonlocal audited, capped
+        for run in candidates.iterator():
+            if audited == scan_limit:
+                capped = True
+                return
+            audited += 1
+            yield run
+
+    def entities():
+        for entity in iter_spotlight_answer_chunks_for_runs(newest_runs()):
+            if not _still_opted_in(user_id):
+                return  # switched off again while this was running
+            yield entity
+
+    stats = ingest_entity_stream(entities(), abort_after_errors=RESHARE_ABORT_AFTER_ERRORS)
+
+    if not _still_opted_in(user_id):
+        # The off-purge may have run before our last write landed.
+        purge_team_lane_for_user(user_id)
+    if capped:
+        log.info(
+            "Re-collected team answers: audited the newest %d runs; older runs "
+            "return on the next full reindex.",
+            audited,
+        )
+    if stats.errors:
+        log.warning(
+            "Re-collecting team answers hit %d error(s); the runs not indexed "
+            "return on the next reindex that visits them.",
+            len(stats.errors),
+        )
+    log.info("Re-collected team answers: audited %d run(s), %s", audited, stats.as_dict())
+
+
+def reshare_team_lane_in_background(user_id: str) -> None:
+    """Start `reshare_team_lane_for_user` on a daemon thread and return at
+    once, so the preference request never waits on the backlog. Call it after
+    the preference write has committed (the thread reads it from its own DB
+    connection). Never raises: the PATCH that triggered it has already
+    succeeded."""
+    user_id = str(user_id)
+    _run_in_background(lambda: reshare_team_lane_for_user(user_id), name="reshare-team-answers")
+
+
+def _run_in_background(job: Callable[[], None], *, name: str) -> None:
+    """The pattern of `demo_seeder.kick_off_demo_reindex`: best-effort work
+    after the response's data is committed goes on a daemon thread, whose
+    failures are logged, never raised, and which releases its own DB
+    connection. A restart of the process loses a job in flight; the callers
+    are written to be re-runnable and backed by the reindex."""
+
+    def runner() -> None:
+        try:
+            job()
+        except Exception:  # noqa: BLE001 — best-effort, see above
+            log.exception("Background job %s failed", name)
+        finally:
+            connection.close()
+
+    try:
+        threading.Thread(target=runner, daemon=True, name=name).start()
+    except Exception:  # noqa: BLE001 — e.g. the process cannot start a thread
+        log.exception("Could not start background job %s", name)

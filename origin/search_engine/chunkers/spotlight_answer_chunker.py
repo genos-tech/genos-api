@@ -31,14 +31,20 @@ default on) and a per-run withdrawal (`AgentRun.withheld_from_team_answers`).
 Either one makes the run a tombstone here, and the API purges the existing
 chunk the moment the choice is made. Which runs are collected is decided in
 ONE place, `shared_answers.judge_run`, which the "answers shared with your
-team" list also uses. Turning the preference back on collects the runs again
-on the next reindex that visits them (an incremental pass only revisits recent
-runs, so older answers come back on a full reindex).
+team" list also uses. Turning the preference back on (false -> true) does not
+wait for a reindex: the API starts `shared_answers.reshare_team_lane_for_user`
+in the background, which feeds that user's newest runs (at most
+`shared_answers.RESHARE_SCAN_LIMIT`) through
+`iter_spotlight_answer_chunks_for_runs`, the same per-run builder the batch
+reindex uses, so the list and the index agree again at once. Runs older than
+that bound come back on the next full reindex (an incremental pass only
+revisits recent runs).
 
 Indexed by the batch reindex (`ingest_all(entity_types=["spotlight_answer"])` /
-`opensearch_reindex`), NOT on the answer path — zero added latency to the live
-ask. Runs that no longer qualify (e.g. a cited project later turned private)
-are purged on the next full reindex via an empty `EntityChunks` tombstone.
+`opensearch_reindex`) and by that opt-in job, NOT on the answer path — zero
+added latency to the live ask. Runs that no longer qualify (e.g. a cited
+project later turned private) are purged on the next full reindex via an empty
+`EntityChunks` tombstone.
 
 Known v1 limitation: the gate constrains the answer + its sources, but the
 QUESTION text (stored in `title` / `search_text` / `snippet`) comes from
@@ -55,7 +61,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Iterator, Optional
+from typing import Iterable, Iterator, Optional
 
 from origin.search_engine import shared_answers
 from origin.search_engine.chunkers.base import (
@@ -64,6 +70,7 @@ from origin.search_engine.chunkers.base import (
     iso,
     make_snippet,
 )
+from origin.search_engine.models import AgentRun
 
 # Inline citation tokens the agent embeds in answers (e.g. "[task:123]",
 # "[chat:dm:uuid]"). Mirrors the frontend's strip pattern. We drop them from
@@ -86,62 +93,84 @@ _MAX_ANSWER_SEARCH_CHARS = 4000
 _MAX_ANSWER_DISPLAY_CHARS = 12000
 
 
+def spotlight_answer_chunks_for_run(
+    run: AgentRun, *, opted_out: set[str]
+) -> Optional[EntityChunks]:
+    """The `EntityChunks` for ONE run, or None when the run is not this
+    lane's business. The single per-run builder: the batch reindex and the
+    opt-in re-collection both go through it, so they cannot disagree on what
+    a collected answer looks like.
+
+    Whether a run is collected at all is `shared_answers.judge_run`'s call,
+    the same one the "answers shared with your team" list makes:
+
+      * SKIP      -> None (nothing to emit, nothing to purge);
+      * WITHHELD  -> an empty tombstone, so any previously-indexed copy is
+                     purged (the asker opted out / withdrew this answer, or
+                     it is built from private / unclassifiable sources);
+      * COLLECT   -> the one chunk.
+    """
+    entity_id = f"spotlight_answer:{run.run_id}"
+
+    verdict = shared_answers.judge_run(run, opted_out=opted_out)
+    if verdict.state == shared_answers.SKIP:
+        return None
+    if verdict.state == shared_answers.WITHHELD:
+        return EntityChunks(entity_type="spotlight_answer", entity_id=entity_id, chunks=[])
+    sources, acl = verdict.sources, verdict.acl
+
+    query = (run.query or "").strip()
+    answer = (run.final_answer_text or "").strip()
+    team_id = str(run.team_id or "")
+    search_answer = (
+        answer
+        if len(answer) <= _MAX_ANSWER_SEARCH_CHARS
+        else answer[:_MAX_ANSWER_SEARCH_CHARS] + "…"
+    )
+    display_answer = (
+        answer
+        if len(answer) <= _MAX_ANSWER_DISPLAY_CHARS
+        else answer[:_MAX_ANSWER_DISPLAY_CHARS] + "…"
+    )
+
+    chunk = Chunk(
+        chunk_id=entity_id,
+        entity_type="spotlight_answer",
+        entity_id=entity_id,
+        chunk_type="spotlight_answer",
+        team_id=team_id,
+        acl_user_ids=acl,
+        # The original question is the most useful one-line handle when the
+        # answer surfaces as a typeahead result.
+        title=query if len(query) <= 200 else query[:197] + "…",
+        # search_text carries BOTH question and answer so a recall query
+        # matches on either side.
+        search_text=f"Q: {query}\nA: {search_answer}",
+        snippet_text=answer_snippet(answer),
+        related_entity_ids=[s["entity_id"] for s in sources if s.get("entity_id")],
+        # Provenance for the frontend "Previous answer" card.
+        answer_text=display_answer,
+        answer_sources=sources,
+        created_at=iso(run.started_at),
+        updated_at=iso(run.finished_at or run.started_at),
+    )
+    return EntityChunks(entity_type="spotlight_answer", entity_id=entity_id, chunks=[chunk])
+
+
+def iter_spotlight_answer_chunks_for_runs(runs: Iterable[AgentRun]) -> Iterator[EntityChunks]:
+    """`spotlight_answer_chunks_for_run` over any set of runs: the batch
+    reindex's candidates, or one user's newest runs for the opt-in
+    re-collection. The opted-out set is loaded once per pass."""
+    opted_out = shared_answers.opted_out_user_ids()
+    for run in runs:
+        entity = spotlight_answer_chunks_for_run(run, opted_out=opted_out)
+        if entity is not None:
+            yield entity
+
+
 def iter_spotlight_answer_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
     qs = shared_answers.completed_runs()
     if since is not None:
         qs = qs.filter(started_at__gte=since)
     qs = qs.order_by("started_at")
-    opted_out = shared_answers.opted_out_user_ids()
-
-    for run in qs.iterator():
-        entity_id = f"spotlight_answer:{run.run_id}"
-
-        # Whether a run is collected at all is `shared_answers.judge_run`'s
-        # call, the same one the "answers shared with your team" list makes.
-        verdict = shared_answers.judge_run(run, opted_out=opted_out)
-        if verdict.state == shared_answers.SKIP:
-            continue
-        if verdict.state == shared_answers.WITHHELD:
-            # The asker opted out / withdrew this answer, or it is built from
-            # private / unclassifiable sources. Emit a tombstone so any
-            # previously-indexed copy is purged.
-            yield EntityChunks(entity_type="spotlight_answer", entity_id=entity_id, chunks=[])
-            continue
-        sources, acl = verdict.sources, verdict.acl
-
-        query = (run.query or "").strip()
-        answer = (run.final_answer_text or "").strip()
-        team_id = str(run.team_id or "")
-        search_answer = (
-            answer
-            if len(answer) <= _MAX_ANSWER_SEARCH_CHARS
-            else answer[:_MAX_ANSWER_SEARCH_CHARS] + "…"
-        )
-        display_answer = (
-            answer
-            if len(answer) <= _MAX_ANSWER_DISPLAY_CHARS
-            else answer[:_MAX_ANSWER_DISPLAY_CHARS] + "…"
-        )
-
-        chunk = Chunk(
-            chunk_id=entity_id,
-            entity_type="spotlight_answer",
-            entity_id=entity_id,
-            chunk_type="spotlight_answer",
-            team_id=team_id,
-            acl_user_ids=acl,
-            # The original question is the most useful one-line handle when the
-            # answer surfaces as a typeahead result.
-            title=query if len(query) <= 200 else query[:197] + "…",
-            # search_text carries BOTH question and answer so a recall query
-            # matches on either side.
-            search_text=f"Q: {query}\nA: {search_answer}",
-            snippet_text=answer_snippet(answer),
-            related_entity_ids=[s["entity_id"] for s in sources if s.get("entity_id")],
-            # Provenance for the frontend "Previous answer" card.
-            answer_text=display_answer,
-            answer_sources=sources,
-            created_at=iso(run.started_at),
-            updated_at=iso(run.finished_at or run.started_at),
-        )
-        yield EntityChunks(entity_type="spotlight_answer", entity_id=entity_id, chunks=[chunk])
+    yield from iter_spotlight_answer_chunks_for_runs(qs.iterator())
