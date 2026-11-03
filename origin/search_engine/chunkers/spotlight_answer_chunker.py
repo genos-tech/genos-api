@@ -33,6 +33,11 @@ quotes it would reach everyone who can see whatever else the run read. Such a
 run is a tombstone (`shared_answers.is_scoped_session`), so a copy collected
 before the rule is purged.
 
+Mentions are audited too (MIP-980): an @/# mention puts the mentioned object's
+title in the system prompt without being a tool result, so `judge_run` adds the
+run's persisted mentions to the sources whose audiences are intersected. The
+chunk's `answer_sources` stay the sources the tools read.
+
 The asker can also keep an answer out of this lane (MIP-891): a per-user
 preference ("let my answers help teammates", `CustomUser.share_answers_with_team`,
 default on) and a per-run withdrawal (`AgentRun.withheld_from_team_answers`).

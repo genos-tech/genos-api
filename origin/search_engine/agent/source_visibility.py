@@ -11,6 +11,8 @@ This is the "Source-audience" privacy rule:
     access (the answer body itself can quote a source, not just the chips).
   * Fail-closed: a source we can't classify (or whose row is gone) drops the
     whole run rather than risk over-sharing.
+  * Mentions count (MIP-980): an @/# mention puts the object's title in the
+    prompt, so `audit_run` audits the run's persisted mentions like sources.
   * Anonymous: collected answers carry no asker identity — teammates inside
     the audience see the question + answer, never who asked.
 
@@ -182,6 +184,15 @@ def source_acl_user_ids(
             note_id=nid,
         )
 
+    if etype == "team_directory":
+        # Not a chip: what a @user / @group mention stands for (MIP-980). A
+        # person's name and a mention group are team-visible, but a guest has
+        # no `TeamMembers` row and is refused the roster / mention groups
+        # (`views/utils/scope_guards.is_guest`), so the audience is the team's
+        # members. No narrowing among them.
+        team_id = str(source.get("team_id") or "")
+        return _team_member_ids(team_id) if team_id else None
+
     # conversation / web / anything new → not shareable. Fail closed.
     return None
 
@@ -254,15 +265,44 @@ def shareable_acl_for_sources(
     return sorted(intersection)
 
 
-def shareable_acl_for_run(run) -> Optional[list[str]]:
-    """Convenience wrapper: reconstruct a run's sources and return its
-    shareable audience (or `None`). Useful for one-off checks / unit tests.
+def audit_run(run) -> tuple[list[dict[str, Any]], Optional[list[str]]]:
+    """`(sources, audience)` of a run: the sources its tools read, and the
+    sorted users who may see an answer built on them, or `None` when it must
+    NOT be collected. The one place the rule is applied to a run
+    (`shared_answers.judge_run` and `shareable_acl_for_run` both call it).
+
+    The audience is audited over the tool sources AND the run's persisted
+    @/# mentions (MIP-980): a mention puts the object's title in the prompt, so
+    the answer can repeat it without the run ever reading it. The mentions are
+    audited, not displayed -- the returned sources (stored as the chunk's
+    provenance) are the tool sources only, so a chunk whose audience a mention
+    does not change is unchanged.
+
+    `None` audience when:
+      * no tool source was read: a mention alone never makes a run collectable;
+      * a mention cannot be classified (unknown kind, missing id): fail closed;
+      * the intersection is empty (`shareable_acl_for_sources`).
     """
     # Lazy import: `controller` pulls in the LLM client stack — keep it off the
     # module-import path so importing this helper is cheap and free of
     # circular-import risk via the ingestion graph.
-    from origin.search_engine.agent.controller import reconstruct_sources_for_run
-
-    return shareable_acl_for_sources(
-        reconstruct_sources_for_run(run), asker_id=str(run.user_id) if run.user_id else None
+    from origin.search_engine.agent.controller import (  # noqa: PLC0415
+        _hydrate_task_display_ids,
+        reconstruct_sources_for_run,
     )
+    from origin.search_engine.agent.mentions import mention_audit_sources  # noqa: PLC0415
+
+    sources = _hydrate_task_display_ids(reconstruct_sources_for_run(run))
+    if not sources:
+        return sources, None
+    mention_sources = mention_audit_sources(run.mentions, team_id=str(run.team_id or ""))
+    if mention_sources is None:
+        return sources, None
+    asker_id = str(run.user_id) if run.user_id else None
+    return sources, shareable_acl_for_sources(sources + mention_sources, asker_id=asker_id)
+
+
+def shareable_acl_for_run(run) -> Optional[list[str]]:
+    """Convenience wrapper: a run's shareable audience (or `None`), mentions
+    included. Useful for one-off checks / unit tests."""
+    return audit_run(run)[1]
