@@ -992,7 +992,8 @@ class TestTheCatalogContract(McpBase):
         *not* here is a capability the user has in the UI and a connected
         agent has not — so a new one has to be added here on purpose, or
         excluded on purpose by naming it below."""
-        deliberately_withheld: set[str] = set()
+        # In the app only, by decision: it has no undo and this surface asks nobody first.
+        deliberately_withheld: set[str] = {"delete_project"}
         registry_writes = {
             name for name, tool in REGISTRY.items() if tool.requires_approval
         } - deliberately_withheld

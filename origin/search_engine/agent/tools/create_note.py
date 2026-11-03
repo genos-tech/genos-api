@@ -378,8 +378,8 @@ def _create_chat_note(
 CREATE_NOTE = Tool(
     name="create_note",
     description=(
-        "Create a new note, right away: a personal note needs no lookup unless "
-        "the user names a folder. REQUIRES USER APPROVAL — the user sees your "
+        "Create a new note, right away. Do NOT call list_note_folders first unless "
+        "the user names a folder: a personal note needs no lookup. REQUIRES USER APPROVAL — the user sees your "
         "proposed title and body before it's saved. Kinds: "
         "'personal' (private to the creator; optionally filed into one of "
         "their My-Notes folders via folder_id), 'team' (in a Team Notes "

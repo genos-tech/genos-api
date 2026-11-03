@@ -9,7 +9,6 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import Channel
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.models.project.prj_models import *
@@ -28,6 +27,7 @@ from origin.services.project_catalog import (
     replace_project_labels,
 )
 from origin.services.project_code import derive_project_code
+from origin.services.project_delete import delete_project
 from origin.services.project_manage import (
     ProjectRefused,
     change_member_role,
@@ -335,26 +335,8 @@ class ProjectMasterView(AuthenticatedAPIView):
             if not is_project_member(target_project.project_id, request_user_id):
                 raise ProjectMaster.DoesNotExist
             if target_project.owner and str(request_user_id) == str(target_project.owner.id):
-                with transaction.atomic():
-                    # Every project gets a PM channel from the
-                    # `_ensure_pm_channel_for_project` post_save signal, and
-                    # `Channel.project` is PROTECT — so deleting the project
-                    # while that row still points at it raises ProtectedError
-                    # and surfaces as a bare 500. Hard-deleting the channel
-                    # isn't the way out either: `Message.channel` is PROTECT
-                    # too, deliberately, so chat history outlives its
-                    # container.
-                    #
-                    # Soft-delete the channel and release the FK instead.
-                    # `_user_channels_qs` filters `is_deleted=False`, so the
-                    # PM channel leaves every sidebar while its messages stay
-                    # on disk. Atomic because ATOMIC_REQUESTS is off — without
-                    # it a failure between the two statements would strand a
-                    # detached channel against a live project.
-                    Channel.objects.filter(project=target_project).update(
-                        is_deleted=True, project=None
-                    )
-                    target_project.delete()
+                # Why the PM channel is soft-deleted and released first is in the service.
+                delete_project(target_project)
                 return Response(
                     {"message": f"Project `{project_id}` deleted successfully."},
                     status=status.HTTP_204_NO_CONTENT,

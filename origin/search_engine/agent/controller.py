@@ -2155,6 +2155,12 @@ def resume_agent(
                     "summary": summary,
                     "duration_ms": dur_ms,
                 }
+                # A deleted project leaves the sidebar and its page closes (MIP-882).
+                if call_name == "delete_project" and result.get("project_id") is not None:
+                    result_event["project"] = {
+                        "project_id": result["project_id"],
+                        "deleted": True,
+                    }
                 # Approved note writes carry a compact `note` ref so the
                 # frontend can refresh caches and (for body updates) push
                 # the new blocks into the live Yjs doc. Additive — older
