@@ -8,8 +8,8 @@ from origin.models.note.favorite_note_models import NoteFavoriteMaster, NoteFold
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.note.note_serializers import NoteFavoriteMasterSerializer
+from origin.services.note_favorites import can_see_folder, star_folder, unstar_folder
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.note_folder_role import get_folder_role
 from origin.views.utils.note_role import readable_note_ids, readable_note_ref
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
@@ -158,15 +158,6 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
         return Response(result, status=status.HTTP_200_OK)
 
 
-def can_see_folder(user_id, folder: PersonalNoteFolder) -> bool:
-    """A My Notes folder is its owner's alone; a Team Notes folder —
-    including one another team shared — is visible to whoever its chain
-    gives a role, resolved in the folder's own team."""
-    if folder.scope == PersonalNoteFolder.SCOPE_TEAM:
-        return get_folder_role(user_id, folder.folder_id, folder.team_id) is not None
-    return str(folder.owner_id) == str(user_id)
-
-
 def favorite_folders_meta(user_id, team_id) -> list[dict]:
     """The folders this user starred that belong in team `team_id`'s
     sidebar and that they can still see (MIP-747), newest first: the
@@ -232,9 +223,7 @@ class NoteFolderFavoriteView(AuthenticatedAPIView):
         if folder is None or not can_see_folder(request_user_id, folder):
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        _fav, created = NoteFolderFavorite.objects.get_or_create(
-            user_id=request_user_id, folder=folder, defaults={"team_id": data["team_id"]}
-        )
+        created = star_folder(team_id=data["team_id"], user_id=request_user_id, folder=folder)
         return Response(
             {"isFavorited": True, "folderId": folder.folder_id},
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -252,10 +241,7 @@ class NoteFolderFavoriteView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["user_id"])):
             return res
 
-        deleted, _ = NoteFolderFavorite.objects.filter(
-            user_id=request_user_id, folder_id=data["folder_id"]
-        ).delete()
-        if not deleted:
+        if not unstar_folder(user_id=request_user_id, folder_id=data["folder_id"]):
             return Response(
                 {"error": "Favorite not found.", "isFavorited": False},
                 status=status.HTTP_404_NOT_FOUND,

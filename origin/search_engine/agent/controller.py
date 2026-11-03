@@ -355,6 +355,8 @@ _FRIENDLY_ARG_RESOLVERS: dict[str, Callable[[Any, LabelAccess], str | None]] = {
     "parent_task_id": _resolve_task_display_id,
     # Only the note tools take `folder_id` (My-Notes sidebar folders).
     "folder_id": _resolve_note_folder_name,
+    # `manage_note_folder` nests a new folder inside this one.
+    "parent_folder_id": _resolve_note_folder_name,
     # A milestone's folder is another table; its argument has its own name so
     # the note-folder resolver above can never label it (MIP-879).
     "milestone_folder_id": _resolve_milestone_folder_name,
@@ -931,6 +933,8 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "delete_milestone": _friendly_delete_milestone_arguments,
     "update_todo_item": _friendly_update_todo_arguments,
     "create_todo_item": _friendly_create_todo_arguments,
+    # The note it stars, named; a folder takes the flat `folder_id` label.
+    "favorite_note": _friendly_update_note_arguments,
     "delete_todo_item": _friendly_delete_todo_arguments,
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,

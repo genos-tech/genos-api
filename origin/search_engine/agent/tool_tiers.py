@@ -54,6 +54,8 @@ SINGLE_WRITE_TOOLS = frozenset(
         "manage_sprint",
         "manage_project",
         "manage_project_members",
+        "manage_note_folder",
+        "favorite_note",
         "delete_sprint",
     }
 )
