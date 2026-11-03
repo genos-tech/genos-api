@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Any
 
 import jwt
@@ -71,7 +72,8 @@ def _internal_token() -> str:
 _NOTE_DOCUMENT_PREFIX = {"personal": "my-note", "task": "task-note", "chat": "chat-note"}
 
 
-def _post(document_name: str, blocks: list[dict[str, Any]]) -> None:
+def _post(document_name: str, blocks: list[dict[str, Any]]) -> bool:
+    """One push to genos-collab. True only when collab applied it (HTTP 200)."""
     url = f"{settings.COLLAB_INTERNAL_URL}{REPLACE_BLOCKS_PATH}"
     try:
         resp = requests.post(
@@ -83,9 +85,11 @@ def _post(document_name: str, blocks: list[dict[str, Any]]) -> None:
         )
     except requests.RequestException as exc:
         logger.warning("collab body push failed doc=%s: %s", document_name, exc)
-        return
+        return False
     if resp.status_code != 200:
         logger.warning("collab body push refused doc=%s status=%s", document_name, resp.status_code)
+        return False
+    return True
 
 
 def _push(document_name: str, blocks: list[dict[str, Any]]) -> None:
@@ -105,6 +109,41 @@ def _push(document_name: str, blocks: list[dict[str, Any]]) -> None:
     transaction.on_commit(lambda: _post(document_name, snapshot))
 
 
+class PushOutcome(str, Enum):
+    """What happened to a push, for a caller that has to tell the user."""
+
+    SENT = "sent"  # collab applied it: an open editor has the new text
+    FAILED = "failed"  # collab refused it or could not be reached
+    SKIPPED = "skipped"  # collab is not configured here, so there is no live editor to reach
+    DEFERRED = "deferred"  # inside a transaction: sent after commit, outcome not known yet
+
+
+def _in_transaction() -> bool:
+    return transaction.get_connection().in_atomic_block
+
+
+def _push_now(document_name: str, blocks: list[dict[str, Any]]) -> PushOutcome:
+    """Like `_push`, but tells the caller whether the live document got it.
+
+    Outside a transaction the push happens now and its result is returned. Inside
+    one it is deferred to commit exactly as `_push` does (a rolled-back write must
+    never push), and the caller is told it is `DEFERRED` rather than given a
+    result it can't know.
+    """
+    if not settings.COLLAB_INTERNAL_URL:
+        return PushOutcome.SKIPPED
+    if not settings.COLLAB_INTERNAL_SECRET:
+        logger.warning(
+            "collab body push skipped doc=%s: COLLAB_INTERNAL_SECRET is unset", document_name
+        )
+        return PushOutcome.SKIPPED
+    snapshot = list(blocks or [])
+    if _in_transaction():
+        transaction.on_commit(lambda: _post(document_name, snapshot))
+        return PushOutcome.DEFERRED
+    return PushOutcome.SENT if _post(document_name, snapshot) else PushOutcome.FAILED
+
+
 def push_task_body(task_id: int, blocks: list[dict[str, Any]]) -> None:
     """Push a task body into `task-body:<task_id>`."""
     _push(f"task-body:{task_id}", blocks)
@@ -114,3 +153,13 @@ def push_note_body(note_type: str, note_id: int, blocks: list[dict[str, Any]]) -
     """Push a note body into `my-note:<id>` (note_type "personal"),
     `task-note:<id>` ("task") or `chat-note:<id>` ("chat")."""
     _push(f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}", blocks)
+
+
+def push_note_body_now(note_type: str, note_id: int, blocks: list[dict[str, Any]]) -> PushOutcome:
+    """`push_note_body`, but returns whether the live editor got the body.
+
+    A restore must not report success it can't stand behind: if the push fails, an
+    editor that is open keeps the old text and its next autosave writes it back
+    over the restored one. The caller says so instead (MIP-883).
+    """
+    return _push_now(f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}", blocks)

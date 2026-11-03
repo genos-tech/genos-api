@@ -14,6 +14,34 @@ def _latest_version(note_type, note_id):
     )
 
 
+def keep_current_state(*, team, note_type, note_id, title, body):
+    """Make sure the note's CURRENT title and body are the newest version, so an
+    edit about to replace them can be walked back.
+
+    Version rows are written after an edit, so a note nobody has edited through
+    the app has none, and the first agent edit would leave no copy of what it
+    replaced. When the newest row already holds exactly this state, nothing is
+    written. The row has no editor: nobody just made this state, it is what was
+    there.
+    """
+    latest = _latest_version(note_type, note_id)
+    if (
+        latest is not None
+        and (latest.title or "") == (title or "")
+        and (latest.body or []) == (body or [])
+    ):
+        return latest
+    return snapshot_note_version(
+        team=team,
+        editor=None,
+        note_type=note_type,
+        note_id=note_id,
+        title=title or "",
+        body=body or [],
+        force_new=True,
+    )
+
+
 def snapshot_note_version(
     *,
     team,
@@ -23,6 +51,7 @@ def snapshot_note_version(
     title,
     body,
     restored_from_version_no=None,
+    force_new=False,
 ):
     """Persist a version snapshot for the given note.
 
@@ -35,6 +64,9 @@ def snapshot_note_version(
     - Restore actions (`restored_from_version_no` set) always insert a
       fresh row; restore markers are never overwritten by subsequent
       coalesced edits.
+    - `force_new` always inserts a fresh row. An edit made by an agent or an API
+      key sets it: it is not a typing session, and the row it would overwrite
+      holds the text it has just replaced (MIP-883).
 
     Returns the resulting `NoteVersionMaster` instance.
     """
@@ -43,6 +75,7 @@ def snapshot_note_version(
 
     if (
         latest is not None
+        and not force_new
         and restored_from_version_no is None
         # Never overwrite a restore marker — the next edit forces a
         # fresh row so the "restored from vN" label stays accurate.

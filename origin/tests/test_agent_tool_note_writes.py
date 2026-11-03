@@ -150,17 +150,25 @@ class UpdateNoteAclTests(NoteWriteToolTestBase):
 class UpdateNoteSnapshotTests(NoteWriteToolTestBase):
     def test_body_change_writes_version_snapshot(self):
         note = self._personal_note()
+        before = list(note.body or [])
         update_note_run(
             {"note_type": "personal", "note_id": note.note_id, "content_text": "## New body"},
             self.ctx,
         )
         versions = self._versions(NOTE_TYPE_PERSONAL, note.note_id)
-        self.assertEqual(len(versions), 1)
+        # Two rows: what the note held before the edit (nobody made that state, so
+        # no editor), then the edit itself (MIP-883).
+        self.assertEqual(len(versions), 2)
+        self.assertEqual(versions[0].body or [], before)
+        self.assertIsNone(versions[0].editor_id)
         note.refresh_from_db()
-        self.assertEqual(versions[0].body, note.body)
-        self.assertEqual(versions[0].editor_id, self.user.id)
+        self.assertEqual(versions[1].body, note.body)
+        self.assertEqual(versions[1].editor_id, self.user.id)
 
-    def test_same_editor_burst_coalesces_to_one_row(self):
+    def test_an_agent_burst_does_not_coalesce(self):
+        """Every agent edit keeps its own row: the REST PUT coalesces a typing
+        session, but an agent edit is not one, and the row it would overwrite
+        holds the text it just replaced."""
         note = self._personal_note()
         for body in ("draft one", "draft two"):
             update_note_run(
@@ -168,7 +176,7 @@ class UpdateNoteSnapshotTests(NoteWriteToolTestBase):
                 self.ctx,
             )
         versions = self._versions(NOTE_TYPE_PERSONAL, note.note_id)
-        self.assertEqual(len(versions), 1)
+        self.assertEqual(len(versions), 3, "the original, draft one and draft two")
 
     def test_different_editor_gets_own_version_row(self):
         note = self._task_note()
@@ -181,8 +189,8 @@ class UpdateNoteSnapshotTests(NoteWriteToolTestBase):
             self.ctx2,
         )
         versions = self._versions(NOTE_TYPE_TASK, note.note_id)
-        self.assertEqual([v.version_no for v in versions], [1, 2])
-        self.assertEqual([v.editor_id for v in versions], [self.user.id, self.user2.id])
+        self.assertEqual([v.version_no for v in versions], [1, 2, 3])
+        self.assertEqual([v.editor_id for v in versions], [None, self.user.id, self.user2.id])
 
     def test_folder_only_move_does_not_snapshot(self):
         folder = PersonalNoteFolder.objects.create(team=self.team, owner=self.user, name="F")

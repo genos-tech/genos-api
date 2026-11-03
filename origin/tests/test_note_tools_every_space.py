@@ -229,7 +229,7 @@ class ChatNoteToolTests(EverySpaceBase):
     def test_member_edits_a_chat_note_and_the_live_doc_gets_it(self):
         note_id = self._create(self.ctx, chat_id=str(self.gm.id))["note_id"]
         carol_ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.carol.id))
-        with mock.patch("origin.search_engine.agent.tools.update_note.push_note_body") as push:
+        with mock.patch("origin.search_engine.agent.tools.update_note.push_note_body_now") as push:
             res = update_note_run(
                 {"note_type": "chat", "note_id": note_id, "content_text": "We ship Friday"},
                 carol_ctx,
