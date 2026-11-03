@@ -37,6 +37,8 @@ from origin.models.project.prj_models import (
 TAG_NAME_MAX = 20
 LABEL_NAME_MAX = 30
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+# What the picker's `getContrastTextColor` yields for a label's text.
+LABEL_TEXT_COLORS = frozenset({"black", "white"})
 # Neutral grey: a tag nobody chose a colour for should not look like a signal.
 DEFAULT_TAG_COLOR = "#808080"
 # What the page gives a label created without a colour.
@@ -68,6 +70,37 @@ def clean_color(raw, default: str) -> str:
     if not isinstance(raw, str) or not HEX_COLOR_RE.match(raw.strip()):
         raise CatalogRefused("color must be a hex colour like #3b82f6.", 400)
     return raw.strip().lower()
+
+
+def clean_label_color(raw, *, field: str, current: str | None = None) -> str | None:
+    """A label colour as the page's picker sends it, or None when none was sent.
+
+    `ProjectLabel.color` / `.text_color` are 10-character columns, so an unchecked value
+    that is too long reaches Postgres and answers 500. The picker (`ColorPickerMenu`) sends
+    `color` as a lowercase `#rrggbb`, and `text_color` as `black` / `white`; the API's own
+    default text colour is `#ffffff`, which the edit row sends back unchanged on a rename,
+    so `text_color` takes a hex too. Both are lower-cased, as the to-do tag colours are.
+
+    `current` is the value already stored on the label being edited: sending it back
+    unchanged is not a change, so a label written before this check (whatever it holds)
+    can still be renamed by the edit row, which re-sends both colours.
+    """
+    if raw is None or raw == "":
+        return None
+    value = raw.strip() if isinstance(raw, str) else None
+    if value is not None and current is not None and value == current:
+        return current
+    if value is not None:
+        lowered = value.lower()
+        if field == "text_color" and lowered in LABEL_TEXT_COLORS:
+            return lowered
+        if HEX_COLOR_RE.match(value):
+            return lowered
+    if field == "text_color":
+        raise CatalogRefused(
+            "text_color must be 'black', 'white' or a hex colour like #ffffff.", 400
+        )
+    raise CatalogRefused("color must be a hex colour like #3b82f6.", 400)
 
 
 # ---- tags -----------------------------------------------------------------------
@@ -136,6 +169,9 @@ def create_label(*, team_id, user, raw_name, color=None, text_color=None) -> Pro
         raise CatalogRefused("name is required.", 400)
     if len(name) > LABEL_NAME_MAX:
         raise CatalogRefused(f"name must be {LABEL_NAME_MAX} characters or fewer.", 400)
+    # Both columns are 10 characters: a value that doesn't fit is a 400, not a database error.
+    color = clean_label_color(color, field="color")
+    text_color = clean_label_color(text_color, field="text_color")
     # The DB constraint is case-sensitive; block case-variant duplicates here so
     # "Client" / "client" can't both exist.
     if ProjectLabel.objects.filter(team=team_id, name__iexact=name).exists():

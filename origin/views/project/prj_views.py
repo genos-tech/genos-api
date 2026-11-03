@@ -22,6 +22,7 @@ from origin.services.member_roles import (
 )
 from origin.services.project_catalog import (
     CatalogRefused,
+    clean_label_color,
     create_label,
     invalidate_label_project_list,
     replace_project_labels,
@@ -2043,12 +2044,26 @@ class ProjectLabelsView(AuthenticatedAPIView):
                 )
             label.name = name
             update_fields.append("name")
-        if "color" in request.data:
-            label.color = request.data.get("color") or label.color
-            update_fields.append("color")
-        if "text_color" in request.data:
-            label.text_color = request.data.get("text_color") or label.text_color
-            update_fields.append("text_color")
+        # Checked before anything is applied, so a bad colour changes nothing, not even the name.
+        try:
+            if "color" in request.data:
+                label.color = (
+                    clean_label_color(request.data.get("color"), field="color", current=label.color)
+                    or label.color
+                )
+                update_fields.append("color")
+            if "text_color" in request.data:
+                label.text_color = (
+                    clean_label_color(
+                        request.data.get("text_color"),
+                        field="text_color",
+                        current=label.text_color,
+                    )
+                    or label.text_color
+                )
+                update_fields.append("text_color")
+        except CatalogRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
 
         if update_fields:
             update_fields.append("ts_updated_at")
