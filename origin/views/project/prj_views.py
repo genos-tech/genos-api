@@ -941,7 +941,9 @@ class ProjectTagsView(AuthenticatedAPIView):
                     else:
                         updated_tags.append(t)
                 task.tags = updated_tags
-                task.save(update_fields=["tags"])
+                # `auto_now` is written only for a field named in update_fields.
+                # Without ts_updated_at the delta refresh never sends this row.
+                task.save(update_fields=["tags", "ts_updated_at"])
         elif "tag_color" in request.data or "tag_text_color" in request.data:
             from origin.models.task.task_models import TaskMaster
 
@@ -962,7 +964,9 @@ class ProjectTagsView(AuthenticatedAPIView):
                     else:
                         updated_tags.append(t)
                 task.tags = updated_tags
-                task.save(update_fields=["tags"])
+                # `auto_now` is written only for a field named in update_fields.
+                # Without ts_updated_at the delta refresh never sends this row.
+                task.save(update_fields=["tags", "ts_updated_at"])
 
         return Response(
             {
@@ -1003,7 +1007,8 @@ class ProjectTagsView(AuthenticatedAPIView):
         )
         for task in tasks:
             task.tags = [t for t in task.tags if t.get("tagName") != tag_name]
-            task.save(update_fields=["tags"])
+            # See the rename above: ts_updated_at puts the row in the delta.
+            task.save(update_fields=["tags", "ts_updated_at"])
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
