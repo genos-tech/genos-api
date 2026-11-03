@@ -20,12 +20,15 @@ from typing import Any
 from apis.request_id import log_failure
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_access import as_int, load_task
+from origin.search_engine.agent.undo import UNDO_KEY, BodyCapture, body_restore_capture
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     task = load_task(args.get("task_id"), ctx, action="restore the description of")
     activity_id = as_int(args.get("activity_id"), "activity_id")
+    # Undo (`agent/undo.py`): the body this restore replaces, taken before it does.
+    body_capture = BodyCapture(task) if ctx.capture_undo else None
     try:
         result = restore_task_body(task=task, activity_id=activity_id, actor_id=ctx.user_id)
     except RestoreRefused as refused:
@@ -36,7 +39,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         ref = log_failure("restore_task_body tool failed", e)
         raise ToolError(f"Failed to restore the description (ref {ref}).")
-    return {
+    output = {
         "task_id": task.task_id,
         "display_id": task.display_id,
         "restored_from": result["restoredFrom"],
@@ -46,6 +49,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             f"{result['restoredFrom']}"
         ),
     }
+    if body_capture is not None and (image := body_restore_capture(task, body_capture)):
+        output[UNDO_KEY] = image
+    return output
 
 
 RESTORE_TASK_BODY = Tool(

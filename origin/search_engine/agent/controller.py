@@ -24,13 +24,22 @@ Event types emitted (full NDJSON protocol):
                                on session-cache hits; an approved write
                                the person edited first adds `edited:
                                true` and `edited_arguments`, the
-                               {path: value} they typed)
+                               {path: value} they typed; an approved
+                               write that can be undone adds `undo:
+                               {step_id, available_until}` — present
+                               only when what undo needs was stored,
+                               so it, not `undoable`, decides whether
+                               to show Undo: `agent/undo.py`)
   tool_call_error              tool error (incl. user-rejected writes;
                                + duration_ms when a tool ran)
   tool_call_pending_approval   write tool — paused, awaiting user (+
                                `editable`, the argument paths the card
                                may let the person change before
-                               approving: `agent/approval_edits.py`)
+                               approving: `agent/approval_edits.py`;
+                               + `undoable`, whether this call could be
+                               undone after approval, and when it
+                               could not, `undo_reason`, a code:
+                               `agent/undo.py`. A prediction)
   sources                      citation chips (after search calls)
   answer_delta                 streaming text from the final answer
   done                         final answer delivered (the streaming
@@ -57,7 +66,7 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
-from origin.search_engine.agent import approval_edits, tool_cache
+from origin.search_engine.agent import approval_edits, tool_cache, undo
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
 from origin.search_engine.agent.egress import EgressRefused, check_web_query
@@ -2137,7 +2146,9 @@ def resume_agent(
             try:
                 if edit_error is not None:
                     raise ToolError(edit_error)
-                result = tool.run(run_args, ctx)
+                # The one place a write is asked for its pre-image (`agent/undo.py`):
+                # nothing else that runs a tool sets this.
+                result = tool.run(run_args, dataclasses.replace(ctx, capture_undo=True))
             except ToolError as e:
                 dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 emit(
@@ -2188,6 +2199,9 @@ def resume_agent(
             else:
                 dur_ms = int((time.monotonic() - _tool_started) * 1000)
                 summary = result.pop("__summary__", "ok")
+                # The pre-image never goes where `result` goes: it is replayed to
+                # the model and blanked by retention. It is kept on its own column.
+                undo_payload = result.pop(undo.UNDO_KEY, None)
                 result_event = {
                     "type": "tool_call_result",
                     "step": step_index,
@@ -2195,6 +2209,21 @@ def resume_agent(
                     "summary": summary,
                     "duration_ms": dur_ms,
                 }
+                # Stored BEFORE the event goes out, so `undo` is only ever promised
+                # for an undo that is there to run.
+                undo_json = undo.stored(call_name, undo_payload)
+                if undo_json is not None:
+                    try:
+                        pending_step.undo_json = undo_json
+                        pending_step.save(update_fields=["undo_json"])
+                        result_event["undo"] = undo.event_info(pending_step)
+                    except Exception:  # noqa: BLE001 — the write stands; only its undo is lost
+                        pending_step.undo_json = None
+                        log.exception(
+                            "Failed to store the undo of step %s (%s)",
+                            pending_step.step_id,
+                            call_name,
+                        )
                 # An approve that carried edits says so, and with what the
                 # person typed, so the card can show what ran. For the browser
                 # only: it is on the event, never on `result`, which is
@@ -3156,6 +3185,14 @@ def _drive_loop(
                 }
                 if run_id is not None:
                     event["run_id"] = str(run_id)
+                # Whether this call could be undone once approved, so the card
+                # says "can't be undone" BEFORE the person approves. A prediction
+                # from the arguments (`undo.proposal`); the result event's `undo`
+                # is what says it was.
+                undoable = undo.proposal(call_name, call_args)
+                event["undoable"] = undoable.undoable
+                if not undoable.undoable:
+                    event["undo_reason"] = undoable.reason
                 emit(event)
                 return {
                     "paused": True,
@@ -3220,6 +3257,9 @@ def _drive_loop(
 
             result = payload
             summary = result.pop("__summary__", "ok")
+            # A read is never asked for a pre-image; if a tool returns one anyway
+            # it must not reach the model, the session cache or the step row.
+            result.pop(undo.UNDO_KEY, None)
             result_event = {
                 "type": "tool_call_result",
                 "step": step,

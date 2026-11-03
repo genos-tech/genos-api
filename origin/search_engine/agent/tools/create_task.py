@@ -64,6 +64,7 @@ from origin.search_engine.agent.tools.task_custom_fields import (
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
 from origin.search_engine.agent.tools.task_people import plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags
+from origin.search_engine.agent.undo import UNDO_KEY, created_task_capture
 from origin.search_engine.quota import (
     TASK_CREATE_KEY,
     check_remaining_monthly,
@@ -311,7 +312,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "milestone_id",
         ]
     )
-    return {
+    result = {
         "task_id": task.task_id,
         "display_id": task.display_id,
         "project_id": project_id,
@@ -329,6 +330,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "collaborators": collaborator_ids,
         "__summary__": summary,
     }
+    # Undo (`agent/undo.py`): a stamp of the task as made, taken last, once every
+    # post-save write (collaborators, root, mentions) has landed.
+    if ctx.capture_undo and (image := created_task_capture(task)):
+        result[UNDO_KEY] = image
+    return result
 
 
 CREATE_TASK = Tool(

@@ -54,6 +54,7 @@ from origin.search_engine.agent.tools.note_targets import (
     parse_chat_ref,
     writable_team_folder,
 )
+from origin.search_engine.agent.undo import UNDO_KEY, created_note_capture
 from origin.search_engine.quota import (
     NOTE_CREATE_KEY,
     check_remaining_monthly,
@@ -172,6 +173,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     else:
         result = _create_chat_note(args=args, title=title, body=body, ctx=ctx)
     increment_usage(ctx.user_id, NOTE_CREATE_KEY)
+    # Undo (`agent/undo.py`): the note as made and who can reach it, so that
+    # deleting it is refused once it has changed or been shared.
+    if ctx.capture_undo and (
+        image := created_note_capture(result["note_type"], result["note_id"], result.get("title"))
+    ):
+        result[UNDO_KEY] = image
     return result
 
 

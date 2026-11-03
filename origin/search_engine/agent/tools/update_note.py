@@ -50,6 +50,7 @@ from origin.search_engine.agent.tools.note_targets import (
     chat_note_parent_context,
     normalize_note_type,
 )
+from origin.search_engine.agent.undo import UNDO_KEY, note_edit_capture, update_note_blocker
 from origin.search_engine.chunkers.base import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
 from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.views.utils.note_version import keep_current_state, snapshot_note_version
@@ -314,13 +315,17 @@ def _apply_changes(
             result["parent_context"] = parent_context
         return result
 
+    # The version rows that hold what this edit replaced and what it leaves
+    # (`agent/undo.py` puts the first back).
+    replaced_version = None
+    written_version = None
     try:
         if {"title", "body"} & set(update_fields):
             # An edit by an agent or an API key is not a typing session, and the
             # newest version row may hold exactly what it is about to replace (the
             # user's own save a minute ago) or there may be no row at all. Keep
             # the current state first, so the edit can always be walked back.
-            keep_current_state(
+            replaced_version = keep_current_state(
                 team=note.team,
                 note_type=note_type_code,
                 note_id=note_id,
@@ -345,7 +350,7 @@ def _apply_changes(
         try:
             from origin.models.common.user_models import CustomUser  # noqa: PLC0415
 
-            snapshot_note_version(
+            written_version = snapshot_note_version(
                 team=note.team,
                 editor=CustomUser.objects.filter(id=ctx.user_id).first(),
                 note_type=note_type_code,
@@ -388,6 +393,22 @@ def _apply_changes(
     result["__summary__"] = summary
     if parent_context:
         result["parent_context"] = parent_context
+    # Undo (`agent/undo.py`): the version this edit replaced, put back while the
+    # note is still the one this edit wrote. A folder move is not covered.
+    if (
+        ctx.capture_undo
+        and not update_note_blocker(args)
+        and (
+            image := note_edit_capture(
+                note_type,
+                note_id,
+                note.title,
+                before=replaced_version,
+                after=written_version,
+            )
+        )
+    ):
+        result[UNDO_KEY] = image
     return result
 
 

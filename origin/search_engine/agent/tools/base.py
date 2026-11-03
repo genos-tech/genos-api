@@ -53,6 +53,13 @@ class ToolContext:
     # an external client (cap a long chunk, send one copy of a body); the
     # empty default keeps every in-app call byte-identical to before.
     surface: str = ""
+    # Set ONLY by the in-app approve path (`resume_agent`) for the one approved
+    # write it runs: the tool then also returns a pre-image under `__undo__`
+    # (popped by the controller and stored on `AgentStep.undo_json`, never shown
+    # to the model), so the person can undo the write (`agent/undo.py`). Off for
+    # every other caller (MCP, tests, evals): their results carry no pre-image
+    # and cost no extra reads. Server-set, NEVER from the LLM.
+    capture_undo: bool = False
 
 
 class ToolError(Exception):

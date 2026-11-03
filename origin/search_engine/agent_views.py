@@ -74,7 +74,7 @@ from apis.request_id import (
 )
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
-from origin.search_engine.agent import approval_edits
+from origin.search_engine.agent import approval_edits, undo
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -3628,6 +3628,12 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
                 "error": error or None,
                 "started_at": r.started_at.isoformat(),
                 "sources": reconstruct_sources_for_run(r),
+                # The approved writes of this turn that have an undo (one run can
+                # approve several): `{step_id, step, tool_name, available_until,
+                # undone_at | null}`. Whether one can STILL be undone (the window,
+                # and that nothing changed since) is checked when it is tried, not
+                # here: a restored turn shows Undo, and the click may be refused.
+                "undo": [info for step in r.steps.all() if (info := undo.step_info(step))],
             }
         )
     return out
