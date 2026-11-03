@@ -96,6 +96,27 @@ def _store_baseline(row, pk_name: str, full: set[str]) -> None:
     row.mentioned_user_ids = sorted(full)
 
 
+def store_task_mention_baseline(task) -> None:
+    """Bring a task's stored mention set in line with its body, filing nothing.
+
+    For a write that is a way back (undoing an agent's rewrite), which must not
+    ping anyone: but the set the NEXT save diffs against has to match the body
+    now, or that save would announce a mention that was there all along.
+    Best-effort, like the notify path."""
+    try:
+        _store_baseline(task, "task_id", mentioned_user_ids(task.content))
+    except Exception:  # noqa: BLE001 — the body write already succeeded
+        log.exception("task mention baseline failed task=%s", getattr(task, "task_id", None))
+
+
+def store_note_mention_baseline(note) -> None:
+    """`store_task_mention_baseline` for a note."""
+    try:
+        _store_baseline(note, "note_id", mentioned_user_ids(note.body))
+    except Exception:  # noqa: BLE001 — the body write already succeeded
+        log.exception("note mention baseline failed note=%s", getattr(note, "note_id", None))
+
+
 def notify_task_body_mentions(task, *, actor_id: str) -> int:
     """File the mention activities for `task.content` and store its new
     mention set. Call after the body is saved. A milestone's mention set

@@ -74,7 +74,7 @@ from apis.request_id import (
 )
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
-from origin.search_engine.agent import approval_edits, undo
+from origin.search_engine.agent import approval_edits, undo, undo_apply
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -159,7 +159,12 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
-from origin.services.throttles import AgentThrottle, SummaryThrottle, with_defaults
+from origin.services.throttles import (
+    AgentThrottle,
+    AgentUndoThrottle,
+    SummaryThrottle,
+    with_defaults,
+)
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import participates_in_team
@@ -3706,3 +3711,40 @@ class AgentRunFeedbackView(AuthenticatedAPIView):
             {"run_id": str(run.run_id), "rating": feedback.rating, "comment": feedback.comment},
             status=status.HTTP_200_OK,
         )
+
+
+class AgentStepUndoView(AuthenticatedAPIView):
+    """POST /api/v2/agent/runs/<run_id>/steps/<step_id>/undo/ — undo one approved write.
+
+    The person's own click on the answer's Undo control: no model, no second
+    approval (the click is the authorization), no body. It puts back what that one
+    write changed, through the service layer, while nothing has changed since
+    (`agent/undo_apply.py`); the contract is there and in `agent/undo.py`.
+
+    Only the run's own asker may undo a step of it, and a run or step that is not
+    theirs, or not there, is the SAME 404 (a guessed id confirms nothing). Its own
+    throttle: it is a few writes to the workspace, not an LLM call, so it neither
+    spends the `agent` budget nor waits on it.
+    """
+
+    throttle_classes = with_defaults(AgentUndoThrottle)
+
+    _NOT_FOUND = {"error": "No such undoable step.", "code": "not_found"}
+
+    def post(self, request, run_id: str, step_id: str):
+        not_found = Response(self._NOT_FOUND, status=status.HTTP_404_NOT_FOUND)
+        user_id = str(getattr(request.user, "id", "") or "")
+        try:
+            run = AgentRun.objects.get(run_id=run_id)
+            step_pk = int(step_id)
+        except (AgentRun.DoesNotExist, ValueError, ValidationError):
+            return not_found
+        if not user_id or str(run.user_id) != user_id:
+            return not_found
+        try:
+            answer = undo_apply.perform_undo(run=run, step_id=step_pk, user=request.user)
+        except undo_apply.UndoNotFound:
+            return not_found
+        except undo_apply.UndoRefused as refused:
+            return Response(refused.body(), status=refused.status)
+        return Response(answer, status=status.HTTP_200_OK)
