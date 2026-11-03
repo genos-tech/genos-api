@@ -221,27 +221,47 @@ class TeamTasksPageBase(BaseAPITestCase):
 
 
 class TeamTasksPageResponseTests(TeamTasksPageBase):
-    def test_the_response_is_unchanged(self):
+    def test_the_response_is_the_same_apart_from_soft_deleted_tasks(self):
+        """The wire format is pinned against what `main` returned (MIP-966); the one
+        deliberate change since is that soft-deleted tasks are no longer listed
+        (MIP-984). Ids are numbered by order of appearance, so with a row gone the
+        rows are compared by title, field by field, ids left out."""
         self.make_tasks(14)
         body = json.loads(self.fetch().content)
 
         self.assertEqual(list(body), ["tasks", "has_more", "next_cursor"])
         self.assertEqual((body["has_more"], body["next_cursor"]), (False, None))
         rows = body["tasks"]
-        self.assertEqual(len(rows), 14)  # not the other project's task, not the scaffold row
-        self.assertEqual(normalise_ids(rows), EXPECTED_ROWS)
+        # not the other project's task, not the scaffold row, not the deleted one
+        self.assertEqual(len(rows), 13)
+        got = {r["title"]: r for r in normalise_ids(rows)}
+        want = {r["title"]: r for r in EXPECTED_ROWS if r["title"] != DELETED_TITLE}
+        self.assertEqual(set(got), set(want))
+        skip = set(ID_KEYS) | {"displayId"}
+        for title, row in want.items():
+            self.assertEqual(
+                {k: v for k, v in got[title].items() if k not in skip},
+                {k: v for k, v in row.items() if k not in skip},
+                title,
+            )
         # the key order is part of the wire format too
         self.assertEqual(list(rows[0]), EXPECTED_KEY_ORDER)
 
-    def test_soft_deleted_tasks_are_still_listed(self):
-        """Not a feature, a decision to leave things alone (MIP-966): a page has
-        always carried soft-deleted rows. This pins that this change did not
-        add or remove any filtering."""
-        self.make_tasks(12)
-        self.assertEqual(TaskMaster.objects.filter(is_deleted=True).count(), 1)
-        ids = {r["id"] for r in self.fetch().json()["tasks"]}
+    def test_soft_deleted_tasks_are_not_listed(self):
+        """MIP-984: a soft-deleted task used to be sent like a live one, with
+        nothing on the row to tell them apart. Neither route sends it now."""
+        self.make_tasks(14)
         deleted = TaskMaster.objects.get(is_deleted=True)
-        self.assertIn(str(deleted.task_id), ids)
+        self.assertEqual(deleted.title, DELETED_TITLE)
+        for url in (PAGE, OLD):
+            body = self.fetch(url).json()
+            rows = body["tasks"] if url == PAGE else body
+            self.assertNotIn(str(deleted.task_id), {r["id"] for r in rows}, url)
+            self.assertNotIn(DELETED_TITLE, {r["title"] for r in rows}, url)
+        # ...and a page boundary that falls on it does not lose or repeat others
+        titles = [r["title"] for r in self.all_pages(limit=3)]
+        self.assertEqual(len(titles), 13)
+        self.assertEqual(len(set(titles)), 13)
 
     def test_the_unpaged_route_gives_the_same_rows(self):
         self.make_tasks(14)
@@ -335,7 +355,10 @@ class TeamTasksPageCostTests(TeamTasksPageBase):
         self.make_tasks(20)
         large = self.queries()
 
-        self.assertEqual(len(self.fetch().json()["tasks"]), 40)
+        live = (
+            40 - TaskMaster.objects.filter(is_deleted=True).count()
+        )  # deleted ones are not listed
+        self.assertEqual(len(self.fetch().json()["tasks"]), live)
         self.assertEqual(large, small, "queries grow with the number of tasks")
         self.assertEqual(small, self.BUDGET)
 
@@ -391,6 +414,7 @@ EXPECTED_KEY_ORDER = [
     "links",
     "customFieldValues",
 ]
+DELETED_TITLE = "task 009"  # the one soft-deleted task `make_tasks(14)` creates
 EXPECTED_ROWS = [
     {
         "id": "id#1",
