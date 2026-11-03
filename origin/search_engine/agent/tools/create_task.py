@@ -401,8 +401,8 @@ CREATE_TASK = Tool(
                 "items": {"type": "STRING"},
                 "description": (
                     "Optional tag names from list_project_tags (this project's "
-                    "catalogue). An unknown name is refused — tags can't be "
-                    "created here. Omit when no tag fits."
+                    "catalogue). An unknown name is refused — add a missing "
+                    "one with add_project_tag first. Omit when no tag fits."
                 ),
             },
             "priority": {

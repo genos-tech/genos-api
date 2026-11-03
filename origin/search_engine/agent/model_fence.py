@@ -77,6 +77,11 @@ FENCED_KEYS = frozenset(
 _PEOPLE = frozenset({"username"})
 _ATTENDEE_NAMES = frozenset({"displayName"})
 FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
+    # A project label's name (MIP-882). The model addresses a label by id, so the name is
+    # display text; `list_project_tags` returns it under its own key because the key `name`
+    # there is a tag, an identifier the model passes back.
+    "list_project_tags": frozenset({"label_name"}),
+    "manage_project_labels": frozenset({"label_name"}),
     # A sprint's or a folder's name.
     "get_sprint_summary": frozenset({"name"}),
     "list_sprints": frozenset({"name"}),

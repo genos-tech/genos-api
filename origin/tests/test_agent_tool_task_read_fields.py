@@ -495,7 +495,8 @@ class ListProjectTagsFieldsTests(ReadFieldsBase):
             ],
         )
         self.assertEqual(
-            out["__summary__"], "1 tag(s), 4 custom field(s) and 1 saved filter(s) on Website"
+            out["__summary__"],
+            "1 tag(s), 0 label(s), 4 custom field(s) and 1 saved filter(s) on Website",
         )
 
     def test_a_dimension_set_to_all_or_left_out_is_not_listed(self):

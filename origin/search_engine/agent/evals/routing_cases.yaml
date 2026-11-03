@@ -305,6 +305,18 @@
   en: "Add Sam to the WRD project"
   ja: "WRD プロジェクトに Sam を追加して"
   ok: [get_team_members, list_projects, manage_project_members]
+- id: project_tag_add
+  en: "Add a tag called urgent to the WRD project"
+  ja: "WRD プロジェクトに urgent というタグを追加して"
+  ok: [list_projects, list_project_tags, add_project_tag]
+- id: project_label_create
+  en: "Create a project label called Client Work"
+  ja: "Client Work というプロジェクトラベルを作って"
+  ok: [list_projects, list_project_tags, manage_project_labels]
+- id: project_label_assign
+  en: "Put the Client Work label on the WRD project"
+  ja: "WRD プロジェクトに Client Work ラベルを付けて"
+  ok: [list_projects, list_project_tags, manage_project_labels]
 - id: inbox_requests
   en: "Is anyone waiting for me to approve a request?"
   ja: "承認待ちのリクエストはある?"
