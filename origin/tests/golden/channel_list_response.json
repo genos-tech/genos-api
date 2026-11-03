@@ -386,7 +386,7 @@
   "isExternal": false,
   "teamId": "<uuid:15>",
   "hostTeamName": "Test Team",
-  "legacyChatId": 3,
+  "legacyChatId": "<int>",
   "latestMessage": {
    "id": "<uuid:30>",
    "channelId": "<uuid:29>",

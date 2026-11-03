@@ -247,8 +247,9 @@ class ChannelListPayloadTests(CrossTeamTestCase):
 
         text = self.UUID.sub(uuid, text)
         text = self.STAMP.sub("<time>", text)
-        # Auto-increment values and the display id built from one.
-        text = re.sub(r'("(?:projectId|taskId)"): \d+', r'\1: "<int>"', text)
+        # Auto-increment values (a PM channel's `legacyChatId` is its project's
+        # id), which depend on how many rows earlier tests created.
+        text = re.sub(r'("(?:projectId|taskId|legacyChatId)"): \d+', r'\1: "<int>"', text)
         return json.loads(text)
 
     def _list(self):
