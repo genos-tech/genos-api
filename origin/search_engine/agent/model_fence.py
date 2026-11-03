@@ -82,6 +82,9 @@ FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     # there is a tag, an identifier the model passes back.
     "list_project_tags": frozenset({"label_name"}),
     "manage_project_labels": frozenset({"label_name"}),
+    # The requester, by the name they chose. A request is addressed by `inbox_item_id`.
+    "approve_join_request": _PEOPLE,
+    "decline_join_request": _PEOPLE,
     # A sprint's or a folder's name.
     "get_sprint_summary": frozenset({"name"}),
     "list_sprints": frozenset({"name"}),

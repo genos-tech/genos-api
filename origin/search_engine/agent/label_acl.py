@@ -27,6 +27,7 @@ from django.core.exceptions import ValidationError
 
 from origin.models.chat.todo_models import ToDoItem
 from origin.models.chat.unified_models import Channel
+from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
@@ -219,6 +220,35 @@ class LabelAccess:
             .values_list("project__project_name", flat=True)
             .first()
         )
+
+    # ---- join requests --------------------------------------------------
+
+    def join_request_label(self, raw: Any) -> str | None:
+        """"Sam -> Website", for a project join request addressed to the caller.
+
+        Both names come from the database, never from the request's `item_optionals`:
+        the requester wrote that, and a card is where the user decides. The rule is the
+        approval's own: a pending-or-answered request of the join-project type, addressed
+        to the caller, in the run's team, naming a project of that team the caller is on.
+        """
+        item_id = _as_int(raw)
+        if item_id is None or isinstance(raw, bool) or not self.usable:
+            return None
+        item = InboxItems.objects.filter(
+            item_id=item_id,
+            receiver_id=self.user_id,
+            team_id=self.team_id,
+            item_type=2,
+            is_deleted=False,
+        ).first()
+        if item is None or item.sender_id is None:
+            return None
+        project_id = _as_int((item.item_optionals or {}).get("project_id"))
+        who = self.username(item.sender_id)
+        where = self.project_name(project_id) if project_id is not None else None
+        if who is None or where is None:
+            return None
+        return f"{who} → {where}"
 
     # ---- project labels -------------------------------------------------
 

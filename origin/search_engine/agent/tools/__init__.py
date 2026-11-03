@@ -44,6 +44,7 @@ from origin.search_engine.agent.model_fence import with_unfenced_arguments
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.add_project_tag import ADD_PROJECT_TAG
 from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
+from origin.search_engine.agent.tools.approve_join_request import APPROVE_JOIN_REQUEST
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
 from origin.search_engine.agent.tools.base import (
     REGISTRY,
@@ -57,6 +58,7 @@ from origin.search_engine.agent.tools.create_note import CREATE_NOTE
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import CREATE_TASK_PLAN
 from origin.search_engine.agent.tools.create_todo_item import CREATE_TODO_ITEM
+from origin.search_engine.agent.tools.decline_join_request import DECLINE_JOIN_REQUEST
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.delete_comment import DELETE_COMMENT
 from origin.search_engine.agent.tools.delete_milestone import DELETE_MILESTONE
@@ -251,6 +253,8 @@ for _t in (
     MANAGE_PROJECT_MEMBERS,
     ADD_PROJECT_TAG,
     MANAGE_PROJECT_LABELS,
+    APPROVE_JOIN_REQUEST,
+    DECLINE_JOIN_REQUEST,
     # --- Write tools (MIP-883) — organizing notes ---
     MANAGE_NOTE_FOLDER,
     FAVORITE_NOTE,
@@ -278,6 +282,8 @@ __all__ = [
     "MANAGE_PROJECT_MEMBERS",
     "ADD_PROJECT_TAG",
     "MANAGE_PROJECT_LABELS",
+    "APPROVE_JOIN_REQUEST",
+    "DECLINE_JOIN_REQUEST",
     "MANAGE_NOTE_FOLDER",
     "FAVORITE_NOTE",
     "DELETE_NOTE",

@@ -56,6 +56,8 @@ SINGLE_WRITE_TOOLS = frozenset(
         "manage_project_members",
         "add_project_tag",
         "manage_project_labels",
+        "approve_join_request",
+        "decline_join_request",
         "manage_note_folder",
         "favorite_note",
         "delete_note",

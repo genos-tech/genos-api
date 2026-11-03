@@ -11,6 +11,7 @@ from published reads.
 from __future__ import annotations
 
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
+from origin.models.common.inbox_models import InboxItems
 from origin.models.project.prj_models import (
     ProjectLabel,
     ProjectMaster,
@@ -232,3 +233,113 @@ class TestTagAndLabelTools(McpProjectBase):
             self.assertTrue(result.get("isError"), name)
         self.assertFalse(ProjectLabel.objects.filter(name="Sneaky").exists())
         self.assertFalse(ProjectTags.objects.filter(tag_name="sneaky").exists())
+
+
+JOIN = {"approve_join_request", "decline_join_request"}
+
+
+class TestJoinRequestTools(McpProjectBase):
+    """Approving lets someone in, which this surface cannot ask the user about, so it needs
+    the key's opt-in like a delete. Declining lets nobody in and needs a write key only."""
+
+    def ask_to_join(self):
+        return InboxItems.objects.create(
+            team=self.team,
+            sender=self.user2,
+            receiver=self.user,
+            item_body="let me in",
+            item_type=2,
+            item_optionals={
+                "project_id": self.project.project_id,
+                "project_name": self.project.project_name,
+            },
+        )
+
+    def is_member(self):
+        return ProjectMembers.objects.filter(project=self.project, attendee=self.user2).exists()
+
+    def test_a_write_key_sees_the_decline_but_not_the_approval(self):
+        self._key(scope=SCOPE_WRITE)
+        self.assertEqual(JOIN & set(self.listed()), {"decline_join_request"})
+
+    def test_the_opt_in_adds_the_approval(self):
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
+        self.assertEqual(JOIN & set(self.listed()), JOIN)
+
+    def test_a_read_key_sees_neither(self):
+        self._key(scope=SCOPE_READ)
+        self.assertFalse(JOIN & set(self.listed()))
+
+    def test_only_the_approval_is_destructive(self):
+        self.assertTrue(tools.BY_NAME["approve_join_request"].destructive)
+        self.assertFalse(tools.BY_NAME["decline_join_request"].destructive)
+        for name in JOIN:
+            self.assertTrue(tools.BY_NAME[name].write, name)
+
+    def test_the_catalog_says_why_the_approval_is_gated_and_where_the_id_comes_from(self):
+        approve = tools.BY_NAME["approve_join_request"].description
+        self.assertIn("opted into destructive tools", approve)
+        for name in JOIN:
+            text = tools.BY_NAME[name].description
+            self.assertIn("list_my_inbox", text, name)
+            self.assertIn("inbox_item_id", text, name)
+            self.assertNotIn("approval", text.lower(), "this surface has no approval card")
+
+    def test_the_id_comes_from_a_published_read_and_the_flow_works_end_to_end(self):
+        item = self.ask_to_join()
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
+        inbox, _ = self.run_tool("list_my_inbox", {"category": "requests"})
+        row = next(x for x in inbox["structuredContent"]["items"] if x["item_id"] == item.item_id)
+        self.assertEqual(row["item_type_label"], "join_project_request")
+        self.assertEqual(row["target"], {"project_id": self.project.project_id})
+        done, _ = self.run_tool("approve_join_request", {"inbox_item_id": row["item_id"]})
+        self.assertFalse(done.get("isError"), done)
+        self.assertEqual(done["structuredContent"]["request_status"], "approved")
+        self.assertTrue(self.is_member())
+
+    def test_the_approval_is_refused_without_the_opt_in(self):
+        item = self.ask_to_join()
+        self._key(scope=SCOPE_WRITE)
+        result, text = self.run_tool("approve_join_request", {"inbox_item_id": item.item_id})
+        self.assertTrue(result.get("isError"), result)
+        self.assertIn("destructive", text.lower())
+        self.assertFalse(self.is_member())
+        item.refresh_from_db()
+        self.assertEqual(item.request_status, "pending")
+
+    def test_a_decline_works_with_a_write_key(self):
+        item = self.ask_to_join()
+        self._key(scope=SCOPE_WRITE)
+        result, _ = self.run_tool("decline_join_request", {"inbox_item_id": item.item_id})
+        self.assertFalse(result.get("isError"), result)
+        self.assertEqual(result["structuredContent"]["request_status"], "rejected")
+        self.assertFalse(self.is_member())
+
+    def test_a_refusal_from_the_service_comes_back_as_an_error(self):
+        item = self.ask_to_join()
+        InboxItems.objects.filter(item_id=item.item_id).update(request_status="approved")
+        self._key(scope=SCOPE_WRITE)
+        result, text = self.run_tool("decline_join_request", {"inbox_item_id": item.item_id})
+        self.assertTrue(result.get("isError"), result)
+        self.assertIn("already answered", text)
+
+    def test_a_read_key_cannot_call_either_even_from_a_cached_list(self):
+        item = self.ask_to_join()
+        self._key(scope=SCOPE_READ, allow_destructive=False)
+        for name in JOIN:
+            result, _ = self.run_tool(name, {"inbox_item_id": item.item_id})
+            self.assertTrue(result.get("isError"), name)
+        item.refresh_from_db()
+        self.assertEqual(item.request_status, "pending")
+        self.assertFalse(self.is_member())
+
+    def test_another_users_request_is_not_found(self):
+        item = self.ask_to_join()
+        InboxItems.objects.filter(item_id=item.item_id).update(
+            receiver=self.user2, sender=self.user
+        )
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
+        for name in JOIN:
+            result, text = self.run_tool(name, {"inbox_item_id": item.item_id})
+            self.assertTrue(result.get("isError"), name)
+            self.assertIn("not found", text.lower())

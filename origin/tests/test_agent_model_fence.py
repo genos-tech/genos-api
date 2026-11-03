@@ -254,6 +254,8 @@ class FenceByToolTests(SimpleTestCase):
             {
                 "list_project_tags": ["label_name"],
                 "manage_project_labels": ["label_name"],
+                "approve_join_request": ["username"],
+                "decline_join_request": ["username"],
                 "get_sprint_summary": ["name"],
                 "list_sprints": ["name"],
                 "list_note_folders": ["name"],
