@@ -12,7 +12,10 @@ from apis.llm_catalog import EFFORTS
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.shared_answers import purge_team_lane_for_user
+from origin.search_engine.shared_answers import (
+    purge_team_lane_for_user,
+    reshare_team_lane_in_background,
+)
 from origin.serializers.common.user_serializers import UserSerializer
 from origin.services.calendar_sync import (
     LINK_ONLY_FIELDS,
@@ -654,10 +657,20 @@ class ShareAnswersPreferenceView(AuthenticatedAPIView):
     already in the team lane (best-effort: an unreachable search index is
     logged and the periodic orphan sweep removes the chunks afterwards; the
     preference is saved either way). The caller's private conversation memory
-    is untouched. Turning it back ON does not re-index by itself: the next
-    reindex that visits a run collects it again (an incremental pass only
-    revisits recent runs, so older answers return on a full reindex).
-    Answers the caller withdrew one by one stay withdrawn.
+    is untouched.
+
+    Turning it back ON (a real false -> true change; a PATCH that leaves it
+    true does nothing more) re-collects the caller's answers right then, so
+    "Answers shared with your team" and what teammates can find agree again.
+    After the commit, a background thread feeds the caller's newest
+    `shared_answers.RESHARE_SCAN_LIMIT` completed runs through the chunker's
+    own rule (`judge_run`) into the index; the response does not wait for it.
+    Runs older than that bound, and anything the job could not index (the
+    index or embedder unreachable, the process restarted mid-job), come back on
+    the next reindex that visits them: runs from the last few minutes on the
+    next incremental pass, anything older on a full `opensearch_reindex` (or
+    on the next off -> on). The preference is saved either way. Answers the
+    caller withdrew one by one stay withdrawn.
     """
 
     def get(self, request):
@@ -675,12 +688,25 @@ class ShareAnswersPreferenceView(AuthenticatedAPIView):
             )
         user_id = str(request.user.id)
         with transaction.atomic():
+            # Read the stored value under a row lock, so "did it really change"
+            # is decided in turn even when two requests race.
+            was_on = (
+                CustomUser.objects.select_for_update()
+                .values_list("share_answers_with_team", flat=True)
+                .get(pk=request.user.pk)
+            )
             request.user.share_answers_with_team = value
             request.user.save(update_fields=["share_answers_with_team"])
             if not value:
                 # Every time it is set to false, not only on the change: a
                 # repeat is the user's way to retry a purge that failed.
                 transaction.on_commit(lambda: purge_team_lane_for_user(user_id))
+            elif not was_on:
+                # Only on the change to true: re-collecting costs an embedding
+                # call per answer, and a PATCH that keeps it true has nothing
+                # to catch up on. After the commit, so a rollback starts
+                # nothing and the job reads the new value.
+                transaction.on_commit(lambda: reshare_team_lane_in_background(user_id))
         return Response({"share_answers_with_team": value}, status=status.HTTP_200_OK)
 
 

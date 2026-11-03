@@ -358,9 +358,11 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # its sources' audiences, shown ANONYMOUSLY as a "Previous answer").
     # When False the chunker collects none of their runs and the ones
     # already collected are purged at the moment of the change. Turning it
-    # back on does not re-index by itself: the next reindex that visits a
-    # run collects it again (an incremental pass only sees recent runs, so
-    # older answers return on a full reindex).
+    # back on (false -> true, in ShareAnswersPreferenceView) re-collects their
+    # newest answers right away, in the background
+    # (shared_answers.reshare_team_lane_for_user, bounded); runs beyond that
+    # bound come back on the next full reindex, since an incremental pass only
+    # sees recent runs.
     share_answers_with_team = models.BooleanField(default=True)
 
     # Django Auth Fields

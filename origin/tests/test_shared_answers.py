@@ -17,7 +17,12 @@ The orphan sweep is the safety net for a purge that OpenSearch missed, so it
 is asserted to remove a withdrawn / opted-out chunk (the run row survives, so
 "run is gone" alone would never catch it) and to leave healthy ones alone.
 
-No LLM and no OpenSearch: same in-memory index as test_agent_conversation_delete.
+No LLM and no OpenSearch: same in-memory index as test_agent_conversation_delete,
+which here also takes the writes ingestion sends (see `WritableFakeIndex`).
+Turning the preference back on starts a background job; its thread is stubbed
+(`background_jobs` collects what would have been started, `run_background_jobs`
+runs them inline), because a real thread cannot see the test's open
+transaction. The re-collection itself is covered in test_shared_answers_reshare.
 """
 
 import uuid
@@ -26,12 +31,12 @@ from unittest import mock
 
 from rest_framework.test import APIClient
 
-from origin.search_engine import purge
+from origin.search_engine import ingestion, purge, shared_answers
 from origin.search_engine.chunkers.spotlight_answer_chunker import iter_spotlight_answer_chunks
 from origin.search_engine.models import AgentRun, RagChunk
 from origin.search_engine.shared_answers import COLLECT, SKIP, WITHHELD, judge_run
 
-from .test_agent_conversation_delete import LIST_URL, ConversationDeleteTestCase
+from .test_agent_conversation_delete import LIST_URL, ConversationDeleteTestCase, FakeIndex
 
 SHARED_URL = "/api/v2/agent/shared-answers/"
 PREF_URL = "/api/v2/user/preferences/share-answers/"
@@ -41,7 +46,79 @@ def _shared_url(run):
     return f"{SHARED_URL}{run.run_id}/"
 
 
+class WritableFakeIndex(FakeIndex):
+    """`FakeIndex` that also takes the `index` / `update` ops ingestion sends
+    (the base one only honours deletes, because until the opt-in
+    re-collection nothing under test wrote)."""
+
+    def bulk(self, client, actions, **kwargs):
+        actions = list(actions)
+        for action in actions:
+            op = action.get("_op_type", "index")
+            cid = action["_id"]
+            if op == "delete":
+                self.docs.pop(cid, None)
+            elif op == "index":
+                doc = dict(action["_source"])
+                doc["chunk_id"] = cid
+                doc["snippet"] = doc.get("snippet_text")
+                doc["text"] = doc.get("search_text")
+                self.docs[cid] = doc
+            elif op == "update":
+                self.docs.setdefault(cid, {}).update(action["doc"])
+            else:
+                raise AssertionError(f"unexpected bulk op {op!r}")
+        return len(actions), []
+
+
 class SharedAnswersTestCase(ConversationDeleteTestCase):
+    def setUp(self):
+        super().setUp()
+        # An index that takes writes (the base class patched `bulk` to the
+        # delete-only one it built).
+        self.index = WritableFakeIndex()
+        self.bulk.side_effect = self.index.bulk
+
+        # The re-collection runs on a daemon thread; collect its jobs instead.
+        self.background_jobs = []
+        self.real_run_in_background = shared_answers._run_in_background
+        self._start(
+            mock.patch.object(
+                shared_answers,
+                "_run_in_background",
+                side_effect=lambda job, name: self.background_jobs.append(job),
+            )
+        )
+
+        # What ingestion reaches for besides `os_helpers.bulk` (already
+        # patched by the base class): the embedder and the OpenSearch client.
+        self.embed = self._start(
+            mock.patch.object(
+                ingestion,
+                "embed_texts",
+                side_effect=lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+            )
+        )
+        self._start(mock.patch.object(ingestion, "get_client", self.get_client))
+        self._start(mock.patch.object(ingestion, "get_index_alias", return_value="test-alias"))
+        self._start(mock.patch.object(ingestion, "ensure_additive_mapping"))
+        self._start(
+            mock.patch.object(
+                ingestion, "get_active_embedding_model_name", return_value="test-embed-v1"
+            )
+        )
+
+    def _start(self, patcher):
+        started = patcher.start()
+        self.addCleanup(patcher.stop)
+        return started
+
+    def run_background_jobs(self):
+        """Run (inline) the jobs the preference endpoint started."""
+        jobs, self.background_jobs[:] = list(self.background_jobs), []
+        for job in jobs:
+            job()
+
     def team_lane(self):
         """{run_id: has_chunk} for every run the team-lane chunker has an
         opinion on (skipped runs are absent; withheld ones are tombstones)."""
