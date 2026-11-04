@@ -167,6 +167,7 @@ from origin.services.throttles import (
 )
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object, refuse_non_string_fields
 from origin.views.utils.scope_guards import participates_in_team
 
 log = logging.getLogger(__name__)
@@ -956,11 +957,37 @@ def _enforce_monthly_ceilings(user_id: str, plan: str, team_id, chosen: LlmChoic
         return None, None, chosen
 
 
+# What a malformed `thread_context` / `note_context` is refused with. Named because it is
+# said in two places: for a context that is not an object, up front in `AgentAskView.post`,
+# and for an object with the wrong fields, where the context is parsed.
+_THREAD_CONTEXT_MALFORMED = (
+    "thread_context must have an integer chat_type and UUID-string chat_id and thread_id."
+)
+_NOTE_CONTEXT_MALFORMED = "note_context must have integer note_type and note_id."
+
+
 class AgentAskView(AuthenticatedAPIView):
     throttle_classes = with_defaults(AgentThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
+
+        # The body's own shape, checked first and all at once. It needs nothing but the
+        # body, so a refusal here comes before the team lookup, the quota gates and
+        # `metered.open_request` (which writes the cost meter's rollup row): a refused body
+        # spends and records nothing. `session_id` and the two contexts used to be read
+        # after all of those, and crashed there. A context that is not an object gets the
+        # answer an object with the wrong fields gets, further down. Empty-ish values
+        # (null, 0, false, [], {}) still mean "not sent".
+        refusal = refuse_non_string_fields(data, "query", "session_id")
+        if refusal is not None:
+            return refusal
+        for field, malformed in (
+            ("thread_context", _THREAD_CONTEXT_MALFORMED),
+            ("note_context", _NOTE_CONTEXT_MALFORMED),
+        ):
+            if data.get(field) and not isinstance(data[field], dict):
+                return Response({"error": malformed}, status=status.HTTP_400_BAD_REQUEST)
 
         query = (data.get("query") or "").strip()
         team_id = data.get("team_id")
@@ -1221,12 +1248,7 @@ class AgentAskView(AuthenticatedAPIView):
                     raise ValueError("chat_id and thread_id are required")
             except (TypeError, ValueError):
                 return Response(
-                    {
-                        "error": (
-                            "thread_context must have an integer chat_type and "
-                            "UUID-string chat_id and thread_id."
-                        )
-                    },
+                    {"error": _THREAD_CONTEXT_MALFORMED},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         note_ctx_parsed: dict | None = None
@@ -1238,7 +1260,7 @@ class AgentAskView(AuthenticatedAPIView):
                 }
             except (TypeError, ValueError):
                 return Response(
-                    {"error": "note_context must have integer note_type and note_id."},
+                    {"error": _NOTE_CONTEXT_MALFORMED},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         # Structured @/# mentions (see agent/mentions.py). Parse errors
@@ -1642,18 +1664,15 @@ class AgentDecideView(AuthenticatedAPIView):
     throttle_classes = with_defaults(AgentThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
 
         # A text field that is not text (a number, a list, an object) is a
         # malformed body, like `edited_args` below, not a crash in `.strip()`.
         # Empty-ish values (null, 0, false, [], {}) still mean "not sent" and
         # reach the "is required" answers.
-        for field in ("run_id", "approval_token", "decision"):
-            if data.get(field) and not isinstance(data[field], str):
-                return Response(
-                    {"error": f"{field} must be a string."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        refusal = refuse_non_string_fields(data, "run_id", "approval_token", "decision")
+        if refusal is not None:
+            return refusal
 
         run_id = (data.get("run_id") or "").strip()
         approval_token = (data.get("approval_token") or "").strip()
@@ -2455,7 +2474,7 @@ class NoteSummaryView(AuthenticatedAPIView):
     throttle_classes = with_defaults(SummaryThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
         team_id = data.get("team_id")
         if not team_id:
             return Response(
@@ -2623,7 +2642,7 @@ class ThreadSummaryView(AuthenticatedAPIView):
     throttle_classes = with_defaults(SummaryThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
         team_id = data.get("team_id")
         if not team_id:
             return Response(
@@ -3678,7 +3697,7 @@ class AgentRunFeedbackView(AuthenticatedAPIView):
     }
 
     def post(self, request, run_id: str):
-        data = request.data or {}
+        data = body_object(request)
 
         try:
             rating = int(data.get("rating"))

@@ -63,6 +63,38 @@ def validate_request_user(requested_user_id: str, target_user_id: str) -> None:
     return None
 
 
+def body_object(request) -> dict:
+    """The request body as a dict: `request.data` when it is one, else `{}`.
+
+    A view that reads its body with `data.get(...)` crashes (a 500) on a JSON body that
+    is not an object: `[1]`, `"abc"`, `5`, `true`. `request.data or {}` covered only the
+    empty ones (null, `[]`, `0`, `""`, `false`, which read as no body at all).
+
+    A body that is not an object is read as an empty one, so it gets what a missing field
+    gets: the view's own "is required" 400, in the view's own words. Anything that was
+    already an answer keeps it, null included. A form post is a QueryDict, which is a
+    dict, and passes through.
+    """
+    data = request.data
+    return data if isinstance(data, dict) else {}
+
+
+def refuse_non_string_fields(data: dict, *fields: str):
+    """A 400 `Response` naming the first of `fields` that is present and not a string, else None.
+
+    For a text field the view reads with `(data.get(f) or "").strip()`, which is an
+    `AttributeError` for a truthy value that is not text. Empty-ish values (null, `0`,
+    `false`, `[]`, `{}`) mean "not sent" and are left to the view's own "is required".
+    """
+    for field in fields:
+        if data.get(field) and not isinstance(data[field], str):
+            return Response(
+                {"error": f"{field} must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return None
+
+
 # Schemes a task or milestone link may use. Anything else (`javascript:`, `data:`, `vbscript:`,
 # `file:`…) is stored on the task and rendered by the app as `<a href=…>`, and a
 # `javascript:` href runs in the app's origin, with the clicker's session, when a
