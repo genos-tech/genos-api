@@ -361,8 +361,10 @@ class RerootCostTests(RerootBase):
 
         self.assertEqual(large, small)
         # One query per level (and one that finds the bottom), one for the
-        # rows, one write.
-        self.assertEqual(small, 4 + 1 + 1)
+        # rows, one write, and one read of which (team, project) the rows are
+        # in, which the change feed needs to tell those projects' clients
+        # (`update_tasks_recorded`, MIP-970): constant, like the rest.
+        self.assertEqual(small, 4 + 1 + 1 + 1)
         # Every one of them really was re-rooted (the equality is not two no-ops).
         for i in range(12):
             top = TaskMaster.objects.get(title=f"t{i}", project=self.project)

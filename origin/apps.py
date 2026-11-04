@@ -16,6 +16,7 @@ class OriginConfig(AppConfig):
         from origin.signals import (
             billing_signals,  # noqa: F401
             cache_invalidation,  # noqa: F401
+            change_feed_signals,  # noqa: F401
             dependency_signals,  # noqa: F401
             email_suppression_signals,  # noqa: F401
             pm_channel_signals,  # noqa: F401

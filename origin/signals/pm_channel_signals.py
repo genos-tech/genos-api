@@ -34,6 +34,7 @@ from origin.models.chat.unified_models import (
     ChannelMember,
 )
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services import change_feed
 
 
 @receiver(post_save, sender=ProjectMaster)
@@ -145,3 +146,6 @@ def _remove_pm_channel_member(sender, instance, **kwargs):
         return
 
     ChannelMember.objects.filter(channel=channel, user_id=attendee).update(is_deleted=True)
+    # A queryset update fires no `post_save` for the change feed's receiver
+    # (MIP-970): the person stops seeing the PM channel's chat notes.
+    change_feed.bump_notes(channel.team_id, chat=True)

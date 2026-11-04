@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster, claim_project_task_number
+from origin.services import change_feed
 from origin.views.utils.foreign_team_scope import forget_object_team
 from origin.views.utils.note_role import NOTE_TYPE_TASK
 
@@ -148,8 +149,13 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
     # behind disappears from both projects' trees while still being
     # reachable from the task it hangs off.
     notes = TaskNoteMaster.objects.filter(task_id__in=task_ids)
-    moved_note_ids = list(notes.values_list("note_id", flat=True))
+    moved = list(notes.values_list("note_id", "team_id"))
+    moved_note_ids = [note_id for note_id, _ in moved]
     notes.update(project_id=project_id, team_id=team_id)
+    # The `.update()` fires no `post_save`: tell the change feed by hand
+    # (MIP-970), for the team the notes left and the one they joined.
+    for old_team_id in {old for _, old in moved} | {team_id}:
+        change_feed.bump_notes(old_team_id, task=True)
     _settle_dependencies(task_ids, team_id=team_id)
     # A move is the one thing in the product that changes which team an
     # object belongs to, and the request-scoping layer caches that answer

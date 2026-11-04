@@ -4,6 +4,7 @@ from .chat.personal_tag_models import *
 from .chat.reaction_models import *
 from .chat.todo_models import *
 from .chat.unified_models import *
+from .common.change_models import *
 from .common.feature_models import *
 from .common.inbox_models import *
 from .common.invite_models import *
