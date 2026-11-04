@@ -11,6 +11,7 @@ from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
@@ -29,6 +30,16 @@ from origin.views.utils.scope_guards import can_access_task
 from origin.views.utils.upload_validation import check_attachment_upload
 
 NOTE_TYPE = 2  # Task Notes
+
+# Columns of a note that its autosave PUT never changes (MIP-1018).
+TASK_NOTE_SERVER_OWNED_FIELDS = (
+    "team",
+    "project",
+    "owner",
+    "task",
+    "parent_note_id",
+    "mentioned_user_ids",
+)
 
 
 def _task_hierarchy_fields(team_id, task_id):
@@ -433,12 +444,17 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         except TaskNoteMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        update_data = request.data.copy()
-
-        # Remove None values from the update_data
-        for key, val in request.data.items():
-            if val is None:
-                update_data.pop(key)
+        # An autosave changes the title and the body, and the app sends nothing
+        # else (moves have their own endpoints). The whole request used to reach
+        # a partial `__all__` serializer, so a writer could also take the note's
+        # `owner`, re-file it, or point it at another team, project or channel,
+        # past the move endpoints' checks. The note's own value is accepted and
+        # unused; any other is a 400 (MIP-1018).
+        if res := refuse_forged_fields(
+            request.data, stored_values(note, TASK_NOTE_SERVER_OWNED_FIELDS)
+        ):
+            return res
+        update_data = {"title": data["title"], "body": data["body"]}
 
         # Mirror personal/task body PUT: walk BlockNote body, dedupe
         # direct user + group-expanded mentions, persist the full set,
