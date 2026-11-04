@@ -11,6 +11,7 @@ from origin.models.common.mention_group_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_GROUP_MEMBERS_PER_ADD, check_batch_size
+from origin.views.utils.request_validators import is_own_user_id
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 
@@ -80,7 +81,7 @@ class MentionGroupView(AuthenticatedAPIView):
         team_id = request.data.get("team_id")
         group_name = (request.data.get("group_name") or "").strip().lower()
         description = request.data.get("description") or ""
-        created_by = request.data.get("created_by")
+        claimed_creator = request.data.get("created_by")
 
         if not team_id or not group_name:
             return Response(
@@ -89,6 +90,15 @@ class MentionGroupView(AuthenticatedAPIView):
             )
         if res := _require_team(request, team_id):
             return res
+        # The creator is the caller, always. `created_by` was stored as sent,
+        # so a member could attribute a group to a colleague (and a value that
+        # was not a user id at all was a 500). The app sends the caller's own
+        # id, which is still accepted; anybody else's is refused.
+        if claimed_creator is not None and not is_own_user_id(claimed_creator, request.user):
+            return Response(
+                {"error": "created_by must be your own user id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if MentionGroupMaster.objects.filter(
             team_id=team_id, group_name=group_name, is_deleted=False
@@ -102,7 +112,7 @@ class MentionGroupView(AuthenticatedAPIView):
             team_id=team_id,
             group_name=group_name,
             description=description,
-            created_by_id=created_by,
+            created_by_id=request.user.id,
         )
         return Response(_serialize_group(group, []), status=status.HTTP_201_CREATED)
 
@@ -194,7 +204,7 @@ class MentionGroupMembersView(AuthenticatedAPIView):
     def post(self, request):
         group_id = request.data.get("group_id")
         user_ids = request.data.get("user_ids") or []
-        added_by = request.data.get("added_by")
+        claimed_adder = request.data.get("added_by")
         if not group_id or not user_ids:
             return Response(
                 {"error": "group_id and user_ids are required."},
@@ -209,6 +219,24 @@ class MentionGroupMembersView(AuthenticatedAPIView):
         if err:
             return err
 
+        # Same rule as `created_by` on the group: the adder is the caller.
+        if claimed_adder is not None and not is_own_user_id(claimed_adder, request.user):
+            return Response(
+                {"error": "added_by must be your own user id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # A group names colleagues. Any user id used to be accepted, so a member
+        # could put someone from another team (or an id that is no user, a 500)
+        # into the team's group, and an @group mention would then reach them.
+        # Checked up front: one outsider and nothing is added.
+        if not isinstance(user_ids, list) or not all(
+            is_team_member(group.team_id, uid) for uid in user_ids
+        ):
+            return Response(
+                {"error": "user_ids must all be members of this team."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         existing = set(
             MentionGroupMembers.objects.filter(group_id=group_id).values_list("user_id", flat=True)
         )
@@ -217,7 +245,7 @@ class MentionGroupMembersView(AuthenticatedAPIView):
                 team_id=group.team_id,
                 group_id=group_id,
                 user_id=uid,
-                added_by_id=added_by,
+                added_by_id=request.user.id,
             )
             for uid in user_ids
             if str(uid) not in {str(e) for e in existing}
