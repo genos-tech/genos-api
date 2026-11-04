@@ -1,3 +1,5 @@
+import uuid
+
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -61,6 +63,20 @@ def validate_request_user(requested_user_id: str, target_user_id: str) -> None:
             status=status.HTTP_403_FORBIDDEN,
         )
     return None
+
+
+def is_own_user_id(value, user) -> bool:
+    """True if `value` names `user`, in any spelling of their UUID.
+
+    For a create that takes its owner from `request.user` but still accepts
+    the id the client sends: parsed rather than compared as text, so an
+    upper-case or unhyphenated copy of the caller's own id is still theirs.
+    Anything that is not a UUID at all (a name, a number, a list) is not.
+    """
+    try:
+        return uuid.UUID(str(value)) == uuid.UUID(str(user.id))
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def body_object(request) -> dict:

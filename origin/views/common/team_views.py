@@ -62,6 +62,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
+from origin.views.utils.request_validators import body_object, is_own_user_id
 from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.scope_guards import (
     external_people_for_member,
@@ -81,12 +82,31 @@ logger = logging.getLogger(__name__)
 #############################
 class TeamMasterView(AuthenticatedAPIView):
     def post(self, request):
+        """Create a team owned by the CALLER.
 
-        data = {
-            "team_name": request.data["team_name"],
-            "team_email": request.data["team_email"],
-            "owner": request.data["owner_id"],
-        }
+        The owner used to be whatever `owner_id` the body named, checked
+        against nothing, so a signed-in user could create a team owned by
+        someone else: it appeared in that person's team list and billing,
+        and once the creator was in it (the starter workspace makes them a
+        member), it blocked the victim's account deletion. The owner is now
+        always `request.user`. `owner_id` is still accepted, because the
+        app sends the caller's own id, but one naming anybody else is
+        refused rather than ignored, so a confused or hostile client hears
+        about it.
+        """
+        body = body_object(request)
+
+        claimed_owner = body.get("owner_id")
+        if claimed_owner is not None and not is_own_user_id(claimed_owner, request.user):
+            return Response(
+                {"error": "owner_id must be your own user id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Only the fields the body carries: a missing one then gets the
+        # serializer's "This field is required." 400 instead of a KeyError.
+        data = {key: body[key] for key in ("team_name", "team_email") if key in body}
+        data["owner"] = request.user.pk
 
         serializer = TeamMasterSerializer(data=data)
         if serializer.is_valid():
@@ -97,7 +117,7 @@ class TeamMasterView(AuthenticatedAPIView):
             # is fields="__all__" over a model that carries is_demo).
             # Best-effort by design: a seeding failure must not lose the
             # team the user just created.
-            if request.data.get("with_starter") is True:
+            if body.get("with_starter") is True:
                 from origin.services.starter_seeder import create_starter_workspace
 
                 try:
