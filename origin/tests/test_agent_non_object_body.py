@@ -6,10 +6,11 @@
 bodies (null, `[]`, `0`, `""`, `false`). A body that parses as JSON but is not an object
 (`[1]`, `"abc"`, `5`, `true`) went straight to `.get` and answered 500.
 
-`body_object` reads such a body as an empty one, so it gets what a missing field gets:
-the endpoint's own "is required" 400, in the endpoint's own words, and null keeps exactly
-the answer it always had. Each probe below compares STATUS AND BODY with the answer for
-`{}` on the same endpoint, and pins that answer's text so both cannot drift together.
+MIP-992 read such a body as an empty one (`body_object`), so it got the endpoint's own
+"is required" 400. Since MIP-1013 the base view refuses it before the endpoint runs, with
+400 "Request body must be a JSON object." (`object_body`), the same answer on every
+route. The empty bodies still reach the endpoint as `{}` and keep exactly the answer
+they always had, and `{}`'s answer is pinned so a refusal cannot pass for it.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from .test_base import BaseAPITestCase
 NOT_OBJECTS = ("[1]", '"abc"', "5", "true", "1.5", '[{"query": "q"}]')
 # Empty-ish: they read as "no body" and were already the missing-field answer.
 EMPTY_ISH = ("null", "[]", "0", '""', "false", "")
+
+NOT_AN_OBJECT = {"error": "Request body must be a JSON object."}
 
 ASK = "/api/v2/agent/ask/"
 
@@ -56,14 +59,14 @@ class _BodyShapeTests:
     URL: str
     MISSING_FIELD: str  # the endpoint's answer to `{}`, in its own words
 
-    def test_a_body_that_is_not_an_object_answers_as_an_empty_one_does(self):
+    def test_a_body_that_is_not_an_object_is_refused(self):
         empty = self.post_raw(self.URL, "{}")
         self.assertEqual(empty.status_code, 400)
         self.assertEqual(empty.json(), {"error": self.MISSING_FIELD})
 
         for raw in NOT_OBJECTS:
             resp = self.post_raw(self.URL, raw)
-            self.assertEqual((resp.status_code, resp.json()), (400, empty.json()), raw)
+            self.assertEqual((resp.status_code, resp.json()), (400, NOT_AN_OBJECT), raw)
 
     def test_an_empty_body_keeps_the_answer_it_always_had(self):
         for raw in EMPTY_ISH:

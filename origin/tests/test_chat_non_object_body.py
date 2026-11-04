@@ -3,14 +3,15 @@
 These views read their body with `request.data or {}` and then `.get(...)`. `or {}` only
 covers the empty bodies (null, `[]`, `0`, `""`, `false`). A body that parses as JSON but
 is not an object (`[1]`, `"abc"`, `5`, `true`) went straight to `.get`, or to `in` and
-`.keys()`, and answered 500. Two rules, picked per view:
+`.keys()`, and answered 500. MIP-996 picked one of two rules per view; since MIP-1013
+there is one, in the base view (`object_body`), ahead of the view itself:
 
-* A view with a REQUIRED field reads the body through `body_object`: a body that is not an
-  object reads as `{}` and gets what a missing field gets, the view's own 400 in its own
-  words (the answer MIP-992 gave the agent endpoints).
-* A view where an EMPTY body is a request in its own right (mark everything read; a
-  patch with nothing to change) refuses a non-object with 400 "Request body must be a JSON
-  object.", because reading `[1]` as `{}` would run the request as if nothing had been sent.
+* A body that is not an object is refused with 400 "Request body must be a JSON object.".
+  Where MIP-996 read it as `{}` (a view with a REQUIRED field, whose missing-field 400 it
+  got) the answer is now the refusal, and `{}`'s own answer is still pinned beside it.
+* Where an EMPTY body is a request in its own right (mark everything read; a patch with
+  nothing to change) it was already refused, because reading `[1]` as `{}` would run the
+  request as if nothing had been sent.
 
 Each probe below compares STATUS AND BODY with the answer for `{}` on the same view and
 pins that answer's text, so both cannot drift together; a refused body must leave every
@@ -123,7 +124,8 @@ class _ChatClient(BaseAPITestCase):
 
 
 class _MissingFieldAnswers:
-    """A view with a required field: a body that is not an object answers as `{}` does."""
+    """A view with a required field: a body that is not an object is refused, and `{}` still
+    gets the view's own missing-field answer."""
 
     METHOD: str
     MISSING_FIELD: str  # the view's answer to `{}`, in its own words
@@ -131,14 +133,14 @@ class _MissingFieldAnswers:
     def url(self) -> str:
         raise NotImplementedError
 
-    def test_a_body_that_is_not_an_object_answers_as_an_empty_one_does(self):
+    def test_a_body_that_is_not_an_object_is_refused(self):
         before = self.state()
         empty = self.send(self.METHOD, self.url(), "{}")
         self.assertEqual((empty.status_code, empty.json()), (400, {"error": self.MISSING_FIELD}))
 
         for raw in NOT_OBJECTS:
             resp = self.send(self.METHOD, self.url(), raw)
-            self.assertEqual((resp.status_code, resp.json()), (400, empty.json()), raw)
+            self.assertEqual((resp.status_code, resp.json()), (400, NOT_AN_OBJECT), raw)
         self.assertEqual(self.state(), before, "a refused body wrote something")
 
     def test_an_empty_body_keeps_the_answer_it_always_had(self):
@@ -212,15 +214,24 @@ class ReadAllBodyShapeTests(_ChatClient):
         self.assertEqual((resp.status_code, resp.json()), (200, {"updated": 1}))
         self.assertEqual(self.read_ids(), {mine[1].id})
 
-    def test_a_channel_in_the_query_never_reads_the_body(self):
-        # The body is not read at all when `?channel_id=` is there, so it cannot be wrong:
-        # the request the web client sends (`{}` plus the query) and any other body answer
-        # exactly as they did.
-        for raw in NOT_OBJECTS + EMPTY_ISH:
+    def test_a_channel_in_the_query_still_scopes_it(self):
+        # The view reads no body when `?channel_id=` is there, so the request the web
+        # client sends (`{}` plus the query) and every empty body answer as they did.
+        for raw in EMPTY_ISH:
             mine = self.unread()
             resp = self.send("PUT", f"{self.URL}?channel_id={self.other.id}", raw)
             self.assertEqual((resp.status_code, resp.json()), (200, {"updated": 1}), repr(raw))
             self.assertEqual(self.read_ids(), {mine[1].id}, repr(raw))
+
+    def test_a_channel_in_the_query_does_not_excuse_a_body_that_is_not_an_object(self):
+        # Since MIP-1013 the base view refuses it before the view runs, whether or not the
+        # view would have read it.
+        before = self.state()
+        for raw in NOT_OBJECTS:
+            resp = self.send("PUT", f"{self.URL}?channel_id={self.other.id}", raw)
+            self.assertEqual((resp.status_code, resp.json()), (400, NOT_AN_OBJECT), raw)
+        self.assertEqual(self.state(), before)
+        self.assertEqual(self.read_ids(), set())
 
 
 class ReadBatchBodyShapeTests(_MissingFieldAnswers, _ChatClient):
@@ -340,11 +351,18 @@ class ChannelPatchBodyShapeTests(_ChatClient):
         self.gm.refresh_from_db()
         self.assertEqual((self.gm.title, self.gm.is_private), ("Renamed", True))
 
-    def test_the_refusal_comes_after_the_permission_checks(self):
-        # A viewer who may not edit is told so, whatever the body.
+    def test_the_refusal_comes_before_the_views_own_permission_check(self):
+        # Since MIP-1013 the body is judged in the base view, after DRF's authentication
+        # and permissions but before the view's own "may you edit this channel" (a 403
+        # inside the handler). A viewer who may not edit hears that for a body that is an
+        # object, and the body refusal for one that is not; neither changes anything.
         self.authenticate(self.user2)
+        before = self.state()
         resp = self.send("PATCH", self.url(), "[1]")
+        self.assertEqual((resp.status_code, resp.json()), (400, NOT_AN_OBJECT))
+        resp = self.send("PATCH", self.url(), '{"title": "x"}')
         self.assertEqual(resp.status_code, 403)
+        self.assertEqual(self.state(), before)
 
 
 class PmChannelPatchBodyShapeTests(_MissingFieldAnswers, _ChatClient):

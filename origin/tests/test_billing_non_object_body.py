@@ -5,14 +5,13 @@ customer, start a checkout. So each test below checks two things for every body 
 an object: the answer, and that nothing moved. The whole `_stripe()` boundary is a mock, so
 ANY call to Stripe shows, and no user, team or credit row may change.
 
-Two rules, picked per view (see `test_chat_non_object_body` for the same split):
-
-* A view with a REQUIRED field reads its body through `body_object`: a body that is not an
-  object reads as `{}` and gets the view's own answer for a missing field (checkout, team
-  checkout, team portal).
-* A view where an EMPTY body is a request in its own right refuses a non-object with 400
-  "Request body must be a JSON object." (the personal portal: `{}` opens the portal home,
-  so `[1]` must not; credit-pack checkout, whose missing-pack answer is a 503).
+MIP-996 picked one of two rules per view; since MIP-1013 there is one, in the base view
+(`object_body`): a body that is not an object is a 400 "Request body must be a JSON
+object." before the view runs. Where MIP-996 read it as `{}` (checkout, team checkout,
+team portal: the view's own missing-field answer) the answer is now the refusal, and
+`{}`'s own answer is still pinned. The personal portal (`{}` opens the portal home, so
+`[1]` must not) and credit-pack checkout (whose missing-pack answer is a 503) already
+refused it.
 """
 
 from __future__ import annotations
@@ -79,19 +78,20 @@ class _BillingClient(BaseAPITestCase):
 
 
 class _MissingFieldAnswers:
-    """A view with a required field: a body that is not an object answers as `{}` does."""
+    """A view with a required field: a body that is not an object is refused, and `{}` still
+    gets the view's own missing-field answer."""
 
     URL: str
     MISSING_FIELD: str  # the view's answer to `{}`, in its own words
 
-    def test_a_body_that_is_not_an_object_answers_as_an_empty_one_does(self):
+    def test_a_body_that_is_not_an_object_is_refused(self):
         before = self.state()
         empty = self.send(self.URL, "{}")
         self.assertEqual((empty.status_code, empty.json()), (400, {"error": self.MISSING_FIELD}))
 
         for raw in NOT_OBJECTS:
             resp = self.send(self.URL, raw)
-            self.assertEqual((resp.status_code, resp.json()), (400, empty.json()), raw)
+            self.assertEqual((resp.status_code, resp.json()), (400, NOT_AN_OBJECT), raw)
         self.assertNothingMoved(before)
 
     def test_an_empty_body_keeps_the_answer_it_always_had(self):
