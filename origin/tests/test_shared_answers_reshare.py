@@ -52,11 +52,35 @@ def withhold(run):
     run.refresh_from_db()
 
 
+def open_server_side_cursors():
+    """Names of the `.iterator()` cursors this connection still has open."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT name FROM pg_cursors")
+        return [name for (name,) in cursor.fetchall() if name.startswith("_django_curs_")]
+
+
 class ReshareTestCase(SharedAnswersTestCase):
     def make_unindexed(self, session=None, **kwargs):
         """A run as the answer path leaves it: in the DB, not in the index."""
         kwargs.setdefault("index", False)
         return self.make_run(session, **kwargs)
+
+    def index_down(self):
+        """Every write to OpenSearch fails, with a NEW exception each time.
+
+        Not `side_effect = ConnectionError(...)`: the mock would keep that one
+        instance, its traceback keeps the frames of the pass that raised it,
+        and a pass that stopped early is suspended inside `.iterator()` with a
+        server-side cursor open. The cursor then outlives the test, and the
+        garbage collector closes it during whichever later test is running:
+        it died with the first test's rollback, so that `CLOSE` aborts the
+        later test's transaction ("current transaction is aborted").
+        """
+
+        def down(*args, **kwargs):
+            raise ConnectionError("opensearch is down")
+
+        self.bulk.side_effect = down
 
     def mixed_history(self):
         """One of everything the rule has to tell apart, for the caller and a
@@ -425,7 +449,7 @@ class FailureTests(ReshareTestCase):
     def test_an_opensearch_failure_does_not_fail_the_patch_and_the_next_reindex_catches_up(self):
         self.mixed_history()
         self.set_preference(False)
-        self.bulk.side_effect = ConnectionError("opensearch is down")
+        self.index_down()
 
         res = self.set_preference(True)
 
@@ -447,12 +471,14 @@ class FailureTests(ReshareTestCase):
     def test_a_dead_index_stops_the_pass_instead_of_embedding_every_run(self):
         for i in range(8):
             self.make_unindexed(None, query=f"q{i}", age=timedelta(minutes=i))
-        self.bulk.side_effect = ConnectionError("opensearch is down")
+        self.index_down()
 
         self.reshare()  # does not raise
 
         self.assertEqual(self.embed.call_count, shared_answers.RESHARE_ABORT_AFTER_ERRORS)
         self.assertEqual(self.team_docs(), set())
+        # The pass stopped with runs left, i.e. with its `.iterator()` unspent.
+        self.assertEqual(open_server_side_cursors(), [])
 
     def test_the_embedder_failing_is_survived_too(self):
         self.make_unindexed(None)
