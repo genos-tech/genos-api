@@ -161,8 +161,9 @@ class NoteFolderTagView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if "name" in request.data and request.data.get("name") is not None:
-            name = str(request.data["name"]).strip()
+        name = request.data.get("name")
+        if name is not None:
+            name = str(name).strip()
             if name == "" or len(name) > MAX_TAG_NAME:
                 return Response(
                     {"error": f"Tag name must be 1-{MAX_TAG_NAME} characters."},

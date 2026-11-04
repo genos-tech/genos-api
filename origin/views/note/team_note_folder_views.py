@@ -470,8 +470,9 @@ class TeamNoteFolderView(AuthenticatedAPIView):
         ):
             return _require_host_member(owning_team_id, request_user_id)
 
-        if "name" in request.data and request.data.get("name") is not None:
-            name = str(request.data["name"]).strip()
+        name = request.data.get("name")
+        if name is not None:
+            name = str(name).strip()
             if name == "" or len(name) > 255:
                 return Response(
                     {"error": "Folder name must be 1-255 characters."},
