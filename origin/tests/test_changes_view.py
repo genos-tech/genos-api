@@ -17,7 +17,9 @@ from origin.models.common.team_models import ExternalGrant, ShareStatus
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.services import change_feed as cf
+from origin.services import throttles
 from origin.services.throttles import ChangeFeedThrottle
+from origin.tests.security_clock import MidMinute
 from origin.tests.test_change_feed import ChangeFeedCase
 
 GOLDEN = Path(__file__).parent / "golden" / "changes_response.json"
@@ -382,7 +384,10 @@ class ChangesCostTests(ChangesViewCase):
         self.assertEqual(len(reads), 1, "\n".join(sql))
 
 
-class ChangesThrottleTests(ChangesViewCase):
+class ChangesThrottleTests(MidMinute, ChangesViewCase):
+    # The `3/min` below counts in fixed minute windows, read through `throttles.time` (MIP-1007).
+    clock_modules = (throttles,)
+
     def test_a_script_is_held_off_and_a_person_is_not(self):
         cache.clear()
         with mock.patch.object(ChangeFeedThrottle, "rate", "3/min"):
