@@ -62,7 +62,11 @@ from origin.views.utils.mention_handler import extractMentionedUsers, resolve_gr
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import (
+    as_int,
+    body_object,
+    missing_fields,
     refuse_unsafe_link_urls,
+    require_fields,
     validate_request_data,
     validate_request_user,
 )
@@ -184,6 +188,22 @@ def _refuse_unreachable_task_links(request, project):
     return None
 
 
+# The body fields a task create must carry (the key, not a value: `due_date` may be null).
+TASK_CREATE_REQUIRED = (
+    "assignee",
+    "reporter",
+    "title",
+    "priority",
+    "effort_level",
+    "status",
+    "content",
+    "due_date",
+    "links",
+    "tags",
+    "is_init_task",
+)
+
+
 class TaskMasterView(AuthenticatedAPIView):
     def post(self, request):
         # Tier quota: monthly task-creation cap. Charged to the
@@ -198,9 +218,11 @@ class TaskMasterView(AuthenticatedAPIView):
         # project's own team, but only for a caller who reaches the
         # project; anyone else kept the team they named, and the row was
         # filed into a stranger's project all the same.
+        body = body_object(request)
+        project_id = body.get("project")
         project = None
-        if is_project_member(request.data.get("project"), request.user.id):
-            project = ProjectMaster.objects.filter(project_id=request.data["project"]).first()
+        if is_project_member(project_id, request.user.id):
+            project = ProjectMaster.objects.filter(project_id=project_id).first()
         if project is None:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -275,45 +297,43 @@ class TaskMasterView(AuthenticatedAPIView):
             except MilestoneMaster.DoesNotExist:
                 sprint_id = None
 
-        # Build the create payload. Required fields are read with bare
-        # `[...]`; a missing one raises KeyError, which we convert to a
-        # clean 400 rather than letting it 500 the request (a missing
-        # required field is client error, not server error).
-        try:
-            data = {
-                # The project's team, whatever the payload said: a task
-                # filed under one team's project and another team's id is
-                # invisible to the project's own task list.
-                "team": project.team_id,
-                "project": project.project_id,
-                "chat_type": request.data.get("chat_type", None),
-                "chat_id": request.data.get("chat_id", None),
-                "thread_id": request.data.get("thread_id", None),
-                "milestone": milestone_id,
-                "sprint": sprint_id,
-                "parent_task_id": parent_task_id,
-                "root_task_id": request.data.get("root_task_id", None),
-                "assignee": request.data["assignee"],
-                "reporter": request.data["reporter"],
-                "title": request.data["title"],
-                "priority": request.data["priority"],
-                "priority_code": 0,
-                "effort_level": request.data["effort_level"],
-                "effort_level_code": 0,
-                "status": request.data["status"],
-                "status_code": 0,
-                "content": request.data["content"],
-                "due_date": request.data["due_date"],
-                "start_date": request.data.get("start_date"),
-                "links": request.data["links"],
-                "tags": request.data["tags"],
-                "is_init_task": request.data["is_init_task"] == True,
-            }
-        except KeyError as exc:
+        # Build the create payload. A missing required field is a client
+        # error: a 400 naming the first one missing, not a KeyError 500. Presence,
+        # not value: `due_date` is sent as `null` for "no date".
+        if absent := missing_fields(body, *TASK_CREATE_REQUIRED):
             return Response(
-                {"error": f"Missing required field: {exc.args[0]}"},
+                {"error": f"Missing required field: {absent[0]}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        data = {
+            # The project's team, whatever the payload said: a task
+            # filed under one team's project and another team's id is
+            # invisible to the project's own task list.
+            "team": project.team_id,
+            "project": project.project_id,
+            "chat_type": request.data.get("chat_type", None),
+            "chat_id": request.data.get("chat_id", None),
+            "thread_id": request.data.get("thread_id", None),
+            "milestone": milestone_id,
+            "sprint": sprint_id,
+            "parent_task_id": parent_task_id,
+            "root_task_id": request.data.get("root_task_id", None),
+            "assignee": body["assignee"],
+            "reporter": body["reporter"],
+            "title": body["title"],
+            "priority": body["priority"],
+            "priority_code": 0,
+            "effort_level": body["effort_level"],
+            "effort_level_code": 0,
+            "status": body["status"],
+            "status_code": 0,
+            "content": body["content"],
+            "due_date": body["due_date"],
+            "start_date": request.data.get("start_date"),
+            "links": body["links"],
+            "tags": body["tags"],
+            "is_init_task": body["is_init_task"] == True,
+        }
 
         # Per-project custom field values. Optional — quick-add and the
         # bootstrap `is_init_task` POST never send the key; those rows
@@ -348,9 +368,9 @@ class TaskMasterView(AuthenticatedAPIView):
             )
 
         newly_mentioned_user_ids = []
-        if "content" in request.data and request.data["content"] is not None:
+        if body["content"] is not None:
             extract_user_handler = extractMentionedUsers()
-            extract_user_handler.extract(request.data["content"])
+            extract_user_handler.extract(body["content"])
             # Merge direct user mentions with members of any mentioned
             # groups. Dedupe via set so a user reachable both ways gets
             # one entry; downstream notification fan-out then sends
@@ -2338,8 +2358,9 @@ class TaskCommentsView(AuthenticatedAPIView):
         # used to go to a partial serializer, so an edit could also hand
         # the comment to another author or move it onto another task.
         update_data = {}
-        if request.data.get("comment_body") is not None:
-            update_data["comment_body"] = request.data["comment_body"]
+        comment_body = request.data.get("comment_body")
+        if comment_body is not None:
+            update_data["comment_body"] = comment_body
 
         serializer = TaskCommentsSerializer(message, data=update_data, partial=True)
         if serializer.is_valid():
@@ -2531,21 +2552,34 @@ def _reaction_broadcast_context(task_id, comment_id, reactor) -> dict:
 
 class TaskCommentReactionView(AuthenticatedAPIView):
     def post(self, request):
-        if not can_access_task(request.data.get("task_id"), request.user.id):
+        body = body_object(request)
+        # `task_id` is the first read, and `can_access_task` refuses a missing one, so by the
+        # time the rest are asked for it is there.
+        if not can_access_task(body.get("task_id"), request.user.id):
             return _no_task()
+        if res := require_fields(body, "team_id", "comment_id", "reaction_emoji"):
+            return res
+        # A comment id is a number. Text, a list or an object here was a ValueError or a
+        # TypeError (500) at the lookup below.
+        comment_id = as_int(body["comment_id"])
+        if comment_id is None:
+            return Response(
+                {"error": "comment_id must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         current_max_reaction_id = TaskCommentReactionFact.objects.filter(
-            team_id=request.data["team_id"],
-            task_id=request.data["task_id"],
-            comment_id=request.data["comment_id"],
+            team_id=body["team_id"],
+            task_id=body["task_id"],
+            comment_id=comment_id,
         ).aggregate(max_id=Max("reaction_id"))["max_id"]
 
         data = {
-            "team": request.data["team_id"],
-            "task": request.data["task_id"],
-            "comment_id": int(request.data["comment_id"]),
+            "team": body["team_id"],
+            "task": body["task_id"],
+            "comment_id": comment_id,
             "reaction_id": current_max_reaction_id + 1 if current_max_reaction_id else 1,
-            "reaction_emoji": request.data["reaction_emoji"],
+            "reaction_emoji": body["reaction_emoji"],
             # The caller, not the body's `sender_id`, for the same reason
             # as a comment's author: the reaction notifies as them.
             "sender": request.user.id,
@@ -2646,20 +2680,25 @@ class TaskCommentReactionView(AuthenticatedAPIView):
 
 class TaskCommentMentionView(AuthenticatedAPIView):
     def post(self, request):
-        if not can_access_task(request.data.get("task_id"), request.user.id):
+        body = body_object(request)
+        if not can_access_task(body.get("task_id"), request.user.id):
             return _no_task()
-        mentioned = request.data.get("mentioned_user_ids")
+        mentioned = body.get("mentioned_user_ids")
         if isinstance(mentioned, list) and (
             too_many := check_batch_size(mentioned, MAX_MENTIONS_PER_COMMENT, "mentioned_user_ids")
         ):
             return too_many
         res = []
         try:
-            for mentioned_user_id in list(request.data["mentioned_user_ids"]):
+            # A missing field is a KeyError here, answered by the `except` below with this
+            # view's own 400 ("Failed to create mentions."), and only once there is a
+            # mention to save: an empty list saves nothing and answers 201 whatever else
+            # the body lacks. Kept as it was (a change here is a change in what 201 means).
+            for mentioned_user_id in list(body["mentioned_user_ids"]):
                 data = {
-                    "team": request.data["team_id"],
-                    "task": request.data["task_id"],
-                    "comment_id": int(request.data["comment_id"]),
+                    "team": body["team_id"],
+                    "task": body["task_id"],
+                    "comment_id": int(body["comment_id"]),
                     "mentioned_user": mentioned_user_id,
                 }
 
