@@ -61,6 +61,7 @@ from origin.services.team_connection import (
     revoke_connection,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object
 from origin.views.utils.scope_guards import (
     is_team_member,
     require_team_member_or_response,
@@ -283,7 +284,7 @@ class ExternalShareView(AuthenticatedAPIView):
         )
 
     def post(self, request):
-        data = request.data
+        data = body_object(request)
         required = ("team_id", "guest_team_id", "object_type", "object_id")
         if any(not data.get(k) for k in required):
             return Response(

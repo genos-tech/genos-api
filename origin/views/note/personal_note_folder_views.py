@@ -152,9 +152,10 @@ class PersonalNoteFolderView(AuthenticatedAPIView):
             return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # Rename — only when a non-empty name is supplied.
-        if "name" in request.data and request.data.get("name") is not None:
+        name = request.data.get("name")
+        if name is not None:
             try:
-                folder.name = clean_name(request.data["name"])
+                folder.name = clean_name(name)
             except FolderRefused as refused:
                 return Response({"error": refused.message}, status=refused.status)
 
