@@ -38,6 +38,7 @@ from origin.models.chat.unified_models import Activity
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
+from origin.views.utils.request_validators import body_object, refuse_non_object_body
 from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_SINCE_DAYS = 30
@@ -217,7 +218,15 @@ class ActivityReadAllView(AuthenticatedAPIView):
 
     def put(self, request):
         qs = Activity.objects.filter(recipient=request.user, is_read=False)
-        channel_id = request.GET.get("channel_id") or (request.data or {}).get("channel_id")
+        channel_id = request.GET.get("channel_id")
+        if not channel_id:
+            # An empty body is a request here (mark everything read), so a body that is not
+            # an object is refused, not read as an empty one. With `?channel_id=` the body
+            # is never read, as before.
+            refusal = refuse_non_object_body(request)
+            if refusal:
+                return refusal
+            channel_id = body_object(request).get("channel_id")
         if channel_id:
             qs = qs.filter(channel_id=channel_id)
         updated = qs.update(is_read=True)
@@ -240,7 +249,7 @@ class ActivityReadBatchView(AuthenticatedAPIView):
     """
 
     def put(self, request):
-        activity_ids = (request.data or {}).get("activity_ids")
+        activity_ids = body_object(request).get("activity_ids")
         if not activity_ids or not isinstance(activity_ids, list):
             return Response(
                 {"error": "activity_ids must be a non-empty list."},
@@ -280,7 +289,7 @@ class ActivitySurfaceView(AuthenticatedAPIView):
     def post(self, request):
         from origin.services import v3_activity
 
-        data = request.data or {}
+        data = body_object(request)
         surface_type = data.get("surface_type")
         team_id = data.get("team_id")
         entity_key = data.get("entity_key")
@@ -345,7 +354,7 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
     def post(self, request):
         from origin.services import v3_activity
 
-        data = request.data or {}
+        data = body_object(request)
         surface_type = data.get("surface_type")
         team_id = data.get("team_id")
         entity_key = data.get("entity_key")

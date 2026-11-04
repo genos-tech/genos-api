@@ -19,7 +19,7 @@ from origin.serializers.chat.todo_serializers import (
 from origin.services import todo_items, todo_reminders
 from origin.services.user_time import user_today
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.request_validators import body_object, validate_request_data
 
 # Default look-back when no `from` is supplied — matches the prior 365-day
 # window the old GET /todo/ used.
@@ -298,7 +298,7 @@ class ToDoItemReminderView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        raw = (request.data or {}).get("remindAt")
+        raw = body_object(request).get("remindAt")
         remind_at = dateparse.parse_datetime(raw) if isinstance(raw, str) else None
         if remind_at is None:
             return Response(
