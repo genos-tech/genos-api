@@ -66,6 +66,17 @@ class MapCompletenessTests(SimpleTestCase):
             set(undo.UNDO_REASONS) - set(undo.UNDO_SUPPORT), "a reason for a tool not in the map"
         )
 
+    def test_the_tools_filed_as_telling_people_are_the_reviewed_ones(self):
+        """`notified_people` is a claim that a person is told, and what the card says
+        before the person approves goes by it. A tool joins this set only with a test in
+        `test_agent_undo_reasons` that runs it and sees the notice."""
+        told = {
+            name for name, (code, _) in undo.UNDO_REASONS.items() if code == undo.NOTIFIED_PEOPLE
+        }
+        self.assertEqual(
+            told, {"approve_join_request", "decline_join_request", "create_calendar_event"}
+        )
+
     def test_the_tools_v1_covers_are_the_reviewed_ones(self):
         covered = {name for name, level in undo.UNDO_SUPPORT.items() if level != undo.NONE}
         self.assertEqual(
@@ -164,8 +175,10 @@ class ProposalTests(SimpleTestCase):
             undo.Proposal(False, "irreversible_delete"),
         )
         self.assertEqual(
-            undo.proposal("manage_project_members", {}), undo.Proposal(False, "notified_people")
+            undo.proposal("approve_join_request", {}), undo.Proposal(False, "notified_people")
         )
+        for name in ("manage_project_members", "assign_task", "manage_note_sharing"):
+            self.assertEqual(undo.proposal(name, {}), undo.Proposal(False, "not_yet"), name)
         self.assertEqual(undo.proposal("update_comment", {}), undo.Proposal(False, "no_snapshot"))
         self.assertEqual(undo.proposal("update_tasks_bulk", {}), undo.Proposal(False, "not_yet"))
 
