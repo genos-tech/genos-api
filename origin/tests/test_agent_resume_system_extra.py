@@ -288,9 +288,7 @@ class ResumeKeepsContextTests(ResumeBase):
             kind="task", label="Fix login flow", task_id=123, display_id="WRD-5", project_id="77"
         )
         with mock.patch.object(agent_views, "resolve_mentions", return_value=[mention]):
-            extra = self.check(
-                "approve", mentions=[{"type": "task", "task_id": 123, "label": "x"}]
-            )
+            extra = self.check("approve", mentions=[{"type": "task", "task_id": 123, "label": "x"}])
         self.assertIn("USER-PROVIDED REFERENCES", extra)
         self.assertIn("Fix login flow", extra)
 
@@ -737,7 +735,8 @@ class ResumeContextShapeTests(TestCase):
                 run = AgentRun(resume_context=kept)
                 with mock.patch.object(agent_views, "_scope_still_readable", return_value=True):
                     self.assertEqual(
-                        agent_views._resumed_system_extra(run), self.original(scoped, mentions, tier)
+                        agent_views._resumed_system_extra(run),
+                        self.original(scoped, mentions, tier),
                     )
 
     def test_nothing_to_keep_is_nothing_stored(self):
@@ -842,7 +841,9 @@ class NormalAskUnchangedTests(TestCase):
             mock.patch.object(agent_views, "_stream_ndjson", side_effect=fake_stream),
             mock.patch.object(agent_views, "run_agent", side_effect=fake_run_agent),
             mock.patch.object(agent_views, "check_remaining", return_value=(True, 0, None)),
-            mock.patch.object(agent_views, "load_or_generate_for_ask", return_value="THREAD SUMMARY"),
+            mock.patch.object(
+                agent_views, "load_or_generate_for_ask", return_value="THREAD SUMMARY"
+            ),
             mock.patch.object(
                 agent_views, "load_or_generate_note_for_ask", return_value=("NOTE SUMMARY", record)
             ),

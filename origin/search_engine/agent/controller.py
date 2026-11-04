@@ -2159,6 +2159,7 @@ def resume_agent(
     emit: Callable[[dict[str, Any]], None],
     *,
     disabled_tools: set[str] | None = None,
+    system_extra: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Resume a paused agent run after the user has approved or rejected.
@@ -2175,6 +2176,16 @@ def resume_agent(
     itself: an approval issued before a downgrade (or before an ops
     kill-switch flipped) must not execute a tool the user no longer
     has.
+
+    `system_extra` is the prompt context the run's first leg had: the thread or
+    note summary of "Ask about this ...", the @/# references, the tier block
+    (MIP-977). `_rebuild_messages` replays the conversation from the run's rows
+    and none of that is in them, so the view hands it back (`/decide/` keeps it
+    on the run, `_resumed_system_extra`). Without it, every approve and every
+    reject answered the rest of the run as if the person had never opened it from
+    that thread or note, and with a different system prompt from the leg before
+    (so a provider's prompt cache could not carry over either). None (a plain
+    ask, a run paused before it was kept) is what this always received.
     """
     if decision not in (DECISION_APPROVE, DECISION_REJECT):
         emit(
@@ -2482,6 +2493,7 @@ def resume_agent(
         starting_step=step_index + 1,
         seen_sources_by_id=resumed_sources,
         disabled_tools=disabled_tools,
+        system_extra=system_extra,
         session_id=str(run.session_id) if run.session_id else None,
         cancel_event=cancel_event,
     )
