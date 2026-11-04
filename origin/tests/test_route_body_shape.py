@@ -7,7 +7,10 @@ walks the URL conf so a route added later is held to it without anyone rememberi
 * `[1]`, `"abc"`, `5`, `true` are exactly 400 `{"error": NOT_AN_OBJECT}` (an upload view
   that takes only multipart never reads JSON: DRF's 415, or its answer to `{}`);
 * a malformed body is 400 `{"error": NOT_JSON}`;
-* `null`, `[]`, `0`, `false` answer with the status `{}` answers with on the same URL.
+* `null`, `[]`, `0`, `false` answer with the status `{}` answers with on the same URL;
+* `{}` and `null` never answer 500 (MIP-1014), except the routes named in
+  `KNOWN_FAILURES_MIP_1014`, which can only shrink: a member that stops failing fails the test
+  until it is taken out.
 
 The views that are not ours to guard are named here BY CLASS, and the walk asserts the
 set: so are the classes that carry the guard, which must be exactly the classes walked,
@@ -92,28 +95,14 @@ MALFORMED_READ_EARLY = {
     ("POST", "api/v2/team/invite/"),
 }
 
-# Routes where `{}` itself answers 500 today, so "the same as `{}`" says nothing. These
-# are MIP-1014's to fix (the URL method lists and the handlers' own parsing); the empty
-# bodies are not compared here until they are. Members that now pass, or that MIP-1014
-# stops routing (nine of them are a method whose handler cannot take the route's
-# arguments), are printed so the set can shrink; neither fails this test. A typo does:
-# every member must name a route that exists.
-KNOWN_FAILURES_MIP_1014 = {
-    ("POST", "api/v2/team/create/"),
-    ("POST", "api/v2/team/profile/"),
-    ("POST", "api/v2/inbox/joinTeamRequest/"),
-    ("POST", "api/v2/gm/join/fromInbox/"),
-    ("POST", "api/v2/note/role/fromInbox/"),
-    ("POST", "api/v2/task/dependency/<int:dependency_id>/"),
-    ("PATCH", "api/v2/sprint/"),
-    ("POST", "api/v2/sprint/<int:sprint_id>/"),
-    ("DELETE", "api/v2/sprint/"),
-    ("PATCH", "api/v2/milestone/"),
-    ("POST", "api/v2/milestone/<int:milestone_id>/"),
-    ("DELETE", "api/v2/milestone/"),
-    ("POST", "api/v2/milestone/<int:milestone_id>/assignees/<uuid:user_id>/"),
-    ("DELETE", "api/v2/milestone/<int:milestone_id>/assignees/"),
-}
+# Routes where `{}` itself answers 500, so "the same as `{}`" says nothing and the "never 500"
+# check below cannot hold. EMPTY: after MIP-1014 (the method lists, the handlers' own parsing,
+# the inbox approvals, `team/create/`) and the `request.data[...]` sweep (MIP-1020) no route is
+# left. An entry needs a cause beside it and a follow-up task; its empty bodies are not compared.
+# The set can only shrink: a member that now answers anything but 500, or that is no longer
+# routed, FAILS the test until it is taken out, so a fix cannot leave its route here. A typo
+# fails too: every member must name a route that exists.
+KNOWN_FAILURES_MIP_1014: set[tuple[str, str]] = set()
 
 # 251 today; MIP-1014 stops routing the nine pairs whose handler cannot take the route's
 # arguments, which leaves 242.
@@ -273,7 +262,7 @@ class RouteBodyShapeTests(BaseAPITestCase):
             },
         )
 
-        failures, exercised = [], 0
+        failures, exercised, still_failing = [], 0, []
         # DELETE last: nothing should survive a rollback, but a probe that deletes a
         # fixture must not be able to hide the routes after it if one did.
         ordered = sorted(drf, key=lambda t: (t[0] == "DELETE", t[1], t[0]))
@@ -286,6 +275,23 @@ class RouteBodyShapeTests(BaseAPITestCase):
             url = self.fill(route)
             name = _name(cls)
             where = f"{method} /{route} ({name})"
+            # `{}` and `null` are a request with nothing in it: a 400 for a field that is
+            # missing, or whatever the view answers for no body, but never a 500 (an
+            # unhandled exception). Asked of every route, the exempt and the upload ones
+            # too. A 5xx the view CHOOSES (503 "not configured") is an answer, not a crash.
+            empty = self.probe(cls, method, url, "{}")
+            known = (method, route) in KNOWN_FAILURES_MIP_1014
+            if known:
+                if empty[0] == 500:
+                    still_failing.append(f"{method} /{route}: {empty}")
+                else:
+                    fixed.append(f"{method} /{route}")
+            else:
+                if empty[0] == 500:
+                    failures.append(f"{where} `{{}}` answers {empty}")
+                null = self.probe(cls, method, url, "null")
+                if null[0] == 500:
+                    failures.append(f"{where} `null` answers {null}")
             if name in EXEMPT:
                 for raw in BAD:
                     got = self.probe(cls, method, url, raw)
@@ -296,7 +302,6 @@ class RouteBodyShapeTests(BaseAPITestCase):
                 # No JSON parser, so the guard never reads a JSON body: a handler that
                 # reads it gets DRF's 415, one that does not (a DELETE that takes
                 # its ids from the query) answers as it does for `{}`.
-                empty = self.probe(cls, method, url, "{}")
                 for raw in BAD + EMPTY:
                     got = self.probe(cls, method, url, raw)
                     if got[0] != empty[0] or got[0] >= 500:
@@ -313,11 +318,7 @@ class RouteBodyShapeTests(BaseAPITestCase):
                 ok = got == (400, {"error": NOT_JSON})
             if not ok:
                 failures.append(f"{where} malformed: {got}")
-            empty = self.probe(cls, method, url, "{}")
-            known = (method, route) in KNOWN_FAILURES_MIP_1014
             if known:
-                if empty[0] < 500:
-                    fixed.append(f"{method} /{route}")
                 continue
             # Status, not body: a create answers with a fresh id each time (sequences
             # are not rolled back), and the body for `{}` is pinned per view elsewhere.
@@ -326,10 +327,12 @@ class RouteBodyShapeTests(BaseAPITestCase):
                 if got[0] != empty[0]:
                     failures.append(f"{where} {raw}: {got} but {{}} is {empty}")
 
-        if fixed:
-            print(
-                "\nMIP-1014: these no longer 500 on `{}`, or are no longer routed; "
-                "take them out of KNOWN_FAILURES_MIP_1014:\n  " + "\n  ".join(fixed)
-            )
+        if still_failing:
+            print("\nMIP-1014: `{}` still answers 500 on:\n  " + "\n  ".join(still_failing))
+        # A member that stopped failing, or stopped being routed, must leave the set.
+        failures += [
+            f"{route}: take it out of KNOWN_FAILURES_MIP_1014 (it can only shrink)"
+            for route in fixed
+        ]
         self.assertGreaterEqual(exercised, MIN_PAIRS)
         self.assertEqual(failures, [], "\n" + "\n".join(failures))
