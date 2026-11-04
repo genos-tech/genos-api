@@ -79,6 +79,27 @@ def body_object(request) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def refuse_non_object_body(request):
+    """A 400 `Response` if the body is JSON but not an object, else None.
+
+    For a view where an EMPTY body is a request in its own right: a mark-all-read, a
+    patch with nothing to change, a billing-portal link. `body_object` would read `[1]`
+    as `{}` there and the view would do what it does for an empty body, as if the
+    person had sent nothing. This refuses it instead, so a view that takes it reads
+    `body_object(request)` only after this has passed.
+
+    The empty bodies (null, `[]`, `0`, `""`, `false`) are still "no body", as they are
+    for `body_object`: only a truthy value that is not an object is refused.
+    """
+    data = request.data
+    if data and not isinstance(data, dict):
+        return Response(
+            {"error": "Request body must be a JSON object."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
+
+
 def refuse_non_string_fields(data: dict, *fields: str):
     """A 400 `Response` naming the first of `fields` that is present and not a string, else None.
 
