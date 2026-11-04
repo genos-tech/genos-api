@@ -45,6 +45,7 @@ from origin.services import message_reminders
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object
 
 
 class PinView(AuthenticatedAPIView):
@@ -192,7 +193,7 @@ class MessageReminderView(AuthenticatedAPIView):
 
     def post(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
-        raw = (request.data or {}).get("remindAt")
+        raw = body_object(request).get("remindAt")
         remind_at = dateparse.parse_datetime(raw) if isinstance(raw, str) else None
         if remind_at is None:
             return Response(

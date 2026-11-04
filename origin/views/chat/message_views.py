@@ -64,6 +64,7 @@ from origin.views.utils.incremental import (
 )
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
+from origin.views.utils.request_validators import body_object
 from origin.views.utils.upload_validation import check_attachment_upload
 
 
@@ -592,7 +593,7 @@ class MessagesDeltaView(AuthenticatedAPIView):
         Returns the full serialized Message.
         """
         channel = _verify_member_or_404(channel_id, request.user)
-        body = request.data or {}
+        body = body_object(request)
         msg_body = body.get("body")
         if msg_body is None or not isinstance(msg_body, list):
             return Response(
@@ -760,13 +761,14 @@ class MessageDetailView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        body_json = request.data.get("body") if request.data else None
+        data = body_object(request)
+        body_json = data.get("body")
         if body_json is None or not isinstance(body_json, list):
             return Response(
                 {"error": "body must be a non-empty list of blocks."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        body_text = (request.data or {}).get("body_text") or ""
+        body_text = data.get("body_text") or ""
 
         # Body change + mention re-sync must be atomic — otherwise a
         # crash between the body save and the mention delete leaves the
@@ -871,14 +873,15 @@ class TaskCardMessageView(AuthenticatedAPIView):
     """
 
     def patch(self, request, task_id):
-        body_json = request.data.get("body") if request.data else None
+        data = body_object(request)
+        body_json = data.get("body")
         if body_json is None or not isinstance(body_json, list):
             return Response(
                 {"error": "body must be a non-empty list of blocks."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        body_text = (request.data or {}).get("body_text") or ""
-        metadata = (request.data or {}).get("metadata")
+        body_text = data.get("body_text") or ""
+        metadata = data.get("metadata")
 
         # The top-level (non-thread-reply) card header for this task.
         # There is one per task per PM channel; `order_by("seq")` resolves

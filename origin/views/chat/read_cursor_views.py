@@ -28,6 +28,7 @@ from origin.models.chat.unified_models import (
 from origin.serializers.chat.unified_serializers import ReadCursorSerializer
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object
 
 # Activity types whose backing message's `seq` faithfully marks "when the
 # recipient could first see it" — so reading the channel up to that seq
@@ -128,7 +129,7 @@ class ReadCursorView(AuthenticatedAPIView):
 
     def put(self, request, channel_id):
         channel = _verify_member_or_404(channel_id, request.user)
-        body = request.data or {}
+        body = body_object(request)
         last_read_message_id = body.get("last_read_message_id")
         thread_root_id = body.get("thread_root_id") or None
 

@@ -26,6 +26,7 @@ from origin.serializers.chat.unified_serializers import (
 )
 from origin.services import v3_activity
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object
 
 
 def _verify_message_member(message_id, user):
@@ -63,7 +64,7 @@ class MessageReactionsView(AuthenticatedAPIView):
 
     def post(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
-        emoji = (request.data or {}).get("emoji")
+        emoji = body_object(request).get("emoji")
         if not emoji or not isinstance(emoji, str):
             return Response(
                 {"error": "emoji must be a non-empty string."},
@@ -109,7 +110,7 @@ class MessageReactionsView(AuthenticatedAPIView):
 
     def delete(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
-        emoji = (request.data or {}).get("emoji")
+        emoji = body_object(request).get("emoji")
         if not emoji or not isinstance(emoji, str):
             return Response(
                 {"error": "emoji must be a non-empty string."},

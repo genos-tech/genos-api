@@ -64,6 +64,7 @@ from origin.services.member_roles import (
     resolve_team_role,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object, refuse_non_object_body
 from origin.views.utils.scope_guards import is_guest, is_team_member, is_team_participant
 from origin.views.utils.upload_validation import check_attachment_upload, check_image_upload
 
@@ -479,7 +480,7 @@ class ChannelListView(AuthenticatedAPIView):
         before knowing whether the DM already exists).
         """
         user = request.user
-        body = request.data or {}
+        body = body_object(request)
         kind = body.get("kind")
         team_id = body.get("team_id")
 
@@ -812,7 +813,12 @@ class ChannelDetailView(AuthenticatedAPIView):
         # Whitelist patchable fields so a misbehaving client can't write
         # arbitrary columns. `metadata` JSON pass-through would be next
         # to support if a feature ever needs it; punt for now.
-        body = request.data or {}
+        # An empty body is a valid patch (the channel comes back unchanged), so a body that
+        # is not an object is refused rather than read as an empty one.
+        refusal = refuse_non_object_body(request)
+        if refusal:
+            return refusal
+        body = body_object(request)
         update_fields = []
         if "title" in body:
             title = (body.get("title") or "").strip()
@@ -930,7 +936,7 @@ class ChannelDetailView(AuthenticatedAPIView):
         """
         from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
 
-        body = request.data or {}
+        body = body_object(request)
         extra_fields = set(body.keys()) - {"title"}
         if extra_fields or "title" not in body:
             return Response(
@@ -1022,7 +1028,7 @@ class ChannelMembersView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        body = request.data or {}
+        body = body_object(request)
         user_ids = body.get("user_ids") or []
         if not isinstance(user_ids, list) or not user_ids:
             return Response(
@@ -1222,7 +1228,7 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        member_role = (request.data or {}).get("member_role")
+        member_role = body_object(request).get("member_role")
         if not is_assignable(member_role):
             return Response(
                 {"error": f"member_role must be one of {list(ASSIGNABLE_ROLES)}."},
