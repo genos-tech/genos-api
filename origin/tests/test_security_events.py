@@ -458,7 +458,7 @@ class TestPasswordReset(SecurityEventCase):
 # ── 4. API keys ────────────────────────────────────────────────────────
 
 
-class TestApiKeys(SecurityEventCase):
+class TestApiKeys(MidMinute, SecurityEventCase):
     def test_creating_a_team_key(self):
         self.authenticate(self.user)
         res = self.client.post(
