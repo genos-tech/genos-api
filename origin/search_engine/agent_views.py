@@ -51,9 +51,10 @@ import json
 import logging
 import threading
 import time
+import uuid
 from contextlib import contextmanager, nullcontext
 from datetime import timedelta
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -95,6 +96,7 @@ from origin.search_engine.agent.mentions import (
     parse_mentions,
     resolve_mentions,
 )
+from origin.search_engine.agent.multi_turn import PriorContext
 from origin.search_engine.agent.note_summary import (
     NoteSummaryError,
     fetch_note_for_agent,
@@ -377,26 +379,40 @@ def _persist_rolling_summary(session: AgentSession | None, ctx) -> None:
         log.debug("Could not persist rolling summary", exc_info=True)
 
 
-def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, str]]:
-    """Return the last `max_turns` (query, answer) pairs from the session.
+def _load_prior_runs(session: AgentSession, max_turns: int) -> list[AgentRun]:
+    """The last `max_turns` runs of the session that have an answer, oldest first.
 
-    Only includes runs that have a non-empty `final_answer_text` (i.e.
-    the model produced an actual answer — done, rejected, etc.). Each
-    answer is truncated to `SESSION_PRIOR_ANSWER_MAX_CHARS` (default
-    `_DEFAULT_PRIOR_ANSWER_MAX_CHARS`) to keep the context budget
-    bounded while still carrying whole prior answers verbatim.
+    Only runs with a non-empty `final_answer_text` (i.e. the model produced an
+    actual answer — done, rejected, etc.). No filter on status, and none on time:
+    the run being asked now does not exist yet, so it is not among them. The
+    rows, not just their text, because a run that pauses on a write keeps their
+    ids (`/decide/` reads the same turns again by id, MIP-991).
     """
-    max_chars = int(
-        settings.SEARCH_ENGINE.get(
-            "SESSION_PRIOR_ANSWER_MAX_CHARS", _DEFAULT_PRIOR_ANSWER_MAX_CHARS
-        )
-    )
     runs = (
         AgentRun.objects.filter(session=session)
         .exclude(final_answer_text="")
         .order_by("-started_at")[:max_turns]
     )
-    return [(r.query, r.final_answer_text[:max_chars]) for r in reversed(list(runs))]
+    return list(reversed(list(runs)))
+
+
+def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
+    """The (query, answer) pairs of `runs`, in the order given. Each answer is
+    truncated to `SESSION_PRIOR_ANSWER_MAX_CHARS` (default
+    `_DEFAULT_PRIOR_ANSWER_MAX_CHARS`) to keep the context budget bounded while
+    still carrying whole prior answers verbatim. The one place a run becomes a
+    turn: `/ask/` and the resumed leg of `/decide/` both go through it."""
+    max_chars = int(
+        settings.SEARCH_ENGINE.get(
+            "SESSION_PRIOR_ANSWER_MAX_CHARS", _DEFAULT_PRIOR_ANSWER_MAX_CHARS
+        )
+    )
+    return [(r.query, r.final_answer_text[:max_chars]) for r in runs]
+
+
+def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, str]]:
+    """Return the last `max_turns` (query, answer) pairs from the session."""
+    return _turns_of(_load_prior_runs(session, max_turns))
 
 
 # --------------------------------------------------------------------------- #
@@ -1215,6 +1231,9 @@ class AgentAskView(AuthenticatedAPIView):
         session: AgentSession | None = None
         prior_turns_all: list[tuple[str, str]] = []
         prior_summary: str | None = None
+        # The runs behind `prior_turns` (the verbatim window), oldest first: what a
+        # resumed leg reads the same turns back by (MIP-991).
+        prior_run_ids: list[uuid.UUID] = []
         session_id_str = (data.get("session_id") or "").strip() or None
         force_new_conversation = bool(data.get("new_conversation"))
         # `resume: true` = the client is continuing a conversation whose
@@ -1291,7 +1310,8 @@ class AgentAskView(AuthenticatedAPIView):
                 force_new=force_new_conversation,
                 allow_expired=resume_requested,
             )
-            prior_turns_all = _load_prior_turns(session, load_cap)
+            prior_runs = _load_prior_runs(session, load_cap)
+            prior_turns_all = _turns_of(prior_runs)
             from origin.search_engine.agent.multi_turn import build_prior_context  # noqa: PLC0415
 
             with spend.spend_context(**spend_kwargs), _effort_choice_bound(chosen):
@@ -1307,10 +1327,15 @@ class AgentAskView(AuthenticatedAPIView):
                 )
             prior_turns = prior_ctx.verbatim
             prior_summary = prior_ctx.summary
+            # The verbatim window is the newest of what was loaded (`build_prior_context`).
+            prior_run_ids = [r.run_id for r in prior_runs][
+                max(len(prior_runs) - len(prior_turns), 0) :
+            ]
             _persist_rolling_summary(session, prior_ctx)
         except Exception:  # noqa: BLE001
             log.exception("Session load failed; continuing without memory")
             prior_turns = []
+            prior_run_ids = []
 
         # Persist one AgentRun row per /ask/ call. Failures here are
         # logged but never break the user-facing response.
@@ -1565,6 +1590,8 @@ class AgentAskView(AuthenticatedAPIView):
                 scoped_extra=scoped_extra,
                 mention_extra=mention_extra,
                 tier_extra=tier_extra,
+                prior_summary=prior_summary,
+                prior_run_ids=prior_run_ids,
             )
             if _resume_keeps_blocks()
             else None
@@ -1701,9 +1728,12 @@ def _resume_context_for(
     scoped_extra: str | None,
     mention_extra: str | None,
     tier_extra: str | None,
+    prior_summary: str | None = None,
+    prior_run_ids: Iterable[uuid.UUID] = (),
 ) -> dict[str, Any] | None:
-    """What `/decide/` needs to hand a resumed leg the `system_extra` its first
-    leg had (MIP-977), or None when that was nothing.
+    """What `/decide/` needs to hand a resumed leg the context its first leg had
+    (MIP-977 the `system_extra`, MIP-991 the earlier turns), or None when that was
+    nothing.
 
     `/ask/` joins up to three blocks with a blank line, in this order: the
     summary of the thread or note the person asked from, the @/# references,
@@ -1728,15 +1758,43 @@ def _resume_context_for(
     anyway would still pause; its first leg carried the block, and so does its
     resumed leg.) A person downgraded since has the pending write vetoed by the
     tool gate `/decide/` recomputes.
+
+    `prior` is the conversation in front of the question (MIP-991), and the one
+    part NOT kept as text:
+
+      * `summary` is the rolling recap, kept as sent. It is an LLM-made text of the
+        earlier turns that cannot be made again identically (a new call words it
+        differently, and it is billed), and it cannot be read back from the
+        session either: `AgentSession.rolling_summary_text` moves on with every
+        later ask of the session, and by the decision may cover turns this run
+        never saw. It is a summary of turns the person was already shown, and the
+        session keeps its own copy for as long as the session lives.
+      * `run_ids` are the runs behind the verbatim window, oldest first. The turns
+        themselves are earlier runs' `query` and `final_answer_text`, already in
+        the table, and `/decide/` reads them again by these ids. Copying their text
+        here would leave a second copy of other runs' answers on a row that an
+        abandoned card keeps for ever (retention takes no `awaiting_approval` run),
+        outliving the deletion of the runs they came from: a person's erasure and
+        `agent_runs` retention would reach the originals and not the copy. The
+        ids hold nothing, and a run that is gone is a turn that is simply not there.
+
+    A first-turn ask has neither, and keeps no `prior`.
     """
     rest = "\n\n".join(block for block in (mention_extra, tier_extra) if block) or None
-    if not scoped_extra and not rest:
+    run_ids = [str(run_id) for run_id in prior_run_ids]
+    prior = (
+        {"summary": prior_summary or None, "run_ids": run_ids} if prior_summary or run_ids else None
+    )
+    if not scoped_extra and not rest and prior is None:
         return None
-    return {
+    kept: dict[str, Any] = {
         "scope": scope if scoped_extra else None,
         "scoped": scoped_extra or None,
         "rest": rest,
     }
+    if prior is not None:
+        kept["prior"] = prior
+    return kept
 
 
 def _scope_still_readable(scope: Any, user_id: str) -> bool:
@@ -1801,6 +1859,69 @@ def _resumed_system_extra(run: AgentRun) -> str | None:
     except Exception:  # noqa: BLE001 — see the docstring
         log.exception("Could not rebuild the system prompt context of run %s", run.run_id)
         return None
+
+
+def _resumed_prior_context(run: AgentRun) -> PriorContext:
+    """The earlier turns of the conversation the paused `run` belongs to, as its
+    first leg had them (`_resume_context_for`): the recap as it was sent, and the
+    verbatim turns read again from the runs the ask took them from. Empty for a
+    run with none kept (a first turn, or one paused before this existed), which
+    is what every resume received before.
+
+    Never raises, and is called after the approval has been spent: whatever goes
+    wrong here costs the resumed leg its earlier turns, as it did before this
+    existed, never the decision.
+
+    The turns are read by the ids the ask kept, in that order, through the same
+    `_turns_of` the ask used, and not by asking the session again for its latest
+    turns: that would hand a resumed leg whatever the session holds NOW, which is
+    a later ask's turn if one came while the card waited, and a turn of a run that
+    was still running (so had no answer yet) when the first leg looked. Only runs
+    of this run's own session and user are read, whatever ids a row holds.
+
+    The price of keeping ids and not a copy of the text (see
+    `_resume_context_for`): the turns can differ from the first leg's in three
+    ways, none of them a crash. A run that is gone (deleted since, or taken by
+    `agent_runs` retention), or whose answer is empty now, is left out, as the ask
+    leaves out an unanswered turn. An answer that was rewritten since (an earlier
+    paused card decided in between appends to its answer) is read as it is now.
+    And the answer cap (`SESSION_PRIOR_ANSWER_MAX_CHARS`) is the one in force now.
+
+    Not access-checked, and deliberately: they are answers the person was already
+    shown, in a conversation `/ask/` itself goes on from with no check beyond the
+    session being theirs. Unlike the thread or note summary a resumed leg
+    re-checks (`_resumed_system_extra`), which is context the person never saw.
+    """
+    nothing = PriorContext(verbatim=[], summary=None)
+    kept = run.resume_context
+    prior = kept.get("prior") if isinstance(kept, dict) else None
+    if not isinstance(prior, dict):
+        return nothing
+    try:
+        summary = prior.get("summary")
+        summary = summary if isinstance(summary, str) and summary else None
+        run_ids: dict[uuid.UUID, None] = {}  # in order, once each
+        raw_ids = prior.get("run_ids")
+        for raw in raw_ids if isinstance(raw_ids, list) else ():
+            try:
+                run_ids[uuid.UUID(str(raw))] = None
+            except (AttributeError, TypeError, ValueError):
+                continue  # not an id: the same as a run that is gone
+        turns: list[tuple[str, str]] = []
+        if run_ids and run.session_id:
+            rows = {
+                r.run_id: r
+                for r in AgentRun.objects.filter(
+                    run_id__in=list(run_ids), session_id=run.session_id, user_id=run.user_id
+                )
+                .exclude(final_answer_text="")
+                .only("run_id", "query", "final_answer_text")
+            }
+            turns = _turns_of(rows[run_id] for run_id in run_ids if run_id in rows)
+        return PriorContext(verbatim=turns, summary=summary)
+    except Exception:  # noqa: BLE001 — see the docstring
+        log.exception("Could not rebuild the earlier turns of run %s", run.run_id)
+        return nothing
 
 
 class AgentDecideView(AuthenticatedAPIView):
@@ -2035,6 +2156,10 @@ class AgentDecideView(AuthenticatedAPIView):
         # Flag off (`AGENT_RESUME_KEEPS_BLOCKS`): None, which is what every resume got
         # before MIP-977, whatever a row holds.
         resumed_extra = _resumed_system_extra(run) if _resume_keeps_blocks() else None
+        # ...and the earlier turns of its conversation, which sit in the messages and
+        # not the system prompt (MIP-991). Without them every decision finished a
+        # follow-up ask as if it were the first question of the conversation.
+        resumed_prior = _resumed_prior_context(run)
 
         def worker(emit, cancel_event):
             token = set_llm_choice(resumed_choice)
@@ -2047,6 +2172,8 @@ class AgentDecideView(AuthenticatedAPIView):
                         emit,
                         disabled_tools=resumed_disabled,
                         system_extra=resumed_extra,
+                        prior_turns=resumed_prior.verbatim,
+                        prior_summary=resumed_prior.summary,
                         cancel_event=cancel_event,
                     )
             finally:

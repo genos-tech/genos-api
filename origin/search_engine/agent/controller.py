@@ -1059,6 +1059,40 @@ def _user_turn(query: str) -> AgentMessage:
     return AgentMessage(role="user", text=query)
 
 
+def _prior_messages(
+    prior_summary: str | None, prior_turns: list[tuple[str, str]] | None
+) -> list[AgentMessage]:
+    """The earlier turns of a conversation as the messages that go in front of its
+    next question: the rolling recap, then each earlier (question, answer) pair.
+
+    The recap (Phase 3.5, `multi_turn.py`) is an assistant "note to self" so the
+    model can refer to topics that have fallen out of the verbatim window. It goes
+    first, then the verbatim turns oldest to newest.
+
+    ONE function for both legs of a run: `run_agent` puts these in front of the
+    question, and `resume_agent` puts the same ones in front of the replay of what
+    the run did since (MIP-991). They are two callers of one construction because
+    the whole point of the second is that its messages START WITH the first's,
+    exactly: a copy of these lines in `resume_agent` would be one edit away from
+    sending the model a different conversation after an approval, and from losing
+    the shared prefix a provider's cache keys on.
+
+    Empty for a first turn (no recap, no turns).
+    """
+    messages: list[AgentMessage] = []
+    if prior_summary:
+        messages.append(
+            AgentMessage(
+                role="assistant",
+                text=f"[Context recap from earlier in this conversation: {prior_summary}]",
+            )
+        )
+    for prior_query, prior_answer in prior_turns or []:
+        messages.append(_user_turn(prior_query))
+        messages.append(AgentMessage(role="assistant", text=prior_answer))
+    return messages
+
+
 def _assistant_function_call_turn(function_call: FunctionCall) -> AgentMessage:
     return AgentMessage(role="assistant", function_call=function_call)
 
@@ -2085,21 +2119,9 @@ def run_agent(
         if seeded_map:
             emit({"type": "sources", "sources": list(seeded_map.values())})
 
-    messages: list[AgentMessage] = []
-    # Phase 3.5 — rolling summary of earlier turns prepended as an
-    # assistant "note to self" so the model can reference topics that
-    # have fallen out of the verbatim prior_turns window. Cheap, opt-in
-    # context recovery for long sessions. See `multi_turn.py`.
-    if prior_summary:
-        messages.append(
-            AgentMessage(
-                role="assistant",
-                text=f"[Context recap from earlier in this conversation: {prior_summary}]",
-            )
-        )
-    for prior_query, prior_answer in prior_turns or []:
-        messages.append(_user_turn(prior_query))
-        messages.append(AgentMessage(role="assistant", text=prior_answer))
+    # The recap and the earlier turns, then this question. `resume_agent` builds
+    # the same start (`_prior_messages`) for the leg that follows an approval.
+    messages = _prior_messages(prior_summary, prior_turns)
     messages.append(_user_turn(query))
 
     # Phase 3.2 — optional self-critique pass. Dispatched here so the
@@ -2160,6 +2182,8 @@ def resume_agent(
     *,
     disabled_tools: set[str] | None = None,
     system_extra: str | None = None,
+    prior_turns: list[tuple[str, str]] | None = None,
+    prior_summary: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Resume a paused agent run after the user has approved or rejected.
@@ -2186,6 +2210,17 @@ def resume_agent(
     that thread or note, and with a different system prompt from the leg before
     (so a provider's prompt cache could not carry over either). None (a plain
     ask, a run paused before it was kept) is what this always received.
+
+    `prior_turns` and `prior_summary` are the earlier turns of the run's
+    conversation exactly as `run_agent` was given them (MIP-991): the verbatim
+    (question, answer) pairs and the rolling recap. Same reason as above: the
+    rebuild below starts from `run.query` alone, so without them every approve and
+    every reject finished a follow-up ask as if it were the first question of the
+    conversation. They go in front of the rebuilt messages through the same
+    `_prior_messages` the ask used, so this leg's messages START WITH its first
+    leg's, in the same order, and a provider's prompt cache can carry the prefix
+    over. The view hands them back from the run (`_resumed_prior_context`); empty
+    (a first turn, a run paused before they were kept) is what this always got.
     """
     if decision not in (DECISION_APPROVE, DECISION_REJECT):
         emit(
@@ -2205,6 +2240,9 @@ def resume_agent(
             }
         )
         return None
+    # The conversation the ask leg had before the question (`_rebuild_messages`
+    # starts at the question, which is where `run.query` is).
+    messages = [*_prior_messages(prior_summary, prior_turns), *messages]
 
     step_index = pending_step.step_index
     call_name = pending_step.tool_name
