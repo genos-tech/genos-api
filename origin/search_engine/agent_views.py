@@ -295,7 +295,9 @@ def _get_or_create_session(
                     )
                     session.last_active_at = timezone.now()
                     return session
-            except (AgentSession.DoesNotExist, ValueError):
+            except (AgentSession.DoesNotExist, ValidationError, ValueError):
+                # An unknown id, or one that is not a UUID at all (a
+                # ValidationError out of the ORM): either way, a fresh session.
                 pass
         if thread_context:
             existing = (
@@ -1642,6 +1644,17 @@ class AgentDecideView(AuthenticatedAPIView):
     def post(self, request):
         data = request.data or {}
 
+        # A text field that is not text (a number, a list, an object) is a
+        # malformed body, like `edited_args` below, not a crash in `.strip()`.
+        # Empty-ish values (null, 0, false, [], {}) still mean "not sent" and
+        # reach the "is required" answers.
+        for field in ("run_id", "approval_token", "decision"):
+            if data.get(field) and not isinstance(data[field], str):
+                return Response(
+                    {"error": f"{field} must be a string."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         run_id = (data.get("run_id") or "").strip()
         approval_token = (data.get("approval_token") or "").strip()
         decision = (data.get("decision") or "").strip().lower()
@@ -1684,7 +1697,9 @@ class AgentDecideView(AuthenticatedAPIView):
 
         try:
             run = AgentRun.objects.get(run_id=run_id)
-        except AgentRun.DoesNotExist:
+        except (AgentRun.DoesNotExist, ValidationError, ValueError):
+            # A run_id that is not a UUID raises ValidationError out of the
+            # ORM: the same 404 as an unknown run, as on the feedback view.
             return Response({"error": "run not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # AuthZ: the user resuming the run must be the one who started
@@ -3358,9 +3373,10 @@ class AgentSessionDetailView(AuthenticatedAPIView):
                 team_id=str(team_id),
                 user_id=user_id,
             )
-        except (AgentSession.DoesNotExist, ValueError):
-            # ValueError covers malformed UUIDs. Both surface as 404 so
-            # we don't reveal "this id exists but you can't see it".
+        except (AgentSession.DoesNotExist, ValidationError, ValueError):
+            # ValidationError is what a malformed UUID raises out of the ORM.
+            # All of them surface as 404 so we don't reveal "this id exists
+            # but you can't see it".
             return Response(
                 {"error": "Session not found."},
                 status=status.HTTP_404_NOT_FOUND,
