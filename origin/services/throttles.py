@@ -375,6 +375,22 @@ class BatchReadThrottle(WindowRateThrottle):
     scope = "batch_read"
 
 
+class ChangeFeedThrottle(WindowRateThrottle):
+    """`GET /api/v2/changes/`, the "what changed?" poll (MIP-970).
+
+    One call per open tab every 30-60 s, plus a burst when a window regains
+    focus, so a person with five tabs is well under 20 a minute. It costs a few
+    indexed reads and no joins, which is why the ceiling can sit this high
+    without being the thing that lets a script hurt the database.
+
+    The rate sits on the class, still tunable with `THROTTLE_CHANGE_FEED`,
+    rather than in `DEFAULT_THROTTLE_RATES`: any edit to `apis/settings.py`
+    starts the Vertex-billed agent evals on a PR (`agent-evals.yml`)."""
+
+    scope = "change_feed"
+    rate = os.environ.get("THROTTLE_CHANGE_FEED", "120/min")
+
+
 class ClientPerfThrottle(WindowRateThrottle):
     """The browser's interaction timings (`POST /api/v2/client-perf/`).
     Each batch is a few log lines, so this caps what a script can write

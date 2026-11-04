@@ -27,6 +27,7 @@ from origin.views.common.calendar_views import (
     CalendarEventsView,
     CalendarListView,
 )
+from origin.views.common.changes_views import ChangesView
 from origin.views.common.client_perf_views import ClientPerfView
 from origin.views.common.email_unsubscribe_views import email_unsubscribe
 from origin.views.common.gif_views import GifSearchView
@@ -299,6 +300,9 @@ urlpatterns = [
     # Interaction timings the browser measured (MIP-957): logged as
     # `perf.client` lines, never stored.
     path("api/v2/client-perf/", ClientPerfView.as_view(), name="client_perf"),
+    # "What changed?" (MIP-970): one token per collection the web client keeps a
+    # copy of, so it refetches only what moved.
+    path("api/v2/changes/", ChangesView.as_view(), name="changes"),
     path(
         "api/v2/user/preferences/auto-close-on-pr-merge/",
         AutoCloseOnPrMergePreferenceView.as_view(),
