@@ -52,6 +52,7 @@ from origin.services.thread_link import find_thread_link_conflict
 from origin.services.throttles import BatchReadThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_MENTIONS_PER_COMMENT, check_batch_size
+from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
@@ -76,6 +77,19 @@ from origin.views.utils.scope_guards import (
 from origin.views.utils.upload_validation import check_attachment_upload
 
 from .common_color import EFFORT_LEVEL_COLOR_MAP, PRIORITY_COLOR_MAP, status_color
+
+# Columns of a task that `PUT /task/` never takes from the body (MIP-1018).
+# The app's full save and the partial callers (diagram, board) send none of
+# them: the server soft-deletes through DELETE, numbers tasks itself, derives
+# the mention list from `content`, and the calendar sync owns the link ids.
+TASK_SERVER_OWNED_FIELDS = (
+    "is_deleted",
+    "is_milestone",
+    "project_task_number",
+    "mentioned_user_ids",
+    "linked_calendar_event_id",
+    "linked_calendar_id",
+)
 
 
 def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
@@ -435,6 +449,21 @@ class TaskMasterView(AuthenticatedAPIView):
 
         update_data = request.data.copy()
 
+        # A save may only restate these as they are. `is_deleted: true` used to
+        # soft-delete the task without the delete endpoint's checks and cleanup,
+        # and `project_task_number` could be set to collide or skip. Refused when
+        # different, and dropped either way so the serializer never sees them.
+        # `is_init_task` is the create form's scaffold flag: the finalize PUT
+        # clears it (False is always fine), but nothing turns a real task into a
+        # scaffold, which hides it from every list.
+        server_owned = stored_values(task, TASK_SERVER_OWNED_FIELDS)
+        if not task.is_init_task:
+            server_owned["is_init_task"] = False
+        if res := refuse_forged_fields(request.data, server_owned):
+            return res
+        for field in TASK_SERVER_OWNED_FIELDS:
+            update_data.pop(field, None)
+
         # Capture the milestone change intent BEFORE the None-strip
         # below: an explicit `milestone: null` in the payload means
         # "clear the link", which we must distinguish from "key
@@ -496,7 +525,7 @@ class TaskMasterView(AuthenticatedAPIView):
         # Remove None values from the update_data
         for key, val in request.data.items():
             if val is None:
-                update_data.pop(key)
+                update_data.pop(key, None)
 
         # The strip leaves `""` in place and the serializer's DateField
         # rejects it as a malformed date, so a clear never reaches it.
