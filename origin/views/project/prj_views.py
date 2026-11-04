@@ -2,6 +2,7 @@ import time
 from collections import defaultdict
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Q
 from django.db.models.functions import Lower
@@ -10,7 +11,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from origin.models.common.security_event_models import SecurityAction
-from origin.models.common.team_models import ExternalGrant, TeamMaster
+from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
@@ -30,6 +31,7 @@ from origin.services.project_catalog import (
 from origin.services.project_code import derive_project_code
 from origin.services.project_delete import delete_project
 from origin.services.project_manage import (
+    PROJECT_CODE_RE,
     ProjectRefused,
     change_member_role,
     set_project_code,
@@ -37,6 +39,7 @@ from origin.services.project_manage import (
 )
 from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.forged_fields import refuse_forged_fields
 from origin.views.utils.inbox_approval import (
     JOIN_PROJECT_REQUEST,
     already_answered,
@@ -55,6 +58,44 @@ from origin.views.utils.scope_guards import (
     require_team_member_or_response,
 )
 from origin.views.utils.upload_validation import check_image_upload
+
+# What a project create takes from the body, and what the server holds back
+# (MIP-1018). The serializer is `fields = "__all__"`, so every column the body
+# named used to be written: `is_deleted: true` made a deleted project, and the
+# image path, the per-project rules and the template defaults were set around
+# the endpoints that validate them. The app sends `team`, `project_name`,
+# `owner`, `is_private` and, from the create modal, `project_system_user`.
+# `code` is the one optional extra: it is checked like `PUT code` is.
+CREATE_PROJECT_FIELDS = ("team", "project_name", "is_private")
+CREATE_PROJECT_SERVER_VALUES = {
+    "is_deleted": False,
+    "profile_image_file_name": None,
+    "profile_image_url": None,
+    "default_task_template": None,
+    "default_milestone_template": None,
+    "task_field_rules": {},
+}
+
+
+def _new_project_system_user(raw):
+    """`(user_id, None)` for a usable `project_system_user`, else `(None, error text)`.
+
+    The create modal signs a system user up and names it here, so it is
+    accepted when it really is one and nothing has claimed it: a system user,
+    on no project and no team yet (the modal joins it to the team after the
+    create). Anything else, such as a colleague's id, is refused.
+    """
+    try:
+        user = CustomUser.objects.filter(pk=raw, is_system_user=True).first()
+    except (AttributeError, ValueError, TypeError, DjangoValidationError):
+        user = None
+    if (
+        user is None
+        or ProjectMaster.objects.filter(project_system_user=user).exists()
+        or TeamMembers.objects.filter(attendee=user).exists()
+    ):
+        return None, "project_system_user must be a new system user."
+    return user.pk, None
 
 
 class ProjectMasterView(AuthenticatedAPIView):
@@ -169,8 +210,25 @@ class ProjectMasterView(AuthenticatedAPIView):
                 {"error": "owner must be your own user id."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        # The server's columns are not the client's (MIP-1018): the server's own
+        # value is accepted and unused, anything else is refused.
+        if res := refuse_forged_fields(request.data, CREATE_PROJECT_SERVER_VALUES):
+            return res
+        data = {key: request.data[key] for key in CREATE_PROJECT_FIELDS if key in request.data}
         data["owner"] = request.user.pk
+        if request.data.get("project_system_user") not in (None, ""):
+            system_user_id, problem = _new_project_system_user(request.data["project_system_user"])
+            if problem:
+                return Response({"error": problem}, status=status.HTTP_400_BAD_REQUEST)
+            data["project_system_user"] = system_user_id
+        if request.data.get("code"):
+            code = str(request.data["code"]).strip().upper()
+            if not PROJECT_CODE_RE.match(code):
+                return Response(
+                    {"error": "Code must be 2-6 uppercase letters/digits, starting with a letter."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            data["code"] = code
         if not data.get("code"):
             team_id = data.get("team")
             taken = set(
