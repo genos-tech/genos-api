@@ -124,13 +124,6 @@ class TestTeamCreationOwner(BaseAPITestCase):
                 self.assertEqual(res.data, self.REFUSED)
         self.assertEqual(self._counts(), before)
 
-    def test_the_profile_route_refuses_it_as_well(self):
-        before = self._counts()
-        res = self._post(self._body(owner_id=str(self.stranger.id)), url="/api/v2/team/profile/")
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(res.data, self.REFUSED)
-        self.assertEqual(self._counts(), before)
-
     def test_own_owner_id_creates_a_team_owned_by_the_caller(self):
         res = self._post(self._body(owner_id=str(self.user.id)))
         self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
@@ -188,12 +181,25 @@ class TestTeamCreationOwner(BaseAPITestCase):
                 self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(self._counts(), before)
 
-    def test_post_on_the_profile_route_still_creates(self):
-        """Unchanged by this fix; whether POST belongs on this route at all
-        is MIP-1014's question."""
-        res = self._post(self._body(owner_id=str(self.user.id)), url="/api/v2/team/profile/")
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-        self.assertEqual(self._team(res).owner_id, self.user.id)
+    def test_post_on_the_profile_route_is_not_allowed(self):
+        """The app only PUTs `team/profile/`; a POST there was a second
+        create route (MIP-1014)."""
+        before = self._counts()
+        for owner in (self.user, self.stranger):
+            with self.subTest(owner=owner.username):
+                res = self._post(self._body(owner_id=str(owner.id)), url="/api/v2/team/profile/")
+                self.assertEqual(res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertEqual(self._counts(), before)
+
+    def test_put_on_the_profile_route_still_renames(self):
+        res = self.client.put(
+            "/api/v2/team/profile/",
+            {"team_id": str(self.team.team_id), "team_name": "Renamed"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.team_name, "Renamed")
 
 
 class TestCheckTeamExists(BaseAPITestCase):

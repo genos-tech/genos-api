@@ -32,6 +32,8 @@ REQUEST_PENDING = "pending"
 # `item_type`s of the requests an approval answers (see `InboxItems`).
 JOIN_TEAM_REQUEST = 1
 JOIN_PROJECT_REQUEST = 2
+JOIN_GM_REQUEST = 3
+NOTE_ACCESS_REQUEST = 4
 
 
 def not_found() -> Response:
@@ -57,15 +59,45 @@ def find_request_item(user, item_id: int, *, item_type: int) -> InboxItems | Non
     return item
 
 
-def load_request_item(request, *, item_type: int) -> tuple[InboxItems | None, Response | None]:
-    """The request item `request.data["item_id"]` names, or the response to send."""
+def parse_item_id(request) -> tuple[int | None, Response | None]:
+    """`request.data["item_id"]` as an int, or the 400 to send."""
     try:
-        item_id = int(request.data.get("item_id"))
+        return int(request.data.get("item_id")), None
     except (TypeError, ValueError):
         return None, Response({"error": "item_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
+
+def load_request_item(request, *, item_type: int) -> tuple[InboxItems | None, Response | None]:
+    """The request item `request.data["item_id"]` names, or the response to send."""
+    item_id, error = parse_item_id(request)
+    if error is not None:
+        return None, error
+
     item = find_request_item(request.user, item_id, item_type=item_type)
     if item is None:
+        return None, not_found()
+    return item, None
+
+
+def load_approvable_item(request, *, item_type: int) -> tuple[InboxItems | None, Response | None]:
+    """The request item `request.data["item_id"]` names, for an approval whose
+    view authorizes the caller itself, or the response to send.
+
+    The GM-join and note-access approvals (MIP-1014) decide who may approve
+    from the thing the item names (the GM's owner or a member, the note's
+    owner), not from the item's `receiver`, so this does not filter on it:
+    doing so would refuse approvals that work today. Everything else that
+    makes an item a request still holds: it exists, is not deleted, is of the
+    endpoint's type and has a sender to admit. Each failure is the same 404.
+    Whether it is still pending is the view's to ask (`is_still_open`), after
+    its own authorization, so a stranger learns nothing from a 409.
+    """
+    item_id, error = parse_item_id(request)
+    if error is not None:
+        return None, error
+
+    item = InboxItems.objects.filter(item_id=item_id, item_type=item_type, is_deleted=False).first()
+    if item is None or item.sender_id is None:
         return None, not_found()
     return item, None
 
