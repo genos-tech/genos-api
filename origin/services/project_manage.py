@@ -69,7 +69,7 @@ def record_member_added(project: ProjectMaster, attendee_id, *, via: str, reques
     )
 
 
-def _new_system_user(team, name: str) -> CustomUser:
+def new_system_user(team, name: str) -> CustomUser:
     """The account a project's own messages come from. It has no password and
     never signs in, and it holds no billed seat. The page names it
     `<team id>-<name with underscores>@genos.tech`; a taken address (a project of
@@ -111,7 +111,7 @@ def create_project(
         wanted.append(member_id)
 
     with transaction.atomic():
-        system_user = _new_system_user(team, name)
+        system_user = new_system_user(team, name)
         taken = set(
             ProjectMaster.objects.filter(team=team, code__isnull=False).values_list(
                 "code", flat=True

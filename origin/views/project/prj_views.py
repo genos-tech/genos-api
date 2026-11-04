@@ -34,6 +34,7 @@ from origin.services.project_manage import (
     PROJECT_CODE_RE,
     ProjectRefused,
     change_member_role,
+    new_system_user,
     set_project_code,
     set_project_name,
 )
@@ -221,7 +222,8 @@ class ProjectMasterView(AuthenticatedAPIView):
             return res
         data = {key: request.data[key] for key in CREATE_PROJECT_FIELDS if key in request.data}
         data["owner"] = request.user.pk
-        if request.data.get("project_system_user") not in (None, ""):
+        supplied_system_user = request.data.get("project_system_user") not in (None, "")
+        if supplied_system_user:
             system_user_id, problem = _new_project_system_user(request.data["project_system_user"])
             if problem:
                 return Response({"error": problem}, status=status.HTTP_400_BAD_REQUEST)
@@ -245,7 +247,21 @@ class ProjectMasterView(AuthenticatedAPIView):
 
         serializer = ProjectMasterSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            if supplied_system_user:
+                serializer.save()
+            else:
+                # The project's own system user is made here, with the
+                # project and after the body has validated, so a refused
+                # create leaves no stray account and no client can mint
+                # one (MIP-1031). The address is the server's too
+                # (`<team id>-<name>@genos.tech`); a client-chosen one
+                # could reserve anyone's real address. The membership is
+                # what the create modal used to ask for in a second call.
+                with transaction.atomic():
+                    team = serializer.validated_data["team"]
+                    system_user = new_system_user(team, serializer.validated_data["project_name"])
+                    serializer.save(project_system_user=system_user)
+                    TeamMembers.objects.get_or_create(team=team, attendee=system_user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
