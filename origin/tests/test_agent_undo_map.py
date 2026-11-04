@@ -68,8 +68,11 @@ class MapCompletenessTests(SimpleTestCase):
 
     def test_the_tools_filed_as_telling_people_are_the_reviewed_ones(self):
         """`notified_people` is a claim that a person is told, and what the card says
-        before the person approves goes by it. A tool joins this set only with a test in
-        `test_agent_undo_reasons` that runs it and sees the notice."""
+        before the person approves goes by it. A tool joins this set only when running it
+        shows the notice: an inbox item and a push, for `approve_join_request` and
+        `decline_join_request` (`test_agent_undo_reasons`). `create_calendar_event` is the
+        one exception: its guest is handed to Google as an invitee, and what Google does
+        with them is not visible from here, so its test pins the handoff, not a notice."""
         told = {
             name for name, (code, _) in undo.UNDO_REASONS.items() if code == undo.NOTIFIED_PEOPLE
         }
