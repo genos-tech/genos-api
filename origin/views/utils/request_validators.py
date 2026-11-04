@@ -95,6 +95,42 @@ def body_object(request) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def as_uuid(value):
+    """A client-supplied id as a `uuid.UUID`, or None if it isn't one.
+
+    A `UUIDField` handed a string that is not a UUID raises `ValidationError`
+    from `get_prep_value`: an uncaught 500, not the answer a malformed request
+    deserves. It happens in normal use: the web client renders an optimistic
+    echo keyed by its `corr-<random>` correlation id, and a mark-read that
+    fires before the server ack forwards that placeholder. Returns None rather than a Response so each view keeps its own
+    wording: where a view already answers "not found" for an id, a malformed
+    id gets that same answer (it names nothing either), else its own 400.
+    """
+    try:
+        return uuid.UUID(str(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def as_int(value):
+    """A client-supplied integer (an int, or text that is one), or None.
+
+    `int()` alone would take `True` as 1 and `1.9` as 1, and raise on
+    anything else; this answers None for all of those, so the view can say
+    so in its own words.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
 def refuse_non_object_body(request):
     """A 400 `Response` if the body is JSON but not an object, else None.
 

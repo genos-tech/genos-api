@@ -23,6 +23,7 @@ from origin.search_engine import credit_ledger
 from origin.services import stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
+    as_uuid,
     body_object,
     refuse_non_object_body,
     refuse_non_string_fields,
@@ -412,11 +413,18 @@ def _owned_team_or_error(request, team_id):
     """Resolve a team the requester OWNS, or the error Response.
 
     Non-owners get the same 404 as a nonexistent team — membership in
-    someone else's billing is not a thing to confirm or deny.
+    someone else's billing is not a thing to confirm or deny. So does an id
+    that is not a UUID at all (MIP-1014), which names no team either and
+    used to be a 500.
     """
     if not team_id:
         return None, Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
-    team = TeamMaster.objects.filter(team_id=team_id, owner=request.user, is_deleted=False).first()
+    team_uuid = as_uuid(team_id)
+    if team_uuid is None:
+        return None, Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+    team = TeamMaster.objects.filter(
+        team_id=team_uuid, owner=request.user, is_deleted=False
+    ).first()
     if team is None:
         return None, Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
     return team, None
