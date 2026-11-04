@@ -34,6 +34,7 @@ from origin.services.demo_seeder import (
 )
 from origin.services.security_events import record_security_event
 from origin.services.throttles import AuthThrottle
+from origin.views.utils.request_validators import body_object
 
 from .base_auth_api_view import AuthenticatedAPIView
 
@@ -282,9 +283,16 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         # is only revealed once credentials are otherwise valid — wrong
         # passwords still flow through to the normal 401 below, so this
         # doesn't leak account existence.
-        email = (request.data or {}).get("email")
-        password = (request.data or {}).get("password")
-        if email and password:
+        body = body_object(request)
+        email = body.get("email")
+        password = body.get("password")
+        # The serializer below reads a number as its text (`5` signs in as "5"), so the
+        # gate has to check that text too: `check_password` raises (a 500) for a number,
+        # and skipping the gate for one would let it past `email_not_verified`. Anything
+        # else that is not text is the serializer's to refuse, and is not checked here.
+        if isinstance(password, (int, float)) and not isinstance(password, bool):
+            password = str(password)
+        if email and password and isinstance(password, str):
             unverified = User.objects.with_email(email).first()
             if (
                 unverified is not None
@@ -524,9 +532,7 @@ def _refresh_token_password_is_current(refresh_value: str) -> bool:
     # at all. `!=` treats that as a mismatch, which is what we want: those
     # tokens are already dead at `get_user`, so the refresh endpoint must
     # agree rather than handing back an access token that cannot work.
-    return token.get(jwt_api_settings.REVOKE_TOKEN_CLAIM) == get_md5_hash_password(
-        user.password
-    )
+    return token.get(jwt_api_settings.REVOKE_TOKEN_CLAIM) == get_md5_hash_password(user.password)
 
 
 # Claims that earlier releases put in the JWT and that must not outlive them.

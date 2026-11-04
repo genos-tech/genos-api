@@ -22,6 +22,11 @@ from origin.models.common.team_models import TeamMaster
 from origin.search_engine import credit_ledger
 from origin.services import stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import (
+    body_object,
+    refuse_non_object_body,
+    refuse_non_string_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +81,7 @@ def _requested_currency(request) -> str:
     if request.method == "GET":
         raw = (request.query_params.get("currency") or "").strip().lower()
     else:
-        raw = str((request.data or {}).get("currency") or "").strip().lower()
+        raw = str(body_object(request).get("currency") or "").strip().lower()
     supported = stripe_billing.supported_currencies()
     return raw if raw in supported else stripe_billing.default_currency()
 
@@ -89,7 +94,7 @@ class BillingCheckoutView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        plan = (request.data or {}).get("plan") or ""
+        plan = body_object(request).get("plan") or ""
         if plan not in stripe_billing.PURCHASABLE_PLANS:
             return Response(
                 {"error": f"Unknown plan {plan!r}."},
@@ -168,10 +173,21 @@ class BillingCreditPackCheckoutView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        pack = (request.data or {}).get("pack") or ""
+        # Not `body_object`: with no `pack` this answers 503 ("Unknown credit pack"), which
+        # would put a client's mistake on the server-error counters, so a body that is not an
+        # object is refused here as a 400 instead.
+        refusal = refuse_non_object_body(request)
+        if refusal:
+            return refusal
+        data = body_object(request)
+        pack = data.get("pack") or ""
         allowed, reason = _credit_packs_available_for(request.user)
         if not allowed:
             return Response({"error": reason}, status=status.HTTP_400_BAD_REQUEST)
+        # `pack` is looked up by the service; a list or an object there is unhashable.
+        refusal = refuse_non_string_fields(data, "pack")
+        if refusal:
+            return refusal
         try:
             url = stripe_billing.create_credit_pack_checkout_session(
                 request.user, pack, _requested_currency(request)
@@ -186,15 +202,24 @@ class BillingCreditPackCheckoutView(AuthenticatedAPIView):
 def _portal_flow_or_error(data):
     """Validate the optional `flow` / `plan` deep-link params.
 
-    Returns `((flow, plan), None)` or `(None, Response)`. An absent flow
-    is valid and means the portal home.
+    `data` is the request body as a dict (`body_object`). Returns
+    `((flow, plan), None)` or `(None, Response)`. An absent flow is valid and
+    means the portal home. Each is refused if it is not text (`.strip()` below
+    is an AttributeError for a number or a list), just ahead of the read, so
+    no other answer moves.
     """
-    flow = ((data or {}).get("flow") or "").strip() or None
+    refusal = refuse_non_string_fields(data, "flow")
+    if refusal:
+        return None, refusal
+    flow = (data.get("flow") or "").strip() or None
     if flow is not None and flow not in stripe_billing.PORTAL_FLOWS:
         return None, Response(
             {"error": f"Unknown portal flow {flow!r}."}, status=status.HTTP_400_BAD_REQUEST
         )
-    plan = ((data or {}).get("plan") or "").strip() or None
+    refusal = refuse_non_string_fields(data, "plan")
+    if refusal:
+        return None, refusal
+    plan = (data.get("plan") or "").strip() or None
     if flow == "update" and plan not in stripe_billing.PURCHASABLE_PLANS:
         return None, Response(
             {"error": f"Unknown plan {plan!r}."}, status=status.HTTP_400_BAD_REQUEST
@@ -219,7 +244,12 @@ class BillingPortalView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        parsed, err = _portal_flow_or_error(request.data)
+        # An empty body is the portal home, so a body that is not an object is refused,
+        # not read as an empty one: it must not open a Stripe portal session.
+        refusal = refuse_non_object_body(request)
+        if refusal:
+            return refusal
+        parsed, err = _portal_flow_or_error(body_object(request))
         if err:
             return err
         flow, plan = parsed
@@ -422,12 +452,13 @@ class TeamBillingCheckoutView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        plan = (request.data or {}).get("plan") or ""
+        data = body_object(request)
+        plan = data.get("plan") or ""
         if plan not in stripe_billing.PURCHASABLE_PLANS:
             return Response(
                 {"error": f"Unknown plan {plan!r}."}, status=status.HTTP_400_BAD_REQUEST
             )
-        team, err = _owned_team_or_error(request, (request.data or {}).get("team_id"))
+        team, err = _owned_team_or_error(request, data.get("team_id"))
         if err:
             return err
         try:
@@ -448,11 +479,12 @@ class TeamBillingPortalView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        parsed, err = _portal_flow_or_error(request.data)
+        data = body_object(request)
+        parsed, err = _portal_flow_or_error(data)
         if err:
             return err
         flow, plan = parsed
-        team, err = _owned_team_or_error(request, (request.data or {}).get("team_id"))
+        team, err = _owned_team_or_error(request, data.get("team_id"))
         if err:
             return err
         try:
