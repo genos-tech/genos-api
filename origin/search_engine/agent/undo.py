@@ -96,7 +96,7 @@ LEVELS = (FULL, PARTIAL, NONE)
 
 # Why a write cannot be undone: what the card says before the person approves.
 IRREVERSIBLE_DELETE = "irreversible_delete"  # it deletes for good
-NOTIFIED_PEOPLE = "notified_people"  # other people are told, or given access
+NOTIFIED_PEOPLE = "notified_people"  # other people are told: a notice, a push, an invite
 NO_SNAPSHOT = "no_snapshot"  # the old values are not kept anywhere
 UNSUPPORTED_FIELDS = "unsupported_fields"  # this call touches what undo cannot restore
 NOT_YET = "not_yet"  # restorable in principle; not built
@@ -176,7 +176,10 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     ),
     "update_tasks_bulk": (NOT_YET, "per-row undo of a bulk update is a follow-up"),
     "create_task_plan": (NOT_YET, "undoing a milestone with its tasks as one step is a follow-up"),
-    "assign_task": (NOTIFIED_PEOPLE, "the new assignee is told, and the old one is not told back"),
+    "assign_task": (
+        NOT_YET,
+        "the assignee changes and nobody is told; putting the old assignee back is not built",
+    ),
     "add_task_delivery": (NOT_YET, "unlinking what it linked is not built"),
     "remove_task_delivery": (NOT_YET, "relinking what it removed is not built"),
     "update_task_dependencies": (NOT_YET, "putting the old dependencies back is not built"),
@@ -190,7 +193,10 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     ),
     "manage_note_folder": (NO_SNAPSHOT, "the folder's old name and place are not kept"),
     "favorite_note": (NOT_YET, "a toggle; putting it back is not built"),
-    "manage_note_sharing": (NOTIFIED_PEOPLE, "people are given or lose access, and are told"),
+    "manage_note_sharing": (
+        NOT_YET,
+        "access is given or taken away and nobody is told; putting it back is not built",
+    ),
     "create_todo_item": (NOT_YET, "a to-do has no history; deleting it again is not built"),
     "update_todo_item": (NO_SNAPSHOT, "a to-do keeps no history of its old values"),
     "delete_todo_item": (IRREVERSIBLE_DELETE, "a hard delete: a to-do keeps no history"),
@@ -202,7 +208,10 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     "manage_sprint": (NO_SNAPSHOT, "the sprint's old values are not kept"),
     "delete_sprint": (IRREVERSIBLE_DELETE, "it removes the sprint and detaches its tasks"),
     "manage_project": (NO_SNAPSHOT, "the project's old values are not kept"),
-    "manage_project_members": (NOTIFIED_PEOPLE, "people are added or removed, and are told"),
+    "manage_project_members": (
+        NOT_YET,
+        "a member is added or a role changes and nobody is told; putting it back is not built",
+    ),
     "add_project_tag": (NOT_YET, "removing the tag it added is not built"),
     "manage_project_labels": (NO_SNAPSHOT, "the labels' old values are not kept"),
     "approve_join_request": (NOTIFIED_PEOPLE, "the person is let in and told"),

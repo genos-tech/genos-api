@@ -780,7 +780,9 @@ class TheCardIsToldBeforeApproving(TestCase):
         cases = (
             ("delete_project", {"project_id": 5}, "irreversible_delete"),
             ("delete_note", {"note_type": "personal", "note_id": 5}, "irreversible_delete"),
-            ("manage_project_members", {"project_id": 1}, "notified_people"),
+            ("approve_join_request", {"inbox_item_id": 1}, "notified_people"),
+            ("manage_project_members", {"project_id": 1}, "not_yet"),
+            ("manage_note_sharing", {"note_type": "personal", "note_id": 1}, "not_yet"),
             ("update_comment", {"task_id": 1, "comment_id": 1, "body_text": "x"}, "no_snapshot"),
             ("update_tasks_bulk", {"updates": []}, "not_yet"),
             (
