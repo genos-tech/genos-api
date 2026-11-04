@@ -190,6 +190,11 @@ def _walk_inline(inline):
         props = inline.get("props") or {}
         name = props.get("name")
         return [f":{name}:"] if name else []
+    if t == "math":
+        # Inline math keeps its TeX source as a plain string; index it like the
+        # source of a math or diagram block, which is a text run.
+        source = inline.get("content")
+        return [source] if isinstance(source, str) and source.strip() else []
     if t == "link":
         # Links embed their own content array.
         nested = inline.get("content") or []

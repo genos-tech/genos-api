@@ -24,7 +24,7 @@ code-block branch. These tests pin that guarantee so a future refactor of
 drop code-block contents from the index.
 """
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from origin.search_engine.text_extraction import extract_sections, extract_text
 
@@ -105,3 +105,58 @@ class TestCodeBlockExtraction(TestCase):
         body = [_code_block("echo hello", language="bash")]
         sections = extract_sections(body)
         self.assertEqual(sections, [("", "echo hello")])
+
+
+# Math and diagram blocks (MIP-1023). The source of a block flows into the search
+# text by structure (a plain-text run in `content`, like a code block); inline
+# math keeps its TeX in a plain string, which needs its own branch.
+class TestMathExtraction(SimpleTestCase):
+    @staticmethod
+    def _body():
+        return [
+            {
+                "type": "heading",
+                "props": {"level": 2},
+                "content": [{"type": "text", "text": "Energy", "styles": {}}],
+            },
+            {
+                "type": "paragraph",
+                "props": {},
+                "content": [
+                    {"type": "text", "text": "Einstein: ", "styles": {}},
+                    {"type": "math", "props": {}, "content": "E=mc^2"},
+                ],
+            },
+            {
+                "type": "mathBlock",
+                "props": {},
+                "content": [{"type": "text", "text": "a^2+b^2=c^2", "styles": {}}],
+            },
+            {
+                "type": "diagram",
+                "props": {},
+                "content": [{"type": "text", "text": "graph LR; Start-->Done", "styles": {}}],
+            },
+        ]
+
+    def test_extract_text_indexes_inline_math_and_both_block_sources(self):
+        text = extract_text(self._body())
+        for expected in ("Einstein:", "E=mc^2", "a^2+b^2=c^2", "graph LR; Start-->Done"):
+            self.assertIn(expected, text)
+
+    def test_extract_sections_keeps_them_under_their_heading(self):
+        sections = extract_sections(self._body())
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0][0], "Energy")
+        self.assertIn("E=mc^2", sections[0][1])
+        self.assertIn("Start-->Done", sections[0][1])
+
+    def test_an_empty_inline_math_node_adds_nothing(self):
+        body = [
+            {
+                "type": "paragraph",
+                "props": {},
+                "content": [{"type": "math", "props": {}, "content": " "}],
+            }
+        ]
+        self.assertEqual(extract_text(body), "")

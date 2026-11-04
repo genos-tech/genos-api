@@ -7,11 +7,23 @@ literal `##`/`**`/`|` control characters.
 
 Vocabulary: headings, bullet / numbered / check lists (nested by
 indentation), quotes, fenced code blocks, pipe tables, dividers, and
-inline **bold**, *italic*, ~~strike~~, `code` and links. Block and
+inline **bold**, *italic*, ~~strike~~, `code` and links, plus the editors'
+free math and diagram blocks (below). Block and
 inline shapes are the ones BlockNote 0.49's own `tryParseMarkdownToBlocks`
 produces for the same input (the frontend's note import uses that
 parser), so a body the agent writes is indistinguishable from one a user
 imported or typed. `blocknote_render.blocks_to_markdown` is the inverse.
+
+Math and diagrams (MIP-1023). The editors have two blocks whose source is
+plain text with a rendered preview (`@blocknote/math-block`,
+`@blocknote/diagram-block`): a fence tagged `math` (GitHub's spelling) or a
+`$$` display block is a `mathBlock`, a fence tagged `mermaid` is a `diagram`,
+and `$x^2$` inside text is an inline `math` node (pandoc's rule, tightened:
+the opener is followed, and the closer preceded, by a non-space, and neither
+touches an ASCII letter or digit on its outer side, so "$5 and $10" and
+`$HOME/$USER` stay text). `blocknote_render` writes
+them back the same way, so an agent that edits the text around a formula or
+a diagram keeps it instead of flattening it to a paragraph of source.
 
 Citation tokens (`[prose](type:id)` and bare `[type:id]`)
 are resolved into in-app `/workspace/...` links when the caller supplies
@@ -81,6 +93,21 @@ _QUOTE_RE = re.compile(r"^>\s?(.*)$")
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})\s*([^`\s]*)")
 _DIVIDER_RE = re.compile(r"^(?:-\s*){3,}$|^(?:\*\s*){3,}$|^(?:_\s*){3,}$")
 _TABLE_SEPARATOR_RE = re.compile(r"^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$")
+
+# Fence info strings that are not code: the editors' plain-text blocks with a
+# rendered preview. `latex` / `tex` are NOT here: a fenced LaTeX document is
+# code, only `math` (what GitHub renders as a formula) is a formula.
+_SOURCE_BLOCK_FENCES = {"math": "mathBlock", "mermaid": "diagram"}
+# Inline math, pandoc's `tex_math_dollars` rule, tightened: `$` + a non-space,
+# no `$` or newline inside (a backslash escapes), a non-space + `$`. Pandoc
+# only keeps the closer from a digit ("$5 and $10"); here the opener also may
+# not follow, and the closer may not be followed by, an ASCII letter or digit,
+# so `$HOME/$USER` and `US$5-US$10` stay text. ASCII only, on purpose: CJK text
+# has no spaces around a formula (エネルギーは$E=mc^2$です). An opener after a
+# backslash or another `$` is literal.
+_INLINE_MATH_RE = re.compile(
+    r"(?<![A-Za-z0-9\\$])\$(?![\s$])((?:[^$\\\n]|\\.)*?[^\s$\\])\$(?![A-Za-z0-9$])"
+)
 
 # Fence info strings → the language ids the editor's syntax-highlighted
 # code block (`@blocknote/code-block`'s `supportedLanguages`) knows. Its
@@ -309,6 +336,7 @@ def _tokenize_inline(
         parts.append([_text_node(code, {"code": True})])
         cursor = m.end()
     _collect_links(text[cursor:], resolver, chips, parts)
+    parts = _math_atoms(parts)
 
     line: list[str] = []
     atoms: dict[int, list[dict[str, Any]]] = {}
@@ -536,6 +564,66 @@ def _code_block(language: str, source: str) -> dict[str, Any]:
     }
 
 
+def _source_block(block_type: str, source: str) -> dict[str, Any]:
+    """A `mathBlock` or `diagram`: no props, the source as plain text, the
+    shape the editors' packages produce."""
+    return {
+        "type": block_type,
+        "props": {},
+        "content": [_text_node(source)] if source.strip() else [],
+        "children": [],
+    }
+
+
+def _display_math(lines: list[str], i: int) -> tuple[str, int] | None:
+    """`$$ x $$` on one line, or `$$` ... `$$` over several (text may share
+    the opening or closing line). Returns the source and the next line
+    index, or None when this is not display math or is never closed."""
+    first = lines[i].strip()
+    if not first.startswith("$$"):
+        return None
+    rest = first[2:]
+    if len(rest.strip()) > 2 and rest.rstrip().endswith("$$"):
+        source = rest.rstrip()[:-2].strip()
+        return (source, i + 1) if source else None
+    body = [rest.strip()] if rest.strip() else []
+    for j in range(i + 1, len(lines)):
+        line = lines[j].strip()
+        if line.endswith("$$"):
+            tail = line[:-2].strip()
+            if tail:
+                body.append(tail)
+            return "\n".join(body), j + 1
+        body.append(line)
+    return None
+
+
+def _math_atoms(parts: _Parts) -> _Parts:
+    """Cut inline math out of the plain-text runs. Done after links, chips and
+    code spans are atoms, so a `$` inside one of them is never read as math,
+    and the math source (an atom too) is never touched by emphasis."""
+    merged: _Parts = []
+    for part in parts:
+        if isinstance(part, str) and merged and isinstance(merged[-1], str):
+            merged[-1] += part
+        else:
+            merged.append(part)
+    out: _Parts = []
+    for part in merged:
+        if not isinstance(part, str) or "$" not in part:
+            out.append(part)
+            continue
+        cursor = 0
+        for m in _INLINE_MATH_RE.finditer(part):
+            if m.start() > cursor:
+                out.append(part[cursor : m.start()])
+            out.append([{"type": "math", "props": {}, "content": m.group(1)}])
+            cursor = m.end()
+        if cursor < len(part):
+            out.append(part[cursor:])
+    return out
+
+
 def _divider_block() -> dict[str, Any]:
     return {"type": "divider", "props": {}, "children": []}
 
@@ -559,6 +647,7 @@ def _starts_block(stripped: str, lines: list[str], i: int) -> bool:
     return bool(
         _HEADING_RE.match(stripped)
         or _FENCE_RE.match(stripped)
+        or (stripped.startswith("$$") and _display_math(lines, i) is not None)
         or _QUOTE_RE.match(stripped)
         or _DIVIDER_RE.match(stripped)
         or _list_item(stripped)
@@ -625,7 +714,20 @@ def markdown_to_blocks(
                 body.append(line[min(fence_indent, _indent_of(line)) :])
                 i += 1
             list_stack.clear()
-            blocks.append(_code_block(fence.group(2), "\n".join(body)))
+            source_block = _SOURCE_BLOCK_FENCES.get(fence.group(2).strip().lower())
+            if source_block:
+                blocks.append(_source_block(source_block, "\n".join(body)))
+            else:
+                blocks.append(_code_block(fence.group(2), "\n".join(body)))
+            continue
+
+        # `$$` display math, one line or several. No closing `$$` means it
+        # was never a block: it falls through to a paragraph.
+        display = _display_math(lines, i)
+        if display:
+            source, i = display
+            list_stack.clear()
+            blocks.append(_source_block("mathBlock", source))
             continue
 
         heading = _HEADING_RE.match(stripped)

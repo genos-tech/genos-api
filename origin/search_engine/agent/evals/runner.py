@@ -31,6 +31,7 @@ Design notes:
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import re
 import time
@@ -910,6 +911,24 @@ def _check_behavior_expectations(
         if missing:
             _add(f"pending_tools_contains: missing {sorted(missing)} (saw {sorted(seen)})")
 
+    if "pending_args_contain" in expect:
+        # What the model PROPOSED to write, not only that it proposed: for a
+        # tool whose argument carries a whole new body (`update_note`), text the
+        # model left out is text the write deletes. Each needle must appear
+        # (case-sensitively) in the arguments of a pending call to that tool.
+        for tool, needles in expect["pending_args_contain"].items():
+            proposals = [
+                json.dumps(e.get("arguments"), ensure_ascii=False)
+                for e in events
+                if e.get("type") == "tool_call_pending_approval" and e.get("tool_name") == tool
+            ]
+            if not proposals:
+                _add(f"pending_args_contain: no pending call to {tool}")
+                continue
+            missing = [n for n in needles if not any(n in p for p in proposals)]
+            if missing:
+                _add(f"pending_args_contain: {tool} proposal lacks {missing}")
+
     if "answer_contains_any" in expect:
         needles = [s.lower() for s in expect["answer_contains_any"]]
         haystack = answer.lower()
@@ -1659,21 +1678,30 @@ def _setup_seed_personal_note(spec: dict[str, Any], *, team_id: str, user_id: st
     `spec` keys:
         title (str): note title (also the `lookup_title` target)
         body  (str): plain-text body, wrapped into one BlockNote paragraph
+        markdown (str): instead of `body`, a markdown body converted the way a
+            note the agent saved is (headings, lists, `math` / `mermaid` fences,
+            `$x$`), so a case can start from a note that holds those blocks
     """
     from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
 
     title = (spec.get("title") or "Eval mention note").strip()
     body_text = spec.get("body") or ""
-    note = PersonalNoteMaster.objects.create(
-        team_id=team_id,
-        owner_id=user_id,
-        title=title,
-        body=[
+    if spec.get("markdown"):
+        from origin.search_engine.agent.tools.blocknote_md import task_body_blocks  # noqa: PLC0415
+
+        body = task_body_blocks(spec["markdown"])
+    else:
+        body = [
             {
                 "type": "paragraph",
                 "content": [{"type": "text", "text": body_text, "styles": {}}],
             }
-        ],
+        ]
+    note = PersonalNoteMaster.objects.create(
+        team_id=team_id,
+        owner_id=user_id,
+        title=title,
+        body=body,
     )
 
     def cleanup() -> None:
