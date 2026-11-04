@@ -3731,6 +3731,12 @@ class AgentRunFeedbackView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Read after the run lookup and the ownership check, so every answer they gave is
+        # unchanged; refused before the row is written, so a refused comment leaves the
+        # verdict the person gave last time as it was.
+        refusal = refuse_non_string_fields(data, "comment")
+        if refusal:
+            return refusal
         comment = (data.get("comment") or "").strip()
         feedback, _created = AgentRunFeedback.objects.update_or_create(
             run=run,

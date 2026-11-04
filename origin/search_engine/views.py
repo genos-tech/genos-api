@@ -27,7 +27,7 @@ from origin.search_engine.metered import metered_request
 from origin.search_engine.search import memory_exclude_lanes, search
 from origin.services.throttles import SearchThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.request_validators import body_object
+from origin.views.utils.request_validators import body_object, refuse_non_string_fields
 from origin.views.utils.scope_guards import participates_in_team
 
 
@@ -37,6 +37,10 @@ class SearchView(AuthenticatedAPIView):
     def post(self, request):
         data = body_object(request)
 
+        # `.strip()` below is an AttributeError for a query that is not text.
+        refusal = refuse_non_string_fields(data, "query")
+        if refusal:
+            return refusal
         query = (data.get("query") or "").strip()
         team_id = data.get("team_id")
 
