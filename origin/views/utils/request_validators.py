@@ -131,6 +131,48 @@ def as_int(value):
     return None
 
 
+def missing_fields(body: dict, *fields: str) -> list[str]:
+    """The names in `fields` that `body` does not carry, in the order given.
+
+    PRESENCE, not value: `null` is a value. A task's `due_date` is sent as `null` for
+    "no date", so a check that refused `None` (like `validate_request_data`) would turn that
+    valid create into a 400. This is for a view that read the field as `request.data[...]`
+    and so answered a KeyError (a 500) when the key was missing: it now asks first.
+    """
+    return [field for field in fields if field not in body]
+
+
+def _names(fields: list[str]) -> str:
+    return fields[0] if len(fields) == 1 else f"{', '.join(fields[:-1])} and {fields[-1]}"
+
+
+def require_fields(body: dict, *fields: str, objects: tuple = (), message: str | None = None):
+    """A 400 `Response` if `body` lacks a field, or an `objects` field is not an object, else None.
+
+    One check for the required fields of a body a view reads with `body[...]` afterwards:
+
+      * a key in `fields` or `objects` that is absent is "<names> is/are required." (or
+        `message`, when the view has words of its own that a test or a client already
+        knows);
+      * a key in `objects` that is present but not a JSON object (`null`, a string, a list, a
+        number) is "<name> must be an object.", for a field the view reads a key out of
+        (`item_optionals["project_id"]` raises a TypeError, not a KeyError, on a string).
+
+    Presence only otherwise: a `null` in `fields` passes, as it did when the read was
+    `request.data["x"]`. Nothing is written here; call it before anything is.
+    """
+    if absent := missing_fields(body, *fields, *objects):
+        text = message or f"{_names(absent)} {'is' if len(absent) == 1 else 'are'} required."
+        return Response({"error": text}, status=status.HTTP_400_BAD_REQUEST)
+    for field in objects:
+        if not isinstance(body[field], dict):
+            return Response(
+                {"error": f"{field} must be an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return None
+
+
 def refuse_non_object_body(request):
     """A 400 `Response` if the body is JSON but not an object, else None.
 
