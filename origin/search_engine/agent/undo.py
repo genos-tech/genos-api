@@ -96,7 +96,7 @@ LEVELS = (FULL, PARTIAL, NONE)
 
 # Why a write cannot be undone: what the card says before the person approves.
 IRREVERSIBLE_DELETE = "irreversible_delete"  # it deletes for good
-NOTIFIED_PEOPLE = "notified_people"  # other people are told, or given access
+NOTIFIED_PEOPLE = "notified_people"  # other people are told: a notice, a push, an invite
 NO_SNAPSHOT = "no_snapshot"  # the old values are not kept anywhere
 UNSUPPORTED_FIELDS = "unsupported_fields"  # this call touches what undo cannot restore
 NOT_YET = "not_yet"  # restorable in principle; not built
@@ -190,7 +190,10 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     ),
     "manage_note_folder": (NO_SNAPSHOT, "the folder's old name and place are not kept"),
     "favorite_note": (NOT_YET, "a toggle; putting it back is not built"),
-    "manage_note_sharing": (NOTIFIED_PEOPLE, "people are given or lose access, and are told"),
+    "manage_note_sharing": (
+        NOT_YET,
+        "access is given or taken away and nobody is told; putting it back is not built",
+    ),
     "create_todo_item": (NOT_YET, "a to-do has no history; deleting it again is not built"),
     "update_todo_item": (NO_SNAPSHOT, "a to-do keeps no history of its old values"),
     "delete_todo_item": (IRREVERSIBLE_DELETE, "a hard delete: a to-do keeps no history"),
