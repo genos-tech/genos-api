@@ -40,6 +40,7 @@ from origin.management.cron_command import CronCommand, HeartbeatCommand
 from origin.models.common.ops_models import CronHeartbeat, OpsAlert, OpsAlertKind
 from origin.models.common.security_event_models import SecurityAction
 from origin.services import ops_alerts, throttles
+from origin.tests.security_clock import MidMinute
 from origin.tests.test_cron_command import _EXEC_OPTS
 from origin.tests.test_security_events import SecurityEventCase
 
@@ -400,8 +401,12 @@ class TestMissedCrons(_NoReconnect, TestCase):
 
 
 @override_settings(OPS_5XX_BURST=3)
-class TestServerErrorBurst(TestCase):
+class TestServerErrorBurst(MidMinute, TestCase):
+    # The burst counts in fixed one-minute windows, read through `ops_alerts.time` (MIP-999).
+    clock_modules = (ops_alerts,)
+
     def setUp(self):
+        super().setUp()  # the pin; a setUp that skips it shadows the mixin's
         cache.clear()
         self.addCleanup(cache.clear)
         self.addCleanup(setattr, throttles, "_down_until", 0.0)

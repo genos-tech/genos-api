@@ -58,8 +58,10 @@ from origin.search_engine.agent import controller, undo, undo_apply
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent_views import AgentStepUndoView
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
+from origin.services import throttles
 from origin.services.collab_push import PushOutcome
 from origin.services.throttles import AgentUndoThrottle
+from origin.tests.security_clock import MidMinute
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
 from origin.views.utils.note_version import snapshot_note_version
 
@@ -150,7 +152,10 @@ class UndoBase(CaptureBase):
         AgentStep.objects.filter(pk=step.pk).update(undo_json=body)
 
 
-class TheRoute(UndoBase):
+class TheRoute(MidMinute, UndoBase):
+    # The `2/min` below counts in fixed minute windows, read through `throttles.time` (MIP-999).
+    clock_modules = (throttles,)
+
     def test_it_resolves(self):
         match = resolve("/api/v2/agent/runs/6f0c5e0e-0000-4000-8000-000000000000/steps/12/undo/")
         self.assertIs(match.func.cls, AgentStepUndoView)
