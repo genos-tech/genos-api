@@ -43,6 +43,7 @@ from origin.services.account_deletion import delete_account
 from origin.services.member_roles import EDITOR
 from origin.services.oauth.base import ProviderProfile, TokenResponse
 from origin.services.pii_mask import mask_email
+from origin.tests.security_clock import MidMinute
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.common.oauth_views import OAuthCallbackView
 
@@ -457,7 +458,7 @@ class TestPasswordReset(SecurityEventCase):
 # ── 4. API keys ────────────────────────────────────────────────────────
 
 
-class TestApiKeys(SecurityEventCase):
+class TestApiKeys(MidMinute, SecurityEventCase):
     def test_creating_a_team_key(self):
         self.authenticate(self.user)
         res = self.client.post(
@@ -977,7 +978,7 @@ class TestOAuthConnections(SecurityEventCase):
 
 
 @override_settings(SECURITY_FORBIDDEN_BURST=3)
-class TestForbiddenBurst(SecurityEventCase):
+class TestForbiddenBurst(MidMinute, SecurityEventCase):
     def _refused(self, n):
         """`n` refusals from user2 — a viewer asking to rename the team."""
         self.authenticate(self.user2)
