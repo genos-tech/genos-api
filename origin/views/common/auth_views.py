@@ -178,7 +178,7 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         # /jointeam), so the new-account and existing-account paths are
         # identical post-auth (sign in → /jointeam → accept → /workspace).
         invite_token = (request.data.get("invite_token") or "").strip()
-        if invite_token and user.primary_auth_provider == "email" and not user.is_system_user:
+        if invite_token and user.primary_auth_provider == "email":
             if not user.is_email_verified:
                 user.is_email_verified = True
                 user.save(update_fields=["is_email_verified"])
@@ -205,10 +205,7 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             _set_refresh_cookie(response, str(refresh))
             return response
 
-        # System users (created internally for project automations) are
-        # not real humans with a real inbox — they're pre-verified and
-        # still get a JWT so the caller can drive the rest of the flow.
-        if user.primary_auth_provider == "email" and not user.is_system_user:
+        if user.primary_auth_provider == "email":
             raw = _issue_verification_token(user)
             try:
                 _send_verification_email(user, raw)
@@ -220,20 +217,6 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 )
             return Response(
                 {"message": "verification_email_sent", "email": user.email},
-                status=status.HTTP_201_CREATED,
-            )
-
-        # System users carry no credential at all: no usable password (see
-        # `UserCreateSerializer.create`) and no tokens here. The project
-        # flow only reads `user.id`; a token in this response was a
-        # session for a team member, minted for anyone who asked, since
-        # this endpoint is AllowAny.
-        if user.is_system_user:
-            return Response(
-                {
-                    "user": {"username": user.username, "email": user.email, "id": user.id},
-                    "message": "User creation completed",
-                },
                 status=status.HTTP_201_CREATED,
             )
 

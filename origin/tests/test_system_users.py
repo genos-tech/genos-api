@@ -1,16 +1,17 @@
-"""A project system user can never be signed into (MIP-743).
+"""A project system user can never be signed into (MIP-743), or minted (MIP-1031).
 
-The app makes one per project through the public signup endpoint, with an
-email and password both derived from the team id and project name. The
+The app used to make one per project through the public signup endpoint, with
+an email and password both derived from the team id and project name. The
 account is a member of the team, so while it could sign in, anyone who
-knew those two values had a session in that team. Each test below fails
-on the pre-fix code.
+knew those two values had a session in that team. The server now makes
+the account with the project, and the signup endpoint refuses to.
 """
 
 from importlib import import_module
 
 from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
+from django.core import mail
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -35,44 +36,54 @@ def _derived_credentials(team_id, project_name):
     )
 
 
-class NewSystemUserTests(BaseAPITestCase):
+class SystemUserSignupRefusedTests(BaseAPITestCase):
+    """The signup endpoint is open to anyone; a system user is not theirs to make."""
+
     def setUp(self):
         super().setUp()
         self.anon = APIClient()
         self.email, self.password = _derived_credentials(self.team.team_id, "Roadmap")
 
-    def _signup(self):
-        return self.anon.post(
+    def _signup(self, client=None, **extra):
+        body = {
+            "username": "Roadmap",
+            "email": self.email,
+            "password": self.password,
+            "is_system_user": True,
+        }
+        body.update(extra)
+        return (client or self.anon).post(SIGNUP, body, format="json")
+
+    def test_an_anonymous_system_user_signup_is_refused_and_writes_nothing(self):
+        users = User.objects.count()
+        res = self._signup()
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(User.objects.count(), users)
+        self.assertFalse(User.objects.with_email(self.email).exists())
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_a_signed_in_member_cannot_make_one_either(self):
+        self.authenticate(self.user)
+        users = User.objects.count()
+        res = self._signup(self.client)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(User.objects.count(), users)
+
+    def test_a_victims_address_cannot_be_reserved_this_way(self):
+        res = self._signup(email="victim@example.org")
+        self.assertEqual(res.status_code, 400)
+        later = self.anon.post(
             SIGNUP,
-            {
-                "username": "Roadmap",
-                "email": self.email,
-                "password": self.password,
-                "is_system_user": True,
-            },
+            {"username": "victim", "email": "victim@example.org", "password": "testpass123"},
             format="json",
         )
+        self.assertEqual(later.status_code, 201)
 
-    def test_the_derived_password_does_not_sign_in(self):
-        self.assertEqual(self._signup().status_code, 201)
-        res = self.anon.post(
-            SIGNIN, {"email": self.email, "password": self.password}, format="json"
-        )
-        self.assertEqual(res.status_code, 401)
-        self.assertNotIn("access", res.json())
-
-    def test_signup_returns_the_id_and_no_tokens(self):
-        res = self._signup()
+    def test_the_flag_sent_false_is_a_person(self):
+        res = self._signup(email="pat@example.com", is_system_user=False, username="pat")
         self.assertEqual(res.status_code, 201)
-        user = User.objects.with_email(self.email).get()
-        self.assertEqual(str(res.data["user"]["id"]), str(user.id))
-        self.assertNotIn("access", res.data)
-        self.assertNotIn("refresh", res.data)
-        self.assertNotIn("refresh", res.cookies)
-
-    def test_the_password_is_unusable(self):
-        self._signup()
-        self.assertFalse(User.objects.with_email(self.email).get().has_usable_password())
+        user = User.objects.with_email("pat@example.com").get()
+        self.assertFalse(user.is_system_user)
 
     def test_a_person_signing_up_still_gets_their_password(self):
         res = self.anon.post(
@@ -83,6 +94,27 @@ class NewSystemUserTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 201)
         user = User.objects.with_email("pat@example.com").get()
         self.assertTrue(user.check_password("testpass123"))
+        self.assertFalse(user.is_system_user)
+
+
+class ServerMadeSystemUserTests(BaseAPITestCase):
+    """The account the project create makes has no credential."""
+
+    def test_the_derived_password_does_not_sign_in(self):
+        self.authenticate(self.user)
+        res = self.client.post(
+            "/api/v2/project/",
+            {"team": str(self.team.team_id), "project_name": "Roadmap"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        email, password = _derived_credentials(self.team.team_id, "Roadmap")
+        user = User.objects.with_email(email).get()
+        self.assertTrue(user.is_system_user)
+        self.assertFalse(user.has_usable_password())
+        res = APIClient().post(SIGNIN, {"email": email, "password": password}, format="json")
+        self.assertEqual(res.status_code, 401)
+        self.assertNotIn("access", res.json())
 
 
 class SystemUserResetTests(BaseAPITestCase):

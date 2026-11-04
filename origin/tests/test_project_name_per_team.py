@@ -13,7 +13,6 @@ caller's own team. The visible damage:
   * creating one was a 400 that told the caller the name exists elsewhere.
 """
 
-import uuid
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -27,16 +26,6 @@ from origin.services.starter_seeder import JAPANESE_STARTER_BLUEPRINT, STARTER_B
 from origin.tests.test_base import BaseAPITestCase
 
 User = get_user_model()
-
-
-def _new_system_user():
-    """The user the create modal signs up first and names as `project_system_user`."""
-    return User.objects.create_user(
-        username="sys",
-        email=f"sys-{uuid.uuid4().hex[:8]}@genos.tech",
-        password=None,
-        is_system_user=True,
-    )
 
 
 class ProjectNamePerTeamTests(BaseAPITestCase):
@@ -55,7 +44,6 @@ class ProjectNamePerTeamTests(BaseAPITestCase):
                 "team": str(team.team_id),
                 "project_name": name,
                 "owner": str(self.user.id),
-                "project_system_user": str(_new_system_user().id),
             },
             format="json",
         )
