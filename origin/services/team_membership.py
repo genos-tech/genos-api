@@ -87,6 +87,11 @@ def drop_in_team_access(team_id, attendee_id) -> None:
     )
     mark_channels_dirty(left.values_list("channel_id", flat=True))
     left.update(is_deleted=True)
+    # No receiver sees that queryset update (MIP-970), and the departure
+    # changes what the person sees in every collection of the team.
+    from origin.services import change_feed
+
+    change_feed.bump_team(team_id)
 
     # Keyed on the `team` column rather than the folder's, because that is
     # the column the read path resolves through (`load_my_folder_grants`

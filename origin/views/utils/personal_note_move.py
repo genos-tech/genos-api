@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.search_engine.chunkers.note_chunker import refresh_personal_notes
+from origin.services import change_feed
 from origin.views.utils.note_acl_resync import collect_note_subtree_ids, purge_notes_from_index
 from origin.views.utils.note_folder_role import get_folder_role
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
@@ -102,6 +103,11 @@ def apply_personal_note_move(*, team_id, note: PersonalNoteMaster, plan: MovePla
     )
     note.folder_id = plan.target_folder_id
     note.parent_note_id = None
+    # The `.update()` fires no `post_save`, so the change feed is told by hand
+    # (MIP-970): the note moves between folders (My Notes / Team Notes), which
+    # is exactly what `notes_personal` carries.
+    change_feed.bump_notes(team_id, personal=True)
+    change_feed.bump_notes(note.team_id, personal=True)
 
     # Crossing the team boundary CHANGES the note's ACL, which the
     # `.update()` above deliberately hides from the reindexer. Moving out

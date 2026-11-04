@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.common_note_models import NoteFolderTag, NoteFolderTagLink
 from origin.models.note.personal_note_models import PersonalNoteFolder
+from origin.services import change_feed
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_folder_role import get_folder_role, is_team_member
 from origin.views.utils.note_role import ROLE_EDITOR
@@ -71,6 +72,9 @@ def sync_folder_tags(folder, team_id, tag_ids):
     NoteFolderTagLink.objects.bulk_create(
         [NoteFolderTagLink(folder=folder, tag_id=tid) for tid in valid_ids - existing]
     )
+    # `NoteFolderTagLink` has no team column and `bulk_create` fires no receiver:
+    # tell the change feed here (MIP-970). Folder tags ride in the team-folder list.
+    change_feed.bump_notes(team_id, personal=True)
 
 
 class NoteFolderTagView(AuthenticatedAPIView):

@@ -61,6 +61,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 
 from origin.models.common.team_models import ExternalGrant, ShareStatus, TeamMaster
+from origin.services import change_feed
 from origin.services.member_roles import (
     EDITOR,
     VIEWER,
@@ -1084,6 +1085,9 @@ def _remove_participant(grant: ExternalGrant, user_id) -> int:
         if removed:
             # A queryset update fires no receiver; see `acl_dirty`.
             mark_channels_dirty([grant.object_id])
+            # Nor does the change feed hear it (MIP-970). The channel belongs to
+            # the HOST team, and a guest team's tokens fold the host's keys in.
+            change_feed.bump_notes(grant.owner_team_id, chat=True)
         return removed
 
     if grant.object_type == ExternalGrant.ObjectType.PROJECT:

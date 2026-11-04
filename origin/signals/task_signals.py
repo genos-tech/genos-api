@@ -48,7 +48,10 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
-from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_cache import (
+    clear_project_tasks_cache,
+    invalidate_project_tasks_cache,
+)
 
 _calendar_logger = logging.getLogger("origin.calendar_sync")
 _webhook_logger = logging.getLogger("origin.webhooks")
@@ -470,6 +473,36 @@ def update_tasks_recorded(queryset, *, cascade: str, **fields) -> int:
     # detach (MIP-936). Stamped here so every cascade that uses this helper
     # reaches other browsers; a caller that passes its own value keeps it.
     fields = {"ts_updated_at": timezone.now(), **fields}
+    # Every cascade that rewrites task rows without `post_save` comes through
+    # here, so it is the one place the change feed hears about all of them
+    # (MIP-970). Where the rows are is read BEFORE the write (the update may
+    # change the very column the queryset filters on) and, when the write moves
+    # them between projects, again after it: both ends changed.
+    #
+    # Not under `suppress_task_activity()`: that is the demo workspace teardown,
+    # which deletes the rows through the ORM (their own receivers announce it)
+    # and exists to be as cheap as one bare UPDATE.
+    before = set() if activity_suppressed() else _task_locations(queryset)
+    count = _update_tasks_recorded(queryset, cascade=cascade, fields=fields)
+    pairs = {(team_id, project_id) for _, team_id, project_id in before}
+    if before and fields.keys() & {"project", "project_id", "team", "team_id"}:
+        pairs |= {
+            (team_id, project_id)
+            for _, team_id, project_id in _task_locations(
+                TaskMaster.objects.filter(pk__in=[pk for pk, _, _ in before])
+            )
+        }
+    for team_id, project_id in pairs:
+        invalidate_project_tasks_cache(team_id, project_id)
+    return count
+
+
+def _task_locations(queryset) -> set[tuple]:
+    """`(task pk, team, project)` for the rows of a queryset."""
+    return set(queryset.values_list("pk", "team_id", "project_id"))
+
+
+def _update_tasks_recorded(queryset, *, cascade: str, fields: dict) -> int:
     # `milestone=None` and `milestone_id=None` are the same write; the
     # tracked names are attnames, so map a relation's name onto its column.
     columns = {TaskMaster._meta.get_field(name).attname for name in fields}
@@ -546,6 +579,9 @@ def task_capture_original(sender, instance: TaskMaster, **kwargs):
         return
     snapshot = {field: getattr(previous, field) for field in _TRACKED_TASK_FIELDS}
     snapshot["is_deleted"] = previous.is_deleted
+    # Not audited, but the change feed needs the PREVIOUS team to tell the old
+    # location a moved task left (MIP-970).
+    snapshot["team_id"] = previous.team_id
     snapshot["content"] = previous.content
     snapshot["custom_field_values"] = previous.custom_field_values
     # Captured so post_save can recognise the init→real "finalize" save
@@ -998,10 +1034,29 @@ def task_auto_sync_to_calendar(sender, instance: TaskMaster, created: bool, **kw
 
 
 @receiver(post_save, sender=TaskMaster)
-def task_invalidate_project_cache_on_save(sender, instance: TaskMaster, **kwargs):
+def task_invalidate_project_cache_on_save(
+    sender, instance: TaskMaster, created: bool = False, **kwargs
+):
+    original = getattr(instance, "_activity_original", None)
+    if instance.is_init_task and (created or original is None or original.get("is_init_task")):
+        # A draft the create form is still editing: no list shows it, so it is
+        # no change to announce (the form autosaves it repeatedly). Cleared as
+        # before, but not bumped.
+        clear_project_tasks_cache(instance.team_id, instance.project_id)
+        return
     invalidate_project_tasks_cache(instance.team_id, instance.project_id)
+    # A task that MOVED left its old project too. The in-process snapshot
+    # `task_capture_original` took before the save knows where it was.
+    if original is not None and (
+        original.get("project_id") != instance.project_id
+        or original.get("team_id") != instance.team_id
+    ):
+        invalidate_project_tasks_cache(original.get("team_id"), original.get("project_id"))
 
 
 @receiver(post_delete, sender=TaskMaster)
 def task_invalidate_project_cache_on_delete(sender, instance: TaskMaster, **kwargs):
+    if instance.is_init_task:
+        clear_project_tasks_cache(instance.team_id, instance.project_id)
+        return
     invalidate_project_tasks_cache(instance.team_id, instance.project_id)

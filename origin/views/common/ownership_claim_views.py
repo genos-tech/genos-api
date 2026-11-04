@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.services import change_feed
 from origin.services.member_roles import EDITOR, resolve_team_role
 from origin.services.ownership_claim import (
     CLAIM_RESPONSE_DAYS,
@@ -446,6 +447,9 @@ def _transfer(team, new_owner_id, *, previous_owner_id, via):
         TeamMembers.objects.filter(
             team_id=team.team_id, attendee_id=previous_owner_id, is_deleted=False
         ).update(member_role=EDITOR)
+        # A queryset update fires no receiver (MIP-970); a role can change what
+        # the person may see in team folders.
+        change_feed.bump_team(team.team_id)
     record_security_event(
         SecurityAction.OWNER_TRANSFERRED,
         team_id=team.team_id,

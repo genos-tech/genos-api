@@ -54,7 +54,7 @@ from origin.models.common.notification_models import NotificationPreference, Pus
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
-from origin.services import blind_index
+from origin.services import blind_index, change_feed
 from origin.services.security_events import record_security_event
 
 log = logging.getLogger(__name__)
@@ -250,6 +250,10 @@ def delete_account(user) -> dict:
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
         )
+        # Two queryset updates no receiver hears (MIP-970): the person's teams
+        # (and any team that died with them) change what members see.
+        for team_id in {*solo_team_ids, *left_team_ids}:
+            change_feed.bump_team(team_id)
 
         # Every key, not just team-bound ones: the person is gone, so
         # nothing may act as them. `is_active=False` below already makes
