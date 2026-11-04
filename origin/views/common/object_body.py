@@ -53,14 +53,16 @@ def guard_object_body(request) -> None:
     """Refuse a JSON body that is not an object; read an empty one as `{}`.
 
     Raises `ParseError({"error": ...})`, which DRF renders as a 400 with that
-    body. No catch-all: only the JSON parser's own `ParseError` is turned into
-    `NOT_JSON`, so a view's 415 (a multipart-only view sent JSON) still is one.
+    body. No catch-all: only what the JSON parser raises on bad input is
+    turned into `NOT_JSON`.
     """
     if not _is_json_body(request):
         return
     try:
         data = request.data
-    except ParseError:
+    except (ParseError, RecursionError):
+        # RecursionError: JSON nested deeper than the decoder will go. DRF's
+        # parser only turns a ValueError into a ParseError, so it would escape as a 500.
         raise ParseError({"error": NOT_JSON}) from None
     if isinstance(data, QueryDict):
         # The JSON parser never returns one. DRF leaves an empty QueryDict in

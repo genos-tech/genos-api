@@ -87,6 +87,14 @@ class GuardTests(SimpleTestCase):
                 guard_object_body(_request(raw))
             self.assertEqual(_detail(caught.exception), {"error": NOT_JSON}, repr(raw))
 
+    def test_json_nested_past_the_decoders_limit_is_refused(self):
+        # The decoder raises RecursionError, which DRF's parser does not turn into a
+        # ParseError: uncaught, it is a 500.
+        for raw in ("[" * 100_000 + "]" * 100_000, '{"a":' * 100_000 + "1" + "}" * 100_000):
+            with self.assertRaises(ParseError) as caught:
+                guard_object_body(_request(raw))
+            self.assertEqual(_detail(caught.exception), {"error": NOT_JSON})
+
     def test_a_parse_error_swallowed_before_the_guard_is_still_refused(self):
         # What the team alignment did: read the body, catch the error, carry on. DRF then
         # leaves an empty QueryDict where the data was, which read as an empty body.
