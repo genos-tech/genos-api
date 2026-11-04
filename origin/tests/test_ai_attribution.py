@@ -586,7 +586,9 @@ class DecideResumeAttributionTests(_RestoresRecorder, _StreamingAPIBase):
     def _decide(self, run):
         self.authenticate()
 
-        def fake_resume(run_, decision, ctx, emit, disabled_tools=None, cancel_event=None):
+        def fake_resume(
+            run_, decision, ctx, emit, disabled_tools=None, system_extra=None, cancel_event=None
+        ):
             _record_fake_llm_call()
             emit({"type": "answer_delta", "text": "resumed"})
             emit({"type": "done"})

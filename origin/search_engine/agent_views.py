@@ -1706,11 +1706,14 @@ def _resume_context_for(
     regenerated summary is the thread or note as it is NOW, which after the
     approved write (an edit of the very note asked about, say) or a reply posted
     while the card waited is no longer what the first leg saw, and it would be an
-    LLM call inside `/decide/`. The tier block is the first leg's too. A run that
-    paused on a write was never at the read tier (the one tier with a block):
-    every approval-gated tool is hidden there (`ReadTierTests`), so in practice it
-    is absent; a person downgraded since has the pending write vetoed by the tool
-    gate `/decide/` recomputes.
+    LLM call inside `/decide/`. The tier block is the first leg's too. In practice
+    a run that paused on a write was not at the read tier (the one tier with a
+    block): every approval-gated tool is undeclared there (`ReadTierTests`), so
+    the model is never offered one to propose, and the block is absent. (The loop
+    does not refuse an undeclared tool at dispatch, so a model that named one
+    anyway would still pause; its first leg carried the block, and so does its
+    resumed leg.) A person downgraded since has the pending write vetoed by the
+    tool gate `/decide/` recomputes.
     """
     rest = "\n\n".join(block for block in (mention_extra, tier_extra) if block) or None
     if not scoped_extra and not rest:

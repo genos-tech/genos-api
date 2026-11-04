@@ -770,11 +770,14 @@ class ResumeContextShapeTests(TestCase):
 
 class ReadTierTests(TestCase):
     def test_every_approval_gated_tool_is_hidden_at_the_read_tier(self):
-        # The proof behind "the tier block is as at the first leg": a run that
-        # paused on a write cannot have been asked at the read tier, so its first
-        # leg never carried READ_LEVEL_SYSTEM_EXTRA, and "as then" and "as now"
-        # only differ for a person downgraded to read between pause and decision
-        # (whose pending write is vetoed by the recomputed tool gate).
+        # Why "the tier block is as at the first leg" is the same as "absent" in
+        # practice: at the read tier the model is not offered a write tool, so it
+        # has none to propose and a run does not pause there. (The loop does not
+        # refuse an undeclared tool at dispatch, so this is a property of what is
+        # declared, not an enforced invariant; a run that did pause there would
+        # carry the first leg's block, which is what the resume replays.) "As then"
+        # and "as now" differ only for a person downgraded to read between pause
+        # and decision, whose pending write is vetoed by the recomputed tool gate.
         gated = {t.name for t in REGISTRY.values() if t.requires_approval}
         self.assertTrue(gated)
         self.assertEqual(gated - disabled_tools_for_level("read"), set())
