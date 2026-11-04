@@ -12,6 +12,8 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (
     JOIN_GM_REQUEST,
+    JOIN_PROJECT_REQUEST,
+    JOIN_TEAM_REQUEST,
     NOTE_ACCESS_REQUEST,
     already_answered,
     is_still_open,
@@ -22,7 +24,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
-from origin.views.utils.request_validators import as_int, body_object, require_fields
+from origin.views.utils.request_validators import as_int, as_uuid, body_object, require_fields
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 # Columns of an inbox item that `PUT /inbox/` never changes (MIP-1018).
@@ -53,6 +55,43 @@ def _require_team(request, team_id):
     if not is_team_member(team_id, request.user.id) and not is_guest(team_id, request.user.id):
         return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
     return None
+
+
+def _notice_receiver(request, team_id, raw):
+    """The user a notice from the caller may be addressed to in `team_id`, as a UUID, or None.
+
+    `receiver_id` was any id at all: a person in no team of the caller's, a UUID that names
+    nobody, `null` (an item addressed to no one). The sender is the caller, so this is not a
+    forgery, but it let anyone push a notice with a body of their choosing, and a web push
+    for it, to a stranger. A notice goes to:
+
+    * the caller (the sockets service files "your request was sent" this way);
+    * a member of the team, or a guest in it (the approval notices and "added to" notices);
+    * the person who sent the caller a join or access request in this team, whether they
+      are in the team or not (the rejection of a join-team request is a notice to someone
+      who is by definition not a member yet).
+
+    Malformed, unknown and out-of-reach all answer the same, so nothing says which users exist.
+    """
+    receiver = as_uuid(raw)
+    if receiver is None:
+        return None
+    if receiver == as_uuid(request.user.id):
+        return receiver
+    if is_team_member(team_id, receiver) or is_guest(team_id, receiver):
+        return receiver
+    asked_the_caller = InboxItems.objects.filter(
+        team_id=team_id,
+        sender_id=receiver,
+        receiver=request.user,
+        item_type__in=(
+            JOIN_TEAM_REQUEST,
+            JOIN_PROJECT_REQUEST,
+            JOIN_GM_REQUEST,
+            NOTE_ACCESS_REQUEST,
+        ),
+    ).exists()
+    return receiver if asked_the_caller else None
 
 
 # A page of the inbox. Opt-in: a request with no `cursor` and no `limit` returns
@@ -122,10 +161,16 @@ class InboxItemView(AuthenticatedAPIView):
         # `receiver_id` and `item_body` were read as `[...]`: a KeyError (500) when missing.
         if res := require_fields(body, "receiver_id", "item_body"):
             return res
+        receiver_id = _notice_receiver(request, body["team_id"], body["receiver_id"])
+        if receiver_id is None:
+            return Response(
+                {"error": "receiver_id must be a member of the team."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         data = {
             "team": body["team_id"],
             "sender": request.user.id,
-            "receiver": body["receiver_id"],
+            "receiver": receiver_id,
             "item_body": body["item_body"],
             "item_type": 0,
             # Optional, unlike the joinXRequest/ endpoints where it's the
