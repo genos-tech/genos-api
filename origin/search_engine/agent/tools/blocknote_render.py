@@ -175,12 +175,26 @@ def _inline_node(node: dict[str, Any], strip: frozenset[str]) -> str:
     if ntype == "customEmoji":
         name = (node.get("props") or {}).get("name")
         return f":{name}:" if name else ""
+    if ntype == "math":
+        return _inline_math(node.get("content"))
     if ntype in _CHIP_TOKENS:
         return _chip(node)
     # Unknown inline type — recover any text it carries rather than
     # dropping the run (mirrors _walk_inline's fallback).
     text = node.get("text")
     return str(text) if text else ""
+
+
+def _inline_math(content: Any) -> str:
+    """Inline math as `$source$`, what `blocknote_md` reads back. LaTeX has
+    no bare `$` (a dollar sign is `\\$`), so a source with one, which `$...$`
+    could not carry, degrades to a code span rather than being dropped."""
+    source = " ".join(str(content or "").split())
+    if not source:
+        return ""
+    if re.search(r"(?<!\\)\$", source):
+        return f"`{source}`"
+    return f"${source}$"
 
 
 def _note_token(props: dict[str, Any]) -> str | None:
@@ -302,6 +316,20 @@ def _render_media(block: dict[str, Any], btype: str) -> str:
     return f"![{label}]({url})" if btype == "image" else f"[{label}]({url})"
 
 
+# The editors' plain-text blocks with a rendered preview, and the fence tag
+# `blocknote_md` reads each back from.
+_SOURCE_BLOCK_FENCES = {"mathBlock": "math", "diagram": "mermaid"}
+
+
+def _render_source_block(tag: str, source: str, indent: str) -> str:
+    """A fenced block, its fence longer than any backtick run in the source
+    so the source cannot close it early."""
+    longest = max((len(run) for run in re.findall(r"`+", source)), default=0)
+    fence = "`" * max(3, longest + 1)
+    body = "\n".join(f"{indent}{line}" for line in source.split("\n")) if indent else source
+    return f"{indent}{fence}{tag}\n{body}\n{indent}{fence}"
+
+
 def _render_leaf(block: dict[str, Any], depth: int) -> str:
     """One non-list block, indented for its nesting depth."""
     indent = _INDENT * depth
@@ -322,6 +350,11 @@ def _render_leaf(block: dict[str, Any], depth: int) -> str:
         source = _plain(block.get("content"))
         body = "\n".join(f"{indent}{line}" for line in source.split("\n")) if indent else source
         return f"{indent}```{language}\n{body}\n{indent}```"
+
+    if btype in _SOURCE_BLOCK_FENCES:
+        return _render_source_block(
+            _SOURCE_BLOCK_FENCES[btype], _plain(block.get("content")), indent
+        )
 
     if btype == "quote":
         text = _inline(block.get("content"))

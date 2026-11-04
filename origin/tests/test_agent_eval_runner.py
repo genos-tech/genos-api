@@ -91,6 +91,50 @@ class AnyOfExpectationTests(SimpleTestCase):
         self.assertIn("tool_call_errors_contain_any", reasons[0])
 
 
+def _pending(name, arguments):
+    return {
+        "type": "tool_call_pending_approval",
+        "step": 1,
+        "tool_name": name,
+        "arguments": arguments,
+    }
+
+
+class PendingArgsExpectationTests(SimpleTestCase):
+    """`pending_args_contain` (MIP-1023): what the model proposed to write."""
+
+    EXPECT = {
+        "pending_args_contain": {"update_note": ["```math", "E = mc^2"]},
+    }
+
+    def test_passes_when_the_proposed_body_keeps_every_needle(self):
+        body = "intro\n\n```math\nE = mc^2\n```"
+        events = [_pending("update_note", {"content_text": body})]
+        self.assertEqual(_check_behavior_expectations(events, self.EXPECT), [])
+
+    def test_fails_naming_what_the_proposal_dropped(self):
+        events = [_pending("update_note", {"content_text": "intro only"})]
+        reasons = _check_behavior_expectations(events, self.EXPECT)
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("pending_args_contain", reasons[0])
+        self.assertIn("E = mc^2", reasons[0])
+
+    def test_fails_when_the_tool_was_never_proposed(self):
+        reasons = _check_behavior_expectations([_tool("fetch_note")], self.EXPECT)
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("no pending call to update_note", reasons[0])
+
+    def test_a_proposal_to_another_tool_does_not_count(self):
+        events = [_pending("create_note", {"content_text": "```math\nE = mc^2\n```"})]
+        self.assertEqual(len(_check_behavior_expectations(events, self.EXPECT)), 1)
+
+    def test_the_shipped_case_asks_for_the_fences_to_survive(self):
+        case = next(c for c in load_cases() if c["id"] == "refine_note_keeps_math_and_diagram")
+        needles = case["expect"]["pending_args_contain"]["update_note"]
+        self.assertIn("```math", needles)
+        self.assertIn("```mermaid", needles)
+
+
 class RetrievalRewritePinTests(SimpleTestCase):
     def test_flag_decides_when_the_case_says_nothing(self):
         self.assertTrue(_case_rewrite({}, True))

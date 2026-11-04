@@ -358,3 +358,223 @@ class TestMarkdownToBlocks(SimpleTestCase):
         self.assertIn("Common use cases", headings)
         # No content lost — a marker from the last section survives.
         self.assertIn("Consolidating shards", extract_text(blocks))
+
+
+# ---------------------------------------------------------------------------
+# Math and diagram blocks (MIP-1023). The shapes are the ones a real
+# BlockNote 0.57 editor holds for `@blocknote/math-block` and
+# `@blocknote/diagram-block`, recorded from the editor itself for the
+# genos-collab tests: `mathBlock` and `diagram` have no props and their source
+# is ONE plain text run; inline `math` has no props and its source is a plain
+# STRING in `content`.
+# ---------------------------------------------------------------------------
+
+
+def _math(source):
+    return {"type": "math", "props": {}, "content": source}
+
+
+def _source_block(block_type, source):
+    return {
+        "type": block_type,
+        "props": {},
+        "content": [_text(source)] if source else [],
+        "children": [],
+    }
+
+
+_DIAGRAM_SOURCE = "graph TD\n  A[Start] --> B{Ok?}\n  B -->|yes| C[Done]"
+
+
+class TestMathAndDiagramBlocks(SimpleTestCase):
+    def test_math_fence_is_a_math_block(self):
+        self.assertEqual(
+            markdown_to_blocks("```math\nx^2 + y^2 = z^2\n```"),
+            [_source_block("mathBlock", "x^2 + y^2 = z^2")],
+        )
+
+    def test_mermaid_fence_is_a_diagram(self):
+        self.assertEqual(
+            markdown_to_blocks(f"```mermaid\n{_DIAGRAM_SOURCE}\n```"),
+            [_source_block("diagram", _DIAGRAM_SOURCE)],
+        )
+
+    def test_fence_tag_and_marker_variants(self):
+        self.assertEqual(
+            markdown_to_blocks("```Mermaid\ngraph LR; A-->B\n```")[0]["type"], "diagram"
+        )
+        self.assertEqual(markdown_to_blocks("~~~MATH\nx\n~~~")[0]["type"], "mathBlock")
+        self.assertEqual(markdown_to_blocks("````math\nx\n````")[0]["type"], "mathBlock")
+
+    def test_empty_fences_make_empty_blocks(self):
+        self.assertEqual(markdown_to_blocks("```math\n```"), [_source_block("mathBlock", "")])
+        self.assertEqual(markdown_to_blocks("```mermaid\n\n```"), [_source_block("diagram", "")])
+
+    def test_other_fences_stay_code(self):
+        # `latex` / `tex` are code (a LaTeX document), only `math` is a formula.
+        for tag, language in (
+            ("python", "python"),
+            ("latex", "latex"),
+            ("tex", "latex"),
+            ("js", "javascript"),
+        ):
+            block = markdown_to_blocks(f"```{tag}\nx\n```")[0]
+            self.assertEqual(
+                (block["type"], block["props"]["language"]), ("codeBlock", language), tag
+            )
+
+    def test_dollar_display_math_forms(self):
+        for markdown, source in (
+            ("$$\nx^2\n$$", "x^2"),
+            ("$$ x^2 $$", "x^2"),
+            ("$$x^2$$", "x^2"),
+            ("$$a = b \\\\\n  c = d\n$$", "a = b \\\\\nc = d"),
+            ("$$ a = b\nc = d $$", "a = b\nc = d"),
+        ):
+            self.assertEqual(
+                markdown_to_blocks(markdown), [_source_block("mathBlock", source)], markdown
+            )
+
+    def test_unclosed_display_math_is_a_paragraph(self):
+        blocks = markdown_to_blocks("$$\nx^2")
+        self.assertEqual([b["type"] for b in blocks], ["paragraph"])
+
+    def test_display_math_and_fences_end_a_paragraph(self):
+        blocks = markdown_to_blocks(
+            "intro\n$$\nx\n$$\nmiddle\n```mermaid\ngraph LR; A-->B\n```\noutro"
+        )
+        self.assertEqual(
+            [b["type"] for b in blocks],
+            ["paragraph", "mathBlock", "paragraph", "diagram", "paragraph"],
+        )
+
+    def test_a_fence_inside_a_math_source_does_not_end_it_early(self):
+        blocks = markdown_to_blocks("````mermaid\ngraph LR\n```\nstill source\n````")
+        self.assertEqual(blocks, [_source_block("diagram", "graph LR\n```\nstill source")])
+
+
+class TestInlineMath(SimpleTestCase):
+    @staticmethod
+    def content(markdown):
+        return markdown_to_blocks(markdown)[0]["content"]
+
+    def test_inline_math_between_text(self):
+        self.assertEqual(
+            self.content("Energy $E=mc^2$ in joules"),
+            [_text("Energy "), _math("E=mc^2"), _text(" in joules")],
+        )
+
+    def test_two_formulas_in_one_line(self):
+        self.assertEqual(self.content("$a$ and $b_1$"), [_math("a"), _text(" and "), _math("b_1")])
+
+    def test_dollar_amounts_stay_text(self):
+        for text in (
+            "costs $5 and $10",
+            "between $5-$10",
+            "pay $5.",
+            "$5",
+            "US$100 or $200 total",
+            "a $ b $ c",
+            "price: $5, tax: $0.50",
+            # Shell and template variables: nothing here is a formula.
+            "echo $HOME/$USER",
+            "$a$b",
+            "x$y$ z",
+            "<?= $a ?>/<?= $b ?>",
+        ):
+            self.assertEqual(self.content(text), [_text(text)], text)
+
+    def test_a_formula_touching_cjk_text_is_still_a_formula(self):
+        # CJK text has no spaces around a formula; only ASCII letters and
+        # digits keep `$` from opening or closing one.
+        self.assertEqual(
+            self.content("エネルギーは$E=mc^2$です"),
+            [_text("エネルギーは"), _math("E=mc^2"), _text("です")],
+        )
+        self.assertEqual(self.content("($x$)"), [_text("("), _math("x"), _text(")")])
+
+    def test_long_hostile_lines_are_read_in_one_pass(self):
+        # The text is an agent's or a user's: a line of many openers, or one very long
+        # opener, must not cost more than a pass over it (a regex here was flagged for
+        # polynomial backtracking; this is a scanner, and this pins it).
+        for text in ("$a" * 100_000, "$" + "a " * 100_000, "\\" * 200_000 + "$", "$a $" * 50_000):
+            started = time.perf_counter()
+            self.content(text)
+            self.assertLess(time.perf_counter() - started, 2.0, text[:12])
+
+    def test_escaped_dollar_is_literal(self):
+        self.assertEqual(self.content("\\$5 and \\$6"), [_text("\\$5 and \\$6")])
+
+    def test_code_span_wins_over_math(self):
+        self.assertEqual(self.content("`$x$`"), [_text("$x$", {"code": True})])
+
+    def test_emphasis_markers_inside_math_are_literal(self):
+        self.assertEqual(self.content("$a_1*b_2$"), [_math("a_1*b_2")])
+
+    def test_math_inside_emphasis_keeps_the_emphasis_on_the_text_only(self):
+        self.assertEqual(
+            self.content("**bold $x$ end**"),
+            [_text("bold ", {"bold": True}), _math("x"), _text(" end", {"bold": True})],
+        )
+
+    def test_a_link_keeps_a_dollar_in_its_address(self):
+        node = self.content("[a](https://example.com/$x$)")[0]
+        self.assertEqual((node["type"], node["href"]), ("link", "https://example.com/$x$"))
+
+    def test_double_dollars_inside_a_sentence_stay_text(self):
+        self.assertEqual(self.content("a $$x$$ b"), [_text("a $$x$$ b")])
+
+    def test_math_in_heading_list_item_and_table_cell(self):
+        heading, bullet, table = markdown_to_blocks(
+            "# Area $A$\n\n- uses $B$\n\n| h |\n| - |\n| $C$ |"
+        )
+        self.assertEqual(heading["content"], [_text("Area "), _math("A")])
+        self.assertEqual(bullet["content"], [_text("uses "), _math("B")])
+        cell = table["content"]["rows"][1]["cells"][0]
+        self.assertIn(_math("C"), cell["content"] if isinstance(cell, dict) else cell)
+
+
+class TestMathRoundTrip(SimpleTestCase):
+    """A body read as markdown and saved again must keep its math and
+    diagrams: this is what an agent's `update_note` does."""
+
+    @staticmethod
+    def roundtrip(blocks):
+        return markdown_to_blocks(blocks_to_markdown(blocks))
+
+    def test_blocks_survive(self):
+        for block in (
+            _source_block("mathBlock", "x^2 + y^2 = z^2"),
+            _source_block("mathBlock", "a = b\\\\\nc = d"),
+            _source_block("mathBlock", ""),
+            _source_block("diagram", _DIAGRAM_SOURCE),
+            _source_block("diagram", ""),
+            _source_block("diagram", "graph LR\n```\nsource with a fence\n```"),
+        ):
+            self.assertEqual(self.roundtrip([block]), [block])
+
+    def test_inline_math_survives(self):
+        paragraph = {
+            "type": "paragraph",
+            "props": {
+                "textColor": "default",
+                "textAlignment": "left",
+                "backgroundColor": "default",
+            },
+            "content": [_text("Energy "), _math("E=mc^2"), _text(" in joules")],
+            "children": [],
+        }
+        self.assertEqual(self.roundtrip([paragraph]), [paragraph])
+
+    def test_an_edit_next_to_a_formula_and_a_diagram_keeps_both(self):
+        # What the agent does: read the body, change a sentence, save.
+        body = [
+            {**_source_block("mathBlock", "E=mc^2")},
+            {"type": "paragraph", "props": {}, "content": [_text("old sentence")], "children": []},
+            {**_source_block("diagram", _DIAGRAM_SOURCE)},
+        ]
+        markdown = blocks_to_markdown(body).replace("old sentence", "new sentence")
+        saved = markdown_to_blocks(markdown)
+        self.assertEqual([b["type"] for b in saved], ["mathBlock", "paragraph", "diagram"])
+        self.assertEqual(saved[0]["content"], [_text("E=mc^2")])
+        self.assertEqual(saved[2]["content"], [_text(_DIAGRAM_SOURCE)])

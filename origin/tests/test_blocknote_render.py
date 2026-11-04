@@ -314,3 +314,71 @@ class RoundTripTests(SimpleTestCase):
                 if expected == "a **b** c":
                     want = [("a ", []), ("b", ["bold"]), (" c", [])]
                 self.assertEqual(back, want)
+
+
+# ---------------------------------------------------------------------------
+# Math and diagram blocks (MIP-1023): written as `math` / `mermaid` fences and
+# `$...$`, the forms `markdown_to_blocks` reads back. Block shapes as a real
+# BlockNote 0.57 editor holds them (see test_blocknote_md).
+# ---------------------------------------------------------------------------
+
+
+class MathAndDiagramRenderingTests(SimpleTestCase):
+    def test_math_block_is_a_math_fence(self):
+        self.assertEqual(
+            blocks_to_markdown([_block("mathBlock", "x^2 + y^2 = z^2")]),
+            "```math\nx^2 + y^2 = z^2\n```",
+        )
+
+    def test_diagram_is_a_mermaid_fence(self):
+        source = "graph TD\n  A[Start] --> B{Ok?}"
+        self.assertEqual(
+            blocks_to_markdown([_block("diagram", source)]), f"```mermaid\n{source}\n```"
+        )
+
+    def test_empty_blocks_are_empty_fences(self):
+        self.assertEqual(blocks_to_markdown([_block("mathBlock")]), "```math\n\n```")
+        self.assertEqual(blocks_to_markdown([_block("diagram")]), "```mermaid\n\n```")
+
+    def test_the_fence_is_longer_than_any_backticks_in_the_source(self):
+        source = "graph LR\n```\ninside\n```"
+        markdown = blocks_to_markdown([_block("diagram", source)])
+        self.assertTrue(
+            markdown.startswith("````mermaid\n") and markdown.endswith("\n````"), markdown
+        )
+        self.assertEqual(markdown_to_blocks(markdown)[0]["content"], [_text(source)])
+
+    def test_nested_blocks_are_indented_with_their_parent(self):
+        body = [_block("bulletListItem", "item", children=[_block("mathBlock", "a^2")])]
+        # The same layout a nested code block has.
+        self.assertEqual(blocks_to_markdown(body), "- item\n  ```math\n  a^2\n  ```")
+
+    def test_inline_math_is_dollar_delimited(self):
+        content = [
+            _text("Energy "),
+            {"type": "math", "props": {}, "content": "E=mc^2"},
+            _text(" ok"),
+        ]
+        self.assertEqual(
+            blocks_to_markdown([_block("paragraph", content=content)]), "Energy $E=mc^2$ ok"
+        )
+
+    def test_inline_math_with_a_newline_or_edge_spaces_is_tidied(self):
+        node = {"type": "math", "props": {}, "content": "  a +\n b "}
+        self.assertEqual(blocks_to_markdown([_block("paragraph", content=[node])]), "$a + b$")
+
+    def test_inline_math_that_dollars_cannot_carry_becomes_a_code_span(self):
+        node = {"type": "math", "props": {}, "content": "a $ b"}
+        self.assertEqual(blocks_to_markdown([_block("paragraph", content=[node])]), "`a $ b`")
+        escaped = {"type": "math", "props": {}, "content": "a \\$ b"}
+        self.assertEqual(blocks_to_markdown([_block("paragraph", content=[escaped])]), "$a \\$ b$")
+
+    def test_an_empty_inline_math_node_is_dropped(self):
+        content = [_text("a "), {"type": "math", "props": {}, "content": ""}, _text("b")]
+        self.assertEqual(blocks_to_markdown([_block("paragraph", content=content)]), "a b")
+
+    def test_a_code_block_fenced_with_these_tags_reads_back_as_the_block(self):
+        # Documented behaviour: a stored code block whose language is `mermaid`
+        # or `math` becomes the matching block the first time an agent saves it.
+        body = [_block("codeBlock", "graph LR; A-->B", props={"language": "mermaid"})]
+        self.assertEqual(markdown_to_blocks(blocks_to_markdown(body))[0]["type"], "diagram")

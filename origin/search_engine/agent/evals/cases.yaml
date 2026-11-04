@@ -1163,6 +1163,41 @@
     pending_tools_contains: ["update_note"]
     no_errors: true
 
+- id: refine_note_keeps_math_and_diagram
+  # MIP-1023. The note holds a formula and a diagram. `update_note` carries the
+  # FULL new body, so whatever the model leaves out of it is deleted from the
+  # note: an edit next to them must save both back as the same fences.
+  query: >-
+    In #Eval formula and diagram note fix the typo "teh" in the first
+    sentence. Change nothing else.
+  fixture: true
+  setup:
+    seed_personal_note:
+      title: "Eval formula and diagram note"
+      markdown: |
+        This note explains teh energy formula and the release flow.
+
+        ```math
+        E = mc^2
+        ```
+
+        ```mermaid
+        graph TD
+          A[Plan] --> B{Ready?}
+          B -->|yes| C[Ship]
+        ```
+
+        The speed of light is the constant c, and mass is m.
+  mentions:
+    - type: note
+      lookup_title: "Eval formula and diagram note"
+  expect:
+    tools_used_contains: ["fetch_note"]
+    pending_tools_contains: ["update_note"]
+    pending_args_contain:
+      update_note: ["```math", "E = mc^2", "```mermaid", "graph TD", "B -->|yes| C[Ship]"]
+    no_errors: true
+
 # --------------------------------------------------------------------- #
 # P. Structured @/# mentions (3)                                         #
 # --------------------------------------------------------------------- #
