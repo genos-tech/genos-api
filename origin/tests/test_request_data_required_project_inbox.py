@@ -250,14 +250,11 @@ class JoinGMRequestRequiredTests(Base):
                     "GM not found or has no owner.",
                 )
 
-    def test_item_body_and_item_type_are_asked_for_once_the_gm_is_found(self):
+    def test_item_body_is_asked_for_once_the_gm_is_found(self):
+        # `item_type` is no longer read (MIP-1029): the item is always a join-GM request.
         self.assertRefused(JOIN_GM_REQ, self.body(item_body=...), 400, "item_body is required.")
-        self.assertRefused(JOIN_GM_REQ, self.body(item_type=...), 400, "item_type is required.")
         self.assertRefused(
-            JOIN_GM_REQ,
-            self.body(item_body=..., item_type=...),
-            400,
-            "item_body and item_type are required.",
+            JOIN_GM_REQ, self.body(item_body=..., item_type=...), 400, "item_body is required."
         )
 
     def test_an_unknown_gm_is_still_a_404_before_the_rest_is_asked_for(self):

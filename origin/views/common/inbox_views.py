@@ -581,7 +581,7 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         gm_owner_id = gm_channel.owner_id
-        if res := require_fields(body, "item_body", "item_type"):
+        if res := require_fields(body, "item_body"):
             return res
 
         data = {
@@ -589,7 +589,12 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
             "sender": request.user.id,
             "receiver": gm_owner_id,  # Send to the gm owner
             "item_body": body["item_body"],
-            "item_type": body["item_type"],  # Must be '3'
+            # Always: the approval refuses anything else. This used to be
+            # `body["item_type"]`, so a caller could file an item of ANY type
+            # (a team-ownership claim with a deadline already past, a Genos
+            # digest, a project request naming someone else's project)
+            # addressed to the GM owner. An `item_type` in the body is ignored.
+            "item_type": JOIN_GM_REQUEST,
             "item_optionals": body["item_optionals"],
             "is_read": False,
         }
