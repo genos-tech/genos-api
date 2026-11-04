@@ -44,7 +44,7 @@ from origin.views.utils.inbox_approval import (
     load_request_item,
     not_found,
 )
-from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.request_validators import is_own_user_id, validate_request_data
 from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.scope_guards import (
     guest_project_ids,
@@ -157,7 +157,20 @@ class ProjectMasterView(AuthenticatedAPIView):
         # supply one. The code is the prefix in human-readable task
         # display IDs (e.g. "GEN-42"). Users can edit it later from
         # project settings.
+        # The project's owner is the caller (MIP-1016). `owner` used to be
+        # written from the body unchecked, so a team member could create a
+        # project owned by anybody, including someone outside the team, who
+        # then held it (read its roster, renamed it) while the creator was
+        # left a viewer. The app sends the caller's own id, which is still
+        # accepted; anybody else's is refused, not silently replaced.
+        claimed_owner = request.data.get("owner")
+        if claimed_owner is not None and not is_own_user_id(claimed_owner, request.user):
+            return Response(
+                {"error": "owner must be your own user id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        data["owner"] = request.user.pk
         if not data.get("code"):
             team_id = data.get("team")
             taken = set(
