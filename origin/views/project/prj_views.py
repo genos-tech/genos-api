@@ -47,7 +47,12 @@ from origin.views.utils.inbox_approval import (
     load_request_item,
     not_found,
 )
-from origin.views.utils.request_validators import is_own_user_id, validate_request_data
+from origin.views.utils.request_validators import (
+    body_object,
+    is_own_user_id,
+    require_fields,
+    validate_request_data,
+)
 from origin.views.utils.roster_fields import shown_location
 from origin.views.utils.scope_guards import (
     guest_project_ids,
@@ -745,7 +750,7 @@ class JoinProjectView(AuthenticatedAPIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
-        error["hint"] = f"Failed to join project: {request.data['project_id']}"
+        error["hint"] = f"Failed to join project: {project_id}"
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -920,17 +925,22 @@ class ProjectTagsView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        if res := require_project_member_or_response(request.user, request.data.get("project_id")):
+        body = body_object(request)
+        # `project_id` is the first read, and the member check refuses a missing one.
+        if res := require_project_member_or_response(request.user, body.get("project_id")):
             return res
-        tag_count = ProjectTags.objects.filter(project=request.data["project_id"]).count()
+        # The rest were `request.data[...]`: a KeyError (500) when missing.
+        if res := require_fields(body, "team_id", "tag_name", "tag_color", "tag_text_color"):
+            return res
+        tag_count = ProjectTags.objects.filter(project=body["project_id"]).count()
 
         data = {
-            "team": request.data["team_id"],
-            "project": request.data["project_id"],
+            "team": body["team_id"],
+            "project": body["project_id"],
             "tag_id": tag_count + 1,
-            "tag_name": request.data["tag_name"],
-            "tag_color": request.data["tag_color"],
-            "tag_text_color": request.data["tag_text_color"],
+            "tag_name": body["tag_name"],
+            "tag_color": body["tag_color"],
+            "tag_text_color": body["tag_text_color"],
         }
 
         serializer = ProjectTagsSerializer(data=data)
@@ -978,8 +988,9 @@ class ProjectTagsView(AuthenticatedAPIView):
         return Response(response_body, status=status.HTTP_200_OK)
 
     def put(self, request):
-        project_id = request.data.get("project_id")
-        old_tag_name = request.data.get("old_tag_name")
+        body = body_object(request)
+        project_id = body.get("project_id")
+        old_tag_name = body.get("old_tag_name")
 
         if not project_id or not old_tag_name:
             return Response(
@@ -997,16 +1008,16 @@ class ProjectTagsView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if "tag_name" in request.data:
-            tag.tag_name = request.data["tag_name"]
-        if "tag_color" in request.data:
-            tag.tag_color = request.data["tag_color"]
-        if "tag_text_color" in request.data:
-            tag.tag_text_color = request.data["tag_text_color"]
+        if "tag_name" in body:
+            tag.tag_name = body["tag_name"]
+        if "tag_color" in body:
+            tag.tag_color = body["tag_color"]
+        if "tag_text_color" in body:
+            tag.tag_text_color = body["tag_text_color"]
         tag.save()
 
         # Also update all tasks that reference this tag by old name
-        if "tag_name" in request.data and request.data["tag_name"] != old_tag_name:
+        if "tag_name" in body and body["tag_name"] != old_tag_name:
             from origin.models.task.task_models import TaskMaster
 
             tasks = TaskMaster.objects.filter(
@@ -1018,11 +1029,9 @@ class ProjectTagsView(AuthenticatedAPIView):
                     if t.get("tagName") == old_tag_name:
                         updated_tags.append(
                             {
-                                "tagName": request.data["tag_name"],
-                                "tagColor": request.data.get("tag_color", tag.tag_color),
-                                "tagTextColor": request.data.get(
-                                    "tag_text_color", tag.tag_text_color
-                                ),
+                                "tagName": body["tag_name"],
+                                "tagColor": body.get("tag_color", tag.tag_color),
+                                "tagTextColor": body.get("tag_text_color", tag.tag_text_color),
                             }
                         )
                     else:
@@ -1031,7 +1040,7 @@ class ProjectTagsView(AuthenticatedAPIView):
                 # `auto_now` is written only for a field named in update_fields.
                 # Without ts_updated_at the delta refresh never sends this row.
                 task.save(update_fields=["tags", "ts_updated_at"])
-        elif "tag_color" in request.data or "tag_text_color" in request.data:
+        elif "tag_color" in body or "tag_text_color" in body:
             from origin.models.task.task_models import TaskMaster
 
             tasks = TaskMaster.objects.filter(
@@ -1208,7 +1217,7 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 )
             template.template_name = name
         if "body" in request.data:
-            template.body = request.data["body"]
+            template.body = request.data.get("body")
 
         # Surface a duplicate name as a clean 400 rather than a 500. The
         # unique (project, template_name) constraint is DB-enforced.

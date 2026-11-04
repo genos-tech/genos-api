@@ -22,7 +22,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
-from origin.views.utils.request_validators import body_object
+from origin.views.utils.request_validators import as_int, body_object, require_fields
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 # Columns of an inbox item that `PUT /inbox/` never changes (MIP-1018).
@@ -106,30 +106,34 @@ class InboxItemView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        if res := _require_team(request, request.data.get("team_id")):
+        body = body_object(request)
+        if res := _require_team(request, body.get("team_id")):
             return res
         # Only notices are made here. A request (join team, project, GM, ...)
         # is what an approval acts on, and it has its own endpoint that decides
         # who it goes to: letting the caller pick the type and the receiver
         # here is how a user approved their own "request" into someone else's
         # team (MIP-940).
-        if str(request.data.get("item_type")) != "0":
+        if str(body.get("item_type")) != "0":
             return Response(
                 {"error": "Only notices (item_type 0) can be created here."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # `receiver_id` and `item_body` were read as `[...]`: a KeyError (500) when missing.
+        if res := require_fields(body, "receiver_id", "item_body"):
+            return res
         data = {
-            "team": request.data["team_id"],
+            "team": body["team_id"],
             "sender": request.user.id,
-            "receiver": request.data["receiver_id"],
-            "item_body": request.data["item_body"],
+            "receiver": body["receiver_id"],
+            "item_body": body["item_body"],
             "item_type": 0,
             # Optional, unlike the joinXRequest/ endpoints where it's the
             # required routing payload. This endpoint used to drop it on the
             # floor: callers could send `item_optionals` and it silently never
             # persisted, which is why every activity row has null optionals
             # and an activity card can't link to the project/GM it names.
-            "item_optionals": request.data.get("item_optionals"),
+            "item_optionals": body.get("item_optionals"),
             "is_read": False,
         }
 
@@ -381,26 +385,38 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
 
 class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
     def post(self, request):
-        if res := _require_team(request, request.data.get("team_id")):
+        body = body_object(request)
+        if res := _require_team(request, body.get("team_id")):
             return res
-        project_owner_id = list(
-            ProjectMaster.objects.filter(
-                team_id=request.data["team_id"],
-                project_id=request.data["item_optionals"]["project_id"],
+        # The project is named inside `item_optionals`, so that has to be an object with a
+        # `project_id` before the lookup (a string or a list there was a TypeError, a missing
+        # key a KeyError: both 500). A project id that is not a number names no project.
+        if res := require_fields(body, objects=("item_optionals",)):
+            return res
+        if res := require_fields(
+            body["item_optionals"], "project_id", message="item_optionals.project_id is required."
+        ):
+            return res
+        project_id = as_int(body["item_optionals"]["project_id"])
+        project_owner_id = []
+        if project_id is not None:
+            project_owner_id = list(
+                ProjectMaster.objects.filter(team_id=body["team_id"], project_id=project_id)
+                .exclude(owner__isnull=True)
+                .values_list("owner", flat=True)
             )
-            .exclude(owner__isnull=True)
-            .values_list("owner", flat=True)
-        )
         if not project_owner_id:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if res := require_fields(body, "item_body"):
+            return res
 
         data = {
-            "team": request.data["team_id"],
+            "team": body["team_id"],
             "sender": request.user.id,
             "receiver": project_owner_id[0],  # Send to the project owner
-            "item_body": request.data["item_body"],
+            "item_body": body["item_body"],
             "item_type": 2,  # Always: the approval refuses anything else
-            "item_optionals": request.data["item_optionals"],
+            "item_optionals": body["item_optionals"],
             "is_read": False,
         }
 
@@ -542,26 +558,37 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
 
 class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
     def post(self, request):
-        if res := _require_team(request, request.data.get("team_id")):
+        body = body_object(request)
+        if res := _require_team(request, body.get("team_id")):
+            return res
+        # `item_optionals` has to be an object with a `gm_id` before the lookup (see the
+        # project request above for why).
+        if res := require_fields(body, objects=("item_optionals",)):
+            return res
+        if res := require_fields(
+            body["item_optionals"], "gm_id", message="item_optionals.gm_id is required."
+        ):
             return res
         # Resolve the GM's owner via its v3 channel. The FE sends the v3
         # channel UUID as `gm_id` (v3 GMs have no legacy chat id);
         # `Channel.owner` is the GM owner who should receive the request.
-        gm_channel = _gm_channel_by_uuid(request.data["item_optionals"]["gm_id"])
+        gm_channel = _gm_channel_by_uuid(body["item_optionals"]["gm_id"])
         if gm_channel is None or not gm_channel.owner_id:
             return Response(
                 {"error": "GM not found or has no owner."},
                 status=status.HTTP_404_NOT_FOUND,
             )
         gm_owner_id = gm_channel.owner_id
+        if res := require_fields(body, "item_body", "item_type"):
+            return res
 
         data = {
-            "team": request.data["team_id"],
+            "team": body["team_id"],
             "sender": request.user.id,
             "receiver": gm_owner_id,  # Send to the gm owner
-            "item_body": request.data["item_body"],
-            "item_type": request.data["item_type"],  # Must be '3'
-            "item_optionals": request.data["item_optionals"],
+            "item_body": body["item_body"],
+            "item_type": body["item_type"],  # Must be '3'
+            "item_optionals": body["item_optionals"],
             "is_read": False,
         }
 
