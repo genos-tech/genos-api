@@ -3,7 +3,6 @@ tests proving the new project-scoped task display IDs flow end-to-end:
 project creation auto-assigns a code, task creation auto-assigns a
 per-project number, and `display_id` lands in API responses."""
 
-
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
