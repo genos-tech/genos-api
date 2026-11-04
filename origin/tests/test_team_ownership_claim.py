@@ -75,6 +75,10 @@ class ClaimTestCase(TestCase):
             "deadline": (timezone.now() - timedelta(days=1)).isoformat(),
         }
         item.save(update_fields=["item_optionals"])
+        # The deadline is never earlier than the row's age allows (MIP-1029).
+        InboxItems.objects.filter(item_id=item_id).update(
+            ts_created_at=timezone.now() - timedelta(days=CLAIM_RESPONSE_DAYS + 1)
+        )
 
     def owner_of_team(self):
         return str(TeamMaster.objects.get(team_id=self.team.team_id).owner_id)

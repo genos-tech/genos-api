@@ -184,13 +184,28 @@ def claim_optionals(*, team_name: str, owner_id, deadline) -> dict:
 
 
 def claim_deadline_of(item):
-    """The deadline recorded on a claim row, or None if it has none.
+    """When a claim row becomes finalizable, or None if it never does.
 
-    None fails closed at every call site (`finalize` refuses), which is the
-    right behaviour for a row that predates `claim_optionals` or was
-    hand-made.
+    The LATER of the deadline recorded in `item_optionals` and the row's own
+    `ts_created_at` plus the response window. The recorded one alone was never
+    trustworthy: `item_optionals` was a body field on `POST inbox/joinGMRequest/`
+    (MIP-1029), so a row planted through it carried whatever deadline its author
+    liked, and a deadline of last year let an editor finalize at once. A real claim
+    is filed with a deadline of `now + CLAIM_RESPONSE_DAYS`, which is what the row's
+    age gives, so nothing about a real claim changes.
+
+    None fails closed at every call site (`finalize` refuses), which is the right
+    behaviour for a row that predates `claim_optionals`, was hand-made, or carries a
+    deadline that is not a timezone-aware ISO date (that was a 500).
     """
-    raw = (item.item_optionals or {}).get("deadline")
-    if not raw:
+    optionals = item.item_optionals if isinstance(item.item_optionals, dict) else {}
+    raw = optionals.get("deadline")
+    if not isinstance(raw, str) or not raw or item.ts_created_at is None:
         return None
-    return datetime.fromisoformat(raw)
+    try:
+        recorded = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if timezone.is_naive(recorded):
+        return None
+    return max(recorded, claim_deadline(item.ts_created_at))

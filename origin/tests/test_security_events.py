@@ -649,6 +649,7 @@ class TestTeamMembership(SecurityEventCase):
             format="json",
         ).json()["itemId"]
         from origin.models.common.inbox_models import InboxItems
+        from origin.services.ownership_claim import CLAIM_RESPONSE_DAYS
 
         item = InboxItems.objects.get(item_id=item_id)
         item.item_optionals = {
@@ -656,6 +657,11 @@ class TestTeamMembership(SecurityEventCase):
             "deadline": (timezone.now() - timedelta(days=1)).isoformat(),
         }
         item.save(update_fields=["item_optionals"])
+        # A claim that really went unanswered is old: the deadline is never earlier
+        # than the row's own age allows (MIP-1029).
+        InboxItems.objects.filter(item_id=item_id).update(
+            ts_created_at=timezone.now() - timedelta(days=CLAIM_RESPONSE_DAYS + 1)
+        )
         res = self.client.post(
             "/api/v2/team/ownership-claim/finalize/", {"item_id": item_id}, format="json"
         )
