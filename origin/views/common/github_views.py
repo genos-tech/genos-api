@@ -259,9 +259,24 @@ class GithubAccessibleReposView(APIView):
         )
 
 
+def _upstream_error(upstream_status: int) -> Response:
+    return Response(
+        {"detail": "github_api_error", "upstream_status": upstream_status},
+        status=status.HTTP_502_BAD_GATEWAY,
+    )
+
+
 class GithubPullDetailView(APIView):
     """Single PR: metadata + combined status of the head commit so the
-    UI can show a green/yellow/red CI badge."""
+    UI can show a green/yellow/red CI badge.
+
+    Cached in Redis per GitHub account (see "Caching" above
+    `_BRANCH_CACHE_TTL`, and `_pull_detail_ttl` for how long). The task open
+    and the table's PR column call this once per linked PR; it used to cost
+    three live GitHub calls in a row every time (pull, then commit status,
+    then check runs), about 1.7 s at the median. A miss now costs two round
+    trips (the pull, then the two CI calls together) and a hit none.
+    """
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -269,29 +284,64 @@ class GithubPullDetailView(APIView):
         account = _connected_account(request.user)
         if account is None:
             return _not_connected()
-        pr_resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
+        credential = _GithubCredential(account)
+        # Read before GitHub is asked, so a webhook that lands while the
+        # fetch is in flight orphans the key this answer is written under.
+        key = _pull_detail_cache_key(credential, owner, repo, number)
+        if key is not None:
+            cached = cache.get(key)
+            if cached is not None:
+                _log_links("pull_detail", credential)
+                if _is_denied(cached):
+                    return _upstream_error(cached["upstream_status"])
+                return Response(cached)
+        response = self._fetch(credential, owner, repo, number, key)
+        _log_links("pull_detail", credential)
+        return response
+
+    def _fetch(
+        self, credential: _GithubCredential, owner: str, repo: str, number: str, key: str | None
+    ) -> Response:
+        pr_resp = _call_github(credential, f"/repos/{owner}/{repo}/pulls/{number}")
         if not pr_resp.ok:
             logger.warning("GitHub PR fetch failed: %s", describe_upstream(pr_resp))
-            return Response(
-                {"detail": "github_api_error", "upstream_status": pr_resp.status_code},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            if key is not None and _is_refusal(pr_resp):
+                # Same answer for this account until the TTL, a reconnect
+                # (new key) or `_DENIED_CACHE_TTL`. A 5xx, a timeout or a
+                # rate limit says nothing about access and is not cached.
+                refusal = {**_DENIED, "upstream_status": pr_resp.status_code}
+                cache.set(key, refusal, _DENIED_CACHE_TTL)
+            return _upstream_error(pr_resp.status_code)
         pr = pr_resp.json()
 
         # Combined commit status (legacy) + check-runs (new) together
         # give the most complete CI picture. Both endpoints return 200
-        # even when empty.
-        head_sha = pr.get("head", {}).get("sha")
+        # even when empty. They depend only on the head sha, so they run
+        # together once the pull has named it.
+        head_sha = (pr.get("head") or {}).get("sha")
         combined = None
         checks = None
+        complete = True
         if head_sha:
-            cs = _github_get(account, f"/repos/{owner}/{repo}/commits/{head_sha}/status")
+            cs, ck = _get_all(
+                credential,
+                [
+                    (f"/repos/{owner}/{repo}/commits/{head_sha}/status", None),
+                    (f"/repos/{owner}/{repo}/commits/{head_sha}/check-runs", None),
+                ],
+            )
             if cs.ok:
                 combined = cs.json()
-            ck = _github_get(account, f"/repos/{owner}/{repo}/commits/{head_sha}/check-runs")
             if ck.ok:
                 checks = ck.json()
-        return Response({"pull": pr, "combined_status": combined, "check_runs": checks})
+            # A CI call that failed leaves a half-empty badge. It is still
+            # served (as it always was) but never stored: a hiccup must not
+            # freeze a degraded answer for the whole TTL.
+            complete = cs.ok and ck.ok
+        body = {"pull": pr, "combined_status": combined, "check_runs": checks}
+        if key is not None and complete:
+            cache.set(key, body, _pull_detail_ttl(pr, combined, checks))
+        return Response(body)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,6 +1067,8 @@ class GithubWebhookView(APIView):
                 owner_inv, repo_inv, number_inv = ref
                 if action in _PR_DATA_ACTIONS:
                     _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
+                elif action in _PR_DETAIL_ONLY_ACTIONS:
+                    _invalidate_pr_detail(owner_inv, repo_inv)
                 if action in _BRANCH_LIST_ACTIONS:
                     _invalidate_branch_list(owner_inv, repo_inv)
                 team_ids = _repo_team_ids(owner_inv, repo_inv)
@@ -1201,9 +1253,9 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 # limit, a 5xx or a timeout says nothing about access and is never cached.
 #
 # Invalidation. A webhook event can no longer name the keys to delete
-# (it does not know which accounts have entries), so each repo carries two
+# (it does not know which accounts have entries), so each repo carries three
 # generation numbers that are part of the keys: one for its PR lookups, one
-# for its branch list. A bump orphans everything cached under that number
+# for its branch list, one for its PR detail. A bump orphans everything cached under that number
 # for that repo, whichever account wrote it. The helpers read the
 # generation BEFORE calling GitHub and write under that same key, so a
 # fetch that straddles a bump lands under a key nobody reads again.
@@ -1212,6 +1264,11 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 # a PR changing state, draft flag or title drops the PR lookups; a PR being
 # opened or reopened also drops the branch list; a push (`synchronize`)
 # changes neither, so a busy branch no longer throws the branch list away.
+# The PR detail (`GithubPullDetailView`, with the head commit's CI) is dropped
+# by all of those AND by a push (`_invalidate_pr_detail`), since a push is what
+# changes it. What no event reaches is a CI run finishing: GitHub sends this
+# webhook no `check_run` or `status`, so an open PR's detail is only ever as
+# fresh as `_PULL_DETAIL_TTL`.
 # GitHub sends no event when a branch is created or deleted, so the branch
 # list is otherwise only ever refreshed by its TTL: a new branch shows up, and
 # a deleted one disappears, within `_BRANCH_CACHE_TTL`, and its head
@@ -1222,6 +1279,8 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 
 _BRANCH_CACHE_TTL = 5 * 60  # seconds; per repo and account, shared by every task
 _PULL_CACHE_TTL = 60  # matches the frontend prStatusCache
+_PULL_DETAIL_TTL = 60  # an open PR's detail, or one whose CI is still moving
+_PULL_DETAIL_MERGED_TTL = 30 * 60  # a merged PR with finished CI
 # Most repos fetched at once on a miss. Per request, so the process-wide
 # ceiling is this times the concurrent requests that miss.
 _FETCH_MAX_WORKERS = 6
@@ -1243,9 +1302,11 @@ def _account_scope(account) -> str:
     return f"{account.id}.{int(stamp.timestamp() * 1_000_000) if stamp else 0}"
 
 
-# The two counters a repo has: its PR lookups, and its branch list.
+# The three counters a repo has: its PR lookups, its branch list, and its PR
+# detail (`GithubPullDetailView`).
 _PRS = "prs"
 _BRANCHES = "branches"
+_PR_DETAIL = "pr_detail"
 # `pull_request` webhook actions that change what the PR lookups cache
 # (state, draft flag, merged_at, title), and the ones that may bring a branch
 # the cached branch list does not have. `synchronize` is in neither.
@@ -1253,6 +1314,10 @@ _PR_DATA_ACTIONS = frozenset(
     {"opened", "reopened", "closed", "edited", "ready_for_review", "converted_to_draft"}
 )
 _BRANCH_LIST_ACTIONS = frozenset({"opened", "reopened"})
+# A push changes what the detail shows (head commit, CI, size) but not what the
+# lookups cache, so it drops the detail alone. Every action in
+# `_PR_DATA_ACTIONS` drops it too (`_invalidate_pr_caches`).
+_PR_DETAIL_ONLY_ACTIONS = frozenset({"synchronize"})
 
 
 def _generation_key(which: str, owner: str, repo: str) -> str:
@@ -1287,6 +1352,51 @@ def _pull_cache_key(account, owner: str, repo: str, branch: str) -> str:
 
 def _pr_by_number_cache_key(account, owner: str, repo: str, number: int) -> str:
     return _scoped_key("pr_by_number", _PRS, account, owner, repo, number)
+
+
+_PR_NUMBER = re.compile(r"[0-9]{1,9}")
+
+
+def _pull_detail_cache_key(account, owner: str, repo: str, number: str) -> str | None:
+    """The key of one PR's detail for this account, or None when the URL does
+    not name a PR (a repo or number GitHub cannot have): the request then
+    goes to GitHub as it always did, and nobody can fill Redis with keys made
+    of whatever they put in the path."""
+    if not is_valid_repo_ref(owner, repo) or not _PR_NUMBER.fullmatch(number):
+        return None
+    return _scoped_key("pr_detail", _PR_DETAIL, account, owner, repo, int(number))
+
+
+def _ci_settled(combined, checks) -> bool:
+    """Has CI nothing left to report for this commit? Same reading as the
+    badge (`deriveCiState`): a check run that is not `completed` is pending,
+    and so is a combined status whose state is `pending` when it has
+    statuses. With NO statuses GitHub reports `pending` too ("pending if
+    there are no statuses"), which is not a signal. Unknown counts as not
+    settled: a missing answer, or check runs beyond the first page."""
+    if not isinstance(combined, dict) or not isinstance(checks, dict):
+        return False
+    runs = checks.get("check_runs")
+    total = checks.get("total_count")
+    if not isinstance(runs, list) or not isinstance(total, int) or total > len(runs):
+        return False
+    if any(not isinstance(run, dict) or run.get("status") != "completed" for run in runs):
+        return False
+    return not ((combined.get("total_count") or 0) > 0 and combined.get("state") == "pending")
+
+
+def _pull_detail_ttl(pr: dict, combined, checks) -> int:
+    """How long a PR's detail may be served from Redis.
+
+    Only a MERGED PR whose CI has settled is final: it cannot be reopened,
+    and nothing else on it changes (a check re-run on a merged commit is the
+    one exception, bounded by this TTL). Everything else is `_PULL_DETAIL_TTL`:
+    an open PR's CI moves with no event at all (GitHub sends no `check_run` or
+    `status` to this webhook), and a closed one can be reopened, which a lost
+    delivery would not tell us."""
+    if (pr.get("merged") or pr.get("merged_at")) and _ci_settled(combined, checks):
+        return _PULL_DETAIL_MERGED_TTL
+    return _PULL_DETAIL_TTL
 
 
 def _is_rate_limited(resp) -> bool:
@@ -1538,11 +1648,22 @@ def _invalidate_pr_caches(owner: str, repo: str, number: int | None, head_ref: s
     """
     try:
         _bump_repo_generation(_PRS, owner, repo)
+        _bump_repo_generation(_PR_DETAIL, owner, repo)
         if number is not None:
             cache.delete(_pr_head_ref_cache_key(owner, repo, number))
         logger.info("ensure_repo_webhook: invalidated PR caches for %s/%s#%s", owner, repo, number)
     except Exception:
         logger.exception("PR cache invalidation failed for %s/%s#%s", owner, repo, number)
+
+
+def _invalidate_pr_detail(owner: str, repo: str) -> None:
+    """Drop the repo's cached PR details (every account's) and nothing else.
+    Called for a push to a PR (`synchronize`): the head commit and its CI
+    changed, the state the PR lookups cache did not."""
+    try:
+        _bump_repo_generation(_PR_DETAIL, owner, repo)
+    except Exception:
+        logger.exception("PR detail invalidation failed for %s/%s", owner, repo)
 
 
 def _invalidate_branch_list(owner: str, repo: str) -> None:
