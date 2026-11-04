@@ -9,11 +9,19 @@ from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.inbox_approval import (
+    JOIN_GM_REQUEST,
+    NOTE_ACCESS_REQUEST,
+    already_answered,
+    is_still_open,
+    load_approvable_item,
+)
 from origin.views.utils.incremental import (
     build_delta_response,
     capture_server_time,
     check_since,
 )
+from origin.views.utils.request_validators import body_object
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 
@@ -272,21 +280,35 @@ class InboxItemView(AuthenticatedAPIView):
 
 class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
     def post(self, request):
-        team_owner_id = list(
-            TeamMaster.objects.filter(team_id=request.data["team_id"], is_deleted=False)
-            .exclude(owner__isnull=True)
-            .values_list("owner__id", flat=True)
-        )
+        # A body missing any of these was a KeyError 500, and a `team_id`
+        # that is not a UUID a ValidationError 500 (MIP-1014). Now the first
+        # is a 400, and a team id that names no team is the "Team not
+        # found." below whatever its shape.
+        body = body_object(request)
+        if any(field not in body for field in ("team_id", "item_body", "item_optionals")):
+            return Response(
+                {"error": "team_id, item_body and item_optionals are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        team_id = body["team_id"]
+        try:
+            team_owner_id = list(
+                TeamMaster.objects.filter(team_id=team_id, is_deleted=False)
+                .exclude(owner__isnull=True)
+                .values_list("owner__id", flat=True)
+            )
+        except (ValueError, ValidationError):
+            team_owner_id = []
         if not team_owner_id:
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         data = {
-            "team": request.data["team_id"],
+            "team": team_id,
             "sender": request.user.id,
             "receiver": team_owner_id[0],  # Send to the team owner
-            "item_body": request.data["item_body"],
+            "item_body": body["item_body"],
             "item_type": 1,  # Always: the approval refuses anything else
-            "item_optionals": request.data["item_optionals"],
+            "item_optionals": body["item_optionals"],
             "is_read": False,
         }
 
@@ -427,18 +449,15 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        inbox_item_id = int(request.data["item_id"])
-        try:
-            sender_id, optionals = InboxItems.objects.values_list("sender", "item_optionals").get(
-                item_id=inbox_item_id
-            )
-        except InboxItems.DoesNotExist:
-            return Response(
-                {"error": f"Inbox item {inbox_item_id} not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        # A real GM-join request (MIP-1014): it used to be any inbox item by
+        # id, of any type and in any state, and a missing or non-numeric
+        # `item_id` was a 500.
+        item, error = load_approvable_item(request, item_type=JOIN_GM_REQUEST)
+        if error is not None:
+            return error
+        inbox_item_id, sender_id = item.item_id, item.sender_id
 
-        optionals = optionals or {}
+        optionals = item.item_optionals if isinstance(item.item_optionals, dict) else {}
         gm_id = optionals.get("gm_id")
         gm_name = optionals.get("gm_name")
 
@@ -462,6 +481,8 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
                 {"error": "GM channel not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        if not is_still_open(item):
+            return already_answered()
 
         # Idempotent: re-activate a soft-deleted membership rather than
         # duplicating (mirrors ChannelMembersView.post).
@@ -762,18 +783,13 @@ class GrantNoteAccessFromInboxView(AuthenticatedAPIView):
     """
 
     def post(self, request):
-        inbox_item_id = int(request.data["item_id"])
-        try:
-            sender_id, optionals = InboxItems.objects.values_list("sender", "item_optionals").get(
-                item_id=inbox_item_id
-            )
-        except InboxItems.DoesNotExist:
-            return Response(
-                {"error": f"Inbox item {inbox_item_id} not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        # A real note-access request (MIP-1014): see `JoinGMFromInboxView`.
+        item, error = load_approvable_item(request, item_type=NOTE_ACCESS_REQUEST)
+        if error is not None:
+            return error
+        inbox_item_id, sender_id = item.item_id, item.sender_id
 
-        optionals = optionals or {}
+        optionals = item.item_optionals if isinstance(item.item_optionals, dict) else {}
         try:
             note_type = int(optionals.get("note_type"))
             note_id = int(optionals.get("note_id"))
@@ -788,6 +804,8 @@ class GrantNoteAccessFromInboxView(AuthenticatedAPIView):
             # Missing note OR non-owner approver — 404 either way so we
             # don't leak whether the note exists.
             return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_still_open(item):
+            return already_answered()
 
         from origin.models.note.common_note_models import (
             NoteFolderPermission,

@@ -427,7 +427,13 @@ urlpatterns = [
         name="my_security_events",
     ),
     path("api/v2/team/create/", TeamMasterView.as_view(), name="join_team"),
-    path("api/v2/team/profile/", TeamMasterView.as_view(), name="team_profile"),
+    # The app only PUTs here (rename / transfer). POST is `team/create/`'s,
+    # and answered here as well it was a second, unlooked-at create route.
+    path(
+        "api/v2/team/profile/",
+        TeamMasterView.as_view(http_method_names=["put", "options"]),
+        name="team_profile",
+    ),
     path("api/v2/team/exist/", CheckTeamExistsView.as_view(), name="exist_team"),
     path("api/v2/team/join/", TeamMembersView.as_view(), name="exist_team"),
     path("api/v2/team/leave/", LeaveTeamView.as_view(), name="leave_team"),
