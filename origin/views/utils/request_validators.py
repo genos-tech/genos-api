@@ -79,6 +79,22 @@ def body_object(request) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def refuse_non_string_fields(data: dict, *fields: str):
+    """A 400 `Response` naming the first of `fields` that is present and not a string, else None.
+
+    For a text field the view reads with `(data.get(f) or "").strip()`, which is an
+    `AttributeError` for a truthy value that is not text. Empty-ish values (null, `0`,
+    `false`, `[]`, `{}`) mean "not sent" and are left to the view's own "is required".
+    """
+    for field in fields:
+        if data.get(field) and not isinstance(data[field], str):
+            return Response(
+                {"error": f"{field} must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    return None
+
+
 # Schemes a task or milestone link may use. Anything else (`javascript:`, `data:`, `vbscript:`,
 # `file:`…) is stored on the task and rendered by the app as `<a href=…>`, and a
 # `javascript:` href runs in the app's origin, with the clicker's session, when a
