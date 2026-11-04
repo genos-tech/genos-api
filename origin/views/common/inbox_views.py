@@ -9,6 +9,7 @@ from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (
     JOIN_GM_REQUEST,
     NOTE_ACCESS_REQUEST,
@@ -23,6 +24,17 @@ from origin.views.utils.incremental import (
 )
 from origin.views.utils.request_validators import body_object
 from origin.views.utils.scope_guards import is_guest, is_team_member
+
+# Columns of an inbox item that `PUT /inbox/` never changes (MIP-1018).
+INBOX_SERVER_OWNED_FIELDS = (
+    "team",
+    "sender",
+    "receiver",
+    "item_type",
+    "item_body",
+    "item_optionals",
+    "is_deleted",
+)
 
 
 #############################
@@ -186,7 +198,20 @@ class InboxItemView(AuthenticatedAPIView):
         if inbox_item is None:
             return Response({"error": "Inbox item not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        update_data = request.data.copy()
+        # The receiver may mark the item read and answer a request (the sockets
+        # approve/reject handlers send `is_read` and `request_status`) and
+        # nothing else. The whole body used to reach a partial `__all__`
+        # serializer, so the receiver could re-address the item to anyone, rewrite
+        # its sender, body, type or routing ids, or delete it: a spoofed item
+        # planted in another person's inbox, past the sender check on create.
+        # A value that is the item's own is accepted and unused; any other is a 400.
+        if res := refuse_forged_fields(
+            request.data, stored_values(inbox_item, INBOX_SERVER_OWNED_FIELDS)
+        ):
+            return res
+        update_data = {
+            key: request.data[key] for key in ("is_read", "request_status") if key in request.data
+        }
         # Remove None values from the updated_data if it's None
         if "is_read" in update_data:
             if update_data["is_read"] is not None:
