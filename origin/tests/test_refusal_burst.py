@@ -10,6 +10,9 @@ were told before.
 
 import pathlib
 import re
+import time
+from types import SimpleNamespace
+from unittest import mock
 
 from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
@@ -19,14 +22,37 @@ from origin.models.common.security_event_models import SecurityAction, SecurityE
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.services import throttles
+from origin.services import security_events, throttles
 from origin.tests.test_mcp_endpoint import McpBase
 
 ALERT = SecurityAction.ALERT_FORBIDDEN_BURST
 
 
+class _MidMinute:
+    """Freeze the clock the burst counter reads, at the middle of a minute (MIP-993).
+
+    `note_forbidden` counts in fixed one-minute windows keyed on `int(time.time() // 60)`.
+    A test that makes exactly the 3 refusals the threshold needs, then expects one alert,
+    fails whenever the real clock crosses a minute between its first refusal and its last:
+    one lands in the old window, two in the new one, and nothing reaches 3 (`0 != 1`). A
+    loaded run, which stretches a test from milliseconds to seconds, makes that likely.
+
+    The fake goes on the `security_events` module only: patching `time.time` itself would
+    freeze the stdlib for everyone, the cache's expiry included (the same shape as
+    `test_throttles`, MIP-858). It is derived from the real clock, so it still names the
+    minute the test started in.
+    """
+
+    def setUp(self):
+        super().setUp()
+        now = 60.0 * int(time.time() // 60) + 30.0
+        patcher = mock.patch.object(security_events, "time", SimpleNamespace(time=lambda: now))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
 @override_settings(SECURITY_FORBIDDEN_BURST=3)
-class McpRefusalBurstTests(McpBase):
+class McpRefusalBurstTests(_MidMinute, McpBase):
     def setUp(self):
         super().setUp()
         cache.clear()
@@ -172,7 +198,7 @@ class McpRefusalBurstTests(McpBase):
 
 
 @override_settings(SECURITY_FORBIDDEN_BURST=3)
-class TenantGuardBurstTests(McpBase):
+class TenantGuardBurstTests(_MidMinute, McpBase):
     """A tenant guard answers 404 on purpose. A caller walking ids through it
     is probing, so a refusal on a row that EXISTS counts; an id that doesn't
     exist is a typo and does not. The answer is the same 404 either way."""
