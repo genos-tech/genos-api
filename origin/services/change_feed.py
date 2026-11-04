@@ -338,6 +338,59 @@ def _upsert(keys: set[str]) -> None:
 # --- reading (used by GET /api/v2/changes/) --------------------------------
 
 
+def host_team_ids(team_id) -> list[str]:
+    """The teams that lend this team something (an ACTIVE external grant), as
+    canonical ids. One query.
+
+    A guest team sees a host's projects, tasks, folders and chats inside its own
+    workspace, but every write to them bumps the HOST's keys. So a team's token
+    for a collection folds in the same collection's key of each of its hosts.
+    Deliberately every grant type and not just the matching one: over-reporting
+    is a refetch, under-reporting is a stale screen."""
+    from origin.models.common.team_models import ExternalGrant, ShareStatus
+
+    team = norm_team(team_id)
+    if team is None:
+        return []
+    hosts = (
+        ExternalGrant.objects.filter(guest_team_id=team, status=ShareStatus.ACTIVE)
+        .values_list("owner_team_id", flat=True)
+        .distinct()
+    )
+    return sorted({str(h) for h in hosts})
+
+
+def collection_keys(team_id, project_id=None, hosts: Iterable[str] = ()) -> dict:
+    """Which keys each collection's token depends on.
+
+    `tasks_project` is None unless a project is named (the caller has already
+    decided they may see it). The five team-level collections fold in the same
+    collection's key for every host team."""
+    teams = [norm_team(team_id), *[norm_team(h) for h in hosts]]
+    teams = [t for t in teams if t]
+    project_key = tasks_project_key(project_id)
+    return {
+        "tasks_project": [project_key] if project_key else None,
+        "tasks_team": [tasks_team_key(t) for t in teams],
+        "projects": [projects_key(t) for t in teams],
+        "notes_personal": [notes_personal_key(t) for t in teams],
+        "notes_task": [notes_task_key(t) for t in teams],
+        "notes_chat": [notes_chat_key(t) for t in teams],
+    }
+
+
+def tokens(team_id, project_id=None) -> dict:
+    """The response body of `GET /api/v2/changes/`: one opaque token per
+    collection. Two queries (the host teams, then every version at once)."""
+    by_collection = collection_keys(team_id, project_id, host_team_ids(team_id))
+    wanted = {k for keys in by_collection.values() for k in (keys or [])}
+    versions = read_versions(wanted)
+    return {
+        name: (None if keys is None else token_for(keys, versions))
+        for name, keys in by_collection.items()
+    }
+
+
 def read_versions(keys: Iterable[str]) -> dict[str, int]:
     """Every key's version in ONE query. A key never bumped is absent."""
     wanted = list(set(keys))

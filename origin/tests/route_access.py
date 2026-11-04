@@ -238,6 +238,8 @@ REGISTRY = {
     "origin.views.common.calendar_views.CalendarListView": self_only(
         "the caller's own calendars, through their own OAuth token"
     ),
+    # views.common.changes_views
+    "origin.views.common.changes_views.ChangesView": checked("is_team_member", "is_project_member"),
     # views.common.client_perf_views
     "origin.views.common.client_perf_views.ClientPerfView": signed_in(
         "logs the caller's own interaction timings; reads and writes no workspace data"
