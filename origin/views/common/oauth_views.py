@@ -47,6 +47,7 @@ from origin.services import crypto
 from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
 from origin.services.oauth.registry import get_provider, supported_provider_names
 from origin.services.security_events import record_security_event
+from origin.views.common.object_body import ObjectBodyMixin
 
 from .auth_views import _set_refresh_cookie
 
@@ -123,7 +124,7 @@ def _client_configured(provider_name: str) -> bool:
     return False
 
 
-class OAuthInitiateView(APIView):
+class OAuthInitiateView(ObjectBodyMixin, APIView):
     """Build the consent URL and dispatch the browser to the provider.
 
     Two methods on the same URL because they have different auth
@@ -529,7 +530,7 @@ class IntegrationsListView(APIView):
         )
 
 
-class IntegrationsDisconnectView(APIView):
+class IntegrationsDisconnectView(ObjectBodyMixin, APIView):
     """Delete a ConnectedAccount by provider.
 
     Legacy route, kept so older clients keep working. It refuses when
@@ -564,7 +565,7 @@ class IntegrationsDisconnectView(APIView):
         return _disconnect_account(accounts[0])
 
 
-class IntegrationsDisconnectAccountView(APIView):
+class IntegrationsDisconnectAccountView(ObjectBodyMixin, APIView):
     """DELETE /api/v2/integrations/account/<account_id>/ — drop one
     specific connected account. This is the route the UI uses; it's the
     only one that can express "disconnect my personal Google, keep my

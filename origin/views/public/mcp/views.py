@@ -59,6 +59,11 @@ class McpView(PublicApiView):
     # the spec says to answer both with 405. Claude Code still tries the
     # GET and carries on unbothered when it gets one.
     http_method_names = ["post", "options"]
+    # The body is JSON-RPC's to judge, and it answers in JSON-RPC's own
+    # words (`_parse`: an array is -32600 "Expected a single JSON-RPC
+    # request object."), which a client shows. The base view's guard would
+    # answer `[1]` with a bare 400 `{"error": ...}` instead.
+    object_body_required = False
 
     def disabled_message(self) -> str | None:
         # `PUBLIC_API_DISABLED` (all key access) or `MCP_DISABLED` (this
