@@ -22,6 +22,12 @@ from origin.views.task.task_activity_views import (
 from origin.views.task.task_delivery_views import TaskDeliveryListView
 from origin.views.task.task_views import *
 
+# A view class that serves two routes answers on both with every handler it
+# has, so a handler written for `<id>/` was reachable on the bare route and
+# the other way round, and the call crashed binding its arguments (a
+# TypeError, so a 500). Where one class serves routes of different shapes,
+# each route names the methods it is for and the rest answer 405.
+# `test_route_methods` holds every route here to that.
 urlpatterns = [
     path("api/v2/task/", TaskMasterView.as_view(), name="task_create"),
     path("api/v2/task/meta/", TaskMetaView.as_view(), name="task_meta"),
@@ -92,7 +98,7 @@ urlpatterns = [
     ),
     path(
         "api/v2/task/dependency/<int:dependency_id>/",
-        TaskDependencyView.as_view(),
+        TaskDependencyView.as_view(http_method_names=["delete", "options"]),
         name="task_dependency_detail",
     ),
     # Search
@@ -116,11 +122,23 @@ urlpatterns = [
     path("api/v2/task/comment/mention/", TaskCommentMentionView.as_view(), name="comment_mention"),
     # Sprint
     path("api/v2/sprint/config/", SprintConfigView.as_view(), name="sprint_config"),
-    path("api/v2/sprint/", SprintView.as_view(), name="sprint_create"),
+    path(
+        "api/v2/sprint/",
+        SprintView.as_view(http_method_names=["post", "options"]),
+        name="sprint_create",
+    ),
     path("api/v2/sprint/list/", ProjectSprintsView.as_view(), name="project_sprints"),
-    path("api/v2/sprint/<int:sprint_id>/", SprintView.as_view(), name="sprint_detail"),
+    path(
+        "api/v2/sprint/<int:sprint_id>/",
+        SprintView.as_view(http_method_names=["patch", "delete", "options"]),
+        name="sprint_detail",
+    ),
     # Milestone
-    path("api/v2/milestone/", MilestoneView.as_view(), name="milestone_create"),
+    path(
+        "api/v2/milestone/",
+        MilestoneView.as_view(http_method_names=["post", "options"]),
+        name="milestone_create",
+    ),
     path("api/v2/milestone/list/", ProjectMilestonesView.as_view(), name="project_milestones"),
     path(
         "api/v2/milestone/folder/list/",
@@ -139,17 +157,17 @@ urlpatterns = [
     ),
     path(
         "api/v2/milestone/<int:milestone_id>/",
-        MilestoneView.as_view(),
+        MilestoneView.as_view(http_method_names=["get", "head", "patch", "delete", "options"]),
         name="milestone_detail",
     ),
     path(
         "api/v2/milestone/<int:milestone_id>/assignees/",
-        MilestoneAssigneesView.as_view(),
+        MilestoneAssigneesView.as_view(http_method_names=["post", "options"]),
         name="milestone_assignees_add",
     ),
     path(
         "api/v2/milestone/<int:milestone_id>/assignees/<uuid:user_id>/",
-        MilestoneAssigneesView.as_view(),
+        MilestoneAssigneesView.as_view(http_method_names=["delete", "options"]),
         name="milestone_assignees_remove",
     ),
 ]
