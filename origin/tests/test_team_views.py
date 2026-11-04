@@ -1,6 +1,7 @@
 """Tests for team-related and user-profile API endpoints."""
 
 import uuid
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -56,6 +57,143 @@ class TestTeamCreation(BaseAPITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class TestTeamCreationOwner(BaseAPITestCase):
+    """The team's owner is the caller, whatever `owner_id` says (MIP-1016).
+
+    `owner_id` used to be written as the owner unchecked, so a signed-in
+    user could create a team owned by someone else.
+    """
+
+    URL = "/api/v2/team/create/"
+    REFUSED = {"error": "owner_id must be your own user id."}
+
+    def setUp(self):
+        super().setUp()
+        self.authenticate()
+        self.stranger = User.objects.create_user(
+            username="stranger", email="stranger@example.com", password="pw-stranger-1"
+        )
+
+    def _counts(self):
+        from origin.models.chat.todo_models import ToDoItem
+        from origin.models.common.team_models import TeamMaster
+        from origin.models.project.prj_models import ProjectMaster
+
+        return (
+            TeamMaster.objects.count(),
+            TeamMembers.objects.count(),
+            ProjectMaster.objects.count(),
+            ToDoItem.objects.count(),
+        )
+
+    def _post(self, body, url=None, **kwargs):
+        return self.client.post(url or self.URL, body, format="json", **kwargs)
+
+    def _body(self, **extra):
+        return {"team_name": "Mine", "team_email": "mine@genos.tech", **extra}
+
+    def _team(self, response):
+        from origin.models.common.team_models import TeamMaster
+
+        return TeamMaster.objects.get(team_id=response.data["teamDetails"]["teamId"])
+
+    def test_someone_elses_owner_id_is_refused_and_writes_nothing(self):
+        before = self._counts()
+        with mock.patch("origin.services.starter_seeder.create_starter_workspace") as seed:
+            res = self._post(self._body(owner_id=str(self.stranger.id), with_starter=True))
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data, self.REFUSED)
+        self.assertEqual(self._counts(), before)
+        seed.assert_not_called()
+
+    def test_a_teammates_owner_id_is_refused_too(self):
+        before = self._counts()
+        res = self._post(self._body(owner_id=str(self.user2.id)))
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data, self.REFUSED)
+        self.assertEqual(self._counts(), before)
+
+    def test_an_owner_id_that_names_nobody_is_refused(self):
+        before = self._counts()
+        for value in (str(uuid.uuid4()), "abc", "", 5, True, [str(self.user.id)]):
+            with self.subTest(owner_id=value):
+                res = self._post(self._body(owner_id=value))
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(res.data, self.REFUSED)
+        self.assertEqual(self._counts(), before)
+
+    def test_the_profile_route_refuses_it_as_well(self):
+        before = self._counts()
+        res = self._post(self._body(owner_id=str(self.stranger.id)), url="/api/v2/team/profile/")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data, self.REFUSED)
+        self.assertEqual(self._counts(), before)
+
+    def test_own_owner_id_creates_a_team_owned_by_the_caller(self):
+        res = self._post(self._body(owner_id=str(self.user.id)))
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        self.assertEqual(self._team(res).owner_id, self.user.id)
+        self.assertEqual(str(res.data["teamDetails"]["teamOwnerId"]), str(self.user.id))
+
+    def test_own_owner_id_in_another_spelling_is_still_the_caller(self):
+        for i, value in enumerate((str(self.user.id).upper(), self.user.id.hex)):
+            with self.subTest(owner_id=value):
+                res = self._post(
+                    {
+                        "team_name": f"Spelt{i}",
+                        "team_email": f"spelt{i}@genos.tech",
+                        "owner_id": value,
+                    }
+                )
+                self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+                self.assertEqual(self._team(res).owner_id, self.user.id)
+
+    def test_absent_or_null_owner_id_means_the_caller(self):
+        for i, extra in enumerate(({}, {"owner_id": None})):
+            with self.subTest(body=extra):
+                res = self._post(
+                    {"team_name": f"Absent{i}", "team_email": f"absent{i}@genos.tech", **extra}
+                )
+                self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+                self.assertEqual(self._team(res).owner_id, self.user.id)
+
+    def test_the_starter_workspace_still_seeds_for_the_caller(self):
+        with mock.patch("origin.services.starter_seeder.kick_off_demo_reindex"):
+            res = self._post(self._body(owner_id=str(self.user.id), with_starter=True))
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        team = self._team(res)
+        self.assertTrue(TeamMembers.objects.filter(team=team, attendee=self.user).exists())
+
+    def test_missing_fields_answer_400_not_500(self):
+        before = self._counts()
+        cases = (
+            ({}, {"team_name", "team_email"}),
+            ({"team_email": "x@genos.tech", "owner_id": str(self.user.id)}, {"team_name"}),
+            ({"team_name": "X", "owner_id": str(self.user.id)}, {"team_email"}),
+        )
+        for body, missing in cases:
+            with self.subTest(body=body):
+                res = self._post(body)
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(missing, set(res.data) & {"team_name", "team_email"})
+        self.assertEqual(self._counts(), before)
+
+    def test_a_body_that_is_not_an_object_answers_400(self):
+        before = self._counts()
+        for raw in ("[1]", '"abc"', "5", "true"):
+            with self.subTest(body=raw):
+                res = self.client.generic("POST", self.URL, raw, content_type="application/json")
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self._counts(), before)
+
+    def test_post_on_the_profile_route_still_creates(self):
+        """Unchanged by this fix; whether POST belongs on this route at all
+        is MIP-1014's question."""
+        res = self._post(self._body(owner_id=str(self.user.id)), url="/api/v2/team/profile/")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        self.assertEqual(self._team(res).owner_id, self.user.id)
 
 
 class TestCheckTeamExists(BaseAPITestCase):

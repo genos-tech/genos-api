@@ -232,3 +232,59 @@ class InboxApprovalTests(BaseAPITestCase):
         )
         self.assertEqual(res.status_code, 404)
         self.assertFalse(TeamMembers.objects.filter(team=self.team, attendee=newcomer).exists())
+
+
+class ProjectCreateOwnerTests(BaseAPITestCase):
+    """A new project is owned by its creator, whatever `owner` says (MIP-1016).
+
+    `owner` used to be written from the body unchecked: a team member could
+    create a project owned by someone outside the team, who could then read
+    its roster and rename it while the creator was left a viewer.
+    """
+
+    REFUSED = {"error": "owner must be your own user id."}
+
+    def setUp(self):
+        super().setUp()
+        self.outsider = User.objects.create_user(
+            username="pcoout", email="pcoout@example.com", password="pw"
+        )
+        self.authenticate(self.user)
+
+    def _post(self, name, **extra):
+        return self.client.post(
+            PROJECT,
+            {"team": str(self.team.team_id), "project_name": name, **extra},
+            format="json",
+        )
+
+    def test_someone_elses_owner_is_refused_and_writes_nothing(self):
+        before = (ProjectMaster.objects.count(), ProjectMembers.objects.count())
+        owners = (str(self.outsider.id), str(self.user2.id), "abc", "", 5, [str(self.user.id)])
+        for i, owner in enumerate(owners):
+            with self.subTest(owner=owner):
+                res = self._post(f"Forged{i}", owner=owner)
+                self.assertEqual(res.status_code, 400)
+                self.assertEqual(res.data, self.REFUSED)
+        self.assertEqual((ProjectMaster.objects.count(), ProjectMembers.objects.count()), before)
+
+    def test_own_owner_in_any_spelling_creates_it_owned_by_the_caller(self):
+        for i, owner in enumerate((str(self.user.id), str(self.user.id).upper(), self.user.id.hex)):
+            with self.subTest(owner=owner):
+                res = self._post(f"Mine{i}", owner=owner)
+                self.assertEqual(res.status_code, 201, res.data)
+                self.assertEqual(str(res.data["owner"]), str(self.user.id))
+
+    def test_absent_or_null_owner_means_the_caller(self):
+        """Was a project with no owner at all."""
+        for i, extra in enumerate(({}, {"owner": None})):
+            with self.subTest(body=extra):
+                res = self._post(f"Absent{i}", **extra)
+                self.assertEqual(res.status_code, 201, res.data)
+                project = ProjectMaster.objects.get(project_id=res.data["project_id"])
+                self.assertEqual(project.owner_id, self.user.id)
+
+    def test_an_outsider_still_gets_the_team_404_first(self):
+        self.authenticate(self.outsider)
+        res = self._post("Planted", owner=str(self.user.id))
+        self.assertEqual(res.status_code, 404)
