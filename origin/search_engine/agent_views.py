@@ -167,6 +167,7 @@ from origin.services.throttles import (
 )
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.request_validators import body_object
 from origin.views.utils.scope_guards import participates_in_team
 
 log = logging.getLogger(__name__)
@@ -960,7 +961,7 @@ class AgentAskView(AuthenticatedAPIView):
     throttle_classes = with_defaults(AgentThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
 
         query = (data.get("query") or "").strip()
         team_id = data.get("team_id")
@@ -1642,7 +1643,7 @@ class AgentDecideView(AuthenticatedAPIView):
     throttle_classes = with_defaults(AgentThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
 
         # A text field that is not text (a number, a list, an object) is a
         # malformed body, like `edited_args` below, not a crash in `.strip()`.
@@ -2455,7 +2456,7 @@ class NoteSummaryView(AuthenticatedAPIView):
     throttle_classes = with_defaults(SummaryThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
         team_id = data.get("team_id")
         if not team_id:
             return Response(
@@ -2623,7 +2624,7 @@ class ThreadSummaryView(AuthenticatedAPIView):
     throttle_classes = with_defaults(SummaryThrottle)
 
     def post(self, request):
-        data = request.data or {}
+        data = body_object(request)
         team_id = data.get("team_id")
         if not team_id:
             return Response(
@@ -3678,7 +3679,7 @@ class AgentRunFeedbackView(AuthenticatedAPIView):
     }
 
     def post(self, request, run_id: str):
-        data = request.data or {}
+        data = body_object(request)
 
         try:
             rating = int(data.get("rating"))
