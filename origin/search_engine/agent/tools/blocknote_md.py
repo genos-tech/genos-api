@@ -104,10 +104,9 @@ _SOURCE_BLOCK_FENCES = {"math": "mathBlock", "mermaid": "diagram"}
 # not follow, and the closer may not be followed by, an ASCII letter or digit,
 # so `$HOME/$USER` and `US$5-US$10` stay text. ASCII only, on purpose: CJK text
 # has no spaces around a formula (エネルギーは$E=mc^2$です). An opener after a
-# backslash or another `$` is literal.
-_INLINE_MATH_RE = re.compile(
-    r"(?<![A-Za-z0-9\\$])\$(?![\s$])((?:[^$\\\n]|\\.)*?[^\s$\\])\$(?![A-Za-z0-9$])"
-)
+# backslash or another `$` is literal. Scanned by hand (`_inline_math_spans`), once
+# through the text: the source cannot contain a `$`, so each opener's scan stops at
+# the next one.
 
 # Fence info strings → the language ids the editor's syntax-highlighted
 # code block (`@blocknote/code-block`'s `supportedLanguages`) knows. Its
@@ -598,6 +597,59 @@ def _display_math(lines: list[str], i: int) -> tuple[str, int] | None:
     return None
 
 
+def _is_ascii_alnum(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
+
+
+def _inline_math_spans(text: str) -> list[tuple[int, int, str]]:
+    """`(start, end, source)` of each inline math span in one line of text, by the
+    rule above. Mirrors `findInlineMath` in genos-frontend `noteMarkdown.ts`, so the
+    editor's markdown import and the agent read a body the same way."""
+    spans: list[tuple[int, int, str]] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        if text[i] != "$":
+            i += 1
+            continue
+        before = text[i - 1] if i else ""
+        after_open = text[i + 1] if i + 1 < n else ""
+        if (before and (_is_ascii_alnum(before) or before in "\\$")) or (
+            not after_open or after_open.isspace() or after_open == "$"
+        ):
+            i += 1
+            continue
+        j = i + 1
+        close = -1
+        while j < n:
+            ch = text[j]
+            if ch == "\n":
+                break
+            if ch == "\\":
+                if j + 1 >= n or text[j + 1] == "\n":
+                    break
+                j += 2
+                continue
+            if ch == "$":
+                last = text[j - 1]
+                after = text[j + 1] if j + 1 < n else ""
+                if (
+                    not last.isspace()
+                    and last != "\\"
+                    and not _is_ascii_alnum(after)
+                    and after != "$"
+                ):
+                    close = j
+                break
+            j += 1
+        if close < 0:
+            i += 1
+            continue
+        spans.append((i, close + 1, text[i + 1 : close]))
+        i = close + 1
+    return spans
+
+
 def _math_atoms(parts: _Parts) -> _Parts:
     """Cut inline math out of the plain-text runs. Done after links, chips and
     code spans are atoms, so a `$` inside one of them is never read as math,
@@ -614,11 +666,11 @@ def _math_atoms(parts: _Parts) -> _Parts:
             out.append(part)
             continue
         cursor = 0
-        for m in _INLINE_MATH_RE.finditer(part):
-            if m.start() > cursor:
-                out.append(part[cursor : m.start()])
-            out.append([{"type": "math", "props": {}, "content": m.group(1)}])
-            cursor = m.end()
+        for start, end, source in _inline_math_spans(part):
+            if start > cursor:
+                out.append(part[cursor:start])
+            out.append([{"type": "math", "props": {}, "content": source}])
+            cursor = end
         if cursor < len(part):
             out.append(part[cursor:])
     return out

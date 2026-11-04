@@ -493,6 +493,15 @@ class TestInlineMath(SimpleTestCase):
         )
         self.assertEqual(self.content("($x$)"), [_text("("), _math("x"), _text(")")])
 
+    def test_long_hostile_lines_are_read_in_one_pass(self):
+        # The text is an agent's or a user's: a line of many openers, or one very long
+        # opener, must not cost more than a pass over it (a regex here was flagged for
+        # polynomial backtracking; this is a scanner, and this pins it).
+        for text in ("$a" * 100_000, "$" + "a " * 100_000, "\\" * 200_000 + "$", "$a $" * 50_000):
+            started = time.perf_counter()
+            self.content(text)
+            self.assertLess(time.perf_counter() - started, 2.0, text[:12])
+
     def test_escaped_dollar_is_literal(self):
         self.assertEqual(self.content("\\$5 and \\$6"), [_text("\\$5 and \\$6")])
 
