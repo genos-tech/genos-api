@@ -61,13 +61,15 @@ SAMPLE = {
     "longest_ms": 250,
     "requests": 11,
     "window_ms": 3200,
+    "content_ms": 1200,
 }
 CTX = {"cores": 8, "homes_mounted": 2, "viewport_w": 1500, "build": "abc1234"}
 
 # The contract's example, character for character.
 EXAMPLE_LINE = (
     "perf.client kind=task_switch paint_ms=120 settle_ms=1500 blocked_ms=900 "
-    "longest_ms=250 requests=11 window_ms=3200 cores=8 homes=2 vw=1500 build=abc1234"
+    "longest_ms=250 requests=11 window_ms=3200 content_ms=1200 cores=8 homes=2 vw=1500 "
+    "build=abc1234"
 )
 
 
@@ -173,6 +175,39 @@ class TestTheLogLine(ClientPerfCase):
                 self.assertEqual(len(lines), 1)
                 self.assertIn(f"kind={kind} ", lines[0])
 
+    def test_content_ms_follows_window_ms_and_the_ctx_keys_keep_their_order(self):
+        lines, _ = self.logged({"samples": [SAMPLE], "ctx": CTX})
+        keys = [part.split("=", 1)[0] for part in lines[0].split(" ")[1:]]
+        self.assertEqual(
+            keys,
+            [
+                "kind",
+                "paint_ms",
+                "settle_ms",
+                "blocked_ms",
+                "longest_ms",
+                "requests",
+                "window_ms",
+                "content_ms",
+                "cores",
+                "homes",
+                "vw",
+                "build",
+            ],
+        )
+
+    def test_a_client_that_does_not_send_content_ms_still_logs_a_full_line(self):
+        # A browser one release behind the server: nothing breaks, the new
+        # key is a dash and every other value is where it was.
+        old = {k: v for k, v in SAMPLE.items() if k != "content_ms"}
+        lines, response = self.logged({"samples": [old], "ctx": CTX})
+        self.assertEqual(response.json(), {"accepted": 1, "dropped": 0})
+        self.assertEqual(lines, [EXAMPLE_LINE.replace("content_ms=1200", "content_ms=-")])
+
+    def test_a_null_content_ms_is_a_dash(self):
+        lines, _ = self.logged({"samples": [_sample(content_ms=None)], "ctx": CTX})
+        self.assertEqual(lines, [EXAMPLE_LINE.replace("content_ms=1200", "content_ms=-")])
+
     def test_no_ctx_logs_dashes_for_the_ctx_fields(self):
         lines, _ = self.logged({"samples": [SAMPLE]})
         self.assertEqual(
@@ -196,7 +231,7 @@ class TestTheLogLine(ClientPerfCase):
             lines,
             [
                 "perf.client kind=idle_minute paint_ms=- settle_ms=- blocked_ms=- longest_ms=- "
-                "requests=4 window_ms=- cores=- homes=- vw=- build=-"
+                "requests=4 window_ms=- content_ms=- cores=- homes=- vw=- build=-"
             ],
         )
 
@@ -235,7 +270,15 @@ class TestDroppedNotFatal(ClientPerfCase):
 
     def test_a_negative_or_non_numeric_number_drops_that_sample(self):
         bad = [-1, -0.4, "120", "", True, False, [1], {"a": 1}]
-        for field in ("paint_ms", "settle_ms", "blocked_ms", "longest_ms", "requests", "window_ms"):
+        for field in (
+            "paint_ms",
+            "settle_ms",
+            "blocked_ms",
+            "longest_ms",
+            "requests",
+            "window_ms",
+            "content_ms",
+        ):
             for value in bad:
                 with self.subTest(field=field, value=value):
                     response = self.nothing_logged({"samples": [_sample(**{field: value})]})
@@ -279,9 +322,20 @@ class TestDroppedNotFatal(ClientPerfCase):
 class TestClampingAndRounding(ClientPerfCase):
     def test_floats_are_rounded_to_whole_numbers(self):
         lines, _ = self.logged(
-            {"samples": [_sample(paint_ms=120.6, settle_ms=0.4, blocked_ms=7.0, requests=2.51)]}
+            {
+                "samples": [
+                    _sample(
+                        paint_ms=120.6,
+                        settle_ms=0.4,
+                        blocked_ms=7.0,
+                        requests=2.51,
+                        content_ms=1200.4,
+                    )
+                ]
+            }
         )
         self.assertIn("paint_ms=121 settle_ms=0 blocked_ms=7 longest_ms=250 requests=3 ", lines[0])
+        self.assertIn(" content_ms=1200 ", lines[0])
 
     def test_sample_numbers_are_clamped_to_600000(self):
         lines, _ = self.logged(
@@ -294,20 +348,22 @@ class TestClampingAndRounding(ClientPerfCase):
                         longest_ms=1e300,
                         requests=10**40,
                         window_ms=599999.4,
+                        content_ms=10**9,
                     )
                 ]
             }
         )
         self.assertIn(
             "paint_ms=600000 settle_ms=600000 blocked_ms=600000 longest_ms=600000 "
-            "requests=600000 window_ms=599999 ",
+            "requests=600000 window_ms=599999 content_ms=600000 ",
             lines[0],
         )
 
     def test_zero_is_a_value_not_a_dash(self):
-        lines, _ = self.logged({"samples": [_sample(paint_ms=0, requests=0)]})
+        lines, _ = self.logged({"samples": [_sample(paint_ms=0, requests=0, content_ms=0)]})
         self.assertIn("paint_ms=0 settle_ms=1500 ", lines[0])
         self.assertIn(" requests=0 ", lines[0])
+        self.assertIn(" content_ms=0 ", lines[0])
 
     def test_ctx_numbers_are_clamped(self):
         cases = [
@@ -411,6 +467,17 @@ class TestWholeRequestErrors(ClientPerfCase):
         response = self.nothing_logged(body)
         self.assertEqual(response.status_code, 400)
         self.assertIn("error", response.json())
+
+    def test_twenty_largest_samples_fit_under_the_cap(self):
+        # The widest sample there can be: the longest kind, every number at
+        # the clamp. `json.dumps` spaces its separators, so this is more than
+        # a browser's compact `JSON.stringify` sends.
+        widest = {"kind": "project_switch", **{f: 600000 for f in SAMPLE if f != "kind"}}
+        body = {"samples": [widest] * MAX_SAMPLES, "ctx": {**CTX, "build": "a" * 40}}
+        self.assertLess(len(json.dumps(body)), MAX_BODY_BYTES)
+        lines, response = self.logged(body)
+        self.assertEqual(response.json(), {"accepted": MAX_SAMPLES, "dropped": 0})
+        self.assertEqual(len(lines), MAX_SAMPLES)
 
     def test_a_body_just_under_8kb_is_accepted(self):
         body = {"samples": [SAMPLE], "ctx": {"build": "a" * 8000}}
