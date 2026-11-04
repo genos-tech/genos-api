@@ -42,6 +42,7 @@ from apis.request_id import describe_exception, describe_upstream
 from origin.models.common.user_models import ConnectedAccount
 from origin.services.oauth.accounts import accounts_for, resolve_account_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
+from origin.views.common.object_body import ObjectBodyMixin
 
 logger = logging.getLogger(__name__)
 
@@ -520,7 +521,7 @@ def _event_sort_key(event: dict) -> tuple[int, str]:
     return (1, "") if not isinstance(raw, str) else (0, raw)
 
 
-class CalendarEventsView(APIView):
+class CalendarEventsView(ObjectBodyMixin, APIView):
     """GET  /api/v2/calendar/events/ — list events in a date range.
     POST /api/v2/calendar/events/ — create an event."""
 
@@ -636,7 +637,7 @@ class CalendarEventsView(APIView):
         return Response(resp.json(), status=status.HTTP_201_CREATED)
 
 
-class CalendarEventDetailView(APIView):
+class CalendarEventDetailView(ObjectBodyMixin, APIView):
     """GET    /api/v2/calendar/events/<event_id>/ — fetch one event.
     PATCH  /api/v2/calendar/events/<event_id>/ — update an event.
     DELETE /api/v2/calendar/events/<event_id>/ — delete an event."""

@@ -51,6 +51,7 @@ from origin.services.github_webhooks import (
 )
 from origin.services.oauth.tokens import get_valid_access_token
 from origin.services.task_delivery import canonical_pr_url, sync_pull_request
+from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
 
 logger = logging.getLogger(__name__)
@@ -872,7 +873,7 @@ _REGISTER_FAILURE_STATUS = {
 }
 
 
-class GithubRegisterRepoView(APIView):
+class GithubRegisterRepoView(ObjectBodyMixin, APIView):
     """POST /api/v2/github/register-repo/  {owner, repo}
 
     Install Genos's PR webhook on a repo, or take over a hook someone added by

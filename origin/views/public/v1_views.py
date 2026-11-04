@@ -54,6 +54,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.views.common.api_key_auth import ApiKeyAuthentication
+from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.public.permissions import HasApiKey, HasRequiredScope, PublicApiThrottle
 from origin.views.utils.scope_guards import (
     can_access_task,
@@ -72,8 +73,13 @@ class PublicApiDisabled(APIException):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
 
-class PublicApiView(APIView):
-    """Shared base: API key required, scope enforced, throttled per key."""
+class PublicApiView(ObjectBodyMixin, APIView):
+    """Shared base: API key required, scope enforced, throttled per key.
+
+    A JSON body must be an object, as on the app's own views
+    (`object_body`): a list or a number is a 400 before the handler, an
+    empty body reads as `{}`, and a malformed one is a 400 of its own.
+    """
 
     # The key authenticator, and the only view family that names it — see
     # "Authentication" above. JWT is kept beside it so a signed-in session
