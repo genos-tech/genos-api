@@ -13,13 +13,19 @@ Contract:
 
     {"samples": [{"kind": "task_switch", "paint_ms": 120, "settle_ms": 1500,
                   "blocked_ms": 900, "longest_ms": 250, "requests": 11,
-                  "window_ms": 3200}],
+                  "window_ms": 3200, "content_ms": 1200}],
      "ctx": {"cores": 8, "homes_mounted": 2, "viewport_w": 1500,
              "build": "abc1234"}}
 
     Response (202): {"accepted": <n>, "dropped": <m>}
 
-    perf.client kind=task_switch paint_ms=120 settle_ms=1500 blocked_ms=900 longest_ms=250 requests=11 window_ms=3200 cores=8 homes=2 vw=1500 build=abc1234
+    perf.client kind=task_switch paint_ms=120 settle_ms=1500 blocked_ms=900 longest_ms=250 requests=11 window_ms=3200 content_ms=1200 cores=8 homes=2 vw=1500 build=abc1234
+
+`content_ms` (MIP-989) is `settle_ms` without the requests that are never
+what a click waits for (GitHub, presence, the access check, runtime config),
+so it says when the content was ready. It follows `window_ms`, the last of
+the sample's own keys, so the `ctx` keys and `build` keep their order after
+it; a client that does not send it logs `content_ms=-`.
 
 What is accepted, and what is not:
 
@@ -83,6 +89,7 @@ SAMPLE_FIELDS = (
     "longest_ms",
     "requests",
     "window_ms",
+    "content_ms",
 )
 CTX_LIMITS = {"cores": 256, "homes_mounted": 3, "viewport_w": 20000}
 
@@ -156,7 +163,7 @@ def _text(value) -> str:
 def _log_sample(sample: dict, ctx: dict) -> None:
     log.info(
         "perf.client kind=%s paint_ms=%s settle_ms=%s blocked_ms=%s longest_ms=%s "
-        "requests=%s window_ms=%s cores=%s homes=%s vw=%s build=%s",
+        "requests=%s window_ms=%s content_ms=%s cores=%s homes=%s vw=%s build=%s",
         sample["kind"],
         _text(sample["paint_ms"]),
         _text(sample["settle_ms"]),
@@ -164,6 +171,7 @@ def _log_sample(sample: dict, ctx: dict) -> None:
         _text(sample["longest_ms"]),
         _text(sample["requests"]),
         _text(sample["window_ms"]),
+        _text(sample["content_ms"]),
         _text(ctx["cores"]),
         _text(ctx["homes_mounted"]),
         _text(ctx["viewport_w"]),
