@@ -539,3 +539,103 @@ class TodoReminderBodyShapeTests(_MissingFieldAnswers, _ChatClient):
         resp = self.client.post(self.url(), {"remindAt": _in_an_hour()}, format="json")
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(ToDoItemReminder.objects.filter(item=self.todo).count(), 1)
+
+
+# --------------------------------------------------------------------------- #
+# channel text fields                                                         #
+# --------------------------------------------------------------------------- #
+
+NOT_TEXT = (5, True, 1.5, ["a"], {"a": 1})
+EMPTY_TEXT = (0, False, [], {}, None, "")
+
+
+class ChannelTitleFieldTests(_ChatClient):
+    """`title` and `profile_image_url` are text the views `.strip()` or `len()`: a number,
+    a list or an object there was a 500, whatever the rest of the body held."""
+
+    TITLE_NOT_TEXT = {"error": "title must be a string."}
+
+    def create(self, **fields):
+        body = {"kind": 2, "team_id": str(self.team.team_id), **fields}
+        return self.client.post("/api/v3/channels/", body, format="json")
+
+    def test_a_group_title_that_is_not_text_is_refused_and_creates_nothing(self):
+        before = self.state()
+        for title in NOT_TEXT:
+            for kind in (2, 4):
+                resp = self.create(kind=kind, title=title)
+                self.assertEqual(
+                    (resp.status_code, resp.json()), (400, self.TITLE_NOT_TEXT), (kind, title)
+                )
+        self.assertEqual(self.state(), before)
+
+    def test_an_empty_group_title_keeps_its_answer(self):
+        for title in EMPTY_TEXT:
+            resp = self.create(title=title)
+            self.assertEqual(
+                (resp.status_code, resp.json()), (400, {"error": "title is required for GM."})
+            )
+
+    def test_a_dm_ignores_the_title_as_it_always_did(self):
+        resp = self.create(kind=1, other_user_id=str(self.user2.id), title=5)
+        self.assertEqual(resp.status_code, 201)
+
+    def test_a_patched_title_that_is_not_text_is_refused_and_changes_nothing(self):
+        url = f"/api/v3/channels/{self.gm.id}/"
+        before = self.state()
+        for title in NOT_TEXT:
+            resp = self.client.patch(url, {"title": title}, format="json")
+            self.assertEqual(
+                (resp.status_code, resp.json()), (400, self.TITLE_NOT_TEXT), repr(title)
+            )
+        self.assertEqual(self.state(), before)
+
+    def test_a_patched_image_url_that_is_not_text_is_refused_and_changes_nothing(self):
+        url = f"/api/v3/channels/{self.gm.id}/"
+        before = self.state()
+        for value in NOT_TEXT:
+            resp = self.client.patch(url, {"profile_image_url": value}, format="json")
+            self.assertEqual(
+                (resp.status_code, resp.json()),
+                (400, {"error": "profile_image_url must be a string."}),
+                repr(value),
+            )
+        self.assertEqual(self.state(), before)
+
+    def test_an_empty_patched_title_keeps_its_answer(self):
+        url = f"/api/v3/channels/{self.gm.id}/"
+        for title in EMPTY_TEXT:
+            resp = self.client.patch(url, {"title": title}, format="json")
+            self.assertEqual(
+                (resp.status_code, resp.json()),
+                (400, {"error": "title must be a non-empty string."}),
+                repr(title),
+            )
+
+    def test_a_text_patch_still_applies(self):
+        url = f"/api/v3/channels/{self.gm.id}/"
+        resp = self.client.patch(
+            url, {"title": " Renamed ", "profile_image_url": "x.png"}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.gm.refresh_from_db()
+        self.assertEqual((self.gm.title, self.gm.profile_image_url), ("Renamed", "x.png"))
+        # An empty image url still clears it.
+        resp = self.client.patch(url, {"profile_image_url": ""}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.gm.refresh_from_db()
+        self.assertEqual(self.gm.profile_image_url, "")
+
+    def test_a_pm_title_that_is_not_text_is_refused_and_renames_nothing(self):
+        url = f"/api/v3/channels/{self.pm.id}/"
+        before = self.state()
+        for title in NOT_TEXT:
+            resp = self.client.patch(url, {"title": title}, format="json")
+            self.assertEqual(
+                (resp.status_code, resp.json()), (400, self.TITLE_NOT_TEXT), repr(title)
+            )
+        self.assertEqual(self.state(), before)
+        for title in EMPTY_TEXT:
+            resp = self.client.patch(url, {"title": title}, format="json")
+            self.assertEqual(resp.status_code, 400, repr(title))
+            self.assertNotEqual(resp.json(), self.TITLE_NOT_TEXT, repr(title))

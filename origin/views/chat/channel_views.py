@@ -64,7 +64,11 @@ from origin.services.member_roles import (
     resolve_team_role,
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.request_validators import body_object, refuse_non_object_body
+from origin.views.utils.request_validators import (
+    body_object,
+    refuse_non_object_body,
+    refuse_non_string_fields,
+)
 from origin.views.utils.scope_guards import is_guest, is_team_member, is_team_participant
 from origin.views.utils.upload_validation import check_attachment_upload, check_image_upload
 
@@ -627,6 +631,10 @@ class ChannelListView(AuthenticatedAPIView):
         is the whole point of the delegation model and is deliberately not
         something the host can do on their behalf.
         """
+        # `.strip()` below is an AttributeError for a title that is not text.
+        refusal = refuse_non_string_fields(body, "title")
+        if refusal:
+            return refusal
         title = (body.get("title") or "").strip()
         is_external = bool(body.get("is_external", False))
         is_private = bool(body.get("is_private", False))
@@ -821,6 +829,9 @@ class ChannelDetailView(AuthenticatedAPIView):
         body = body_object(request)
         update_fields = []
         if "title" in body:
+            refusal = refuse_non_string_fields(body, "title")
+            if refusal:
+                return refusal
             title = (body.get("title") or "").strip()
             if not title:
                 return Response(
@@ -835,6 +846,9 @@ class ChannelDetailView(AuthenticatedAPIView):
             channel.title = title
             update_fields.append("title")
         if "profile_image_url" in body:
+            refusal = refuse_non_string_fields(body, "profile_image_url")
+            if refusal:
+                return refusal
             url = body.get("profile_image_url") or ""
             if len(url) > 512:
                 return Response(
@@ -949,6 +963,9 @@ class ChannelDetailView(AuthenticatedAPIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        refusal = refuse_non_string_fields(body, "title")
+        if refusal:
+            return refusal
         title = (body.get("title") or "").strip()
         if not title:
             return Response(
