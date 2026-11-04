@@ -22,7 +22,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
-from origin.views.utils.request_validators import as_int, body_object, require_fields
+from origin.views.utils.request_validators import as_int, as_uuid, body_object, require_fields
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 # Columns of an inbox item that `PUT /inbox/` never changes (MIP-1018).
@@ -575,7 +575,14 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
         # channel UUID as `gm_id` (v3 GMs have no legacy chat id);
         # `Channel.owner` is the GM owner who should receive the request.
         gm_channel = _gm_channel_by_uuid(body["item_optionals"]["gm_id"])
-        if gm_channel is None or not gm_channel.owner_id:
+        # A GM of the team the request is filed in: the caller was checked against `team_id`
+        # above, not against the GM's team, so a member of one team could address a request to
+        # the owner of a GM in another, and have themselves added there on Approve.
+        if (
+            gm_channel is None
+            or not gm_channel.owner_id
+            or gm_channel.team_id != as_uuid(body["team_id"])
+        ):
             return Response(
                 {"error": "GM not found or has no owner."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -595,7 +602,12 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
             # digest, a project request naming someone else's project)
             # addressed to the GM owner. An `item_type` in the body is ignored.
             "item_type": JOIN_GM_REQUEST,
-            "item_optionals": body["item_optionals"],
+            # The GM's own name where one was sent: the approval shows it in its push and its
+            # answer, and what the requester typed there is text the approver is asked to trust.
+            "item_optionals": {
+                **body["item_optionals"],
+                **({"gm_name": gm_channel.title} if "gm_name" in body["item_optionals"] else {}),
+            },
             "is_read": False,
         }
 
