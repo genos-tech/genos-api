@@ -38,7 +38,12 @@ from origin.models.chat.unified_models import Activity
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
-from origin.views.utils.request_validators import body_object, refuse_non_object_body
+from origin.views.utils.request_validators import (
+    as_int,
+    as_uuid,
+    body_object,
+    refuse_non_object_body,
+)
 from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_SINCE_DAYS = 30
@@ -218,17 +223,27 @@ class ActivityReadAllView(AuthenticatedAPIView):
 
     def put(self, request):
         qs = Activity.objects.filter(recipient=request.user, is_read=False)
-        channel_id = request.GET.get("channel_id")
-        if not channel_id:
+        if "channel_id" in request.GET:
+            # With `?channel_id=` the body is never read, as before.
+            channel_id = request.GET.get("channel_id")
+        else:
             # An empty body is a request here (mark everything read), so a body that is not
-            # an object is refused, not read as an empty one. With `?channel_id=` the body
-            # is never read, as before.
+            # an object is refused, not read as an empty one.
             refusal = refuse_non_object_body(request)
             if refusal:
                 return refusal
             channel_id = body_object(request).get("channel_id")
-        if channel_id:
-            qs = qs.filter(channel_id=channel_id)
+        if channel_id is not None:
+            # A channel id that is not one is refused (MIP-1014). It used to be a 500 when
+            # it was text, and when it was falsy (`?channel_id=`, `""`, `0`) it was read as
+            # no channel at all, so a request about ONE channel marked everything read.
+            channel_uuid = as_uuid(channel_id)
+            if channel_uuid is None:
+                return Response(
+                    {"error": "channel_id must be a UUID."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            qs = qs.filter(channel_id=channel_uuid)
         updated = qs.update(is_read=True)
         return Response({"updated": updated}, status=status.HTTP_200_OK)
 
@@ -255,8 +270,15 @@ class ActivityReadBatchView(AuthenticatedAPIView):
                 {"error": "activity_ids must be a non-empty list."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Activity ids are UUIDs; one that is not was a 500 from the filter (MIP-1014).
+        parsed = [as_uuid(activity_id) for activity_id in activity_ids]
+        if None in parsed:
+            return Response(
+                {"error": "activity_ids must be a list of UUIDs."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         updated = Activity.objects.filter(
-            id__in=activity_ids, recipient=request.user, is_read=False
+            id__in=parsed, recipient=request.user, is_read=False
         ).update(is_read=True)
         return Response({"updated": updated}, status=status.HTTP_200_OK)
 
@@ -298,6 +320,13 @@ class ActivitySurfaceView(AuthenticatedAPIView):
                 {"error": "surface_type, team_id and entity_key are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # `int(surface_type)` below was a 500 for anything but an integer (MIP-1014).
+        surface_type = as_int(surface_type)
+        if surface_type is None:
+            return Response(
+                {"error": "surface_type must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         # The caller (the mentioner / `actor`) must belong to the team
         # they're creating activities in — otherwise an authenticated user
         # could fabricate sidebar entries for any member of any team whose
@@ -313,7 +342,7 @@ class ActivitySurfaceView(AuthenticatedAPIView):
         rows = v3_activity.create_surface_mention_activities(
             team_id=team_id,
             actor=request.user,
-            surface_type=int(surface_type),
+            surface_type=surface_type,
             entity_key=str(entity_key),
             newly_mentioned_user_ids=data.get("newly_mentioned_user_ids") or [],
             removed_user_ids=data.get("removed_user_ids") or [],
@@ -363,6 +392,13 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
                 {"error": "surface_type, team_id and entity_key are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # `int(surface_type)` below was a 500 for anything but an integer (MIP-1014).
+        surface_type = as_int(surface_type)
+        if surface_type is None:
+            return Response(
+                {"error": "surface_type must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         # Same actor-membership guard as the mention endpoint: the commenter
         # must belong to the team, so an authenticated user can't fabricate
         # activities in a team they're not in. (Recipients are separately
@@ -375,7 +411,7 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
         rows = v3_activity.create_surface_comment_activities(
             team_id=team_id,
             actor=request.user,
-            surface_type=int(surface_type),
+            surface_type=surface_type,
             entity_key=str(entity_key),
             meta=data.get("meta") or {},
             mentioned_user_ids=data.get("mentioned_user_ids") or [],

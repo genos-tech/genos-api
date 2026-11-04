@@ -64,7 +64,7 @@ from origin.views.utils.incremental import (
 )
 from origin.views.utils.mention_handler import resolve_group_members
 from origin.views.utils.mention_membership import non_member_mentions
-from origin.views.utils.request_validators import body_object
+from origin.views.utils.request_validators import as_uuid, body_object
 from origin.views.utils.upload_validation import check_attachment_upload
 
 
@@ -366,9 +366,12 @@ def _allocate_seq_and_create_message(
         thread_root_id = None
         is_thread_reply = False
         if parent_id is not None:
-            try:
-                parent = Message.objects.get(id=parent_id, channel=channel)
-            except Message.DoesNotExist:
+            # An id that is not a UUID names no message here either, so it gets
+            # the same 404; it used to be a ValidationError 500 (MIP-1014).
+            parent_uuid = as_uuid(parent_id)
+            if parent_uuid is not None:
+                parent = Message.objects.filter(id=parent_uuid, channel=channel).first()
+            if parent is None:
                 raise Http404("parent_id not found in this channel.")
             thread_root_id = _resolve_thread_root(parent)
             is_thread_reply = True
