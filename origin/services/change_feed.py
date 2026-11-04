@@ -355,7 +355,7 @@ def token_for(keys: Iterable[str], versions: dict[str, int]) -> str:
     ordered = sorted(set(keys))
     if not any(versions.get(k, 0) for k in ordered):
         return "0"
-    digest = hashlib.sha1(
+    digest = hashlib.sha256(
         "|".join(f"{k}={versions.get(k, 0)}" for k in ordered).encode()
     ).hexdigest()
     return digest[:12]
