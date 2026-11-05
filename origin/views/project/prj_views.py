@@ -219,15 +219,18 @@ class ProjectMasterView(AuthenticatedAPIView):
         # value is accepted and unused, anything else is refused.
         if res := refuse_forged_fields(request.data, CREATE_PROJECT_SERVER_VALUES):
             return res
-        data = {key: request.data[key] for key in CREATE_PROJECT_FIELDS if key in request.data}
+        data = {key: request.data.get(key) for key in CREATE_PROJECT_FIELDS if key in request.data}
         data["owner"] = request.user.pk
-        if request.data.get("project_system_user") not in (None, ""):
-            system_user_id, problem = _new_project_system_user(request.data["project_system_user"])
+        supplied_system_user = request.data.get("project_system_user") not in (None, "")
+        if supplied_system_user:
+            system_user_id, problem = _new_project_system_user(
+                request.data.get("project_system_user")
+            )
             if problem:
                 return Response({"error": problem}, status=status.HTTP_400_BAD_REQUEST)
             data["project_system_user"] = system_user_id
         if request.data.get("code"):
-            code = str(request.data["code"]).strip().upper()
+            code = str(request.data.get("code")).strip().upper()
             if not PROJECT_CODE_RE.match(code):
                 return Response(
                     {"error": "Code must be 2-6 uppercase letters/digits, starting with a letter."},
