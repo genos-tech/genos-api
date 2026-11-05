@@ -2170,6 +2170,18 @@ def _create_milestone_with_backing_task(
         due_date=today + timedelta(days=milestone_spec.get("due_offset_days", 28)),
     )
 
+    # A milestone's backing row carries the milestone's own id in `milestone`
+    # (what `ensure_backing_task` does for every milestone made through the
+    # API): the board and the table route a click on a milestone row to the
+    # milestone preview only when the row has it, and `milestone_work_q` is
+    # written for it. The row had to come first (the milestone points at it),
+    # so link it now. A queryset update, not `.save()`: a save would write a
+    # "milestone changed" row into the task's seeded activity history. Both
+    # the demo and `starter_seeder` (real customer workspaces) come through
+    # here (MIP-1049).
+    TaskMaster.objects.filter(pk=backing_task.pk).update(milestone=milestone)
+    backing_task.milestone = milestone
+
     MilestoneAssignees.objects.bulk_create(
         [
             MilestoneAssignees(team=team, milestone=milestone, user=demo_user),

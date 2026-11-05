@@ -115,10 +115,12 @@ class StarterWorkspaceTests(BaseAPITestCase):
         self.assertEqual(milestones.count(), 2)
         examples = milestones.get(title=EXAMPLES_BLUEPRINT["milestone"]["title"])
 
-        # The backing task carries no milestone FK, so this is exactly
-        # the blueprint's tasks — the sub-task included, since it
-        # inherits its parent's milestone.
-        example_tasks = TaskMaster.objects.filter(milestone=examples)
+        # The milestone's own backing row carries the milestone FK too
+        # (MIP-1049, as for a milestone made through the API); leave it out
+        # and this is exactly the blueprint's tasks — the sub-task included,
+        # since it inherits its parent's milestone.
+        self.assertEqual(examples.task.milestone_id, examples.milestone_id)
+        example_tasks = TaskMaster.objects.filter(milestone=examples, is_milestone=False)
         self.assertEqual(example_tasks.count(), len(EXAMPLES_BLUEPRINT["tasks"]))
         titles = " ".join(example_tasks.values_list("title", flat=True)).lower()
         for trade in (
