@@ -1,5 +1,9 @@
 from django.urls import path
 
+from origin.views.task.conversion_views import (
+    ConvertMilestoneToTaskView,
+    ConvertTaskToMilestoneView,
+)
 from origin.views.task.milestone_views import (
     MilestoneAssigneesView,
     MilestoneFolderListView,
@@ -55,6 +59,11 @@ urlpatterns = [
         "api/v2/task/getTaskByThreadId/",
         GetTaskByThreadIdView.as_view(),
         name="get_task_by_thread_id",
+    ),
+    path(
+        "api/v2/task/convert-to-milestone/",
+        ConvertTaskToMilestoneView.as_view(http_method_names=["post", "options"]),
+        name="task_convert_to_milestone",
     ),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
     path("api/v2/task/activity/", TaskActivityListView.as_view(), name="task_activity_list"),
@@ -154,6 +163,11 @@ urlpatterns = [
         "api/v2/milestone/folder/<int:folder_id>/",
         MilestoneFolderView.as_view(),
         name="milestone_folder_detail",
+    ),
+    path(
+        "api/v2/milestone/convert-to-task/",
+        ConvertMilestoneToTaskView.as_view(http_method_names=["post", "options"]),
+        name="milestone_convert_to_task",
     ),
     path(
         "api/v2/milestone/<int:milestone_id>/",
