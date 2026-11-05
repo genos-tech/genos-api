@@ -317,7 +317,12 @@ class TaskMasterView(AuthenticatedAPIView):
             "milestone": milestone_id,
             "sprint": sprint_id,
             "parent_task_id": parent_task_id,
-            "root_task_id": request.data.get("root_task_id", None),
+            # Never taken from the client: a task's root is a consequence of
+            # where it hangs, and `set_root_task_id` derives it from the
+            # parent once the row exists (it skips a row that already has
+            # one). A browser holding a stale tree used to store its stale
+            # root for good (MIP-1026).
+            "root_task_id": None,
             "assignee": body["assignee"],
             "reporter": body["reporter"],
             "title": body["title"],
