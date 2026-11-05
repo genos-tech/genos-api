@@ -214,7 +214,9 @@ class InboxItemView(AuthenticatedAPIView):
         ):
             return res
         update_data = {
-            key: request.data[key] for key in ("is_read", "request_status") if key in request.data
+            key: request.data.get(key)
+            for key in ("is_read", "request_status")
+            if key in request.data
         }
         # Remove None values from the updated_data if it's None
         if "is_read" in update_data:
