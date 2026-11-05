@@ -124,7 +124,9 @@ class ProjectCreateAllowListTests(BaseAPITestCase):
         self.assertEqual(str(res.data["project_system_user"]), str(system_user.id))
 
     def test_the_first_run_bodys_exact_shape_still_works(self):
-        """`TaskInit`: team, project_name, owner. No system user, not private."""
+        """`TaskInit`: team, project_name, owner. No system user, not private.
+
+        The server makes the project's system user (MIP-1031)."""
         res = self.client.post(
             PROJECT,
             {
@@ -137,7 +139,7 @@ class ProjectCreateAllowListTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 201, res.data)
         project = ProjectMaster.objects.get(project_id=res.data["project_id"])
         self.assertFalse(project.is_private)
-        self.assertIsNone(project.project_system_user_id)
+        self.assertTrue(project.project_system_user.is_system_user)
 
     # ── project_system_user ───────────────────────────────────────────
 
