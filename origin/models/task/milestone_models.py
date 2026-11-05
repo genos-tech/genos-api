@@ -111,6 +111,20 @@ class MilestoneMaster(models.Model):
         related_name="backed_milestone",
         to_field="task_id",
     )
+    # Set when the milestone was turned back into an ordinary task (MIP-1042):
+    # the task row it was. The milestone is retired (`is_deleted`) and unlinked
+    # from that row (`task` is None), but its old id still reaches people through
+    # links and search results, so reading it answers with this task instead of
+    # "not found". Null for a milestone that was never converted, and for one
+    # that was simply deleted.
+    converted_to_task = models.ForeignKey(
+        "origin.TaskMaster",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="converted_from_milestones",
+        to_field="task_id",
+    )
     title = models.CharField(max_length=255)
     description = models.JSONField(blank=True, null=True)
     status = models.CharField(default="Open")

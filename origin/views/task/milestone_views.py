@@ -45,7 +45,7 @@ from origin.views.utils.request_validators import (
     refuse_unsafe_link_urls,
     validate_request_data,
 )
-from origin.views.utils.scope_guards import is_project_member
+from origin.views.utils.scope_guards import can_access_task, is_project_member
 
 # Backing-task invariants moved to `origin/services/milestone_service.py`
 # so the agent's composite write tool (`create_task_plan`) shares them.
@@ -60,6 +60,44 @@ def _deny_not_found(kind: str):
     integers, so a 403 would turn this endpoint into an existence oracle
     for the whole install. Mirrors the `channel_views` convention."""
     return Response({"error": f"{kind} not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _converted_or_not_found(request, milestone_id: int):
+    """A milestone that is not there: a 404, unless it was turned into a task.
+
+    A milestone converted back to a task (MIP-1042) is retired, but its id is
+    still in links, history and search results. For someone who could see it, and
+    can see the task it became, the answer is a 410 that names the task, so the
+    client can follow it. Anyone else, and any milestone that was just deleted or
+    never existed, gets the plain 404.
+    """
+    gone = (
+        MilestoneMaster.objects.filter(
+            milestone_id=milestone_id, is_deleted=True, converted_to_task__isnull=False
+        )
+        .select_related("converted_to_task__project")
+        .first()
+    )
+    if gone is None or not is_project_member(gone.project_id, request.user.id):
+        return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+    task = gone.converted_to_task
+    if task.is_deleted or not can_access_task(task.task_id, request.user.id):
+        return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+    return Response(
+        {
+            "error": "This milestone was converted to a task.",
+            "code": "milestone_converted_to_task",
+            "convertedToTask": {
+                "taskId": task.task_id,
+                "displayId": task.display_id,
+                "projectId": task.project_id,
+                "isMilestone": bool(task.is_milestone),
+                # If the task became a milestone again, the id to open it by.
+                "milestoneId": task.milestone_id if task.is_milestone else None,
+            },
+        },
+        status=status.HTTP_410_GONE,
+    )
 
 
 def _resolve_folder(data, project_id):
@@ -300,7 +338,7 @@ class MilestoneView(AuthenticatedAPIView):
                 .get(milestone_id=milestone_id, is_deleted=False)
             )
         except MilestoneMaster.DoesNotExist:
-            return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+            return _converted_or_not_found(request, milestone_id)
         if not is_project_member(m.project_id, request.user.id):
             return _deny_not_found("Milestone")
         # Lazy-create the backing task for legacy milestones so the
