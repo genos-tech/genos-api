@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from django.conf import settings
+from oauth2_provider.cimd import is_cimd_client_id
 
 from apis.mcp_oauth_settings import MCP_PATH, SCOPES
 
@@ -196,21 +197,27 @@ def authorize_query(params: Any) -> tuple[str | None, str | None]:
     return urlencode(pairs), None
 
 
-def check_decision(body: dict[str, Any], requested: list[str]) -> tuple[dict | None, str | None]:
-    """What a member allowed, from the consent page's body, or why it is refused.
+def check_scopes(scopes: Any, allowed: list[str]) -> tuple[list[str] | None, str | None]:
+    """The scopes a member chose, in our order; or why it is refused.
 
-    `scopes`: a subset of what the client asked for, always with `mcp:read` (a connection that
-    cannot read is no connection); destructive implies write. `team_ids`: 1 to 50 ids, deduped,
-    with `default_team_id` among them. Membership is the view's check, against the database."""
-    scopes = body.get("scopes", requested)
+    Every name must be one of `allowed`: asking for more than the client asked for (or an
+    unknown name) is refused, not quietly trimmed. Always with `mcp:read` (a connection that
+    cannot read is no connection); deleting implies write."""
     if not isinstance(scopes, list) or not all(isinstance(x, str) for x in scopes):
         return None, "scopes must be a list of names."
-    granted = [x for x in SCOPES if x in scopes and x in requested]
+    if any(x not in allowed for x in scopes):
+        return None, "That permission is not available."
+    granted = [x for x in SCOPES if x in scopes]
     if "mcp:read" not in granted:
         return None, "A connection needs at least read access."
     if "mcp:destructive" in granted and "mcp:write" not in granted:
         return None, "Deleting needs write access too."
-    team_ids = body.get("team_ids")
+    return granted, None
+
+
+def check_team_ids(team_ids: Any) -> tuple[list[str] | None, str | None]:
+    """1 to 50 ids, deduped, in the order given; or why it is refused. Whether the member is
+    in them is the view's check, against the database."""
     if (
         not isinstance(team_ids, list)
         or not team_ids
@@ -218,8 +225,35 @@ def check_decision(body: dict[str, Any], requested: list[str]) -> tuple[dict | N
         or len(team_ids) > MAX_CONSENT_TEAMS
     ):
         return None, "Choose at least one team."
-    ordered = list(dict.fromkeys(team_ids))
+    return list(dict.fromkeys(team_ids)), None
+
+
+def check_decision(body: dict[str, Any], requested: list[str]) -> tuple[dict | None, str | None]:
+    """What a member allowed, from the consent page's body, or why it is refused.
+
+    `scopes`: a subset of what the client asked for. `team_ids` with `default_team_id` among
+    them."""
+    granted, why = check_scopes(body.get("scopes", requested), requested)
+    if why:
+        return None, why
+    ordered, why = check_team_ids(body.get("team_ids"))
+    if why:
+        return None, why
     default_team_id = body.get("default_team_id")
     if default_team_id not in ordered:
         return None, "The default team must be one of the chosen teams."
     return {"scopes": granted, "team_ids": ordered, "default_team_id": default_team_id}, None
+
+
+def client_summary(application: Any) -> dict[str, str]:
+    """Who a client is, as far as Genos can tell the member.
+
+    `registered`: it registered itself, and anyone can, under any name: the name proves nothing.
+    `metadata_document`: its client_id is an address, and `host` is that address's host, which
+    does prove who published it."""
+    document = is_cimd_client_id(application.client_id)
+    return {
+        "name": application.name or "",
+        "kind": "metadata_document" if document else "registered",
+        "host": (urlsplit(application.client_id).hostname or "") if document else "",
+    }
