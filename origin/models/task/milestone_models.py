@@ -181,3 +181,43 @@ class MilestoneAssignees(models.Model):
                 name="unique_milestone_assignee",
             )
         ]
+
+
+class MilestoneFavorite(models.Model):
+    """A milestone a user starred (MIP-1053), for the task sidebar's Favorites.
+
+    Private to the user: nobody else sees the row. `team` is the team the
+    user starred it in (a milestone of a project shared from another team is
+    starred from the guest's own workspace), so the sidebar lists a team's
+    favorites without touching the others. `ts_last_opened_at` is bumped
+    when the user opens the milestone, and orders the list.
+    """
+
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="team_milestone_favorites",
+        to_field="team_id",
+    )
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="favorite_milestones",
+        to_field="id",
+    )
+    milestone = models.ForeignKey(
+        MilestoneMaster,
+        on_delete=models.CASCADE,
+        related_name="favorited_by",
+        to_field="milestone_id",
+    )
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_last_opened_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "milestone"], name="unique_user_milestone_favorite"
+            )
+        ]

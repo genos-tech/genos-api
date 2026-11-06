@@ -4,6 +4,11 @@ from origin.views.task.conversion_views import (
     ConvertMilestoneToTaskView,
     ConvertTaskToMilestoneView,
 )
+from origin.views.task.milestone_favorite_views import (
+    MilestoneFavoriteListView,
+    MilestoneFavoriteOpenedView,
+    MilestoneFavoriteView,
+)
 from origin.views.task.milestone_views import (
     MilestoneAssigneesView,
     MilestoneFolderListView,
@@ -163,6 +168,21 @@ urlpatterns = [
         "api/v2/milestone/folder/<int:folder_id>/",
         MilestoneFolderView.as_view(),
         name="milestone_folder_detail",
+    ),
+    path(
+        "api/v2/milestone/favorite/list/",
+        MilestoneFavoriteListView.as_view(http_method_names=["get", "head", "options"]),
+        name="milestone_favorite_list",
+    ),
+    path(
+        "api/v2/milestone/favorite/",
+        MilestoneFavoriteView.as_view(http_method_names=["post", "delete", "options"]),
+        name="milestone_favorite",
+    ),
+    path(
+        "api/v2/milestone/favorite/opened/",
+        MilestoneFavoriteOpenedView.as_view(http_method_names=["post", "options"]),
+        name="milestone_favorite_opened",
     ),
     path(
         "api/v2/milestone/convert-to-task/",
