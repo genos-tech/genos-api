@@ -662,7 +662,7 @@ class MilestoneView(AuthenticatedAPIView):
             new_set: set[str] = set(mention_extractor.extract_mentioned_user_ids(new_body))
             grp_ids = mention_extractor.extract_mention_group_ids(new_body)
             if grp_ids:
-                new_set |= resolve_group_members(grp_ids)
+                new_set |= resolve_group_members(grp_ids, team_id=milestone.team_id)
             backing = milestone.task
             prev_set: set[str] = set(backing.mentioned_user_ids or []) if backing else set()
             newly_mentioned = list(new_set - prev_set)

@@ -35,29 +35,44 @@ class extractMentionedUsers:
                     self.extract(m["children"])
 
 
-def resolve_group_members(group_ids):
+def resolve_group_members(group_ids, *, team_id):
     """Local (in-process) group→user resolver for Django views. Returns
-    a set of user_ids. Soft-deleted groups silently drop out (return
-    empty set for those ids). Empty input → empty set, no query."""
+    a set of user ids (str).
+
+    Resolved for ONE team, at the moment of sending (MIP-1030): only that
+    team's live groups, and only the people who are members of that team NOW.
+    A group id from another team, a soft-deleted group, a malformed id, and a
+    member who was added before the team check existed or has since left the
+    team all drop out, so a group mention never notifies someone the team no
+    longer counts as its own. `team_id` is required on purpose: a caller that
+    forgets it must fail, not silently expand any team's group.
+
+    Empty input → empty set, no query."""
     if not group_ids:
         return set()
-    # Lazy import — keeps this module dependency-light for tests that
-    # only need the extractor.
+    # Lazy imports — keep this module dependency-light for tests that only
+    # need the extractor.
     from origin.models.common.mention_group_models import (
         MentionGroupMaster,
         MentionGroupMembers,
     )
+    from origin.models.common.team_models import TeamMembers
+    from origin.views.utils.request_validators import as_int, as_uuid
 
-    live_group_ids = set(
-        MentionGroupMaster.objects.filter(group_id__in=group_ids, is_deleted=False).values_list(
-            "group_id", flat=True
-        )
-    )
-    if not live_group_ids:
+    team = as_uuid(team_id)
+    # Block editors store prop values as text; a malformed one names no group.
+    keys = {key for key in (as_int(g) for g in group_ids) if key is not None}
+    if team is None or not keys:
         return set()
-    return set(
-        str(uid)
-        for uid in MentionGroupMembers.objects.filter(group_id__in=live_group_ids).values_list(
-            "user_id", flat=True
-        )
+    live_groups = MentionGroupMaster.objects.filter(
+        group_id__in=keys, team_id=team, is_deleted=False
+    ).values("group_id")
+    current_members = TeamMembers.objects.filter(team_id=team, is_deleted=False).values(
+        "attendee_id"
     )
+    return {
+        str(uid)
+        for uid in MentionGroupMembers.objects.filter(
+            group_id__in=live_groups, user_id__in=current_members
+        ).values_list("user_id", flat=True)
+    }

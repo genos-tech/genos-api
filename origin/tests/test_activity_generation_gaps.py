@@ -19,6 +19,7 @@ from origin.models.chat.unified_models import (
     Message,
 )
 from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
+from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.services.v3_activity import create_thread_reply_activity
@@ -34,6 +35,9 @@ class ChatGroupMentionExpansionTests(BaseAPITestCase):
         self.user3 = User.objects.create_user(
             username="u3gap", email="u3gap@e.com", password="pass12345"
         )
+        # A group mention reaches people who are on the team NOW (MIP-1030), so the
+        # third person has to be on it for the group to include them.
+        TeamMembers.objects.create(team=self.team, attendee=self.user3)
         self.channel = Channel.objects.create(
             team=self.team, kind=ChannelKind.GM, title="C", owner=self.user
         )

@@ -466,7 +466,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             extract_user_handler = extractMentionedUsers()
             extract_user_handler.extract(update_data["body"])
             full_mentioned = set(extract_user_handler.mentioned_user_ids)
-            full_mentioned |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            full_mentioned |= resolve_group_members(
+                extract_user_handler.mentioned_group_ids, team_id=note.team_id
+            )
             update_data["mentioned_user_ids"] = list(full_mentioned)
 
             prev_set = set(note.mentioned_user_ids or [])

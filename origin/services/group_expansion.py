@@ -24,6 +24,7 @@ empty rather than leaking its roster.
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
+from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NoteFolderPermission
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 
@@ -40,11 +41,17 @@ def _mention_group_user_ids(team_id, group_id):
         group_id=group_id, team=team_id, is_deleted=False
     ).exists():
         return set()
+    # Only people who are on the team now: a snapshot of the group writes one folder
+    # permission per user, and a member who has left the team (or was added before
+    # members had to be on it) must not walk away with access to the team's notes.
     return {
         str(uid)
-        for uid in MentionGroupMembers.objects.filter(group_id=group_id).values_list(
-            "user_id", flat=True
-        )
+        for uid in MentionGroupMembers.objects.filter(
+            group_id=group_id,
+            user_id__in=TeamMembers.objects.filter(team_id=team_id, is_deleted=False).values(
+                "attendee_id"
+            ),
+        ).values_list("user_id", flat=True)
         if uid is not None
     }
 
