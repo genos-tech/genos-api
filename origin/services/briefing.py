@@ -31,7 +31,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from origin.models.chat.unified_models import Message
+from origin.models.chat.unified_models import Activity, ActivityType, Message
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -42,6 +42,11 @@ from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.search_engine.agent.acl import (
+    chat_note_acl_user_ids,
+    may_read_note,
+    task_note_acl_user_ids,
+)
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import (
     ToolContext,
@@ -54,7 +59,7 @@ from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
-from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
+from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
 from origin.services import worklog
 from origin.services.channel_scope import readable_chats_qs
 from origin.services.user_time import zone_for_user_id
@@ -71,6 +76,9 @@ WEEK = timedelta(days=7)
 MAX_LOOKBACK = timedelta(days=31)
 STALE_AFTER = timedelta(days=7)
 MENTION_LOOKBACK = timedelta(days=7)
+# How many mention rows are looked at before access and "answered" are decided. A member
+# is mentioned a handful of times in a week; this bounds a flood, newest first.
+MENTION_POOL = 60
 
 # The briefing is read by a model with a budget (about 8k tokens), so it is shaped to fit:
 # the busiest items tell their story in detail, the rest get the latest word, and the
@@ -648,8 +656,12 @@ def agenda(ctx: ToolContext, now: datetime, zone, project_id: int | None) -> dic
     }
 
 
-def _unanswered_mentions(ctx: ToolContext, now: datetime) -> list[dict[str, Any]]:
+def _chat_mentions(ctx: ToolContext, now: datetime) -> list[dict[str, Any]]:
     """@mentions of the caller in chat that the caller has not replied to since.
+
+    Direct @user and @group mentions alike: a group is expanded to its members when the
+    message is sent, so each member has a `MessageMention` row. Read through the
+    existing tool, so the access rule is its own.
 
     A reply is any message of theirs in the same chat and the same thread (or, for a
     mention outside a thread, the same chat, top level) sent after the mention."""
@@ -682,6 +694,7 @@ def _unanswered_mentions(ctx: ToolContext, now: datetime) -> list[dict[str, Any]
 
     return [
         {
+            "source": "chat",
             "message_id": m["message_id"],
             "chat_id": m["chat_id"],
             "thread_id": m.get("thread_id"),
@@ -694,6 +707,208 @@ def _unanswered_mentions(ctx: ToolContext, now: datetime) -> list[dict[str, Any]
         for m in mentions
         if not answered(m)
     ][:MAX_LIST]
+
+
+_NOTE_SURFACES = {6: 1, 7: 2, 8: 3}  # `Activity.surface_type` -> note type
+_NOTE_NAMES = {1: "personal", 2: "task", 3: "chat"}
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _may_read_note(ctx: ToolContext, note_type: int, note: Any) -> bool:
+    """Can the caller open this note now? The rule `get_note` applies, per note family."""
+    if str(note.team_id or "") != str(ctx.team_id):
+        return False
+    if note_type == 1:
+        return may_read_note(
+            user_id=ctx.user_id,
+            note_type_code=NOTE_TYPE_PERSONAL,
+            note_id=note.note_id,
+            owner_id=note.owner_id,
+        )
+    if note_type == 2:
+        allowed = task_note_acl_user_ids(
+            owner_id=note.owner_id, project_id=note.project_id, note_id=note.note_id
+        )
+    else:
+        allowed = chat_note_acl_user_ids(
+            owner_id=note.owner_id,
+            chat_type_code=note.chat_type,
+            channel_id=note.channel_id,
+            note_id=note.note_id,
+        )
+    return str(ctx.user_id) in allowed
+
+
+def _activity_mentions(
+    ctx: ToolContext, now: datetime, names: _Names, skip_messages: set[str]
+) -> list[dict[str, Any]]:
+    """Mentions `list_my_mentions` cannot see: in a task comment, a task body or a note.
+
+    Every one of them leaves an `Activity(MENTION)` row for the person mentioned, whoever
+    wrote it (the app, a connected client, the agent) and whether it named them or a group
+    they are in (groups are expanded to members when the text is saved). That row is the
+    durable record, so it is the source; the text is not read again.
+
+    Only what the caller can open NOW is shown, by the rule of each kind. "Answered" is
+    the simplest thing that can be seen: for a comment or a task body, the caller has
+    commented on that task or changed it since; for a note, they have edited it since, or
+    opened the feed entry (a reply in a note's own comment thread is not visible from here).
+    """
+    rows = list(
+        Activity.objects.filter(
+            recipient_id=ctx.user_id,
+            team_id=ctx.team_id,
+            activity_type=ActivityType.MENTION,
+            ts_created_at__gte=now - MENTION_LOOKBACK,
+        )
+        .select_related("message", "message__thread_root")
+        .order_by("-ts_created_at")[:MENTION_POOL]
+    )
+    comment_rows, body_rows, note_rows = [], [], []
+    for row in rows:
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        if row.surface_type == 5:
+            task_id = _int_or_none(meta.get("taskId"))
+            if task_id is not None:
+                body_rows.append((row, task_id))
+        elif row.surface_type in _NOTE_SURFACES:
+            note_id = _int_or_none(meta.get("noteId"))
+            if note_id is not None:
+                note_rows.append((row, _NOTE_SURFACES[row.surface_type], note_id))
+        elif row.message_id and str(row.message_id) not in skip_messages:
+            message = row.message
+            comment_id = _int_or_none((message.metadata or {}).get("taskCommentId"))
+            if comment_id is None or message.deleted_at is not None:
+                continue  # an ordinary chat mention: `list_my_mentions` has it
+            root = message.thread_root
+            task_id = message.task_id or (root.task_id if root is not None else None)
+            if task_id is not None:
+                comment_rows.append((row, task_id, comment_id))
+
+    entries: list[dict[str, Any]] = []
+    if comment_rows or body_rows:
+        task_ids = {t for _, t, _c in comment_rows} | {t for _, t in body_rows}
+        readable = LabelAccess(ctx).tasks(task_ids)
+        oldest = min(r.ts_created_at for r, *_ in comment_rows + body_rows)
+        # When the caller last did anything on each task, after the oldest mention.
+        touched: dict[int, datetime] = {}
+        for task_id, at in TaskComments.objects.filter(
+            task_id__in=readable, sender_id=ctx.user_id, is_deleted=False, ts_sent_at__gte=oldest
+        ).values_list("task_id", "ts_sent_at"):
+            touched[task_id] = max(at, touched.get(task_id, at))
+        for task_id, at in TaskActivity.objects.filter(
+            task_id__in=readable, actor_id=ctx.user_id, ts_created_at__gte=oldest
+        ).values_list("task_id", "ts_created_at"):
+            touched[task_id] = max(at, touched.get(task_id, at))
+
+        def open_on(task_id: int, at: datetime) -> Any:
+            task = readable.get(task_id)
+            return task if task is not None and touched.get(task_id, at) <= at else None
+
+        from origin.search_engine.text_extraction import extract_text  # noqa: PLC0415
+
+        bodies = {
+            (c.task_id, c.comment_id): c
+            for c in TaskComments.objects.filter(
+                task_id__in=readable,
+                comment_id__in={c for _r, _t, c in comment_rows},
+                is_deleted=False,
+            )
+        }
+        for row, task_id, comment_id in comment_rows:
+            task, comment = open_on(task_id, row.ts_created_at), bodies.get((task_id, comment_id))
+            if task is None or comment is None:
+                continue
+            entries.append(
+                {
+                    "source": "task_comment",
+                    "at": row.ts_created_at.isoformat(),
+                    "task_id": task_id,
+                    "display_id": task.display_id,
+                    "title": wrap_workspace_content(task.title or ""),
+                    "comment_id": comment_id,
+                    "text": wrap_workspace_content(_snippet(extract_text(comment.comment_body))),
+                    "_actor": row.actor_id,
+                }
+            )
+        for row, task_id in body_rows:
+            task = open_on(task_id, row.ts_created_at)
+            if task is None:
+                continue
+            entries.append(
+                {
+                    "source": "task",
+                    "at": row.ts_created_at.isoformat(),
+                    "task_id": task_id,
+                    "display_id": task.display_id,
+                    "title": wrap_workspace_content(task.title or ""),
+                    "_actor": row.actor_id,
+                }
+            )
+
+    if note_rows:
+        models = {1: PersonalNoteMaster, 2: TaskNoteMaster, 3: ChatNoteMaster}
+        notes = {
+            (kind, n.note_id): n
+            for kind, model in models.items()
+            for n in model.objects.filter(
+                note_id__in={nid for _r, k, nid in note_rows if k == kind}, team_id=ctx.team_id
+            )
+        }
+        oldest = min(r.ts_created_at for r, _k, _n in note_rows)
+        edited: dict[tuple[int, int], datetime] = {}
+        for kind, note_id, at in NoteVersionMaster.objects.filter(
+            team_id=ctx.team_id,
+            editor_id=ctx.user_id,
+            note_id__in={nid for _r, _k, nid in note_rows},
+            ts_updated_at__gte=oldest,
+        ).values_list("note_type", "note_id", "ts_updated_at"):
+            edited[(kind, note_id)] = max(at, edited.get((kind, note_id), at))
+        for row, kind, note_id in note_rows:
+            note = notes.get((kind, note_id))
+            if (
+                note is None
+                or row.is_read
+                or edited.get((kind, note_id), row.ts_created_at) > row.ts_created_at
+            ):
+                continue
+            if not _may_read_note(ctx, kind, note):
+                continue
+            entries.append(
+                {
+                    "source": "note",
+                    "at": row.ts_created_at.isoformat(),
+                    "note_type": _NOTE_NAMES[kind],
+                    "note_id": note_id,
+                    "title": wrap_workspace_content(note.title or ""),
+                    "_actor": row.actor_id,
+                }
+            )
+
+    entries.sort(key=lambda e: e["at"], reverse=True)
+    entries = entries[:MAX_LIST]
+    for entry in entries:
+        names.put(entry, "from", entry.pop("_actor"))
+    return entries
+
+
+def _unanswered_mentions(ctx: ToolContext, now: datetime, names: _Names) -> list[dict[str, Any]]:
+    """Every @mention of the caller that still waits on them, newest first: in chat, in a
+    task comment, in a task body, in a note. Each entry says its `source`."""
+    chat = _chat_mentions(ctx, now)
+    activity = _activity_mentions(ctx, now, names, {str(m["message_id"]) for m in chat})
+    merged = sorted(
+        chat + activity,
+        key=lambda e: datetime.fromisoformat(str(e["at"]).replace("Z", "+00:00")),
+        reverse=True,
+    )
+    return merged[:MAX_LIST]
 
 
 def waiting_on_me(ctx: ToolContext, now: datetime, names: _Names) -> dict[str, Any]:
@@ -714,7 +929,7 @@ def waiting_on_me(ctx: ToolContext, now: datetime, names: _Names) -> dict[str, A
         }
         names.put(request, "from", item.get("sender_id"))
         requests.append(request)
-    return {"requests": requests, "mentions": _unanswered_mentions(ctx, now)}
+    return {"requests": requests, "mentions": _unanswered_mentions(ctx, now, names)}
 
 
 def waiting_on_others(ctx: ToolContext, names: _Names) -> dict[str, Any]:
