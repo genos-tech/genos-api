@@ -1647,8 +1647,31 @@ CATALOG: tuple[McpTool, ...] = (
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
-    # ---- the secretary's worklog (MIP-1071). MCP only: the in-app agent never
+    # ---- the secretary (MIP-1071, MIP-1072). MCP only: the in-app agent never
     # sees these (`MCP_ONLY_REGISTRY`, MIP-1070). Private to the caller. ----
+    McpTool(
+        name="get_my_briefing",
+        registry_name="get_my_briefing",
+        description=(
+            "Catch the member up and help them plan, in one call. Use it first when they "
+            "say 'catch me up', 'what's going on', 'what should I do today' or 'wrap up my "
+            "day'. It returns: `changed_for_me`, what OTHER people did on the member's own "
+            "things (tasks, threads they are in, notes they own), grouped by item with each "
+            "item's events in time order and the busiest first, so read an item as a story, "
+            "not a list of events; `waiting_on_me` (pending requests and @mentions they have "
+            "not answered); `waiting_on_others` (blocked tasks and what they noted as "
+            "waiting); `agenda` (due today, overdue, to-dos, and today's calendar, read "
+            "live); `stale_mine` (tasks untouched for a week); `worklog` (what they noted "
+            "today and yesterday, and their open next steps); and `suggested_next`, the top "
+            "three with the reasons. The reasons come from activity and dates, and priority "
+            "is only a hint: say them, and let the member disagree. `window` is since_last "
+            "(the default: since they last asked, never empty on a repeat call within two "
+            "hours), today or week; `since` looks back to a time instead; `project_id` "
+            "limits it to one project's tasks. Everything is the member's own view: only "
+            "what they can open. Present what needs a reaction first, then what changed, "
+            "then what is waiting; offer actions, and change nothing until they confirm."
+        ),
+    ),
     McpTool(
         name="capture_worklog",
         registry_name="capture_worklog",
