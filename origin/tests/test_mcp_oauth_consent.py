@@ -125,10 +125,11 @@ class TestWhoMayCall(ConsentBase):
             self.assertEqual(self.decide().status_code, 404)
         self.assertEqual(Grant.objects.count(), 0)
 
-    def test_dark_even_for_a_stranger_it_does_not_ask_who_they_are(self):
+    def test_dark_for_a_stranger_too_nothing_is_written(self):
         self.unauthenticate()
         with override_settings(MCP_OAUTH_ENABLED=False):
-            self.assertEqual(self.decide().status_code, 404)
+            self.assertIn(self.decide().status_code, (401, 404))
+        self.assertEqual(McpConnection.objects.count(), 0)
 
     def test_a_signed_in_member_is_needed(self):
         self.unauthenticate()

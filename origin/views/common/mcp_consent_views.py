@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from django.db import transaction
 from django.db.models import Q
+from django.http import Http404
 from django.test import RequestFactory
 from oauth2_provider.exceptions import OAuthToolkitError
 from oauth2_provider.models import get_application_model
@@ -64,12 +65,11 @@ class _ConsentBase(AuthenticatedAPIView):
     throttle_classes = [McpConsentThrottle]
 
     def initial(self, request, *args, **kwargs):
-        # Dark with the rest of the server: a 404 until it is switched on.
-        if not mcp_oauth.enabled():
-            from django.http import Http404
-
-            raise Http404
+        # Sign-in and the body guard first, as every view here does; then dark with the rest
+        # of the server: a 404 until it is switched on.
         super().initial(request, *args, **kwargs)
+        if not mcp_oauth.enabled():
+            raise Http404
 
     def _validated(self, request):
         """Run the authorization request through the library as the member, or answer why not.
