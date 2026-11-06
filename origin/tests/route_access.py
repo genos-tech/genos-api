@@ -179,6 +179,9 @@ REGISTRY = {
     "origin.views.common.api_key_views.ApiKeyListCreateView": checked("is_team_member"),
     "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_owned_team"),
     "origin.views.common.api_key_views.TeamApiKeyListView": checked("_owned_team"),
+    # views.common.mcp_consent_views (MIP-1077)
+    "origin.views.common.mcp_consent_views.McpConsentContextView": checked("_teams_of"),
+    "origin.views.common.mcp_consent_views.McpConsentDecisionView": checked("_teams_of"),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(
         "exchanges the HttpOnly refresh cookie for a new access token; the cookie is the credential"
