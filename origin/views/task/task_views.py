@@ -2664,9 +2664,15 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        comment_id = int(raw_comment_id)
         if not can_access_task(task_id, request.user.id):
             return _no_task()
+        # A comment id is a number, as on the POST above. `int()` of text was a ValueError (500).
+        comment_id = as_int(raw_comment_id)
+        if comment_id is None:
+            return Response(
+                {"error": "comment_id must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             # Only ever the caller's own reaction. `sender_id` is still

@@ -1,8 +1,15 @@
+import logging
+
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.utils.foreign_team_scope import align_team_to_object
+from origin.views.utils.malformed_lookup import MALFORMED_ID_ERROR, is_malformed_lookup_value
+
+logger = logging.getLogger(__name__)
 
 
 class AuthenticatedAPIView(ObjectBodyMixin, APIView):
@@ -34,3 +41,24 @@ class AuthenticatedAPIView(ObjectBodyMixin, APIView):
         """
         super().initial(request, *args, **kwargs)
         align_team_to_object(request)
+
+    def handle_exception(self, exc):
+        """A malformed id that reached a lookup is a 400, not a 500 (MIP-1060).
+
+        A client-supplied `team_id`, `project_id` or `id` goes into an ORM filter in
+        many views, and the field refuses what it cannot parse. This is the net under
+        the views that parse first (and answer in their own words): it catches only
+        Django's own two parse errors (`malformed_lookup`), logs each one so a route
+        that needs a proper answer stays visible, and leaves every other exception to
+        the normal 500.
+        """
+        if is_malformed_lookup_value(exc):
+            request = getattr(self, "request", None)
+            logger.warning(
+                "malformed id answered 400: %s %s: %s",
+                getattr(request, "method", "?"),
+                getattr(request, "path", "?"),
+                exc,
+            )
+            return Response({"error": MALFORMED_ID_ERROR}, status=status.HTTP_400_BAD_REQUEST)
+        return super().handle_exception(exc)
