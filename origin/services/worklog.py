@@ -30,6 +30,7 @@ from origin.models.common.worklog_models import (
     REVIEW_SUGGESTED,
     SOURCE_CHOICES,
     STATUS_CHOICES,
+    STATUS_OPEN,
     STATUS_RESOLVED,
     WorklogEntry,
     WorklogItem,
@@ -256,15 +257,40 @@ def item_payload(item: WorklogItem) -> dict[str, Any]:
     }
 
 
-def entry_payload(entry: WorklogEntry, items: list[WorklogItem], zone) -> dict[str, Any]:
-    return {
+def compact_item(payload: dict[str, Any]) -> dict[str, Any]:
+    """An item without its empty fields, for a caller (the briefing) that has a budget:
+    what it is, what it says, and only the extras that are set."""
+    out = {"item_id": payload["item_id"], "kind": payload["kind"], "summary": payload["summary"]}
+    if payload["review_state"] == REVIEW_SUGGESTED:
+        out["suggested"] = True
+    if payload["status"] != STATUS_OPEN:
+        out["status"] = payload["status"]
+    for key in ("person_hint", "due_hint", "noted_at", "entry_id"):
+        if payload.get(key):
+            out[key] = payload[key]
+    if payload.get("refs"):
+        out["refs"] = payload["refs"]
+    return out
+
+
+def entry_payload(
+    entry: WorklogEntry, items: list[WorklogItem], zone, *, max_text: int | None = None
+) -> dict[str, Any]:
+    """`max_text` cuts the note short (a briefing wants the gist, not 4,000 characters);
+    `text_truncated` says so, and the whole note is one `list_my_worklog` away."""
+    text = entry.raw_text
+    cut = max_text is not None and len(text) > max_text
+    out = {
         "entry_id": entry.entry_id,
         "occurred_at": _iso(entry.occurred_at),
         "local_date": entry.occurred_at.astimezone(zone).date().isoformat(),
         "source": entry.source,
-        "text": wrap_workspace_content(entry.raw_text),
+        "text": wrap_workspace_content(text[:max_text].rstrip() + "…" if cut else text),
         "items": [item_payload(i) for i in items],
     }
+    if cut:
+        out["text_truncated"] = True
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -444,6 +470,7 @@ def list_entries(
     review_state: Any = None,
     status: Any = None,
     limit: Any = None,
+    max_text: int | None = None,
 ) -> dict[str, Any]:
     """The caller's own entries for a day, a week or a range, newest first.
 
@@ -486,10 +513,29 @@ def list_entries(
         "from_date": start.isoformat(),
         "to_date": end.isoformat(),
         "time_zone": zone.key,
-        "entries": [entry_payload(e, e.shown_items, zone) for e in rows],
+        "entries": [entry_payload(e, e.shown_items, zone, max_text=max_text) for e in rows],
         "truncated": truncated,
         "__summary__": f"{len(rows)} worklog entr{'y' if len(rows) == 1 else 'ies'}, {start} to {end}",
     }
+
+
+def open_items(ctx: ToolContext, kinds: tuple[str, ...], limit: int) -> list[dict[str, Any]]:
+    """The caller's own open items of these kinds, newest note first (rejected ones left
+    out). What the briefing reads for "my next steps" and "what I am waiting on"."""
+    rows = (
+        _owned_items(ctx)
+        .filter(
+            kind__in=kinds,
+            status=STATUS_OPEN,
+            review_state__in=[REVIEW_SUGGESTED, REVIEW_ACCEPTED],
+        )
+        .select_related("entry")
+        .order_by("-entry__occurred_at", "-item_id")[:limit]
+    )
+    return [
+        {**item_payload(item), "entry_id": item.entry_id, "noted_at": _iso(item.entry.occurred_at)}
+        for item in rows
+    ]
 
 
 # --------------------------------------------------------------------------- #

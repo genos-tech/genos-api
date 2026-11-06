@@ -49,6 +49,7 @@ from django.utils import timezone
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.common.api_key_models import ApiKey
+from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.models.common.security_event_models import SecurityAction
@@ -152,6 +153,7 @@ def _delete_personal_data(user) -> None:
     ToDoCategory.objects.filter(user=user).delete()
     # The worklog is private to its author by design (MIP-1071); items cascade.
     WorklogEntry.objects.filter(author=user).delete()
+    MemberBriefingState.objects.filter(user=user).delete()
     # Assignments carry no user column by design — they cascade from the
     # tag, whose owner IS the user.
     PersonalChannelTag.objects.filter(user=user).delete()
