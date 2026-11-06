@@ -44,6 +44,7 @@ from origin.views.common.github_views import (
 )
 from origin.views.common.health_views import AlertingHealthView, HealthView
 from origin.views.common.inbox_views import *
+from origin.views.common.mcp_consent_views import McpConsentContextView, McpConsentDecisionView
 from origin.views.common.mention_group_views import (
     MentionGroupMembersView,
     MentionGroupResolveView,
@@ -410,6 +411,17 @@ urlpatterns = [
     ),
     path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
     path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
+    # Connecting an AI app over MCP (MIP-1077): the consent page's two calls.
+    path(
+        "api/v2/mcp/oauth/consent/context/",
+        McpConsentContextView.as_view(),
+        name="mcp_oauth_consent_context",
+    ),
+    path(
+        "api/v2/mcp/oauth/consent/decision/",
+        McpConsentDecisionView.as_view(),
+        name="mcp_oauth_consent_decision",
+    ),
     path("api/v2/team/api-keys/", TeamApiKeyListView.as_view(), name="team_api_keys"),
     path(
         "api/v2/team/api-keys/<uuid:key_id>/",

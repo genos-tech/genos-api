@@ -32,6 +32,8 @@ class SecurityAction(models.TextChoices):
     SIGNOUT = "signout", "Signed out"
     PASSWORD_RESET_REQUESTED = "password.reset_requested", "Password reset requested"
     PASSWORD_RESET = "password.reset", "Password reset"
+    MCP_CONNECTED = "mcp.connected", "AI app connected"
+    MCP_DISCONNECTED = "mcp.disconnected", "AI app disconnected"
     API_KEY_CREATED = "api_key.created", "API key created"
     API_KEY_REVOKED = "api_key.revoked", "API key revoked"
     # Once per key, address and hour, not per request.

@@ -453,6 +453,7 @@ REST_FRAMEWORK = {
         "mcp_oauth_register": os.environ.get("THROTTLE_MCP_OAUTH_REGISTER", "20/hour"),
         "mcp_oauth_token": os.environ.get("THROTTLE_MCP_OAUTH_TOKEN", "120/min"),
         "mcp_oauth_authorize": os.environ.get("THROTTLE_MCP_OAUTH_AUTHORIZE", "60/min"),
+        "mcp_oauth_consent": os.environ.get("THROTTLE_MCP_OAUTH_CONSENT", "30/min"),
     },
     # Per-IP throttling behind a proxy: both prod edges (Railway, Cloud
     # Run's front end) sit exactly one hop in front of gunicorn and

@@ -154,3 +154,72 @@ def check_registration(data: Any) -> tuple[dict[str, Any] | None, tuple[str, str
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
     }, None
+
+
+# RFC 7636 §4.2: 43 to 128 characters of the unreserved set (an S256 challenge is 43).
+_CHALLENGE = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
+MAX_CONSENT_TEAMS = 50
+
+
+def authorize_problem(method: Any, challenge: Any, resources: list[str]) -> tuple[str, str] | None:
+    """Why an authorization request, valid for the library, is still not one Genos grants.
+
+    PKCE with S256 only, checked up front: the library treats a missing method as `plain` and
+    refuses that only when the code is issued, after the member has been asked. And RFC 8707: a
+    token is for one resource, ours. One that names another is `invalid_target`; one that names
+    none is given ours (there is only one to give)."""
+    if method != "S256" or not isinstance(challenge, str) or not _CHALLENGE.fullmatch(challenge):
+        return "invalid_request", "PKCE with code_challenge_method=S256 is required."
+    for resource in resources:
+        if resource != resource_identifier():
+            return "invalid_target", "This server only issues tokens for its MCP endpoint."
+    return None
+
+
+def authorize_query(params: Any) -> tuple[str | None, str | None]:
+    """The query string of an authorization request posted by the consent page, or why not.
+
+    The page sends the parameters it was given, as an object of strings (`resource` may repeat,
+    as a list). They are turned back into a query for the library to validate exactly as if the
+    client had sent it, so nothing the page says is trusted: the server decides again."""
+    from urllib.parse import urlencode
+
+    if not isinstance(params, dict) or not params or len(params) > 20:
+        return None, "The authorization request is missing."
+    pairs: list[tuple[str, str]] = []
+    for key, value in params.items():
+        values = value if key == "resource" and isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(key, str) or not isinstance(item, str) or len(item) > 2048:
+                return None, "The authorization request is malformed."
+            pairs.append((key, item))
+    return urlencode(pairs), None
+
+
+def check_decision(body: dict[str, Any], requested: list[str]) -> tuple[dict | None, str | None]:
+    """What a member allowed, from the consent page's body, or why it is refused.
+
+    `scopes`: a subset of what the client asked for, always with `mcp:read` (a connection that
+    cannot read is no connection); destructive implies write. `team_ids`: 1 to 50 ids, deduped,
+    with `default_team_id` among them. Membership is the view's check, against the database."""
+    scopes = body.get("scopes", requested)
+    if not isinstance(scopes, list) or not all(isinstance(x, str) for x in scopes):
+        return None, "scopes must be a list of names."
+    granted = [x for x in SCOPES if x in scopes and x in requested]
+    if "mcp:read" not in granted:
+        return None, "A connection needs at least read access."
+    if "mcp:destructive" in granted and "mcp:write" not in granted:
+        return None, "Deleting needs write access too."
+    team_ids = body.get("team_ids")
+    if (
+        not isinstance(team_ids, list)
+        or not team_ids
+        or not all(isinstance(x, str) for x in team_ids)
+        or len(team_ids) > MAX_CONSENT_TEAMS
+    ):
+        return None, "Choose at least one team."
+    ordered = list(dict.fromkeys(team_ids))
+    default_team_id = body.get("default_team_id")
+    if default_team_id not in ordered:
+        return None, "The default team must be one of the chosen teams."
+    return {"scopes": granted, "team_ids": ordered, "default_team_id": default_team_id}, None
