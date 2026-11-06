@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 import dj_database_url
 
+from apis import mcp_oauth_settings
 from apis.credit_policy import load_credit_policy
 from apis.llm_catalog import load_llm_catalog
 
@@ -97,6 +98,8 @@ INSTALLED_APPS = [
     "origin.search_engine",
     "corsheaders",
     "anymail",
+    # OAuth 2.1 authorization server for MCP (MIP-1077). Off until MCP_OAUTH_ENABLED.
+    "oauth2_provider",
 ]
 
 MIDDLEWARE = [
@@ -445,6 +448,11 @@ REST_FRAMEWORK = {
         # In addresses, not requests: one request can carry 50.
         "invite": os.environ.get("THROTTLE_INVITE", "200/hour"),
         "batch_read": os.environ.get("THROTTLE_BATCH_READ", "120/min"),
+        # MCP OAuth (MIP-1077), per address: registration is open to strangers, so it is the
+        # tightest; the token and authorize endpoints see real client traffic.
+        "mcp_oauth_register": os.environ.get("THROTTLE_MCP_OAUTH_REGISTER", "20/hour"),
+        "mcp_oauth_token": os.environ.get("THROTTLE_MCP_OAUTH_TOKEN", "120/min"),
+        "mcp_oauth_authorize": os.environ.get("THROTTLE_MCP_OAUTH_AUTHORIZE", "60/min"),
     },
     # Per-IP throttling behind a proxy: both prod edges (Railway, Cloud
     # Run's front end) sit exactly one hop in front of gunicorn and
@@ -2078,6 +2086,29 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 # sends notification email (backend-django + the email crons) must share
 # the same SECRET_KEY or footer links minted by one 400 at the other.
 API_PUBLIC_BASE_URL = os.environ.get("API_PUBLIC_BASE_URL", "")
+
+# --- OAuth 2.1 authorization server for MCP (MIP-1077) ---
+# Dark by default: with this off every OAuth route answers 404, no metadata is published and a
+# 401 carries no `resource_metadata`, so deploying the code changes nothing until it is turned on.
+# Needs API_PUBLIC_BASE_URL (the issuer and every endpoint URL are anchored to it, never to the
+# request's Host header; see apis/mcp_oauth_settings.py).
+MCP_OAUTH_ENABLED = os.environ.get("MCP_OAUTH_ENABLED", "false").strip().lower() == "true"
+OAUTH2_PROVIDER = mcp_oauth_settings.provider_settings(API_PUBLIC_BASE_URL)
+# django-oauth-toolkit's models are swappable, and Django resolves a foreign key to one through
+# these names even when the defaults are used: undefined, `makemigrations` fails. Stated
+# explicitly, and unchanged from the library's defaults.
+OAUTH2_PROVIDER_APPLICATION_MODEL = "oauth2_provider.Application"
+OAUTH2_PROVIDER_ACCESS_TOKEN_MODEL = "oauth2_provider.AccessToken"
+OAUTH2_PROVIDER_REFRESH_TOKEN_MODEL = "oauth2_provider.RefreshToken"
+OAUTH2_PROVIDER_GRANT_MODEL = "oauth2_provider.Grant"
+OAUTH2_PROVIDER_ID_TOKEN_MODEL = "oauth2_provider.IDToken"
+# Where a client finds the protected-resource metadata: the value the MCP endpoint's 401 points
+# at (RFC 9728). Empty while OAuth is off, which keeps the 401 exactly as it was.
+MCP_RESOURCE_METADATA_URL = (
+    f"{API_PUBLIC_BASE_URL.rstrip('/')}/.well-known/oauth-protected-resource{mcp_oauth_settings.MCP_PATH}"
+    if MCP_OAUTH_ENABLED and API_PUBLIC_BASE_URL
+    else ""
+)
 
 
 # --- Stripe billing (self-serve subscription tiers) ---

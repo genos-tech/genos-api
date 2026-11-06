@@ -26,6 +26,11 @@ gunicorn = "==26.0.0"
 requests = "==2.33.1"
 cryptography = "==50.0.2"                   # imported directly in backend_django/**
 pyyaml = "==6.0.2"
+# --- OAuth 2.1 authorization server for MCP (MIP-1077) ---
+django-oauth-toolkit = "==3.4.1"            # CIMD, DCR, RFC 8707/9728/8414 (3.4.0); reuse detection (3.4.1)
+# oauthlib 4.x was days old when this was added and is the core of the token logic: stay on
+# the long-proven 3.3.x, which django-oauth-toolkit's own floor (>=3.3.0) allows.
+oauthlib = "==3.3.1"
 # --- email / push (from Dockerfile pip installs) ---
 "django-anymail" = {extras = ["resend"], version = "==15.0"}
 pywebpush = "==2.3.0"

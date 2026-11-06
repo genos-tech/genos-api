@@ -45,12 +45,18 @@ import uuid
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.utils import timezone
+from oauth2_provider.models import (
+    get_access_token_model,
+    get_grant_model,
+    get_refresh_token_model,
+)
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.invite_models import TeamInvite
+from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -154,6 +160,13 @@ def _delete_personal_data(user) -> None:
     # The worklog is private to its author by design (MIP-1071); items cascade.
     WorklogEntry.objects.filter(author=user).delete()
     MemberBriefingState.objects.filter(user=user).delete()
+    # Connected apps (MIP-1077): the grant AND every token, refresh included, that an AI
+    # client holds for this person. The account is soft-deleted, so no FK cascade fires:
+    # without this the tokens would outlive the person.
+    McpConnection.objects.filter(user=user).delete()
+    get_grant_model().objects.filter(user=user).delete()
+    get_refresh_token_model().objects.filter(user=user).delete()
+    get_access_token_model().objects.filter(user=user).delete()
     # Assignments carry no user column by design — they cascade from the
     # tag, whose owner IS the user.
     PersonalChannelTag.objects.filter(user=user).delete()

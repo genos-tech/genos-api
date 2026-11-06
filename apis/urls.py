@@ -18,7 +18,7 @@ Including another URLconf
 import re
 
 from django.conf import settings
-from django.urls import re_path
+from django.urls import include, path, re_path
 
 from origin.search_engine import urls as search_engine_urls
 from origin.urls.chat import urls as chat_urls
@@ -47,6 +47,9 @@ urlpatterns.extend(note_urls.urlpatterns)
 urlpatterns.extend(search_engine_urls.urlpatterns)
 # Public API — its own prefix, its own contract. See the module docstring.
 urlpatterns.extend(public_urls.urlpatterns)
+# OAuth 2.1 authorization server for MCP (MIP-1077): at the root, because RFC 8414 / 9728 put the
+# metadata at the origin's `.well-known`. Every route is 404 until MCP_OAUTH_ENABLED.
+urlpatterns.append(path("", include("origin.urls.public.oauth_urls")))
 
 
 # Serve user-uploaded media in *both* dev and prod.

@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "769ba20fe817fb78b39e51ceef78567d7d8926c3b5da541e9980b77220ae820a"
+            "sha256": "d72d925885f0b6713a9c5ce1f5f7b208b684632e396e34616981f2a7da53fc2e"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -654,6 +654,15 @@
             "markers": "python_version >= '3.9'",
             "version": "==4.7.0"
         },
+        "django-oauth-toolkit": {
+            "hashes": [
+                "sha256:c47f2a70e83bade0a47a5e9b20e86030d8ed9c0a8f10ec4ed30446cad7291f2d",
+                "sha256:c4de73c0765eed55a99ea0fa8433b20664dcc1f43930149cff569abed166c5c2"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.10'",
+            "version": "==3.4.1"
+        },
         "django-redis": {
             "hashes": [
                 "sha256:4b23aa6e0cd0937bb1242e9a463809e6004de3ca2150f34e986306bb6220d688",
@@ -1009,6 +1018,14 @@
             "markers": "python_version >= '3.9'",
             "version": "==0.16.0"
         },
+        "jwcrypto": {
+            "hashes": [
+                "sha256:77e856818e514cb3d64a1043b6885a7d52f5cc37773f5e944de02103c8d3a54f",
+                "sha256:a1e1570da5c2e35dbcd375ec1d2891a24de8eb35ee2c1fe8e91978efb72cfe90"
+            ],
+            "markers": "python_version >= '3.9'",
+            "version": "==1.6.1"
+        },
         "multidict": {
             "hashes": [
                 "sha256:006c4478de0a1876f4834e14255776286f09b9846b505fe63f67f9d173a9487c",
@@ -1186,6 +1203,15 @@
             "index": "pypi",
             "markers": "python_version >= '3.10'",
             "version": "==6.9.1"
+        },
+        "oauthlib": {
+            "hashes": [
+                "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9",
+                "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1"
+            ],
+            "index": "pypi",
+            "markers": "python_version >= '3.8'",
+            "version": "==3.3.1"
         },
         "openai": {
             "hashes": [

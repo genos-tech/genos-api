@@ -9,6 +9,7 @@ from .common.change_models import *
 from .common.feature_models import *
 from .common.inbox_models import *
 from .common.invite_models import *
+from .common.mcp_connection_models import *
 from .common.notification_models import *
 from .common.ops_models import *
 from .common.security_event_models import *

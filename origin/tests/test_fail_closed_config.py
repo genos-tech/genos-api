@@ -608,12 +608,21 @@ _PUBLIC_DRF = {
 # Plain Django views never see DRF permissions at all, so each one does its
 # own check (anymail verifies the provider's webhook signature; the
 # unsubscribe link carries a signed token; serve_media authenticates
-# attachment prefixes itself). Pinned by module, because anymail registers
+# attachment prefixes itself; the OAuth server's routes are guarded in the view). Pinned by module, because anymail registers
 # one route per provider.
 _PLAIN_DJANGO_MODULES = {
     "anymail.webhooks.",
     "origin.views.common.email_unsubscribe_views",
     "origin.views.common.media_views",
+    # MIP-1077: the OAuth server for MCP. Dark (404) until MCP_OAUTH_ENABLED, then each
+    # route is public by protocol (a client has no login yet) and guards itself: a
+    # per-address rate limit, the library's client + PKCE + redirect checks, and for
+    # registration our own policy. See `origin/views/public/oauth_views.py`.
+    "origin.views.public.oauth_views",
+    # The two library views we mount as they are (token, revoke, the metadata pair); the
+    # gate and the rate limit wrap them in `oauth_views`, and `wraps` keeps THEIR module.
+    "oauth2_provider.views.base",
+    "oauth2_provider.views.metadata",
 }
 
 
