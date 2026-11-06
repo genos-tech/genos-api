@@ -105,9 +105,16 @@ class MapCompletenessTests(SimpleTestCase):
         card must never promise one."""
         destructive = {t.registry_name for t in CATALOG if t.destructive}
         self.assertTrue(destructive, "the MCP catalog lists no destructive tool: scan is stale")
-        for name in sorted(destructive):
+        # `UNDO_SUPPORT` is the IN-APP approval card's map. A destructive tool that is
+        # MCP-only (MIP-1070) has no card and no entry: it must not be in the app's
+        # registry at all, which `test_mcp_only_tools` pins.
+        in_app = destructive & set(REGISTRY)
+        for name in sorted(in_app):
             with self.subTest(tool=name):
                 self.assertEqual(undo.UNDO_SUPPORT[name], undo.NONE)
+        for name in sorted(destructive - in_app):
+            with self.subTest(tool=name, mcp_only=True):
+                self.assertNotIn(name, undo.UNDO_SUPPORT)
 
     def test_nothing_that_deletes_or_shares_is_undoable(self):
         for name in sorted(_approval_tools()):
