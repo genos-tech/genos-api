@@ -2106,6 +2106,12 @@ MCP_OAUTH_ENABLED = _env_on("MCP_OAUTH_ENABLED")
 # Client metadata documents make the server fetch an address a stranger names. Off until it
 # is wanted (DCR alone satisfies the MCP spec); the probe (MIP-1076) says which clients need it.
 MCP_OAUTH_CIMD_ENABLED = _env_on("MCP_OAUTH_CIMD_ENABLED")
+# Client registrations are open, so they are bounded: at most this many new ones a day (across
+# all addresses), and unused ones go after this many days (`prune_oauth_clients`, MIP-1104).
+MCP_OAUTH_MAX_REGISTRATIONS_PER_DAY = int(
+    os.environ.get("MCP_OAUTH_MAX_REGISTRATIONS_PER_DAY", "500")
+)
+MCP_OAUTH_CLIENT_PRUNE_DAYS = int(os.environ.get("MCP_OAUTH_CLIENT_PRUNE_DAYS", "7"))
 OAUTH2_PROVIDER = mcp_oauth_settings.provider_settings(
     API_PUBLIC_BASE_URL, cimd=MCP_OAUTH_CIMD_ENABLED
 )

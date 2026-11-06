@@ -42,6 +42,39 @@ def clean_name(name: str) -> str:
     return " ".join(name.split())
 
 
+DEFAULT_CLIENT_PRUNE_DAYS = 7
+DEFAULT_MAX_REGISTRATIONS_PER_DAY = 500
+
+
+def client_prune_days() -> int:
+    days = getattr(settings, "MCP_OAUTH_CLIENT_PRUNE_DAYS", DEFAULT_CLIENT_PRUNE_DAYS)
+    return days if isinstance(days, int) and days >= 1 else DEFAULT_CLIENT_PRUNE_DAYS
+
+
+def registrations_capped() -> bool:
+    """Has the day's quota of NEW client registrations been used? The per-address limit alone
+    lets many addresses (an IPv6 /64 is plenty) add rows without end; this is the brake that
+    does not depend on who is asking."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from oauth2_provider.models import get_application_model
+
+    cap = getattr(
+        settings, "MCP_OAUTH_MAX_REGISTRATIONS_PER_DAY", DEFAULT_MAX_REGISTRATIONS_PER_DAY
+    )
+    if not isinstance(cap, int) or cap < 1:
+        cap = DEFAULT_MAX_REGISTRATIONS_PER_DAY
+    Application = get_application_model()
+    since = timezone.now() - timedelta(days=1)
+    return (
+        Application.objects.filter(
+            registration_source=Application.RegistrationSource.DCR, created__gte=since
+        ).count()
+        >= cap
+    )
+
+
 def enabled() -> bool:
     return bool(getattr(settings, "MCP_OAUTH_ENABLED", False)) and bool(public_base())
 

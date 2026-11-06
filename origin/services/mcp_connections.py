@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from oauth2_provider.models import (
     get_access_token_model,
+    get_application_model,
     get_grant_model,
     get_refresh_token_model,
 )
@@ -78,3 +81,42 @@ def prune_left_teams(connection: McpConnection) -> bool:
         metadata={"reason": "left_team", "teams": len(kept)},
     )
     return True
+
+
+def prunable_clients(now, days: int):
+    """Client registrations nothing refers to, old enough to go (MIP-1104).
+
+    Only the ones strangers can create (registered and metadata-document), never one made by
+    hand. "Nothing refers to it" is: no connection, no token of either kind, no pending code.
+    A metadata document's row also has to be past its cache expiry (no expiry counts as past)."""
+    Application = get_application_model()
+
+    def uses(model):
+        return Exists(model.objects.filter(application=OuterRef("pk")))
+
+    return (
+        Application.objects.filter(
+            registration_source__in=[
+                Application.RegistrationSource.DCR,
+                Application.RegistrationSource.CIMD,
+            ],
+            created__lt=now - timedelta(days=days),
+        )
+        .filter(
+            Q(registration_source=Application.RegistrationSource.DCR)
+            | Q(cimd_expires_at__isnull=True)
+            | Q(cimd_expires_at__lt=now)
+        )
+        .exclude(
+            uses(McpConnection)
+            | uses(get_access_token_model())
+            | uses(get_refresh_token_model())
+            | uses(get_grant_model())
+        )
+    )
+
+
+def prune_clients(rows) -> int:
+    """Delete the given client rows; returns how many went."""
+    deleted, _per_model = rows.delete()
+    return deleted
