@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import functools
 import json
-import re
+from urllib.parse import urlencode
 
 from django.http import HttpResponseRedirect, JsonResponse
 from django.utils.decorators import method_decorator
@@ -43,9 +43,6 @@ from oauthlib.oauth2.rfc6749.errors import CustomOAuth2Error
 
 from origin.services import mcp_oauth
 from origin.services.throttles import AuthThrottle
-
-# RFC 7636 §4.2: 43 to 128 characters of the unreserved set (an S256 challenge is 43).
-_CHALLENGE = re.compile(r"[A-Za-z0-9\-._~]{43,128}")
 
 
 class OAuthRegisterThrottle(AuthThrottle):
@@ -104,6 +101,39 @@ def throttled(throttle_class):
     return decorate
 
 
+class Library(OAuthLibMixin):
+    """The library's authorization machinery, for the views that are not its own views."""
+
+
+def refusal(credentials, error: str, description: str) -> OAuthToolkitError:
+    """An OAuth error to send back to the client's (already validated) redirect address."""
+    return OAuthToolkitError(
+        error=CustomOAuth2Error(
+            error=error, description=description, state=credentials.get("state")
+        ),
+        redirect_uri=credentials["redirect_uri"],
+    )
+
+
+def describe_error(error: OAuthToolkitError) -> tuple[str | None, str, str, int]:
+    """`(redirect_url, error, description, status)`. The URL is None when the client's address
+    cannot be trusted (an unknown client, a redirect that is not registered): nothing is sent
+    there, the person is told. RFC 9207: an error response names its issuer too, so a client
+    can tell which server it came from (the library adds `iss` only to a success)."""
+    redirect, payload = Library().error_response(error)
+    oauthlib_error = payload["error"]
+    if not redirect:
+        return (
+            None,
+            oauthlib_error.error,
+            oauthlib_error.description or "",
+            oauthlib_error.status_code,
+        )
+    url = payload["url"]
+    url += ("&" if "?" in url else "?") + urlencode({"iss": mcp_oauth.public_base()})
+    return url, oauthlib_error.error, oauthlib_error.description or "", oauthlib_error.status_code
+
+
 class AuthorizeView(OAuthLibMixin, View):
     """`GET /oauth/authorize/`: validate, then hand the browser to the consent page."""
 
@@ -115,26 +145,13 @@ class AuthorizeView(OAuthLibMixin, View):
         except OAuthToolkitError as error:
             return self._error(error)
 
-        # PKCE with S256 only, checked HERE and not left to the token step: DOT treats a missing
-        # method as `plain` and refuses that only when the code is issued, after the member has
-        # been asked. A client that cannot do S256 is told now.
-        challenge = request.GET.get("code_challenge", "")
-        if request.GET.get("code_challenge_method") != "S256" or not _CHALLENGE.fullmatch(
-            challenge
-        ):
-            return self._refuse(
-                credentials, "invalid_request", "PKCE with code_challenge_method=S256 is required."
-            )
-
-        # RFC 8707: a token is for one resource, ours. A client that names another is refused
-        # with `invalid_target`; one that names none gets ours (there is only one to give).
-        for resource in request.GET.getlist("resource"):
-            if resource != mcp_oauth.resource_identifier():
-                return self._refuse(
-                    credentials,
-                    "invalid_target",
-                    "This server only issues tokens for its MCP endpoint.",
-                )
+        problem = mcp_oauth.authorize_problem(
+            request.GET.get("code_challenge_method"),
+            request.GET.get("code_challenge", ""),
+            request.GET.getlist("resource"),
+        )
+        if problem:
+            return self._refuse(credentials, *problem)
 
         response = HttpResponseRedirect(
             f"{mcp_oauth.consent_url()}?{request.META.get('QUERY_STRING', '')}"
@@ -143,25 +160,13 @@ class AuthorizeView(OAuthLibMixin, View):
         return response
 
     def _refuse(self, credentials, error: str, description: str):
-        return self._error(
-            OAuthToolkitError(
-                error=CustomOAuth2Error(
-                    error=error, description=description, state=credentials.get("state")
-                ),
-                redirect_uri=credentials["redirect_uri"],
-            )
-        )
+        return self._error(refusal(credentials, error, description))
 
     def _error(self, error: OAuthToolkitError):
-        redirect, payload = self.error_response(error)
-        if redirect:
-            return OAuth2ResponseRedirect(
-                payload["url"], oauth2_settings.ALLOWED_REDIRECT_URI_SCHEMES
-            )
-        oauthlib_error = payload["error"]
-        return _json_error(
-            oauthlib_error.error, oauthlib_error.description or "", oauthlib_error.status_code
-        )
+        url, code, description, status = describe_error(error)
+        if url:
+            return OAuth2ResponseRedirect(url, oauth2_settings.ALLOWED_REDIRECT_URI_SCHEMES)
+        return _json_error(code, description, status)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
