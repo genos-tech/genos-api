@@ -379,8 +379,11 @@ class TeamOwnershipClaimFinalizeView(AuthenticatedAPIView):
             # normally while this claim sits pending. Finalizing on the
             # recorded owner would then take the team from the new owner,
             # who never had a claim filed against them.
-            owner_at_request = (item.item_optionals or {}).get("owner_id_at_request")
-            if owner_at_request and str(team.owner_id) != str(owner_at_request):
+            # Who it was filed against is the row's RECEIVER, which the server sets when a
+            # claim is filed. `owner_id_at_request` in `item_optionals` only mirrors it, and
+            # is whatever a planted row says (MIP-1029): a claim addressed to anyone but the
+            # current owner is not a claim on this owner.
+            if item.receiver_id is None or str(team.owner_id) != str(item.receiver_id):
                 item.request_status = "rejected"
                 item.save(update_fields=["request_status", "ts_updated_at"])
                 return Response(
