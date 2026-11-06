@@ -14,6 +14,7 @@ library, so a registration cannot set anything we did not decide to allow.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -30,6 +31,15 @@ ALLOWED_GRANTS = ("authorization_code", "refresh_token")
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_name(name: str) -> str:
+    """A client's name as a person may be shown it: one line, no control characters and no
+    invisible formatting ones (the right-to-left override that reorders what follows it), no
+    runs of spaces. The length is the caller's rule."""
+    name = _CONTROL.sub(" ", name)
+    name = "".join(c for c in name if unicodedata.category(c) != "Cf")
+    return " ".join(name.split())
 
 
 def enabled() -> bool:
@@ -140,7 +150,7 @@ def check_registration(data: Any) -> tuple[dict[str, Any] | None, tuple[str, str
     name = data.get("client_name", "")
     if not isinstance(name, str):
         return None, ("invalid_client_metadata", "client_name must be a string.")
-    name = " ".join(_CONTROL.sub(" ", name).split())
+    name = clean_name(name)
     if len(name) > MAX_CLIENT_NAME_CHARS:
         return None, (
             "invalid_client_metadata",
@@ -245,15 +255,35 @@ def check_decision(body: dict[str, Any], requested: list[str]) -> tuple[dict | N
     return {"scopes": granted, "team_ids": ordered, "default_team_id": default_team_id}, None
 
 
+def client_problem(application: Any) -> str | None:
+    """Why this registered client may not be used, or None.
+
+    A client registered by DCR was held to this when it registered; one that is a metadata
+    document is published by a stranger and was not, so the same limits are applied to the
+    client itself, whichever way it came: a public client, the authorization-code grant only,
+    and no redirect address that `redirect_uri_problem` refuses (https, or loopback http)."""
+    if application.client_type != "public":
+        return "Only public clients are supported."
+    if application.authorization_grant_type != "authorization-code":
+        return "Only the authorization-code grant is supported."
+    for uri in (application.redirect_uris or "").split():
+        problem = redirect_uri_problem(uri)
+        if problem:
+            return f"The client's registration is not acceptable: {problem}."
+    return None
+
+
 def client_summary(application: Any) -> dict[str, str]:
     """Who a client is, as far as Genos can tell the member.
 
-    `registered`: it registered itself, and anyone can, under any name: the name proves nothing.
-    `metadata_document`: its client_id is an address, and `host` is that address's host, which
-    does prove who published it."""
+    `registered`: it registered itself, and anyone can, under any name: the name proves
+    nothing. `metadata_document`: its client_id is an address; `url` is that address, in full,
+    and `host` its host. A host on a shared platform (`*.vercel.app`, `*.pages.dev`) says
+    little about WHO published the document, so a page shows the whole address."""
     document = is_cimd_client_id(application.client_id)
     return {
-        "name": application.name or "",
+        "name": clean_name(application.name or "")[:MAX_CLIENT_NAME_CHARS],
         "kind": "metadata_document" if document else "registered",
         "host": (urlsplit(application.client_id).hostname or "") if document else "",
+        "url": application.client_id if document else "",
     }

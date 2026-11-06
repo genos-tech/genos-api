@@ -34,6 +34,9 @@ class SecurityAction(models.TextChoices):
     PASSWORD_RESET = "password.reset", "Password reset"
     MCP_CONNECTED = "mcp.connected", "AI app connected"
     MCP_UPDATED = "mcp.updated", "AI app access changed"
+    # Once per connection, address and hour, not per call (like `api_key.used`).
+    MCP_USED = "mcp.used", "AI app used"
+    MCP_REJECTED = "mcp.rejected", "AI app refused"
     MCP_DISCONNECTED = "mcp.disconnected", "AI app disconnected"
     API_KEY_CREATED = "api_key.created", "API key created"
     API_KEY_REVOKED = "api_key.revoked", "API key revoked"

@@ -85,10 +85,11 @@ def client_ip(request) -> str | None:
 
 
 def _api_key(request):
-    from origin.models.common.api_key_models import ApiKey  # noqa: PLC0415
+    """The credential that made the request (an API key, or another kind that satisfies
+    `Credential`, MIP-1078), or None. Named for the key it was written for."""
+    from origin.views.public.credentials import credential_of  # noqa: PLC0415
 
-    key = getattr(request, "auth", None)
-    return key if isinstance(key, ApiKey) else None
+    return credential_of(request)
 
 
 def _source(request, key=None) -> tuple[str, str | None]:
@@ -360,7 +361,7 @@ def _caller(request) -> str | None:
     those."""
     key = _api_key(request)
     if key is not None:
-        return f"key:{key.id}"
+        return key.audit_ref()
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
         return f"user:{user.pk}"
@@ -459,3 +460,48 @@ class ForbiddenBurstMiddleware:
         if response.status_code == 403:
             note_forbidden(request)
         return response
+
+
+# ── Connected-app (OAuth) use ───────────────────────────────────────────
+
+
+def note_mcp_used(request, credential) -> None:
+    """Record that a connected app made a call, once per connection, IP and hour: the same
+    answer `note_api_key_used` gives for a key (was it used, when, from where)."""
+    ip = client_ip(request)
+    hour = int(time.time() // _KEY_USE_WINDOW)
+    if not _first_in_window(f"secmcpuse:{credential.id}:{ip}:{hour}", _KEY_USE_WINDOW * 2):
+        return
+    record_security_event(
+        SecurityAction.MCP_USED,
+        request=request,
+        actor=credential.user,
+        api_key=credential,
+        team_id=credential.default_team_id,
+        target_type="mcp_connection",
+        target_id=credential.id,
+        target_label=credential.label,
+        metadata={"path": request.path, "method": request.method},
+    )
+
+
+def note_mcp_rejected(request, reason: str, connection=None) -> None:
+    """Record a refused access token, once per connection (or, for a token we do not know,
+    per address), reason and hour. A revoked connection or a deactivated person still holding
+    a token is the interesting case. Nothing of the presented value is stored."""
+    ip = client_ip(request)
+    hour = int(time.time() // _KEY_USE_WINDOW)
+    who = f"conn:{connection.id}" if connection is not None else f"ip:{ip}"
+    if not _first_in_window(f"secmcprej:{who}:{reason}:{hour}", _KEY_USE_WINDOW * 2):
+        return
+    app = connection.application if connection is not None else None
+    record_security_event(
+        SecurityAction.MCP_REJECTED,
+        request=request,
+        actor=connection.user if connection is not None else None,
+        team_id=connection.default_team_id if connection is not None else None,
+        target_type="mcp_connection" if connection is not None else "",
+        target_id=connection.id if connection is not None else "",
+        target_label=(app.name or app.client_id) if app is not None else "",
+        metadata={"reason": reason, "path": request.path, "method": request.method},
+    )

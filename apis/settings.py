@@ -2089,13 +2089,26 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
 # the same SECRET_KEY or footer links minted by one 400 at the other.
 API_PUBLIC_BASE_URL = os.environ.get("API_PUBLIC_BASE_URL", "")
 
+
 # --- OAuth 2.1 authorization server for MCP (MIP-1077) ---
 # Dark by default: with this off every OAuth route answers 404, no metadata is published and a
 # 401 carries no `resource_metadata`, so deploying the code changes nothing until it is turned on.
 # Needs API_PUBLIC_BASE_URL (the issuer and every endpoint URL are anchored to it, never to the
 # request's Host header; see apis/mcp_oauth_settings.py).
-MCP_OAUTH_ENABLED = os.environ.get("MCP_OAUTH_ENABLED", "false").strip().lower() == "true"
-OAUTH2_PROVIDER = mcp_oauth_settings.provider_settings(API_PUBLIC_BASE_URL)
+def _env_on(name: str) -> bool:
+    """An ON switch for a security surface, so it fails closed: only an explicit yes turns it
+    on, a typo leaves it off (the incident OFF switches above do the opposite, for the same
+    reason)."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+MCP_OAUTH_ENABLED = _env_on("MCP_OAUTH_ENABLED")
+# Client metadata documents make the server fetch an address a stranger names. Off until it
+# is wanted (DCR alone satisfies the MCP spec); the probe (MIP-1076) says which clients need it.
+MCP_OAUTH_CIMD_ENABLED = _env_on("MCP_OAUTH_CIMD_ENABLED")
+OAUTH2_PROVIDER = mcp_oauth_settings.provider_settings(
+    API_PUBLIC_BASE_URL, cimd=MCP_OAUTH_CIMD_ENABLED
+)
 # django-oauth-toolkit's models are swappable, and Django resolves a foreign key to one through
 # these names even when the defaults are used: undefined, `makemigrations` fails. Stated
 # explicitly, and unchanged from the library's defaults.

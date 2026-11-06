@@ -15,15 +15,20 @@ from typing import Any
 from urllib.parse import urlparse
 
 from django.conf import settings
+from rest_framework import exceptions
 from rest_framework.response import Response
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
+from origin.views.common.api_key_auth import ApiKeyAuthentication
+from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
+from origin.views.public.credentials import credential_of
 from origin.views.public.mcp import prompts, protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
-from origin.views.public.permissions import HasApiKey, PublicApiThrottle
+from origin.views.public.permissions import HasCredential, PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
 from origin.views.utils.scope_guards import participates_in_team
 
@@ -52,7 +57,11 @@ class McpView(PublicApiView):
     registry without passing the scope check in `tools.call`.
     """
 
-    permission_classes = [HasApiKey]
+    # An API key, or a connected app's OAuth access token (MIP-1077). The OAuth one goes first
+    # because both it and SimpleJWT read `Bearer`: it takes a token that is one of ours and
+    # passes on any other, so a session JWT still reaches the permission's own refusal.
+    authentication_classes = [McpOAuthAuthentication, JWTAuthentication, ApiKeyAuthentication]
+    permission_classes = [HasCredential]
     throttle_classes = [PublicApiThrottle]
     # POST only. Earlier MCP revisions opened a standalone SSE stream with
     # GET and ended sessions with DELETE; this revision has neither, and
@@ -85,6 +94,56 @@ class McpView(PublicApiView):
             pass
         error = JsonRpcError(protocol.SERVICE_UNAVAILABLE, message, http_status=503)
         return Response(error.as_response(request_id), status=error.http_status)
+
+    def handle_exception(self, exc):
+        if isinstance(exc, (exceptions.NotAuthenticated, exceptions.AuthenticationFailed)):
+            return self.unauthorized_response(exc)
+        return super().handle_exception(exc)
+
+    def unauthorized_response(self, exc) -> Response:
+        """A 401 an MCP client can act on (MIP-1078).
+
+        The HTTP half: `WWW-Authenticate`. When OAuth is set up (`MCP_RESOURCE_METADATA_URL`)
+        it is `Bearer resource_metadata="<url>"`, which is how a client that was never told
+        how to sign in finds out (RFC 9728, and the MCP authorization spec says MUST); when
+        a credential WAS presented and refused it also says `error="invalid_token"`, which is
+        what tells a client to refresh or start over rather than give up. Without that
+        setting it is the header it always was, so nothing changes until OAuth exists.
+
+        The body half is the transport's own convention, a JSON-RPC error, so a client shows
+        a message instead of DRF's bare `{"detail": ...}`. The id is echoed when readable.
+        """
+        request_id = None
+        try:
+            data = self.request.data
+            if isinstance(data, dict):
+                request_id = data.get("id")
+        except Exception:  # noqa: BLE001 - an unreadable body just has no id
+            pass
+        # The authenticator's own words, as before: the API-key one says "Invalid or
+        # revoked API key." for an unknown, a revoked and an expired key alike, and an
+        # OAuth authenticator will say its own. Only the shape of the body is new.
+        message = str(exc.detail)
+        error = JsonRpcError(protocol.INVALID_REQUEST, message, http_status=401)
+        response = Response(error.as_response(request_id), status=401)
+        challenge = self.challenge(failed=isinstance(exc, exceptions.AuthenticationFailed))
+        response["WWW-Authenticate"] = (
+            challenge or self.get_authenticate_header(self.request) or "Bearer"
+        )
+        return response
+
+    @staticmethod
+    def challenge(*, failed: bool) -> str | None:
+        """The `WWW-Authenticate` challenge that points at the OAuth metadata, or None
+        when OAuth is not configured."""
+        url = (getattr(settings, "MCP_RESOURCE_METADATA_URL", "") or "").strip()
+        if not url or '"' in url or "\n" in url or "\r" in url:
+            return None
+        params = []
+        if failed:
+            params.append('error="invalid_token"')
+        params.append(f'resource_metadata="{url}"')
+        return "Bearer " + ", ".join(params)
 
     def post(self, request):
         try:
@@ -195,7 +254,13 @@ class McpView(PublicApiView):
         if method == "tools/call":
             return self._ok(
                 request_id,
-                self._call_tool(params, ctx, scope, allow_destructive),
+                self._call_tool(
+                    params,
+                    ctx,
+                    scope,
+                    allow_destructive,
+                    credential_kind=getattr(credential_of(request), "kind", "api_key"),
+                ),
                 modern=modern,
             )
 
@@ -264,8 +329,21 @@ class McpView(PublicApiView):
         """
         team = self.resolve_team(request)
         if team is None:
+            credential = credential_of(request)
+            # The team it was asked for, else the one it falls back to: a connection whose
+            # default team its owner has left must say so, not "no team named".
             named = self._named_team_id(request)
+            if not named and not request.query_params.get("team_id"):
+                # Only when the request named NOTHING: a malformed `team_id` is its own
+                # mistake ("No team for this request" below), not a problem with the default.
+                named = (
+                    str(credential.default_team_id)
+                    if credential and credential.default_team_id
+                    else None
+                )
             if named:
+                if credential is not None and credential.kind != "api_key":
+                    raise self._team_not_allowed(named)
                 raise self._not_a_member(named)
             raise JsonRpcError(
                 protocol.INVALID_PARAMS,
@@ -319,9 +397,9 @@ class McpView(PublicApiView):
         named no team" apart from "you named one you aren't in". A value
         that isn't a UUID counts as naming nothing: that one *is* a typo,
         and the no-team message is the one that shows the right shape."""
-        key = request.auth
-        if getattr(key, "team_id", None):
-            return str(key.team_id)
+        credential = credential_of(request)
+        if credential is not None and credential.pinned_team_id:
+            return str(credential.pinned_team_id)
         try:
             return str(uuid.UUID(str(request.query_params.get("team_id"))))
         except (ValueError, AttributeError, TypeError):
@@ -349,8 +427,25 @@ class McpView(PublicApiView):
             http_status=403,
         )
 
+    @staticmethod
+    def _team_not_allowed(team_id: str) -> JsonRpcError:
+        """The same refusal for a connected app (MIP-1078): it works in the teams its
+        owner granted it, and only while they are still in them."""
+        return JsonRpcError(
+            protocol.INVALID_REQUEST,
+            f"This connection can't use team {team_id}: it wasn't granted that team, or "
+            "its owner isn't a member of it any more. Choose another team, or change the "
+            "teams this connection may use in Genos under Settings → Connected apps.",
+            http_status=403,
+        )
+
     def _call_tool(
-        self, params: dict[str, Any], ctx: ToolContext, scope: str, allow_destructive: bool
+        self,
+        params: dict[str, Any],
+        ctx: ToolContext,
+        scope: str,
+        allow_destructive: bool,
+        credential_kind: str = "api_key",
     ) -> dict[str, Any]:
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -386,6 +481,7 @@ class McpView(PublicApiView):
                     scope,
                     allow_destructive=allow_destructive,
                     on_unknown_tool=unknown,
+                    credential_kind=credential_kind,
                 )
             except JsonRpcError:
                 raise

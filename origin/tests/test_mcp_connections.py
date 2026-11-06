@@ -105,18 +105,17 @@ class ConnectionsBase(BaseAPITestCase):
 
 
 class TestWhoMayCall(ConnectionsBase):
-    def test_dark_until_switched_on(self):
-        with override_settings(MCP_OAUTH_ENABLED=False):
-            self.assertEqual(self.client.get(LIST).status_code, 404)
-            self.assertEqual(
-                self.client.patch(
-                    detail(self.conn), {"scopes": ["mcp:read"]}, format="json"
-                ).status_code,
-                404,
-            )
-            self.assertEqual(self.client.delete(detail(self.conn)).status_code, 404)
+    def test_a_member_can_still_see_and_end_what_they_connected_while_oauth_is_off(self):
+        """Not dark, on purpose: switching OAuth off must never leave a member unable to
+        disconnect an app (its tokens would otherwise wake up when it is switched back on)."""
+        self.tokens(self.user, self.app, "x")
+        with override_settings(MCP_OAUTH_ENABLED=False, MCP_RESOURCE_METADATA_URL=""):
+            self.assertEqual(self.client.get(LIST).status_code, 200)
+            self.assertEqual(len(self.client.get(LIST).json()["connections"]), 1)
+            self.assertEqual(self.client.delete(detail(self.conn)).status_code, 204)
         self.conn.refresh_from_db()
-        self.assertTrue(self.conn.is_active)
+        self.assertFalse(self.conn.is_active)
+        self.assertEqual(self.counts(self.user, self.app), (0, 0, 0))
 
     def test_signed_in_only(self):
         self.unauthenticate()
@@ -165,7 +164,9 @@ class TestList(ConnectionsBase):
         self.assertEqual(len(body["connections"]), 1)
         row = body["connections"][0]
         self.assertEqual(row["id"], str(self.conn.id))
-        self.assertEqual(row["client"], {"name": "Claude", "kind": "registered", "host": ""})
+        self.assertEqual(
+            row["client"], {"name": "Claude", "kind": "registered", "host": "", "url": ""}
+        )
         self.assertEqual(row["scope"], "write")
         self.assertIs(row["allowDestructive"], False)
         self.assertEqual(row["defaultTeamId"], str(self.team.team_id))
@@ -213,7 +214,12 @@ class TestList(ConnectionsBase):
         }
         self.assertEqual(
             clients["Doc Client"],
-            {"name": "Doc Client", "kind": "metadata_document", "host": "client.example.org"},
+            {
+                "name": "Doc Client",
+                "kind": "metadata_document",
+                "host": "client.example.org",
+                "url": "https://client.example.org/meta.json",
+            },
         )
 
 

@@ -5,8 +5,9 @@
     DELETE /api/v2/mcp/connections/<id>/   disconnect (every token ends at once)
 
 Only the member's own, JWT only (an API key must not be able to widen or end an app's access),
-and a connection that is someone else's, revoked or unknown is the same 404. Dark with the rest
-of the OAuth server until `MCP_OAUTH_ENABLED`.
+and a connection that is someone else's, revoked or unknown is the same 404. NOT dark: a
+member must be able to see and end what they connected even while OAuth is switched off (the
+list is simply empty until anything was ever connected).
 
 A change takes effect on the app's next call: its access is read from the connection each time,
 never copied into the token, so narrowing teams or turning off deleting needs no new sign-in.
@@ -55,12 +56,6 @@ def _serialize(connection: McpConnection, teams: dict[str, str]) -> dict:
 class _Base(AuthenticatedAPIView):
     authentication_classes = [JWTAuthentication]
     throttle_classes = [McpConnectionsThrottle]
-
-    def initial(self, request, *args, **kwargs):
-        # Sign-in and the body guard first, then dark with the rest of the server.
-        super().initial(request, *args, **kwargs)
-        if not mcp_oauth.enabled():
-            raise Http404
 
     @staticmethod
     def _team_names(user) -> dict[str, str]:

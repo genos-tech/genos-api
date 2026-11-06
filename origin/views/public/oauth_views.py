@@ -29,7 +29,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from oauth2_provider.exceptions import OAuthToolkitError
 from oauth2_provider.http import OAuth2ResponseRedirect
-from oauth2_provider.models import get_access_token_model
+from oauth2_provider.models import get_access_token_model, get_application_model
 from oauth2_provider.settings import oauth2_settings
 from oauth2_provider.views import (
     OAuthProtectedResourceMetadataView,
@@ -145,6 +145,12 @@ class AuthorizeView(OAuthLibMixin, View):
         except OAuthToolkitError as error:
             return self._error(error)
 
+        application = get_application_model().objects.get(client_id=credentials["client_id"])
+        why = mcp_oauth.client_problem(application)
+        if why:
+            # Its redirect addresses are not trusted, so nothing is sent there.
+            return _json_error("invalid_client", why)
+
         problem = mcp_oauth.authorize_problem(
             request.GET.get("code_challenge_method"),
             request.GET.get("code_challenge", ""),
@@ -183,7 +189,8 @@ class RegisterView(View):
             )
         try:
             data = json.loads(body or b"null")
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            # RecursionError: a few KB of `[` nests past the interpreter's limit.
             return _json_error("invalid_client_metadata", "The request body must be valid JSON.")
         cleaned, problem = mcp_oauth.check_registration(data)
         if problem:
@@ -211,6 +218,44 @@ class RegisterView(View):
         return JsonResponse(document, status=201)
 
 
+def json_errors(view):
+    """RFC 6749 §5.2: an error from the token endpoint is `application/json`. The library
+    sends the `invalid_target` of a resource-escalation request as JSON text labelled
+    `text/html`, which a strict client refuses to parse; say what it is."""
+
+    @functools.wraps(view)
+    def inner(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        if (
+            response.get("Content-Type", "").startswith("text/html")
+            and response.content[:1] == b"{"
+        ):
+            try:
+                json.loads(response.content)
+            except ValueError:
+                return response
+            response["Content-Type"] = "application/json"
+        return response
+
+    return inner
+
+
+def refresh_race_guard(view):
+    """Two refreshes of one token at once: the second finds its predecessor already rotated and,
+    with tokens hashed at rest, the library trips over the blank value it would hand back (a
+    500). Nothing leaks and no second pair is made; the client is told what it should be told
+    (`invalid_grant`: use the newer token), as for any replayed refresh token."""
+
+    @functools.wraps(view)
+    def inner(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except get_access_token_model().DoesNotExist:
+            return _json_error("invalid_grant", "The refresh token was already used.")
+
+    return inner
+
+
 def registration_management_view(request, client_id):
     """Only here so the library can name this route when it builds its response; see
     `RegisterView._without_management`. There is nothing to manage."""
@@ -219,7 +264,11 @@ def registration_management_view(request, client_id):
 
 authorize_view = gated(throttled(OAuthAuthorizeThrottle)(never_cache(AuthorizeView.as_view())))
 register_view = gated(throttled(OAuthRegisterThrottle)(RegisterView.as_view()))
-token_view = gated(throttled(OAuthTokenThrottle)(never_cache(TokenView.as_view())))
-revoke_view = gated(throttled(OAuthTokenThrottle)(never_cache(RevokeTokenView.as_view())))
+token_view = gated(
+    throttled(OAuthTokenThrottle)(never_cache(refresh_race_guard(json_errors(TokenView.as_view()))))
+)
+revoke_view = gated(
+    throttled(OAuthTokenThrottle)(never_cache(json_errors(RevokeTokenView.as_view())))
+)
 server_metadata_view = gated(OAuthServerMetadataView.as_view())
 resource_metadata_view = gated(OAuthProtectedResourceMetadataView.as_view())

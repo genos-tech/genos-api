@@ -35,8 +35,11 @@ REFRESH_TOKEN_SECONDS = 60 * 24 * 60 * 60
 AUTHORIZATION_CODE_SECONDS = 60
 
 
-def provider_settings(public_base: str) -> dict:
-    """The `OAUTH2_PROVIDER` dict for an API whose public origin is `public_base`."""
+def provider_settings(public_base: str, cimd: bool = False) -> dict:
+    """The `OAUTH2_PROVIDER` dict for an API whose public origin is `public_base`.
+
+    `cimd` switches on client metadata documents (off unless asked: it makes the server fetch
+    an address a stranger names, and DCR alone satisfies the MCP spec)."""
     base = (public_base or "").rstrip("/")
     return {
         # --- Who may ask, and how ---------------------------------------------------------
@@ -85,8 +88,11 @@ def provider_settings(public_base: str) -> dict:
         "OAUTH2_PROTECTED_RESOURCE_NAME": "Genos MCP",
         # --- Registering a client: both ways the MCP spec names -----------------------------
         # CIMD: the client_id is the https URL of a metadata document the client hosts. DOT
-        # fetches it with an SSRF guard, a size cap, a timeout and a failure back-off.
-        "CIMD_ENABLED": True,
+        # fetches it with an SSRF guard, a size cap and a failure back-off; OUR fetcher wraps
+        # that in a real deadline and a small in-flight cap (`services/cimd_fetcher.py`).
+        # Off by default (`MCP_OAUTH_CIMD_ENABLED`): see `provider_settings`.
+        "CIMD_ENABLED": cimd,
+        "CIMD_METADATA_FETCHER": "origin.services.cimd_fetcher.BoundedFetcher",
         "CIMD_FETCH_TIMEOUT_SECONDS": 3,
         "CIMD_MAX_DOCUMENT_SIZE": 8192,
         # DCR (RFC 7591): open, as the spec requires, but only through our wrapper view
