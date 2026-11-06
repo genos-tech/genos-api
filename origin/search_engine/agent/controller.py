@@ -1162,24 +1162,107 @@ def _hydrate_task_display_ids(sources: list[dict[str, Any]]) -> list[dict[str, A
         except (TypeError, ValueError):
             continue
 
-    if not missing_ids:
+    if missing_ids:
+        from origin.models.task.task_models import TaskMaster
+
+        by_id: dict[int, str] = {}
+        for t in TaskMaster.objects.select_related("project").filter(task_id__in=missing_ids):
+            by_id[t.task_id] = t.display_id
+
+        for src in sources:
+            if src.get("entity_type") != "task" or src.get("task_display_id"):
+                continue
+            try:
+                tid = int(src.get("task_id"))
+            except (TypeError, ValueError):
+                continue
+            if tid in by_id:
+                src["task_display_id"] = by_id[tid]
+    # Every emit path funnels through here, so the names a write tool's result
+    # did not carry are filled in once, for all of them.
+    _hydrate_source_names(sources)
+    return sources
+
+
+def _hydrate_source_names(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Backfill what a write tool's result left off its chip: a project's name,
+    a note's title, and the task / chat refs a task or chat note's link needs.
+
+    The project-scoped writes (members, tags, labels, sprints) and
+    `manage_note_sharing` return ids only, and `restore_note_version` returns no
+    parent context, so their chips would read "Project" / "Note" or open the wrong
+    place. One batched read per kind, only for chips that lack it. The ids come
+    from a result the tool already checked access for, so this only names an
+    object the person just operated on. Cosmetic: a failed lookup leaves the chip
+    as it was and never breaks the run.
+    """
+    project_chips: dict[int, list[dict[str, Any]]] = {}
+    note_chips: dict[str, dict[int, list[dict[str, Any]]]] = {}
+    for src in sources:
+        etype = src.get("entity_type")
+        if etype == "project" and not src.get("title"):
+            try:
+                project_chips.setdefault(int(src.get("project_id")), []).append(src)
+            except (TypeError, ValueError):
+                continue
+        elif etype == "note":
+            family = src.get("note_type")
+            if family not in ("personal", "task", "chat"):
+                continue
+            lacks_refs = (
+                family == "task" and not (src.get("project_id") and src.get("task_id"))
+            ) or (family == "chat" and not src.get("chat_id"))
+            if src.get("title") and not lacks_refs:
+                continue
+            try:
+                note_chips.setdefault(family, {}).setdefault(int(src.get("note_id")), []).append(
+                    src
+                )
+            except (TypeError, ValueError):
+                continue
+    if not project_chips and not note_chips:
         return sources
 
-    from origin.models.task.task_models import TaskMaster
+    try:
+        if project_chips:
+            from origin.models.project.prj_models import ProjectMaster
 
-    by_id: dict[int, str] = {}
-    for t in TaskMaster.objects.select_related("project").filter(task_id__in=missing_ids):
-        by_id[t.task_id] = t.display_id
+            for pid, name in ProjectMaster.objects.filter(
+                project_id__in=list(project_chips)
+            ).values_list("project_id", "project_name"):
+                for src in project_chips[pid]:
+                    src["title"] = name or ""
+        if note_chips:
+            from origin.models.note.chat_note_models import ChatNoteMaster
+            from origin.models.note.personal_note_models import PersonalNoteMaster
+            from origin.models.note.task_note_models import TaskNoteMaster
+            from origin.search_engine.agent.tools.note_targets import chat_note_parent_context
 
-    for src in sources:
-        if src.get("entity_type") != "task" or src.get("task_display_id"):
-            continue
-        try:
-            tid = int(src.get("task_id"))
-        except (TypeError, ValueError):
-            continue
-        if tid in by_id:
-            src["task_display_id"] = by_id[tid]
+            models = {
+                "personal": PersonalNoteMaster,
+                "task": TaskNoteMaster,
+                "chat": ChatNoteMaster,
+            }
+            for family, by_id in note_chips.items():
+                for note in models[family].objects.filter(note_id__in=list(by_id)):
+                    if family == "chat":
+                        refs = chat_note_parent_context(note)
+                    elif family == "task":
+                        refs = {"project_id": note.project_id or None, "task_id": note.task_id}
+                    else:
+                        refs = {}
+                    for src in by_id[note.note_id]:
+                        if not src.get("title"):
+                            src["title"] = note.title or ""
+                        for key in ("project_id", "task_id", "chat_type", "chat_id", "thread_id"):
+                            if not src.get(key) and refs.get(key) is not None:
+                                src[key] = (
+                                    str(refs[key])
+                                    if key in ("project_id", "task_id")
+                                    else refs[key]
+                                )
+    except Exception:  # noqa: BLE001 — cosmetic backfill must never break a run
+        log.exception("Failed to backfill chip names")
     return sources
 
 
@@ -1290,6 +1373,65 @@ def _milestone_source(
     return s
 
 
+# Which write tools reach a chip branch of `_sources_from_tool_result`, and which are
+# deliberately without one. `test_agent_write_source_chips` holds the two to the registry
+# both ways, so a new approval-gated tool has to land in one of them.
+_TASK_WRITE_TOOLS = frozenset(
+    {
+        "create_task",
+        "update_task",
+        "assign_task",
+        "add_comment",
+        "update_comment",
+        "delete_comment",
+        "restore_task_body",
+        "add_task_delivery",
+        "remove_task_delivery",
+    }
+)
+_NOTE_SOURCE_TOOLS = frozenset(
+    {
+        "fetch_note",
+        "create_note",
+        "update_note",
+        "restore_note_version",
+        "manage_note_sharing",
+    }
+)
+_PROJECT_WRITE_TOOLS = frozenset(
+    {
+        "manage_project",
+        "manage_sprint",
+        "manage_project_members",
+        "add_project_tag",
+        "manage_project_labels",
+        "approve_join_request",
+        "decline_join_request",
+    }
+)
+# Chip branches that live inline above for the rest: create_task_plan, update_tasks_bulk,
+# update_task_dependencies, manage_milestone, delete_milestone, create_todo_item,
+# update_todo_item.
+NO_CHIP_WRITE_TOOLS: dict[str, str] = {
+    "delete_note": "the note is gone: a chip would be a dead link",
+    "delete_note_folder": "a folder is not a source type, and the folders it deleted are gone",
+    "manage_note_folder": "a folder is not a source type: there is no chip or citation form for one",
+    "favorite_note": (
+        "its result names a note without its type, and adding it would change what the model "
+        "sees (a December item); a folder is not a source type"
+    ),
+    "delete_todo_item": "the to-do is gone: a chip would be a dead link",
+    "delete_sprint": (
+        "its result carries no project, and adding one would change what the model sees "
+        "(a December item)"
+    ),
+    "delete_project": "the project is gone, and there is no container to chip instead",
+    "create_calendar_event": "a calendar event is not a source type yet",
+    "update_calendar_event": "a calendar event is not a source type yet",
+    "delete_calendar_event": "a calendar event is not a source type yet",
+}
+
+
 def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[dict[str, Any]]:
     """Build UI source dicts from a non-search tool's result, marking
     sources produced by a WRITE tool (`requires_approval`) with
@@ -1369,7 +1511,9 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
     if call_name == "create_task_plan":
         # Approved plan → chips for everything it created, so the final
         # answer's citations resolve and the user can click straight
-        # into the new milestone/tasks. Capped like other multi-row chips.
+        # into the new milestone/tasks. Not capped here: the tool itself takes
+        # at most `_MAX_PLAN_TASKS` (20), and the chip row folds the rest into
+        # "+N more".
         sources: list[dict[str, Any]] = []
         pid = result.get("project_id")
         ms = result.get("milestone") or {}
@@ -1388,7 +1532,7 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
                     display_id=parent.get("display_id"),
                 )
             )
-        for t in (result.get("tasks") or [])[:10]:
+        for t in result.get("tasks") or []:
             if t.get("task_id"):
                 sources.append(
                     _task_source(t["task_id"], t.get("title"), pid, display_id=t.get("display_id"))
@@ -1399,7 +1543,8 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
 
     if call_name == "update_tasks_bulk":
         # Approved organize pass → chips for the touched tasks so the
-        # answer's "I bumped X to Critical" citations resolve.
+        # answer's "I bumped X to Critical" citations resolve. Every row the
+        # tool applied (it takes at most `_MAX_BULK_UPDATES`, 30).
         return [
             _task_source(
                 row.get("task_id"),
@@ -1407,13 +1552,13 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
                 row.get("project_id"),
                 display_id=row.get("display_id"),
             )
-            for row in (result.get("updated") or [])[:10]
+            for row in result.get("updated") or []
             if row.get("task_id")
         ]
 
     if call_name == "update_task_dependencies":
-        # Both ends of every touched edge, once each, so "linked X → Y"
-        # cites resolve. No project_id in the result — the downstream
+        # Both ends of every touched edge, once each (the tool takes at most
+        # `_MAX_EDGES`, 30, so this is bounded), so "linked X → Y" cites resolve. No project_id in the result — the downstream
         # display-id hydration backfills it like assign_task's.
         seen: dict[Any, dict[str, Any]] = {}
         for key in ("added", "removed"):
@@ -1427,13 +1572,15 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
                             None,
                             display_id=edge.get(f"{end}_display_id"),
                         )
-        return list(seen.values())[:10]
+        return list(seen.values())
 
-    if call_name in ("create_task", "update_task", "assign_task", "add_comment"):
+    if call_name in _TASK_WRITE_TOOLS:
         # Single-task write tools → chip the operated task, so every
         # approved write hands the user a clickable ref to what changed.
-        # assign_task / add_comment don't echo title/project_id —
-        # display-id hydration and friendly titles backfill downstream.
+        # Several don't echo title/project_id (assign_task, the comment and
+        # delivery tools): display-id hydration backfills the id downstream.
+        # A comment delete or a delivery unlink chips the TASK, which is still
+        # there; only the comment or link is gone.
         tid = result.get("task_id")
         if not tid:
             return []
@@ -1469,6 +1616,20 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
             return [_project_source(result["project_id"], result.get("project_name"))]
         return []
 
+    if call_name in _PROJECT_WRITE_TOOLS:
+        # A project-scoped write (project / sprint / members / tags / labels /
+        # join-request answers) → the project's chip. None of these has an
+        # entity of its own to open, so the project is the place to go. A label
+        # that was only created belongs to the team, not a project: no chip.
+        pid = result.get("project_id")
+        if not pid:
+            return []
+        # `name` is the project's only for manage_project; a sprint's `name` is the sprint's.
+        name = result.get("project_name") or (
+            result.get("name") if call_name == "manage_project" else None
+        )
+        return [_project_source(pid, name)]
+
     if call_name in ("create_todo_item", "update_todo_item"):
         # Todo write tools → chip the operated item (same entity_id
         # shape as the todo chunker: `todo:<local_date>:item:<id>`).
@@ -1498,11 +1659,13 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
             return []
         return [_chat_source(chat_type, chat_id, result.get("thread_id"))]
 
-    if call_name in ("fetch_note", "create_note", "update_note"):
-        # The two write tools return the same note_id / note_type /
+    if call_name in _NOTE_SOURCE_TOOLS:
+        # The write tools return the same note_id / note_type /
         # title / parent_context fields as fetch_note, so one branch
         # gives approved note writes a clickable chip too (emitted via
-        # the resume path's write-result pass).
+        # the resume path's write-result pass). restore_note_version and
+        # manage_note_sharing return less (no parent_context, sharing no title):
+        # `_hydrate_source_names` fills those in from the note's row.
         nid = result.get("note_id")
         ntype = result.get("note_type")
         if not nid or not ntype:
