@@ -17,11 +17,14 @@ from urllib.parse import urlparse
 from django.conf import settings
 from rest_framework import exceptions
 from rest_framework.response import Response
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
+from origin.views.common.api_key_auth import ApiKeyAuthentication
+from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.credentials import credential_of
 from origin.views.public.mcp import prompts, protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
@@ -54,6 +57,10 @@ class McpView(PublicApiView):
     registry without passing the scope check in `tools.call`.
     """
 
+    # An API key, or a connected app's OAuth access token (MIP-1077). The OAuth one goes first
+    # because both it and SimpleJWT read `Bearer`: it takes a token that is one of ours and
+    # passes on any other, so a session JWT still reaches the permission's own refusal.
+    authentication_classes = [McpOAuthAuthentication, JWTAuthentication, ApiKeyAuthentication]
     permission_classes = [HasCredential]
     throttle_classes = [PublicApiThrottle]
     # POST only. Earlier MCP revisions opened a standalone SSE stream with

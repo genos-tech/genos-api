@@ -211,6 +211,28 @@ class RegisterView(View):
         return JsonResponse(document, status=201)
 
 
+def json_errors(view):
+    """RFC 6749 §5.2: an error from the token endpoint is `application/json`. The library
+    sends the `invalid_target` of a resource-escalation request as JSON text labelled
+    `text/html`, which a strict client refuses to parse; say what it is."""
+
+    @functools.wraps(view)
+    def inner(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        if (
+            response.get("Content-Type", "").startswith("text/html")
+            and response.content[:1] == b"{"
+        ):
+            try:
+                json.loads(response.content)
+            except ValueError:
+                return response
+            response["Content-Type"] = "application/json"
+        return response
+
+    return inner
+
+
 def registration_management_view(request, client_id):
     """Only here so the library can name this route when it builds its response; see
     `RegisterView._without_management`. There is nothing to manage."""
@@ -219,7 +241,9 @@ def registration_management_view(request, client_id):
 
 authorize_view = gated(throttled(OAuthAuthorizeThrottle)(never_cache(AuthorizeView.as_view())))
 register_view = gated(throttled(OAuthRegisterThrottle)(RegisterView.as_view()))
-token_view = gated(throttled(OAuthTokenThrottle)(never_cache(TokenView.as_view())))
-revoke_view = gated(throttled(OAuthTokenThrottle)(never_cache(RevokeTokenView.as_view())))
+token_view = gated(throttled(OAuthTokenThrottle)(never_cache(json_errors(TokenView.as_view()))))
+revoke_view = gated(
+    throttled(OAuthTokenThrottle)(never_cache(json_errors(RevokeTokenView.as_view())))
+)
 server_metadata_view = gated(OAuthServerMetadataView.as_view())
 resource_metadata_view = gated(OAuthProtectedResourceMetadataView.as_view())

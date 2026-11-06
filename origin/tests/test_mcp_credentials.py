@@ -41,6 +41,7 @@ from origin.services import security_events
 from origin.tests.test_mcp_endpoint import LEGACY, MCP, MODERN, McpBase
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.public.credentials import Credential, credential_of, reaches_team, team_for
+from origin.views.public.mcp.views import McpView
 from origin.views.public.permissions import PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
 
@@ -109,13 +110,16 @@ class FakeBearer(BaseAuthentication):
 class CredentialBase(McpBase):
     def setUp(self):
         super().setUp()
-        patcher = mock.patch.object(
-            PublicApiView,
-            "authentication_classes",
-            [FakeBearer, JWTAuthentication, ApiKeyAuthentication],
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # MCP has its own authenticators (the OAuth one first), so both it and the REST
+        # base are given the fake, as the one patch of the shared base used to do.
+        for view in (McpView, PublicApiView):
+            patcher = mock.patch.object(
+                view,
+                "authentication_classes",
+                [FakeBearer, JWTAuthentication, ApiKeyAuthentication],
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.team_id = str(self.team.team_id)
 
     def connect(self, **kwargs) -> ConnectedApp:
