@@ -574,6 +574,8 @@ REGISTRY = {
     "origin.views.task.task_activity_views.TaskVelocityView": checked("can_access_task"),
     # views.task.task_delivery_views
     "origin.views.task.task_delivery_views.TaskDeliveryListView": checked("can_access_task"),
+    "origin.views.task.task_recent_views.RecentTasksView": checked("visible_recents"),
+    "origin.views.task.task_recent_views.RecordTaskOpenView": checked("can_open"),
     # views.task.task_views
     "origin.views.task.task_views.ChildTaskView": checked("is_project_member"),
     "origin.views.task.task_views.GetMyAssignedTasksView": checked("is_team_member"),

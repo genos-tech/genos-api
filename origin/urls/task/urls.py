@@ -29,6 +29,7 @@ from origin.views.task.task_activity_views import (
     TaskVelocityView,
 )
 from origin.views.task.task_delivery_views import TaskDeliveryListView
+from origin.views.task.task_recent_views import RecentTasksView, RecordTaskOpenView
 from origin.views.task.task_views import *
 
 # A view class that serves two routes answers on both with every handler it
@@ -114,6 +115,17 @@ urlpatterns = [
         "api/v2/task/dependency/<int:dependency_id>/",
         TaskDependencyView.as_view(http_method_names=["delete", "options"]),
         name="task_dependency_detail",
+    ),
+    # Recents: the tasks the caller opened (MIP-1063)
+    path(
+        "api/v2/task/recent/",
+        RecentTasksView.as_view(http_method_names=["get", "head", "options"]),
+        name="task_recent_list",
+    ),
+    path(
+        "api/v2/task/recent/open/",
+        RecordTaskOpenView.as_view(http_method_names=["post", "options"]),
+        name="task_recent_open",
     ),
     # Search
     path(
