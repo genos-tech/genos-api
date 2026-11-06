@@ -389,7 +389,9 @@ class TaskMasterView(AuthenticatedAPIView):
             # one entry; downstream notification fan-out then sends
             # exactly one notification.
             user_set = set(extract_user_handler.mentioned_user_ids)
-            user_set |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            user_set |= resolve_group_members(
+                extract_user_handler.mentioned_group_ids, team_id=project.team_id
+            )
             newly_mentioned_user_ids = list(user_set)
             data["mentioned_user_ids"] = newly_mentioned_user_ids
 
@@ -639,7 +641,9 @@ class TaskMasterView(AuthenticatedAPIView):
             # Same dedupe-merge as the POST path: direct user mentions
             # plus expanded group members.
             full_mentioned = set(extract_user_handler.mentioned_user_ids)
-            full_mentioned |= resolve_group_members(extract_user_handler.mentioned_group_ids)
+            full_mentioned |= resolve_group_members(
+                extract_user_handler.mentioned_group_ids, team_id=task.team_id
+            )
             update_data["mentioned_user_ids"] = list(full_mentioned)
 
             current_mentioned_user_ids = task.mentioned_user_ids if task.mentioned_user_ids else []

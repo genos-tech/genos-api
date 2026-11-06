@@ -16,7 +16,7 @@ from typing import Any
 from origin.models.task.task_models import TaskComments
 from origin.search_engine.purge import purge_task_comment
 from origin.services import unified_writer, v3_activity
-from origin.services.task_comment_fanout import mentioned_ids
+from origin.services.task_comment_fanout import mentioned_ids, task_team_id
 from origin.services.webpush_dispatch import schedule_push_for_activities
 
 logger = logging.getLogger(__name__)
@@ -62,14 +62,15 @@ def edit_comment(comment: TaskComments, body: list[dict[str, Any]]) -> list[str]
     mentioned are not told twice. Nothing after the save can undo it: the
     mirror and the notifications are best-effort.
     """
-    before = mentioned_ids(comment.comment_body)
+    team_id = task_team_id(comment.task_id)
+    before = mentioned_ids(comment.comment_body, team_id)
     comment.comment_body = body
     comment.save(update_fields=["comment_body", "ts_updated_at"])
 
     mirror = unified_writer.update_task_comment_thread_reply(
         task_id=int(comment.task_id), comment_id=int(comment.comment_id), body=body
     )
-    added = sorted(mentioned_ids(body) - before)
+    added = sorted(mentioned_ids(body, team_id) - before)
     if not added or mirror is None or mirror.sender is None:
         return []
     try:

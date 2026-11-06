@@ -187,7 +187,7 @@ def _split_mentions_by_membership(channel, body):
     mentioned = extract_mentioned_user_ids(body)
     group_ids = extract_mention_group_ids(body)
     if group_ids:
-        mentioned = mentioned | resolve_group_members(group_ids)
+        mentioned = mentioned | resolve_group_members(group_ids, team_id=channel.team_id)
     if not mentioned:
         return set(), set()
     valid = {

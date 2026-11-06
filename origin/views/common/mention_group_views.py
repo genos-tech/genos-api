@@ -1,6 +1,7 @@
 from collections import defaultdict
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -11,7 +12,7 @@ from origin.models.common.mention_group_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_GROUP_MEMBERS_PER_ADD, check_batch_size
-from origin.views.utils.request_validators import is_own_user_id
+from origin.views.utils.request_validators import as_int, as_uuid, is_own_user_id
 from origin.views.utils.scope_guards import is_guest, is_team_member
 
 
@@ -318,7 +319,15 @@ class MentionGroupResolveView(AuthenticatedAPIView):
     mention pipeline to fan-out a single @group mention into per-user
     Mention rows. Soft-deleted groups resolve to an empty list so the
     fan-out silently skips them; the inline token still renders in the
-    body via its persisted props."""
+    body via its persisted props.
+
+    A group resolves to the people who are members of ITS team now, not to
+    everyone ever added to it (MIP-1030): the members come back as the
+    notification recipients, so one who has left the team, or was added before
+    `user_ids` had to be team members, would be told about the team's work.
+    `team_id` (optional) narrows the groups to the team the mention was written
+    in, so a caller who belongs to two teams cannot pull the other team's roster
+    into this one's fan-out."""
 
     def post(self, request):
         group_ids = request.data.get("group_ids") or []
@@ -336,17 +345,30 @@ class MentionGroupResolveView(AuthenticatedAPIView):
         # enumerate several teams' org charts in one request — and the
         # sockets service calls it with the user's own JWT, so scoping
         # here covers that path too.
-        live_groups = set(
-            MentionGroupMaster.objects.filter(group_id__in=group_ids, is_deleted=False)
-            .filter(
-                team_id__in=TeamMembers.objects.filter(
-                    attendee=request.user, is_deleted=False
-                ).values_list("team_id", flat=True)
-            )
-            .values_list("group_id", flat=True)
+        # A group id is a number; text, a list or an object names no group.
+        keys = [key for key in (as_int(g) for g in group_ids) if key is not None]
+        groups = MentionGroupMaster.objects.filter(group_id__in=keys, is_deleted=False).filter(
+            team_id__in=TeamMembers.objects.filter(
+                attendee=request.user, is_deleted=False
+            ).values_list("team_id", flat=True)
         )
-        rows = MentionGroupMembers.objects.filter(group_id__in=live_groups).values_list(
-            "group_id", "user_id"
+        team_id = request.data.get("team_id")
+        if team_id not in (None, ""):
+            team = as_uuid(team_id)
+            groups = groups.filter(team_id=team) if team is not None else groups.none()
+        live_groups = set(groups.values_list("group_id", flat=True))
+        rows = (
+            MentionGroupMembers.objects.filter(group_id__in=live_groups)
+            .filter(
+                Exists(
+                    TeamMembers.objects.filter(
+                        team_id=OuterRef("group__team_id"),
+                        attendee_id=OuterRef("user_id"),
+                        is_deleted=False,
+                    )
+                )
+            )
+            .values_list("group_id", "user_id")
         )
         resolved = defaultdict(list)
         for gid, uid in rows:

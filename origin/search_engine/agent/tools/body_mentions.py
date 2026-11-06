@@ -38,9 +38,9 @@ _NOTE_SURFACE = {1: 6, 2: 7, 3: 8}
 _NOTE_LABEL = {1: "personal note", 2: "task note", 3: "chat note"}
 
 
-def mentioned_user_ids(body: Any) -> set[str]:
+def mentioned_user_ids(body: Any, team_id) -> set[str]:
     """Every user a body mentions: direct `mention` chips plus the
-    members of each `mentionGroup` — what the REST save paths store."""
+    members of `team_id` in each `mentionGroup` — what the REST save paths store."""
     from origin.views.utils.mention_handler import (  # noqa: PLC0415
         extractMentionedUsers,
         resolve_group_members,
@@ -49,7 +49,7 @@ def mentioned_user_ids(body: Any) -> set[str]:
     handler = extractMentionedUsers()
     handler.extract(body if isinstance(body, list) else [])
     ids = {str(u) for u in handler.mentioned_user_ids}
-    ids |= {str(u) for u in resolve_group_members(handler.mentioned_group_ids)}
+    ids |= {str(u) for u in resolve_group_members(handler.mentioned_group_ids, team_id=team_id)}
     return ids
 
 
@@ -104,7 +104,7 @@ def store_task_mention_baseline(task) -> None:
     now, or that save would announce a mention that was there all along.
     Best-effort, like the notify path."""
     try:
-        _store_baseline(task, "task_id", mentioned_user_ids(task.content))
+        _store_baseline(task, "task_id", mentioned_user_ids(task.content, task.team_id))
     except Exception:  # noqa: BLE001 — the body write already succeeded
         log.exception("task mention baseline failed task=%s", getattr(task, "task_id", None))
 
@@ -112,7 +112,7 @@ def store_task_mention_baseline(task) -> None:
 def store_note_mention_baseline(note) -> None:
     """`store_task_mention_baseline` for a note."""
     try:
-        _store_baseline(note, "note_id", mentioned_user_ids(note.body))
+        _store_baseline(note, "note_id", mentioned_user_ids(note.body, note.team_id))
     except Exception:  # noqa: BLE001 — the body write already succeeded
         log.exception("note mention baseline failed note=%s", getattr(note, "note_id", None))
 
@@ -123,7 +123,7 @@ def notify_task_body_mentions(task, *, actor_id: str) -> int:
     lives on its backing task (`MilestonePatchView` does the same), so
     pass the backing `TaskMaster` for both. Returns rows created."""
     try:
-        full = mentioned_user_ids(task.content)
+        full = mentioned_user_ids(task.content, task.team_id)
         prev = {str(u) for u in (task.mentioned_user_ids or [])}
         if full == prev:
             return 0
@@ -169,7 +169,7 @@ def notify_note_mentions(note, *, note_type: int, actor_id: str) -> int:
     )
 
     try:
-        full = mentioned_user_ids(note.body)
+        full = mentioned_user_ids(note.body, note.team_id)
         prev = {str(u) for u in (note.mentioned_user_ids or [])}
         if full == prev:
             return 0

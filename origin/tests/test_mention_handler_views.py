@@ -142,16 +142,16 @@ class ResolveGroupMembersTests(BaseAPITestCase):
 
     def test_empty_input_returns_empty_without_query(self):
         # Empty/falsy short-circuits before touching the DB.
-        self.assertEqual(resolve_group_members(set()), set())
-        self.assertEqual(resolve_group_members([]), set())
-        self.assertEqual(resolve_group_members(None), set())
+        self.assertEqual(resolve_group_members(set(), team_id=self.team.team_id), set())
+        self.assertEqual(resolve_group_members([], team_id=self.team.team_id), set())
+        self.assertEqual(resolve_group_members(None, team_id=self.team.team_id), set())
 
     def test_resolves_live_group_to_member_user_ids(self):
         group = self._make_group()
         self._add_member(group, self.user)
         self._add_member(group, self.user2)
         # Mirrors production: the extractor hands group ids as strings.
-        result = resolve_group_members({str(group.group_id)})
+        result = resolve_group_members({str(group.group_id)}, team_id=self.team.team_id)
         self.assertEqual(result, {str(self.user.id), str(self.user2.id)})
         # ids are returned as strings.
         self.assertTrue(all(isinstance(u, str) for u in result))
@@ -160,16 +160,20 @@ class ResolveGroupMembersTests(BaseAPITestCase):
         # is_deleted=True -> no live group -> empty set (members ignored).
         group = self._make_group(name="gone", is_deleted=True)
         self._add_member(group, self.user)
-        self.assertEqual(resolve_group_members({str(group.group_id)}), set())
+        self.assertEqual(
+            resolve_group_members({str(group.group_id)}, team_id=self.team.team_id), set()
+        )
 
     def test_unknown_group_id_returns_empty(self):
-        self.assertEqual(resolve_group_members({"99999999"}), set())
+        self.assertEqual(resolve_group_members({"99999999"}, team_id=self.team.team_id), set())
 
     def test_mixes_live_and_deleted_groups(self):
         live = self._make_group(name="live")
         dead = self._make_group(name="dead", is_deleted=True)
         self._add_member(live, self.user)
         self._add_member(dead, self.user2)
-        result = resolve_group_members({str(live.group_id), str(dead.group_id)})
+        result = resolve_group_members(
+            {str(live.group_id), str(dead.group_id)}, team_id=self.team.team_id
+        )
         # Only the live group's member survives.
         self.assertEqual(result, {str(self.user.id)})
