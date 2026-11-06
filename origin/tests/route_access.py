@@ -546,6 +546,15 @@ REGISTRY = {
     "origin.views.task.conversion_views.ConvertTaskToMilestoneView": checked(
         "can_access_task", "is_project_member"
     ),
+    "origin.views.task.milestone_favorite_views.MilestoneFavoriteListView": checked(
+        "is_project_member"
+    ),
+    "origin.views.task.milestone_favorite_views.MilestoneFavoriteOpenedView": self_only(
+        "touches only the caller's own favorite row"
+    ),
+    "origin.views.task.milestone_favorite_views.MilestoneFavoriteView": checked(
+        "can_see_milestone"
+    ),
     "origin.views.task.milestone_views.MilestoneAssigneesView": checked("is_project_member"),
     "origin.views.task.milestone_views.MilestoneFolderListView": checked("is_project_member"),
     "origin.views.task.milestone_views.MilestoneFolderView": checked("is_project_member"),
