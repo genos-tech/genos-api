@@ -47,11 +47,13 @@ from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.approve_join_request import APPROVE_JOIN_REQUEST
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
 from origin.search_engine.agent.tools.base import (
+    MCP_ONLY_REGISTRY,
     REGISTRY,
     Tool,
     ToolContext,
     ToolError,
     ToolForbidden,
+    get_mcp_tool,
 )
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.create_note import CREATE_NOTE
@@ -145,6 +147,30 @@ from origin.search_engine.agent.tools.update_task_dependencies import UPDATE_TAS
 from origin.search_engine.agent.tools.update_tasks_bulk import UPDATE_TASKS_BULK
 from origin.search_engine.agent.tools.update_todo_item import UPDATE_TODO_ITEM
 from origin.search_engine.agent.tools.web_search import SEARCH_WEB
+
+
+def register_tool(tool: Tool) -> None:
+    """Put `tool` where it belongs: `REGISTRY`, or `MCP_ONLY_REGISTRY` when
+    `tool.mcp_only` (MIP-1070).
+
+    Every tool, read and write, takes its arguments with any
+    <workspace_content> fence the model copied from a result taken off
+    (MIP-735), so a tool added later is covered without remembering to.
+    Wrapped IN PLACE, not copied: the module constant (`LIST_TASKS`, which
+    tests and other code call directly) and the registry entry must be the
+    same object, or one of them would skip the stripping.
+
+    One name is one tool: a name already taken in EITHER registry is refused,
+    so an MCP-only tool can never shadow, or be shadowed by, one the app runs.
+    A tool that lives outside this package (an MCP-only one can) calls this too,
+    so it gets the same wrapping.
+    """
+    if tool.name in REGISTRY or tool.name in MCP_ONLY_REGISTRY:
+        raise ValueError(f"tool {tool.name!r} is already registered")
+    if not hasattr(tool.run, "__wrapped__"):
+        object.__setattr__(tool, "run", with_unfenced_arguments(tool.run))
+    (MCP_ONLY_REGISTRY if tool.mcp_only else REGISTRY)[tool.name] = tool
+
 
 # Register at import time so REGISTRY is populated by the time the
 # controller asks for a tool by name. Read tools first, then write
@@ -265,18 +291,12 @@ for _t in (
     MANAGE_NOTE_SHARING,
     RESTORE_NOTE_VERSION,
 ):
-    # Every tool, read and write, takes its arguments with any
-    # <workspace_content> fence the model copied from a result taken off
-    # (MIP-735), so a tool added later is covered without remembering to.
-    # Wrapped IN PLACE, not copied: the module constant (`LIST_TASKS`, which
-    # tests and other code call directly) and the registry entry must be the
-    # same object, or one of them would skip the stripping.
-    if not hasattr(_t.run, "__wrapped__"):
-        object.__setattr__(_t, "run", with_unfenced_arguments(_t.run))
-    REGISTRY[_t.name] = _t
+    register_tool(_t)
 
 
 __all__ = [
+    "register_tool",
+    "get_mcp_tool",
     "ADD_COMMENT",
     "ADD_TASK_DELIVERY",
     "DELETE_SPRINT",
@@ -351,6 +371,7 @@ __all__ = [
     "LIST_UNCOMPLETED_TODOS",
     "MANAGE_MILESTONE",
     "REGISTRY",
+    "MCP_ONLY_REGISTRY",
     "RESTORE_TASK_BODY",
     "SEARCH_KNOWLEDGE_BASE",
     "Tool",

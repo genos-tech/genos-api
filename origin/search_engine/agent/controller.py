@@ -81,7 +81,7 @@ from origin.search_engine.agent.prompts import (
     agent_system_prompt,
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
-from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
+from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -249,7 +249,9 @@ def _operator_disabled_tools() -> set[str]:
     configured = settings.SEARCH_ENGINE.get("AGENT_DISABLED_TOOLS") or frozenset()
     if not configured:
         return set()
-    known = set(configured) & set(REGISTRY)
+    # An MCP-only tool is not in REGISTRY but is a real name here: MCP honours the
+    # same switch, and naming one must not read as a typo (MIP-1070).
+    known = set(configured) & (set(REGISTRY) | set(MCP_ONLY_REGISTRY))
     if not _KILLSWITCH_LOGGED:
         _KILLSWITCH_LOGGED = True
         log.warning(

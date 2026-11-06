@@ -120,7 +120,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
-from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools import get_mcp_tool
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import note_refusal
@@ -1693,8 +1693,17 @@ def _milestone_ref_property(prop: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _registered(tool: McpTool):
+    """The registry tool behind a published one: a shared tool, or an MCP-only one
+    (MIP-1070). `KeyError` for a name in neither, as `REGISTRY[...]` raised."""
+    registered = get_mcp_tool(tool.registry_name)
+    if registered is None:
+        raise KeyError(tool.registry_name)
+    return registered
+
+
 def input_schema(tool: McpTool) -> dict[str, Any]:
-    schema = _to_json_schema(REGISTRY[tool.registry_name].parameters_schema)
+    schema = _to_json_schema(_registered(tool).parameters_schema)
     if tool.schema_overrides:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
@@ -2016,7 +2025,7 @@ def call(
     mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
     try:
         args = resolve_references(tool, args, ctx.team_id)
-        payload = REGISTRY[tool.registry_name].run(args, ctx)
+        payload = _registered(tool).run(args, ctx)
         if tool.augment is not None:
             payload = tool.augment(dict(payload or {}), args, mcp_args, ctx)
     except ToolError as exc:
