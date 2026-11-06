@@ -35,7 +35,7 @@ from oauth2_provider.models import get_access_token_model
 from rest_framework import authentication, exceptions
 
 from origin.models.common.mcp_connection_models import McpConnection
-from origin.services import mcp_oauth, security_events
+from origin.services import mcp_connections, mcp_oauth, security_events
 from origin.services.mcp_credential import McpOAuthCredential
 
 KEYWORD = "Bearer"
@@ -131,6 +131,9 @@ class McpOAuthAuthentication(authentication.BaseAuthentication):
         ):
             return
         McpConnection.objects.filter(pk=connection.pk).update(last_used_at=now)
+        # Once an hour, not per call: forget the teams the person has left, so that rejoining
+        # one later does not silently give the app back what consent was never given for.
+        mcp_connections.prune_left_teams(connection)
 
     def authenticate_header(self, request):
         # The header MCP has always answered with (SimpleJWT's), so a client that knows no

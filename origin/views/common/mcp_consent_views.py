@@ -21,7 +21,6 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from django.db import transaction
-from django.db.models import Q
 from django.http import Http404
 from django.test import RequestFactory
 from oauth2_provider.exceptions import OAuthToolkitError
@@ -52,12 +51,7 @@ def _problem(error: str, description: str, http: int = 400, **extra) -> Response
 
 
 def _teams_of(user) -> list[TeamMaster]:
-    return list(
-        TeamMaster.objects.filter(is_deleted=False)
-        .filter(Q(owner=user) | Q(team_members__attendee=user, team_members__is_deleted=False))
-        .distinct()
-        .order_by("team_name")
-    )
+    return mcp_connections.member_teams(user)
 
 
 class _ConsentBase(AuthenticatedAPIView):

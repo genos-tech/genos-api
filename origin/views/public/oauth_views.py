@@ -189,7 +189,8 @@ class RegisterView(View):
             )
         try:
             data = json.loads(body or b"null")
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            # RecursionError: a few KB of `[` nests past the interpreter's limit.
             return _json_error("invalid_client_metadata", "The request body must be valid JSON.")
         cleaned, problem = mcp_oauth.check_registration(data)
         if problem:
@@ -239,6 +240,22 @@ def json_errors(view):
     return inner
 
 
+def refresh_race_guard(view):
+    """Two refreshes of one token at once: the second finds its predecessor already rotated and,
+    with tokens hashed at rest, the library trips over the blank value it would hand back (a
+    500). Nothing leaks and no second pair is made; the client is told what it should be told
+    (`invalid_grant`: use the newer token), as for any replayed refresh token."""
+
+    @functools.wraps(view)
+    def inner(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except get_access_token_model().DoesNotExist:
+            return _json_error("invalid_grant", "The refresh token was already used.")
+
+    return inner
+
+
 def registration_management_view(request, client_id):
     """Only here so the library can name this route when it builds its response; see
     `RegisterView._without_management`. There is nothing to manage."""
@@ -247,7 +264,9 @@ def registration_management_view(request, client_id):
 
 authorize_view = gated(throttled(OAuthAuthorizeThrottle)(never_cache(AuthorizeView.as_view())))
 register_view = gated(throttled(OAuthRegisterThrottle)(RegisterView.as_view()))
-token_view = gated(throttled(OAuthTokenThrottle)(never_cache(json_errors(TokenView.as_view()))))
+token_view = gated(
+    throttled(OAuthTokenThrottle)(never_cache(refresh_race_guard(json_errors(TokenView.as_view()))))
+)
 revoke_view = gated(
     throttled(OAuthTokenThrottle)(never_cache(json_errors(RevokeTokenView.as_view())))
 )

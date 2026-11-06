@@ -61,7 +61,7 @@ def oauth_on(**extra):
         MCP_OAUTH_ENABLED=True,
         API_PUBLIC_BASE_URL=BASE,
         FRONTEND_BASE_URL=APP,
-        OAUTH2_PROVIDER=conf.provider_settings(BASE),
+        OAUTH2_PROVIDER=conf.provider_settings(BASE, cimd=True),
         **extra,
     )
 
@@ -166,7 +166,11 @@ class TestTheSettingsArePinned(TestCase):
 
     def test_registration_is_open_only_through_our_wrapper(self):
         self.assertTrue(self.s["DCR_ENABLED"])
-        self.assertTrue(self.s["CIMD_ENABLED"])
+        self.assertIs(self.s["CIMD_ENABLED"], False, "off unless asked for")
+        self.assertIs(conf.provider_settings(BASE, cimd=True)["CIMD_ENABLED"], True)
+        self.assertEqual(
+            self.s["CIMD_METADATA_FETCHER"], "origin.services.cimd_fetcher.BoundedFetcher"
+        )
         self.assertLessEqual(self.s["CIMD_MAX_DOCUMENT_SIZE"], 16384)
         self.assertLessEqual(self.s["CIMD_FETCH_TIMEOUT_SECONDS"], 5)
 
@@ -190,7 +194,10 @@ class TestTheSettingsArePinned(TestCase):
         from django.conf import settings
 
         self.assertEqual(
-            settings.OAUTH2_PROVIDER, conf.provider_settings(settings.API_PUBLIC_BASE_URL)
+            settings.OAUTH2_PROVIDER,
+            conf.provider_settings(
+                settings.API_PUBLIC_BASE_URL, cimd=settings.MCP_OAUTH_CIMD_ENABLED
+            ),
         )
         self.assertIn("oauth2_provider", settings.INSTALLED_APPS)
 
@@ -807,7 +814,7 @@ class TestClientMetadataDocuments(FoundationBase):
         FakeDocumentFetcher.documents = {}
         patcher = override_settings(
             OAUTH2_PROVIDER={
-                **conf.provider_settings(BASE),
+                **conf.provider_settings(BASE, cimd=True),
                 "CIMD_METADATA_FETCHER": "origin.tests.test_mcp_oauth_foundation.FakeDocumentFetcher",
             }
         )
@@ -929,6 +936,46 @@ class TestTheSwitchFailsClosed(TestCase):
             importlib.reload(project_settings)
         on = {v for v, r in results.items() if r}
         self.assertEqual(on, {"true", "TRUE", " yes ", "1", "on"})
+
+
+@override_settings(
+    MCP_OAUTH_ENABLED=True,
+    API_PUBLIC_BASE_URL=BASE,
+    FRONTEND_BASE_URL=APP,
+    OAUTH2_PROVIDER=conf.provider_settings(BASE),
+)
+class TestMetadataDocumentsAreOffByDefault(FoundationBase):
+    def test_the_metadata_does_not_claim_them(self):
+        doc = self.client.get("/.well-known/oauth-authorization-server").json()
+        self.assertFalse(doc.get("client_id_metadata_document_supported", False))
+
+    def test_an_address_as_client_id_is_just_an_unknown_client_and_nothing_is_fetched(self):
+        with mock.patch("oauth2_provider.cimd.urllib3.HTTPSConnectionPool") as pool:
+            res = self.authorize(client_id=DOC_ID)
+        self.assertEqual(res.status_code, 400)
+        self.assertNotIn("Location", res)
+        pool.assert_not_called()
+        self.assertFalse(Application.objects.filter(client_id=DOC_ID).exists())
+
+    def test_the_project_switch_defaults_off_and_fails_closed(self):
+        import importlib
+        import os
+
+        from apis import settings as project_settings
+
+        original = os.environ.get("MCP_OAUTH_CIMD_ENABLED")
+        seen = {}
+        try:
+            for value in ("true", "1", "yes", "on", "", "false", "ture", "enabled"):
+                os.environ["MCP_OAUTH_CIMD_ENABLED"] = value
+                seen[value] = importlib.reload(project_settings).MCP_OAUTH_CIMD_ENABLED
+        finally:
+            if original is None:
+                os.environ.pop("MCP_OAUTH_CIMD_ENABLED", None)
+            else:
+                os.environ["MCP_OAUTH_CIMD_ENABLED"] = original
+            importlib.reload(project_settings)
+        self.assertEqual({v for v, on in seen.items() if on}, {"true", "1", "yes", "on"})
 
 
 class TestClientPolicyOnItsOwn(TestCase):
