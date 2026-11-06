@@ -47,7 +47,7 @@ from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMas
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine import quota
-from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools import REGISTRY, get_mcp_tool
 from origin.search_engine.agent.tools.base import ToolError
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.public.mcp import protocol, tools
@@ -830,9 +830,8 @@ class TestTheCatalogContract(McpBase):
 
     def test_every_published_tool_exists_in_the_registry(self):
         for tool in tools.CATALOG:
-            self.assertIn(
-                tool.registry_name,
-                REGISTRY,
+            self.assertIsNotNone(
+                get_mcp_tool(tool.registry_name),
                 f"{tool.name} maps to a registry tool that no longer exists",
             )
 
@@ -886,7 +885,7 @@ class TestTheCatalogContract(McpBase):
         for tool in tools.CATALOG:
             self.assertEqual(
                 tool.write,
-                REGISTRY[tool.registry_name].requires_approval,
+                get_mcp_tool(tool.registry_name).requires_approval,
                 f"{tool.name}'s write flag disagrees with the registry",
             )
 
@@ -897,7 +896,7 @@ class TestTheCatalogContract(McpBase):
         the registry calls `assignee_user_id`."""
         for tool in tools.CATALOG:
             registry_properties = (
-                REGISTRY[tool.registry_name].parameters_schema.get("properties") or {}
+                get_mcp_tool(tool.registry_name).parameters_schema.get("properties") or {}
             )
             for key in tool.schema_overrides:
                 self.assertIn(
@@ -920,7 +919,7 @@ class TestTheCatalogContract(McpBase):
         references silently arrive unresolved."""
         for tool in tools.CATALOG:
             registry_properties = (
-                REGISTRY[tool.registry_name].parameters_schema.get("properties") or {}
+                get_mcp_tool(tool.registry_name).parameters_schema.get("properties") or {}
             )
             for arg in tool.task_ref_args + tool.note_ref_args:
                 self.assertIn(arg, registry_properties, f"{tool.name} resolves absent `{arg}`")
@@ -1005,14 +1004,14 @@ class TestTheCatalogContract(McpBase):
         Genos's own LLM sees — and the in-app agent would start taking
         `PRJ-123` where it expects an integer."""
         before = {
-            name: copy.deepcopy(REGISTRY[name].parameters_schema)
+            name: copy.deepcopy(get_mcp_tool(name).parameters_schema)
             for name in {t.registry_name for t in tools.CATALOG}
         }
         for tool in tools.CATALOG:
             tools.input_schema(tool)
         for name, original in before.items():
             self.assertEqual(
-                REGISTRY[name].parameters_schema,
+                get_mcp_tool(name).parameters_schema,
                 original,
                 f"building {name}'s MCP schema wrote through to the registry",
             )
@@ -1057,7 +1056,8 @@ class TestTheCatalogContract(McpBase):
         producers = {
             "event_id": "list_calendar_events",
             "calendar_id": "list_calendars",
-            "item_id": ("list_uncompleted_todos", "list_today_todos"),
+            "item_id": ("list_uncompleted_todos", "list_today_todos", "list_my_worklog"),
+            "entry_id": "list_my_worklog",
             "project_id": "list_projects",
             "inbox_item_id": "list_my_inbox",
             "milestone_id": "list_milestones",
@@ -1601,7 +1601,7 @@ class TestUnknownArgumentsAreRefused(McpBase):
 
         offenders = []
         for tool in mcp_tools.BY_NAME.values():
-            run = REGISTRY[tool.registry_name].run
+            run = get_mcp_tool(tool.registry_name).run
             source = inspect.getsource(inspect.getmodule(getattr(run, "__wrapped__", run)))
             declared = set((mcp_tools.input_schema(tool).get("properties") or {}).keys())
             # `args.get("x")` / `args["x"]`, not `create_kwargs["x"]`: the character
@@ -1852,6 +1852,8 @@ class TestPlantedInstructions(McpBase):
                 "delete_note_folder",
                 "manage_note_sharing",
                 "delete_todo_item",
+                # The member's own worklog, which only they can read (MIP-1071).
+                "delete_worklog_entry",
             },
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))

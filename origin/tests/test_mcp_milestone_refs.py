@@ -251,10 +251,10 @@ class TestMilestoneToolsTakeADisplayId(MilestoneRefBase):
         self.assertEqual(len(published), 10, published)
 
     def test_every_declared_milestone_ref_arg_is_a_real_property(self):
-        from origin.search_engine.agent.tools import REGISTRY
+        from origin.search_engine.agent.tools import get_mcp_tool
 
         for tool in tools.CATALOG:
-            props = REGISTRY[tool.registry_name].parameters_schema.get("properties") or {}
+            props = get_mcp_tool(tool.registry_name).parameters_schema.get("properties") or {}
             for arg in tool.milestone_ref_args:
                 self.assertIn(arg, props, f"{tool.name} resolves absent `{arg}`")
             for list_arg, item_key in tool.nested_milestone_ref_args:

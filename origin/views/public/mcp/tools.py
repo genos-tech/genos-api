@@ -83,7 +83,9 @@ answer is a hang. Two consequences, both load-bearing:
   `delete_todo_item` (MIP-884: the UI's delete is a hard delete that takes
   the sub-items and reminders with it) are published on the same grounds,
   since a user asks an assistant to delete a milestone or "that to-do" by
-  name. Each delete is published deliberately, behind the opt-in below, and
+  name; `delete_worklog_entry` (MIP-1071) deletes one entry of the member's own
+  private worklog, which is MCP-only, so it has no in-app twin to hold the
+  opt-in. Each delete is published deliberately, behind the opt-in below, and
   not as a side effect of the tool having been built; the asymmetry is on
   purpose rather than an oversight to be "fixed" by adding more. (The one
   removal besides them, `remove_task_delivery` (MIP-834), is not a delete in
@@ -124,6 +126,7 @@ from origin.search_engine.agent.tools import get_mcp_tool
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import note_refusal
+from origin.views.public.mcp import secretary  # noqa: F401  (registers the MCP-only tools)
 from origin.views.public.mcp.resolve import (
     resolve_milestone_ref,
     resolve_note_ref,
@@ -1643,6 +1646,65 @@ CATALOG: tuple[McpTool, ...] = (
         write=True,
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    # ---- the secretary's worklog (MIP-1071). MCP only: the in-app agent never
+    # sees these (`MCP_ONLY_REGISTRY`, MIP-1070). Private to the caller. ----
+    McpTool(
+        name="capture_worklog",
+        registry_name="capture_worklog",
+        description=(
+            "Save what the member says they did, will do, are waiting on or decided, in "
+            "their own private worklog. Use it when they tell you something like that "
+            "('merged the landing PR, waiting on Aki for the copy, dropping the chip'), "
+            "and offer it at the end of a day. Only `text` is required: it is kept exactly "
+            "as written. Split it into `items` yourself: each has a `kind` (done, next, "
+            "waiting, decision, note), a short `summary` in the member's words and the "
+            "exact `evidence` from `text`. Link an item to a task, note, milestone or "
+            "project with `refs`; only things the member can open are linked, and any "
+            "that could not be are listed in `unresolved_refs`, so tell the member. Items "
+            "are saved as suggestions unless the member has confirmed them in this "
+            "conversation (`reviewed: true`). Write only what the member said: do not "
+            "invent progress, and do not copy calendar events or other people's messages "
+            "into it. The worklog is visible to the member alone. Saving the same text "
+            "twice within two minutes returns the first entry. Requires a write-scoped "
+            "API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="list_my_worklog",
+        registry_name="list_my_worklog",
+        description=(
+            "The member's own worklog for today (the default), yesterday, the last week "
+            "or a range of dates, newest first, each entry with its items. Filter by "
+            "`kind`, `status` (open or resolved) or `review_state`. Rejected items are "
+            "left out unless asked for. Dates and `today` follow the member's own time "
+            "zone. Nobody else's worklog can be read."
+        ),
+    ),
+    McpTool(
+        name="update_worklog_item",
+        registry_name="update_worklog_item",
+        description=(
+            "Change one item in the member's worklog: reword it or change its kind, mark "
+            "it `accepted` once they confirm it or `rejected` if it is wrong, or mark a "
+            "next or waiting item `resolved` when it is done. Get `item_id` from "
+            "`capture_worklog` or `list_my_worklog`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="delete_worklog_entry",
+        registry_name="delete_worklog_entry",
+        description=(
+            "Delete one entry from the member's worklog, with all its items. This can't "
+            "be undone: call it only when the member asked for that entry to go; to fix "
+            "an item use `update_worklog_item`. Get `entry_id` from `list_my_worklog`. "
+            "Requires a write-scoped API key that its owner also opted into destructive "
+            "tools."
+        ),
+        write=True,
+        destructive=True,
     ),
 )
 

@@ -54,6 +54,7 @@ from origin.models.common.notification_models import NotificationPreference, Pus
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
+from origin.models.common.worklog_models import WorklogEntry
 from origin.services import blind_index, change_feed
 from origin.services.security_events import record_security_event
 
@@ -149,6 +150,8 @@ def _delete_personal_data(user) -> None:
     ConnectedAccount.objects.filter(user=user).delete()
     ToDoGroup.objects.filter(user=user).delete()  # items cascade
     ToDoCategory.objects.filter(user=user).delete()
+    # The worklog is private to its author by design (MIP-1071); items cascade.
+    WorklogEntry.objects.filter(author=user).delete()
     # Assignments carry no user column by design — they cascade from the
     # tag, whose owner IS the user.
     PersonalChannelTag.objects.filter(user=user).delete()

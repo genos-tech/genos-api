@@ -44,6 +44,7 @@ def build_export(user) -> dict:
     from origin.models.chat.unified_models import Message
     from origin.models.common.notification_models import NotificationPreference
     from origin.models.common.team_models import TeamMembers
+    from origin.models.common.worklog_models import WorklogEntry
     from origin.models.note.personal_note_models import (
         PersonalNoteFolder,
         PersonalNoteMaster,
@@ -103,6 +104,33 @@ def build_export(user) -> dict:
                 ],
             }
         )
+
+    # The worklog is the member's own, so all of it is theirs to take with them,
+    # rejected items included (MIP-1071).
+    worklog = [
+        {
+            "entry_id": e.entry_id,
+            "occurred_at": _iso(e.occurred_at),
+            "source": e.source,
+            "text": e.raw_text,
+            "items": [
+                {
+                    "kind": i.kind,
+                    "summary": i.summary,
+                    "evidence": i.evidence_text,
+                    "review_state": i.review_state,
+                    "status": i.status,
+                    "due_hint": i.due_hint,
+                    "person_hint": i.person_hint,
+                    "refs": i.refs,
+                }
+                for i in e.items.all()
+            ],
+        }
+        for e in WorklogEntry.objects.filter(author=user)
+        .order_by("occurred_at", "entry_id")
+        .prefetch_related("items")
+    ]
 
     tasks = [
         {
@@ -201,6 +229,7 @@ def build_export(user) -> dict:
         "teams": memberships,
         "personal_notes": notes,
         "todos": todos,
+        "worklog": worklog,
         "tasks": tasks,
         "messages": messages,
         "task_comments": comments,
@@ -209,6 +238,7 @@ def build_export(user) -> dict:
             "teams": len(memberships),
             "personal_notes": len(notes),
             "todo_days": len(todos),
+            "worklog_entries": len(worklog),
             "tasks": len(tasks),
             "messages": len(messages),
             "task_comments": len(comments),
