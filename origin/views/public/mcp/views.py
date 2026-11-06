@@ -23,7 +23,7 @@ from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
 from origin.views.public.credentials import credential_of
-from origin.views.public.mcp import protocol, tools
+from origin.views.public.mcp import prompts, protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
@@ -257,6 +257,32 @@ class McpView(PublicApiView):
                 modern=modern,
             )
 
+        # The secretary's commands (MIP-1073). Behind the same gate as the tools they
+        # ask the model to call: a prompt for a plan the member does not have would only
+        # lead to a refusal on the first tool.
+        if method == "prompts/list":
+            return self._ok(
+                request_id,
+                {"prompts": prompts.list_prompts()},
+                modern=modern,
+                cache_hints=protocol.CACHE_HINTS_NO_STORE,
+            )
+
+        if method == "prompts/get":
+            if not isinstance(params, dict):
+                raise JsonRpcError(
+                    protocol.INVALID_PARAMS, "`params` must be an object.", http_status=400
+                )
+            # Written for what this key can do: see `prompts.py`.
+            visible = frozenset(
+                t.name for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+            )
+            return self._ok(
+                request_id,
+                prompts.get_prompt(params.get("name"), params.get("arguments"), visible),
+                modern=modern,
+            )
+
         raise protocol.method_not_found(str(method), modern=modern)
 
     def _ok(
@@ -276,7 +302,7 @@ class McpView(PublicApiView):
     def _discover(self) -> dict[str, Any]:
         return {
             "supportedVersions": list(protocol.SUPPORTED_VERSIONS),
-            "capabilities": {"tools": {}},
+            "capabilities": dict(protocol.CAPABILITIES),
             "_meta": {"io.modelcontextprotocol/serverInfo": dict(protocol.SERVER_INFO)},
             "instructions": protocol.initialize_result({})["instructions"],
         }
