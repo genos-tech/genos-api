@@ -72,7 +72,15 @@ EXEMPT = {
 
 # Not DRF views at all, so there is no `initial()` to guard: django-anymail's inbound and
 # tracking webhooks, authenticated by the provider's own scheme.
-NON_DRF_MODULE_PREFIXES = ("anymail.",)
+NON_DRF_MODULE_PREFIXES = (
+    "anymail.",
+    # MIP-1077: the OAuth server's own protocol endpoints. Each is a plain view that reads
+    # its body itself and answers a malformed one with the RFC's error (the registration
+    # view parses JSON with a size cap; token and revoke are the library's, form-encoded).
+    # Tested in test_mcp_oauth_foundation.
+    "origin.views.public.oauth_views.",
+    "oauth2_provider.views.",
+)
 
 # Views whose parsers do not include JSON (uploads): a JSON body is never read as
 # JSON. Their POST/PUT answer it with DRF's 415; a DELETE that reads only the query
