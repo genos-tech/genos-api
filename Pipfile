@@ -28,9 +28,11 @@ cryptography = "==50.0.2"                   # imported directly in backend_djang
 pyyaml = "==6.0.2"
 # --- OAuth 2.1 authorization server for MCP (MIP-1077) ---
 django-oauth-toolkit = "==3.4.1"            # CIMD, DCR, RFC 8707/9728/8414 (3.4.0); reuse detection (3.4.1)
-# oauthlib 4.x was days old when this was added and is the core of the token logic: stay on
-# the long-proven 3.3.x, which django-oauth-toolkit's own floor (>=3.3.0) allows.
-oauthlib = "==3.3.1"
+# 4.0.1, not the 3.3.x line: 3.3.1 and 4.0.0 carry published advisories (PYSEC-2026-4114, a
+# PKCE comparison that is not constant time; CVE-2026-49272, a device-code grant that accepts a
+# made-up code), and 4.0.1 is the first release without either. django-oauth-toolkit's own floor
+# is >=3.3.0. The device-code flow is not enabled here; pip-audit (required) fails on both older.
+oauthlib = "==4.0.1"
 # --- email / push (from Dockerfile pip installs) ---
 "django-anymail" = {extras = ["resend"], version = "==15.0"}
 pywebpush = "==2.3.0"
