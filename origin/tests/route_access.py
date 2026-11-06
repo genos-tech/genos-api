@@ -182,6 +182,14 @@ REGISTRY = {
     # views.common.mcp_consent_views (MIP-1077)
     "origin.views.common.mcp_consent_views.McpConsentContextView": checked("_teams_of"),
     "origin.views.common.mcp_consent_views.McpConsentDecisionView": checked("_teams_of"),
+    # views.common.mcp_connection_views (MIP-1079)
+    "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
+        "the caller's own connected apps (user=request.user on every query)"
+    ),
+    "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
+        "the caller's own connected app: looked up by id AND user=request.user, "
+        "anything else is a 404"
+    ),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(
         "exchanges the HttpOnly refresh cookie for a new access token; the cookie is the credential"

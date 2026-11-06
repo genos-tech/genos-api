@@ -24,7 +24,6 @@ from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.test import RequestFactory
-from oauth2_provider.cimd import is_cimd_client_id
 from oauth2_provider.exceptions import OAuthToolkitError
 from oauth2_provider.models import get_application_model
 from rest_framework import status
@@ -113,18 +112,10 @@ class McpConsentContextView(_ConsentBase):
         application = get_application_model().objects.get(client_id=credentials["client_id"])
         teams = _teams_of(request.user)
         existing = McpConnection.objects.filter(user=request.user, application=application).first()
-        client_id = application.client_id
         redirect_host = urlsplit(credentials["redirect_uri"]).hostname or ""
         return Response(
             {
-                "client": {
-                    "name": application.name or "",
-                    # How we know the client: it registered itself (anyone can, with any name),
-                    # or it is a document at this address (the host is the proof of who).
-                    "kind": "metadata_document" if is_cimd_client_id(client_id) else "registered",
-                    "host": urlsplit(client_id).hostname if is_cimd_client_id(client_id) else "",
-                    "redirectHost": redirect_host,
-                },
+                "client": {**mcp_oauth.client_summary(application), "redirectHost": redirect_host},
                 "scopes": [{"name": s, "description": SCOPES[s]} for s in SCOPES if s in scopes],
                 "teams": [{"id": str(t.team_id), "name": t.team_name} for t in teams],
                 "planAllowed": get_mcp_enabled(str(request.user.id)),

@@ -214,14 +214,13 @@ class TestTheRequestIsValidatedAgain(ConsentBase):
         self.assertEqual(McpConnection.objects.count(), 0)
 
     def test_a_forged_page_cannot_widen_what_the_client_asked_for(self):
-        """Scopes the client never asked for are not granted, whatever the page posts."""
+        """Scopes the client never asked for are refused, whatever the page posts."""
         res = self.decide(
             self.params(scope="mcp:read"), scopes=["mcp:read", "mcp:write", "mcp:destructive"]
         )
-        self.assertEqual(res.status_code, 200, res.content)
-        conn = McpConnection.objects.get()
-        self.assertEqual((conn.scope, conn.allow_destructive), ("read", False))
-        self.assertEqual(Grant.objects.get().scope, "mcp:read")
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertEqual(McpConnection.objects.count(), 0)
+        self.assertEqual(Grant.objects.count(), 0)
 
 
 class TestTheContext(ConsentBase):
