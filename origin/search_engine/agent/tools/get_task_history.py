@@ -85,6 +85,30 @@ def _enum_or_fenced(action_type: str, value: Any) -> Any:
     return value
 
 
+# The kinds of `via` the in-app model has always been shown. A new kind of credential
+# (a connected app, MIP-1078) is stored as its own kind, but anything that changes what
+# this tool returns changes what the model sees, and that waits for the December eval:
+# until then it is shown as the nearest thing it already knows, an API key.
+_SHOWN_VIA_KINDS = frozenset({"app", "agent", "api_key", "pr_merge", "dependencies", "github"})
+
+
+def _shown_via(via: dict[str, Any]) -> dict[str, Any]:
+    kind = via.get("kind")
+    if kind in _SHOWN_VIA_KINDS:
+        return via
+    if kind == "oauth":
+        # The name a client gave itself when it registered: not ours, so fenced like any
+        # other text a stranger wrote, and short.
+        name = str(via.get("client_name") or "connected app")[:60]
+        return {
+            "kind": "api_key",
+            "key_id": via.get("connection_id"),
+            "key_name": wrap_workspace_content(name),
+            "key_prefix": None,
+        }
+    return {"kind": "unknown"}
+
+
 def _via(row: TaskActivity) -> dict[str, Any]:
     """How the change arrived. `metadata.via` is stamped by `_record`;
     rows written before it existed, and system writes, have none."""
@@ -100,7 +124,7 @@ def _via(row: TaskActivity) -> dict[str, Any]:
         return {"kind": "github", "github_user": meta.get("github_username")}
     via = meta.get("via")
     if isinstance(via, dict) and via.get("kind"):
-        return via
+        return _shown_via(via)
     return {"kind": "unknown"}
 
 

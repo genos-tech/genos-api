@@ -2056,6 +2056,37 @@ def _refuse_unknown_arguments(tool: McpTool, unknown: list[str]) -> dict[str, An
     )
 
 
+def _read_only_message(name: str, credential_kind: str) -> str:
+    """The refusal for a write on a read-only credential, in the words of the credential
+    the person holds: a key is replaced under Settings → Developer, a connected app is
+    reconnected with write access under Settings → Connected apps (MIP-1078)."""
+    if credential_kind == "api_key":
+        return (
+            f"`{name}` writes to the workspace, and this API key is read-only. "
+            f"Create a key with write scope in Genos under Settings → Developer, "
+            f"then reconnect. Reads will keep working with the current key."
+        )
+    return (
+        f"`{name}` writes to the workspace, and this connection is read-only. "
+        "Reconnect it with write access in Genos under Settings → Connected apps. "
+        "Reads will keep working in the meantime."
+    )
+
+
+def _destructive_message(name: str, credential_kind: str) -> str:
+    if credential_kind == "api_key":
+        return (
+            f"`{name}` can't be undone, and this API key wasn't opted into "
+            f"destructive tools. Ask the user to do it in Genos, or to create a "
+            f"key with destructive tools allowed under Settings → Developer."
+        )
+    return (
+        f"`{name}` can't be undone, and this connection wasn't allowed destructive "
+        "tools. Ask the user to do it in Genos, or to allow destructive tools for this "
+        "connection under Settings → Connected apps."
+    )
+
+
 def call(
     name: str,
     arguments: dict[str, Any],
@@ -2064,6 +2095,7 @@ def call(
     *,
     allow_destructive: bool = False,
     on_unknown_tool: Callable[[str], Exception],
+    credential_kind: str = "api_key",
 ) -> dict[str, Any]:
     """Run a published tool and shape its output as a `CallToolResult`.
 
@@ -2082,20 +2114,10 @@ def call(
         # A refusal that is HTTP 200, so the burst alert would never see it
         # (MIP-744).
         note_refusal()
-        return _text_result(
-            f"`{name}` writes to the workspace, and this API key is read-only. "
-            f"Create a key with write scope in Genos under Settings → Developer, "
-            f"then reconnect. Reads will keep working with the current key.",
-            is_error=True,
-        )
+        return _text_result(_read_only_message(name, credential_kind), is_error=True)
     if tool.destructive and not allow_destructive:
         note_refusal()
-        return _text_result(
-            f"`{name}` can't be undone, and this API key wasn't opted into "
-            f"destructive tools. Ask the user to do it in Genos, or to create a "
-            f"key with destructive tools allowed under Settings → Developer.",
-            is_error=True,
-        )
+        return _text_result(_destructive_message(name, credential_kind), is_error=True)
 
     args = dict(arguments or {})
     # Before anything is resolved or run, so a refused call changes nothing.

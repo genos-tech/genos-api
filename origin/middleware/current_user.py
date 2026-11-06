@@ -63,16 +63,13 @@ def get_current_source():
         return explicit
     if get_current_user() is None:
         return None
-    from origin.models.common.api_key_models import ApiKey  # noqa: PLC0415
+    from origin.views.public.credentials import credential_of  # noqa: PLC0415
 
-    key = getattr(getattr(_state, "request", None), "auth", None)
-    if isinstance(key, ApiKey):
-        return {
-            "kind": "api_key",
-            "key_id": str(key.id),
-            "key_name": key.name,
-            "key_prefix": key.prefix,
-        }
+    credential = credential_of(getattr(_state, "request", None))
+    if credential is not None:
+        # An API key says `api_key` as ever; another kind of credential (MIP-1078) says
+        # its own, and the history tool decides what the in-app model is shown of it.
+        return credential.via()
     return {"kind": "app"}
 
 

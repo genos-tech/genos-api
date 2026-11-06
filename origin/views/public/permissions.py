@@ -23,6 +23,7 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from origin.models.common.api_key_models import SCOPE_WRITE, ApiKey
 from origin.services.throttles import RecordedThrottleMixin
+from origin.views.public.credentials import credential_of
 
 
 class HasApiKey(BasePermission):
@@ -32,6 +33,19 @@ class HasApiKey(BasePermission):
 
     def has_permission(self, request, view) -> bool:
         return isinstance(getattr(request, "auth", None), ApiKey)
+
+
+class HasCredential(BasePermission):
+    """The caller authenticated with a credential MCP accepts: an API key, or any other
+    kind that satisfies `Credential` (MIP-1078). A session is refused, as in `HasApiKey`.
+
+    MCP uses this where REST uses `HasApiKey`: an OAuth token is for MCP only, so it can
+    stand here and still never reach a REST view."""
+
+    message = "This endpoint requires an API key or a connected app."
+
+    def has_permission(self, request, view) -> bool:
+        return credential_of(request) is not None
 
 
 class HasRequiredScope(BasePermission):
@@ -72,7 +86,9 @@ class PublicApiThrottle(RecordedThrottleMixin, throttling.SimpleRateThrottle):
     scope = "public_api"
 
     def get_cache_key(self, request, view):
-        key = getattr(request, "auth", None)
-        if not isinstance(key, ApiKey):
-            return None  # Not throttled here; HasApiKey rejects it anyway.
-        return self.cache_format % {"scope": self.scope, "ident": str(key.id)}
+        credential = credential_of(request)
+        if credential is None:
+            return None  # Not throttled here; the permission rejects it anyway.
+        # An API key's bucket is its id, as it always was; another kind brings its own,
+        # so two kinds can never share one.
+        return self.cache_format % {"scope": self.scope, "ident": credential.throttle_ident()}

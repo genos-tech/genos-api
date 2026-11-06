@@ -85,10 +85,11 @@ def client_ip(request) -> str | None:
 
 
 def _api_key(request):
-    from origin.models.common.api_key_models import ApiKey  # noqa: PLC0415
+    """The credential that made the request (an API key, or another kind that satisfies
+    `Credential`, MIP-1078), or None. Named for the key it was written for."""
+    from origin.views.public.credentials import credential_of  # noqa: PLC0415
 
-    key = getattr(request, "auth", None)
-    return key if isinstance(key, ApiKey) else None
+    return credential_of(request)
 
 
 def _source(request, key=None) -> tuple[str, str | None]:
@@ -360,7 +361,7 @@ def _caller(request) -> str | None:
     those."""
     key = _api_key(request)
     if key is not None:
-        return f"key:{key.id}"
+        return key.audit_ref()
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
         return f"user:{user.pk}"
