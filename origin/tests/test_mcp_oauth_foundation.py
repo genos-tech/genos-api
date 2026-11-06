@@ -673,6 +673,30 @@ class TestTokenAndRevokeAreReachableAndLimited(FoundationBase):
             res.json()["error"], ("unsupported_grant_type", "invalid_request", "invalid_client")
         )
 
+    def test_the_device_code_grant_gets_no_token_with_a_made_up_code(self):
+        """CVE-2026-49272 (oauthlib before 4.0.1): a device-code token request with a bogus code
+        and a valid client id was given a token. The flow is not enabled here, and this holds it
+        shut whatever the library version does."""
+        client = Application.objects.create(
+            client_id="device-test",
+            client_type=Application.CLIENT_PUBLIC,
+            authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+            redirect_uris=CALLBACK,
+        )
+        res = self.client.post(
+            "/oauth/token/",
+            {
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "device_code": "made-up-code",
+                "client_id": client.client_id,
+            },
+        )
+        self.assertIn(res.status_code, (400, 401, 404), "refused whichever way the library says no")
+        self.assertNotIn("access_token", res.content.decode())
+        from oauth2_provider.models import AccessToken
+
+        self.assertEqual(AccessToken.objects.count(), 0)
+
     def test_the_token_endpoint_is_never_cached(self):
         res = self.client.post("/oauth/token/", {"grant_type": "authorization_code"})
         self.assertIn("no-store", res["Cache-Control"])
