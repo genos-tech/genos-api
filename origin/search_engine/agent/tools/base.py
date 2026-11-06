@@ -116,10 +116,35 @@ class Tool:
     # protocol lands; all four current tools (search + 3 fetches) are
     # read-only and keep the default of False.
     requires_approval: bool = False
+    # Published on MCP only (MIP-1070). The in-app agent never declares, lists or
+    # runs it: `register_tool` files it in `MCP_ONLY_REGISTRY` instead of
+    # `REGISTRY`. See the note on `MCP_ONLY_REGISTRY` for why that is a second
+    # registry and not a filter over this one.
+    mcp_only: bool = False
 
 
 # Populated by `tools/__init__.py` at import time.
 REGISTRY: dict[str, Tool] = {}
+
+# Tools that exist on the MCP surface only (MIP-1070): the secretary's worklog and
+# briefing, which a connected client's own model drives. A second registry rather
+# than a flag every reader of REGISTRY has to remember to filter on, because the
+# in-app agent reads REGISTRY in two different ways and both have to stay blind to
+# these:
+#   * to BUILD what the model sees: the tool declarations, the registry-generated
+#     cheatsheet and tool directory (and its tool COUNT), the agency/reach tiers;
+#   * to RUN what the model asks for: the controller looks a call up by the name
+#     the model sent, not by what was declared, so a tool that merely is not
+#     declared but is in REGISTRY would still execute if a model named it.
+# A tool that is not in REGISTRY can do neither, however a new reader is written.
+# What MCP-only tools need is for MCP to see them: it looks tools up through
+# `get_mcp_tool`.
+MCP_ONLY_REGISTRY: dict[str, Tool] = {}
+
+
+def get_mcp_tool(name: str) -> Tool | None:
+    """The tool the MCP surface runs for `name`: a shared one, or an MCP-only one."""
+    return REGISTRY.get(name) or MCP_ONLY_REGISTRY.get(name)
 
 
 def wrap_workspace_content(text: str) -> str:
