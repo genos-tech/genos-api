@@ -81,6 +81,7 @@ def _fetch_personal(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         raise ToolForbidden(f"Not authorized to read personal note {note_id}.")
 
     return _shape_note(
+        surface=ctx.surface,
         note_id=note_id,
         note_type="personal",
         title=note.title,
@@ -108,6 +109,7 @@ def _fetch_task_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         raise ToolForbidden(f"Not authorized to read task note {note_id}.")
 
     return _shape_note(
+        surface=ctx.surface,
         note_id=note_id,
         note_type="task",
         title=note.title,
@@ -145,6 +147,7 @@ def _fetch_chat_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
     # feed-through; the source values are now the v3 channel / thread-root
     # UUID.
     return _shape_note(
+        surface=ctx.surface,
         note_id=note_id,
         note_type="chat",
         title=note.title,
@@ -172,6 +175,7 @@ def _shape_note(
     ts_created_at,
     ts_updated_at,
     parent_context: dict[str, Any],
+    surface: str = "",
 ) -> dict[str, Any]:
     body_text = extract_text(body)
     # The body as markdown — headings, lists, code fences, and `@`/`#`
@@ -180,12 +184,19 @@ def _shape_note(
     # flattened `body_text` stripped every chip and all formatting. Kept
     # ALONGSIDE `body_text`, as `fetch_task` keeps `content_text`.
     body_markdown = blocks_to_markdown(body)
+    body_fields: dict[str, Any] = {}
+    # Over MCP (MIP-1099, as MIP-826 did for `get_task`) the plain copy is left out
+    # when the markdown is there: it is the same words again, and a long note came
+    # back twice as large and past the client's output limit. `surface` is set by the
+    # server, never by the caller; the in-app agent (surface "") keeps both fields.
+    if not (surface == "mcp" and body_markdown):
+        body_fields["body_text"] = wrap_workspace_content(body_text)
+    body_fields["body_markdown"] = wrap_workspace_content(body_markdown)
     return {
         "note_id": note_id,
         "note_type": note_type,
         "title": title or "",
-        "body_text": wrap_workspace_content(body_text),
-        "body_markdown": wrap_workspace_content(body_markdown),
+        **body_fields,
         "parent_note_id": (str(parent_note_id) if parent_note_id else None),
         "parent_context": {k: v for k, v in parent_context.items() if v is not None},
         "ts_created": ts_created_at.isoformat() if ts_created_at else None,

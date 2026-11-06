@@ -14,8 +14,13 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.tools import search_kb
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 
 from .test_mcp_endpoint import McpBase
@@ -129,6 +134,187 @@ class GetTaskBodyTests(McpBase):
         self.assertEqual(keys.index("content_markdown") + 1, keys.index("comments"))
         self.assertIn("Return 404", out["content_text"])
         self.assertIn("Return 404", out["content_markdown"])
+
+
+class GetNoteBodyTests(McpBase):
+    """`get_note` sends the body once over MCP (MIP-1099), as `get_task` does (MIP-826).
+
+    A long note came back twice as large (`body_markdown` and `body_text` carry the same
+    words) and past a client's output limit. The in-app agent keeps both fields, in the same
+    order, because changing what its model reads is its own eval-gated change."""
+
+    TEXT = "Retention is 180 days."
+
+    def _blocks(self, text=None):
+        return [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": text or self.TEXT}],
+                "children": [],
+            }
+        ]
+
+    def _ctx(self, surface):
+        return ToolContext(
+            team_id=str(self.team.team_id), user_id=str(self.user.id), surface=surface
+        )
+
+    def _personal(self, body=None):
+        return PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Plan",
+            body=self._blocks() if body is None else body,
+        )
+
+    def _task_note(self, body=None):
+        return TaskNoteMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            task=self.task,
+            owner=self.user,
+            title="Spec",
+            body=self._blocks() if body is None else body,
+        )
+
+    def _chat_note(self, body=None):
+        gm = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="Board", owner=self.user
+        )
+        ChannelMember.objects.create(channel=gm, user=self.user, role="owner")
+        return ChatNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            chat_type=int(ChannelKind.GM),
+            channel=gm,
+            is_thread=False,
+            title="Decisions",
+            body=self._blocks() if body is None else body,
+        )
+
+    def _families(self, body=None):
+        return (
+            ("personal", self._personal(body)),
+            ("task", self._task_note(body)),
+            ("chat", self._chat_note(body)),
+        )
+
+    def _mcp(self, note_type, note):
+        self._key()
+        return self._result(
+            self._call("get_note", {"note_id": note.note_id, "note_type": note_type})
+        )["structuredContent"]
+
+    def test_mcp_sends_the_body_once_for_every_kind_of_note(self):
+        for note_type, note in self._families():
+            with self.subTest(note_type=note_type):
+                payload = self._mcp(note_type, note)
+                self.assertIn(self.TEXT, payload["body_markdown"])
+                self.assertNotIn("body_text", payload)
+
+    def test_it_is_about_half_the_size(self):
+        """The reason for the change: the body must not be paid for twice."""
+        note = self._personal(self._blocks("word " * 2000))
+        in_app = FETCH_NOTE.run({"note_type": "personal", "note_id": note.note_id}, self._ctx(""))
+        self._key()
+        mcp = self._result(
+            self._call("get_note", {"note_id": note.note_id, "note_type": "personal"})
+        )["structuredContent"]
+        words = lambda out: sum(len(str(v)) for k, v in out.items() if k.startswith("body_"))  # noqa: E731
+        self.assertLess(words(mcp), words(in_app) * 0.6)
+
+    def test_an_empty_body_still_returns_a_usable_shape(self):
+        for note_type, note in self._families(body=[]):
+            with self.subTest(note_type=note_type):
+                payload = self._mcp(note_type, note)
+                self.assertIn("body_markdown", payload)
+                self.assertIn("body_text", payload)
+                self.assertFalse(payload["body_markdown"])
+
+    def test_in_app_output_keeps_both_fields_and_their_order(self):
+        for note_type, note in self._families():
+            with self.subTest(note_type=note_type):
+                out = FETCH_NOTE.run(
+                    {"note_type": note_type, "note_id": note.note_id}, self._ctx("")
+                )
+                keys = list(out)
+                self.assertEqual(keys.index("body_text") + 1, keys.index("body_markdown"))
+                self.assertEqual(keys.index("title") + 1, keys.index("body_text"))
+                self.assertIn(self.TEXT, out["body_text"])
+                self.assertIn(self.TEXT, out["body_markdown"])
+                self.assertTrue(out["body_text"].startswith("<workspace_content>"))
+
+    def test_in_app_output_is_byte_identical_to_the_shape_before_the_change(self):
+        """The exact keys, in order, that the in-app agent has always been given."""
+        out = FETCH_NOTE.run(
+            {"note_type": "personal", "note_id": self._personal().note_id}, self._ctx("")
+        )
+        self.assertEqual(
+            list(out),
+            [
+                "note_id",
+                "note_type",
+                "title",
+                "body_text",
+                "body_markdown",
+                "parent_note_id",
+                "parent_context",
+                "ts_created",
+                "ts_updated",
+                "__summary__",
+            ],
+        )
+
+    def test_the_surface_is_set_by_the_server_never_by_the_caller(self):
+        """A caller cannot ask for the in-app shape, or any shape, by sending a `surface`."""
+        self._key()
+        note = self._personal()
+        res = self._call(
+            "get_note", {"note_id": note.note_id, "note_type": "personal", "surface": ""}
+        )
+        text, is_error = self._tool_text(res)
+        self.assertTrue(is_error)
+        self.assertIn("does not take", text)
+
+    def test_the_comment_threads_are_unaffected(self):
+        """The MCP-only comments added by MIP-1064 ride on the same result."""
+        note = self._task_note()
+        self._key()
+        with mock.patch(
+            "origin.services.note_comments.read_note_threads",
+            return_value=[
+                {
+                    "id": "t1",
+                    "resolved": False,
+                    "anchorText": "Retention",
+                    "createdAt": "2026-11-06T09:00:00.000Z",
+                    "comments": [
+                        {
+                            "id": "c1",
+                            "userId": str(self.user.id),
+                            "createdAt": "2026-11-06T09:00:00.000Z",
+                            "updatedAt": "2026-11-06T09:00:00.000Z",
+                            "deleted": False,
+                            "body": self._blocks("why 180?"),
+                        }
+                    ],
+                }
+            ],
+        ):
+            payload = self._result(
+                self._call("get_note", {"note_id": note.note_id, "note_type": "task"})
+            )["structuredContent"]
+        self.assertNotIn("body_text", payload)
+        self.assertIn(self.TEXT, payload["body_markdown"])
+        self.assertEqual(payload["comment_threads"][0]["thread_id"], "t1")
+        self.assertEqual(payload["comment_threads"][0]["anchor_text"], "Retention")
+
+    def test_the_description_no_longer_promises_body_text_unconditionally(self):
+        from origin.views.public.mcp import tools
+
+        description = tools.BY_NAME["get_note"].description
+        self.assertIn("body_markdown", description)
+        self.assertIn("only when there is no markdown", description)
 
 
 class GetTaskCommentTests(McpBase):
