@@ -1,4 +1,3 @@
-import uuid
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -16,16 +15,6 @@ from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_models import TaskComments, TaskMaster
 
 User = get_user_model()
-
-
-def _new_system_user():
-    """The user the create modal signs up first and names as `project_system_user`."""
-    return User.objects.create_user(
-        username="sys",
-        email=f"sys-{uuid.uuid4().hex[:8]}@genos.tech",
-        password=None,
-        is_system_user=True,
-    )
 
 
 class TestProjectViews(TestCase):
@@ -56,7 +45,6 @@ class TestProjectViews(TestCase):
                 "team": str(self.team.team_id),
                 "project_name": "New Project",
                 "owner": self.user.id,
-                "project_system_user": _new_system_user().id,
             },
             format="json",
         )
@@ -76,7 +64,6 @@ class TestProjectViews(TestCase):
                 "team": str(self.team.team_id),
                 "project_name": "Existing Project",
                 "owner": self.user.id,
-                "project_system_user": _new_system_user().id,
             },
             format="json",
         )
@@ -89,7 +76,6 @@ class TestProjectViews(TestCase):
             {
                 "team": str(self.team.team_id),
                 "owner": self.user.id,
-                "project_system_user": _new_system_user().id,
             },
             format="json",
         )

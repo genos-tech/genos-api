@@ -9,9 +9,8 @@ endpoints that validate them.
 The rule, shared with `owner` (MIP-1016): a server-owned field carrying a
 value other than the server's own is refused with a 400 and nothing is
 written; the server's own value (`is_deleted: false`) is accepted and never
-used. `project_system_user` is a client field (the create modal signs a
-system user up and names it), so it is validated instead: it must be a new
-system user.
+used. `project_system_user` is server-owned too (MIP-1031): the server makes
+the project's system user, so a body that names one is refused.
 """
 
 from django.contrib.auth import get_user_model
@@ -53,6 +52,7 @@ class ProjectCreateAllowListTests(BaseAPITestCase):
             "default_task_template": "custom:1",
             "default_milestone_template": "milestone",
             "task_field_rules": {"dueDate": {"required": True}},
+            "project_system_user": str(self.user2.id),
         }
         before = self._counts()
         for i, (field, value) in enumerate(forged.items()):
@@ -98,22 +98,21 @@ class ProjectCreateAllowListTests(BaseAPITestCase):
     # ── what the app sends ────────────────────────────────────────────
 
     def test_the_create_modals_exact_body_still_works(self):
-        """`ModalCreateProject`: team, project_name, owner, project_system_user, is_private."""
-        system_user = self._system_user()
+        """`ModalCreateProject`: team, project_name, owner, is_private."""
         res = self.client.post(
             PROJECT,
             {
                 "team": str(self.team.team_id),
                 "project_name": "From the modal",
                 "owner": str(self.user.id),
-                "project_system_user": str(system_user.id),
                 "is_private": True,
             },
             format="json",
         )
         self.assertEqual(res.status_code, 201, res.data)
         project = ProjectMaster.objects.get(project_id=res.data["project_id"])
-        self.assertEqual(project.project_system_user_id, system_user.id)
+        system_user = project.project_system_user
+        self.assertTrue(system_user.is_system_user)
         self.assertTrue(project.is_private)
         self.assertEqual(project.owner_id, self.user.id)
         self.assertFalse(project.is_deleted)
@@ -143,32 +142,27 @@ class ProjectCreateAllowListTests(BaseAPITestCase):
 
     # ── project_system_user ───────────────────────────────────────────
 
-    def test_project_system_user_must_be_a_new_system_user(self):
-        taken = self._system_user("taken")
-        ProjectMaster.objects.create(
-            team=self.team, project_name="Owner of it", owner=self.user, project_system_user=taken
-        )
-        on_a_team = self._system_user("onteam")
-        TeamMembers.objects.create(team=self.team, attendee=on_a_team)
+    def test_a_named_project_system_user_is_refused(self):
+        """Not a colleague's, not the caller's, not an unclaimed system user."""
+        unclaimed = self._system_user("unclaimed")
         bad = (
-            str(self.user2.id),  # a colleague
-            str(self.user.id),  # the caller
-            str(taken.id),  # another project's
-            str(on_a_team.id),  # already joined to a team
+            str(unclaimed.id),
+            str(self.user2.id),
+            str(self.user.id),
             "00000000-0000-0000-0000-000000000000",
             "not-a-uuid",
             5,
             [str(self.user2.id)],
         )
         before = self._counts()
+        users = User.objects.count()
         for i, value in enumerate(bad):
             with self.subTest(project_system_user=value):
                 res = self._post(f"Sys{i}", project_system_user=value)
                 self.assertEqual(res.status_code, 400, res.data)
-                self.assertEqual(
-                    res.data, {"error": "project_system_user must be a new system user."}
-                )
+                self.assertEqual(res.data, {"error": "project_system_user cannot be set."})
         self.assertEqual(self._counts(), before)
+        self.assertEqual(User.objects.count(), users)
 
     def test_an_empty_project_system_user_means_none(self):
         for i, value in enumerate((None, "")):

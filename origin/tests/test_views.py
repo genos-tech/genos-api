@@ -536,10 +536,9 @@ class TestEmailVerificationEndpoints(TestCase):
             user = User.objects.with_email(email).get()
             self.assertTrue(user.is_email_verified)
 
-    def test_system_user_signup_returns_the_id_and_no_credential(self):
-        # System users (project automations) have no inbox, so no
-        # verification email. They never sign in either, so no tokens:
-        # the project flow only reads `user.id`. See test_system_users.py.
+    def test_system_user_signup_is_refused(self):
+        # A project's system user is made by the server with the project
+        # (MIP-1031); this endpoint is open to anyone. See test_system_users.py.
         response = self.client.post(
             "/api/v2/user/signup/",
             {
@@ -550,12 +549,8 @@ class TestEmailVerificationEndpoints(TestCase):
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 201)
-        user = User.objects.with_email("bot@example.com").get()
-        self.assertEqual(str(response.data["user"]["id"]), str(user.id))
-        self.assertNotIn("access", response.data)
-        self.assertNotIn("refresh", response.data)
-        self.assertFalse(user.has_usable_password())
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(User.objects.with_email("bot@example.com").exists())
         self.assertEqual(self.mock_send.call_count, 0)
 
     def test_migration_backfill_function(self):

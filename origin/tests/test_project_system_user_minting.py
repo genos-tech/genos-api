@@ -3,9 +3,8 @@
 The create modal used to sign a system user up through the open signup
 endpoint and then name it on the project, so anyone could mint system users
 (and reserve any email address with one). The project create now makes the
-account itself, in the same transaction as the project, and the
-`project_system_user` the old modal sends is still accepted when it is an
-unclaimed system user.
+account itself, in the same transaction as the project, and refuses a body
+that names one.
 
 A project with no system user (rows from before this, or one whose account
 was removed: the FK is SET_NULL) must still read: the task endpoints used to
@@ -111,15 +110,16 @@ class ProjectCreateMintsItsSystemUserTests(BaseAPITestCase):
         emails = set(User.objects.filter(is_system_user=True).values_list("email", flat=True))
         self.assertEqual(len(emails), 2)
 
-    def test_an_unclaimed_system_user_from_an_older_page_is_still_accepted(self):
+    def test_a_page_that_names_a_system_user_is_refused(self):
+        """The old modal's body: nothing is made, and nothing is claimed."""
         old = User.objects.create_user(
             username="old", email="old@genos.tech", password=None, is_system_user=True
         )
-        before = self._system_users()
+        users, projects = User.objects.count(), ProjectMaster.objects.count()
         res = self._post("Old page", project_system_user=str(old.id))
-        self.assertEqual(res.status_code, 201, res.data)
-        self.assertEqual(self._system_users(), before)  # none made on top
-        self.assertEqual(str(res.data["project_system_user"]), str(old.id))
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(User.objects.count(), users)
+        self.assertEqual(ProjectMaster.objects.count(), projects)
 
 
 class ProjectWithoutSystemUserReadsTests(BaseAPITestCase):

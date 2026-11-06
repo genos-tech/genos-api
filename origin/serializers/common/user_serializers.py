@@ -140,6 +140,14 @@ class UserCreateSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_is_system_user(self, value):
+        # A project's system user is made by the server with the project
+        # (MIP-1031). This endpoint is open to anyone, so a system user made
+        # here was an account anyone could mint, at any address they chose.
+        if value:
+            raise serializers.ValidationError("System users are created with their project.")
+        return value
+
     def validate(self, attrs):
         token = (attrs.get("invite_token") or "").strip()
         if token:
@@ -158,16 +166,10 @@ class UserCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Override create method to hash password"""
         validated_data.pop("invite_token", None)
-        is_system_user = validated_data.get("is_system_user", False)
         user = user_models.CustomUser.objects.create_user(
             email=validated_data["email"],
             username=validated_data["username"],
-            # A system user never signs in, so it gets no usable password,
-            # whatever the client sent. The app sends one derived from the
-            # team id and project name, so keeping it made every project's
-            # system user, a team member, a login anyone could compute.
-            password=None if is_system_user else validated_data["password"],
-            is_system_user=is_system_user,
+            password=validated_data["password"],
         )
         return user
 

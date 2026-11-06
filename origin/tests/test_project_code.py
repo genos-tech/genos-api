@@ -3,8 +3,6 @@ tests proving the new project-scoped task display IDs flow end-to-end:
 project creation auto-assigns a code, task creation auto-assigns a
 per-project number, and `display_id` lands in API responses."""
 
-import uuid
-
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -17,16 +15,6 @@ from origin.models.task.task_models import TaskMaster
 from origin.services.project_code import derive_project_code
 
 User = get_user_model()
-
-
-def _new_system_user():
-    """The user the create modal signs up first and names as `project_system_user`."""
-    return User.objects.create_user(
-        username="sys",
-        email=f"sys-{uuid.uuid4().hex[:8]}@genos.tech",
-        password=None,
-        is_system_user=True,
-    )
 
 
 class TestDeriveProjectCode(TestCase):
@@ -108,7 +96,6 @@ class TestProjectAndTaskAutoAssignment(TestCase):
                 "team": str(self.team.team_id),
                 "project_name": name,
                 "owner": self.user.id,
-                "project_system_user": _new_system_user().id,
             },
             format="json",
         )
@@ -249,7 +236,6 @@ class TestTaskProjectMove(TestCase):
                 "team": str(self.team.team_id),
                 "project_name": name,
                 "owner": self.user.id,
-                "project_system_user": _new_system_user().id,
             },
             format="json",
         )

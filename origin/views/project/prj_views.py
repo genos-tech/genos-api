@@ -2,7 +2,6 @@ import time
 from collections import defaultdict
 
 from django.core.cache import cache
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Q
 from django.db.models.functions import Lower
@@ -80,28 +79,8 @@ CREATE_PROJECT_SERVER_VALUES = {
     "default_task_template": None,
     "default_milestone_template": None,
     "task_field_rules": {},
+    "project_system_user": None,
 }
-
-
-def _new_project_system_user(raw):
-    """`(user_id, None)` for a usable `project_system_user`, else `(None, error text)`.
-
-    The create modal signs a system user up and names it here, so it is
-    accepted when it really is one and nothing has claimed it: a system user,
-    on no project and no team yet (the modal joins it to the team after the
-    create). Anything else, such as a colleague's id, is refused.
-    """
-    try:
-        user = CustomUser.objects.filter(pk=raw, is_system_user=True).first()
-    except (AttributeError, ValueError, TypeError, DjangoValidationError):
-        user = None
-    if (
-        user is None
-        or ProjectMaster.objects.filter(project_system_user=user).exists()
-        or TeamMembers.objects.filter(attendee=user).exists()
-    ):
-        return None, "project_system_user must be a new system user."
-    return user.pk, None
 
 
 class ProjectMasterView(AuthenticatedAPIView):
@@ -222,14 +201,6 @@ class ProjectMasterView(AuthenticatedAPIView):
             return res
         data = {key: request.data.get(key) for key in CREATE_PROJECT_FIELDS if key in request.data}
         data["owner"] = request.user.pk
-        supplied_system_user = request.data.get("project_system_user") not in (None, "")
-        if supplied_system_user:
-            system_user_id, problem = _new_project_system_user(
-                request.data.get("project_system_user")
-            )
-            if problem:
-                return Response({"error": problem}, status=status.HTTP_400_BAD_REQUEST)
-            data["project_system_user"] = system_user_id
         if request.data.get("code"):
             code = str(request.data.get("code")).strip().upper()
             if not PROJECT_CODE_RE.match(code):
@@ -249,21 +220,16 @@ class ProjectMasterView(AuthenticatedAPIView):
 
         serializer = ProjectMasterSerializer(data=data)
         if serializer.is_valid():
-            if supplied_system_user:
-                serializer.save()
-            else:
-                # The project's own system user is made here, with the
-                # project and after the body has validated, so a refused
-                # create leaves no stray account and no client can mint
-                # one (MIP-1031). The address is the server's too
-                # (`<team id>-<name>@genos.tech`); a client-chosen one
-                # could reserve anyone's real address. The membership is
-                # what the create modal used to ask for in a second call.
-                with transaction.atomic():
-                    team = serializer.validated_data["team"]
-                    system_user = new_system_user(team, serializer.validated_data["project_name"])
-                    serializer.save(project_system_user=system_user)
-                    TeamMembers.objects.get_or_create(team=team, attendee=system_user)
+            # The project's own system user is made here, with the project
+            # and after the body has validated, so a refused create leaves
+            # no stray account and no client can mint one (MIP-1031). The
+            # address is the server's too (`<team id>-<name>@genos.tech`); a
+            # client-chosen one could reserve anyone's real address.
+            with transaction.atomic():
+                team = serializer.validated_data["team"]
+                system_user = new_system_user(team, serializer.validated_data["project_name"])
+                serializer.save(project_system_user=system_user)
+                TeamMembers.objects.get_or_create(team=team, attendee=system_user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
