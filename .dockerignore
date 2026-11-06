@@ -1,0 +1,58 @@
+# What the genos-api image does not need (MIP-1102).
+#
+# The Dockerfile ends its build with `COPY . .`, so without this file the whole repo
+# root ships to production: the git history, the test suite, any local virtualenv or
+# `.env`, and whatever a person had lying around when they built.
+#
+# Be conservative: add a line here only after showing the running container never
+# reads it. `origin/tests/test_dockerignore.py` fails if anything the container reads
+# is listed here. NOT listed, on purpose:
+#   - `apis/` and `origin/` (the app and the files it reads at runtime: `apis/*.yaml`,
+#     `origin/fixtures/`, the eval cases and baselines);
+#   - `railway-*-entrypoint.sh` and `railway*.toml`: the cron services run
+#     `/app/railway-*-entrypoint.sh` from this same image;
+#   - `.railway/`, `Pipfile*`, `manage.py`, and `requirements-dev.txt` (the dev image
+#     in genos-platform uses this repo as its build context and copies the last two).
+
+# Version control and CI: never read by a running container.
+.git
+.github
+.gitignore
+.gitleaksignore
+
+# Local environments. A `.venv` copied in would shadow the image's own `/app/.venv`, and
+# `.env` is a local secrets file: production gets its settings from the platform.
+/.venv
+/venv
+.env
+.env.*
+
+# Local data and generated output. `uploads/` is user data (production mounts a volume
+# there), and `collectstatic` rewrites `staticfiles/` as the first thing the container does.
+/uploads
+/staticfiles
+
+# Python, tool and editor leftovers.
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+coverage.xml
+htmlcov
+.idea
+.vscode
+**/.DS_Store
+
+# Documentation and lint/coverage configuration: read by people and CI, not the app.
+/docs
+/README.md
+/.coveragerc
+/ruff.toml
+
+# The test suite: nothing imports it at runtime (checked by
+# `origin/tests/test_dockerignore.py`). Running `manage.py test` inside the production
+# image is no longer possible; it runs in CI and in the dev image, which bind-mounts the repo.
+/origin/tests
