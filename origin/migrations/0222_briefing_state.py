@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0220_worklog"),
+        ("origin", "0221_merge_0220_task_recent_0220_worklog"),
     ]
 
     operations = [
