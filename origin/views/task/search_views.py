@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.project.prj_models import *
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import *
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_project_member, reachable_project_ids
@@ -217,23 +218,32 @@ class GetTaskByDisplayIdView(AuthenticatedAPIView):
         if task is None:
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
         colors = status_color(task.status)
-        return Response(
-            {
-                "projectId": task.project_id,
-                "projectName": task.project.project_name,
-                "projectCode": task.project.code,
-                "projectTags": task.tags,
-                "taskId": task.task_id,
-                "displayId": f"{task.project.code}-{task.project_task_number}",
-                "title": task.title,
-                "isMilestone": bool(task.is_milestone),
-                "status": {
-                    "code": 0,
-                    "status": task.status,
-                    "color": colors["chipColor"],
-                    "textColor": colors["textColor"],
-                },
-                "tsUpdated": task.ts_updated_at,
+        row = {
+            "projectId": task.project_id,
+            "projectName": task.project.project_name,
+            "projectCode": task.project.code,
+            "projectTags": task.tags,
+            "taskId": task.task_id,
+            "displayId": f"{task.project.code}-{task.project_task_number}",
+            "title": task.title,
+            "isMilestone": bool(task.is_milestone),
+            "status": {
+                "code": 0,
+                "status": task.status,
+                "color": colors["chipColor"],
+                "textColor": colors["textColor"],
             },
-            status=status.HTTP_200_OK,
-        )
+            "tsUpdated": task.ts_updated_at,
+        }
+        if task.is_milestone:
+            # A milestone opens by its own id (a route through the backing task
+            # broke fresh milestones, see `canonicalSpotlightHref`), so Spotlight's
+            # id search needs it. Only a milestone row carries the key.
+            milestone_id = (
+                MilestoneMaster.objects.filter(task_id=task.task_id)
+                .values_list("milestone_id", flat=True)
+                .first()
+            )
+            if milestone_id is not None:
+                row["milestoneId"] = milestone_id
+        return Response(row, status=status.HTTP_200_OK)
