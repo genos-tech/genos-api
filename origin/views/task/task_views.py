@@ -63,6 +63,7 @@ from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import (
     as_int,
+    as_uuid,
     body_object,
     missing_fields,
     refuse_unsafe_link_urls,
@@ -372,6 +373,13 @@ class TaskMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # A body is text, a list of blocks or an object. A number or `true` was a TypeError
+        # (500) in the mention walk below.
+        if body["content"] is not None and not isinstance(body["content"], (str, list, dict)):
+            return Response(
+                {"error": "content must be a list of blocks."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         newly_mentioned_user_ids = []
         if body["content"] is not None:
             extract_user_handler = extractMentionedUsers()
@@ -2570,6 +2578,14 @@ class TaskCommentReactionView(AuthenticatedAPIView):
         if comment_id is None:
             return Response(
                 {"error": "comment_id must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # `require_fields` takes `""` as present; a team id is a UUID, and `""` was a
+        # ValidationError (500) at the lookup below.
+        if as_uuid(body["team_id"]) is None:
+            return Response(
+                {"error": "team_id must be a valid id."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

@@ -25,7 +25,7 @@ from origin.services import change_feed
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_folder_role import get_folder_role, is_team_member
 from origin.views.utils.note_role import ROLE_EDITOR
-from origin.views.utils.request_validators import validate_request_data
+from origin.views.utils.request_validators import as_int, as_uuid, validate_request_data
 
 MAX_TAG_NAME = 40
 
@@ -48,6 +48,16 @@ def _can_edit_vocabulary(tag: NoteFolderTag, team_id, user_id) -> bool:
     if str(tag.created_by_id) == str(user_id):
         return True
     return TeamMaster.objects.filter(team_id=team_id, owner=user_id).exists()
+
+
+def _get_tag(tag_id, team_id):
+    """One of the team's tags. Raises DoesNotExist.
+
+    A tag id is a number and a team id a UUID. One that is not parses to None, and `= None`
+    is `IS NULL`, which matches no row: the same DoesNotExist as an id that names nothing
+    (the views' 404), not a ValueError or ValidationError (500).
+    """
+    return NoteFolderTag.objects.get(tag_id=as_int(tag_id), team=as_uuid(team_id))
 
 
 def sync_folder_tags(folder, team_id, tag_ids):
@@ -151,7 +161,7 @@ class NoteFolderTagView(AuthenticatedAPIView):
             return res
 
         try:
-            tag = NoteFolderTag.objects.get(tag_id=data["tag_id"], team=data["team_id"])
+            tag = _get_tag(data["tag_id"], data["team_id"])
         except NoteFolderTag.DoesNotExist:
             return Response({"error": "Tag not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -202,7 +212,7 @@ class NoteFolderTagView(AuthenticatedAPIView):
             return res
 
         try:
-            tag = NoteFolderTag.objects.get(tag_id=data["tag_id"], team=data["team_id"])
+            tag = _get_tag(data["tag_id"], data["team_id"])
         except NoteFolderTag.DoesNotExist:
             return Response({"error": "Tag not found."}, status=status.HTTP_404_NOT_FOUND)
 

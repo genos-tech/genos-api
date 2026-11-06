@@ -37,7 +37,12 @@ from origin.services.note_folder_manage import (
 )
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.personal_note_move import NoteMoveRefused, move_personal_note
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.request_validators import (
+    as_int,
+    as_uuid,
+    validate_request_data,
+    validate_request_user,
+)
 
 NOTE_TYPE = 1  # Personal Notes
 SCOPE = PersonalNoteFolder.SCOPE_PERSONAL
@@ -55,9 +60,14 @@ def _folder_dict(folder: PersonalNoteFolder) -> dict:
 
 
 def _get_owned_folder(folder_id, team_id, owner_id):
-    """Fetch a PERSONAL folder scoped to (team, owner). Raises DoesNotExist."""
+    """Fetch a PERSONAL folder scoped to (team, owner). Raises DoesNotExist.
+
+    A folder id is a number and a team id a UUID. One that is not parses to None, and
+    `= None` is `IS NULL`, which matches no row: the same DoesNotExist as an id that names
+    nothing (the views' 404), not a ValueError or ValidationError (500).
+    """
     return PersonalNoteFolder.objects.get(
-        folder_id=folder_id, team=team_id, owner=owner_id, scope=SCOPE
+        folder_id=as_int(folder_id), team=as_uuid(team_id), owner=owner_id, scope=SCOPE
     )
 
 
