@@ -122,6 +122,7 @@ from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import note_refusal
 from origin.views.public.mcp.resolve import (
     resolve_milestone_ref,
@@ -207,6 +208,34 @@ class McpTool:
     # Search must not say whether a task or milestone exists, so an
     # unresolvable milestone reference there matches nothing instead of failing.
     quiet_milestone_refs: bool = False
+    # Arguments published on MCP that the registry tool does not have (MIP-1064).
+    # Their schemas are added to the published schema; the values are taken out of
+    # the call before the registry tool runs, and handed to `augment` instead.
+    mcp_only_args: dict[str, Any] = field(default_factory=dict)
+    # `(payload, args, mcp_args, ctx) -> payload`: adds to a read's result AFTER the
+    # registry tool has run, so access has been checked and the in-app agent, which
+    # shares the registry tool, sees none of it.
+    augment: (
+        Callable[[dict[str, Any], dict[str, Any], dict[str, Any], ToolContext], dict[str, Any]]
+        | None
+    ) = None
+
+
+def _with_comment_threads(
+    payload: dict[str, Any], args: dict[str, Any], mcp_args: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any]:
+    """`get_note` on MCP also carries the note's comment threads (MIP-1064)."""
+    note_type = str(args.get("note_type") or "").lower().strip()
+    try:
+        note_id = int(args.get("note_id"))
+    except (TypeError, ValueError):
+        return payload
+    wanted = mcp_args.get("include_resolved")
+    include_resolved = wanted is True or str(wanted).lower() == "true"
+    return {
+        **payload,
+        **note_comment_fields(note_type, note_id, ctx, include_resolved=include_resolved),
+    }
 
 
 def _rewrite_refs(text: str) -> str:
@@ -434,10 +463,23 @@ CATALOG: tuple[McpTool, ...] = (
             "decisions — follow one when a task description points at it. "
             "`body_markdown` keeps the note's headings, lists and @/# chips; "
             "`body_text` is the same body flattened. Pass the note's Genos URL "
-            "and nothing else, or a numeric id together with `note_type`."
+            "and nothing else, or a numeric id together with `note_type`. "
+            "Also returns the note's comment threads as `comment_threads`: "
+            "reviewers' comments on parts of the text, each with the "
+            "`anchor_text` it sits on, its replies (`author`, `ts`, "
+            "`markdown`) and whether it is `resolved`. Open threads come "
+            "first; resolved ones are left out unless `include_resolved` is "
+            "true."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+        mcp_only_args={
+            "include_resolved": {
+                "type": "boolean",
+                "description": "Also return the resolved comment threads. Default false.",
+            }
+        },
+        augment=_with_comment_threads,
     ),
     # ---- chats: read only (MIP-885). No chat write is published. ----
     McpTool(
@@ -1657,6 +1699,10 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
+    if tool.mcp_only_args:
+        properties = dict(schema.get("properties") or {})
+        properties.update(tool.mcp_only_args)
+        schema = {**schema, "properties": properties}
     for arg in tool.milestone_ref_args:
         properties = dict(schema.get("properties") or {})
         if arg in properties:
@@ -1965,9 +2011,14 @@ def call(
         # the refusal is new, and what real clients send is not visible from here.
         log.info("MCP %s refused unknown argument(s): %s", name, ", ".join(unknown))
         return _refuse_unknown_arguments(tool, unknown)
+    # Taken out before anything else sees the call: the registry tool has no such
+    # argument, and the in-app agent's copy of it must stay as it is.
+    mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
     try:
         args = resolve_references(tool, args, ctx.team_id)
         payload = REGISTRY[tool.registry_name].run(args, ctx)
+        if tool.augment is not None:
+            payload = tool.augment(dict(payload or {}), args, mcp_args, ctx)
     except ToolError as exc:
         # The tool's own vocabulary — not authorized, not found, invalid
         # argument. Exactly the feedback a model can retry against.

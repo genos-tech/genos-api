@@ -46,6 +46,7 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 REPLACE_BLOCKS_PATH = "/internal/documents/replace-blocks"
+READ_THREADS_PATH = "/internal/documents/read-threads"
 # Must match genos-collab `INTERNAL_AUDIENCE`. User access tokens carry no
 # `aud`, so collab refuses them on this endpoint; and this token has no
 # `token_type`, so simplejwt refuses it as a client token.
@@ -163,3 +164,37 @@ def push_note_body_now(note_type: str, note_id: int, blocks: list[dict[str, Any]
     over the restored one. The caller says so instead (MIP-883).
     """
     return _push_now(f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}", blocks)
+
+
+def read_note_threads(note_type: str, note_id: int) -> list[dict[str, Any]] | None:
+    """The comment threads of one note, read from its Yjs doc (MIP-1064).
+
+    A BlockNote comment lives in the collab doc, not in a table this process
+    owns, so the only way to see one is to ask genos-collab. Returns the threads
+    exactly as collab answers (author ids, ISO times, comment bodies as BlockNote
+    blocks, resolved state, anchor text), `[]` for a note nobody has opened, and
+    `None` when they could not be read at all: collab is not configured here, is
+    unreachable, or refused. The caller says so; a note with no comments and a
+    note whose comments could not be read must not look alike.
+    """
+    if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
+        return None
+    document_name = f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}"
+    try:
+        resp = requests.post(
+            f"{settings.COLLAB_INTERNAL_URL}{READ_THREADS_PATH}",
+            json={"documentName": document_name},
+            headers={"Authorization": f"Bearer {_internal_token()}"},
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "collab thread read refused doc=%s status=%s", document_name, resp.status_code
+            )
+            return None
+        threads = resp.json().get("threads")
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        logger.warning("collab thread read failed doc=%s: %s", document_name, exc)
+        return None
+    return threads if isinstance(threads, list) else None
