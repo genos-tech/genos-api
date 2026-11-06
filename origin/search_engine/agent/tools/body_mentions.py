@@ -43,14 +43,14 @@ def mentioned_user_ids(body: Any, team_id) -> set[str]:
     members of `team_id` in each `mentionGroup` — what the REST save paths store."""
     from origin.views.utils.mention_handler import (  # noqa: PLC0415
         extractMentionedUsers,
-        resolve_group_members,
+        resolve_mentions,
     )
 
     handler = extractMentionedUsers()
     handler.extract(body if isinstance(body, list) else [])
-    ids = {str(u) for u in handler.mentioned_user_ids}
-    ids |= {str(u) for u in resolve_group_members(handler.mentioned_group_ids, team_id=team_id)}
-    return ids
+    return resolve_mentions(
+        handler.mentioned_user_ids, handler.mentioned_group_ids, team_id=team_id
+    )
 
 
 def _file(
