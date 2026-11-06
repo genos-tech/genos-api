@@ -104,7 +104,7 @@ class McpConnectionDetailView(_Base):
 
         scope, destructive = connection.scope, connection.allow_destructive
         if "scopes" in body:
-            granted, why = mcp_oauth.check_scopes(body["scopes"], list(mcp_oauth.SCOPES))
+            granted, why = mcp_oauth.check_scopes(body.get("scopes"), list(mcp_oauth.SCOPES))
             if why:
                 return _problem("invalid_request", why)
             scope = "write" if "mcp:write" in granted else "read"
@@ -112,7 +112,7 @@ class McpConnectionDetailView(_Base):
 
         team_ids = list(connection.team_ids)
         if "team_ids" in body:
-            team_ids, why = mcp_oauth.check_team_ids(body["team_ids"])
+            team_ids, why = mcp_oauth.check_team_ids(body.get("team_ids"))
             if why:
                 return _problem("invalid_request", why)
         if not all(t in teams for t in team_ids):
