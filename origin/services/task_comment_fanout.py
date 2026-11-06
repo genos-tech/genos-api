@@ -25,7 +25,7 @@ from typing import Any
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services import mention_extractor, unified_writer, v3_activity, webhook_enqueue
 from origin.services.webpush_dispatch import schedule_push_for_activities
-from origin.views.utils.mention_handler import resolve_group_members
+from origin.views.utils.mention_handler import resolve_mentions
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +73,11 @@ def mentioned_ids(comment_body: Any, team_id) -> set[str]:
     now, not to everyone ever added to it (MIP-1030).
     """
     body = comment_body or []
-    mentioned = set(mention_extractor.extract_mentioned_user_ids(body))
-    group_ids = mention_extractor.extract_mention_group_ids(body)
-    if group_ids:
-        mentioned |= resolve_group_members(group_ids, team_id=team_id)
-    return mentioned
+    return resolve_mentions(
+        mention_extractor.extract_mentioned_user_ids(body),
+        mention_extractor.extract_mention_group_ids(body),
+        team_id=team_id,
+    )
 
 
 def _participant_ids(task_id: int, mentioned: set[str]) -> set[str]:

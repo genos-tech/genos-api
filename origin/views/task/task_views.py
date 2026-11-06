@@ -58,7 +58,7 @@ from origin.views.utils.incremental import (
     capture_server_time,
     check_since,
 )
-from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import (
@@ -388,9 +388,10 @@ class TaskMasterView(AuthenticatedAPIView):
             # groups. Dedupe via set so a user reachable both ways gets
             # one entry; downstream notification fan-out then sends
             # exactly one notification.
-            user_set = set(extract_user_handler.mentioned_user_ids)
-            user_set |= resolve_group_members(
-                extract_user_handler.mentioned_group_ids, team_id=project.team_id
+            user_set = resolve_mentions(
+                extract_user_handler.mentioned_user_ids,
+                extract_user_handler.mentioned_group_ids,
+                team_id=project.team_id,
             )
             newly_mentioned_user_ids = list(user_set)
             data["mentioned_user_ids"] = newly_mentioned_user_ids
@@ -640,9 +641,10 @@ class TaskMasterView(AuthenticatedAPIView):
             extract_user_handler.extract(update_data["content"])
             # Same dedupe-merge as the POST path: direct user mentions
             # plus expanded group members.
-            full_mentioned = set(extract_user_handler.mentioned_user_ids)
-            full_mentioned |= resolve_group_members(
-                extract_user_handler.mentioned_group_ids, team_id=task.team_id
+            full_mentioned = resolve_mentions(
+                extract_user_handler.mentioned_user_ids,
+                extract_user_handler.mentioned_group_ids,
+                team_id=task.team_id,
             )
             update_data["mentioned_user_ids"] = list(full_mentioned)
 

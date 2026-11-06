@@ -40,7 +40,7 @@ from origin.services.task_collaborators import (
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import find_thread_link_conflict
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
-from origin.views.utils.mention_handler import resolve_group_members
+from origin.views.utils.mention_handler import resolve_mentions
 from origin.views.utils.request_validators import (
     refuse_unsafe_link_urls,
     validate_request_data,
@@ -659,10 +659,11 @@ class MilestoneView(AuthenticatedAPIView):
         removed_mentioned: list[str] = []
         if "description" in request.data and milestone.task_id is not None:
             new_body = request.data.get("description") or []
-            new_set: set[str] = set(mention_extractor.extract_mentioned_user_ids(new_body))
-            grp_ids = mention_extractor.extract_mention_group_ids(new_body)
-            if grp_ids:
-                new_set |= resolve_group_members(grp_ids, team_id=milestone.team_id)
+            new_set: set[str] = resolve_mentions(
+                mention_extractor.extract_mentioned_user_ids(new_body),
+                mention_extractor.extract_mention_group_ids(new_body),
+                team_id=milestone.team_id,
+            )
             backing = milestone.task
             prev_set: set[str] = set(backing.mentioned_user_ids or []) if backing else set()
             newly_mentioned = list(new_set - prev_set)

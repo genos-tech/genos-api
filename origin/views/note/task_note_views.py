@@ -12,7 +12,7 @@ from origin.serializers.note.note_serializers import *
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
-from origin.views.utils.mention_handler import extractMentionedUsers, resolve_group_members
+from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
     ROLE_OWNER,
@@ -465,9 +465,10 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if "body" in update_data:
             extract_user_handler = extractMentionedUsers()
             extract_user_handler.extract(update_data["body"])
-            full_mentioned = set(extract_user_handler.mentioned_user_ids)
-            full_mentioned |= resolve_group_members(
-                extract_user_handler.mentioned_group_ids, team_id=note.team_id
+            full_mentioned = resolve_mentions(
+                extract_user_handler.mentioned_user_ids,
+                extract_user_handler.mentioned_group_ids,
+                team_id=note.team_id,
             )
             update_data["mentioned_user_ids"] = list(full_mentioned)
 
