@@ -128,6 +128,43 @@ class ApiKey(models.Model):
     def is_active(self) -> bool:
         return self.revoked_at is None and not self.is_expired
 
+    # -- the `Credential` interface (`views/public/credentials.py`, MIP-1078) --
+    #
+    # An API key is the credential every public-API and MCP path was written for, so
+    # these only name what it already was: nothing about how a key behaves changes.
+
+    kind = "api_key"
+
+    @property
+    def pinned_team_id(self) -> str | None:
+        return str(self.team_id) if self.team_id else None
+
+    @property
+    def allowed_team_ids(self):
+        return None
+
+    @property
+    def default_team_id(self) -> str | None:
+        return None
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} ({self.prefix})"
+
+    def throttle_ident(self) -> str:
+        return str(self.id)
+
+    def audit_ref(self) -> str:
+        return f"key:{self.id}"
+
+    def via(self) -> dict:
+        return {
+            "kind": "api_key",
+            "key_id": str(self.id),
+            "key_name": self.name,
+            "key_prefix": self.prefix,
+        }
+
     def revoke(self) -> None:
         if self.revoked_at is None:
             self.revoked_at = timezone.now()

@@ -50,16 +50,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.object_body import ObjectBodyMixin
+from origin.views.public.credentials import credential_of, reaches_team, team_for
 from origin.views.public.permissions import HasApiKey, HasRequiredScope, PublicApiThrottle
 from origin.views.utils.scope_guards import (
     can_access_task,
     is_project_member,
-    is_team_member,
     member_project_ids,
 )
 
@@ -115,57 +114,39 @@ class PublicApiView(ObjectBodyMixin, APIView):
     def resolve_team(self, request):
         """The team this request operates in, or `None`.
 
-        A team key answers this by itself. A personal token has to say,
-        and has to belong.
+        The rule is `credentials.team_for`, shared with MCP (MIP-1078): a team key answers
+        by itself, any other credential has to name a team it may use, and has to belong.
         """
-        key = request.auth
-        if key.team_id:
-            # The key names its team, but its owner still has to be IN
-            # it. A key outlives the membership that justified it, and
-            # this returned the team unconditionally, so someone who left
-            # kept reading and writing that team's tasks over REST for as
-            # long as the key lived. MCP re-checked in `_context`; REST
-            # never did. Same strict rule as the personal-token branch
-            # below — a team key is minted by a manager, so a guest or a
-            # cross-team participant holding one is a membership that
-            # ended, not a reason to let them in.
-            if not is_team_member(key.team_id, request.user.id):
-                return None
-            return TeamMaster.objects.filter(team_id=key.team_id, is_deleted=False).first()
-        team_id = request.query_params.get("team_id") or (
-            request.data.get("team_id") if hasattr(request.data, "get") else None
-        )
-        if not team_id:
+        credential = credential_of(request)
+        if credential is None:
             return None
-        # Parsed before it reaches a query. `team_id` is a UUIDField, so
-        # a malformed value raises `ValidationError` (not `ValueError`)
-        # out of `to_python` deep inside the ORM — a 500 that anyone
-        # could trigger with `?team_id=abc`. Treated as "no such team",
-        # which is what a caller who sent nonsense should hear.
-        try:
-            team_id = str(uuid.UUID(str(team_id)))
-        except (ValueError, AttributeError, TypeError):
-            return None
-        if not is_team_member(team_id, request.user.id):
-            return None
-        return TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
+        named = None
+        if not credential.pinned_team_id:
+            raw = request.query_params.get("team_id") or (
+                request.data.get("team_id") if hasattr(request.data, "get") else None
+            )
+            if raw:
+                # Parsed before it reaches a query. `team_id` is a UUIDField, so
+                # a malformed value raises `ValidationError` (not `ValueError`)
+                # out of `to_python` deep inside the ORM — a 500 that anyone
+                # could trigger with `?team_id=abc`. Treated as "no such team",
+                # which is what a caller who sent nonsense should hear, and NOT
+                # as "none named": a credential with a default team must not
+                # quietly fall back to it on a typo.
+                try:
+                    named = str(uuid.UUID(str(raw)))
+                except (ValueError, AttributeError, TypeError):
+                    return None
+        return team_for(credential, request.user.id, named)
 
     def key_reaches_team(self, request, team_id) -> bool:
-        """May this key touch an object that lives in `team_id`?
+        """May this credential touch an object that lives in `team_id`?
 
         For the routes that name an object rather than a team, so never
-        pass through `resolve_team`. A personal token: yes — it spans its
-        owner's teams, and the caller's own ACL check is what narrows it.
-        A team key: only its own team, and only while `resolve_team`
-        still admits it — otherwise `GET /tasks/<id>/` read, and PATCH
-        rewrote, the owner's tasks in every OTHER team too.
+        pass through `resolve_team`; see `credentials.reaches_team`.
         """
-        key = request.auth
-        if not key.team_id:
-            return True
-        if team_id is None or str(team_id) != str(key.team_id):
-            return False
-        return self.resolve_team(request) is not None
+        credential = credential_of(request)
+        return credential is not None and reaches_team(credential, request.user.id, team_id)
 
 
 def _team_required():
