@@ -27,6 +27,10 @@ class extractMentionedUsers:
                     self.mentioned_group_ids.add(str(gid))
 
     def extract(self, message):
+        # A body is a list of blocks. Anything else holds no mention; a number or `true`
+        # was a TypeError (500) in every view that walks a body.
+        if not isinstance(message, list):
+            return
         for m in message:
             if isinstance(m, dict):
                 if "content" in m and isinstance(m["content"], list):

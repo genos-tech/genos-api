@@ -48,6 +48,8 @@ from origin.views.utils.inbox_approval import (
     not_found,
 )
 from origin.views.utils.request_validators import (
+    as_int,
+    as_uuid,
     body_object,
     is_own_user_id,
     require_fields,
@@ -672,10 +674,14 @@ class JoinProjectView(AuthenticatedAPIView):
             )
 
         # The project must really live in the named team; otherwise the
-        # team_id below is just a claim the caller made up.
-        project = ProjectMaster.objects.filter(
-            project_id=project_id, team=team_id, is_deleted=False
-        ).first()
+        # team_id below is just a claim the caller made up. A project id is a number and a
+        # team id a UUID: anything else names nothing, so it gets the 404 a missing project
+        # gets, not a 500 at the lookup.
+        project = None
+        if as_int(project_id) is not None and as_uuid(team_id) is not None:
+            project = ProjectMaster.objects.filter(
+                project_id=project_id, team=team_id, is_deleted=False
+            ).first()
         # Self-service join of a public project (see the class docstring).
         # Team membership is required HERE rather than left to the 403
         # below so that an outsider still gets the indistinguishable 404
@@ -708,8 +714,14 @@ class JoinProjectView(AuthenticatedAPIView):
 
         # System users are attached by the project-creation flow and
         # never hold a team membership row of their own at this point.
-        is_system = CustomUser.objects.filter(id=attendee_id, is_system_user=True).exists()
-        if not is_system and not is_team_member(team_id, attendee_id):
+        # A malformed attendee id names nobody: it gets the answer a stranger gets, not a
+        # 500 at the lookup.
+        attendee_is_id = as_uuid(attendee_id) is not None
+        is_system = (
+            attendee_is_id
+            and CustomUser.objects.filter(id=attendee_id, is_system_user=True).exists()
+        )
+        if not is_system and not (attendee_is_id and is_team_member(team_id, attendee_id)):
             return Response(
                 {"error": "Only members of this team can be added to the project."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -992,6 +1004,13 @@ class ProjectTagsView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Three non-null text columns: `null` was an IntegrityError (500) at the save.
+        for field in ("tag_name", "tag_color", "tag_text_color"):
+            if field in body and not isinstance(body[field], str):
+                return Response(
+                    {"error": f"{field} must be text."}, status=status.HTTP_400_BAD_REQUEST
+                )
+
         if "tag_name" in body:
             tag.tag_name = body["tag_name"]
         if "tag_color" in body:
@@ -1104,7 +1123,31 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
 
     @staticmethod
     def _is_member(project_id, user):
-        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        # A project id is a number; anything else is no project of theirs.
+        return (
+            as_int(project_id) is not None
+            and ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        )
+
+    @staticmethod
+    def _find(template_id, project_id):
+        """The template, or None. An id that is not a number names no template."""
+        key = as_int(template_id)
+        if key is None:
+            return None
+        return ProjectTaskTemplate.objects.filter(id=key, project=project_id).first()
+
+    @staticmethod
+    def _name_text(raw):
+        """The trimmed name; `""` when there is none; None when it is not text.
+
+        What `(raw or "").strip()` did for every value that did not crash: a missing,
+        null, empty or falsy one is no name. A number, a list or an object was an
+        AttributeError (500).
+        """
+        if not raw:
+            return ""
+        return raw.strip() if isinstance(raw, str) else None
 
     @staticmethod
     def _serialize(template):
@@ -1118,7 +1161,11 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
 
     def post(self, request):
         project_id = request.data.get("project_id")
-        template_name = (request.data.get("template_name") or "").strip()
+        template_name = self._name_text(request.data.get("template_name"))
+        if template_name is None:
+            return Response(
+                {"error": "template_name must be text."}, status=status.HTTP_400_BAD_REQUEST
+            )
         body = request.data.get("body")
 
         if not project_id or not template_name or body is None:
@@ -1185,7 +1232,7 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        template = ProjectTaskTemplate.objects.filter(id=template_id, project=project_id).first()
+        template = self._find(template_id, project_id)
         if not template:
             return Response(
                 {"error": "Template not found."},
@@ -1193,7 +1240,12 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
             )
 
         if "template_name" in request.data:
-            name = (request.data.get("template_name") or "").strip()
+            name = self._name_text(request.data.get("template_name"))
+            if name is None:
+                return Response(
+                    {"error": "template_name must be text."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             if not name:
                 return Response(
                     {"error": "template_name cannot be empty."},
@@ -1234,7 +1286,7 @@ class ProjectTaskTemplateView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        template = ProjectTaskTemplate.objects.filter(id=template_id, project=project_id).first()
+        template = self._find(template_id, project_id)
         if not template:
             return Response(
                 {"error": "Template not found."},
@@ -1314,7 +1366,11 @@ class ProjectSavedTaskFilterView(AuthenticatedAPIView):
 
     @staticmethod
     def _is_member(project_id, user):
-        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        # A project id is a number; anything else is no project of theirs.
+        return (
+            as_int(project_id) is not None
+            and ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        )
 
     @staticmethod
     def _serialize(row):
@@ -1480,7 +1536,11 @@ class ProjectTemplateDefaultsView(AuthenticatedAPIView):
 
     @staticmethod
     def _is_member(project_id, user):
-        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        # A project id is a number; anything else is no project of theirs.
+        return (
+            as_int(project_id) is not None
+            and ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        )
 
     @staticmethod
     def _payload(project):
@@ -1560,7 +1620,11 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
 
     @staticmethod
     def _is_member(project_id, user):
-        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        # A project id is a number; anything else is no project of theirs.
+        return (
+            as_int(project_id) is not None
+            and ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        )
 
     @staticmethod
     def _payload(project):
@@ -1690,7 +1754,11 @@ class ProjectCustomFieldsView(AuthenticatedAPIView):
 
     @staticmethod
     def _is_member(project_id, user):
-        return ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        # A project id is a number; anything else is no project of theirs.
+        return (
+            as_int(project_id) is not None
+            and ProjectMembers.objects.filter(project=project_id, attendee=user).exists()
+        )
 
     @staticmethod
     def _serialize(field):

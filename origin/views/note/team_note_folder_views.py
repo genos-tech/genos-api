@@ -60,7 +60,11 @@ from origin.views.utils.note_folder_role import (
     readable_team_folder_roles,
 )
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_OWNER, ROLE_VIEWER
-from origin.views.utils.request_validators import validate_request_data, validate_request_user
+from origin.views.utils.request_validators import (
+    as_uuid,
+    validate_request_data,
+    validate_request_user,
+)
 
 NOTE_TYPE = 1  # Team notes are personal notes; the folder holds the ACL.
 SCOPE = PersonalNoteFolder.SCOPE_TEAM
@@ -334,6 +338,10 @@ def _resolve_folder(folder_id, viewing_team_id, user_id):
 
     Returns `(folder, owning_team_id)`, or `(None, None)`.
     """
+    # The viewing team is a UUID. `""` or text reached the shared-folder lookup below and
+    # was a ValidationError (500); it reads as missing, like any folder the caller can't reach.
+    if as_uuid(viewing_team_id) is None:
+        return None, None
     try:
         folder = PersonalNoteFolder.objects.get(folder_id=folder_id, scope=SCOPE)
     except (PersonalNoteFolder.DoesNotExist, ValueError, TypeError):
