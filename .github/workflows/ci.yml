@@ -64,10 +64,137 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
-  backend-django:
-    name: backend-django (required-first)
+  # The test suite, split across three jobs (MIP-1095). It was one job that ran
+  # 9,700 tests in a row: ~13 minutes, with 11.8 of them in the test run, and
+  # every PR waited for all of it. Each shard installs the same locked deps and
+  # runs a third of the test modules (scripts/ci_test_shard.py: every module in
+  # exactly one shard, balanced by test count). Coverage is not collected here:
+  # it gates nothing and is combined only on pushes to main (below).
+  backend-django-shards:
+    name: backend-django shard ${{ matrix.shard }}/3
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every failing shard, not just the first to go red.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    # Dockerfile is python:3.11-slim and the code has no 3.12+ syntax, so 3.11
+    # is the correct prod-parity version here.
+    env:
+      PIPENV_PIPFILE: ${{ github.workspace }}/Pipfile
+      PIPENV_VENV_IN_PROJECT: "1"
+      # Only DATABASE_URL is truly required (else settings fall back to an
+      # unreachable hardcoded host). API keys default to "" and clients are
+      # mocked, so they are intentionally NOT set.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/origin
+      DJANGO_SETTINGS_MODULE: apis.settings_test
+      DJANGO_SECRET_KEY: ci-test-secret-key
+      JWT_SECRET_KEY: ci-test-secret-key
+    services:
+      postgres:
+        # Match the local/Railway Postgres major (local docker-compose uses
+        # postgres:15).
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: origin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: setup-python
+        with:
+          python-version: "3.11"
+      - run: pip install pipenv==2026.7.1
+      - name: Cache venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          # The exact Python version is in the key on purpose. A venv's
+          # `bin/python` is a symlink into /opt/hostedtoolcache/Python/<x.y.z>,
+          # and GitHub hands out runners from more than one image: 20261021
+          # has 3.11.17, 20261028 has 3.11.18. A venv cached from one and
+          # restored on the other has a dangling `bin/python`, and `pipenv sync`
+          # dies with FileNotFoundError before any test runs (MIP-1050).
+          key: ${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-pipenv-${{ hashFiles('Pipfile.lock') }}
+      - name: Install deps (locked prod deps + test tooling)
+        # django-anymail[resend] is in Pipfile.lock, so `pipenv sync`
+        # installs it. The unpinned install that used to follow is gone:
+        # it fetched whatever PyPI had that day, on every run.
+        run: |
+          pipenv sync
+          pipenv run pip install -r requirements-dev.txt
+      # Once per run, not per shard: both are fast, and a failure in one
+      # would be the same in all three.
+      - name: Django system check
+        if: matrix.shard == 1
+        run: pipenv run python manage.py check --settings=apis.settings_test
+      - name: Migration drift check
+        if: matrix.shard == 1
+        run: pipenv run python manage.py makemigrations --check --dry-run --settings=apis.settings_test
+      - name: Tests (shard ${{ matrix.shard }}/3)
+        run: |
+          pipenv run python scripts/ci_test_shard.py --report 3
+          pipenv run python manage.py test $(pipenv run python scripts/ci_test_shard.py ${{ matrix.shard }} 3) --settings=apis.settings_test
+
+  # Single stable check context for the shards above.
+  #
+  # This job exists for its NAME: `backend-django (required-first)` is listed as
+  # a required-check context in the (currently disabled) branch ruleset, and a
+  # matrix reports three differently named contexts instead, which would leave
+  # the required one "Expected" forever. Same shape as `frontend-test` in the
+  # frontend repo.
+  backend-django:
+    name: backend-django (required-first)
+    needs: [changes, backend-django-shards]
+    # `always()` so this still reports on a docs-only PR, where the shards are
+    # skipped by the `changes` filter.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on the shards
+        env:
+          # A matrix result is `success` only when every shard passed.
+          SHARDS: ${{ needs.backend-django-shards.result }}
+          # Both needed: a skipped shard set is only benign when `changes` MEANT
+          # to skip it. A job whose dependency died also reports `skipped`, so
+          # reading the result alone would turn a broken `changes` job into a
+          # green required check. Assert why it was skipped, not just that it was.
+          DETECT: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          echo "detect=$DETECT code=$CODE shards=$SHARDS"
+          if [ "$DETECT" != "success" ]; then
+            echo "::error::change detection did not succeed, refusing to report green"
+            exit 1
+          fi
+          # Fail closed: every path not named here is a failure.
+          if [ "$CODE" = "false" ]; then
+            [ "$SHARDS" = "skipped" ] && exit 0
+            echo "::error::docs-only PR but shards did not skip"
+            exit 1
+          fi
+          [ "$SHARDS" = "success" ] && exit 0
+          echo "::error::test shards reported '$SHARDS'"
+          exit 1
+
+  # Coverage: the whole suite in one job, as before, but only on pushes to main
+  # (MIP-1095). It gates nothing and is not a required check; running it on every
+  # PR made each PR wait for a report. A skipped job reports success. The shards
+  # above are the tests that gate a merge.
+  backend-django-coverage:
+    name: backend-django-coverage (report-only)
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     # Dockerfile is python:3.11-slim and the code has no 3.12+ syntax, so 3.11
     # is the correct prod-parity version here.
@@ -122,14 +249,8 @@ jobs:
         run: |
           pipenv sync
           pipenv run pip install -r requirements-dev.txt
-      - name: Django system check
-        run: pipenv run python manage.py check --settings=apis.settings_test
-      - name: Migration drift check
-        run: pipenv run python manage.py makemigrations --check --dry-run --settings=apis.settings_test
       - name: Tests + coverage
-        # No --parallel: keeps coverage capture simple/correct. The migrations
-        # dominate cold-start; revisit --parallel + multiprocessing coverage if
-        # wall time becomes a problem.
+        # No --parallel: keeps coverage capture simple/correct.
         run: |
           pipenv run coverage run manage.py test origin.tests --settings=apis.settings_test
           pipenv run coverage xml
