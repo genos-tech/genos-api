@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 from urllib.parse import urlencode
 
 from django.http import HttpResponseRedirect, JsonResponse
@@ -99,6 +100,9 @@ def throttled(throttle_class):
         return inner
 
     return decorate
+
+
+log = logging.getLogger(__name__)
 
 
 class Library(OAuthLibMixin):
@@ -182,6 +186,14 @@ class RegisterView(View):
     http_method_names = ["post", "options"]
 
     def post(self, request):
+        if mcp_oauth.registrations_capped():
+            log.warning("mcp_oauth: the day's client registration quota is used up")
+            return _json_error(
+                "temporarily_unavailable",
+                "Too many clients registered today. Try again later.",
+                503,
+                Retry_After="3600",
+            )
         body = request.body
         if len(body) > mcp_oauth.MAX_BODY_BYTES:
             return _json_error(
