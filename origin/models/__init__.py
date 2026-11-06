@@ -33,3 +33,4 @@ from .task.sprint_models import *
 from .task.task_activity_models import *
 from .task.task_delivery_models import *
 from .task.task_models import *
+from .task.task_recent_models import *
