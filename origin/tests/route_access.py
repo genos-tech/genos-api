@@ -179,6 +179,14 @@ REGISTRY = {
     "origin.views.common.api_key_views.ApiKeyListCreateView": checked("is_team_member"),
     "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_owned_team"),
     "origin.views.common.api_key_views.TeamApiKeyListView": checked("_owned_team"),
+    # views.common.mcp_connection_views (MIP-1079)
+    "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
+        "the caller's own connected apps (user=request.user on every query)"
+    ),
+    "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
+        "the caller's own connected app: looked up by id AND user=request.user, "
+        "anything else is a 404"
+    ),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(
         "exchanges the HttpOnly refresh cookie for a new access token; the cookie is the credential"
