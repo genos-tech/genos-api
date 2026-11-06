@@ -35,7 +35,7 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_oauth
+from origin.services import mcp_connections, mcp_oauth
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -84,6 +84,10 @@ class _ConsentBase(AuthenticatedAPIView):
             scopes, credentials = Library().validate_authorization_request(fake)
         except OAuthToolkitError as error:
             return self._library_error(error), None
+        application = get_application_model().objects.get(client_id=credentials["client_id"])
+        why = mcp_oauth.client_problem(application)
+        if why:
+            return _problem("invalid_client", why, redirect_to=None), None
         problem = mcp_oauth.authorize_problem(
             fake.GET.get("code_challenge_method"),
             fake.GET.get("code_challenge", ""),
@@ -170,6 +174,12 @@ class McpConsentDecisionView(_ConsentBase):
         application = get_application_model().objects.get(client_id=credentials["client_id"])
         scopes = decision["scopes"]
         with transaction.atomic():
+            # Consenting again after a disconnect starts clean: whatever tokens the old
+            # connection left are not woken up by the new one.
+            if McpConnection.objects.filter(
+                user=request.user, application=application, revoked_at__isnull=False
+            ).exists():
+                mcp_connections.end_tokens(request.user, application)
             connection, created = McpConnection.objects.update_or_create(
                 user=request.user,
                 application=application,

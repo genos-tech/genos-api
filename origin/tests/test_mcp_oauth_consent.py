@@ -203,6 +203,19 @@ class TestTheRequestIsValidatedAgain(ConsentBase):
             self.params(resource=[RESOURCE, "https://other.example/mcp"]), "invalid_target", True
         )
 
+    def test_a_client_that_is_not_acceptable_is_refused_and_nothing_goes_to_its_address(self):
+        """A client published by a stranger (a metadata document) was never held to the
+        registration policy; the client itself is, whichever way it came."""
+        Application.objects.filter(pk=self.app.pk).update(redirect_uris="http://evil.example/cb")
+        params = self.params(redirect_uri="http://evil.example/cb")
+        for call in (self.context, self.decide):
+            res = call(params)
+            self.assertEqual(res.status_code, 400, call.__name__)
+            self.assertEqual(res.json()["error"], "invalid_client")
+            self.assertIsNone(res.json()["redirect_to"])
+        self.assertEqual(McpConnection.objects.count(), 0)
+        self.assertEqual(Grant.objects.count(), 0)
+
     def test_an_unknown_scope_is_refused(self):
         self.refused(self.params(scope="mcp:read admin"), "invalid_scope", True)
 

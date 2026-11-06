@@ -2094,7 +2094,14 @@ API_PUBLIC_BASE_URL = os.environ.get("API_PUBLIC_BASE_URL", "")
 # 401 carries no `resource_metadata`, so deploying the code changes nothing until it is turned on.
 # Needs API_PUBLIC_BASE_URL (the issuer and every endpoint URL are anchored to it, never to the
 # request's Host header; see apis/mcp_oauth_settings.py).
-MCP_OAUTH_ENABLED = os.environ.get("MCP_OAUTH_ENABLED", "false").strip().lower() == "true"
+# An ON switch for a security surface, so it fails closed: only an explicit yes turns it on,
+# a typo leaves it off (the incident OFF switches above do the opposite, for the same reason).
+MCP_OAUTH_ENABLED = os.environ.get("MCP_OAUTH_ENABLED", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 OAUTH2_PROVIDER = mcp_oauth_settings.provider_settings(API_PUBLIC_BASE_URL)
 # django-oauth-toolkit's models are swappable, and Django resolves a foreign key to one through
 # these names even when the defaults are used: undefined, `makemigrations` fails. Stated

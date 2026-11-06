@@ -245,6 +245,24 @@ def check_decision(body: dict[str, Any], requested: list[str]) -> tuple[dict | N
     return {"scopes": granted, "team_ids": ordered, "default_team_id": default_team_id}, None
 
 
+def client_problem(application: Any) -> str | None:
+    """Why this registered client may not be used, or None.
+
+    A client registered by DCR was held to this when it registered; one that is a metadata
+    document is published by a stranger and was not, so the same limits are applied to the
+    client itself, whichever way it came: a public client, the authorization-code grant only,
+    and no redirect address that `redirect_uri_problem` refuses (https, or loopback http)."""
+    if application.client_type != "public":
+        return "Only public clients are supported."
+    if application.authorization_grant_type != "authorization-code":
+        return "Only the authorization-code grant is supported."
+    for uri in (application.redirect_uris or "").split():
+        problem = redirect_uri_problem(uri)
+        if problem:
+            return f"The client's registration is not acceptable: {problem}."
+    return None
+
+
 def client_summary(application: Any) -> dict[str, str]:
     """Who a client is, as far as Genos can tell the member.
 
@@ -252,8 +270,11 @@ def client_summary(application: Any) -> dict[str, str]:
     `metadata_document`: its client_id is an address, and `host` is that address's host, which
     does prove who published it."""
     document = is_cimd_client_id(application.client_id)
+    # The name is the client's own words (a registration, or a document anyone can publish):
+    # one line, short, no control characters, before any page shows it.
+    name = _CONTROL.sub(" ", application.name or "")
     return {
-        "name": application.name or "",
+        "name": " ".join(name.split())[:MAX_CLIENT_NAME_CHARS],
         "kind": "metadata_document" if document else "registered",
         "host": (urlsplit(application.client_id).hostname or "") if document else "",
     }

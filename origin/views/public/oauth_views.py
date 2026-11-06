@@ -29,7 +29,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from oauth2_provider.exceptions import OAuthToolkitError
 from oauth2_provider.http import OAuth2ResponseRedirect
-from oauth2_provider.models import get_access_token_model
+from oauth2_provider.models import get_access_token_model, get_application_model
 from oauth2_provider.settings import oauth2_settings
 from oauth2_provider.views import (
     OAuthProtectedResourceMetadataView,
@@ -144,6 +144,12 @@ class AuthorizeView(OAuthLibMixin, View):
             _scopes, credentials = self.validate_authorization_request(request)
         except OAuthToolkitError as error:
             return self._error(error)
+
+        application = get_application_model().objects.get(client_id=credentials["client_id"])
+        why = mcp_oauth.client_problem(application)
+        if why:
+            # Its redirect addresses are not trusted, so nothing is sent there.
+            return _json_error("invalid_client", why)
 
         problem = mcp_oauth.authorize_problem(
             request.GET.get("code_challenge_method"),

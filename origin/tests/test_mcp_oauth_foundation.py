@@ -41,6 +41,21 @@ CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"  # RFC 7636's example S256 challenge
 
 
+class FakeDocumentFetcher:
+    """Stands in for the library's fetcher: what a client_id URL "serves". The library's
+    own fetcher (SSRF-hardened, tested by the library) is not what is under test here; what
+    Genos does with a document that came back is."""
+
+    documents: dict = {}
+
+    def fetch(self, client_id):
+        from oauth2_provider.cimd import CIMDError
+
+        if client_id not in self.documents:
+            raise CIMDError("no such document")
+        return dict(self.documents[client_id]), 300
+
+
 def oauth_on(**extra):
     return override_settings(
         MCP_OAUTH_ENABLED=True,
@@ -776,3 +791,170 @@ class TestWithTheAccount(FoundationBase):
         self.assertFalse(RefreshToken.objects.filter(user=self.user2).exists())
         self.assertTrue(McpConnection.objects.filter(user=self.user).exists(), "only theirs")
         self.assertTrue(AccessToken.objects.filter(user=self.user).exists())
+
+
+DOC_ID = "https://client.example.org/meta.json"
+
+
+@oauth_on()
+class TestClientMetadataDocuments(FoundationBase):
+    """A client that is a document at an address (CIMD). The document is an untrusted stranger's
+    text exactly as a registration is, so the same limits hold: nothing registered by a document
+    may be wider than what registration allows."""
+
+    def setUp(self):
+        super().setUp()
+        FakeDocumentFetcher.documents = {}
+        patcher = override_settings(
+            OAUTH2_PROVIDER={
+                **conf.provider_settings(BASE),
+                "CIMD_METADATA_FETCHER": "origin.tests.test_mcp_oauth_foundation.FakeDocumentFetcher",
+            }
+        )
+        patcher.enable()
+        self.addCleanup(patcher.disable)
+
+    def document(self, **kw):
+        doc = {
+            "client_id": DOC_ID,
+            "client_name": "Doc Client",
+            "redirect_uris": [CALLBACK],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "token_endpoint_auth_method": "none",
+        }
+        doc.update(kw)
+        FakeDocumentFetcher.documents = {DOC_ID: doc}
+        return doc
+
+    def authorize_doc(self, **kw):
+        return self.authorize(client_id=DOC_ID, **kw)
+
+    def test_a_good_document_reaches_the_consent_page(self):
+        self.document()
+        res = self.authorize_doc()
+        self.assertEqual(res.status_code, 302, res.content)
+        self.assertTrue(res["Location"].startswith(f"{APP}/oauth/consent?"))
+        app = Application.objects.get(client_id=DOC_ID)
+        self.assertEqual(app.client_type, Application.CLIENT_PUBLIC)
+
+    def test_a_loopback_callback_is_allowed_over_http(self):
+        self.document(redirect_uris=["http://127.0.0.1:3000/cb"])
+        res = self.authorize_doc(redirect_uri="http://127.0.0.1:3000/cb")
+        self.assertEqual(res.status_code, 302, res.content)
+
+    def test_an_unsafe_callback_in_a_document_is_never_redirected_to(self):
+        for uri in (
+            "http://evil.example/cb",
+            "myapp://callback",
+            "javascript:alert(1)",
+            "https://*.example/cb",
+            "https://x.example/cb#frag",
+            "https://user:pw@x.example/cb",
+        ):
+            self.document(redirect_uris=[uri])
+            Application.objects.filter(client_id=DOC_ID).delete()
+            cache.clear()
+            res = self.authorize_doc(redirect_uri=uri)
+            self.assertEqual(res.status_code, 400, uri)
+            self.assertNotIn("Location", res, uri)
+
+    def test_a_document_cannot_be_a_confidential_or_implicit_client(self):
+        for change in (
+            {"token_endpoint_auth_method": "client_secret_basic"},
+            {"client_secret": "x"},
+            {"grant_types": ["implicit"]},
+            {"grant_types": ["authorization_code", "password"]},
+            {"redirect_uris": []},
+        ):
+            self.document(**change)
+            Application.objects.filter(client_id=DOC_ID).delete()
+            cache.clear()
+            res = self.authorize_doc()
+            # Refused outright, or (the library's own refusal of an implicit client) an error
+            # sent to the client's callback: never on to the consent page.
+            self.assertNotEqual(res.status_code, 200, change)
+            self.assertNotIn(f"{APP}/oauth/consent", res.get("Location", ""), change)
+
+    def test_a_document_that_names_another_client_is_refused(self):
+        self.document(client_id="https://other.example.org/meta.json")
+        res = self.authorize_doc()
+        self.assertEqual(res.status_code, 400)
+
+    def test_a_missing_document_is_refused(self):
+        res = self.authorize_doc()
+        self.assertEqual(res.status_code, 400)
+
+    def test_a_name_with_control_characters_is_shown_flat_and_short(self):
+        summary = mcp_oauth.client_summary(
+            Application(client_id=DOC_ID, name="Evil\n\t\x00App " + "x" * 300)
+        )
+        self.assertNotRegex(summary["name"], r"[\x00-\x1f\x7f]")
+        self.assertLessEqual(len(summary["name"]), mcp_oauth.MAX_CLIENT_NAME_CHARS)
+        self.assertEqual(summary["kind"], "metadata_document")
+        self.assertEqual(summary["host"], "client.example.org")
+
+
+class TestTheSwitchFailsClosed(TestCase):
+    def test_only_an_explicit_yes_turns_it_on(self):
+        import importlib
+        import os
+
+        from apis import settings as project_settings
+
+        original = os.environ.get("MCP_OAUTH_ENABLED")
+        results = {}
+        try:
+            for value in (
+                "true",
+                "TRUE",
+                " yes ",
+                "1",
+                "on",
+                "",
+                "false",
+                "0",
+                "no",
+                "off",
+                "ture",
+                "enabled",
+                "y",
+            ):
+                os.environ["MCP_OAUTH_ENABLED"] = value
+                results[value] = importlib.reload(project_settings).MCP_OAUTH_ENABLED
+        finally:
+            if original is None:
+                os.environ.pop("MCP_OAUTH_ENABLED", None)
+            else:
+                os.environ["MCP_OAUTH_ENABLED"] = original
+            importlib.reload(project_settings)
+        on = {v for v, r in results.items() if r}
+        self.assertEqual(on, {"true", "TRUE", " yes ", "1", "on"})
+
+
+class TestClientPolicyOnItsOwn(TestCase):
+    def app(self, **kw):
+        defaults = {
+            "client_id": "c",
+            "client_type": Application.CLIENT_PUBLIC,
+            "authorization_grant_type": Application.GRANT_AUTHORIZATION_CODE,
+            "redirect_uris": CALLBACK,
+        }
+        defaults.update(kw)
+        return Application(**defaults)
+
+    def test_an_acceptable_client(self):
+        self.assertIsNone(mcp_oauth.client_problem(self.app()))
+        self.assertIsNone(
+            mcp_oauth.client_problem(self.app(redirect_uris=f"{CALLBACK} http://127.0.0.1:5/cb"))
+        )
+
+    def test_each_way_a_client_is_not(self):
+        for change in (
+            {"client_type": Application.CLIENT_CONFIDENTIAL},
+            {"authorization_grant_type": Application.GRANT_IMPLICIT},
+            {"authorization_grant_type": Application.GRANT_PASSWORD},
+            {"redirect_uris": "http://evil.example/cb"},
+            {"redirect_uris": f"{CALLBACK} myapp://cb"},
+            {"redirect_uris": f"{CALLBACK} https://*.example/cb"},
+        ):
+            self.assertIsNotNone(mcp_oauth.client_problem(self.app(**change)), change)

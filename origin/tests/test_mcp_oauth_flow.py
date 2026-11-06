@@ -391,13 +391,15 @@ class TestTheConnectionIsAskedEveryTime(FlowBase):
         if res.status_code == 200:
             self.assertEqual(self.mcp(res.json()["access_token"]).status_code, 401)
 
-    def test_consenting_again_brings_it_back_with_the_same_tokens(self):
-        token = self.tokens()["access_token"]
+    def test_consenting_again_starts_clean_the_old_tokens_stay_dead(self):
+        old = self.tokens()
         self.connection().revoke()
-        self.assertEqual(self.mcp(token).status_code, 401)
+        self.assertEqual(self.mcp(old["access_token"]).status_code, 401)
         self.verifier, self.challenge = pkce()
-        self.consent()
-        self.assertEqual(self.mcp(token).status_code, 200)
+        new = self.tokens()
+        self.assertEqual(self.mcp(old["access_token"]).status_code, 401)
+        self.assertEqual(self.refresh(old["refresh_token"]).status_code, 400)
+        self.assertEqual(self.mcp(new["access_token"]).status_code, 200)
 
     def test_a_deactivated_person_is_refused(self):
         token = self.tokens()["access_token"]
