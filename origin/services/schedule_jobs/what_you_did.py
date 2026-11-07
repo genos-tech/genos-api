@@ -33,16 +33,38 @@ def _events_text(events: list[dict[str, Any]], total: int) -> str:
     return f"{text}; and {total - len(events)} earlier" if total > len(events) else text
 
 
+def _looked_item(entry: dict[str, Any], links: Links):
+    """One line: what the member's AI app opened or changed, and which app, with a link."""
+    kind = entry["type"]
+    title = plain(entry["title"]) or f"Untitled {kind}"
+    if kind == "task":
+        name, link = f"{entry['display_id']} · {title}", links.task(entry["task_id"])
+    elif kind == "note":
+        name, link = title, links.note(entry["note_type"], entry["note_id"])
+    elif kind == "milestone":
+        name, link = title, links.milestone(entry["project_id"], entry["milestone_id"])
+    else:
+        name, link = title, links.project(entry["project_id"])
+    app = plain(entry["app"])
+    app_text = "your AI app" if app == "api_key" else app
+    verb = "changed" if entry["kind"] == "changed" else "opened"
+    return item(f"{name}: {verb} by {app_text} at {entry['at']}", link)
+
+
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     day = params.get("day", "today")
     zone = zone_for_user_id(ctx.user_id)
-    did = briefing.did_on_day(ctx, day, timezone.now(), zone, MAX_ITEMS, MAX_EVENTS)
+    did = briefing.did_on_day(
+        ctx, day, timezone.now(), zone, MAX_ITEMS, MAX_EVENTS, briefing.DID_LOOKED
+    )
+    looked = did.get("looked_at", [])
 
     links = Links(ctx)
+    shown = did["items"] + looked
     links.preload(
-        tasks=[i["task_id"] for i in did["items"] if i["type"] == "task"],
+        tasks=[i["task_id"] for i in shown if i["type"] == "task"],
         task_notes=[
-            i["note_id"] for i in did["items"] if i["type"] == "note" and i["note_type"] == "task"
+            i["note_id"] for i in shown if i["type"] == "note" and i["note_type"] == "task"
         ],
     )
     sections: list[ReportSection] = []
@@ -103,12 +125,21 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             }
         )
 
+    if looked:
+        sections.append(
+            {
+                "heading": "Looked at with your AI app",
+                "items": [_looked_item(i, links) for i in looked],
+            }
+        )
+
     totals = did["totals"]
     facts = [
         (totals["items"], "item", "items"),
         (totals["comments"], "comment", "comments"),
         (totals["todos_done"], "to-do finished", "to-dos finished"),
         (totals["messages"], "message sent", "messages sent"),
+        (len(looked), "item looked at with your AI app", "items looked at with your AI app"),
     ]
     said = [f"{n} {one if n == 1 else many}" for n, one, many in facts if n]
     summary = f"{', '.join(said)}." if said else f"Nothing saved in Genos for {day} yet."

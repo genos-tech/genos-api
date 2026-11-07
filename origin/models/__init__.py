@@ -10,6 +10,7 @@ from .common.feature_models import *
 from .common.inbox_models import *
 from .common.invite_models import *
 from .common.mcp_connection_models import *
+from .common.member_event_models import *
 from .common.notification_models import *
 from .common.ops_models import *
 from .common.schedule_models import *

@@ -2247,6 +2247,7 @@ def call(
     on_unknown_tool: Callable[[str], Exception],
     credential_kind: str = "api_key",
     audit: Callable[[str, str, dict[str, Any], dict[str, Any]], None] | None = None,
+    record_use: Callable[["McpTool", dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a published tool and shape its output as a `CallToolResult`.
 
@@ -2322,6 +2323,14 @@ def call(
         # Here, before the result is shaped, so that a bug while shaping it cannot leave a
         # delete that happened with no trace.
         _audit_destructive(audit, tool, DESTRUCTIVE_DONE, sent)
+    if record_use is not None:
+        # The call succeeded: hand the tool and its RESOLVED arguments (never the result) to
+        # the recorder, which notes which item an AI app touched (MIP-1143). It swallows its
+        # own failures; the guard here is for a recorder that does not.
+        try:
+            record_use(tool, args)
+        except Exception:  # noqa: BLE001 - recording never fails a call
+            log.warning("MCP use marker failed for %s", tool.name, exc_info=True)
 
     fenced: list[bool] = []
     payload = _strip_workspace_content(dict(payload or {}), fenced)

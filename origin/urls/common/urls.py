@@ -397,6 +397,11 @@ urlpatterns = [
         name="share_answers_preference",
     ),
     path(
+        "api/v2/user/preferences/member-events/",
+        MemberEventsPreferenceView.as_view(),
+        name="member_events_preference",
+    ),
+    path(
         "api/v2/user/calendar-sync/backfill/",
         CalendarSyncBackfillView.as_view(),
         name="calendar_sync_backfill",

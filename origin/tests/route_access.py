@@ -430,6 +430,7 @@ REGISTRY = {
     "origin.views.common.user_views.DigestPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.LanguagePreferenceView": self_only(_PREF),
     "origin.views.common.user_views.LlmModelPreferenceView": self_only(_PREF),
+    "origin.views.common.user_views.MemberEventsPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.ShareAnswersPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.SpotlightWebSearchPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.TimezonePreferenceView": self_only(_PREF),

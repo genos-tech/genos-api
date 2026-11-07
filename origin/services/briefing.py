@@ -61,6 +61,7 @@ from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
+from origin.services import member_events
 from origin.services.channel_scope import readable_chats_qs
 from origin.services.user_time import zone_for_user_id
 
@@ -97,6 +98,11 @@ DID_ITEMS = {"today": 5, "yesterday": 3}
 DID_EVENTS = {"today": 3, "yesterday": 1}
 DID_CHATS = 3
 DID_TODOS = 6
+# What the member's AI app opened or changed that is saved nowhere else (MIP-1143): a few
+# lines, resolved from a bounded pool of the newest markers.
+DID_LOOKED = 5
+LOOKED_POOL = 40
+LOOKED_CHECKS = 15
 
 _ACTIVE_TASK_EXCLUDE = ["Closed", "Deleted"]
 _COMMENT_ACTIONS = (
@@ -1042,6 +1048,86 @@ def _did_event(at: datetime, zone, what: str, summary: str, **extra: Any) -> dic
     return event
 
 
+def _looked_at(
+    ctx: ToolContext,
+    since: datetime,
+    until: datetime,
+    zone,
+    changed: set[tuple[str, str]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """What the member's connected AI app opened or changed in `[since, until)` that is NOT
+    among the items already told as changed (MIP-1143): a few lines, newest first.
+
+    The markers (`MemberEvent`) hold references only. The title is read here, now, through the
+    rule the item's own tool applies (`LabelAccess`, `_may_read_note`): an item the member can
+    no longer open is left out, not named from memory. Only the member's own markers are read.
+    `changed` holds the `("task", "12")` / `("note", "personal:3")` keys of the day's changed
+    items. A chat thread is noted but not told here. An item both opened and changed is told
+    once, as changed."""
+    markers = member_events.recent(ctx.user_id, ctx.team_id, since, until, LOOKED_POOL)
+    if not markers or limit <= 0:
+        return []
+    grouped: dict[tuple[str, str], list[Any]] = {}
+    for m in markers:  # newest first, so the first of a group is its latest
+        grouped.setdefault((m.object_type, m.object_id), []).append(m)
+    access = LabelAccess(ctx)
+    readable_tasks = access.tasks(
+        int(oid) for (otype, oid) in grouped if otype == "task" and oid.isdigit()
+    )
+    out: list[dict[str, Any]] = []
+    for checked, ((otype, oid), rows) in enumerate(grouped.items()):
+        if len(out) >= limit or checked >= LOOKED_CHECKS:
+            break
+        if (otype, oid) in changed:
+            continue
+        entry: dict[str, Any] | None = None
+        if otype == "task" and oid.isdigit() and int(oid) in readable_tasks:
+            task = readable_tasks[int(oid)]
+            entry = {
+                "type": "task",
+                "task_id": task.task_id,
+                "display_id": task.display_id,
+                "title": wrap_workspace_content(task.title or ""),
+            }
+        elif otype == "note":
+            family, _, raw = oid.partition(":")
+            title = access.note_title(family, raw) if raw.isdigit() else None
+            if title is not None:
+                entry = {
+                    "type": "note",
+                    "note_type": family,
+                    "note_id": int(raw),
+                    "title": wrap_workspace_content(title or ""),
+                }
+        elif otype == "project" and oid.isdigit():
+            name = access.project_name(oid)
+            if name is not None:
+                entry = {
+                    "type": "project",
+                    "project_id": int(oid),
+                    "title": wrap_workspace_content(name),
+                }
+        elif otype == "milestone" and oid.isdigit():
+            milestone = access.milestone(oid)
+            if milestone is not None and ("task", str(milestone.task_id)) not in changed:
+                entry = {
+                    "type": "milestone",
+                    "milestone_id": milestone.milestone_id,
+                    "project_id": milestone.project_id,
+                    "title": wrap_workspace_content(milestone.title or ""),
+                }
+        if entry is None:
+            continue
+        newest = rows[0]
+        app = newest.client
+        entry["kind"] = "changed" if any(r.kind == "write" for r in rows) else "opened"
+        entry["app"] = app if app == "api_key" else wrap_workspace_content(app)
+        entry["at"] = newest.ts.astimezone(zone).strftime("%H:%M")
+        out.append(entry)
+    return out
+
+
 def _did_in(
     ctx: ToolContext,
     since: datetime,
@@ -1050,6 +1136,7 @@ def _did_in(
     names: _Names,
     max_items: int,
     max_events: int,
+    max_looked: int = 0,
 ) -> dict[str, Any]:
     """What the caller did in `[since, until)`, from what is already saved: their changes to
     tasks, comments, edits to notes, to-dos finished and messages sent, grouped by item, in
@@ -1215,7 +1302,7 @@ def _did_in(
         }
         for row in sent[:DID_CHATS]
     ]
-    return {
+    did = {
         "totals": {
             "items": len(items),
             "comments": len(comments),
@@ -1229,6 +1316,18 @@ def _did_in(
         ],
         "chats": chats,
     }
+    if max_looked > 0:
+        # What their AI app opened or changed that no saved history already tells (MIP-1143).
+        # Only asked for by the callers that show it; the key is absent otherwise.
+        told = {
+            (
+                i["type"],
+                str(i["task_id"]) if i["type"] == "task" else f"{i['note_type']}:{i['note_id']}",
+            )
+            for _n, _at, i in items
+        }
+        did["looked_at"] = _looked_at(ctx, since, until, zone, told, max_looked)
+    return did
 
 
 def what_you_did(ctx: ToolContext, now: datetime, zone, names: _Names) -> dict[str, Any]:
@@ -1247,6 +1346,7 @@ def what_you_did(ctx: ToolContext, now: datetime, zone, names: _Names) -> dict[s
                 names,
                 DID_ITEMS["today"],
                 DID_EVENTS["today"],
+                DID_LOOKED,
             ),
         },
         "yesterday": {
@@ -1271,6 +1371,7 @@ def did_between(
     max_items: int,
     max_events: int,
     zone,
+    max_looked: int = 0,
 ) -> dict[str, Any]:
     """What the member did in `[since, until)`, with the caps the caller chooses. A scheduled
     report has more room than the briefing, which is sized for a model's context (MIP-1148,
@@ -1278,7 +1379,7 @@ def did_between(
     names = _Names(ctx)
     did = {
         "local_date": since.astimezone(zone).date().isoformat(),
-        **_did_in(ctx, since, until, zone, names, max_items, max_events),
+        **_did_in(ctx, since, until, zone, names, max_items, max_events, max_looked),
     }
     names.fill()
     return did
@@ -1291,6 +1392,7 @@ def did_on_day(
     zone,
     max_items: int,
     max_events: int,
+    max_looked: int = 0,
 ) -> dict[str, Any]:
     """`what_you_did` for ONE day ("today" or "yesterday", the member's own zone)."""
     if day not in ("today", "yesterday"):
@@ -1301,7 +1403,7 @@ def did_on_day(
         if day == "today"
         else (start_yesterday, start_today)
     )
-    return did_between(ctx, start, end, max_items, max_events, zone)
+    return did_between(ctx, start, end, max_items, max_events, zone, max_looked)
 
 
 _PRIORITY_HINT = {"Critical": 6, "High": 4, "Normal": 2}

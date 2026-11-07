@@ -101,6 +101,16 @@ class Links:
         return None  # a chat's note has no stable link
 
     @staticmethod
+    def project(project_id: Any) -> str | None:
+        return f"/workspace/tasks/project/{int(project_id)}" if project_id else None
+
+    @staticmethod
+    def milestone(project_id: Any, milestone_id: Any) -> str | None:
+        if not project_id or not milestone_id:
+            return None
+        return f"/workspace/tasks/project/{int(project_id)}/milestone/{int(milestone_id)}"
+
+    @staticmethod
     def chat(chat_type: Any, chat_id: Any, thread_id: Any = None) -> str | None:
         if chat_type not in ("dm", "gm", "pm", "mdm") or not chat_id:
             return None

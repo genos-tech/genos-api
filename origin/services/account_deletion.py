@@ -176,6 +176,7 @@ def _delete_personal_data(user) -> None:
     # Assignments carry no user column by design — they cascade from the
     # tag, whose owner IS the user.
     PersonalChannelTag.objects.filter(user=user).delete()
+    user.member_events.all().delete()  # what their AI apps opened (MIP-1143)
 
     # Personal notes are private by definition, so they are erasable
     # content rather than team content. Folders cascade nothing (the
