@@ -28,9 +28,10 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 
+from origin.models.chat.todo_models import ToDoItem
 from origin.models.chat.unified_models import Activity, ActivityType, Message
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.team_models import TeamMaster
@@ -89,11 +90,16 @@ EVENTS_HOT = 6
 EVENTS_REST = 2
 MAX_LIST = 8
 MAX_TODOS = 15
-WORKLOG_ENTRIES = 5
-WORKLOG_TEXT_CHARS = 240
+WORKLOG_ENTRIES = 3
+WORKLOG_TEXT_CHARS = 120
 EVENT_POOL = 600
 SNIPPET_CHARS = 140
 SUGGESTIONS = 3
+# What the member did: items per day, events told per item, chats and to-dos listed.
+DID_ITEMS = {"today": 5, "yesterday": 3}
+DID_EVENTS = {"today": 3, "yesterday": 1}
+DID_CHATS = 3
+DID_TODOS = 6
 
 _ACTIVE_TASK_EXCLUDE = ["Closed", "Deleted"]
 _COMMENT_ACTIONS = (
@@ -1042,6 +1048,251 @@ def worklog_section(ctx: ToolContext) -> dict[str, Any]:
 # What to do next                                                              #
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# What the member did                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def _local_day_bounds(now: datetime, zone) -> tuple[datetime, datetime, datetime]:
+    """UTC instants of the start of yesterday and of today in the member's zone, and `now`."""
+    local_today = now.astimezone(zone).date()
+    start_today = datetime.combine(local_today, datetime.min.time(), tzinfo=zone)
+    start_yesterday = datetime.combine(
+        local_today - timedelta(days=1), datetime.min.time(), tzinfo=zone
+    )
+    return start_yesterday, start_today, now
+
+
+def _did_event(at: datetime, zone, what: str, summary: str, **extra: Any) -> dict[str, Any]:
+    """One thing done, with the time of day in the member's own zone ("14:05"): the day is
+    named once for the whole section, so the date is not repeated on every event."""
+    event = {"at": at.astimezone(zone).strftime("%H:%M"), "what": what, "summary": summary}
+    event.update({k: v for k, v in extra.items() if v})
+    return event
+
+
+def _did_in(
+    ctx: ToolContext,
+    since: datetime,
+    until: datetime,
+    zone,
+    names: _Names,
+    max_items: int,
+    max_events: int,
+) -> dict[str, Any]:
+    """What the caller did in `[since, until)`, from what is already saved: their changes to
+    tasks, comments, edits to notes, to-dos finished and messages sent, grouped by item, in
+    time order. Only what they can open now. Chats are counted, never read. The PR activity
+    and the merge that closes a task, on tasks assigned to them, are theirs too (automated,
+    flagged): that is where the caller's own PRs belong (MIP-1142).
+
+    Compact on purpose (the briefing's whole budget is about 32,000 characters): the busiest
+    items first, the latest few events of each, and `events_total` for the rest."""
+    me, team = ctx.user_id, ctx.team_id
+    window = {"ts_created_at__gte": since, "ts_created_at__lt": until}
+
+    acts = list(
+        TaskActivity.objects.filter(team_id=team, actor_id=me, **window)
+        .exclude(action_type__in=_COMMENT_ACTIONS)
+        .order_by("-ts_created_at")[:EVENT_POOL]
+    )
+    automation = list(
+        TaskActivity.objects.filter(
+            team_id=team, actor__isnull=True, task__assignee_id=me, **window
+        )
+        .filter(
+            Q(action_type__in=_PR_ACTIONS)
+            | Q(action_type=TaskActivityActionType.STATUS, metadata__closedByPrMerge=True)
+        )
+        .order_by("-ts_created_at")[:EVENT_POOL]
+    )
+    comments = list(
+        TaskComments.objects.filter(
+            sender_id=me,
+            is_deleted=False,
+            task__team_id=team,
+            ts_sent_at__gte=since,
+            ts_sent_at__lt=until,
+        ).order_by("-ts_sent_at")[:EVENT_POOL]
+    )
+    readable = LabelAccess(ctx).tasks(
+        {a.task_id for a in acts + automation} | {c.task_id for c in comments}
+    )
+    by_task: dict[int, list[tuple[datetime, dict[str, Any]]]] = {}
+    for row in acts + automation:
+        if row.task_id in readable:
+            event = _activity_event(row, me, names)
+            via = (row.metadata or {}).get("via")
+            via_kind = via.get("kind") if isinstance(via, dict) else None
+            by_task.setdefault(row.task_id, []).append(
+                (
+                    row.ts_created_at,
+                    _did_event(
+                        row.ts_created_at,
+                        zone,
+                        event["kind"] if event["kind"] != "other" else "change",
+                        event["summary"],
+                        automated=True if event.get("automated") else None,
+                        by=event.get("_label") if event.get("automated") else None,
+                        via=str(via_kind)[:30] if via_kind not in (None, "app") else None,
+                    ),
+                )
+            )
+    for c in comments:
+        if c.task_id in readable:
+            by_task.setdefault(c.task_id, []).append(
+                (c.ts_sent_at, _did_event(c.ts_sent_at, zone, "comment", "commented"))
+            )
+    items: list[tuple[int, datetime, dict[str, Any]]] = []
+    for task_id, events in by_task.items():
+        task = readable[task_id]
+        events.sort(key=lambda e: e[0])
+        items.append(
+            (
+                len(events),
+                events[-1][0],
+                {
+                    "type": "task",
+                    "task_id": task_id,
+                    "display_id": task.display_id,
+                    "title": wrap_workspace_content(task.title or ""),
+                    "status": task.status,
+                    "events_total": len(events),
+                    "events": [e for _at, e in events[-max_events:]],
+                },
+            )
+        )
+
+    versions = list(
+        NoteVersionMaster.objects.filter(
+            team_id=team, editor_id=me, ts_updated_at__gte=since, ts_updated_at__lt=until
+        ).order_by("-ts_updated_at")[:EVENT_POOL]
+    )
+    note_models = {1: PersonalNoteMaster, 2: TaskNoteMaster, 3: ChatNoteMaster}
+    notes = {
+        (kind, n.note_id): n
+        for kind, model in note_models.items()
+        for n in model.objects.filter(
+            note_id__in={v.note_id for v in versions if v.note_type == kind}, team_id=team
+        )
+    }
+    by_note: dict[tuple[int, int], list[Any]] = {}
+    for v in versions:
+        note = notes.get((v.note_type, v.note_id))
+        if note is not None and _may_read_note(ctx, v.note_type, note):
+            by_note.setdefault((v.note_type, v.note_id), []).append(v)
+    for (kind, note_id), rows in by_note.items():
+        rows.sort(key=lambda v: v.ts_updated_at)
+        events = [
+            _did_event(
+                v.ts_updated_at,
+                zone,
+                "note_edit",
+                "restored an earlier version" if v.restored_from_version_no else "edited the note",
+            )
+            for v in rows
+        ]
+        items.append(
+            (
+                len(events),
+                rows[-1].ts_updated_at,
+                {
+                    "type": "note",
+                    "note_type": _NOTE_KIND[kind],
+                    "note_id": note_id,
+                    "title": wrap_workspace_content(notes[(kind, note_id)].title or ""),
+                    "events_total": len(events),
+                    "events": events[-max_events:],
+                },
+            )
+        )
+
+    items.sort(key=lambda i: (i[0], i[1]), reverse=True)
+
+    finished = ToDoItem.objects.filter(
+        group__user_id=me,
+        group__team_id=team,
+        is_completed=True,
+        ts_completed_at__gte=since,
+        ts_completed_at__lt=until,
+    )
+    todos = list(finished.order_by("-ts_completed_at")[:DID_TODOS])
+
+    # Chats are counted, never read. A task comment is mirrored into the project chat as a
+    # message and is already counted as a comment; a task's card is not something said.
+    sent = (
+        Message.objects.filter(
+            sender_id=me,
+            deleted_at__isnull=True,
+            task_id__isnull=True,
+            channel_id__in=readable_chats_qs(team, me).values("id"),
+            ts_sent_at__gte=since,
+            ts_sent_at__lt=until,
+        )
+        .exclude(metadata__has_key="taskCommentId")
+        .values("channel_id", "channel__title", "channel__kind")
+        .annotate(n=Count("id"))
+        .order_by("-n")
+    )
+    sent = list(sent)
+    chats = [
+        {
+            "chat_id": str(row["channel_id"]),
+            "chat_type": CHAT_TYPE_LABEL.get(row["channel__kind"]),
+            "title": wrap_workspace_content(row["channel__title"] or ""),
+            "messages": row["n"],
+        }
+        for row in sent[:DID_CHATS]
+    ]
+    return {
+        "totals": {
+            "items": len(items),
+            "comments": len(comments),
+            "todos_done": finished.count(),
+            "messages": sum(row["n"] for row in sent),
+        },
+        "items": [i for _n, _at, i in items[:max_items]],
+        "items_truncated": len(items) > max_items,
+        "todos_done": [
+            {"item_id": t.item_id, "title": wrap_workspace_content(t.title or "")} for t in todos
+        ],
+        "chats": chats,
+    }
+
+
+def what_you_did(ctx: ToolContext, now: datetime, zone, names: _Names) -> dict[str, Any]:
+    """What the member did today and yesterday (their own time zone), from what is already
+    saved: nothing is asked of them and nothing new is stored (MIP-1145). Today in detail,
+    yesterday as the gist."""
+    start_yesterday, start_today, until = _local_day_bounds(now, zone)
+    return {
+        "today": {
+            "local_date": start_today.date().isoformat(),
+            **_did_in(
+                ctx,
+                start_today,
+                until + timedelta(seconds=1),
+                zone,
+                names,
+                DID_ITEMS["today"],
+                DID_EVENTS["today"],
+            ),
+        },
+        "yesterday": {
+            "local_date": start_yesterday.date().isoformat(),
+            **_did_in(
+                ctx,
+                start_yesterday,
+                start_today,
+                zone,
+                names,
+                DID_ITEMS["yesterday"],
+                DID_EVENTS["yesterday"],
+            ),
+        },
+    }
+
+
 _PRIORITY_HINT = {"Critical": 6, "High": 4, "Normal": 2}
 
 
@@ -1143,6 +1394,7 @@ def build_briefing(
     waiting_me = waiting_on_me(ctx, now, names)
     waiting_others = waiting_on_others(ctx, names)
     suggestions = suggested_next(ctx, now, zone, win, items, project)
+    did = what_you_did(ctx, now, zone, names)
 
     # People are named in one batch, after every section has said who it needs.
     for item in items:
@@ -1177,6 +1429,7 @@ def build_briefing(
         "waiting_on_me": waiting_me,
         "waiting_on_others": waiting_others,
         "stale_mine": stale_mine(ctx, now, zone, project),
+        "what_you_did": did,
         "worklog": worklog_section(ctx),
         "suggested_next": suggestions,
     }
