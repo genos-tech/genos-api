@@ -272,7 +272,7 @@ class IdempotenceTests(ScheduleBase):
 
     def test_a_repeat_sends_no_second_push(self):
         sched = self.make(deliver_push=True)
-        with mock.patch(PUSH) as push:
+        with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
             schedule_delivery.deliver(sched, self.REPORT, run_at=SCHEDULED)
             schedule_delivery.deliver(sched, self.REPORT, run_at=SCHEDULED)
         self.assertEqual(push.call_count, 1)
@@ -307,15 +307,22 @@ class PushTests(ScheduleBase):
     def test_no_push_unless_the_schedule_asked(self):
         sched = self.make()
         self.assertFalse(sched.deliver_push)
-        with mock.patch(PUSH) as push:
+        with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
             schedule_delivery.deliver(sched, self.REPORT)
         push.assert_not_called()
 
     def test_a_push_goes_out_when_the_schedule_asked(self):
         sched = self.make(deliver_push=True)
-        with mock.patch(PUSH) as push:
+        with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
             item = schedule_delivery.deliver(sched, self.REPORT)
         push.assert_called_once_with(item, title="Overdue", body="Two tasks.")
+
+    def test_the_push_waits_for_the_commit(self):
+        sched = self.make(deliver_push=True)
+        with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=False) as callbacks:
+            schedule_delivery.deliver(sched, self.REPORT)
+            push.assert_not_called()
+        self.assertEqual(len(callbacks), 1)
 
     def test_the_real_dispatcher_queues_a_card_with_the_headline_and_summary(self):
         from origin.services import webpush_dispatch
@@ -324,6 +331,7 @@ class PushTests(ScheduleBase):
         with (
             mock.patch.object(webpush_dispatch, "vapid_configured", return_value=True),
             mock.patch.object(webpush_dispatch, "_queue_push") as queue,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             schedule_delivery.deliver(sched, self.REPORT)
         kwargs = queue.call_args.kwargs
@@ -338,6 +346,7 @@ class PushTests(ScheduleBase):
         with (
             mock.patch(PUSH, side_effect=RuntimeError("push gateway said: secret body")),
             self.assertLogs("origin.schedules", level="WARNING") as logs,
+            self.captureOnCommitCallbacks(execute=True),
         ):
             summary = schedules.run_due(NOW)
         sched.refresh_from_db()
@@ -351,7 +360,10 @@ class PushTests(ScheduleBase):
 
     def test_a_push_that_always_fails_never_pauses_the_schedule(self):
         sched = self.make(deliver_push=True)
-        with mock.patch(PUSH, side_effect=RuntimeError("down")):
+        with (
+            mock.patch(PUSH, side_effect=RuntimeError("down")),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
             for day in range(5):
                 MemberSchedule.objects.filter(pk=sched.pk).update(
                     next_run_at=SCHEDULED + timedelta(days=day), claimed_at=None
@@ -480,6 +492,11 @@ class SanitisingTests(ScheduleBase):
             "https://example.com/\n",
             "/workspace/../admin",
             "/workspace/a/../../b",
+            "/workspace/%2e%2e/admin",
+            "/workspace/%2E%2E/admin",
+            "/workspace/.%2e/admin",
+            "/workspace/a%2f..%2fb",
+            "/workspace/a%5cb",
             "/workspace/\\evil",
             "/workspace/a\tb",
             "/workspace/" + "a" * 600,

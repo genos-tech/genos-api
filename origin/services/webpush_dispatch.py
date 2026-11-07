@@ -20,6 +20,7 @@ from django.conf import settings
 from django.db import transaction
 
 from origin.models.chat.unified_models import ActivityType, ChannelKind
+from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT
 from origin.models.common.notification_models import PushSubscription
 from origin.services import presence
 from origin.services.unread_badge import unread_badge_total
@@ -381,7 +382,7 @@ def _inbox_title(item, sender_name: str) -> str:
         3: f"{sender_name} asked to join your group chat",
         4: f"{sender_name} requested access to your note",
     }
-    if item.item_type == 10:
+    if item.item_type == ITEM_TYPE_GENOS_REPORT:
         # A schedule's report (MIP-1149): the report's own headline, not "New inbox item".
         body = item.item_body if isinstance(item.item_body, dict) else {}
         headline = body.get("title")

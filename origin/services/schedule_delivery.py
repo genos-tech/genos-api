@@ -47,6 +47,7 @@ report, and it never uses up the next scheduled one.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from datetime import timezone as dt_timezone
 from typing import Any
@@ -75,6 +76,7 @@ PUSH_BODY_CHARS = 140
 DEFAULT_SUMMARY = "Nothing to report."
 
 _APP_PATH_PREFIX = "/workspace/"
+_ENCODED_ESCAPE = re.compile(r"%(?:2e|2f|5c)", re.IGNORECASE)
 
 
 def _text(value: Any, limit: int) -> str:
@@ -97,7 +99,9 @@ def clean_link(value: Any) -> str:
         return ""
     if value.startswith(_APP_PATH_PREFIX):
         path = value.split("?", 1)[0].split("#", 1)[0]
-        if any(part == ".." for part in path.split("/")):
+        # A dot-segment written literally or percent-encoded (`%2e%2e`), and an encoded
+        # separator, which a browser or router may decode into one.
+        if any(part == ".." for part in path.split("/")) or _ENCODED_ESCAPE.search(path):
             return ""
         return value
     try:
@@ -198,7 +202,11 @@ def deliver(
     schedule.last_result = result
 
     if schedule.deliver_push:
-        _push(item, body)
+        # After the run's transaction commits, not inside it: the item and the lock on the
+        # schedule row are released first, the notification never arrives before the item
+        # exists, and a push that trips over a database error cannot poison the run's own
+        # transaction. `_push` swallows everything, so a failing callback cannot fail the run.
+        transaction.on_commit(lambda: _push(item, body))
     # Ids and a count only: the title can quote what the member's data says.
     log.info(
         "schedule_delivered schedule=%s user=%s item=%s items=%d push=%s",
