@@ -670,6 +670,21 @@ def _chat_mentions(ctx: ToolContext, now: datetime) -> list[dict[str, Any]]:
     ).get("mentions", [])
     if not mentions:
         return []
+    # A task's card in its project chat (the thread root that carries the task) restates the
+    # assignee and the reporter as @mentions. Nobody is asking anything there, and the
+    # assignment is already in the task's own history, so it does not wait on anyone
+    # (MIP-1141). A reply in the card's thread, and a deliberate @mention of oneself, stay.
+    cards = {
+        str(pk)
+        for pk in Message.objects.filter(
+            id__in=[m["message_id"] for m in mentions],
+            task_id__isnull=False,
+            is_thread_reply=False,
+        ).values_list("id", flat=True)
+    }
+    mentions = [m for m in mentions if m["message_id"] not in cards]
+    if not mentions:
+        return []
     chat_ids = {m["chat_id"] for m in mentions}
     oldest = min(m["ts"] for m in mentions if m.get("ts"))
     mine = list(
