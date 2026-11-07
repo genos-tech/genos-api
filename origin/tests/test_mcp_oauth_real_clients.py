@@ -11,7 +11,10 @@ connector (2026-11-07), not guessed:
   * ChatGPT refreshes again and again, each time with the newest refresh token (6 in a row in the
     log; Claude 2), and one reused token would end the whole chain, so the chain must hold;
   * both ask for every scope the metadata lists, and nothing else but `offline_access`, which we
-    do not list.
+    do not list;
+  * against metadata identical to ours (probe `--like-genos`, third pass), both register as a
+    public client (`none`) and ask for exactly our three scopes: the registration bodies below
+    are theirs, byte for byte except the redirect host.
 """
 
 from __future__ import annotations
@@ -77,3 +80,47 @@ class TestWhatTheRealClientsSend(FlowBase):
         location = res["Location"]
         self.assertNotIn("/oauth/consent", location)
         self.assertEqual(parse_qs(urlsplit(location).query).get("error"), ["invalid_scope"])
+
+
+CLAUDE_REGISTRATION = {
+    "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"],
+    "scope": "mcp:destructive mcp:read mcp:write",
+    "client_name": "Claude",
+    "application_type": "web",
+}
+CHATGPT_REGISTRATION = {
+    "client_name": "ChatGPT",
+    "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"],
+    "token_endpoint_auth_method": "none",
+}
+ALL_SCOPES = "mcp:destructive mcp:read mcp:write"
+
+
+class TestTheRegistrationsTheyReallySend(FlowBase):
+    def test_both_register_as_public_clients_and_get_no_secret(self):
+        for body in (CLAUDE_REGISTRATION, CHATGPT_REGISTRATION):
+            res = self.app.post("/oauth/register/", body, format="json")
+            self.assertEqual(res.status_code, 201, res.content)
+            doc = res.json()
+            self.assertEqual(doc["token_endpoint_auth_method"], "none")
+            self.assertNotIn("client_secret", doc)
+            self.assertNotIn("registration_access_token", doc)
+
+    def test_a_client_that_registered_that_way_connects_with_all_three_scopes(self):
+        for body in (CLAUDE_REGISTRATION, CHATGPT_REGISTRATION):
+            registered = self.app.post("/oauth/register/", body, format="json").json()
+            self.client_id = registered["client_id"]
+            self.redirect = body["redirect_uris"][0]
+            params = self.authorize_params(
+                client_id=self.client_id, redirect_uri=self.redirect, scope=ALL_SCOPES
+            )
+            code = self.consent(params=params)
+            res = self.token(code=code, redirect_uri=self.redirect)
+            self.assertEqual(res.status_code, 200, res.content)
+            self.assertEqual(set(res.json()["scope"].split()), set(ALL_SCOPES.split()))
+            self.assertEqual(self.mcp(res.json()["access_token"]).status_code, 200)
