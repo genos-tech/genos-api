@@ -58,6 +58,7 @@ from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
+from origin.models.common.schedule_models import MemberSchedule
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
@@ -160,6 +161,9 @@ def _delete_personal_data(user) -> None:
     # The worklog is private to its author by design (MIP-1071); items cascade.
     WorklogEntry.objects.filter(author=user).delete()
     MemberBriefingState.objects.filter(user=user).delete()
+    # The member's schedules (MIP-1147) are theirs alone; the account is soft-deleted, so no
+    # FK cascade fires and the tick would keep running them.
+    MemberSchedule.objects.filter(user=user).delete()
     # Connected apps (MIP-1077): the grant AND every token, refresh included, that an AI
     # client holds for this person. The account is soft-deleted, so no FK cascade fires:
     # without this the tokens would outlive the person.

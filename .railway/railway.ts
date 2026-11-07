@@ -450,6 +450,27 @@ export default defineRailway(() => {
       limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
     },
   });
+  const scheduleTick = service("schedule-tick", {
+    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
+    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      ALLOWED_HOSTS: preserve(),
+      BLIND_INDEX_KEYS: preserve(),
+      DATABASE_URL: preserve(),
+      DJANGO_DEBUG: preserve(),
+      DJANGO_SECRET_KEY: preserve(),
+      FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+    },
+    deploy: {
+      cronSchedule: "*/5 * * * *",
+      startCommand: "python /app/manage.py schedule_tick --heartbeat schedule-tick",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
   const securityEventPrune = service("security-event-prune", {
     source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
@@ -513,5 +534,5 @@ export default defineRailway(() => {
     },
   });
 
-  return project("genos", { resources: [agentDigest, agentJudgeSampler, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, securityEventPrune, webhookDeliver] });
+  return project("genos", { resources: [agentDigest, agentJudgeSampler, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleTick, securityEventPrune, webhookDeliver] });
 });

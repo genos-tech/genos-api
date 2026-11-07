@@ -43,6 +43,7 @@ def build_export(user) -> dict:
     from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
     from origin.models.chat.unified_models import Message
     from origin.models.common.notification_models import NotificationPreference
+    from origin.models.common.schedule_models import MemberSchedule
     from origin.models.common.team_models import TeamMembers
     from origin.models.common.worklog_models import WorklogEntry
     from origin.models.note.personal_note_models import (
@@ -130,6 +131,31 @@ def build_export(user) -> dict:
         for e in WorklogEntry.objects.filter(author=user)
         .order_by("occurred_at", "entry_id")
         .prefetch_related("items")
+    ]
+
+    # Their schedules (MIP-1147), across every team: what each runs and when, and how the
+    # last run went. The report a run produced is not kept anywhere, so there is none to export.
+    schedules = [
+        {
+            "name": sc.name,
+            "team_id": str(sc.team_id),
+            "job": sc.job,
+            "params": sc.params,
+            "frequency": sc.frequency,
+            "weekdays": sc.weekdays,
+            "month_day": sc.month_day,
+            "run_date": sc.run_date.isoformat() if sc.run_date else None,
+            "time_of_day": sc.time_of_day.strftime("%H:%M"),
+            "enabled": sc.enabled,
+            "paused_reason": sc.paused_reason,
+            "next_run_at": _iso(sc.next_run_at),
+            "last_run_at": _iso(sc.last_run_at),
+            "last_status": sc.last_status,
+            "last_error": sc.last_error,
+            "last_result": sc.last_result,
+            "created_at": _iso(sc.ts_created_at),
+        }
+        for sc in MemberSchedule.objects.filter(user=user).order_by("ts_created_at")
     ]
 
     tasks = [
@@ -230,6 +256,7 @@ def build_export(user) -> dict:
         "personal_notes": notes,
         "todos": todos,
         "worklog": worklog,
+        "schedules": schedules,
         "tasks": tasks,
         "messages": messages,
         "task_comments": comments,
@@ -239,6 +266,7 @@ def build_export(user) -> dict:
             "personal_notes": len(notes),
             "todo_days": len(todos),
             "worklog_entries": len(worklog),
+            "schedules": len(schedules),
             "tasks": len(tasks),
             "messages": len(messages),
             "task_comments": len(comments),

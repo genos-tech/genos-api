@@ -12,6 +12,7 @@ from .common.invite_models import *
 from .common.mcp_connection_models import *
 from .common.notification_models import *
 from .common.ops_models import *
+from .common.schedule_models import *
 from .common.security_event_models import *
 from .common.team_models import *
 from .common.usage_models import *
