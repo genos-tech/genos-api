@@ -24,10 +24,13 @@ self-contained and receiver ordering can't matter.
 
 from __future__ import annotations
 
+from django.db.models import QuerySet
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
+from origin.models.common.member_event_models import KIND_DEPENDENCY_ADD, KIND_DEPENDENCY_REMOVE
 from origin.models.task.task_models import TaskDependency, TaskMaster
+from origin.services import member_events
 from origin.services.task_blocking import CLOSED_STATUSES, sync_blocked_status
 
 
@@ -37,11 +40,21 @@ def dependency_saved(sender, instance: TaskDependency, created: bool, **kwargs):
     # never edited), but re-syncing on a hypothetical update is harmless
     # and keeps the invariant unconditional.
     sync_blocked_status([instance.blocked_task_id])
+    if created:
+        member_events.note_dependencies([instance], KIND_DEPENDENCY_ADD)
 
 
 @receiver(post_delete, sender=TaskDependency)
 def dependency_deleted(sender, instance: TaskDependency, **kwargs):
     sync_blocked_status([instance.blocked_task_id])
+    # The acting member's ledger notes a delete someone chose to make (MIP-1085), not the
+    # rows that go because a task or project did: the cascade's `origin` is that task.
+    origin = kwargs.get("origin")
+    asked_for = isinstance(origin, TaskDependency) or (
+        isinstance(origin, QuerySet) and origin.model is TaskDependency
+    )
+    if asked_for:
+        member_events.note_dependencies([instance], KIND_DEPENDENCY_REMOVE)
 
 
 def _is_blocking(status: str | None, is_deleted: bool) -> bool:

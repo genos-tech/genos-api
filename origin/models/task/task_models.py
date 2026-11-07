@@ -506,6 +506,20 @@ class TaskBodyAttachmentFact(models.Model):
     ts_updated_at = models.DateTimeField(auto_now=True)
 
 
+class TaskDependencyQuerySet(models.QuerySet):
+    def bulk_create(self, objs, *args, **kwargs):
+        """`bulk_create` fires no `post_save`, so the acting member's ledger is told here
+        (MIP-1085). With `ignore_conflicts` every edge handed in is counted as added: the one
+        caller (`create_task_plan`) hands in edges between tasks it has just created."""
+        objs = list(objs)
+        created = super().bulk_create(objs, *args, **kwargs)
+        from origin.models.common.member_event_models import KIND_DEPENDENCY_ADD  # noqa: PLC0415
+        from origin.services import member_events  # noqa: PLC0415
+
+        member_events.note_dependencies(objs, KIND_DEPENDENCY_ADD)
+        return created
+
+
 class TaskDependency(models.Model):
     """Directional "blocker -> blocked" relation between two TaskMaster
     rows. Milestones use their backing TaskMaster (`is_milestone=True`),
@@ -546,6 +560,8 @@ class TaskDependency(models.Model):
     )
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TaskDependencyQuerySet.as_manager()
 
     class Meta:
         constraints = [

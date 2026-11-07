@@ -44,6 +44,7 @@ from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.task_models import TaskDependency
+from origin.services import member_events
 from origin.services.demo_seeder import (
     _body,
     _create_blueprint_tasks,
@@ -862,12 +863,14 @@ def _create_starter_project(
 
     # Inviting teammates blocks the first-project walkthrough in each
     # language, giving the dependency UI one real relationship to show.
-    TaskDependency.objects.create(
-        blocker_task=tasks[0],
-        blocked_task=tasks[1],
-        team=team,
-        created_by=user,
-    )
+    # Example data, made by Genos inside the member's request: not the member's own change.
+    with member_events.not_recorded():
+        TaskDependency.objects.create(
+            blocker_task=tasks[0],
+            blocked_task=tasks[1],
+            team=team,
+            created_by=user,
+        )
 
 
 def create_starter_workspace(user, team) -> None:

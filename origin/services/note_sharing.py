@@ -9,16 +9,26 @@ role. Neither path notifies the person.
 Taking a share back narrows who may read the note, so the note's search chunks are
 purged afterwards (best-effort, the reindex sweep retries): the index stamps a note's
 readers when it is built, and without this the person could still find it in search.
+
+The granter's own ledger is told (MIP-1085): `note_share` (a grant, or a change of the
+role) or `note_unshare`, with the person's id and the note's family and id, never its
+title. The note's owner is the only one who can, so it is always the member's own change.
 """
 
 from __future__ import annotations
 
 from django.db import transaction
 
+from origin.models.common.member_event_models import (
+    KIND_NOTE_SHARE,
+    KIND_NOTE_UNSHARE,
+    OBJECT_NOTE,
+)
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.search_engine.purge import purge_note
+from origin.services import member_events
 from origin.views.utils.note_role import (
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
@@ -38,6 +48,20 @@ class SharingRefused(Exception):
         super().__init__(message)
         self.message = message
         self.status = status
+
+
+def _note(kind: str, granter_id, team_id, note_type: int, note_id: int, target_user_id) -> None:
+    """Tell the granter's ledger (never raises). The note's id carries its family, as
+    everywhere else in the ledger: `personal:12`."""
+    family = _LABEL_BY_CODE.get(note_type)
+    if family is None:
+        return
+    member_events.record_activity(
+        user_id=str(granter_id),
+        team_id=team_id,
+        kind=kind,
+        items=[(OBJECT_NOTE, f"{family}:{note_id}", str(target_user_id))],
+    )
 
 
 def share_note(
@@ -67,6 +91,7 @@ def share_note(
             note_id=note_id,
             defaults={"team": team, "role_id": role_id},
         )
+        _note(KIND_NOTE_SHARE, granter_id, team_id, note_type, note_id, target_user_id)
     return permission
 
 
@@ -76,11 +101,17 @@ def unshare_note(*, granter_id, note_type: int, note_id: int, target_user_id) ->
         raise SharingRefused("Only the note owner can revoke roles.", 403)
     if str(target_user_id) == str(granter_id):
         raise SharingRefused("Owners cannot revoke themselves.", 400)
-    deleted, _ = NotePermissionMaster.objects.filter(
+    grants = NotePermissionMaster.objects.filter(
         user=target_user_id, note_type=note_type, note_id=note_id
-    ).delete()
-    if deleted == 0:
-        raise SharingRefused("No matching role found.", 404)
+    )
+    team_id = None
+    if member_events.recording_activity_for(granter_id):
+        team_id = grants.values_list("team_id", flat=True).first()
+    with transaction.atomic():
+        deleted, _ = grants.delete()
+        if deleted == 0:
+            raise SharingRefused("No matching role found.", 404)
+        _note(KIND_NOTE_UNSHARE, granter_id, team_id, note_type, note_id, target_user_id)
     label = _LABEL_BY_CODE.get(note_type)
     if label is not None:
         purge_note(label, note_id)
