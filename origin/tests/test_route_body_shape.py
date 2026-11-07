@@ -80,6 +80,8 @@ NON_DRF_MODULE_PREFIXES = (
     # Tested in test_mcp_oauth_foundation.
     "origin.views.public.oauth_views.",
     "oauth2_provider.views.",
+    # MIP-1108: GET/HEAD only; it never reads a request body.
+    "origin.views.public.openai_challenge.",
 )
 
 # Views whose parsers do not include JSON (uploads): a JSON body is never read as
