@@ -1,7 +1,15 @@
-"""Notice which items a member's AI app opens or changes over MCP (MIP-1143).
+"""Notice which items a member's AI app opens or changes over MCP (MIP-1143), and the
+member's own changes that nothing else saves (MIP-1085).
 
 Markers, never text (see `models/common/member_event_models.py` for the why). This module is
 the only writer and the only reader of `MemberEvent`.
+
+**Two writers, one statement.** `record_call` notes an MCP call's arguments (above and below).
+`record_activity` notes a change the member made: a collaborator, a dependency, a to-do edit
+or delete, a note share. It is called from the funnel every path goes through (the services
+`sync_task_collaborators`, `todo_items.save_item` / `delete_item`, `note_sharing.share_note` /
+`unshare_note`, and the `TaskDependency` signals and `bulk_create`), so the app, an MCP call
+and the in-app agent are all covered by one hook, not one per view. Both end in `record`.
 
 **What is recorded, and from what.** From the call's ARGUMENTS only, after the references in
 them were resolved to ids (so `PRJ-123`, `123` and a pasted URL are one marker), and only
@@ -30,17 +38,21 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import connection, transaction
 from django.utils import timezone
 
+from origin.middleware.current_user import get_current_source, get_current_user
 from origin.models.common.member_event_models import (
     CLIENT_API_KEY,
     KIND_READ,
     KIND_WRITE,
+    MCP_KINDS,
     OBJECT_CHAT_THREAD,
     OBJECT_NOTE,
     OBJECT_TASK,
@@ -279,12 +291,16 @@ def record(
     *,
     user_id: str,
     team_id: str,
-    items: Iterable[tuple[str, str]],
+    items: Iterable[tuple[str, ...]],
     kind: str,
     client: str,
+    source: str = SOURCE_MCP,
     now: datetime | None = None,
 ) -> None:
     """Note that `user_id`'s app touched `items`, in ONE statement.
+
+    An item is `(object_type, object_id)` or, for an activity event, `(object_type,
+    object_id, other_id)`; the other end is part of the dedupe key.
 
     The statement (a) deletes the member's rows older than `RETENTION`, (b) inserts one row per
     item, or, when the member already has the marker in this bucket, bumps its `ts` and
@@ -292,27 +308,29 @@ def record(
     read in the statement and locked `FOR SHARE`). A raise from here is the caller's to catch.
     """
     now = now or timezone.now()
-    unique = list(dict.fromkeys(items))[:MAX_ITEMS_PER_CALL]
+    padded = [(*item, "")[:3] for item in items]
+    unique = list(dict.fromkeys(padded))[:MAX_ITEMS_PER_CALL]
     if not unique:
         return
-    values = ", ".join(["(%s, %s)"] * len(unique))
+    values = ", ".join(["(%s, %s, %s)"] * len(unique))
     params: list[Any] = [str(user_id), now - RETENTION]
-    params += [str(team_id), kind, SOURCE_MCP, client, now, _bucket(now)]
-    for object_type, object_id in unique:
-        params += [object_type, object_id]
+    params += [str(team_id), kind, source, client, now, _bucket(now)]
+    for object_type, object_id, other_id in unique:
+        params += [object_type, object_id, other_id]
     params.append(str(user_id))
     sql = f"""
         WITH swept AS (
             DELETE FROM {_TABLE} WHERE user_id = %s AND ts < %s
         )
         INSERT INTO {_TABLE}
-            (user_id, team_id, kind, source, client, ts, bucket, count, object_type, object_id)
-        SELECT u.id, %s, %s, %s, %s, %s, %s, 1, v.object_type, v.object_id
+            (user_id, team_id, kind, source, client, ts, bucket, count,
+             object_type, object_id, other_id)
+        SELECT u.id, %s, %s, %s, %s, %s, %s, 1, v.object_type, v.object_id, v.other_id
         FROM {_USER_TABLE} u
-        CROSS JOIN (VALUES {values}) AS v(object_type, object_id)
+        CROSS JOIN (VALUES {values}) AS v(object_type, object_id, other_id)
         WHERE u.id = %s AND u.member_events_enabled
         FOR SHARE OF u
-        ON CONFLICT (user_id, team_id, object_type, object_id, kind, client, source, bucket)
+        ON CONFLICT (user_id, team_id, object_type, object_id, kind, other_id, client, source, bucket)
         DO UPDATE SET ts = EXCLUDED.ts, count = {_TABLE}.count + 1
     """  # noqa: S608 - table names are ours, every value is a parameter
     with connection.cursor() as cursor:
@@ -340,23 +358,138 @@ def record_call(
         items = subjects(tool_name, args)
         if not items:
             return
-        kwargs = dict(
+        _record_safely(
             user_id=str(user.id),
             team_id=str(team_id),
             items=items,
             kind=kind_of(write),
             client=client_name(credential),
         )
-        if connection.in_atomic_block:
-            # Inside someone's transaction a database error would leave it aborted for the
-            # rest of the request, so the statement gets its own savepoint. In autocommit
-            # (a request here) there is nothing to protect and it costs no extra statement.
-            with transaction.atomic():
-                record(**kwargs)
-        else:
-            record(**kwargs)
     except Exception:  # noqa: BLE001 - recording is never a reason for a call to fail
         log.warning("MCP use marker not recorded for %s", tool_name, exc_info=True)
+
+
+def _record_safely(**kwargs: Any) -> None:
+    if connection.in_atomic_block:
+        # Inside someone's transaction a database error would leave it aborted for the
+        # rest of the request, so the statement gets its own savepoint. In autocommit
+        # (a request here) there is nothing to protect and it costs no extra statement.
+        with transaction.atomic():
+            record(**kwargs)
+    else:
+        record(**kwargs)
+
+
+# --------------------------------------------------------------------------- #
+# The member's own changes that nothing else saves (MIP-1085)                  #
+# --------------------------------------------------------------------------- #
+
+_unrecorded: ContextVar[bool] = ContextVar("member_events_unrecorded", default=False)
+
+
+@contextmanager
+def not_recorded() -> Iterator[None]:
+    """Note nothing from `record_activity` inside the block.
+
+    For work Genos does for a member rather than the member doing it: the seeders that put
+    example data into a new workspace run inside the member's request, so without this the
+    member would be credited with a dependency they never made."""
+    token = _unrecorded.set(True)
+    try:
+        yield
+    finally:
+        _unrecorded.reset(token)
+
+
+def activity_source() -> str:
+    """How the change reached Genos: `app`, `agent`, `api_key`, ... (the words a task history
+    row's `via` uses), `system` when nothing in this thread says."""
+    via = get_current_source() or {}
+    return str(via.get("kind") or "system")[:16]
+
+
+def acting_user_id() -> str | None:
+    """The member whose request or approved agent write this is, or None when no one is acting
+    (a command, a webhook, a seeder): then there is no member to describe."""
+    user = get_current_user()
+    return str(user.id) if user is not None else None
+
+
+def recording_activity_for(user_id: str | None) -> bool:
+    """False when nothing could be written for `user_id`: nobody, the block `not_recorded`, or
+    the member's switch is off on the user row this request already holds (no query). A True
+    is not a promise: the statement checks the switch again, under lock."""
+    if not user_id or _unrecorded.get():
+        return False
+    current = get_current_user()
+    if current is not None and str(current.id) == str(user_id):
+        return bool(current.member_events_enabled)
+    return True
+
+
+def record_activity(
+    *,
+    user_id: str | None,
+    team_id: str | None,
+    kind: str,
+    items: Iterable[tuple[str, str, str]],
+    now: datetime | None = None,
+) -> None:
+    """Note that the member made a change, one row per `(object_type, object_id, other_id)`.
+
+    NEVER raises and never breaks the caller's transaction (a failure is logged at WARNING).
+    Writes nothing when there is no member or no team, inside `not_recorded()`, or when the
+    member's switch is off. References only: the caller passes ids, never a title."""
+    try:
+        if not team_id or not recording_activity_for(user_id):
+            return
+        wanted = [(str(t), str(i), str(o)) for t, i, o in items]
+        source = activity_source()
+        for start in range(0, len(wanted), MAX_ITEMS_PER_CALL):
+            _record_safely(
+                user_id=str(user_id),
+                team_id=str(team_id),
+                items=wanted[start : start + MAX_ITEMS_PER_CALL],
+                kind=kind,
+                client="",
+                source=source,
+                now=now,
+            )
+    except Exception:  # noqa: BLE001 - recording is never a reason for a change to fail
+        log.warning("Member event %s not recorded", kind, exc_info=True)
+
+
+def note_dependencies(dependencies: Iterable[Any], kind: str) -> None:
+    """Note, for the acting member, that these `TaskDependency` edges were added or removed.
+
+    The row is on the BLOCKED task (`object_id`) and `other_id` is the blocker, so "task 5 is
+    blocked by task 3" reads from task 5's own line. The team is the edge's own, or, when the
+    column is empty (it is SET_NULL), the blocked task's. Never raises."""
+    try:
+        actor = acting_user_id()
+        if not recording_activity_for(actor):
+            return
+        deps = list(dependencies)
+        teams: dict[int, Any] = {}
+        missing = {d.blocked_task_id for d in deps if d.team_id is None}
+        if missing:
+            from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+            teams = dict(
+                TaskMaster.objects.filter(task_id__in=missing).values_list("task_id", "team_id")
+            )
+        by_team: dict[str, list[tuple[str, str, str]]] = {}
+        for dep in deps:
+            team_id = dep.team_id if dep.team_id is not None else teams.get(dep.blocked_task_id)
+            if team_id is None:
+                continue
+            by_team.setdefault(str(team_id), []).append(
+                (OBJECT_TASK, str(dep.blocked_task_id), str(dep.blocker_task_id))
+            )
+        for team_id, items in by_team.items():
+            record_activity(user_id=actor, team_id=team_id, kind=kind, items=items)
+    except Exception:  # noqa: BLE001 - recording is never a reason for a change to fail
+        log.warning("Dependency event %s not recorded", kind, exc_info=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -364,14 +497,26 @@ def record_call(
 # --------------------------------------------------------------------------- #
 
 
-def recent(user_id: str, team_id: str, since: datetime, until: datetime, limit: int = 60):
-    """The member's own markers in `[since, until)` for one team, newest first, never older
-    than the retention. ALWAYS filtered by the member: nothing here can return another's."""
+def recent(
+    user_id: str,
+    team_id: str,
+    since: datetime,
+    until: datetime,
+    limit: int = 60,
+    kinds: tuple[str, ...] = MCP_KINDS,
+):
+    """The member's own rows in `[since, until)` for one team, newest first, never older
+    than the retention. ALWAYS filtered by the member: nothing here can return another's.
+
+    `kinds` defaults to the AI-app markers (`read`, `write`): the briefing tells those as
+    "opened / changed with your AI app" and must never tell an activity event that way. Ask
+    for `ACTIVITY_KINDS` to read the member's own changes."""
     floor = timezone.now() - RETENTION
     return list(
         MemberEvent.objects.filter(
             user_id=user_id,
             team_id=team_id,
+            kind__in=kinds,
             ts__gte=max(since, floor),
             ts__lt=until,
         ).order_by("-ts", "-event_id")[:limit]

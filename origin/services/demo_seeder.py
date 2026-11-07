@@ -74,6 +74,7 @@ from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import AgentRun, AgentSession, RagChunk
+from origin.services import member_events
 from origin.services.activity_suppression import suppress_task_activity
 
 # BlockNote body builders live in `demo_blocks` so the per-language
@@ -1650,11 +1651,13 @@ def _seed_task_dependencies(team, demo_user, tasks_by_key: dict) -> None:
         blocked = tasks_by_key.get(blocked_key)
         if not blocker or not blocked or blocker.task_id == blocked.task_id:
             continue
-        TaskDependency.objects.get_or_create(
-            blocker_task=blocker,
-            blocked_task=blocked,
-            defaults={"team": team, "created_by": demo_user},
-        )
+        # Example data, not the demo member's own change.
+        with member_events.not_recorded():
+            TaskDependency.objects.get_or_create(
+                blocker_task=blocker,
+                blocked_task=blocked,
+                defaults={"team": team, "created_by": demo_user},
+            )
 
 
 # Task history: the decisions a team makes ABOUT a task, not just its

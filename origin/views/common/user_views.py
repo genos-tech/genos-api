@@ -719,6 +719,11 @@ class MemberEventsPreferenceView(AuthenticatedAPIView):
     never any text, visible only to the caller, kept 180 days. Default True. Scoped to
     `request.user`, like the other preference views.
 
+    The same switch covers the caller's own changes that nothing else saves (MIP-1085):
+    collaborators added or removed, dependencies added or removed, to-dos edited or
+    deleted, notes shared or unshared. Item and person ids only, never a title. Off notes
+    none of it.
+
     Body (PATCH): `{"member_events_enabled": true | false}`, a real JSON boolean (anything
     else is a 400).
 

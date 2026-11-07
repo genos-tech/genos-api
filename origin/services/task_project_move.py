@@ -23,7 +23,7 @@ from django.utils import timezone
 
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster, claim_project_task_number
-from origin.services import change_feed
+from origin.services import change_feed, member_events
 from origin.views.utils.foreign_team_scope import forget_object_team
 from origin.views.utils.note_role import NOTE_TYPE_TASK
 
@@ -203,5 +203,8 @@ def _settle_dependencies(task_ids, *, team_id) -> None:
             len(straddling),
             sorted(task_ids),
         )
-        TaskDependency.objects.filter(id__in=straddling).delete()
+        # The move dropped these, the member did not choose to remove them: not their ledger's
+        # `dependency_remove`.
+        with member_events.not_recorded():
+            TaskDependency.objects.filter(id__in=straddling).delete()
     TaskDependency.objects.filter(touching).exclude(id__in=straddling).update(team_id=team_id)
