@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('origin', '0229_delete_worklog'),
+        ('origin', '0230_member_schedule_seed'),
     ]
 
     operations = [
