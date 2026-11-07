@@ -439,9 +439,11 @@ def _read_tasks(
                 source="reaction",
                 key=("task_reaction", r.pk),
                 what="reaction",
-                summary=f"reacted {r.reaction_emoji} to a comment",
+                summary="reacted to a comment",
                 actor=r.sender_id,
                 via="task",
+                # Free text from a teammate (not validated as an emoji): fenced like the rest.
+                extra={"emoji": wrap_workspace_content(str(r.reaction_emoji or ""))},
             ),
         )
 
@@ -639,9 +641,10 @@ def _read_tasks(
                     source="reaction",
                     key=("reaction", r.pk),
                     what="reaction",
-                    summary=f"reacted {r.emoji} to a message",
+                    summary="reacted to a message",
                     actor=r.user_id,
                     via="thread",
+                    extra={"emoji": wrap_workspace_content(str(r.emoji or ""))},
                 ),
             )
 
