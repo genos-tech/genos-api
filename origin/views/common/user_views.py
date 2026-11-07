@@ -710,6 +710,49 @@ class ShareAnswersPreferenceView(AuthenticatedAPIView):
         return Response({"share_answers_with_team": value}, status=status.HTTP_200_OK)
 
 
+class MemberEventsPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH /api/v2/user/preferences/member-events/
+
+    "Notice what my AI apps open" (MIP-1143). Whether Genos notes which tasks, notes,
+    projects and chats the caller's connected AI apps open or change over MCP: markers
+    (`MemberEvent`) with an item reference, read or write, a time and the app's name,
+    never any text, visible only to the caller, kept 180 days. Default True. Scoped to
+    `request.user`, like the other preference views.
+
+    Body (PATCH): `{"member_events_enabled": true | false}`, a real JSON boolean (anything
+    else is a 400).
+
+    Turning it OFF also deletes every marker of the caller, in the same transaction as the
+    flag (so a failure leaves neither half done), and the recorder reads the flag in the
+    statement it writes with, so nothing is noted after the commit. Every PATCH to false
+    purges, not only the change: a repeat is harmless. Turning it back on starts fresh:
+    nothing is back-filled.
+    """
+
+    def get(self, request):
+        return Response(
+            {"member_events_enabled": bool(request.user.member_events_enabled)},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("member_events_enabled")
+        if not isinstance(value, bool):
+            return Response(
+                {"error": "member_events_enabled must be true or false."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            # The row lock the recorder's `FOR SHARE` waits on: a call that is writing right
+            # now finishes first and is purged below; one that starts later sees the flag.
+            CustomUser.objects.select_for_update().filter(pk=request.user.pk).first()
+            request.user.member_events_enabled = value
+            request.user.save(update_fields=["member_events_enabled"])
+            if not value:
+                request.user.member_events.all().delete()
+        return Response({"member_events_enabled": value}, status=status.HTTP_200_OK)
+
+
 class CalendarSyncBackfillView(AuthenticatedAPIView):
     """POST one-shot backfill of the calling user's open future-dated
     tasks to Google Calendar.

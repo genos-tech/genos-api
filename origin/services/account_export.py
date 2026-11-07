@@ -43,6 +43,7 @@ def build_export(user) -> dict:
     from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
     from origin.models.chat.unified_models import Message
     from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
+    from origin.models.common.member_event_models import MemberEvent
     from origin.models.common.notification_models import NotificationPreference
     from origin.models.common.schedule_models import MemberSchedule
     from origin.models.common.team_models import TeamMembers
@@ -146,6 +147,22 @@ def build_export(user) -> dict:
         ).order_by("ts_created_at", "item_id")
     ]
 
+    # What their connected AI apps opened or changed over MCP (MIP-1143): their own markers,
+    # references only. Never anyone else's.
+    mcp_use = [
+        {
+            "team_id": str(e.team_id),
+            "kind": e.kind,
+            "object_type": e.object_type,
+            "object_id": e.object_id,
+            "app": e.client,
+            "source": e.source,
+            "calls": e.count,
+            "last_at": _iso(e.ts),
+        }
+        for e in MemberEvent.objects.filter(user=user).order_by("ts", "event_id")
+    ]
+
     tasks = [
         {
             "task_id": t.task_id,
@@ -245,6 +262,7 @@ def build_export(user) -> dict:
         "todos": todos,
         "schedules": schedules,
         "schedule_reports": schedule_reports,
+        "mcp_use": mcp_use,
         "tasks": tasks,
         "messages": messages,
         "task_comments": comments,
@@ -255,6 +273,7 @@ def build_export(user) -> dict:
             "todo_days": len(todos),
             "schedules": len(schedules),
             "schedule_reports": len(schedule_reports),
+            "mcp_use": len(mcp_use),
             "tasks": len(tasks),
             "messages": len(messages),
             "task_comments": len(comments),
