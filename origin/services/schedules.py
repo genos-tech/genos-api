@@ -102,6 +102,9 @@ LATE_GRACE = timedelta(hours=3)
 STALE_CLAIM = timedelta(minutes=15)
 # Failures in a row before the schedule pauses itself.
 MAX_FAILURES = 3
+# "Run now" is a convenience, and it delivers a report each time: a second one this soon is
+# a loop or a mistake, not a member checking their schedule.
+RUN_NOW_COOLDOWN = timedelta(seconds=60)
 
 _SEARCH_DAYS = 400
 _MAX_SKIPPED_OCCURRENCES = 1000
@@ -607,6 +610,9 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
     now = now or timezone.now()
     _require_member(ctx)
     sched = _get(ctx, schedule_id)
+    if sched.last_run_at is not None and timedelta(0) <= now - sched.last_run_at < RUN_NOW_COOLDOWN:
+        wait = int((RUN_NOW_COOLDOWN - (now - sched.last_run_at)).total_seconds()) + 1
+        raise ScheduleError(f"This schedule ran a moment ago. Try again in {wait} seconds.")
     status, error = _execute(sched)
     MemberSchedule.objects.filter(pk=sched.pk).update(
         last_run_at=now, last_status=status, last_error=error, ts_updated_at=now

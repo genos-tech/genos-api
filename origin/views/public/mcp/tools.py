@@ -1741,6 +1741,71 @@ CATALOG: tuple[McpTool, ...] = (
         write=True,
         destructive=True,
     ),
+    McpTool(
+        name="list_my_schedules",
+        registry_name="list_my_schedules",
+        description=(
+            "The member's own schedules, and the jobs a schedule can run. A schedule says "
+            "'at this time, on these days, run this job'; its report arrives in the member's "
+            "Inbox. Each schedule shows what it does in words (`when`), whether it is on, "
+            "the next run and the last run in the member's own time zone, and why it is "
+            "paused if it is (repeated failures pause one). `jobs` lists every job with "
+            "what it does and the parameters it takes. Use it before creating or changing "
+            "one, to get a `schedule_id`, and when the member asks what Genos does for them "
+            "on a schedule. Nobody else's schedules can be read."
+        ),
+    ),
+    McpTool(
+        name="create_my_schedule",
+        registry_name="create_my_schedule",
+        description=(
+            "Create a schedule: run one of Genos's jobs at a time the member chooses, for "
+            "example 'every weekday at 09:00, what to do today' or 'every Friday at 17:00, "
+            "what I did'. Times are in the member's own time zone. The report goes to their "
+            "Inbox, and a push only if `deliver_push` is true. Check `list_my_schedules` "
+            "first so you do not add a duplicate, and choose `job` from its `jobs`. A "
+            "member can keep a limited number of schedules. Say back what you created, in "
+            "words. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="update_my_schedule",
+        registry_name="update_my_schedule",
+        description=(
+            "Change one of the member's schedules: its name, job, parameters, time, days or "
+            "push, or pause it (`enabled: false`) or turn it back on (`enabled: true`, which "
+            "also clears a pause from repeated failures). Send only what changes. Pausing "
+            "is how to stop one without losing it. Get `schedule_id` from "
+            "`list_my_schedules`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
+    McpTool(
+        name="delete_my_schedule",
+        registry_name="delete_my_schedule",
+        description=(
+            "Delete one of the member's schedules for good. Reports it already delivered stay "
+            "in the Inbox. To stop one for now, pause it with `update_my_schedule` instead. "
+            "Call this only when the member asked for it to go. Get `schedule_id` from "
+            "`list_my_schedules`. Requires a write-scoped API key that its owner also opted "
+            "into destructive tools."
+        ),
+        write=True,
+        destructive=True,
+    ),
+    McpTool(
+        name="run_my_schedule",
+        registry_name="run_my_schedule",
+        description=(
+            "Run one of the member's schedules once, now, whatever the clock says: the "
+            "report is delivered to their Inbox like a scheduled one. Use it to let them "
+            "see what a schedule produces. It does not change when the schedule runs next, "
+            "and a schedule can be run at most once a minute. Get `schedule_id` from "
+            "`list_my_schedules`. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
 )
 
 BY_NAME = {t.name: t for t in CATALOG}
@@ -1969,6 +2034,7 @@ OVERWRITE_TOOLS = frozenset(
         "update_tasks_bulk",
         "update_todo_item",
         "update_worklog_item",
+        "update_my_schedule",
     }
 )
 
@@ -1980,12 +2046,14 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "add_project_tag",
         "add_task_delivery",
         "capture_worklog",
+        "create_my_schedule",
         "create_note",
         "create_task",
         "create_task_plan",
         "create_todo_item",
         "favorite_note",
         "manage_project_labels",
+        "run_my_schedule",  # adds a report to the member's own Inbox
     }
 )
 
