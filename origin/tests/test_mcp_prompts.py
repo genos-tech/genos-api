@@ -27,20 +27,17 @@ from origin.views.public.mcp import prompts, protocol
 from origin.views.public.mcp import tools as mcp_tools
 
 BOTH = ("catch_me_up", "plan_my_day")
-WRITE_TOOLS = frozenset(
-    {"create_todo_item", "update_tasks_bulk", "capture_worklog", "update_task", "add_comment"}
-)
+WRITE_TOOLS = frozenset({"create_todo_item", "update_tasks_bulk", "update_task", "add_comment"})
 FIELDS_NAMED = (
     "changed_for_me",
     "waiting_on_me",
     "suggested_next",
-    "worklog",
     "agenda",
     "window.since",
     "agenda.calendar.events",
 )
 # Backticked words in a prompt that are neither a tool nor a briefing field.
-OTHER_WORDS = {"reviewed"}
+OTHER_WORDS: set[str] = set()
 
 
 def _names_in(text: str) -> set[str]:
@@ -204,10 +201,9 @@ class TestTheTextIsTrueForTheKey(PromptBase):
     def test_a_write_key_is_offered_the_writes_and_told_to_wait_for_a_yes(self):
         self._key(scope=SCOPE_WRITE)
         plan = self.text("plan_my_day")
-        for tool in ("create_todo_item", "update_tasks_bulk", "capture_worklog"):
+        for tool in ("create_todo_item", "update_tasks_bulk"):
             self.assertIn(f"`{tool}`", plan)
         self.assertIn("ONE `update_tasks_bulk` call", plan)
-        self.assertIn("only once the user has confirmed", plan)
         for name in BOTH:
             self.assertIn("Change nothing until the user says yes", self.text(name))
             self.assertNotIn("can only read", self.text(name))
@@ -222,13 +218,28 @@ class TestTheTextIsTrueForTheKey(PromptBase):
 
     def test_a_tool_an_operator_switched_off_is_not_named(self):
         self._key(scope=SCOPE_WRITE)
-        off = frozenset({"capture_worklog"})
+        off = frozenset({"update_tasks_bulk"})
         with override_settings(
             SEARCH_ENGINE={**settings.SEARCH_ENGINE, "AGENT_DISABLED_TOOLS": off}
         ):
             plan = self.text("plan_my_day")
-        self.assertNotIn("capture_worklog", plan)
+        self.assertNotIn("update_tasks_bulk", plan)
         self.assertIn("`create_todo_item`", plan, "the rest still is")
+
+    def test_no_prompt_offers_the_worklog_whatever_the_key_can_do(self):
+        """MIP-1153: Genos never expects input from the member, so no prompt asks the model
+        to save anything to their worklog or to plan from it."""
+        for scope in (SCOPE_WRITE, SCOPE_READ):
+            self._key(scope=scope)
+            for name in BOTH:
+                text = self.text(name).lower()
+                self.assertNotIn("worklog", text, (scope, name))
+        # Even when the tool is on offer to the key, the text does not reach for it.
+        for name in BOTH:
+            text = prompts.get_prompt(
+                name, {}, frozenset({"get_my_briefing", "capture_worklog", "create_todo_item"})
+            )
+            self.assertNotIn("worklog", json.dumps(text).lower(), name)
 
     def test_both_start_from_the_briefing_with_the_right_window(self):
         self._key(scope=SCOPE_WRITE)
@@ -301,11 +312,14 @@ class TestTheInstructionsSayItToo(PromptBase):
     def instructions(self):
         return protocol.initialize_result({})["instructions"]
 
-    def test_they_point_at_the_briefing_and_the_worklog(self):
+    def test_they_point_at_the_briefing_and_no_longer_offer_the_worklog(self):
+        """MIP-1153: the worklog is not an input, so the handshake never asks the model to
+        offer to save what the member says, and says Genos does not ask them to report."""
         text = self.instructions()
         self.assertIn("`get_my_briefing`", text)
-        self.assertIn("`capture_worklog`", text)
-        self.assertIn("if you have that tool", text, "a read-only key has no capture_worklog")
+        self.assertNotIn("worklog", text.lower())
+        self.assertNotIn("offer to save", text)
+        self.assertIn("Do not ask them to report", text)
 
     def test_they_ask_for_short_answers_and_a_yes_before_a_change(self):
         text = self.instructions()

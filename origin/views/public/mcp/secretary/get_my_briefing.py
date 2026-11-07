@@ -2,7 +2,7 @@
 
 One call that catches the member up and helps them plan: what others changed on their
 things, what they did themselves, what waits on them and what they wait on, today's
-agenda, their worklog, and
+agenda, and
 the few things to look at first, with why. The logic is in `origin/services/briefing.py`.
 """
 
