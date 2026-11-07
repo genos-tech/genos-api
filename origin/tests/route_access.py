@@ -190,6 +190,17 @@ REGISTRY = {
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
     ),
+    # views.common.schedule_views (MIP-1150): every call builds its context from request.user
+    # and the service filters on user AND team; someone else's id is the same 404
+    "origin.views.common.schedule_views.ScheduleListView": self_only(
+        "the caller's own schedules (user and team on every query, in the service)"
+    ),
+    "origin.views.common.schedule_views.ScheduleDetailView": self_only(
+        "the caller's own schedule: looked up by id AND user AND team, anything else is a 404"
+    ),
+    "origin.views.common.schedule_views.ScheduleRunView": self_only(
+        "the caller's own schedule: looked up by id AND user AND team, anything else is a 404"
+    ),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(
         "exchanges the HttpOnly refresh cookie for a new access token; the cookie is the credential"
