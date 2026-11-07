@@ -463,12 +463,15 @@ def _read_tasks(
                 source="delivery",
                 key=("delivery", d.pk),
                 what="pr_merged",
-                summary="merged a PR"
-                + (f": {wrap_workspace_content(d.pr_title)}" if d.pr_title else ""),
+                summary="merged a PR",
                 label="GitHub",
                 automated=True,
                 via="task",
-                extra={"pr_number": d.pr_number} if d.pr_number else {},
+                # The title comes from GitHub: its own fenced field, never inside the sentence.
+                extra={
+                    **({"pr_number": d.pr_number} if d.pr_number else {}),
+                    **({"pr_title": wrap_workspace_content(d.pr_title)} if d.pr_title else {}),
+                },
             ),
         )
 
