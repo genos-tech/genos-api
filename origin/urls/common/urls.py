@@ -71,6 +71,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimStatusView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.schedule_views import ScheduleDetailView, ScheduleListView, ScheduleRunView
 from origin.views.common.security_event_views import (
     MySecurityEventListView,
     TeamSecurityEventListView,
@@ -417,6 +418,17 @@ urlpatterns = [
         "api/v2/mcp/oauth/consent/context/",
         McpConsentContextView.as_view(),
         name="mcp_oauth_consent_context",
+    ),
+    path("api/v2/schedules/", ScheduleListView.as_view(), name="schedules"),
+    path(
+        "api/v2/schedules/<uuid:schedule_id>/",
+        ScheduleDetailView.as_view(),
+        name="schedule_detail",
+    ),
+    path(
+        "api/v2/schedules/<uuid:schedule_id>/run/",
+        ScheduleRunView.as_view(),
+        name="schedule_run",
     ),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),
     path(
