@@ -104,6 +104,45 @@ class TestListAndCreate(ScheduleViewBase):
         self.assertEqual(jobs["fake_day"]["title"], "Fake day")
         self.assertEqual(jobs["fake_day"]["params"]["day"]["enum"], ["today", "yesterday"])
 
+    def test_two_suggested_schedules_are_offered_and_accepting_one_makes_it_disappear(self):
+        # The test registry has no real jobs, so register the two a suggestion names.
+        with mock.patch.dict(
+            JOBS,
+            {
+                "what_to_do_today": Job("what_to_do_today", "Today", "d", fake_job, {}),
+                "what_you_did": Job(
+                    "what_you_did",
+                    "Did",
+                    "d",
+                    fake_job,
+                    {"properties": {"day": {"type": "string", "enum": ["today", "yesterday"]}}},
+                ),
+            },
+        ):
+            first = self.client.get(LIST + self.q).data["suggestions"]
+            self.assertEqual([x["key"] for x in first], ["morning_plan", "evening_recap"])
+            self.assertEqual(
+                first[0],
+                {
+                    "key": "morning_plan",
+                    "name": "Morning plan",
+                    "job": "what_to_do_today",
+                    "params": {},
+                    "frequency": "daily",
+                    "timeOfDay": "09:00",
+                },
+            )
+            # Accepting is an ordinary create from the suggestion's own fields.
+            accept = {k: v for k, v in first[0].items() if k != "key"}
+            res = self.client.post(LIST, {**accept, "team_id": self.team_id}, format="json")
+            self.assertEqual(res.status_code, 201, res.data)
+            after = self.client.get(LIST + self.q).data["suggestions"]
+            self.assertEqual([x["key"] for x in after], ["evening_recap"])
+            # And it is an ordinary schedule: it can be deleted, after which it is offered again.
+            self.client.delete(f"{LIST}{res.data['schedule']['id']}/{self.q}")
+            again = self.client.get(LIST + self.q).data["suggestions"]
+            self.assertEqual(len(again), 2)
+
     def test_a_schedule_is_created_and_read_back_in_the_pages_shape(self):
         row = self.create(name="What to do", frequency="weekly", weekdays=[0, 2])
         self.assertEqual(

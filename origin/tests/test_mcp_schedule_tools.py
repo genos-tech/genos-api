@@ -148,6 +148,26 @@ class TestCreateAndList(ScheduleToolBase):
         self.assertEqual(jobs["fake_day"]["description"], "A job for the tests.")
         self.assertIn("day", jobs["fake_day"]["params"])
 
+    def test_the_list_offers_the_suggested_schedules_the_member_does_not_have(self):
+        with mock.patch.dict(
+            JOBS,
+            {
+                "what_to_do_today": Job("what_to_do_today", "Today", "d", fake_job, {}),
+                "what_you_did": Job(
+                    "what_you_did",
+                    "Did",
+                    "d",
+                    fake_job,
+                    {"properties": {"day": {"type": "string", "enum": ["today", "yesterday"]}}},
+                ),
+            },
+        ):
+            suggested = self.ok("list_my_schedules")["suggested"]
+            self.assertEqual([s["key"] for s in suggested], ["morning_plan", "evening_recap"])
+            self.create(name="Mine", job="what_to_do_today", frequency="daily")
+            suggested = self.ok("list_my_schedules")["suggested"]
+            self.assertEqual([s["key"] for s in suggested], ["evening_recap"])
+
     def test_every_recurrence_reads_naturally(self):
         cases = [
             ({"frequency": "daily"}, "every day at 09:00"),
