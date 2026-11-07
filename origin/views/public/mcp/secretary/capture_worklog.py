@@ -81,7 +81,7 @@ def _capture(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 CAPTURE_WORKLOG = Tool(
     name="capture_worklog",
     description=(
-        "Save what the member said they did, will do, wait on or decided, in their private worklog."
+        "Save text in the member's private worklog scratchpad, only when the member asks for that."
     ),
     parameters_schema={
         "type": "OBJECT",

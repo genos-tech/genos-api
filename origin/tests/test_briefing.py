@@ -253,7 +253,7 @@ class TestTheWindow(BriefingBase):
         self.assertIsNone(self.state())
 
     def test_a_briefing_that_fails_does_not_use_up_the_window(self):
-        with mock.patch.object(briefing, "worklog_section", side_effect=RuntimeError("boom")):
+        with mock.patch.object(briefing, "stale_mine", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 self.build(self.now)
         self.assertIsNone(self.state(), "the stamp moves only after the briefing is built")
@@ -827,30 +827,26 @@ class TestWaiting(BriefingBase):
         self.assertEqual(waiting_for["display_id"], blocker.display_id)
         self.assertEqual(waiting_for["assignee"], "otheruser")
 
-    def test_my_open_waiting_notes_are_listed_and_resolved_or_rejected_ones_are_not(self):
+    def test_it_waits_on_blocked_tasks_only_and_a_worklog_waiting_note_is_not_read(self):
+        """MIP-1153: the worklog is no longer an input, so a `waiting` item the member once
+        saved there is not a thing they are waiting on, as far as the briefing goes."""
         entry = WorklogEntry.objects.create(
             team=self.team, author=self.user, raw_text="waiting on Aki"
         )
-
-        def item(summary, **kw):
-            return WorklogItem.objects.create(
-                entry=entry,
-                team=self.team,
-                author=self.user,
-                kind="waiting",
-                summary=summary,
-                **kw,
-            )
-
-        item("Aki's copy", person_hint="Aki")
-        item("Resolved one", status="resolved")
-        item("Rejected one", review_state="rejected")
-        waiting = self.brief()["waiting_on_others"]["worklog_waiting"]
-        self.assertEqual([w["summary"] for w in waiting], ["Aki's copy"])
-        self.assertEqual(waiting[0]["person_hint"], "Aki")
+        WorklogItem.objects.create(
+            entry=entry,
+            team=self.team,
+            author=self.user,
+            kind="waiting",
+            summary="Aki's copy",
+            person_hint="Aki",
+        )
+        waiting = self.brief()["waiting_on_others"]
+        self.assertEqual(set(waiting), {"blocked_tasks"})
+        self.assertNotIn("Aki", json.dumps(self.brief()))
 
 
-class TestStaleAndWorklog(BriefingBase):
+class TestStale(BriefingBase):
     def age(self, task, **delta):
         TaskMaster.objects.filter(pk=task.pk).update(ts_updated_at=self.now - timedelta(**delta))
 
@@ -869,43 +865,24 @@ class TestStaleAndWorklog(BriefingBase):
         self.assertEqual(stale[0]["days_idle"], 12)
         self.assertNotIn(fresh.task_id, [t["task_id"] for t in stale])
 
-    def test_the_worklog_section_has_today_yesterday_and_open_next_steps(self):
+    def test_the_worklog_is_not_in_the_briefing_at_all(self):
+        """MIP-1153: Genos never expects input from the member, so what they saved in their
+        private worklog (their own, today, yesterday, open next steps) is not read."""
         zone = zone_for_user_id(self.user.id)
         noon = self.now.astimezone(zone).replace(hour=12, minute=0)
-        today = WorklogEntry.objects.create(
-            team=self.team, author=self.user, raw_text="today", occurred_at=noon
-        )
-        yesterday = WorklogEntry.objects.create(
-            team=self.team,
-            author=self.user,
-            raw_text="yesterday",
-            occurred_at=noon - timedelta(days=1),
-        )
-        WorklogEntry.objects.create(
-            team=self.team,
-            author=self.user,
-            raw_text="last week",
-            occurred_at=noon - timedelta(days=6),
+        mine = WorklogEntry.objects.create(
+            team=self.team, author=self.user, raw_text="my scratch text", occurred_at=noon
         )
         WorklogItem.objects.create(
-            entry=yesterday,
-            team=self.team,
-            author=self.user,
-            kind="next",
-            summary="Write the migration",
+            entry=mine, team=self.team, author=self.user, kind="next", summary="Write the migration"
         )
-        section = self.brief()["worklog"]
-        self.assertEqual([e["entry_id"] for e in section["today"]], [today.entry_id])
-        self.assertEqual([e["entry_id"] for e in section["yesterday"]], [yesterday.entry_id])
-        self.assertEqual([i["summary"] for i in section["open_next"]], ["Write the migration"])
-        self.assertEqual(
-            set(section["open_next"][0]),
-            {"item_id", "kind", "summary", "suggested", "noted_at", "entry_id"},
-        )
-
-    def test_it_is_only_my_worklog(self):
         WorklogEntry.objects.create(team=self.team, author=self.user2, raw_text="user2 private")
-        self.assertNotIn("user2 private", json.dumps(self.brief()))
+        brief = self.brief()
+        self.assertNotIn("worklog", brief)
+        text = json.dumps(brief)
+        for secret in ("my scratch text", "Write the migration", "user2 private"):
+            self.assertNotIn(secret, text)
+        self.assertNotIn("worklog", text.lower())
 
 
 class TestSuggestions(BriefingBase):
@@ -1058,10 +1035,10 @@ class TestPublishing(BriefingBase):
             "waiting_on_me",
             "waiting_on_others",
             "stale_mine",
-            "worklog",
             "suggested_next",
         ):
             self.assertIn(key, out)
+        self.assertNotIn("worklog", out)
         self.assertEqual(out["changed_for_me"]["items"], [])
         self.assertEqual(out["suggested_next"], [])
         self.assertEqual(out["me"]["username"], "testuser")
@@ -1109,6 +1086,13 @@ class TestPublishing(BriefingBase):
         size = len(json.dumps(brief))
         sections = {key: len(json.dumps(value)) for key, value in brief.items()}
         self.assertLess(size, 32_000, f"the briefing is {size} characters: {sections}")
+
+    def test_the_tool_description_does_not_mention_the_worklog(self):
+        """MIP-1153: the briefing no longer has a worklog section, so the text a model reads
+        must not promise one."""
+        text = self.listed()["get_my_briefing"]["description"]
+        self.assertNotIn("worklog", text.lower())
+        self.assertIn("`what_you_did`", text, "the briefing's own activity section stays")
 
     def test_the_summary_line_counts_what_it_found(self):
         task = self.make_task()

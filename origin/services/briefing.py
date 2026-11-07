@@ -61,7 +61,6 @@ from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
-from origin.services import worklog
 from origin.services.channel_scope import readable_chats_qs
 from origin.services.user_time import zone_for_user_id
 
@@ -90,8 +89,6 @@ EVENTS_HOT = 6
 EVENTS_REST = 2
 MAX_LIST = 8
 MAX_TODOS = 15
-WORKLOG_ENTRIES = 3
-WORKLOG_TEXT_CHARS = 120
 EVENT_POOL = 600
 SNIPPET_CHARS = 140
 SUGGESTIONS = 3
@@ -993,12 +990,7 @@ def waiting_on_others(ctx: ToolContext, names: _Names) -> dict[str, Any]:
                 "waiting_for": waiting_for,
             }
         )
-    return {
-        "blocked_tasks": blocked,
-        "worklog_waiting": [
-            worklog.compact_item(i) for i in worklog.open_items(ctx, ("waiting",), MAX_LIST)
-        ],
-    }
+    return {"blocked_tasks": blocked}
 
 
 def stale_mine(
@@ -1014,34 +1006,6 @@ def stale_mine(
         .order_by("ts_updated_at")[:MAX_LIST]
     )
     return [{**_task_row(t, today), "days_idle": (now - t.ts_updated_at).days} for t in rows]
-
-
-def _compact_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    out = {
-        "entry_id": entry["entry_id"],
-        "local_date": entry["local_date"],
-        "text": entry["text"],
-        "items": [worklog.compact_item(i) for i in entry["items"]],
-    }
-    if entry.get("text_truncated"):
-        out["text_truncated"] = True
-    return out
-
-
-def worklog_section(ctx: ToolContext) -> dict[str, Any]:
-    today = worklog.list_entries(
-        ctx, window="today", limit=WORKLOG_ENTRIES, max_text=WORKLOG_TEXT_CHARS
-    )
-    yesterday = worklog.list_entries(
-        ctx, window="yesterday", limit=WORKLOG_ENTRIES, max_text=WORKLOG_TEXT_CHARS
-    )
-    return {
-        "today": [_compact_entry(e) for e in today["entries"]],
-        "yesterday": [_compact_entry(e) for e in yesterday["entries"]],
-        "open_next": [
-            worklog.compact_item(i) for i in worklog.open_items(ctx, ("next",), MAX_LIST)
-        ],
-    }
 
 
 # --------------------------------------------------------------------------- #
@@ -1458,7 +1422,6 @@ def build_briefing(
         "waiting_on_others": waiting_others,
         "stale_mine": stale_mine(ctx, now, zone, project),
         "what_you_did": did,
-        "worklog": worklog_section(ctx),
         "suggested_next": suggestions,
     }
     names.fill()

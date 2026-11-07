@@ -4,7 +4,7 @@ An MCP prompt is a canned instruction the CLIENT shows the member as a command: 
 Claude Code they appear as `/mcp__genos__catch_me_up` and `/mcp__genos__plan_my_day`.
 The member types one, the client asks us for the prompt, and the model it runs gets our
 text as its first message. Genos pays nothing for the thinking: the model on the other end
-does it, with `get_my_briefing` and the worklog tools as its hands.
+does it, with `get_my_briefing` and the workspace tools as its hands.
 
 What the text asks for is what Ken asked of the secretary (2026-11-06): the member
 should not have to read or type much. So the answer is SHORT and in a fixed order (what
@@ -40,7 +40,6 @@ _WINDOWS = ("since_last", "today", "week")
 _WRITE_TOOLS = (
     "create_todo_item",
     "update_tasks_bulk",
-    "capture_worklog",
     "update_task",
     "add_comment",
 )
@@ -114,18 +113,13 @@ def _plan_my_day(args: dict[str, str], tools: frozenset[str]) -> str:
             "apply task changes the plan needs (a due date, a priority) in ONE "
             "`update_tasks_bulk` call"
         )
-    if "capture_worklog" in tools:
-        offers.append(
-            "save the plan as a worklog note with `capture_worklog` (kind next; set "
-            "`reviewed` only once the user has confirmed the items)"
-        )
     focus = args.get("focus")
     lines = [
         "Help the user plan today in Genos.",
         "",
         '1. Call `get_my_briefing` with window "today".',
         "2. Propose at most 5 things to focus on, in order. Build them from `suggested_next`, "
-        "what is due or overdue in `agenda`, the open next steps in `worklog`, and anything "
+        "what is due or overdue in `agenda`, and anything "
         "in `waiting_on_me` that needs a reaction. Give each a few-word reason taken from the "
         "briefing, so the user can disagree with it. A priority label alone is not a reason.",
     ]

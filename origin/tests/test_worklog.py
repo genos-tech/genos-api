@@ -770,6 +770,24 @@ class TestPublishing(WorklogBase):
         declared = {d.name for d in _build_tool_declarations()}
         self.assertEqual(declared & set(NAMES), set())
 
+    def test_no_description_invites_the_model_to_save_on_its_own(self):
+        """MIP-1153: Genos never expects input from the member. The tools stay (what a
+        member already saved must stay readable and deletable) but nothing in their text
+        tells the model to offer or to save unprompted."""
+        listed = self.listed()
+        for name in NAMES:
+            text = " ".join(listed[name]["description"].split())
+            self.assertIn("private worklog", text, name)
+            for invitation in ("and offer it", "end of a day", "Use it when they tell you"):
+                self.assertNotIn(invitation, text, name)
+        capture = " ".join(listed["capture_worklog"]["description"].split())
+        self.assertIn("only when THEY ask", capture)
+        self.assertIn("Never offer it", capture)
+        self.assertIn("Genos does not need the worklog", capture)
+        self.assertIn(
+            "only when the member asks", " ".join(listed["list_my_worklog"]["description"].split())
+        )
+
     def test_every_worklog_tool_is_on_the_catalog(self):
         from origin.views.public.mcp import tools as mcp_tools
 

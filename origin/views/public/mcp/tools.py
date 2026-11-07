@@ -1667,14 +1667,13 @@ CATALOG: tuple[McpTool, ...] = (
             "item's events in time order and the busiest first, so read an item as a story, "
             "not a list of events; `waiting_on_me` (pending requests, and @mentions they have "
             "not answered, each with its `source`: chat, a task comment, a task "
-            "description or a note); `waiting_on_others` (blocked tasks and what they noted as "
-            "waiting); `agenda` (due today, overdue, to-dos, and today's calendar, read "
+            "description or a note); `waiting_on_others` (blocked tasks and who they wait for); "
+            "`agenda` (due today, overdue, to-dos, and today's calendar, read "
             "live); `stale_mine` (tasks untouched for a week); `what_you_did` (what the member "
             "did today and yesterday, from what is already saved: tasks they changed and "
             "commented on, notes they edited, to-dos they finished, chats as counts only, and "
             "PRs on their own tasks, flagged `automated`; nothing was asked of them, so say "
-            "it as what they did); `worklog` (what they noted "
-            "today and yesterday, and their open next steps); and `suggested_next`, the top "
+            "it as what they did); and `suggested_next`, the top "
             "three with the reasons. The reasons come from activity and dates, and priority "
             "is only a hint: say them, and let the member disagree. `window` is since_last "
             "(the default: since they last asked, never empty on a repeat call within two "
@@ -1688,19 +1687,21 @@ CATALOG: tuple[McpTool, ...] = (
         name="capture_worklog",
         registry_name="capture_worklog",
         description=(
-            "Save what the member says they did, will do, are waiting on or decided, in "
-            "their own private worklog. Use it when they tell you something like that "
-            "('merged the landing PR, waiting on Aki for the copy, dropping the chip'), "
-            "and offer it at the end of a day. Only `text` is required: it is kept exactly "
-            "as written. Split it into `items` yourself: each has a `kind` (done, next, "
-            "waiting, decision, note), a short `summary` in the member's words and the "
-            "exact `evidence` from `text`. Link an item to a task, note, milestone or "
-            "project with `refs`; only things the member can open are linked, and any "
-            "that could not be are listed in `unresolved_refs`, so tell the member. Items "
-            "are saved as suggestions unless the member has confirmed them in this "
-            "conversation (`reviewed: true`). Write only what the member said: do not "
-            "invent progress, and do not copy calendar events or other people's messages "
-            "into it. The worklog is visible to the member alone. Saving the same text "
+            "Save text in the member's own private worklog, a scratchpad that only they "
+            "can read. Use it only when THEY ask you to save something there ('add that "
+            "to my worklog'). Never offer it, never save on your own, and do not record "
+            "what they did or said in passing: Genos does not need the worklog and does "
+            "not read it for the briefing or anything else, so what is not saved is not "
+            "missed (work is written down in task notes, team notes and task comments). "
+            "Only `text` is required: it is kept exactly as written. You may split it "
+            "into `items`: each has a `kind` (done, next, waiting, decision, note), a "
+            "short `summary` in the member's words and the exact `evidence` from `text`. "
+            "Link an item to a task, note, milestone or project with `refs`; only things "
+            "the member can open are linked, and any that could not be are listed in "
+            "`unresolved_refs`, so tell the member. Items are saved as suggestions unless "
+            "the member has confirmed them in this conversation (`reviewed: true`). Write "
+            "only what the member said to save: do not invent progress, and do not copy "
+            "calendar events or other people's messages into it. Saving the same text "
             "twice within two minutes returns the first entry. Requires a write-scoped "
             "API key."
         ),
@@ -1710,21 +1711,25 @@ CATALOG: tuple[McpTool, ...] = (
         name="list_my_worklog",
         registry_name="list_my_worklog",
         description=(
-            "The member's own worklog for today (the default), yesterday, the last week "
-            "or a range of dates, newest first, each entry with its items. Filter by "
-            "`kind`, `status` (open or resolved) or `review_state`. Rejected items are "
-            "left out unless asked for. Dates and `today` follow the member's own time "
-            "zone. Nobody else's worklog can be read."
+            "The member's own private worklog, a scratchpad of what they chose to save "
+            "there (it may well be empty). Genos does not need it and the briefing does "
+            "not include it: call this only when the member asks to see their worklog. "
+            "Shows today (the default), yesterday, the last week or a range of dates, "
+            "newest first, each entry with its items. Filter by `kind`, `status` (open "
+            "or resolved) or `review_state`. Rejected items are left out unless asked "
+            "for. Dates and `today` follow the member's own time zone. Nobody else's "
+            "worklog can be read."
         ),
     ),
     McpTool(
         name="update_worklog_item",
         registry_name="update_worklog_item",
         description=(
-            "Change one item in the member's worklog: reword it or change its kind, mark "
-            "it `accepted` once they confirm it or `rejected` if it is wrong, or mark a "
-            "next or waiting item `resolved` when it is done. Get `item_id` from "
-            "`capture_worklog` or `list_my_worklog`. Requires a write-scoped API key."
+            "Change one item in the member's private worklog scratchpad, only when they "
+            "ask: reword it or change its kind, mark it `accepted` once they confirm it "
+            "or `rejected` if it is wrong, or mark a next or waiting item `resolved` "
+            "when it is done. Get `item_id` from `capture_worklog` or `list_my_worklog`. "
+            "Requires a write-scoped API key."
         ),
         write=True,
     ),
@@ -1732,11 +1737,11 @@ CATALOG: tuple[McpTool, ...] = (
         name="delete_worklog_entry",
         registry_name="delete_worklog_entry",
         description=(
-            "Delete one entry from the member's worklog, with all its items. This can't "
-            "be undone: call it only when the member asked for that entry to go; to fix "
-            "an item use `update_worklog_item`. Get `entry_id` from `list_my_worklog`. "
-            "Requires a write-scoped API key that its owner also opted into destructive "
-            "tools."
+            "Delete one entry from the member's private worklog scratchpad, with all its "
+            "items. This can't be undone: call it only when the member asked for that "
+            "entry to go; to fix an item use `update_worklog_item`. Get `entry_id` from "
+            "`list_my_worklog`. Requires a write-scoped API key that its owner also "
+            "opted into destructive tools."
         ),
         write=True,
         destructive=True,
