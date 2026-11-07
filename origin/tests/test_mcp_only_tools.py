@@ -1,6 +1,6 @@
 """MCP-only tools (MIP-1070): published on MCP, invisible to the in-app agent.
 
-The secretary's worklog and briefing are driven by a connected client's own model.
+The secretary's briefing and schedules are driven by a connected client's own model.
 Anything that changes what the in-app model sees waits for the December eval, so
 these tools must not reach the app by any route. They live in `MCP_ONLY_REGISTRY`,
 not `REGISTRY`, because the app reads `REGISTRY` both to BUILD what the model sees

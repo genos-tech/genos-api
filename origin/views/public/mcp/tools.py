@@ -1,7 +1,7 @@
 """The published tool catalog, and the adapter down to the registry.
 
 Genos's agent tools are published here, except five left out on purpose, plus the few
-that exist only on this surface (the secretary tools: worklog and briefing, MIP-1070). The
+that exist only on this surface (the secretary tools: the briefing and schedules, MIP-1070). The
 five are left out on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, two are `list_milestones`
@@ -84,8 +84,8 @@ answer is a hang. Two consequences, both load-bearing:
   `delete_todo_item` (MIP-884: the UI's delete is a hard delete that takes
   the sub-items and reminders with it) are published on the same grounds,
   since a user asks an assistant to delete a milestone or "that to-do" by
-  name; `delete_worklog_entry` (MIP-1071) deletes one entry of the member's own
-  private worklog, which is MCP-only, so it has no in-app twin to hold the
+  name; `delete_my_schedule` (MIP-1147) deletes one of the member's own
+  schedules, which is MCP-only, so it has no in-app twin to hold the
   opt-in. Each delete is published deliberately, behind the opt-in below, and
   not as a side effect of the tool having been built; the asymmetry is on
   purpose rather than an oversight to be "fixed" by adding more. (The one
@@ -1654,7 +1654,7 @@ CATALOG: tuple[McpTool, ...] = (
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
-    # ---- the secretary (MIP-1071, MIP-1072). MCP only: the in-app agent never
+    # ---- the secretary (MIP-1072, MIP-1147). MCP only: the in-app agent never
     # sees these (`MCP_ONLY_REGISTRY`, MIP-1070). Private to the caller. ----
     McpTool(
         name="get_my_briefing",
@@ -1682,69 +1682,6 @@ CATALOG: tuple[McpTool, ...] = (
             "what they can open. Present what needs a reaction first, then what changed, "
             "then what is waiting; offer actions, and change nothing until they confirm."
         ),
-    ),
-    McpTool(
-        name="capture_worklog",
-        registry_name="capture_worklog",
-        description=(
-            "Save text in the member's own private worklog, a scratchpad that only they "
-            "can read. Use it only when THEY ask you to save something there ('add that "
-            "to my worklog'). Never offer it, never save on your own, and do not record "
-            "what they did or said in passing: Genos does not need the worklog and does "
-            "not read it for the briefing or anything else, so what is not saved is not "
-            "missed (work is written down in task notes, team notes and task comments). "
-            "Only `text` is required: it is kept exactly as written. You may split it "
-            "into `items`: each has a `kind` (done, next, waiting, decision, note), a "
-            "short `summary` in the member's words and the exact `evidence` from `text`. "
-            "Link an item to a task, note, milestone or project with `refs`; only things "
-            "the member can open are linked, and any that could not be are listed in "
-            "`unresolved_refs`, so tell the member. Items are saved as suggestions unless "
-            "the member has confirmed them in this conversation (`reviewed: true`). Write "
-            "only what the member said to save: do not invent progress, and do not copy "
-            "calendar events or other people's messages into it. Saving the same text "
-            "twice within two minutes returns the first entry. Requires a write-scoped "
-            "API key."
-        ),
-        write=True,
-    ),
-    McpTool(
-        name="list_my_worklog",
-        registry_name="list_my_worklog",
-        description=(
-            "The member's own private worklog, a scratchpad of what they chose to save "
-            "there (it may well be empty). Genos does not need it and the briefing does "
-            "not include it: call this only when the member asks to see their worklog. "
-            "Shows today (the default), yesterday, the last week or a range of dates, "
-            "newest first, each entry with its items. Filter by `kind`, `status` (open "
-            "or resolved) or `review_state`. Rejected items are left out unless asked "
-            "for. Dates and `today` follow the member's own time zone. Nobody else's "
-            "worklog can be read."
-        ),
-    ),
-    McpTool(
-        name="update_worklog_item",
-        registry_name="update_worklog_item",
-        description=(
-            "Change one item in the member's private worklog scratchpad, only when they "
-            "ask: reword it or change its kind, mark it `accepted` once they confirm it "
-            "or `rejected` if it is wrong, or mark a next or waiting item `resolved` "
-            "when it is done. Get `item_id` from `capture_worklog` or `list_my_worklog`. "
-            "Requires a write-scoped API key."
-        ),
-        write=True,
-    ),
-    McpTool(
-        name="delete_worklog_entry",
-        registry_name="delete_worklog_entry",
-        description=(
-            "Delete one entry from the member's private worklog scratchpad, with all its "
-            "items. This can't be undone: call it only when the member asked for that "
-            "entry to go; to fix an item use `update_worklog_item`. Get `entry_id` from "
-            "`list_my_worklog`. Requires a write-scoped API key that its owner also "
-            "opted into destructive tools."
-        ),
-        write=True,
-        destructive=True,
     ),
     McpTool(
         name="list_my_schedules",
@@ -2040,7 +1977,6 @@ OVERWRITE_TOOLS = frozenset(
         "update_task_dependencies",
         "update_tasks_bulk",
         "update_todo_item",
-        "update_worklog_item",
         "update_my_schedule",
     }
 )
@@ -2052,7 +1988,6 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "add_comment",
         "add_project_tag",
         "add_task_delivery",
-        "capture_worklog",
         "create_my_schedule",
         "create_note",
         "create_task",
