@@ -133,7 +133,7 @@ class McpTierGateTests(BaseAPITestCase):
         with self._as_tier(False):
             quota.invalidate_effective_tier([str(self.user.id)])
             message = self._rpc("tools/list").data["error"]["message"]
-        self.assertIn("Pro", message)
+        self.assertIn("Core", message)
         self.assertIn("Settings", message)
         # The REST API is NOT gated, and someone told "your plan doesn't
         # include this" will otherwise assume their key is dead.
@@ -146,7 +146,7 @@ class McpTierGateTests(BaseAPITestCase):
         with self._as_tier(False):
             quota.invalidate_effective_tier([str(self.user.id)])
             message = self._rpc("tools/list").data["error"]["message"]
-        self.assertIn("Pro plan and above", message)
+        self.assertIn("Core plan and above", message)
         self.assertNotIn("upgrade", message.lower())
 
     # -- the handshake stays open --
@@ -229,7 +229,8 @@ class McpTierIsAdvertisedTests(BaseAPITestCase):
         # The actual product decision, asserted where a reader looks for
         # it rather than only in a settings table.
         self.assertFalse(by_tier["free"]["mcp_enabled"])
-        self.assertFalse(by_tier["core"]["mcp_enabled"])
+        # Core can connect AI apps (Ken, 2026-11-07, MIP-1138); only Free cannot.
+        self.assertTrue(by_tier["core"]["mcp_enabled"])
         self.assertTrue(by_tier["pro"]["mcp_enabled"])
         self.assertTrue(by_tier["max"]["mcp_enabled"])
         self.assertTrue(by_tier["enterprise"]["mcp_enabled"])
