@@ -324,6 +324,13 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
     }
 
 
+def activity_event(row: TaskActivity, me: str) -> dict[str, Any]:
+    """One task activity row in the briefing's words ("status: Open → WIP", "linked a PR"),
+    for the scheduled reports (MIP-1152): `summary`, who (`_actor` or the automation's
+    `_label`) and `at`."""
+    return _activity_event(row, me, None)  # type: ignore[arg-type]  # `names` is not read
+
+
 def _heat_of(events: list[dict[str, Any]]) -> int:
     """Heat from what PEOPLE did. Automation echoes (a PR linked, a task closed because its
     PR merged) are consequences, usually of the member's own work, and say nothing about how
@@ -1257,6 +1264,26 @@ def what_you_did(ctx: ToolContext, now: datetime, zone, names: _Names) -> dict[s
     }
 
 
+def did_between(
+    ctx: ToolContext,
+    since: datetime,
+    until: datetime,
+    max_items: int,
+    max_events: int,
+    zone,
+) -> dict[str, Any]:
+    """What the member did in `[since, until)`, with the caps the caller chooses. A scheduled
+    report has more room than the briefing, which is sized for a model's context (MIP-1148,
+    MIP-1152). People are named once, after everything that needs a name has said so."""
+    names = _Names(ctx)
+    did = {
+        "local_date": since.astimezone(zone).date().isoformat(),
+        **_did_in(ctx, since, until, zone, names, max_items, max_events),
+    }
+    names.fill()
+    return did
+
+
 def did_on_day(
     ctx: ToolContext,
     day: str,
@@ -1265,9 +1292,7 @@ def did_on_day(
     max_items: int,
     max_events: int,
 ) -> dict[str, Any]:
-    """`what_you_did` for ONE day ("today" or "yesterday", the member's own zone), with the
-    caps the caller chooses. A scheduled report has more room than the briefing, which is
-    sized for a model's context (MIP-1148)."""
+    """`what_you_did` for ONE day ("today" or "yesterday", the member's own zone)."""
     if day not in ("today", "yesterday"):
         raise ValueError(f"day must be 'today' or 'yesterday', not {day!r}")
     start_yesterday, start_today, until = _local_day_bounds(now, zone)
@@ -1276,13 +1301,7 @@ def did_on_day(
         if day == "today"
         else (start_yesterday, start_today)
     )
-    names = _Names(ctx)
-    did = {
-        "local_date": start.date().isoformat(),
-        **_did_in(ctx, start, end, zone, names, max_items, max_events),
-    }
-    names.fill()  # people are named once, after everything that needs a name has said so
-    return did
+    return did_between(ctx, start, end, max_items, max_events, zone)
 
 
 _PRIORITY_HINT = {"Critical": 6, "High": 4, "Normal": 2}

@@ -79,6 +79,8 @@ def item_count(report: Report) -> int:
 
 # The built-in jobs. Imported last: each registers itself with the registry above.
 from origin.services.schedule_jobs import (  # noqa: E402, F401
+    milestone_updates,
+    what_is_left,
     what_to_do_today,
     what_you_did,
 )

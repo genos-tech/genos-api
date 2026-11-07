@@ -10,18 +10,20 @@ from typing import Any
 
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools import Tool, ToolContext
-from origin.services import schedule_text, schedules
+from origin.services import schedule_defaults, schedule_text, schedules
 from origin.services.user_time import user_zone
 
 
 def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     user = CustomUser.objects.get(pk=ctx.user_id)
     zone = user_zone(user)
-    rows = [schedule_text.present(s, zone) for s in schedules.list_schedules(ctx)]
+    mine = schedules.list_schedules(ctx)
+    rows = [schedule_text.present(s, zone) for s in mine]
     return {
         "time_zone": zone.key,
         "schedules": rows,
         "jobs": schedule_text.job_catalog(),
+        "suggested": schedule_defaults.suggestions_for(mine),
         "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
         "__summary__": f"{len(rows)} schedule(s).",
     }

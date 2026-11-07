@@ -1757,7 +1757,9 @@ CATALOG: tuple[McpTool, ...] = (
             "paused if it is (repeated failures pause one). `jobs` lists every job with "
             "what it does and the parameters it takes. Use it before creating or changing "
             "one, to get a `schedule_id`, and when the member asks what Genos does for them "
-            "on a schedule. Nobody else's schedules can be read."
+            "on a schedule. `suggested` lists two ordinary schedules the member does not have yet "
+            "(a morning plan and an evening recap): offer them, and create one only if they say "
+            "yes. Nobody else's schedules can be read."
         ),
     ),
     McpTool(

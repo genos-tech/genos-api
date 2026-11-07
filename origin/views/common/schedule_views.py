@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_text, schedules
+from origin.services import schedule_defaults, schedule_text, schedules
 from origin.services.throttles import WindowRateThrottle
 from origin.services.user_time import user_zone
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -127,6 +127,18 @@ class ScheduleListView(_Base):
                 "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
                 "jobs": schedule_text.job_catalog(),
                 "schedules": [_row(s, zone) for s in rows],
+                # Two ordinary schedules to accept with one step (MIP-1152).
+                "suggestions": [
+                    {
+                        "key": d["key"],
+                        "name": d["name"],
+                        "job": d["job"],
+                        "params": d["params"],
+                        "frequency": d["frequency"],
+                        "timeOfDay": d["time_of_day"],
+                    }
+                    for d in schedule_defaults.suggestions_for(rows)
+                ],
             }
         )
 
