@@ -469,17 +469,18 @@ def note_dependencies(dependencies: Iterable[Any], kind: str) -> None:
         actor = acting_user_id()
         if not recording_activity_for(actor):
             return
-        by_team: dict[str, list[tuple[str, str, str]]] = {}
-        for dep in dependencies:
-            team_id = dep.team_id
-            if team_id is None:
-                from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+        deps = list(dependencies)
+        teams: dict[int, Any] = {}
+        missing = {d.blocked_task_id for d in deps if d.team_id is None}
+        if missing:
+            from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
-                team_id = (
-                    TaskMaster.objects.filter(task_id=dep.blocked_task_id)
-                    .values_list("team_id", flat=True)
-                    .first()
-                )
+            teams = dict(
+                TaskMaster.objects.filter(task_id__in=missing).values_list("task_id", "team_id")
+            )
+        by_team: dict[str, list[tuple[str, str, str]]] = {}
+        for dep in deps:
+            team_id = dep.team_id if dep.team_id is not None else teams.get(dep.blocked_task_id)
             if team_id is None:
                 continue
             by_team.setdefault(str(team_id), []).append(

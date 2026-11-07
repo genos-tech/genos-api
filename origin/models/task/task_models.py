@@ -509,14 +509,29 @@ class TaskBodyAttachmentFact(models.Model):
 class TaskDependencyQuerySet(models.QuerySet):
     def bulk_create(self, objs, *args, **kwargs):
         """`bulk_create` fires no `post_save`, so the acting member's ledger is told here
-        (MIP-1085). With `ignore_conflicts` every edge handed in is counted as added: the one
-        caller (`create_task_plan`) hands in edges between tasks it has just created."""
-        objs = list(objs)
-        created = super().bulk_create(objs, *args, **kwargs)
+        (MIP-1085). With `ignore_conflicts` the edges that already existed are left out, so
+        only the ones this call added are noted."""
         from origin.models.common.member_event_models import KIND_DEPENDENCY_ADD  # noqa: PLC0415
         from origin.services import member_events  # noqa: PLC0415
 
-        member_events.note_dependencies(objs, KIND_DEPENDENCY_ADD)
+        objs = list(objs)
+        already: set[tuple[int, int]] = set()
+        if (
+            objs
+            and kwargs.get("ignore_conflicts")
+            and member_events.recording_activity_for(member_events.acting_user_id())
+        ):
+            already = set(
+                self.model.objects.filter(
+                    blocker_task_id__in={o.blocker_task_id for o in objs},
+                    blocked_task_id__in={o.blocked_task_id for o in objs},
+                ).values_list("blocker_task_id", "blocked_task_id")
+            )
+        created = super().bulk_create(objs, *args, **kwargs)
+        member_events.note_dependencies(
+            [o for o in objs if (o.blocker_task_id, o.blocked_task_id) not in already],
+            KIND_DEPENDENCY_ADD,
+        )
         return created
 
 

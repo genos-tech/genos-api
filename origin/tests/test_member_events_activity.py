@@ -249,6 +249,46 @@ class TestDependencies(Base):
         self.assertFalse(TaskDependency.objects.exists())
         self.assertEqual(MemberEvent.objects.count(), 0)
 
+    def test_bulk_create_notes_only_the_edges_it_added(self):
+        set_current_user(self.user)
+        TaskDependency.objects.create(
+            blocker_task=self.blocker, blocked_task=self.blocked, team_id=self.team.team_id
+        )
+        extra = self.make_task("Extra", number=103)
+        MemberEvent.objects.all().delete()
+        TaskDependency.objects.bulk_create(
+            [
+                TaskDependency(
+                    blocker_task=self.blocker, blocked_task=self.blocked, team_id=self.team.team_id
+                ),
+                TaskDependency(
+                    blocker_task=self.blocker, blocked_task=extra, team_id=self.team.team_id
+                ),
+            ],
+            ignore_conflicts=True,
+        )
+        self.assertEqual(
+            shape(self.events()),
+            [(KIND_DEPENDENCY_ADD, "task", str(extra.task_id), str(self.blocker.task_id))],
+        )
+
+    def test_edges_dropped_by_moving_a_task_to_another_team_are_not_the_members_remove(self):
+        from origin.models.common.team_models import TeamMaster
+        from origin.services.task_project_move import _settle_dependencies
+
+        set_current_user(self.user)
+        TaskDependency.objects.create(
+            blocker_task=self.blocker, blocked_task=self.blocked, team_id=self.team.team_id
+        )
+        MemberEvent.objects.all().delete()
+        other = TeamMaster.objects.create(
+            team_name="Elsewhere", team_email="e@example.com", owner=self.user
+        )
+        TaskMaster.objects.filter(pk=self.blocked.pk).update(team_id=other.team_id)
+        _settle_dependencies([self.blocked.task_id], team_id=other.team_id)
+        self.assertFalse(TaskDependency.objects.exists())
+        self.assertEqual(MemberEvent.objects.count(), 0)
+
     def test_a_queryset_delete_is_a_remove(self):
         set_current_user(self.user)
         TaskDependency.objects.create(
@@ -393,6 +433,12 @@ class TestNoteShares(Base):
         self.assertIn(
             (KIND_NOTE_UNSHARE, "note", self.key(), str(self.user2.id)), shape(self.events())
         )
+
+    def test_sending_the_same_grant_again_is_not_a_second_share(self):
+        self.rest()
+        self.assertEqual(self.post().status_code, 200)
+        self.assertEqual(self.post().status_code, 200)
+        self.assertEqual(self.events().get(kind=KIND_NOTE_SHARE).count, 1)
 
     def test_the_mcp_tool_notes_a_share_and_an_unshare(self):
         self.mcp()

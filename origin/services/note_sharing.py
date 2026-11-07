@@ -85,13 +85,24 @@ def share_note(
     except (TeamMaster.DoesNotExist, CustomUser.DoesNotExist):
         raise SharingRefused("Team or target user not found.", 404)
     with transaction.atomic():
+        # Only a grant or a change of role is noted: sending the same one again is not.
+        previous = None
+        if member_events.recording_activity_for(str(granter_id)):
+            previous = (
+                NotePermissionMaster.objects.filter(
+                    user=target, note_type=note_type, note_id=note_id
+                )
+                .values_list("role_id", flat=True)
+                .first()
+            )
         permission, _ = NotePermissionMaster.objects.update_or_create(
             user=target,
             note_type=note_type,
             note_id=note_id,
             defaults={"team": team, "role_id": role_id},
         )
-        _note(KIND_NOTE_SHARE, granter_id, team_id, note_type, note_id, target_user_id)
+        if previous != role_id:
+            _note(KIND_NOTE_SHARE, granter_id, team_id, note_type, note_id, target_user_id)
     return permission
 
 
