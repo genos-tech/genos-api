@@ -79,6 +79,7 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "get_task": ("task", "task_id"),
     "get_task_blockers": ("task", "task_id"),
     "get_task_history": ("task", "task_id"),
+    "get_item_line": ("task", "task_id"),
     "update_task": ("task", "task_id"),
     "assign_task": ("task", "task_id"),
     "add_comment": ("task", "task_id"),

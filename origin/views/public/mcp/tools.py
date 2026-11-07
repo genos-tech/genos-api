@@ -1684,6 +1684,41 @@ CATALOG: tuple[McpTool, ...] = (
         ),
     ),
     McpTool(
+        name="get_item_line",
+        registry_name="get_item_line",
+        description=(
+            "Read what is going on around ONE task as a line: its events from every source "
+            "in time order, and the lines of the items next to it. Use it when the member "
+            "asks 'what happened on PRJ-123', 'what is going on with this', 'why is this "
+            "stuck' or 'catch me up on this one', and to follow up an item from "
+            "`get_my_briefing`. `line.events` runs oldest to newest, so read it as a story: "
+            "history changes (status, assignee, a PR linked), comments and reactions, "
+            "replies in the chat thread linked to the task, messages and comments elsewhere "
+            "that point at it with a # chip, edits to its task notes, merged PRs, and the "
+            "member's OWN AI-app markers (`source` app: your assistant opened or changed it; "
+            "say it as what they did, never as what someone else did). Each event says `via` "
+            "how it reached the task (task, thread, chip, note_task, marker), who did it (`by`, "
+            "`mine` for the member), a short `text` for comments and messages, and who it "
+            "`mentions`. `events_total` counts the window; the newest `limit` are told, and "
+            "`older_events` says how many were left out. `people` are those on the line. "
+            "`related` gives the neighbours' lines (`relation`: parent, milestone, blocked_by, "
+            "blocks, milestone_work; at most 10, each with its latest few events): "
+            "`related_total`, `related_capped` and `related_quiet` (neighbours with nothing "
+            "in the window) say what was left out; set `include_related` false to read the "
+            "task alone. `unattached` counts the member's own events in the window that "
+            "belong to no item (markers on a project or chat, chat messages in no linked "
+            "thread and with no task chip, completed to-dos): it is a count, never a guess, "
+            "and says nothing about anyone else. `capped` appears when a source was cut. "
+            "Everything is the member's own view: other people's events appear only on items "
+            "the member can open now, and a neighbour they cannot open is left out without "
+            "a trace. `window` is `since` (included) to `until` (excluded), default the last "
+            "seven days, at most 31 days back. Name the task by its display id (PRJ-123), "
+            "its Genos URL, or its numeric id; for a milestone use its backing task."
+        ),
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
         name="list_my_schedules",
         registry_name="list_my_schedules",
         description=(
