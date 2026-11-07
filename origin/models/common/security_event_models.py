@@ -37,6 +37,9 @@ class SecurityAction(models.TextChoices):
     # Once per connection, address and hour, not per call (like `api_key.used`).
     MCP_USED = "mcp.used", "AI app used"
     MCP_REJECTED = "mcp.rejected", "AI app refused"
+    # One per destructive tool call, so a delete leaves a trace of who made it after the row
+    # is gone (MIP-1140). Names and ids only: see `security_events.note_mcp_destructive`.
+    MCP_DESTRUCTIVE = "mcp.destructive", "AI app destructive call"
     MCP_DISCONNECTED = "mcp.disconnected", "AI app disconnected"
     API_KEY_CREATED = "api_key.created", "API key created"
     API_KEY_REVOKED = "api_key.revoked", "API key revoked"

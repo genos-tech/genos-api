@@ -125,7 +125,12 @@ from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools import get_mcp_tool
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
-from origin.services.security_events import note_refusal
+from origin.services.security_events import (
+    DESTRUCTIVE_DONE,
+    DESTRUCTIVE_FAILED,
+    DESTRUCTIVE_REFUSED,
+    note_refusal,
+)
 from origin.views.public.mcp import secretary  # noqa: F401  (registers the MCP-only tools)
 from origin.views.public.mcp.resolve import (
     resolve_milestone_ref,
@@ -2196,6 +2201,27 @@ def _destructive_message(name: str, credential_kind: str, detail: str | None = N
     )
 
 
+def _audit_destructive(
+    audit: Callable[[str, str, dict[str, Any], dict[str, Any]], None] | None,
+    tool: McpTool,
+    outcome: str,
+    arguments: dict[str, Any],
+) -> None:
+    """Hand one destructive call to `audit` (MIP-1140): the tool's name, what became of it, the
+    arguments as sent, and what its published schema declares (each argument's name and enum,
+    so the writer keeps nothing the tool never defined and no free text in a switch). The RESULT is never passed, because it has no place in the log.
+    A trace that cannot be written must not undo or hide a delete that happened, so a failure
+    is logged and swallowed."""
+    if audit is None:
+        return
+    try:
+        properties = input_schema(tool).get("properties") or {}
+        declared = {k: (v or {}).get("enum") for k, v in properties.items()}
+        audit(tool.name, outcome, arguments, declared)
+    except Exception:  # noqa: BLE001 - see the docstring
+        log.exception("MCP destructive-call audit failed for %s", tool.name)
+
+
 def call(
     name: str,
     arguments: dict[str, Any],
@@ -2205,6 +2231,7 @@ def call(
     allow_destructive: bool = False,
     on_unknown_tool: Callable[[str], Exception],
     credential_kind: str = "api_key",
+    audit: Callable[[str, str, dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a published tool and shape its output as a `CallToolResult`.
 
@@ -2219,29 +2246,41 @@ def call(
     if tool is None or tool.registry_name in _disabled_tools():
         raise on_unknown_tool(name)
 
+    args = dict(arguments or {})
+    deleting = deleting_argument(name, args)
+    # A call that deletes, by its tool or by an argument: the security log keeps a trace of
+    # each, whatever became of it (MIP-1140).
+    destroys = tool.destructive or deleting is not None
+
     if tool.write and scope != SCOPE_WRITE:
         # A refusal that is HTTP 200, so the burst alert would never see it
         # (MIP-744).
         note_refusal()
+        if destroys:
+            _audit_destructive(audit, tool, DESTRUCTIVE_REFUSED, args)
         return _text_result(_read_only_message(name, credential_kind), is_error=True)
     if tool.destructive and not allow_destructive:
         note_refusal()
+        _audit_destructive(audit, tool, DESTRUCTIVE_REFUSED, args)
         return _text_result(_destructive_message(name, credential_kind), is_error=True)
-    if not allow_destructive and (deleting := deleting_argument(name, arguments or {})):
+    if not allow_destructive and deleting:
         # Not a delete tool, but this call deletes: held to the same opt-in (MIP-1110).
         note_refusal()
+        _audit_destructive(audit, tool, DESTRUCTIVE_REFUSED, args)
         return _text_result(_destructive_message(name, credential_kind, deleting), is_error=True)
 
-    args = dict(arguments or {})
     # Before anything is resolved or run, so a refused call changes nothing.
     if unknown := _unknown_arguments(tool, args):
         # The key NAMES only, never the values (task text, note bodies). This is how
         # a client that attaches something extra to every call would be noticed:
         # the refusal is new, and what real clients send is not visible from here.
         log.info("MCP %s refused unknown argument(s): %s", name, ", ".join(unknown))
+        if destroys:
+            _audit_destructive(audit, tool, DESTRUCTIVE_FAILED, args)
         return _refuse_unknown_arguments(tool, unknown)
     # Taken out before anything else sees the call: the registry tool has no such
     # argument, and the in-app agent's copy of it must stay as it is.
+    sent = dict(args)
     mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
     try:
         args = resolve_references(tool, args, ctx.team_id)
@@ -2256,7 +2295,18 @@ def call(
         # caller is told the same either way (MIP-744).
         if isinstance(exc, ToolForbidden):
             note_refusal()
+        if destroys:
+            _audit_destructive(audit, tool, DESTRUCTIVE_FAILED, sent)
         return _text_result(str(exc), is_error=True)
+    except Exception:
+        # A bug of ours, surfaced as an internal error by the caller; the attempt still counts.
+        if destroys:
+            _audit_destructive(audit, tool, DESTRUCTIVE_FAILED, sent)
+        raise
+    if destroys:
+        # Here, before the result is shaped, so that a bug while shaping it cannot leave a
+        # delete that happened with no trace.
+        _audit_destructive(audit, tool, DESTRUCTIVE_DONE, sent)
 
     fenced: list[bool] = []
     payload = _strip_workspace_content(dict(payload or {}), fenced)
