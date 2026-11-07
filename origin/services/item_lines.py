@@ -1,0 +1,1096 @@
+"""Item lines (MIP-1083): "lines, not dots".
+
+A LINE is one item's events from every source, in time order. One comment is a dot; a
+comment, a reply in the linked chat thread, a note edit and a merged PR on the same task
+are a line that says what is going on. `related_lines` joins a line to the lines of the
+items around it: the parent task, the milestone and its siblings, the dependency
+neighbours.
+
+**Computed on read, nothing copied.** Every event is read live from the table that already
+holds it (task history, task comments and their reactions and mentions, chat messages and
+their reactions and mentions, note versions, merged PR deliveries) plus `MemberEvent` (the
+member's own AI-app markers and any other kind written there, read generically: `kind`,
+`object_type` and `object_id` are columns, so a new kind simply appears). No table, no
+migration, no stored text. Titles and snippets are read at the moment of reading, through
+the access rules of that moment.
+
+**How an event attaches to a task** (each rule has its own test; an event no rule claims
+stays UNATTACHED, it is never guessed):
+
+  1. the task's own id: its history rows (a comment's rows are told once, from the comment),
+     its comments, their reactions;
+  2. a PR delivery of the task that merged (`TaskDelivery`);
+  3. a task note (`TaskNoteMaster.task`): the note's versions;
+  4. the chat thread linked to the task (`TaskMaster.thread_id`): the thread's messages and
+     the reactions on them. A thread claimed by more than one live task is ambiguous and
+     attaches to none of them;
+  5. a `#` task chip (`hashTask` with a `taskId`) inside a chat message, a task comment or a
+     note version. A chip with only a display id is not followed: display ids are renumbered
+     when a task moves project, so resolving one would be a guess;
+  6. `@` mentions are not items. They say who an event involved: they are listed on the
+     event and feed `people`;
+  7. an AI-app marker (`MemberEvent`) by item id: a task, a milestone (its backing task), a
+     task note, the thread linked to a task. Only the member's own;
+  8. anything else stays out and is counted in `unattached`: the member's own markers that
+     name no live task (a project, a chat, a personal note, an unknown type), the member's
+     own chat messages that are in no linked thread and carry no task chip, the member's
+     completed to-dos (a to-do's title is plain text with no id to follow).
+
+**Access.** An event is shown only when the member can open BOTH the item and the event's own
+container, now: the task (`LabelAccess`), the chat the message is in (`readable_chats_qs`),
+the task a referencing comment sits on, the note a version belongs to (`briefing._may_read_note`).
+A milestone's neighbours appear only when the member can open the milestone itself
+(`LabelAccess.milestone`, the rule of `get_milestone_summary`). Every count (`events_total`,
+`related_total`, `people`) is over what the member may open: a number never gives away
+something they cannot. A task they cannot open is refused with the same words as one that
+does not exist. Another person's AI-app markers are never read: the member's own only.
+
+**Bounded.** Every source is read once for the WHOLE set of items (a line and its related
+lines together), so the number of queries does not grow with events or items. What is capped
+says so: events beyond `limit` (`older_events`), related items beyond the cap
+(`related_capped`), a source cut at its pool (`pool_capped`), note access checks past their
+cap (`notes_capped`).
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any
+
+from django.db.models import Q
+from django.utils import timezone
+
+from origin.models.chat.todo_models import ToDoItem
+from origin.models.chat.unified_models import (
+    Message,
+    MessageMention,
+    MessageReaction,
+)
+from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.note.version_note_models import NoteVersionMaster
+from origin.models.task.milestone_models import MilestoneMaster
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
+from origin.models.task.task_models import (
+    TaskCommentMentionFact,
+    TaskCommentReactionFact,
+    TaskComments,
+    TaskDependency,
+    TaskMaster,
+)
+from origin.search_engine.agent.label_acl import LabelAccess
+from origin.search_engine.agent.tools.base import (
+    ToolContext,
+    ToolError,
+    ToolForbidden,
+    wrap_workspace_content,
+)
+from origin.search_engine.text_extraction import extract_text
+from origin.services import briefing, member_events
+from origin.services.channel_scope import readable_chats_qs
+from origin.services.milestone_rollup import milestone_work_q
+from origin.services.user_time import zone_for_user_id
+
+DEFAULT_DAYS = 7
+MAX_LOOKBACK = briefing.MAX_LOOKBACK
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 100
+# Each source is read at most this many rows for the whole set of items (newest first).
+POOL = 300
+# Related lines: the cap on items shown, on candidates considered after access, and how
+# many events each related item tells.
+RELATED_MAX = 10
+CANDIDATE_CAP = 40
+SIBLING_POOL = 150
+NEIGHBOUR_POOL = 20
+RELATED_EVENTS = 5
+# Note access is one role lookup per note, so the notes checked in one call are capped.
+MAX_NOTES_CHECKED = 10
+PEOPLE_MAX = 8
+SNIPPET_CHARS = briefing.SNIPPET_CHARS
+
+_COMMENT_ACTIONS = briefing._COMMENT_ACTIONS
+_NOTE_NAMES = {1: "personal", 2: "task", 3: "chat"}
+_NOTE_MODELS = {1: PersonalNoteMaster, 2: TaskNoteMaster, 3: ChatNoteMaster}
+
+# Tie-break for events at the same instant: the order a story is told in.
+_RANK = {
+    "activity": 0,
+    "comment": 1,
+    "message": 2,
+    "reaction": 3,
+    "note": 4,
+    "delivery": 5,
+    "app": 6,
+}
+
+# `jsonb_path_exists(body, PATH, VARS)`: some `hashTask` chip, at any depth, whose `taskId` is
+# one of `$ids`. The editor writes the id as a string and an agent-written chip as a number,
+# so both spellings are passed. A chip that carries no `taskId` never matches.
+_CHIP_PATH = '$.** ? (@.type == "hashTask" && ($ids[*] == @.props.taskId))'
+
+
+# --------------------------------------------------------------------------- #
+# The window                                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _moment(value: Any, name: str, user_id: str, now: datetime) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            raise ToolError(
+                f"`{name}` must be an ISO date-time, such as 2026-11-06T09:00 (got {value!r})."
+            )
+    else:
+        raise ToolError(f"`{name}` must be an ISO date-time, such as 2026-11-06T09:00.")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=zone_for_user_id(user_id))
+    return parsed
+
+
+def resolve_window(
+    user_id: str, since: Any, until: Any, now: datetime | None = None
+) -> tuple[datetime, datetime]:
+    """`[since, until)`: `until` defaults to now (and is never later than now), `since` to
+    seven days before it, and at most 31 days back from now."""
+    now = now or timezone.now()
+    end = now if until in (None, "") else min(_moment(until, "until", user_id, now), now)
+    start = (
+        end - timedelta(days=DEFAULT_DAYS)
+        if since in (None, "")
+        else _moment(since, "since", user_id, now)
+    )
+    if start < now - MAX_LOOKBACK:
+        raise ToolError(f"`since` is more than {MAX_LOOKBACK.days} days back.")
+    if start >= end:
+        raise ToolError("`since` must be earlier than `until`.")
+    return start, end
+
+
+# --------------------------------------------------------------------------- #
+# One event                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class Ev:
+    at: datetime
+    source: str
+    key: tuple
+    what: str
+    summary: str
+    actor: str | None = None
+    label: str | None = None
+    automated: bool = False
+    text: str = ""
+    via: str = ""
+    mentions: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def sort_key(self) -> tuple:
+        return (self.at, _RANK.get(self.source, 9), str(self.key))
+
+
+def _snippet(text: str) -> str:
+    return briefing._snippet(text)
+
+
+def chip_task_ids(body: Any) -> set[int]:
+    """Every task a body points at with a `#` task chip (by `taskId`), at any depth."""
+    found: set[int] = set()
+    stack = [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get("type") == "hashTask":
+                props = node.get("props")
+                raw = props.get("taskId") if isinstance(props, dict) else None
+                if isinstance(raw, bool):
+                    raw = None
+                if isinstance(raw, int) or (
+                    isinstance(raw, str) and raw.isascii() and raw.isdigit() and len(raw) < 19
+                ):
+                    found.add(int(raw))
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
+def _chip_filter(qs, column: str, task_ids) -> Any:
+    """Narrow `qs` to the rows whose JSON `column` holds a `#` chip for one of `task_ids`.
+    The ids travel as jsonpath variables, never inside the SQL text."""
+    values: list[Any] = []
+    for i in sorted(task_ids):
+        values += [i, str(i)]
+    table = qs.model._meta.db_table
+    return qs.extra(
+        where=[f'jsonb_path_exists("{table}"."{column}", %s::jsonpath, %s::jsonb)'],
+        params=[_CHIP_PATH, json.dumps({"ids": values})],
+    )
+
+
+def _uuid_text(value: Any) -> str | None:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Reading every source for a set of tasks, once                                #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _Read:
+    events: dict[int, dict[tuple, Ev]]
+    pool_capped: bool = False
+    notes_capped: bool = False
+
+
+def _note_checker(ctx: ToolContext):
+    """`may(note_type, note_id) -> note | None`: the note row when the member can open it now
+    (the rule `get_note` applies), asked once per note and at most `MAX_NOTES_CHECKED` notes
+    in one call. Past the cap the answer is None and `capped` says so."""
+    cache: dict[tuple[int, int], Any] = {}
+    state = {"capped": False}
+
+    def may(note_type: int, note_id: int):
+        key = (note_type, note_id)
+        if key in cache:
+            return cache[key]
+        if len(cache) >= MAX_NOTES_CHECKED:
+            state["capped"] = True
+            return None
+        note = _NOTE_MODELS[note_type].objects.filter(note_id=note_id).first()
+        ok = note is not None and briefing._may_read_note(ctx, note_type, note)
+        cache[key] = note if ok else None
+        return cache[key]
+
+    return may, state
+
+
+def _claims(team_id: str, thread_ids: list[str]) -> dict[str, list[int]]:
+    """`thread_id -> [live task ids claiming it]`, for the threads asked about."""
+    out: dict[str, list[int]] = {}
+    if not thread_ids:
+        return out
+    rows = TaskMaster.objects.filter(
+        team_id=team_id, thread_id__in=thread_ids, is_deleted=False, is_init_task=False
+    ).values_list("thread_id", "task_id")
+    for thread_id, task_id in rows:
+        out.setdefault(str(thread_id), []).append(task_id)
+    return out
+
+
+def _read_tasks(
+    ctx: ToolContext,
+    access: LabelAccess,
+    tasks: dict[int, TaskMaster],
+    since: datetime,
+    until: datetime,
+) -> _Read:
+    """Every event of every source for `tasks` (all of them already openable by the member),
+    keyed by task. One query per source for the whole set."""
+    me, team = str(ctx.user_id), str(ctx.team_id)
+    ids = list(tasks)
+    read = _Read(events={i: {} for i in ids})
+
+    def add(task_id: int, ev: Ev) -> None:
+        # The first rule to claim an event keeps it: the same row reached twice (a comment on
+        # the task that also chips it) is one event.
+        read.events[task_id].setdefault(ev.key, ev)
+
+    def pooled(rows: list) -> list:
+        if len(rows) >= POOL:
+            read.pool_capped = True
+        return rows
+
+    window = {"gte": since, "lt": until}
+
+    # 1. the task's own id: history (a comment's rows are told once, from the comment) ...
+    activities = pooled(
+        list(
+            TaskActivity.objects.filter(
+                team_id=team,
+                task_id__in=ids,
+                ts_created_at__gte=window["gte"],
+                ts_created_at__lt=window["lt"],
+            )
+            .exclude(action_type__in=_COMMENT_ACTIONS)
+            # Nobody to credit for "created it": automation and imports, not news.
+            .exclude(actor__isnull=True, action_type=TaskActivityActionType.CREATED)
+            .order_by("-ts_created_at", "-pk")[:POOL]
+        )
+    )
+    for row in activities:
+        shaped = briefing.activity_event(row, me)
+        add(
+            row.task_id,
+            Ev(
+                at=row.ts_created_at,
+                source="activity",
+                key=("activity", row.pk),
+                what=shaped["kind"] if shaped["kind"] != "other" else "change",
+                summary=wrap_workspace_content(shaped["summary"]),
+                actor=row.actor_id,
+                label=shaped["_label"],
+                automated=shaped["automated"],
+                via="task",
+            ),
+        )
+
+    # ... its comments, and the comments elsewhere that point at it with a `#` chip (5).
+    comment_rows = pooled(
+        list(
+            TaskComments.objects.filter(
+                task_id__in=ids,
+                is_deleted=False,
+                ts_sent_at__gte=window["gte"],
+                ts_sent_at__lt=window["lt"],
+            ).order_by("-ts_sent_at", "-pk")[:POOL]
+        )
+    )
+    chip_comments = pooled(
+        list(
+            _chip_filter(
+                TaskComments.objects.filter(
+                    task__team_id=team,
+                    is_deleted=False,
+                    ts_sent_at__gte=window["gte"],
+                    ts_sent_at__lt=window["lt"],
+                ),
+                "comment_body",
+                ids,
+            ).order_by("-ts_sent_at", "-pk")[:POOL]
+        )
+    )
+    # The container of a referencing comment is the task it sits on: the member must open it.
+    source_tasks = access.tasks({c.task_id for c in chip_comments})
+    chip_comments = [c for c in chip_comments if c.task_id in source_tasks]
+    all_comments = comment_rows + chip_comments
+    comment_mentions: dict[tuple[int, int], list[str]] = {}
+    if all_comments:
+        for m in TaskCommentMentionFact.objects.filter(
+            task_id__in={c.task_id for c in all_comments},
+            comment_id__in={c.comment_id for c in all_comments},
+        ).order_by("ts_created_at", "uid"):
+            comment_mentions.setdefault((m.task_id, m.comment_id), []).append(
+                str(m.mentioned_user_id)
+            )
+    for c in comment_rows:
+        add(
+            c.task_id,
+            Ev(
+                at=c.ts_sent_at,
+                source="comment",
+                key=("comment", c.pk),
+                what="comment",
+                summary="commented",
+                actor=c.sender_id,
+                text=_snippet(extract_text(c.comment_body)),
+                via="task",
+                mentions=comment_mentions.get((c.task_id, c.comment_id), []),
+            ),
+        )
+    for c in chip_comments:
+        for target in chip_task_ids(c.comment_body) & set(ids):
+            add(
+                target,
+                Ev(
+                    at=c.ts_sent_at,
+                    source="comment",
+                    key=("comment", c.pk),
+                    what="comment",
+                    summary="commented on another task and pointed at this one",
+                    actor=c.sender_id,
+                    text=_snippet(extract_text(c.comment_body)),
+                    via="chip",
+                    mentions=comment_mentions.get((c.task_id, c.comment_id), []),
+                    extra={"from_task": source_tasks[c.task_id].display_id},
+                ),
+            )
+
+    # ... reactions to its comments.
+    for r in pooled(
+        list(
+            TaskCommentReactionFact.objects.filter(
+                task_id__in=ids,
+                ts_created_at__gte=window["gte"],
+                ts_created_at__lt=window["lt"],
+            ).order_by("-ts_created_at", "-pk")[:POOL]
+        )
+    ):
+        add(
+            r.task_id,
+            Ev(
+                at=r.ts_created_at,
+                source="reaction",
+                key=("task_reaction", r.pk),
+                what="reaction",
+                summary=f"reacted {r.reaction_emoji} to a comment",
+                actor=r.sender_id,
+                via="task",
+            ),
+        )
+
+    # 2. a PR delivery of the task that merged. (Linking and unlinking a PR are history rows.)
+    for d in pooled(
+        list(
+            TaskDelivery.objects.filter(
+                task_id__in=ids,
+                state=TaskDeliveryState.MERGED,
+                merged_at__gte=window["gte"],
+                merged_at__lt=window["lt"],
+            ).order_by("-merged_at", "-pk")[:POOL]
+        )
+    ):
+        add(
+            d.task_id,
+            Ev(
+                at=d.merged_at,
+                source="delivery",
+                key=("delivery", d.pk),
+                what="pr_merged",
+                summary="merged a PR"
+                + (f": {wrap_workspace_content(d.pr_title)}" if d.pr_title else ""),
+                label="GitHub",
+                automated=True,
+                via="task",
+                extra={"pr_number": d.pr_number} if d.pr_number else {},
+            ),
+        )
+
+    # 3. task notes: the versions of the notes that belong to these tasks, and (5) of any
+    # note that points at them with a chip. Each note must be one the member can open.
+    may_note, note_state = _note_checker(ctx)
+    task_notes = {
+        n.note_id: n.task_id
+        for n in TaskNoteMaster.objects.filter(team_id=team, task_id__in=ids).only(
+            "note_id", "task_id"
+        )
+    }
+    versions: list[tuple[NoteVersionMaster, str, set[int]]] = []
+    if task_notes:
+        for v in pooled(
+            list(
+                NoteVersionMaster.objects.filter(
+                    team_id=team,
+                    note_type=2,
+                    note_id__in=list(task_notes),
+                    ts_updated_at__gte=window["gte"],
+                    ts_updated_at__lt=window["lt"],
+                ).order_by("-ts_updated_at", "-pk")[:POOL]
+            )
+        ):
+            versions.append((v, "note_task", {task_notes[v.note_id]}))
+    for v in pooled(
+        list(
+            _chip_filter(
+                NoteVersionMaster.objects.filter(
+                    team_id=team,
+                    ts_updated_at__gte=window["gte"],
+                    ts_updated_at__lt=window["lt"],
+                ),
+                "body",
+                ids,
+            ).order_by("-ts_updated_at", "-pk")[:POOL]
+        )
+    ):
+        versions.append((v, "chip", chip_task_ids(v.body) & set(ids)))
+    for v, via, targets in sorted(
+        versions, key=lambda t: (t[0].ts_updated_at, t[0].pk), reverse=True
+    ):
+        if not targets or v.note_type not in _NOTE_MODELS:
+            continue
+        note = may_note(v.note_type, v.note_id)
+        if note is None:
+            continue
+        for target in targets:
+            add(
+                target,
+                Ev(
+                    at=v.ts_updated_at,
+                    source="note",
+                    key=("version", v.pk),
+                    what="note_edit",
+                    summary=(
+                        "restored an earlier version"
+                        if v.restored_from_version_no
+                        else "edited the note"
+                    )
+                    + ("" if via == "note_task" else " that points at this task"),
+                    actor=v.editor_id,
+                    via=via,
+                    extra={
+                        "note": wrap_workspace_content(note.title or ""),
+                        "note_type": _NOTE_NAMES[v.note_type],
+                    },
+                ),
+            )
+    read.notes_capped = note_state["capped"]
+
+    # 4. the chat thread linked to the task, and (5) messages that point at it with a chip.
+    readable_chats = readable_chats_qs(team, me).values("id")
+    message_filter = {
+        "channel_id__in": readable_chats,
+        "deleted_at__isnull": True,
+        "task_id__isnull": True,
+        "ts_sent_at__gte": window["gte"],
+        "ts_sent_at__lt": window["lt"],
+    }
+    # A task comment is mirrored into the project chat as a message and is told as the
+    # comment; the task's card is not something said.
+    said = Message.objects.filter(**message_filter).exclude(metadata__has_key="taskCommentId")
+    thread_of: dict[str, int] = {}
+    wanted = {tid: _uuid_text(t.thread_id) for tid, t in tasks.items() if t.thread_id}
+    wanted = {tid: th for tid, th in wanted.items() if th}
+    if wanted:
+        claims = _claims(team, sorted(set(wanted.values())))
+        for tid, th in wanted.items():
+            # One live task per thread. A thread two tasks claim is not told to either.
+            if claims.get(th) == [tid]:
+                thread_of[th] = tid
+    messages: list[tuple[Message, int, str]] = []
+    if thread_of:
+        roots = list(thread_of)
+        for m in pooled(
+            list(
+                said.filter(Q(id__in=roots, is_thread_reply=False) | Q(thread_root_id__in=roots))
+                .select_related("channel")
+                .order_by("-ts_sent_at", "-pk")[:POOL]
+            )
+        ):
+            root = str(m.thread_root_id or m.id)
+            if root in thread_of:
+                messages.append((m, "thread", thread_of[root]))
+    for m in pooled(
+        list(
+            _chip_filter(said, "body", ids)
+            .select_related("channel")
+            .order_by("-ts_sent_at", "-pk")[:POOL]
+        )
+    ):
+        for target in chip_task_ids(m.body) & set(ids):
+            messages.append((m, "chip", target))
+    message_ids = {m.pk for m, _via, _t in messages}
+    message_mentions: dict[Any, list[str]] = {}
+    message_reactions: list[MessageReaction] = []
+    if message_ids:
+        for mm in MessageMention.objects.filter(message_id__in=message_ids).order_by(
+            "ts_created_at", "pk"
+        ):
+            message_mentions.setdefault(mm.message_id, []).append(str(mm.mentioned_user_id))
+        message_reactions = pooled(
+            list(
+                MessageReaction.objects.filter(
+                    message_id__in=message_ids,
+                    ts_created_at__gte=window["gte"],
+                    ts_created_at__lt=window["lt"],
+                ).order_by("-ts_created_at", "-pk")[:POOL]
+            )
+        )
+    attached_to: dict[Any, set[int]] = {}
+    for m, via, target in messages:
+        attached_to.setdefault(m.pk, set()).add(target)
+        add(
+            target,
+            Ev(
+                at=m.ts_sent_at,
+                source="message",
+                key=("message", m.pk),
+                what="reply" if m.is_thread_reply else "message",
+                summary=(
+                    "replied in the linked thread"
+                    if m.is_thread_reply and via == "thread"
+                    else "wrote in the linked thread"
+                    if via == "thread"
+                    else "mentioned this task in a message"
+                ),
+                actor=m.sender_id,
+                text=_snippet(m.body_text),
+                via=via,
+                mentions=message_mentions.get(m.pk, []),
+                extra={"chat": wrap_workspace_content(m.channel.title or "")}
+                if m.channel.title
+                else {},
+            ),
+        )
+    for r in message_reactions:
+        for target in attached_to.get(r.message_id, ()):
+            add(
+                target,
+                Ev(
+                    at=r.ts_created_at,
+                    source="reaction",
+                    key=("reaction", r.pk),
+                    what="reaction",
+                    summary=f"reacted {r.emoji} to a message",
+                    actor=r.user_id,
+                    via="thread",
+                ),
+            )
+
+    # 7. the member's own AI-app markers, and any other kind written to `MemberEvent`.
+    markers = member_events.recent(me, team, since, until, POOL)
+    pooled(markers)
+    for marker, task_id in _resolve_markers(team, markers).items():
+        if task_id in read.events:
+            add(task_id, _marker_event(marker, me))
+    return read
+
+
+# --------------------------------------------------------------------------- #
+# The member's own markers                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def _thread_of_marker(object_id: str) -> str | None:
+    """The thread a `chat_thread` marker names: `<chat>:<thread>`, or the thread alone (a UUID).
+    A marker for a whole chat, with no thread, names no thread."""
+    _chat, sep, thread = object_id.partition(":")
+    return _uuid_text(thread if sep else object_id) if (thread or not sep) else None
+
+
+def _resolve_markers(team: str, markers: list) -> dict[Any, int | None]:
+    """`marker -> live task id or None`: the item a marker names, by the ids it holds. A marker
+    that names no live task of the team (a project, a chat, a personal note, a type this code
+    does not know, a thing since deleted) maps to None: it is not guessed onto an item."""
+    direct: set[int] = set()
+    milestones: set[int] = set()
+    task_notes: set[int] = set()
+    threads: set[str] = set()
+    for m in markers:
+        oid = m.object_id
+        if m.object_type == "task" and oid.isdigit():
+            direct.add(int(oid))
+        elif m.object_type == "milestone" and oid.isdigit():
+            milestones.add(int(oid))
+        elif m.object_type == "note":
+            family, _, raw = oid.partition(":")
+            if family == "task" and raw.isdigit():
+                task_notes.add(int(raw))
+        elif m.object_type == "chat_thread":
+            thread = _thread_of_marker(oid)
+            if thread:
+                threads.add(thread)
+    milestone_task = (
+        dict(
+            MilestoneMaster.objects.filter(
+                milestone_id__in=milestones, team_id=team, is_deleted=False
+            ).values_list("milestone_id", "task_id")
+        )
+        if milestones
+        else {}
+    )
+    note_task = (
+        dict(
+            TaskNoteMaster.objects.filter(note_id__in=task_notes, team_id=team).values_list(
+                "note_id", "task_id"
+            )
+        )
+        if task_notes
+        else {}
+    )
+    claims = _claims(team, sorted(threads))
+    candidates = (
+        direct
+        | {t for t in milestone_task.values() if t}
+        | {t for t in note_task.values() if t}
+        | {ids[0] for ids in claims.values() if len(ids) == 1}
+    )
+    live = (
+        set(
+            TaskMaster.objects.filter(
+                task_id__in=candidates, team_id=team, is_deleted=False, is_init_task=False
+            ).values_list("task_id", flat=True)
+        )
+        if candidates
+        else set()
+    )
+
+    def live_or_none(task_id: Any) -> int | None:
+        return task_id if task_id in live else None
+
+    out: dict[Any, int | None] = {}
+    for m in markers:
+        oid = m.object_id
+        task_id: int | None = None
+        if m.object_type == "task" and oid.isdigit():
+            task_id = live_or_none(int(oid))
+        elif m.object_type == "milestone" and oid.isdigit():
+            task_id = live_or_none(milestone_task.get(int(oid)))
+        elif m.object_type == "note":
+            family, _, raw = oid.partition(":")
+            if family == "task" and raw.isdigit():
+                task_id = live_or_none(note_task.get(int(raw)))
+        elif m.object_type == "chat_thread":
+            found = claims.get(_thread_of_marker(oid) or "", [])
+            task_id = live_or_none(found[0]) if len(found) == 1 else None
+        out[m] = task_id
+    return out
+
+
+def _marker_event(marker: Any, me: str) -> Ev:
+    kind = str(marker.kind)
+    if marker.source == member_events.SOURCE_MCP:
+        summary = {
+            "read": "opened in your AI app",
+            "write": "changed in your AI app",
+        }.get(kind, f"{kind} in your AI app")
+    else:
+        summary = f"{kind} ({marker.source})"
+    client = str(marker.client or "")
+    extra: dict[str, Any] = {
+        "app": client if client == "api_key" else wrap_workspace_content(client)
+    }
+    if marker.count and marker.count > 1:
+        extra["calls"] = marker.count
+    return Ev(
+        at=marker.ts,
+        source="app",
+        key=("marker", marker.event_id),
+        what=f"app_{kind}",
+        summary=summary,
+        actor=me,
+        via="marker",
+        extra=extra,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# What no item claims                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def unattached(ctx: ToolContext, since: datetime, until: datetime) -> dict[str, Any]:
+    """The member's OWN events in `[since, until)` that no item claims, counted and never
+    guessed onto one: markers that name no live task, chat messages in no linked thread that
+    carry no task chip, completed to-dos. Only the member's own events are counted, so the
+    numbers say nothing about anything they cannot open."""
+    me, team = str(ctx.user_id), str(ctx.team_id)
+    markers = member_events.recent(me, team, since, until, POOL)
+    lost_markers = sum(1 for t in _resolve_markers(team, markers).values() if t is None)
+
+    own = list(
+        Message.objects.filter(
+            sender_id=me,
+            channel_id__in=readable_chats_qs(team, me).values("id"),
+            deleted_at__isnull=True,
+            task_id__isnull=True,
+            ts_sent_at__gte=since,
+            ts_sent_at__lt=until,
+        )
+        .exclude(metadata__has_key="taskCommentId")
+        .only("id", "thread_root_id", "body")
+        .order_by("-ts_sent_at", "-pk")[:POOL]
+    )
+    roots = {str(m.thread_root_id or m.id) for m in own}
+    claimed = set(_claims(team, sorted(roots)))
+    lost_messages = sum(
+        1 for m in own if str(m.thread_root_id or m.id) not in claimed and not chip_task_ids(m.body)
+    )
+    todos = ToDoItem.objects.filter(
+        group__user_id=me,
+        group__team_id=team,
+        is_completed=True,
+        ts_completed_at__gte=since,
+        ts_completed_at__lt=until,
+    ).count()
+    return {
+        "app_markers": lost_markers,
+        "chat_messages": lost_messages,
+        "todos_completed": todos,
+        "total": lost_markers + lost_messages + todos,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Shaping                                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def _item(task: TaskMaster) -> dict[str, Any]:
+    return {
+        "type": "task",
+        "task_id": task.task_id,
+        "display_id": task.display_id,
+        "title": wrap_workspace_content(task.title or ""),
+        "status": task.status,
+        "project": task.project.project_name if task.project_id else None,
+    }
+
+
+def _render(ev: Ev, names: briefing._Names, me: str, pending: list) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "at": ev.at.isoformat(),
+        "source": ev.source,
+        "what": ev.what,
+        "summary": ev.summary,
+        "via": ev.via,
+    }
+    if ev.automated:
+        d["automated"] = True
+    if ev.label:
+        d["by"] = ev.label
+    elif ev.actor:
+        names.put(d, "by", ev.actor)
+        if str(ev.actor) == me:
+            d["mine"] = True
+    if ev.text:
+        d["text"] = wrap_workspace_content(ev.text)
+    if ev.mentions:
+        holders = []
+        for uid in ev.mentions:
+            holder: dict[str, Any] = {}
+            names.put(holder, "name", uid)
+            holders.append(holder)
+        pending.append((d, holders))
+    d.update(ev.extra)
+    return d
+
+
+def _line(
+    task: TaskMaster,
+    events: list[Ev],
+    shown: int,
+    names: briefing._Names,
+    me: str,
+    pending: list,
+) -> dict[str, Any]:
+    ordered = sorted(events, key=Ev.sort_key)
+    tail = ordered[-shown:] if shown > 0 else []
+    return {
+        **_item(task),
+        "events_total": len(ordered),
+        "older_events": len(ordered) - len(tail),
+        "latest_at": ordered[-1].at.isoformat() if ordered else None,
+        "events": [_render(e, names, me, pending) for e in tail],
+    }
+
+
+def _people(events: list[Ev], names: briefing._Names, me: str) -> list[dict[str, Any]]:
+    count: Counter[str] = Counter()
+    for e in events:
+        if e.actor and not e.automated:
+            count[str(e.actor)] += 1
+        for uid in e.mentions:
+            count[str(uid)] += 0
+    ranked = sorted(count.items(), key=lambda kv: (-kv[1], kv[0]))[:PEOPLE_MAX]
+    out = []
+    for uid, n in ranked:
+        row: dict[str, Any] = {"events": n}
+        names.put(row, "name", uid)
+        if uid == me:
+            row["you"] = True
+        out.append(row)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# The public functions                                                         #
+# --------------------------------------------------------------------------- #
+
+
+def _open_task(ctx: ToolContext, access: LabelAccess, item_ref: Any) -> TaskMaster:
+    try:
+        task_id = int(item_ref)
+    except (TypeError, ValueError):
+        raise ToolError(f"The item must be a task id (got {item_ref!r}).")
+    task = access.tasks([task_id]).get(task_id)
+    if task is None:
+        # One sentence for a task that does not exist and one the member may not open.
+        message = f"Task {task_id} not found."
+        if TaskMaster.objects.filter(task_id=task_id).exists():
+            raise ToolForbidden(message)
+        raise ToolError(message)
+    return task
+
+
+def _candidates(
+    ctx: ToolContext, access: LabelAccess, root: TaskMaster
+) -> tuple[list[tuple[str, TaskMaster]], bool]:
+    """The items around `root` the member may open, `[(relation, task)]` in priority order
+    (parent, milestone, what blocks it, what it blocks, the milestone's other work), at most
+    `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are dropped
+    before anything is counted."""
+    wanted: list[tuple[str, int]] = []
+    if root.parent_task_id:
+        wanted.append(("parent", root.parent_task_id))
+    milestone = access.milestone(root.milestone_id) if root.milestone_id else None
+    sibling_ids: list[int] = []
+    if milestone is not None:
+        if milestone.task_id and milestone.task_id != root.task_id:
+            wanted.append(("milestone", milestone.task_id))
+        sibling_ids = list(
+            TaskMaster.objects.filter(milestone_work_q(milestone), team_id=ctx.team_id)
+            .exclude(task_id=root.task_id)
+            .order_by("-ts_updated_at", "-task_id")
+            .values_list("task_id", flat=True)[:SIBLING_POOL]
+        )
+    blockers = (
+        TaskDependency.objects.filter(blocked_task_id=root.task_id)
+        .order_by("-ts_created_at", "-pk")
+        .values_list("blocker_task_id", flat=True)[:NEIGHBOUR_POOL]
+    )
+    blocked = (
+        TaskDependency.objects.filter(blocker_task_id=root.task_id)
+        .order_by("-ts_created_at", "-pk")
+        .values_list("blocked_task_id", flat=True)[:NEIGHBOUR_POOL]
+    )
+    wanted += [("blocked_by", t) for t in blockers]
+    wanted += [("blocks", t) for t in blocked]
+    wanted += [("milestone_work", t) for t in sibling_ids]
+    readable = access.tasks({t for _r, t in wanted})
+    seen = {root.task_id}
+    out: list[tuple[str, TaskMaster]] = []
+    for relation, task_id in wanted:
+        task = readable.get(task_id)
+        if task is not None and task_id not in seen:
+            seen.add(task_id)
+            out.append((relation, task))
+    return out[:CANDIDATE_CAP], len(out) > CANDIDATE_CAP
+
+
+_RELATION_RANK = {
+    "parent": 0,
+    "milestone": 1,
+    "blocked_by": 2,
+    "blocks": 3,
+    "milestone_work": 4,
+}
+
+
+def _build(
+    ctx: ToolContext,
+    item_ref: Any,
+    since: datetime | None,
+    until: datetime | None,
+    limit: int,
+    related_limit: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    me = str(ctx.user_id)
+    limit = max(1, min(int(limit), MAX_LIMIT))
+    related_limit = max(0, min(int(related_limit), RELATED_MAX))
+    start, end = resolve_window(me, since, until, now)
+    access = LabelAccess(ctx)
+    root = _open_task(ctx, access, item_ref)
+
+    candidates: list[tuple[str, TaskMaster]] = []
+    fanout_capped = False
+    if related_limit:
+        candidates, fanout_capped = _candidates(ctx, access, root)
+    tasks = {root.task_id: root, **{t.task_id: t for _r, t in candidates}}
+    read = _read_tasks(ctx, access, tasks, start, end)
+
+    names = briefing._Names(ctx)
+    pending: list = []
+    root_events = list(read.events[root.task_id].values())
+    result: dict[str, Any] = {
+        "window": {"since": start.isoformat(), "until": end.isoformat()},
+        "line": _line(root, root_events, limit, names, me, pending),
+        "people": _people(root_events, names, me),
+    }
+    if related_limit:
+        with_events = [
+            (relation, task) for relation, task in candidates if read.events[task.task_id]
+        ]
+        with_events.sort(
+            key=lambda rt: (
+                _RELATION_RANK[rt[0]],
+                -max(e.at for e in read.events[rt[1].task_id].values()).timestamp(),
+                rt[1].task_id,
+            )
+        )
+        shown = with_events[:related_limit]
+        result["related"] = [
+            {
+                "relation": relation,
+                **_line(
+                    task,
+                    list(read.events[task.task_id].values()),
+                    RELATED_EVENTS,
+                    names,
+                    me,
+                    pending,
+                ),
+            }
+            for relation, task in shown
+        ]
+        result["related_total"] = len(with_events)
+        result["related_quiet"] = len(candidates) - len(with_events)
+        result["related_capped"] = len(with_events) > related_limit or fanout_capped
+    result["unattached"] = unattached(ctx, start, end)
+    flags = {"pool_capped": read.pool_capped, "notes_capped": read.notes_capped}
+    result["capped"] = {k: v for k, v in flags.items() if v}
+    names.fill()
+    for event, holders in pending:
+        event["mentions"] = [h["name"] for h in holders]
+    return result
+
+
+def line_for_item(
+    ctx: ToolContext,
+    item_ref: Any,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """One task's line: every event about it, from every source, in time order, in
+    `[since, until)`. The newest `limit` are told (oldest first); `events_total` and
+    `older_events` say how many there are."""
+    out = _build(ctx, item_ref, since, until, limit, 0)
+    return {k: v for k, v in out.items() if k != "related"}
+
+
+def related_lines(
+    ctx: ToolContext,
+    item_ref: Any,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = RELATED_MAX,
+) -> dict[str, Any]:
+    """The lines of the items around a task: its parent, its milestone and the milestone's
+    other work, what blocks it and what it blocks, with the people on the line. At most
+    `limit` (never more than `RELATED_MAX`) items that have events in the window, the
+    busiest group first; `related_capped` says when some were left out."""
+    out = _build(ctx, item_ref, since, until, DEFAULT_LIMIT, limit)
+    return {
+        k: out[k]
+        for k in (
+            "window",
+            "people",
+            "related",
+            "related_total",
+            "related_quiet",
+            "related_capped",
+            "unattached",
+            "capped",
+        )
+        if k in out
+    }
+
+
+def item_lines(
+    ctx: ToolContext,
+    item_ref: Any,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = DEFAULT_LIMIT,
+    related_limit: int = RELATED_MAX,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """A line and its related lines in one pass: what the MCP tool returns."""
+    return _build(ctx, item_ref, since, until, limit, related_limit, now)
