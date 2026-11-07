@@ -303,3 +303,27 @@ class TestNoDeadMcpOnlyTools(McpBase):
         with _Registered(_fake()) as tool:
             out = tool.run({"text": "a"}, ToolContext(team_id="t", user_id="u"))
         self.assertEqual(out["echo"], "a")
+
+
+class TestTheWorklogIsGone(SimpleTestCase):
+    """MIP-1170: Genos never expects input from the member, so the private worklog (MIP-1071)
+    was removed: its four tools, its two tables and its part of the export."""
+
+    NAMES = ("capture_worklog", "list_my_worklog", "update_worklog_item", "delete_worklog_entry")
+
+    def test_no_worklog_tool_is_published_or_registered(self):
+        published = {t.name for t in mcp_tools.CATALOG} | {
+            t.registry_name for t in mcp_tools.CATALOG
+        }
+        for name in self.NAMES:
+            self.assertNotIn(name, published)
+            self.assertIsNone(get_mcp_tool(name), name)
+            self.assertNotIn(name, REGISTRY)
+            self.assertNotIn(name, MCP_ONLY_REGISTRY)
+
+    def test_the_two_worklog_models_are_gone(self):
+        from django.apps import apps
+
+        for model in ("WorklogEntry", "WorklogItem"):
+            with self.assertRaises(LookupError, msg=model):
+                apps.get_model("origin", model)

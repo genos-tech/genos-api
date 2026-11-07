@@ -73,6 +73,13 @@ class ExportContentTests(BaseAPITestCase):
         self.assertEqual(doc["task_comments"][0]["body"], [{"t": "hi"}])
         self.assertEqual(doc["counts"]["personal_notes"], 1)
 
+    def test_export_has_no_worklog(self):
+        """MIP-1170: the private worklog was removed, so the export carries no trace of it."""
+        doc = build_export(self.user)
+        self.assertNotIn("worklog", doc)
+        self.assertNotIn("worklog_entries", doc["counts"])
+        self.assertNotIn("worklog", json.dumps(doc).lower())
+
     def test_other_peoples_content_is_excluded(self):
         doc = build_export(self.user)
         titles = [t["title"] for t in doc["tasks"]]
