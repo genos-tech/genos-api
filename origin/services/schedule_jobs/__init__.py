@@ -8,8 +8,8 @@ which is the member's Inbox from the delivery step on.
 To add one: write a function `run(ctx, params) -> Report`, then
 `register_job(Job(key=..., title=..., description=..., params_schema=..., run=run))` at
 import time of the module that defines it, and import that module here (below the
-registry), so the key exists before any schedule or tick looks it up. There are no real
-jobs yet; tests register fake ones with `mock.patch.dict(JOBS, ...)`.
+registry), so the key exists before any schedule or tick looks it up. Tests that need a
+job of their own register a fake one with `mock.patch.dict(JOBS, ...)`.
 
 `ctx` is a `ToolContext` for the schedule's owner: server-built from the row, never from
 what a member typed. Read through the same access rules as every agent tool (`LabelAccess`,
@@ -75,3 +75,10 @@ def register_job(job: Job) -> Job:
 
 def item_count(report: Report) -> int:
     return sum(len(section.get("items") or []) for section in report.get("sections") or [])
+
+
+# The built-in jobs. Imported last: each registers itself with the registry above.
+from origin.services.schedule_jobs import (  # noqa: E402, F401
+    what_to_do_today,
+    what_you_did,
+)

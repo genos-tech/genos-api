@@ -1293,6 +1293,34 @@ def what_you_did(ctx: ToolContext, now: datetime, zone, names: _Names) -> dict[s
     }
 
 
+def did_on_day(
+    ctx: ToolContext,
+    day: str,
+    now: datetime,
+    zone,
+    max_items: int,
+    max_events: int,
+) -> dict[str, Any]:
+    """`what_you_did` for ONE day ("today" or "yesterday", the member's own zone), with the
+    caps the caller chooses. A scheduled report has more room than the briefing, which is
+    sized for a model's context (MIP-1148)."""
+    if day not in ("today", "yesterday"):
+        raise ValueError(f"day must be 'today' or 'yesterday', not {day!r}")
+    start_yesterday, start_today, until = _local_day_bounds(now, zone)
+    start, end = (
+        (start_today, until + timedelta(seconds=1))
+        if day == "today"
+        else (start_yesterday, start_today)
+    )
+    names = _Names(ctx)
+    did = {
+        "local_date": start.date().isoformat(),
+        **_did_in(ctx, start, end, zone, names, max_items, max_events),
+    }
+    names.fill()  # people are named once, after everything that needs a name has said so
+    return did
+
+
 _PRIORITY_HINT = {"Critical": 6, "High": 4, "Normal": 2}
 
 

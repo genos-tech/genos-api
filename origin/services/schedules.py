@@ -579,11 +579,14 @@ def _check_report(report: Any) -> None:
         raise ScheduleRunError("The job returned a report in the wrong shape.")
 
 
-def _execute(sched: MemberSchedule) -> tuple[str, str]:
+def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[str, str]:
     """Run the schedule's job as its owner and deliver the report. Returns `(status, error)`.
 
     Never raises for a job's own failure. The run is one savepoint: a job whose query fails
     would otherwise leave the connection aborted and fail every schedule after it.
+
+    `run_at` is the SCHEDULED time of a tick's run. It keys the delivery, so a run the tick
+    repeats after a crash files its report once. "Run now" passes none: each press is its own.
     """
     job = JOBS.get(sched.job)
     if job is None:
@@ -593,7 +596,7 @@ def _execute(sched: MemberSchedule) -> tuple[str, str]:
         with transaction.atomic():
             report: Report = job.run(ctx, dict(sched.params or {}))
             _check_report(report)
-            schedule_delivery.deliver(sched, report)
+            schedule_delivery.deliver(sched, report, run_at=run_at)
     except ScheduleRunError as exc:
         return STATUS_FAILED, exc.public[:MAX_ERROR_CHARS]
     except Exception as exc:  # noqa: BLE001 - one schedule's failure is that schedule's
@@ -755,7 +758,8 @@ def _process(row: MemberSchedule, now: datetime, summary: RunSummary) -> None:
         log.info("schedule_skipped_late schedule=%s", sched.pk)
         return
 
-    status, error = _execute(sched)
+    # `sched.next_run_at` is still the scheduled time here: `_finish` is what advances it.
+    status, error = _execute(sched, run_at=sched.next_run_at)
     fields: dict[str, Any] = {
         "last_run_at": now,
         "last_status": status,
