@@ -28,7 +28,7 @@ from origin.models.common.user_models import CustomUser
 
 # Only the model is exported by `from .common.schedule_models import *`: the constants
 # below are short generic names (STATUS_*, PAUSE_*) that would shadow other models'.
-__all__ = ["MemberSchedule"]
+__all__ = ["MemberSchedule", "MemberScheduleSeed"]
 
 FREQ_DAILY = "daily"
 FREQ_WEEKDAYS = "weekdays"
@@ -131,3 +131,36 @@ class MemberSchedule(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.frequency} {self.time_of_day:%H:%M})"
+
+
+class MemberScheduleSeed(models.Model):
+    """Marker: Genos already made this member's suggested schedules (MIP-1178).
+
+    One row per (member, team), written in the same transaction that creates the suggested
+    schedules (`services.schedule_defaults.seed_defaults`). It is the whole reason a default
+    the member deleted never comes back: the schedules are ordinary rows the member may
+    delete, so "they have none" cannot tell "never seeded" from "seeded and removed". The app
+    never deletes a row (only account deletion does) and it holds no content.
+    """
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        to_field="id",
+        related_name="member_schedule_seeds",
+    )
+    team = models.ForeignKey(
+        TeamMaster,
+        on_delete=models.CASCADE,
+        to_field="team_id",
+        related_name="member_schedule_seeds",
+    )
+    seeded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "team"], name="member_schedule_seed_unique")
+        ]
+
+    def __str__(self) -> str:
+        return f"seeded {self.user_id} in {self.team_id}"

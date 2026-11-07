@@ -117,6 +117,9 @@ class ScheduleListView(_Base):
         ctx = self._ctx(request, request.query_params.get("team_id"))
         if isinstance(ctx, Response):
             return ctx
+        # A member's first list in their default team creates the suggested schedules
+        # (MIP-1178). Never raises, and only for a live member of this team.
+        schedule_defaults.seed_if_default_team(request.user, ctx.team_id)
         rows, problem = self._run(lambda: schedules.list_schedules(ctx))
         if problem:
             return problem
@@ -127,7 +130,7 @@ class ScheduleListView(_Base):
                 "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
                 "jobs": schedule_text.job_catalog(),
                 "schedules": [_row(s, zone) for s in rows],
-                # Two ordinary schedules to accept with one step (MIP-1152).
+                # What the member does not have of the two defaults: one step to (re-)add.
                 "suggestions": [
                     {
                         "key": d["key"],

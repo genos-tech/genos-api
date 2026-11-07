@@ -45,7 +45,7 @@ def build_export(user) -> dict:
     from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
     from origin.models.common.member_event_models import MemberEvent
     from origin.models.common.notification_models import NotificationPreference
-    from origin.models.common.schedule_models import MemberSchedule
+    from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
     from origin.models.common.team_models import TeamMembers
     from origin.models.note.personal_note_models import (
         PersonalNoteFolder,
@@ -130,6 +130,12 @@ def build_export(user) -> dict:
             "created_at": _iso(sc.ts_created_at),
         }
         for sc in MemberSchedule.objects.filter(user=user).order_by("ts_created_at")
+    ]
+
+    # When Genos made their suggested schedules for them (MIP-1178), per team.
+    schedule_defaults_seeded = [
+        {"team_id": str(seed.team_id), "seeded_at": _iso(seed.seeded_at)}
+        for seed in MemberScheduleSeed.objects.filter(user=user).order_by("seeded_at")
     ]
 
     schedule_reports = [
@@ -261,6 +267,7 @@ def build_export(user) -> dict:
         "personal_notes": notes,
         "todos": todos,
         "schedules": schedules,
+        "schedule_defaults_seeded": schedule_defaults_seeded,
         "schedule_reports": schedule_reports,
         "mcp_use": mcp_use,
         "tasks": tasks,

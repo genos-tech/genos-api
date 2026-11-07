@@ -22,7 +22,7 @@ from unittest import mock
 from django.utils import timezone
 
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
-from origin.models.common.schedule_models import MemberSchedule
+from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
 from origin.services import schedule_delivery, schedule_text, schedules
 from origin.services.schedule_jobs import JOBS, Job
@@ -48,6 +48,9 @@ def fake_job(ctx, params):
 class ScheduleToolBase(McpBase):
     def setUp(self):
         super().setUp()
+        # These tests are about the page, not about the defaults (MIP-1178): the member was
+        # seeded long ago, so a first list creates nothing.
+        MemberScheduleSeed.objects.create(user=self.user, team=self.team)
         self.user.timezone = "Asia/Tokyo"
         self.user.save(update_fields=["timezone"])
         patcher = mock.patch.dict(

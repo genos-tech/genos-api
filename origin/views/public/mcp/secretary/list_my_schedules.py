@@ -17,6 +17,8 @@ from origin.services.user_time import user_zone
 def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     user = CustomUser.objects.get(pk=ctx.user_id)
     zone = user_zone(user)
+    # Read-only on purpose (the tool says readOnlyHint): it never seeds. The Schedules page
+    # and the tick create the defaults; here they are only offered in `suggested`.
     mine = schedules.list_schedules(ctx)
     rows = [schedule_text.present(s, zone) for s in mine]
     return {
