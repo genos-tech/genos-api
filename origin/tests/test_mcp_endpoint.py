@@ -1864,10 +1864,16 @@ class TestPlantedInstructions(McpBase):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
         listed = self._listed()
         self.assertEqual(
-            listed["get_task"]["annotations"], {"readOnlyHint": True, "openWorldHint": False}
+            listed["get_task"]["annotations"],
+            {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
         )
         self.assertEqual(
             listed["update_task"]["annotations"],
+            # An overwrite is announced as destructive (OpenAI's rule), though it is not gated.
+            {"readOnlyHint": False, "openWorldHint": False, "destructiveHint": True},
+        )
+        self.assertEqual(
+            listed["create_task"]["annotations"],
             {"readOnlyHint": False, "openWorldHint": False, "destructiveHint": False},
         )
         self.assertIs(listed["delete_calendar_event"]["annotations"]["destructiveHint"], True)
@@ -1884,7 +1890,10 @@ class TestPlantedInstructions(McpBase):
                 hints = listed[tool.name]["annotations"]
                 self.assertIs(hints["readOnlyHint"], not tool.write)
                 if tool.write:
-                    self.assertIs(hints["destructiveHint"], tool.destructive)
+                    self.assertIs(
+                        hints["destructiveHint"],
+                        tool.destructive or tool.name in tools.OVERWRITE_TOOLS,
+                    )
 
     # ── the untrusted-content notice ──────────────────────────────────
 
