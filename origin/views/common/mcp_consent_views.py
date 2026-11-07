@@ -152,7 +152,7 @@ class McpConsentDecisionView(_ConsentBase):
         if not get_mcp_enabled(str(request.user.id)):
             return _problem(
                 "plan_required",
-                "Connecting an AI app is available on the Pro plan and above.",
+                "Connecting an AI app is available on the Core plan and above.",
                 http=status.HTTP_403_FORBIDDEN,
             )
         decision, why = mcp_oauth.check_decision(request.data, requested)

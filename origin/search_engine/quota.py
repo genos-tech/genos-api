@@ -383,13 +383,13 @@ def get_integrations(user_id: str) -> list[str]:
 
 
 def get_mcp_enabled(user_id: str) -> bool:
-    """May this user connect an outside AI agent over MCP? (Pro and up.)
+    """May this user connect an outside AI agent over MCP? (Core and up; not Free.)
 
     Permissive default `True`, deliberately, and it is worth saying why
     since this one gates a PAID feature: the fail-open contract exists
     because a Redis hiccup or a `TIER_QUOTAS_JSON` override written
     before this key existed must never silently downgrade someone. The
-    asymmetry decides it — a Pro user whose coding agent dies mid-task
+    asymmetry decides it — a paying user whose coding agent dies mid-task
     files a support ticket and loses work in progress; a Free user who
     briefly reaches MCP during an incident costs us a few tool calls.
 

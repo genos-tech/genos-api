@@ -1601,7 +1601,8 @@ SEARCH_ENGINE = {
         # class so there is real headroom to sell pro into.
         # Core reads as: Genos ACTS (single writes, with approval),
         # thinks thoroughly, remembers your history, sees web +
-        # Calendar.
+        # Calendar, and can be connected from outside AI apps (MCP:
+        # Claude, ChatGPT; Ken, 2026-11-07, MIP-1138).
         "core": {
             "llm_ask_daily": 100,
             "web_search_daily": 25,
@@ -1617,7 +1618,7 @@ SEARCH_ENGINE = {
             "agent_history_retention_days": 180,
             "integrations": ["web", "google_calendar"],
             "digest_cadence": None,
-            "mcp_enabled": False,
+            "mcp_enabled": True,
         },
         # Pro reads as: Genos ORGANIZES (composite writes — a milestone
         # + task tree in one approval), deep reasoning + adaptive

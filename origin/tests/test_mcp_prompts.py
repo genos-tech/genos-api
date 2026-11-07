@@ -133,7 +133,7 @@ class TestTheProtocol(PromptBase):
                 self._rpc("tools/list"),
             ):
                 self.assertEqual(res.status_code, 403)
-                self.assertIn("Pro plan", self.error(res)["message"])
+                self.assertIn("Core plan", self.error(res)["message"])
         quota.invalidate_effective_tier([str(self.user.id)])
 
     def test_a_read_only_key_can_list_and_get_them(self):
