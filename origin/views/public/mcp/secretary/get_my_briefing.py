@@ -1,7 +1,8 @@
 """`get_my_briefing` (MIP-1072): MCP-only, see `secretary/__init__.py`.
 
 One call that catches the member up and helps them plan: what others changed on their
-things, what waits on them and what they wait on, today's agenda, their worklog, and
+things, what they did themselves, what waits on them and what they wait on, today's
+agenda, their worklog, and
 the few things to look at first, with why. The logic is in `origin/services/briefing.py`.
 """
 

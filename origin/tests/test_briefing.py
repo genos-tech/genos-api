@@ -125,6 +125,14 @@ class BriefingBase(McpBase):
         self.assertTrue(is_error, text)
         return text
 
+    def midnight_jst(self, days_ago=0):
+        from datetime import datetime  # noqa: PLC0415
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        zone = ZoneInfo("Asia/Tokyo")
+        local = timezone.now().astimezone(zone).date() - timedelta(days=days_ago)
+        return datetime.combine(local, datetime.min.time(), tzinfo=zone)
+
     def changed(self, **args):
         return self.brief(**args)["changed_for_me"]["items"]
 
@@ -990,12 +998,20 @@ class TestSuggestions(BriefingBase):
 class TestItIsTheCallersOwnView(BriefingBase):
     def test_another_member_sees_none_of_my_things(self):
         task = self.make_task("Private plan", due_date=self.now.date() - timedelta(days=1))
+        untouched = self.make_task("Hidden plan", due_date=self.now.date() - timedelta(days=1))
         self.comment(task, self.user2, "for you only", at=self.ago(hours=1))
         WorklogEntry.objects.create(team=self.team, author=self.user, raw_text="my private note")
         self._key(scope=SCOPE_READ, user=self.user2)
-        out = json.dumps(self.brief())
-        for secret in ("Private plan", "for you only", "my private note"):
+        brief = self.brief()
+        out = json.dumps(brief)
+        # Nothing of mine that the other member did not act on, and no text of anyone's.
+        for secret in ("Hidden plan", "for you only", "my private note"):
             self.assertNotIn(secret, out)
+        # The one task they did comment on is theirs to see in what THEY did (they can open it);
+        # it is nowhere else in their view.
+        self.assertIn("Private plan", json.dumps(brief["what_you_did"]))
+        rest = {k: v for k, v in brief.items() if k != "what_you_did"}
+        self.assertNotIn("Private plan", json.dumps(rest))
 
     def test_people_are_only_named_when_the_caller_may_see_them(self):
         """A teammate shows by name; someone outside the team is an id without a name."""
@@ -1067,6 +1083,17 @@ class TestPublishing(BriefingBase):
                     at=self.ago(minutes=n * 5 + c + 1),
                 )
             TaskMaster.objects.filter(pk=task.pk).update(ts_updated_at=self.now - timedelta(days=9))
+            # And the member's own busy two days on the same tasks (MIP-1145).
+            for day in (0, 1):
+                for c in range(5):
+                    self.activity(
+                        task,
+                        self.user,
+                        "priority_changed",
+                        "Medium",
+                        "High",
+                        at=self.midnight_jst(days_ago=day) + timedelta(minutes=c + 1),
+                    )
         for n in range(30):
             entry = WorklogEntry.objects.create(
                 team=self.team, author=self.user, raw_text="note " * 100
@@ -1078,8 +1105,10 @@ class TestPublishing(BriefingBase):
                 kind="next",
                 summary="Next step " * 20,
             )
-        size = len(json.dumps(self.brief()))
-        self.assertLess(size, 32_000, f"the briefing is {size} characters")
+        brief = self.brief()
+        size = len(json.dumps(brief))
+        sections = {key: len(json.dumps(value)) for key, value in brief.items()}
+        self.assertLess(size, 32_000, f"the briefing is {size} characters: {sections}")
 
     def test_the_summary_line_counts_what_it_found(self):
         task = self.make_task()
@@ -1097,3 +1126,274 @@ class TestWithTheAccount(BriefingBase):
         delete_account(self.user2)
         self.assertFalse(MemberBriefingState.objects.filter(user=self.user2).exists())
         self.assertTrue(MemberBriefingState.objects.filter(user=self.user).exists())
+
+
+class TestWhatYouDid(BriefingBase):
+    """MIP-1145: what the member did today and yesterday, from what is already saved.
+
+    The secretary must know "what I did today" without being told, so this reads the member's
+    own changes to tasks, comments, edits to notes, finished to-dos and messages sent, and
+    adds nothing to storage. Chats are counted and never read."""
+
+    def did(self, **args):
+        return self.brief(**args)["what_you_did"]
+
+    def test_my_changes_comments_and_note_edits_are_what_i_did_today(self):
+        task = self.make_task("Fix the login redirect")
+        self.activity(task, self.user, "status_changed", "Open", "Closed", at=self.ago(minutes=30))
+        self.comment(task, self.user, "Done, merged", at=self.ago(minutes=20))
+        note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Spec", body=[]
+        )
+        v = NoteVersionMaster.objects.create(
+            team=self.team,
+            note_type=1,
+            note_id=note.note_id,
+            version_no=1,
+            editor=self.user,
+            title="Spec",
+        )
+        NoteVersionMaster.objects.filter(pk=v.pk).update(ts_updated_at=self.ago(minutes=10))
+        today = self.did()["today"]
+        by_type = {i["type"]: i for i in today["items"]}
+        self.assertEqual(by_type["task"]["display_id"], task.display_id)
+        self.assertEqual([e["what"] for e in by_type["task"]["events"]], ["status", "comment"])
+        self.assertEqual(by_type["task"]["events"][0]["summary"], "status: Open → Closed")
+        self.assertEqual(by_type["note"]["title"], "Spec")
+        self.assertEqual(today["totals"]["items"], 2)
+        self.assertEqual(today["totals"]["comments"], 1)
+        self.assertEqual(self.did()["yesterday"]["items"], [])
+
+    def test_what_other_people_did_is_not_mine(self):
+        task = self.make_task()
+        self.activity(task, self.user2, "status_changed", "Open", "WIP", at=self.ago(minutes=30))
+        self.comment(task, self.user2, "Looking", at=self.ago(minutes=20))
+        today = self.did()["today"]
+        self.assertEqual(today["items"], [])
+        self.assertEqual(today["totals"]["comments"], 0)
+
+    def test_today_and_yesterday_split_at_the_members_local_midnight(self):
+        """Asia/Tokyo is nine hours ahead: 23:30 on the 6th there is the 6th, 00:30 on the 7th
+        is the 7th, whatever the UTC date says."""
+        task = self.make_task()
+        start_today = self.midnight_jst()
+        self.activity(
+            task,
+            self.user,
+            "priority_changed",
+            "Low",
+            "High",
+            at=start_today - timedelta(minutes=30),
+        )
+        self.activity(
+            task,
+            self.user,
+            "priority_changed",
+            "High",
+            "Low",
+            at=start_today + timedelta(minutes=1),
+        )
+        did = self.did()
+        self.assertEqual(did["today"]["totals"]["items"], 1)
+        self.assertEqual(did["yesterday"]["totals"]["items"], 1)
+        self.assertEqual(did["today"]["items"][0]["events"][0]["summary"], "priority: High → Low")
+        self.assertEqual(
+            did["yesterday"]["items"][0]["events"][0]["summary"], "priority: Low → High"
+        )
+        self.assertEqual(did["today"]["local_date"], start_today.date().isoformat())
+
+    def test_the_prs_on_my_tasks_are_mine_flagged_automated_and_only_on_my_tasks(self):
+        mine = self.make_task("Mine", assignee=self.user)
+        theirs = self.make_task("Theirs", assignee=self.user2)
+        for task in (mine, theirs):
+            self.activity(
+                task, None, "pr_linked", None, None, at=self.ago(minutes=30), pr_title="x"
+            )
+        today = self.did()["today"]
+        self.assertEqual([i["task_id"] for i in today["items"]], [mine.task_id])
+        event = today["items"][0]["events"][0]
+        self.assertIs(event["automated"], True)
+        self.assertEqual(event["by"], "GitHub")
+
+    def test_a_change_made_through_an_ai_app_says_so(self):
+        task = self.make_task()
+        self.activity(
+            task,
+            self.user,
+            "priority_changed",
+            "Low",
+            "High",
+            at=self.ago(minutes=5),
+            via={"kind": "api_key", "client_name": "Claude"},
+        )
+        self.activity(task, self.user, "title_changed", "a", "b", at=self.ago(minutes=4))
+        events = self.did()["today"]["items"][0]["events"]
+        self.assertEqual(events[0]["via"], "api_key")
+        self.assertNotIn("via", events[1])
+
+    def test_finished_to_dos_are_listed_and_open_ones_are_not(self):
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=timezone.localdate()
+        )
+        ToDoItem.objects.create(
+            group=group, title="Ship it", is_completed=True, ts_completed_at=self.ago(minutes=5)
+        )
+        ToDoItem.objects.create(group=group, title="Still open")
+        ToDoItem.objects.create(
+            group=group, title="Done last week", is_completed=True, ts_completed_at=self.ago(days=7)
+        )
+        other = ToDoGroup.objects.create(
+            team=self.team, user=self.user2, local_date=timezone.localdate()
+        )
+        ToDoItem.objects.create(
+            group=other, title="Theirs", is_completed=True, ts_completed_at=self.ago(minutes=5)
+        )
+        today = self.did()["today"]
+        self.assertEqual([t["title"] for t in today["todos_done"]], ["Ship it"])
+        self.assertEqual(today["totals"]["todos_done"], 1)
+
+    def test_messages_are_counted_per_chat_and_never_read(self):
+        channel = self.channel([self.user, self.user2], title="Design")
+        for n in range(3):
+            self.message(channel, self.user, f"secret plan {n}", at=self.ago(minutes=n + 1))
+        self.message(channel, self.user2, "not mine", at=self.ago(minutes=1))
+        today = self.did()["today"]
+        self.assertEqual(today["chats"][0]["messages"], 3)
+        self.assertEqual(today["chats"][0]["chat_type"], "gm")
+        self.assertEqual(today["totals"]["messages"], 3)
+        self.assertNotIn("secret plan", json.dumps(self.brief()["what_you_did"]))
+
+    def test_a_task_comment_is_one_thing_done_not_also_a_chat_message(self):
+        """A comment is mirrored into the project chat as a message; counting both would say
+        the member did it twice."""
+        task = self.make_task()
+        channel = self.channel([self.user, self.user2], title="Project")
+        self.comment(task, self.user, "hello", at=self.ago(minutes=5))
+        mirror = self.message(channel, self.user, "hello", at=self.ago(minutes=5))
+        Message.objects.filter(pk=mirror.pk).update(metadata={"taskCommentId": 1})
+        today = self.did()["today"]
+        self.assertEqual(today["totals"]["comments"], 1)
+        self.assertEqual(today["totals"]["messages"], 0)
+
+    def test_a_task_i_can_no_longer_open_is_left_out(self):
+        elsewhere = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Closed shop",
+            code="CLS",
+            owner=self.user2,
+            project_system_user=self.user2,
+        )
+        task = self.make_task("Not for me now", assignee=self.user2, project=elsewhere)
+        self.activity(task, self.user, "priority_changed", "a", "b", at=self.ago(minutes=5))
+        self.assertEqual(self.did()["today"]["items"], [])
+        self.assertNotIn("Not for me now", json.dumps(self.brief()))
+
+    def test_another_teams_work_is_not_in_it(self):
+        other = TeamMaster.objects.create(
+            team_name="Other", team_email="o@example.com", owner=self.user2
+        )
+        TeamMembers.objects.create(team=other, attendee=self.user)
+        project = ProjectMaster.objects.create(
+            team=other,
+            project_name="Elsewhere",
+            code="ELS",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        foreign = TaskMaster.objects.create(
+            team=other,
+            project=project,
+            reporter=self.user,
+            assignee=self.user,
+            title="Over there",
+            status="Open",
+            project_task_number=1,
+        )
+        TaskActivity.objects.create(
+            team=other,
+            project=project,
+            task=foreign,
+            actor=self.user,
+            action_type="status_changed",
+            field_name="status",
+            old_value="Open",
+            new_value="Closed",
+        )
+        self.assertEqual(self.did()["today"]["items"], [])
+        self.assertNotIn("Over there", json.dumps(self.brief()))
+
+    def test_the_busiest_items_come_first_and_the_cap_says_so(self):
+        for n in range(briefing.DID_ITEMS["today"] + 3):
+            self.activity(
+                self.make_task(f"T{n}"),
+                self.user,
+                "priority_changed",
+                "a",
+                "b",
+                at=self.ago(minutes=n + 1),
+            )
+        busy = self.make_task("Busy")
+        for n in range(3):
+            self.comment(busy, self.user, f"c{n}", at=self.ago(hours=3, minutes=n))
+        today = self.did()["today"]
+        self.assertEqual(len(today["items"]), briefing.DID_ITEMS["today"])
+        self.assertIs(today["items_truncated"], True)
+        self.assertEqual(today["totals"]["items"], briefing.DID_ITEMS["today"] + 4)
+        self.assertEqual(today["items"][0]["display_id"], busy.display_id)
+        self.assertEqual(today["items"][0]["events_total"], 3)
+
+    def test_events_per_item_are_capped_but_counted(self):
+        task = self.make_task()
+        for n in range(briefing.DID_EVENTS["today"] + 3):
+            self.comment(task, self.user, f"c{n}", at=self.ago(minutes=n + 1))
+        item = self.did()["today"]["items"][0]
+        self.assertEqual(item["events_total"], briefing.DID_EVENTS["today"] + 3)
+        self.assertEqual(len(item["events"]), briefing.DID_EVENTS["today"])
+
+    def test_a_quiet_day_has_a_stable_shape(self):
+        for day in ("today", "yesterday"):
+            section = self.did()[day]
+            self.assertEqual(section["items"], [])
+            self.assertEqual(section["todos_done"], [])
+            self.assertEqual(section["chats"], [])
+            self.assertEqual(
+                section["totals"], {"items": 0, "comments": 0, "todos_done": 0, "messages": 0}
+            )
+            self.assertIs(section["items_truncated"], False)
+
+    def test_it_asks_nothing_of_the_member_and_stores_nothing(self):
+        """Read only: no worklog row, no briefing stamp beyond the one the briefing already
+        keeps, and the member typed nothing."""
+        task = self.make_task()
+        self.activity(task, self.user, "priority_changed", "a", "b", at=self.ago(minutes=5))
+        self.did()
+        self.assertEqual(WorklogEntry.objects.count(), 0)
+
+    def test_yesterday_is_the_gist_today_is_the_detail(self):
+        """The briefing has one budget: today gets more items and events than yesterday."""
+        task = self.make_task("Busy both days")
+        for n in range(briefing.DID_EVENTS["today"] + 2):
+            self.comment(
+                task, self.user, f"t{n}", at=self.midnight_jst() + timedelta(minutes=n + 1)
+            )
+        for n in range(briefing.DID_EVENTS["yesterday"] + 2):
+            self.comment(
+                task,
+                self.user,
+                f"y{n}",
+                at=self.midnight_jst(days_ago=1) + timedelta(minutes=n + 1),
+            )
+        did = self.did()
+        self.assertEqual(len(did["today"]["items"][0]["events"]), briefing.DID_EVENTS["today"])
+        self.assertEqual(
+            len(did["yesterday"]["items"][0]["events"]), briefing.DID_EVENTS["yesterday"]
+        )
+        self.assertGreater(briefing.DID_ITEMS["today"], briefing.DID_ITEMS["yesterday"])
+
+    def test_an_event_carries_the_local_time_of_day(self):
+        task = self.make_task()
+        self.comment(
+            task, self.user, "morning", at=self.midnight_jst() + timedelta(hours=9, minutes=5)
+        )
+        event = self.did()["today"]["items"][0]["events"][0]
+        self.assertEqual(event["at"], "09:05")
