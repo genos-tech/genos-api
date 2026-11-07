@@ -1929,22 +1929,59 @@ def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpToo
     ]
 
 
+# Tools whose effect leaves the workspace to people we cannot enumerate: a calendar event
+# names attendees by e-mail address, and Google sends them the invitation, the change or the
+# cancellation (MIP-1110). Reading one's own calendar is not here.
+OPEN_WORLD_TOOLS = frozenset(
+    {"create_calendar_event", "update_calendar_event", "delete_calendar_event"}
+)
+
+# Calls that delete although the TOOL is not one of the delete tools: an argument value does
+# it. Without the same opt-in a delete needs, a connection the member only allowed to make
+# changes could still remove tasks (`update_task` with status "Deleted"): the member was
+# promised "deleting needs its own yes". `test_no_other_argument_deletes` fails when a new
+# such value appears, so it is decided here, not found later.
+DELETING_ARGUMENTS = {
+    "update_task": ("status", "Deleted"),
+}
+
+# Delete-looking values that are deliberately allowed with write scope alone: a milestone
+# FOLDER is only a grouping. Deleting one leaves every milestone in it (they go back to
+# "no folder") and nothing in it is lost that creating a folder again does not restore.
+ARGUMENT_DELETES_WITHOUT_THE_OPT_IN = {("manage_milestone", "delete_folder")}
+
+
+def deleting_argument(name: str, arguments: dict[str, Any]) -> str | None:
+    """`field=value` when this call deletes through an argument, else None."""
+    gate = DELETING_ARGUMENTS.get(name)
+    if gate and isinstance(arguments, dict) and arguments.get(gate[0]) == gate[1]:
+        return f"{gate[0]}={gate[1]}"
+    return None
+
+
 def annotations(tool: McpTool) -> dict[str, Any]:
     """MCP `ToolAnnotations`: what a client shows before it calls.
 
     A client that asks before running a write or a delete does it from
-    these hints, so they have to be true of the tool, not hopeful. Every
-    tool here touches the workspace, never the open web, so none is
-    `openWorldHint`. `destructiveHint` is spelled out on every write
+    these hints, so they have to be true of the tool, not hopeful.
+    `destructiveHint` is spelled out on every write
     because the spec's default for a write is `true` — leaving it off
     would cry wolf on each task edit and teach the user to click through
     the one that matters. `idempotentHint` is left to its default rather
     than claimed tool by tool from memory.
+
+    All three of `readOnlyHint`, `destructiveHint` and `openWorldHint` are sent on EVERY tool:
+    OpenAI's plugin scan lists each as required, and a read says `destructiveHint: false`
+    outright rather than leaving a client to infer it. `openWorldHint` is "the tool reaches
+    the public internet or open-ended outside parties"; a member's own calendar or repository
+    is a bounded account and does not count, but an invitation e-mailed to anyone an event
+    names does (`OPEN_WORLD_TOOLS`).
     """
-    out: dict[str, Any] = {"readOnlyHint": not tool.write, "openWorldHint": False}
-    if tool.write:
-        out["destructiveHint"] = tool.destructive
-    return out
+    return {
+        "readOnlyHint": not tool.write,
+        "destructiveHint": bool(tool.write and tool.destructive),
+        "openWorldHint": tool.name in OPEN_WORLD_TOOLS,
+    }
 
 
 def describe(tool: McpTool) -> dict[str, Any]:
@@ -2075,15 +2112,18 @@ def _read_only_message(name: str, credential_kind: str) -> str:
     )
 
 
-def _destructive_message(name: str, credential_kind: str) -> str:
+def _destructive_message(name: str, credential_kind: str, detail: str | None = None) -> str:
+    # A delete tool "can't be undone"; an argument that deletes (a task's status) is said to
+    # delete, which is true whether or not it could be put back.
+    what = f"`{name}` with `{detail}` deletes, and" if detail else f"`{name}` can't be undone, and"
     if credential_kind == "api_key":
         return (
-            f"`{name}` can't be undone, and this API key wasn't opted into "
+            f"{what} this API key wasn't opted into "
             f"destructive tools. Ask the user to do it in Genos, or to create a "
             f"key with destructive tools allowed under Settings → Developer."
         )
     return (
-        f"`{name}` can't be undone, and this connection wasn't allowed destructive "
+        f"{what} this connection wasn't allowed destructive "
         "tools. Ask the user to do it in Genos, or to allow destructive tools for this "
         "connection under Settings → Connected apps."
     )
@@ -2120,6 +2160,10 @@ def call(
     if tool.destructive and not allow_destructive:
         note_refusal()
         return _text_result(_destructive_message(name, credential_kind), is_error=True)
+    if not allow_destructive and (deleting := deleting_argument(name, arguments or {})):
+        # Not a delete tool, but this call deletes: held to the same opt-in (MIP-1110).
+        note_refusal()
+        return _text_result(_destructive_message(name, credential_kind, deleting), is_error=True)
 
     args = dict(arguments or {})
     # Before anything is resolved or run, so a refused call changes nothing.

@@ -1864,7 +1864,8 @@ class TestPlantedInstructions(McpBase):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
         listed = self._listed()
         self.assertEqual(
-            listed["get_task"]["annotations"], {"readOnlyHint": True, "openWorldHint": False}
+            listed["get_task"]["annotations"],
+            {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
         )
         self.assertEqual(
             listed["update_task"]["annotations"],

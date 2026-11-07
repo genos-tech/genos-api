@@ -219,9 +219,18 @@ class ManageOverMcpTests(McpMilestoneBase):
         self.assertEqual(self.milestone.status, "Open")
 
     def test_the_update_tool_still_refuses_to_delete_a_milestone(self):
+        # With the delete opt-in the call reaches the tool, which names `delete_milestone`.
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
         text, is_error = self._text("update_task", {"task_id": self.display, "status": "Deleted"})
         self.assertTrue(is_error)
         self.assertIn("can't delete one", text)
+        self.milestone.refresh_from_db()
+        self.assertFalse(self.milestone.is_deleted)
+
+    def test_without_the_delete_opt_in_it_is_held_before_the_tool_is_reached(self):
+        text, is_error = self._text("update_task", {"task_id": self.display, "status": "Deleted"})
+        self.assertTrue(is_error)
+        self.assertIn("destructive tools", text)
         self.milestone.refresh_from_db()
         self.assertFalse(self.milestone.is_deleted)
 
