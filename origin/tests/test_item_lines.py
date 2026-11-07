@@ -721,6 +721,17 @@ class TestMarkers(LineBase):
         self.marker(self.user, 11, "chat_thread", str(root.id))
         self.assertEqual([e["source"] for e in self.events(task)], ["message", "app", "app"])
 
+    def test_a_marker_on_a_thread_two_tasks_claim_is_on_neither_and_is_unattached(self):
+        chat = self.channel([self.user, self.user2])
+        root = self.message(chat, self.user2, 1)
+        a, b = self.make_task(), self.make_task()
+        self.link_thread(a, root)
+        self.link_thread(b, root)
+        self.marker(self.user, 10, "chat_thread", str(root.id))
+        out = self.line(a)
+        self.assertEqual([e for e in out["line"]["events"] if e["source"] == "app"], [])
+        self.assertEqual(out["unattached"]["app_markers"], 1)
+
     def test_a_marker_on_something_else_stays_unattached(self):
         task = self.make_task()
         note = PersonalNoteMaster.objects.create(
