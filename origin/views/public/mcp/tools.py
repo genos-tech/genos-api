@@ -1,7 +1,8 @@
 """The published tool catalog, and the adapter down to the registry.
 
-Genos has 87 agent tools. This exposes 82. The five it leaves out are left out
-on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
+Genos's agent tools are published here, except five left out on purpose, plus the few
+that exist only on this surface (the secretary tools: worklog and briefing, MIP-1070). The
+five are left out on purpose (`WITHHELD` in `test_mcp_team_numbers`, with a reason each, and a
 test that fails when a tool is neither published nor listed there): a connected
 client has its own web search and its own memory, two are `list_milestones`
 with the caller's id and a due-date range over `list_tasks` and the calendar,
