@@ -23,6 +23,7 @@ from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
+from origin.services import security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.credentials import credential_of
@@ -260,6 +261,7 @@ class McpView(PublicApiView):
                     scope,
                     allow_destructive,
                     credential_kind=getattr(credential_of(request), "kind", "api_key"),
+                    request=request,
                 ),
                 modern=modern,
             )
@@ -445,6 +447,7 @@ class McpView(PublicApiView):
         scope: str,
         allow_destructive: bool,
         credential_kind: str = "api_key",
+        request=None,
     ) -> dict[str, Any]:
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -460,6 +463,23 @@ class McpView(PublicApiView):
             return JsonRpcError(
                 protocol.INVALID_PARAMS,
                 f"Unknown tool: {tool_name}. Available: {available}.",
+            )
+
+        credential = credential_of(request) if request is not None else None
+
+        def audit(tool_name: str, outcome: str, args: dict[str, Any], declared) -> None:
+            # A destructive call leaves a trace of which key or connected app made it
+            # (MIP-1140). Names and ids only: `note_mcp_destructive` decides what is kept.
+            if credential is None:
+                return
+            security_events.note_mcp_destructive(
+                getattr(request, "_request", request),
+                credential,
+                team_id=ctx.team_id,
+                tool=tool_name,
+                outcome=outcome,
+                arguments=args,
+                declared=declared,
             )
 
         # `search_workspace` embeds its query, which costs money. Bound the
@@ -481,6 +501,7 @@ class McpView(PublicApiView):
                     allow_destructive=allow_destructive,
                     on_unknown_tool=unknown,
                     credential_kind=credential_kind,
+                    audit=audit,
                 )
             except JsonRpcError:
                 raise

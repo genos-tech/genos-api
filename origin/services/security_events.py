@@ -505,3 +505,118 @@ def note_mcp_rejected(request, reason: str, connection=None) -> None:
         target_label=(app.name or app.client_id) if app is not None else "",
         metadata={"reason": reason, "path": request.path, "method": request.method},
     )
+
+
+# ── Destructive MCP calls (MIP-1140) ────────────────────────────────────
+
+# What an event may say about the arguments of a destructive call. Names and ids, never what
+# a person wrote: the titles, comment texts, note bodies and addresses that a call can carry
+# are the member's content, and a security log that held them would outlive the thing they
+# were deleted from. A key is kept only when it names a thing (`*_id`, `*_ids`) or is one of
+# the few small switches that say WHAT was done to it.
+_DESTRUCTIVE_ARG_KEYS = frozenset({"action", "status", "note_type", "role"})
+_DESTRUCTIVE_ARG_STR_MAX = 80
+_DESTRUCTIVE_ARG_LIST_MAX = 10
+_DROP = object()
+
+DESTRUCTIVE_DONE = "done"
+DESTRUCTIVE_FAILED = "failed"
+DESTRUCTIVE_REFUSED = "refused"
+
+
+def _identifier_key(key) -> bool:
+    return isinstance(key, str) and (
+        key in _DESTRUCTIVE_ARG_KEYS or key.endswith("_id") or key.endswith("_ids")
+    )
+
+
+def _scalar(value):
+    """`value` if it is an allowed scalar (str cut short, int, bool), else `_DROP`."""
+    if isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str):
+        return value[:_DESTRUCTIVE_ARG_STR_MAX]
+    return _DROP
+
+
+def destructive_arguments(arguments, declared=None) -> dict:
+    """The part of a destructive call's arguments an event may hold.
+
+    `declared` maps each argument the tool's published schema defines to its `enum` (or None).
+    Only an allowlisted key (see `_identifier_key`) the tool declares is kept, so an argument a
+    caller invented is not, however it is named; and only a scalar, or a list of at most ten
+    of them. The four switches (`action`, `status`, `note_type`, `role`) are kept only when
+    the schema lists their values and the one sent is on that list: a free-text value in
+    one of them is not a switch. Everything else is dropped: nested objects, longer lists,
+    floats, nulls, and every key that is not an identifier.
+    """
+    kept: dict = {}
+    if not isinstance(arguments, dict):
+        return kept
+    declared = declared or {}
+    for key, value in arguments.items():
+        if not _identifier_key(key) or key not in declared:
+            continue
+        if key in _DESTRUCTIVE_ARG_KEYS:
+            if not isinstance(value, str) or value not in (declared[key] or ()):
+                continue
+        if isinstance(value, list):
+            if len(value) > _DESTRUCTIVE_ARG_LIST_MAX:
+                continue
+            items = [_scalar(v) for v in value]
+            if any(v is _DROP for v in items):
+                continue
+            kept[key] = items
+            continue
+        scalar = _scalar(value)
+        if scalar is not _DROP:
+            kept[key] = scalar
+    return kept
+
+
+def note_mcp_destructive(
+    request,
+    credential,
+    *,
+    team_id,
+    tool: str,
+    outcome: str,
+    arguments=None,
+    declared=None,
+) -> None:
+    """Record one destructive MCP call, so that after the delete has taken its target away
+    there is still a trace of which connected app or API key did it.
+
+    `outcome` is `done` (the tool ran and answered without an error), `failed` (it ran and
+    answered with one) or `refused` (held back before it ran: no delete opt-in, or a read-only
+    scope). Done and failed are never collapsed: each delete is its own act, and the count of
+    them is the answer. A refusal is deduplicated per connection or key, tool, outcome and
+    hour, as `mcp.rejected` is, so an instruction planted in a document that makes a model try
+    the same delete over and over writes one row, not one per attempt.
+
+    The metadata is the tool's name, the outcome, the kind of credential, and `arguments` as
+    `destructive_arguments` allows. The call's result is never passed to this function.
+    `record_security_event` swallows a failed insert; the caller guards the rest.
+    """
+    if outcome == DESTRUCTIVE_REFUSED:
+        hour = int(time.time() // _KEY_USE_WINDOW)
+        key = f"secmcpdestr:{credential.id}:{tool}:{outcome}:{hour}"
+        if not _first_in_window(key, _KEY_USE_WINDOW * 2):
+            return
+    oauth = getattr(credential, "kind", "api_key") != "api_key"
+    record_security_event(
+        SecurityAction.MCP_DESTRUCTIVE,
+        request=request,
+        actor=credential.user,
+        api_key=credential,
+        team_id=team_id,
+        target_type="mcp_connection" if oauth else "api_key",
+        target_id=credential.id,
+        target_label=credential.label,
+        metadata={
+            "tool": tool,
+            "outcome": outcome,
+            "credential": "oauth" if oauth else "api_key",
+            "arguments": destructive_arguments(arguments, declared),
+        },
+    )
