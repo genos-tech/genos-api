@@ -1256,11 +1256,14 @@ class TestWhatYouDid(BriefingBase):
                 "priority_changed",
                 "a",
                 "b",
-                at=self.ago(minutes=n + 1),
+                at=self.midnight_jst() + timedelta(seconds=n + 1),
             )
         busy = self.make_task("Busy")
         for n in range(3):
-            self.comment(busy, self.user, f"c{n}", at=self.ago(hours=3, minutes=n))
+            # From local midnight, not "3 hours ago": that is yesterday before 03:00.
+            self.comment(
+                busy, self.user, f"c{n}", at=self.midnight_jst() + timedelta(seconds=30 + n)
+            )
         today = self.did()["today"]
         self.assertEqual(len(today["items"]), briefing.DID_ITEMS["today"])
         self.assertIs(today["items_truncated"], True)
@@ -1318,8 +1321,7 @@ class TestWhatYouDid(BriefingBase):
 
     def test_an_event_carries_the_local_time_of_day(self):
         task = self.make_task()
-        self.comment(
-            task, self.user, "morning", at=self.midnight_jst() + timedelta(hours=9, minutes=5)
-        )
+        # 00:01 local: always today and already past, whatever the hour the suite runs at.
+        self.comment(task, self.user, "early", at=self.midnight_jst() + timedelta(minutes=1))
         event = self.did()["today"]["items"][0]["events"][0]
-        self.assertEqual(event["at"], "09:05")
+        self.assertEqual(event["at"], "00:01")
