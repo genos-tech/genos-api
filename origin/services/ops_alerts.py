@@ -64,6 +64,7 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     # */5
     "email-notify": timedelta(minutes=20),
     "reminder-tick": timedelta(minutes=20),
+    "schedule-tick": timedelta(minutes=20),
     "webhook-deliver": timedelta(minutes=20),
     # */10
     "opensearch-reindexer": timedelta(minutes=35),
