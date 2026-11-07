@@ -5,7 +5,9 @@ takes the enabled schedules whose `next_run_at` has passed, oldest first, and ru
 job as its member (`services.schedules.run_due`). The rules (claim, lateness, failures) live
 there.
 
-Failures here are per member and log at WARNING, so a member's broken job never turns the
+After the due runs, the tick also seeds the suggested schedules for a few members who never
+opened the Schedules page (`schedule_defaults.seed_pending`, MIP-1178), inside the same time
+budget. Failures here are per member and log at WARNING, so a member's broken job never turns the
 cron red. Only a fault in the tick itself (the database) logs at ERROR and fails the run.
 A tick that stops running shows up through its heartbeat (`CRON_SCHEDULES["schedule-tick"]`).
 
@@ -17,11 +19,12 @@ Usage:
 from __future__ import annotations
 
 import logging
+import time
 
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
-from origin.services import schedules
+from origin.services import schedule_defaults, schedules
 
 log = logging.getLogger("origin.schedules")
 
@@ -53,10 +56,16 @@ class Command(CronCommand):
                 self.stdout.write(
                     f"[dry-run] {row.pk} job={row.job} due={row.next_run_at.isoformat()}"
                 )
+            pending = schedule_defaults.pending_members(now=now)
+            self.stdout.write(f"[dry-run] {len(pending)} member(s) would be seeded")
             return
 
+        started = time.monotonic()
         summary = schedules.run_due(
             now=now, budget_seconds=options["budget_seconds"], limit=options["limit"]
+        )
+        seeded = schedule_defaults.seed_pending(
+            now=now, deadline=started + options["budget_seconds"]
         )
         if summary.max_late_seconds > LATE_MINUTES * 60:
             log.warning(
@@ -69,5 +78,7 @@ class Command(CronCommand):
             f"{summary.skipped_late} skipped late, {summary.skipped_access} skipped access, "
             f"{summary.paused} paused, {summary.claimed_elsewhere} claimed elsewhere, "
             f"{summary.deferred} deferred (of {summary.due} due, "
-            f"oldest {summary.max_late_seconds}s late)"
+            f"oldest {summary.max_late_seconds}s late); "
+            f"seeded {seeded.members} member(s) with {seeded.schedules} schedule(s), "
+            f"{seeded.failed} seeding failed"
         )

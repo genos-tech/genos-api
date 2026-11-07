@@ -59,7 +59,7 @@ from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
-from origin.models.common.schedule_models import MemberSchedule
+from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
@@ -162,6 +162,7 @@ def _delete_personal_data(user) -> None:
     # The member's schedules (MIP-1147) are theirs alone; the account is soft-deleted, so no
     # FK cascade fires and the tick would keep running them.
     MemberSchedule.objects.filter(user=user).delete()
+    MemberScheduleSeed.objects.filter(user=user).delete()  # the marker (MIP-1178)
     # The reports those schedules filed in the Inbox (MIP-1149) quote the member's tasks and
     # notes. The receiver FK is SET_NULL and the account is soft-deleted, so they would stay.
     InboxItems.objects.filter(receiver=user, item_type=ITEM_TYPE_GENOS_REPORT).delete()

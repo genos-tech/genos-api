@@ -17,6 +17,8 @@ from origin.services.user_time import user_zone
 def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     user = CustomUser.objects.get(pk=ctx.user_id)
     zone = user_zone(user)
+    # First list in the member's default team creates the suggested schedules (MIP-1178).
+    schedule_defaults.seed_if_default_team(user, ctx.team_id)
     mine = schedules.list_schedules(ctx)
     rows = [schedule_text.present(s, zone) for s in mine]
     return {
