@@ -314,16 +314,22 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
         "kind": kind,
         "_actor": actor,
         "_label": label_for_none,
+        # No actor: the GitHub webhook or the system (a merge closing a task the assignee
+        # asked to be closed that way). Not a person, so not "what others did" (MIP-1142).
+        "automated": row.actor_id is None,
         "summary": summary,
     }
 
 
 def _heat_of(events: list[dict[str, Any]]) -> int:
-    return sum(HEAT.get(e["kind"], 1) for e in events)
+    """Heat from what PEOPLE did. Automation echoes (a PR linked, a task closed because its
+    PR merged) are consequences, usually of the member's own work, and say nothing about how
+    much attention the item is getting."""
+    return sum(HEAT.get(e["kind"], 1) for e in events if not e.get("automated"))
 
 
 def _changed_tasks(
-    ctx: ToolContext, win: Window, project_id: int | None, names: _Names
+    ctx: ToolContext, win: Window, project_id: int | None, names: _Names, automated_only: list
 ) -> list[dict[str, Any]]:
     me = ctx.user_id
     mine = TaskMaster.objects.filter(team_id=ctx.team_id, is_deleted=False).filter(
@@ -381,6 +387,11 @@ def _changed_tasks(
             )
     items = []
     for task_id, events in by_task.items():
+        if all(e.get("automated") for e in events):
+            # Only automation touched it: a PR linked, a merge closing it. Not news from
+            # people, and mostly the member's own PRs echoed back. Counted, not listed.
+            automated_only.append(task_id)
+            continue
         task = readable[task_id]
         events.sort(key=lambda e: e["at"])
         items.append(
@@ -507,7 +518,7 @@ def _finish_items(items: list[dict[str, Any]], names: _Names) -> list[dict[str, 
         item["heat"] = _heat_of(events)
         item["events_total"] = len(events)
         item["latest_at"] = events[-1]["at"]
-        item["_kinds"] = [e["kind"] for e in events]
+        item["_kinds"] = [e["kind"] for e in events if not e.get("automated")]
         item["_all_events"] = events
     items.sort(key=lambda i: (-i["heat"], -i["latest_at"].timestamp()))
     items = items[:MAX_CHANGED_ITEMS]
@@ -522,6 +533,8 @@ def _finish_items(items: list[dict[str, Any]], names: _Names) -> list[dict[str, 
             }
             if e.get("_text"):
                 event["text"] = wrap_workspace_content(e["_text"])
+            if e.get("automated"):
+                event["automated"] = True
             if e.get("_label"):
                 event["by"] = e["_label"]
             else:
@@ -532,17 +545,23 @@ def _finish_items(items: list[dict[str, Any]], names: _Names) -> list[dict[str, 
 
 def changed_for_me(
     ctx: ToolContext, win: Window, project_id: int | None, names: _Names
-) -> tuple[list[dict[str, Any]], int]:
-    """What other people did on the caller's things in the window: `(items, total)`.
+) -> tuple[list[dict[str, Any]], int, int]:
+    """What other people did on the caller's things in the window:
+    `(items, total, automated_only)`.
+
+    `automated_only` is how many of the caller's tasks were touched ONLY by automation (a PR
+    linked, a merge closing the task): not listed, because nobody did anything, but not
+    hidden either.
 
     With a project filter only tasks of that project are looked at: chats and notes
     belong to no project."""
-    items = _changed_tasks(ctx, win, project_id, names)
+    automated_only: list[int] = []
+    items = _changed_tasks(ctx, win, project_id, names, automated_only)
     if project_id is None:
         items += _changed_threads(ctx, win, names)
         items += _changed_notes(ctx, win, names)
     total = len(items)
-    return _finish_items(items, names), total
+    return _finish_items(items, names), total, len(automated_only)
 
 
 # --------------------------------------------------------------------------- #
@@ -1102,7 +1121,7 @@ def build_briefing(
     win = resolve_window(ctx, window, since, now, zone)
     names = _Names(ctx)
 
-    items, total_changed = changed_for_me(ctx, win, project, names)
+    items, total_changed, automated_only = changed_for_me(ctx, win, project, names)
     me = CustomUser.objects.filter(id=ctx.user_id).first()
     team = TeamMaster.objects.filter(team_id=ctx.team_id).first()
     agenda_section = agenda(ctx, now, zone, project)
@@ -1137,6 +1156,7 @@ def build_briefing(
             "items": items,
             "total": total_changed,
             "truncated": total_changed > len(items),
+            "automated_only": automated_only,
             "project_filter": project,
         },
         "waiting_on_me": waiting_me,

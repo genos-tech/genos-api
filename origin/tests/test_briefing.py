@@ -350,14 +350,54 @@ class TestChangedTasks(BriefingBase):
         self.assertEqual(event["what"], "assigned_to_you")
         self.assertEqual(event["summary"], "assigned this to you")
 
-    def test_a_github_event_is_by_github(self):
+    def test_a_github_event_in_a_story_is_by_github_and_flagged_automated(self):
         task = self.make_task()
+        self.comment(task, self.user2, "Opened a PR for this", at=self.ago(hours=2))
         self.activity(
             task, None, "pr_linked", None, None, at=self.ago(hours=1), pr_title="Fix redirect"
         )
-        event = self.item_for(task)["events"][0]
+        event = self.item_for(task)["events"][1]
         self.assertEqual(event["by"], "GitHub")
+        self.assertIs(event["automated"], True)
         self.assertIn("Fix redirect", event["summary"])
+
+    def test_automation_alone_does_not_make_an_item_appear_but_is_counted(self):
+        """MIP-1142: a PR linked, and a merge closing the task, are echoes of the member's own
+        PRs. With nobody else involved nothing happened that the member did not do."""
+        linked = self.make_task("Linked")
+        self.activity(linked, None, "pr_linked", None, None, at=self.ago(hours=2), pr_title="x")
+        closed = self.make_task("Closed by merge")
+        self.activity(closed, None, "status_changed", "WIP", "Closed", at=self.ago(hours=1))
+        brief = self.brief()
+        self.assertIsNone(self.item_for(linked))
+        self.assertIsNone(self.item_for(closed))
+        self.assertEqual(brief["changed_for_me"]["total"], 0)
+        self.assertEqual(brief["changed_for_me"]["automated_only"], 2)
+
+    def test_automation_adds_no_heat_and_no_reason_to_look(self):
+        quiet = self.make_task("Echoes", priority="Low")
+        for n in range(4):
+            self.activity(
+                quiet, None, "pr_linked", None, None, at=self.ago(hours=n + 1), pr_title=f"p{n}"
+            )
+        busy = self.make_task("Spoken to", priority="Low")
+        self.comment(busy, self.user2, "one comment", at=self.ago(hours=1))
+        self.activity(busy, None, "pr_linked", None, None, at=self.ago(hours=1), pr_title="p")
+        item = self.item_for(busy)
+        self.assertEqual(item["heat"], 3, "the comment counts, the PR link does not")
+        suggested = {s["task_id"]: s for s in self.brief()["suggested_next"]}
+        self.assertNotIn(quiet.task_id, suggested)
+        reasons = " ".join(suggested[busy.task_id]["reasons"])
+        self.assertIn("1 comment", reasons)
+        self.assertNotIn("change", reasons)
+
+    def test_someone_elses_status_change_still_counts_beside_automation(self):
+        task = self.make_task()
+        self.activity(task, self.user2, "status_changed", "Open", "WIP", at=self.ago(hours=3))
+        self.activity(task, None, "status_changed", "WIP", "Closed", at=self.ago(hours=1))
+        item = self.item_for(task)
+        self.assertEqual([e.get("automated", False) for e in item["events"]], [False, True])
+        self.assertEqual(item["heat"], 2)
 
     def test_my_reported_tasks_collaborating_and_commented_tasks_count_as_mine(self):
         reported = self.make_task("Reported", assignee=self.user2, reporter=self.user)
