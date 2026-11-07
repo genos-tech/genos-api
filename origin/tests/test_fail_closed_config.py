@@ -623,6 +623,9 @@ _PLAIN_DJANGO_MODULES = {
     # gate and the rate limit wrap them in `oauth_views`, and `wraps` keeps THEIR module.
     "oauth2_provider.views.base",
     "oauth2_provider.views.metadata",
+    # MIP-1108: the domain-verification token for ChatGPT's plugin portal. GET/HEAD only,
+    # reads no body, no data of anyone's: it serves one environment value or a 404.
+    "origin.views.public.openai_challenge",
 }
 
 

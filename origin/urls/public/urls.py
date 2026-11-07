@@ -23,6 +23,7 @@ in kind from breaking the others.
 from django.urls import path
 
 from origin.views.public.mcp.views import McpView
+from origin.views.public.openai_challenge import openai_apps_challenge_view
 from origin.views.public.openapi import OpenApiSchemaView
 from origin.views.public.v1_views import (
     MeView,
@@ -52,4 +53,11 @@ urlpatterns = [
     # people copy by hand doesn't get one. `APPEND_SLASH` can't rescue a
     # POST anyway — the redirect would drop the body.
     path("api/public/v1/mcp", McpView.as_view(), name="public_v1_mcp"),
+    # MIP-1108: ChatGPT's plugin portal checks the host serves its token here (404 unless
+    # `OPENAI_APPS_CHALLENGE` is set). At the origin's `.well-known`, so not under /api.
+    path(
+        ".well-known/openai-apps-challenge",
+        openai_apps_challenge_view,
+        name="openai_apps_challenge",
+    ),
 ]
