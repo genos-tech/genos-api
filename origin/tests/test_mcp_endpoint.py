@@ -1058,6 +1058,7 @@ class TestTheCatalogContract(McpBase):
             "calendar_id": "list_calendars",
             "item_id": ("list_uncompleted_todos", "list_today_todos", "list_my_worklog"),
             "entry_id": "list_my_worklog",
+            "schedule_id": "list_my_schedules",
             "project_id": "list_projects",
             "inbox_item_id": "list_my_inbox",
             "milestone_id": "list_milestones",
@@ -1854,6 +1855,8 @@ class TestPlantedInstructions(McpBase):
                 "delete_todo_item",
                 # The member's own worklog, which only they can read (MIP-1071).
                 "delete_worklog_entry",
+                # The member's own schedules: recreatable, but a delete still asks (MIP-1151).
+                "delete_my_schedule",
             },
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))

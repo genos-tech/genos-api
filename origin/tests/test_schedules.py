@@ -995,6 +995,16 @@ class RunNowTests(ScheduleBase):
         self.assertTrue(sched.enabled)
         self.assertEqual(sched.last_status, "failed")
 
+    def test_a_second_run_inside_the_cooldown_is_refused_and_runs_nothing(self):
+        sched = self.make()
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.run_now(self.ctx, sched.pk, now=NOW + timedelta(seconds=30))
+        self.assertIn("31 seconds", str(caught.exception))
+        self.assertEqual(len(self.calls), 1)
+        schedules.run_now(self.ctx, sched.pk, now=NOW + schedules.RUN_NOW_COOLDOWN)
+        self.assertEqual(len(self.calls), 2)
+
     def test_runs_a_paused_schedule_too(self):
         sched = self.make()
         schedules.set_enabled(self.ctx, sched.pk, False)
