@@ -17,7 +17,7 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from origin.models.common.api_key_models import ApiKey, generate_key, hash_key
-from origin.models.common.schedule_models import MemberSchedule
+from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import schedules
@@ -38,6 +38,9 @@ def fake_job(ctx, params):
 class ScheduleViewBase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        # These tests are about the page, not about the defaults (MIP-1178): the member was
+        # seeded long ago, so a first list creates nothing.
+        MemberScheduleSeed.objects.create(user=self.user, team=self.team)
         cache.clear()
         self.addCleanup(cache.clear)
         self.user.timezone = "Asia/Tokyo"
