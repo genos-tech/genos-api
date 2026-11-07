@@ -17,7 +17,6 @@ from .common.security_event_models import *
 from .common.team_models import *
 from .common.usage_models import *
 from .common.user_models import *
-from .common.worklog_models import *
 from .note.chat_note_models import *
 from .note.common_note_models import *
 from .note.favorite_note_models import *

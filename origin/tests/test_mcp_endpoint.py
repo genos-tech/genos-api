@@ -1056,8 +1056,7 @@ class TestTheCatalogContract(McpBase):
         producers = {
             "event_id": "list_calendar_events",
             "calendar_id": "list_calendars",
-            "item_id": ("list_uncompleted_todos", "list_today_todos", "list_my_worklog"),
-            "entry_id": "list_my_worklog",
+            "item_id": ("list_uncompleted_todos", "list_today_todos"),
             "schedule_id": "list_my_schedules",
             "project_id": "list_projects",
             "inbox_item_id": "list_my_inbox",
@@ -1853,8 +1852,6 @@ class TestPlantedInstructions(McpBase):
                 "delete_note_folder",
                 "manage_note_sharing",
                 "delete_todo_item",
-                # The member's own worklog, which only they can read (MIP-1071).
-                "delete_worklog_entry",
                 # The member's own schedules: recreatable, but a delete still asks (MIP-1151).
                 "delete_my_schedule",
             },

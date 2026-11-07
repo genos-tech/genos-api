@@ -12,18 +12,13 @@ read each tool's own module to check it only takes the arguments it declares.
 """
 
 from origin.search_engine.agent.tools import register_tool
-from origin.views.public.mcp.secretary.capture_worklog import CAPTURE_WORKLOG
 from origin.views.public.mcp.secretary.create_my_schedule import CREATE_MY_SCHEDULE
 from origin.views.public.mcp.secretary.delete_my_schedule import DELETE_MY_SCHEDULE
-from origin.views.public.mcp.secretary.delete_worklog_entry import DELETE_WORKLOG_ENTRY
 from origin.views.public.mcp.secretary.get_my_briefing import GET_MY_BRIEFING
 from origin.views.public.mcp.secretary.list_my_schedules import LIST_MY_SCHEDULES
-from origin.views.public.mcp.secretary.list_my_worklog import LIST_MY_WORKLOG
 from origin.views.public.mcp.secretary.run_my_schedule import RUN_MY_SCHEDULE
 from origin.views.public.mcp.secretary.update_my_schedule import UPDATE_MY_SCHEDULE
-from origin.views.public.mcp.secretary.update_worklog_item import UPDATE_WORKLOG_ITEM
 
-WORKLOG_TOOLS = (CAPTURE_WORKLOG, LIST_MY_WORKLOG, UPDATE_WORKLOG_ITEM, DELETE_WORKLOG_ENTRY)
 SCHEDULE_TOOLS = (
     LIST_MY_SCHEDULES,
     CREATE_MY_SCHEDULE,
@@ -31,7 +26,7 @@ SCHEDULE_TOOLS = (
     DELETE_MY_SCHEDULE,
     RUN_MY_SCHEDULE,
 )
-SECRETARY_TOOLS = (GET_MY_BRIEFING, *WORKLOG_TOOLS, *SCHEDULE_TOOLS)
+SECRETARY_TOOLS = (GET_MY_BRIEFING, *SCHEDULE_TOOLS)
 
 for _tool in SECRETARY_TOOLS:
     register_tool(_tool)

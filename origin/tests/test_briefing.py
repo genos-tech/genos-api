@@ -34,7 +34,6 @@ from origin.models.common.api_key_models import SCOPE_READ
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.common.worklog_models import WorklogEntry, WorklogItem
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -827,24 +826,6 @@ class TestWaiting(BriefingBase):
         self.assertEqual(waiting_for["display_id"], blocker.display_id)
         self.assertEqual(waiting_for["assignee"], "otheruser")
 
-    def test_it_waits_on_blocked_tasks_only_and_a_worklog_waiting_note_is_not_read(self):
-        """MIP-1153: the worklog is no longer an input, so a `waiting` item the member once
-        saved there is not a thing they are waiting on, as far as the briefing goes."""
-        entry = WorklogEntry.objects.create(
-            team=self.team, author=self.user, raw_text="waiting on Aki"
-        )
-        WorklogItem.objects.create(
-            entry=entry,
-            team=self.team,
-            author=self.user,
-            kind="waiting",
-            summary="Aki's copy",
-            person_hint="Aki",
-        )
-        waiting = self.brief()["waiting_on_others"]
-        self.assertEqual(set(waiting), {"blocked_tasks"})
-        self.assertNotIn("Aki", json.dumps(self.brief()))
-
 
 class TestStale(BriefingBase):
     def age(self, task, **delta):
@@ -864,25 +845,6 @@ class TestStale(BriefingBase):
         self.assertEqual([t["task_id"] for t in stale], [old.task_id])
         self.assertEqual(stale[0]["days_idle"], 12)
         self.assertNotIn(fresh.task_id, [t["task_id"] for t in stale])
-
-    def test_the_worklog_is_not_in_the_briefing_at_all(self):
-        """MIP-1153: Genos never expects input from the member, so what they saved in their
-        private worklog (their own, today, yesterday, open next steps) is not read."""
-        zone = zone_for_user_id(self.user.id)
-        noon = self.now.astimezone(zone).replace(hour=12, minute=0)
-        mine = WorklogEntry.objects.create(
-            team=self.team, author=self.user, raw_text="my scratch text", occurred_at=noon
-        )
-        WorklogItem.objects.create(
-            entry=mine, team=self.team, author=self.user, kind="next", summary="Write the migration"
-        )
-        WorklogEntry.objects.create(team=self.team, author=self.user2, raw_text="user2 private")
-        brief = self.brief()
-        self.assertNotIn("worklog", brief)
-        text = json.dumps(brief)
-        for secret in ("my scratch text", "Write the migration", "user2 private"):
-            self.assertNotIn(secret, text)
-        self.assertNotIn("worklog", text.lower())
 
 
 class TestSuggestions(BriefingBase):
@@ -977,12 +939,11 @@ class TestItIsTheCallersOwnView(BriefingBase):
         task = self.make_task("Private plan", due_date=self.now.date() - timedelta(days=1))
         untouched = self.make_task("Hidden plan", due_date=self.now.date() - timedelta(days=1))
         self.comment(task, self.user2, "for you only", at=self.ago(hours=1))
-        WorklogEntry.objects.create(team=self.team, author=self.user, raw_text="my private note")
         self._key(scope=SCOPE_READ, user=self.user2)
         brief = self.brief()
         out = json.dumps(brief)
         # Nothing of mine that the other member did not act on, and no text of anyone's.
-        for secret in ("Hidden plan", "for you only", "my private note"):
+        for secret in ("Hidden plan", "for you only"):
             self.assertNotIn(secret, out)
         # The one task they did comment on is theirs to see in what THEY did (they can open it);
         # it is nowhere else in their view.
@@ -1038,7 +999,6 @@ class TestPublishing(BriefingBase):
             "suggested_next",
         ):
             self.assertIn(key, out)
-        self.assertNotIn("worklog", out)
         self.assertEqual(out["changed_for_me"]["items"], [])
         self.assertEqual(out["suggested_next"], [])
         self.assertEqual(out["me"]["username"], "testuser")
@@ -1071,28 +1031,10 @@ class TestPublishing(BriefingBase):
                         "High",
                         at=self.midnight_jst(days_ago=day) + timedelta(minutes=c + 1),
                     )
-        for n in range(30):
-            entry = WorklogEntry.objects.create(
-                team=self.team, author=self.user, raw_text="note " * 100
-            )
-            WorklogItem.objects.create(
-                entry=entry,
-                team=self.team,
-                author=self.user,
-                kind="next",
-                summary="Next step " * 20,
-            )
         brief = self.brief()
         size = len(json.dumps(brief))
         sections = {key: len(json.dumps(value)) for key, value in brief.items()}
         self.assertLess(size, 32_000, f"the briefing is {size} characters: {sections}")
-
-    def test_the_tool_description_does_not_mention_the_worklog(self):
-        """MIP-1153: the briefing no longer has a worklog section, so the text a model reads
-        must not promise one."""
-        text = self.listed()["get_my_briefing"]["description"]
-        self.assertNotIn("worklog", text.lower())
-        self.assertIn("`what_you_did`", text, "the briefing's own activity section stays")
 
     def test_the_summary_line_counts_what_it_found(self):
         task = self.make_task()
@@ -1346,12 +1288,12 @@ class TestWhatYouDid(BriefingBase):
             self.assertIs(section["items_truncated"], False)
 
     def test_it_asks_nothing_of_the_member_and_stores_nothing(self):
-        """Read only: no worklog row, no briefing stamp beyond the one the briefing already
-        keeps, and the member typed nothing."""
+        """Read only: no briefing stamp beyond the one the briefing already keeps, and the
+        member typed nothing."""
         task = self.make_task()
         self.activity(task, self.user, "priority_changed", "a", "b", at=self.ago(minutes=5))
         self.did()
-        self.assertEqual(WorklogEntry.objects.count(), 0)
+        self.assertEqual(MemberBriefingState.objects.count(), 1, "only the briefing's own stamp")
 
     def test_yesterday_is_the_gist_today_is_the_detail(self):
         """The briefing has one budget: today gets more items and events than yesterday."""

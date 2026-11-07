@@ -49,7 +49,6 @@ EXPECTED_KEPT = {
     "delete_note": {"note_type", "note_id"},
     "delete_note_folder": {"folder_id"},
     "manage_note_sharing": {"action", "note_type", "note_id", "user_id", "role"},
-    "delete_worklog_entry": {"entry_id"},
     "delete_my_schedule": {"schedule_id"},
 }
 
