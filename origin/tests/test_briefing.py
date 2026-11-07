@@ -728,6 +728,41 @@ class TestWaiting(BriefingBase):
         self.message(channel, self.user, "answering here", root=root, at=self.ago(hours=2))
         self.assertEqual(self.brief()["waiting_on_me"]["mentions"], [])
 
+    def card(self, channel, sender, task, text):
+        """The task's card in its project chat: a top-level message that carries the task."""
+        row = self.message(channel, sender, text, at=self.ago(hours=2))
+        Message.objects.filter(pk=row.pk).update(task_id=task.task_id)
+        return row
+
+    def test_a_task_card_restating_the_assignee_does_not_wait_on_me(self):
+        """MIP-1141: the card Genos posts for a new task says "Assignee: @Ken Reporter: @Ken".
+        It is not a question, whoever posted it."""
+        channel = self.channel([self.user, self.user2], title="Genos-Alpha")
+        mine = self.make_task("Mine", reporter=self.user)
+        theirs = self.make_task("Theirs", reporter=self.user2)
+        for sender, task in ((self.user, mine), (self.user2, theirs)):
+            card = self.card(channel, sender, task, "Assignee: @testuser Reporter: @testuser")
+            MessageMention.objects.create(message=card, mentioned_user=self.user)
+        self.assertEqual(self.brief()["waiting_on_me"]["mentions"], [])
+
+    def test_a_question_in_the_cards_thread_still_waits_on_me(self):
+        channel = self.channel([self.user, self.user2], title="Genos-Alpha")
+        card = self.card(channel, self.user2, self.make_task("Theirs"), "Assignee: @testuser")
+        ask = self.message(channel, self.user2, "@testuser can you take this?", root=card)
+        MessageMention.objects.create(message=ask, mentioned_user=self.user)
+        mentions = self.brief()["waiting_on_me"]["mentions"]
+        self.assertEqual([m["message_id"] for m in mentions], [str(ask.id)])
+
+    def test_tagging_myself_in_an_ordinary_message_still_waits(self):
+        """Only the card is dropped: a member who tags themselves leaves a reminder."""
+        channel = self.channel([self.user, self.user2])
+        note = self.message(
+            channel, self.user, "@testuser remember the invoice", at=self.ago(hours=1)
+        )
+        MessageMention.objects.create(message=note, mentioned_user=self.user)
+        mentions = self.brief()["waiting_on_me"]["mentions"]
+        self.assertEqual([m["message_id"] for m in mentions], [str(note.id)])
+
     def test_a_mention_in_a_chat_i_cannot_read_is_not_shown(self):
         channel = self.channel([self.user2])
         ask = self.message(channel, self.user2, "secret @testuser", at=self.ago(hours=1))
