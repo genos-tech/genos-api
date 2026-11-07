@@ -300,11 +300,11 @@ class TestLazySeeding(SeedBase):
         self.client.get(f"{LIST}?team_id={self.team_id}")
         self.assertEqual(MemberSchedule.objects.filter(user=self.user).count(), 2)
 
-    def test_the_mcp_list_does_the_same(self):
+    def test_the_mcp_list_is_read_only_and_only_offers_them(self):
         out = mcp_list({}, self.ctx)
-        self.assertEqual(len(out["schedules"]), 2)
-        self.assertEqual(out["suggested"], [])
-        self.assertEqual(len(mcp_list({}, self.ctx)["schedules"]), 2)
+        self.assertEqual(out["schedules"], [])
+        self.assertEqual([s["key"] for s in out["suggested"]], ["morning_plan", "evening_recap"])
+        self.assertEqual(MemberSchedule.objects.filter(user=self.user).count(), 0)
 
     def test_someone_who_is_not_in_the_team_gets_nothing_made(self):
         stranger = CustomUser.objects.create_user(
