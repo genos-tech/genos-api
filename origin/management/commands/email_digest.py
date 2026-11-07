@@ -12,7 +12,8 @@ skeleton as `agent_digest`:
     deliberately its OWN stamp, never the agent digest's
     (`digest_last_sent_at`): sharing would let one channel's send
     suppress the other and one opt-out kill both.
-  * Content = unread Activity + unread InboxItems since the last stamp,
+  * Content = unread Activity + unread InboxItems since the last stamp
+    (never a scheduled report, item_type 10: `_EXCLUDED_ITEM_TYPES`),
     MINUS anything a coalesced notification email already delivered
     (join against the outbox's `sent` rows — the outbox doubles as the
     dedupe ledger between the two email surfaces).
@@ -36,7 +37,7 @@ from django.utils import timezone
 from apis.request_id import describe_exception
 from origin.management.cron_command import CronCommand
 from origin.models.chat.unified_models import Activity
-from origin.models.common.inbox_models import InboxItems
+from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.notification_models import (
     EmailNotificationEvent,
     NotificationPreference,
@@ -54,6 +55,12 @@ log = logging.getLogger(__name__)
 _MIN_GAP = timedelta(hours=20)  # DST-tolerant "once a day"
 _FIRST_WINDOW = timedelta(days=7)  # first-ever digest looks back a week
 _MAX_ENTRIES = 10
+# Inbox item types the email never lists or counts (MIP-1158). A scheduled report (10) is
+# something the member asked the Inbox for; nobody asked for it by email, and a daily report
+# would otherwise put its title (which can quote the member's own task titles) in the mail
+# whatever the schedule's `deliver_push` says. A member whose only unread item is a report
+# gets no email at all.
+_EXCLUDED_ITEM_TYPES = (ITEM_TYPE_GENOS_REPORT,)
 
 
 def _digest_template(locale: str) -> str:
@@ -187,6 +194,8 @@ class Command(CronCommand):
                 is_deleted=False,
                 ts_created_at__gte=window_start,
             )
+            # In the query, not the list below: the [:50] cap must not be spent on reports.
+            .exclude(item_type__in=_EXCLUDED_ITEM_TYPES)
             .select_related("sender")
             .order_by("-ts_created_at")[:50]
         )

@@ -12,7 +12,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Activity, ActivityType
-from origin.models.common.inbox_models import InboxItems
+from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.notification_models import (
     EmailNotificationEvent,
     EmailSuppression,
@@ -176,6 +176,59 @@ class ContentTests(DigestTestBase):
         self._tick()
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("asked to join your team", mail.outbox[0].body)
+
+    def _report(self, title="Daily summary", **kwargs):
+        return InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=kwargs.pop("receiver", self.user),
+            item_type=ITEM_TYPE_GENOS_REPORT,
+            item_body={"title": title, "text": "s", "sections": []},
+            request_status="",
+            **kwargs,
+        )
+
+    def test_a_report_alone_sends_no_email_and_stamps(self):
+        self._report()
+        self._tick()
+        self.assertEqual(len(mail.outbox), 0)
+        self.user.refresh_from_db()
+        self.assertIsNotNone(self.user.email_digest_last_sent_at)
+
+    def test_a_report_beside_a_real_item_is_neither_listed_nor_counted(self):
+        self._report(title="SECRET-REPORT-TITLE")
+        self._report(title="SECRET-REPORT-TWO")
+        InboxItems.objects.create(
+            team=self.team, sender=self.user2, receiver=self.user, item_type=1
+        )
+        self._tick()
+        self.assertEqual(len(mail.outbox), 1)
+        msg = mail.outbox[0]
+        self.assertNotIn("SECRET-REPORT", msg.body)
+        self.assertNotIn("SECRET-REPORT", msg.alternatives[0][0])
+        self.assertIn("asked to join your team", msg.body)
+        # One update, not three: the count in the subject excludes the reports.
+        self.assertIn("1 update", msg.subject)
+        self.assertNotIn("1 updates", msg.subject)
+
+    def test_reports_do_not_use_up_the_inbox_cap(self):
+        # 60 newer reports must not push the one real item out of the 50 newest rows.
+        InboxItems.objects.create(
+            team=self.team, sender=self.user2, receiver=self.user, item_type=1
+        )
+        for i in range(60):
+            self._report(title=f"R-{i}")
+        self._tick()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("asked to join your team", mail.outbox[0].body)
+
+    def test_the_other_activity_item_types_are_still_listed(self):
+        # Only type 10 is excluded: a notice (0) is still an unread item.
+        InboxItems.objects.create(
+            team=self.team, sender=self.user2, receiver=self.user, item_type=0, item_body={}
+        )
+        self._tick()
+        self.assertEqual(len(mail.outbox), 1)
 
     def test_overflow_shows_more_count(self):
         for i in range(12):
