@@ -238,8 +238,10 @@ class IdempotenceTests(ScheduleBase):
 
     def test_run_now_is_its_own_report_every_time(self):
         sched = self.make(due_at=utc(2030, 1, 1))
-        schedules.run_now(self.ctx, sched.pk)
-        schedules.run_now(self.ctx, sched.pk)
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        # A second press inside the cooldown is refused (MIP-1151); a minute later it is a
+        # report of its own.
+        schedules.run_now(self.ctx, sched.pk, now=NOW + schedules.RUN_NOW_COOLDOWN)
         self.assertEqual(reports(self.user).count(), 2)
 
     def test_run_now_does_not_use_up_the_scheduled_run(self):
@@ -251,8 +253,10 @@ class IdempotenceTests(ScheduleBase):
     def test_run_now_on_a_paused_schedule_is_not_swallowed(self):
         sched = self.make()
         schedules.set_enabled(self.ctx, sched.pk, False)
-        schedules.run_now(self.ctx, sched.pk)
-        schedules.run_now(self.ctx, sched.pk)
+        schedules.run_now(self.ctx, sched.pk, now=NOW)
+        # A second press inside the cooldown is refused (MIP-1151); a minute later it is a
+        # report of its own.
+        schedules.run_now(self.ctx, sched.pk, now=NOW + schedules.RUN_NOW_COOLDOWN)
         self.assertEqual(reports(self.user).count(), 2)
 
     def test_a_tick_that_died_mid_run_and_is_taken_over_files_one_item(self):
