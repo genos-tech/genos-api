@@ -4,12 +4,15 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 
 # The Activities half of the inbox: things that HAPPENED and need no answer
-# (0 notice, 6 Genos digest, 9 reminder). Every other item_type is a REQUEST
+# (0 notice, 6 Genos digest, 9 reminder, 10 Genos report). Every other item_type is a REQUEST
 # somebody is waiting on. The split decides which inbox tab an item lands on
 # and whether it counts toward the Requests badge, on screen and on the app
 # icon (`services/unread_badge`). Mirrors `ACTIVITY_ITEM_TYPES` in the
 # frontend's `features/inbox/utils/inboxItemTypes.ts`: change both together.
-ACTIVITY_INBOX_ITEM_TYPES = frozenset({0, 6, 9})
+ACTIVITY_INBOX_ITEM_TYPES = frozenset({0, 6, 9, 10})
+
+# `item_type` of the report a member's schedule filed (see the map on `InboxItems.item_type`).
+ITEM_TYPE_GENOS_REPORT = 10
 
 
 class InboxItems(models.Model):
@@ -68,13 +71,20 @@ class InboxItems(models.Model):
     #       sender_name, preview, href, remind_at}. Not a request, so
     #       `request_status` is "". Lives in the Activities half of the
     #       inbox with 0 and 6)
+    #   10: "Genos report" (the report a member's own schedule produced —
+    #       origin/services/schedule_delivery.py; `receiver` is the schedule's
+    #       owner, `team` the schedule's team, `sender` is NULL, `item_body`
+    #       carries {title, text, sections: [{heading, items: [{text,
+    #       link?}]}]} (text is the one-line summary) and `item_optionals`
+    #       {kind, schedule_id, job, run_at?}. Not a request, so
+    #       `request_status` is "". Activities half, with 0, 6 and 9)
     # }
     #########################################################
     item_type = models.IntegerField(blank=False)
     item_optionals = models.JSONField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     #########################################################
-    # request_status: only relevant for request items (item_type 1-5, 7-8)
+    # request_status: only relevant for request items (item_type 1-5, 7-8; never 0, 6, 9 or 10)
     #   "pending"  = waiting for action
     #   "approved" = approved by owner
     #   "rejected" = rejected by owner

@@ -20,6 +20,7 @@ from django.conf import settings
 from django.db import transaction
 
 from origin.models.chat.unified_models import ActivityType, ChannelKind
+from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT
 from origin.models.common.notification_models import PushSubscription
 from origin.services import presence
 from origin.services.unread_badge import unread_badge_total
@@ -381,12 +382,20 @@ def _inbox_title(item, sender_name: str) -> str:
         3: f"{sender_name} asked to join your group chat",
         4: f"{sender_name} requested access to your note",
     }
+    if item.item_type == ITEM_TYPE_GENOS_REPORT:
+        # A schedule's report (MIP-1149): the report's own headline, not "New inbox item".
+        body = item.item_body if isinstance(item.item_body, dict) else {}
+        headline = body.get("title")
+        if isinstance(headline, str) and headline.strip():
+            return headline.strip()[:200]
+        return "Your Genos report"
     return titles.get(item.item_type, "New inbox item")
 
 
-def dispatch_push_for_inbox_item(item, *, title: str | None = None) -> None:
+def dispatch_push_for_inbox_item(item, *, title: str | None = None, body: str = "") -> None:
     """Web-push the inbox item's receiver. Never raises. `title` overrides
-    the item_type-derived default (used for the GM-join approval notice)."""
+    the item_type-derived default (used for the GM-join approval notice);
+    `body` is the card's second line (empty for every item but a report)."""
     if item is None or not vapid_configured():
         return
     try:
@@ -395,7 +404,7 @@ def dispatch_push_for_inbox_item(item, *, title: str | None = None) -> None:
             recipient_id=item.receiver_id,
             category="inbox",
             title=title or _inbox_title(item, sender_name),
-            body="",
+            body=body,
             url="/workspace/inbox",
             tag=f"inbox:{item.item_id}",
             actor=item.sender,
