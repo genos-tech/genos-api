@@ -1929,56 +1929,6 @@ def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpToo
     ]
 
 
-# `destructiveHint`, as OpenAI defines it for review: "Use `false` only for additive writes
-# without destructive or irreversible effects ... Being able to undo an action does not, by
-# itself, justify setting `destructiveHint` to `false`." So every write that CHANGES or
-# SENDS something that already exists is announced as destructive, whether or not it has a
-# history and a restore tool. This is the ANNOUNCEMENT only: what the member's "deleting
-# needs its own yes" actually gates stays `McpTool.destructive` (the delete tools), so a
-# connection allowed to make changes still edits tasks without that opt-in. A host that
-# asks before every destructive call will ask before these edits too; that is what OpenAI's
-# rule asks for. Every write tool must be in exactly one of the three sets
-# (`test_every_write_tool_is_decided`), so a new one is a decision, not a default.
-OVERWRITE_TOOLS = frozenset(
-    {
-        "assign_task",
-        "create_calendar_event",  # the invitation is an e-mail that cannot be recalled
-        "decline_join_request",
-        "manage_milestone",
-        "manage_note_folder",
-        "manage_project",
-        "manage_sprint",
-        "remove_task_delivery",
-        "restore_note_version",
-        "restore_task_body",
-        "update_calendar_event",
-        "update_comment",
-        "update_note",
-        "update_task",
-        "update_task_dependencies",
-        "update_tasks_bulk",
-        "update_todo_item",
-        "update_worklog_item",
-    }
-)
-
-# Writes that only add: a new row, a new link, a new label, a flag. Nothing that existed is
-# changed or removed.
-ADDITIVE_WRITE_TOOLS = frozenset(
-    {
-        "add_comment",
-        "add_project_tag",
-        "add_task_delivery",
-        "capture_worklog",
-        "create_note",
-        "create_task",
-        "create_task_plan",
-        "create_todo_item",
-        "favorite_note",
-        "manage_project_labels",
-    }
-)
-
 # Tools whose effect leaves the workspace to people we cannot enumerate: a calendar event
 # names attendees by e-mail address, and Google sends them the invitation, the change or the
 # cancellation (MIP-1110). Reading one's own calendar is not here.
@@ -2029,7 +1979,7 @@ def annotations(tool: McpTool) -> dict[str, Any]:
     """
     return {
         "readOnlyHint": not tool.write,
-        "destructiveHint": bool(tool.write and (tool.destructive or tool.name in OVERWRITE_TOOLS)),
+        "destructiveHint": bool(tool.write and tool.destructive),
         "openWorldHint": tool.name in OPEN_WORLD_TOOLS,
     }
 

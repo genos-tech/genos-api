@@ -53,12 +53,8 @@ class TestEveryToolSaysAllThree(McpBase):
             tool = by_name[name]
             with self.subTest(tool=name):
                 self.assertIs(hints["readOnlyHint"], not tool.write)
-                # A read is never destructive. A write is announced as destructive when it is
-                # a delete tool or one that overwrites or sends (OVERWRITE_TOOLS).
-                self.assertIs(
-                    hints["destructiveHint"],
-                    tool.write and (tool.destructive or name in tools.OVERWRITE_TOOLS),
-                )
+                # A read is never destructive; a write is exactly as destructive as its flag.
+                self.assertIs(hints["destructiveHint"], tool.write and tool.destructive)
 
     def test_only_the_calendar_writes_reach_outside_people(self):
         open_world = {n for n, h in self.listed().items() if h["openWorldHint"]}
@@ -66,32 +62,6 @@ class TestEveryToolSaysAllThree(McpBase):
             open_world,
             {"create_calendar_event", "update_calendar_event", "delete_calendar_event"},
         )
-
-    def test_every_write_tool_is_decided(self):
-        """OpenAI: `false` only for additive writes; an overwrite is destructive even when it
-        can be undone. A new write tool must be placed in one set, not left to a default."""
-        undecided = {
-            t.name
-            for t in tools.CATALOG
-            if t.write
-            and not t.destructive
-            and t.name not in tools.OVERWRITE_TOOLS | tools.ADDITIVE_WRITE_TOOLS
-        }
-        self.assertEqual(undecided, set(), "decide: OVERWRITE_TOOLS or ADDITIVE_WRITE_TOOLS")
-        self.assertEqual(tools.OVERWRITE_TOOLS & tools.ADDITIVE_WRITE_TOOLS, set())
-        names = {t.name for t in tools.CATALOG}
-        self.assertLessEqual(tools.OVERWRITE_TOOLS | tools.ADDITIVE_WRITE_TOOLS, names)
-        # A delete tool is already destructive; listing it again would hide a mistake.
-        self.assertFalse({t.name for t in tools.CATALOG if t.destructive} & tools.OVERWRITE_TOOLS)
-
-    def test_announcing_an_overwrite_as_destructive_does_not_gate_it(self):
-        """The announcement is for the host; what is refused without the delete opt-in is
-        still only the delete tools. A connection allowed to make changes keeps editing."""
-        self._key(scope=SCOPE_WRITE)
-        text, is_error = self._tool_text(
-            self._call("update_task", {"task_id": "WRD-7", "priority": "High"})
-        )
-        self.assertFalse(is_error, text)
 
     def test_the_open_world_names_are_real_tools(self):
         """A renamed tool must not silently stop being open-world."""

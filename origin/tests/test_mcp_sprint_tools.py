@@ -52,8 +52,7 @@ class TestWhoSeesWhat(McpSprintBase):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
         self.assertEqual(NEW & set(self.listed()), NEW)
         self.assertIs(self.listed()["delete_sprint"]["annotations"]["destructiveHint"], True)
-        # Announced as destructive (it can overwrite a sprint) but not gated: see OVERWRITE_TOOLS.
-        self.assertIs(self.listed()["manage_sprint"]["annotations"]["destructiveHint"], True)
+        self.assertIs(self.listed()["manage_sprint"]["annotations"]["destructiveHint"], False)
 
     def test_a_read_key_sees_neither(self):
         self._key(scope=SCOPE_READ)

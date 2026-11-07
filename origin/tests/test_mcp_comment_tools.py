@@ -57,10 +57,8 @@ class TestWhoSeesWhat(McpCommentBase):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
         listed = self.listed()
         self.assertIs(listed["delete_comment"]["annotations"]["destructiveHint"], True)
-        # Overwrites are announced as destructive (OpenAI's rule) though they are not gated.
-        self.assertIs(listed["update_comment"]["annotations"]["destructiveHint"], True)
-        self.assertIs(listed["restore_task_body"]["annotations"]["destructiveHint"], True)
-        self.assertIs(listed["add_comment"]["annotations"]["destructiveHint"], False)
+        self.assertIs(listed["update_comment"]["annotations"]["destructiveHint"], False)
+        self.assertIs(listed["restore_task_body"]["annotations"]["destructiveHint"], False)
 
     def test_the_catalog_says_who_the_comment_belongs_to(self):
         for name in ("update_comment", "delete_comment"):
