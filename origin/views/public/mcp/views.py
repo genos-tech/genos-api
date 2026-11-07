@@ -238,7 +238,7 @@ class McpView(PublicApiView):
 
         if method == "tools/list":
             listed = [
-                tools.describe(t)
+                tools.describe(t, getattr(credential_of(request), "kind", "api_key"))
                 for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
             ]
             # The one cacheable result we serve, so the one that carries
@@ -370,10 +370,9 @@ class McpView(PublicApiView):
         if not get_mcp_enabled(user_id):
             raise JsonRpcError(
                 protocol.INVALID_REQUEST,
-                "MCP is available on the Pro plan and above. Your current plan "
-                "doesn't include it — upgrade in Genos under "
-                "Settings → Plan & Usage, and this connection will start "
-                "working without any change here. The REST API at "
+                "MCP is available on the Pro plan and above, and your current plan "
+                "doesn't include it. Plan details are in Genos under "
+                "Settings → Plan & Usage. The REST API at "
                 "/api/public/v1/ is available on every plan.",
                 http_status=403,
             )

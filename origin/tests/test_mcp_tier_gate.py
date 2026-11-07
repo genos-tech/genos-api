@@ -139,6 +139,16 @@ class McpTierGateTests(BaseAPITestCase):
         # include this" will otherwise assume their key is dead.
         self.assertIn("/api/public/v1/", message)
 
+    def test_the_refusal_explains_the_plan_and_does_not_promote_an_upgrade(self):
+        """OpenAI's guidelines let a plugin say a feature needs another plan but forbid
+        promoting an upgrade (MIP-1110). It says what the plan lacks and where plans are
+        described."""
+        with self._as_tier(False):
+            quota.invalidate_effective_tier([str(self.user.id)])
+            message = self._rpc("tools/list").data["error"]["message"]
+        self.assertIn("Pro plan and above", message)
+        self.assertNotIn("upgrade", message.lower())
+
     # -- the handshake stays open --
 
     def test_the_handshake_still_succeeds_on_an_ungated_tier(self):
