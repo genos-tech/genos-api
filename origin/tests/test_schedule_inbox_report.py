@@ -567,7 +567,7 @@ class AccountTests(ScheduleBase):
 
 
 class TitleTests(ScheduleBase):
-    def test_the_email_digest_and_push_title_is_the_reports_headline(self):
+    def test_the_push_title_is_the_reports_headline(self):
         item = schedule_delivery.deliver(
             self.make(), {"title": "Overdue", "summary": "s", "sections": []}
         )
