@@ -430,7 +430,8 @@ def _changed_tasks(
 
 def _changed_threads(ctx: ToolContext, win: Window, names: _Names) -> list[dict[str, Any]]:
     """Replies from other people in threads the caller started or took part in, in chats
-    the caller may read (live membership, the rule of `fetch_chat_thread`)."""
+    the caller may read (live membership, the rule of `fetch_chat_thread`). The mirror of a
+    task comment is not a reply: the task item tells it."""
     me = ctx.user_id
     readable_chat_ids = readable_chats_qs(ctx.team_id, me).values("id")
     mine = Message.objects.filter(
@@ -448,6 +449,11 @@ def _changed_threads(ctx: ToolContext, win: Window, names: _Names) -> list[dict[
         )
         .filter(Q(thread_root_id__in=my_roots) | Q(thread_root_id__in=replied_roots))
         .exclude(sender_id=me)
+        # A task comment is mirrored into the project chat as a thread reply. The task item
+        # already tells it (with the commenter's text and the task's status): listing the
+        # mirror too would count one comment twice and inflate the heat. `item_lines` skips
+        # the mirror the same way.
+        .exclude(metadata__has_key="taskCommentId")
         .select_related("channel")
         .order_by("-ts_sent_at")[:EVENT_POOL]
     )

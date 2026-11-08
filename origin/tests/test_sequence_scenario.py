@@ -420,7 +420,6 @@ class TestTheBriefingForThePM(Story):
         self.assertEqual(did["looked_at"], [])
         self.assertEqual([i["display_id"] for i in did["items"]], [seq.task.display_id])
 
-    @unittest.expectedFailure
     def test_gap_3_a_task_comment_is_one_item_in_the_briefing_not_two(self):
         """GAP-3: a task comment is mirrored into the project chat as a thread reply, and the
         briefing lists that reply as a SECOND changed item (a 'thread' next to the task), so
