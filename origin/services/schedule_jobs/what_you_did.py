@@ -8,6 +8,7 @@ nothing saved says so, it is not filled in. No model, no cost.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from django.utils import timezone
@@ -15,7 +16,7 @@ from django.utils import timezone
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import briefing
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, clip, item, plain
+from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, plain
 from origin.services.user_time import zone_for_user_id
 
 # A report has more room than the briefing, which is sized for a model's context.
@@ -37,18 +38,21 @@ def _looked_item(entry: dict[str, Any], links: Links):
     """One line: what the member's AI app opened or changed, and which app, with a link."""
     kind = entry["type"]
     title = plain(entry["title"]) or f"Untitled {kind}"
-    if kind == "task":
-        name, link = f"{entry['display_id']} · {title}", links.task(entry["task_id"])
-    elif kind == "note":
-        name, link = title, links.note(entry["note_type"], entry["note_id"])
-    elif kind == "milestone":
-        name, link = title, links.milestone(entry["project_id"], entry["milestone_id"])
-    else:
-        name, link = title, links.project(entry["project_id"])
     app = plain(entry["app"])
     app_text = "your AI app" if app == "api_key" else app
     verb = "changed" if entry["kind"] == "changed" else "opened"
-    return item(f"{name}: {verb} by {app_text} at {entry['at']}", link)
+    if kind == "task":
+        return links.task_item(
+            f"{entry['display_id']} · {title}: {verb} by {app_text} at {entry['at']}",
+            entry["task_id"],
+        )
+    if kind == "note":
+        link = links.note(entry["note_type"], entry["note_id"])
+    elif kind == "milestone":
+        link = links.milestone(entry["project_id"], entry["milestone_id"])
+    else:
+        link = links.project(entry["project_id"])
+    return item(f"{title}: {verb} by {app_text} at {entry['at']}", link)
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
@@ -59,6 +63,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     )
     looked = did.get("looked_at", [])
 
+    today = date.fromisoformat(did["local_date"])
     links = Links(ctx)
     shown = did["items"] + looked
     links.preload(
@@ -73,14 +78,17 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Tasks",
-                "items": [
-                    item(
-                        f"{t['display_id']} · {plain(t['title'])}: "
-                        f"{_events_text(t['events'], t['events_total'])}",
-                        links.task(t["task_id"]),
-                    )
-                    for t in tasks
-                ],
+                "items": arrange(
+                    [
+                        links.task_item(
+                            f"{t['display_id']} · {plain(t['title'])}: "
+                            f"{_events_text(t['events'], t['events_total'])}",
+                            t["task_id"],
+                        )
+                        for t in tasks
+                    ],
+                    today,
+                ),
             }
         )
     notes = [i for i in did["items"] if i["type"] == "note"]
@@ -129,7 +137,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Looked at with your AI app",
-                "items": [_looked_item(i, links) for i in looked],
+                "items": arrange([_looked_item(i, links) for i in looked], today),
             }
         )
 

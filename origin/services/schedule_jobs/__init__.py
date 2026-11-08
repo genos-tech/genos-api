@@ -33,10 +33,20 @@ from typing import Any, NotRequired, TypedDict
 from origin.search_engine.agent.tools.base import ToolContext
 
 
+class ReportProject(TypedDict):
+    id: int
+    name: str
+    code: NotRequired[str]
+
+
 class ReportItem(TypedDict):
     text: str
     # An in-app path or URL the item opens, when it has one.
     link: NotRequired[str]
+    # The project a TASK item belongs to (MIP-1207). Items of one project are contiguous in a
+    # section, so a card draws a header whenever it changes. Never on a to-do, an event or a
+    # note.
+    project: NotRequired[ReportProject]
 
 
 class ReportSection(TypedDict):

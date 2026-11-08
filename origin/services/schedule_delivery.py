@@ -14,7 +14,9 @@ could not be written. A push that fails never does: the report is already in the
 * `item_body`: `{title, text, sections}`. `title` and `text` are the same pair the digest
   (type 6) and the reminders (type 9) carry, so anything that only knows those two reads a
   report as "a title and a one-line summary"; `sections` is `[{heading, items: [{text,
-  link?}]}]`.
+  link?, project?}]}]`. `project` (MIP-1207) is `{id, name, code?}` on an item that is a task:
+  the items of one project are contiguous in a section, so a card draws a header where it
+  changes. An item without it is not a task of a project (a to-do, an event, a note).
 * `item_optionals`: `{kind, schedule_id, job, run_at?}`. The facts the client and the
   de-duplication need; nothing a person typed.
 * `sender` is NULL (system-authored), `request_status` is "" (not a request, so no approve or
@@ -72,6 +74,8 @@ MAX_SUMMARY_CHARS = 280
 MAX_HEADING_CHARS = 120
 MAX_TEXT_CHARS = 240
 MAX_LINK_CHARS = 500
+MAX_PROJECT_NAME_CHARS = 100
+MAX_PROJECT_CODE_CHARS = 6
 PUSH_BODY_CHARS = 140
 DEFAULT_SUMMARY = "Nothing to report."
 
@@ -113,6 +117,23 @@ def clean_link(value: Any) -> str:
     return value
 
 
+def clean_project(value: Any) -> dict[str, Any] | None:
+    """`{id, name, code?}` with a positive integer id and a named project, else None (the item
+    then has no project). Any other key is dropped."""
+    if not isinstance(value, dict):
+        return None
+    project_id = value.get("id")
+    if isinstance(project_id, bool) or not isinstance(project_id, int) or project_id < 1:
+        return None
+    name = _text(value.get("name"), MAX_PROJECT_NAME_CHARS)
+    if not name:
+        return None
+    out: dict[str, Any] = {"id": project_id, "name": name}
+    if code := _text(value.get("code"), MAX_PROJECT_CODE_CHARS):
+        out["code"] = code
+    return out
+
+
 def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
     """The report as it is stored: `{title, text, sections}`, every part checked."""
     raw_sections = report.get("sections")
@@ -120,7 +141,7 @@ def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
     for raw in (raw_sections if isinstance(raw_sections, list) else [])[:MAX_SECTIONS]:
         if not isinstance(raw, dict):
             continue
-        items: list[dict[str, str]] = []
+        items: list[dict[str, Any]] = []
         raw_items = raw.get("items")
         for entry in (raw_items if isinstance(raw_items, list) else [])[:MAX_ITEMS]:
             if not isinstance(entry, dict):
@@ -128,9 +149,11 @@ def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
             text = _text(entry.get("text"), MAX_TEXT_CHARS)
             if not text:
                 continue
-            item = {"text": text}
+            item: dict[str, Any] = {"text": text}
             if link := clean_link(entry.get("link")):
                 item["link"] = link
+            if project := clean_project(entry.get("project")):
+                item["project"] = project
             items.append(item)
         heading = _text(raw.get("heading"), MAX_HEADING_CHARS)
         if items:
