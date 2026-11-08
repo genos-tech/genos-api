@@ -35,6 +35,7 @@ from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity
@@ -649,6 +650,72 @@ class TestChangedThreadsAndNotes(BriefingBase):
             )
             NoteVersionMaster.objects.filter(pk=v.pk).update(ts_updated_at=self.ago(hours=1))
         self.assertEqual([i for i in self.changed() if i["type"] == "note"], [])
+
+    # -- task notes of the tasks I hold (MIP-1285) --
+
+    def task_note(self, task, owner, editor, title="Progress", hours=1):
+        note = TaskNoteMaster.objects.create(
+            team=self.team, project=task.project, owner=owner, task=task, title=title, body=[]
+        )
+        version = NoteVersionMaster.objects.create(
+            team=self.team,
+            note_type=2,
+            note_id=note.note_id,
+            version_no=1,
+            editor=editor,
+            title=title,
+        )
+        NoteVersionMaster.objects.filter(pk=version.pk).update(ts_updated_at=self.ago(hours=hours))
+        return note
+
+    def note_items(self):
+        return [i for i in self.changed() if i["type"] == "note"]
+
+    def test_the_task_note_a_teammate_wrote_on_a_task_i_hold_appears(self):
+        """Assignee, reporter and collaborator each hold the task; the note belongs to the
+        teammate who wrote it, not to me."""
+        as_assignee = self.make_task("Mine", assignee=self.user, reporter=self.user2)
+        as_reporter = self.make_task("Reported", assignee=self.user2, reporter=self.user)
+        as_collaborator = self.make_task("Helped", assignee=self.user2, reporter=self.user2)
+        as_collaborator.collaborators.add(self.user)
+        for task in (as_assignee, as_reporter, as_collaborator):
+            self.task_note(task, self.user2, self.user2, title=f"Note of {task.title}")
+        items = self.note_items()
+        self.assertEqual(
+            sorted(i["title"].strip() for i in items),
+            ["Note of Helped", "Note of Mine", "Note of Reported"],
+        )
+        for item in items:
+            self.assertEqual(item["note_type"], "task")
+            self.assertEqual(item["events"][0]["summary"], "edited the note")
+            self.assertEqual(item["events"][0]["by"], "otheruser")
+
+    def test_a_task_note_of_a_task_i_do_not_hold_is_not_news(self):
+        theirs = self.make_task("Theirs", assignee=self.user2, reporter=self.user2)
+        self.task_note(theirs, self.user2, self.user2, title="Not for me")
+        self.assertEqual(self.note_items(), [])
+        self.assertNotIn("Not for me", json.dumps(self.brief()))
+
+    def test_my_own_edit_of_a_task_note_is_not_news(self):
+        task = self.make_task("Mine", assignee=self.user, reporter=self.user2)
+        self.task_note(task, self.user2, self.user, title="I wrote it")
+        self.assertEqual(self.note_items(), [])
+
+    def test_a_task_note_i_can_no_longer_open_is_left_out(self):
+        """Still the assignee, but removed from the project: the note rule says no, so the
+        note is neither listed nor named."""
+        task = self.make_task("Mine", assignee=self.user, reporter=self.user2)
+        self.task_note(task, self.user2, self.user2, title="Secret plan")
+        self.assertEqual(len(self.note_items()), 1)
+        ProjectMembers.objects.filter(project=self.project, attendee=self.user).delete()
+        self.assertEqual(self.note_items(), [])
+        self.assertNotIn("Secret plan", json.dumps(self.brief()))
+
+    def test_the_task_note_of_a_deleted_task_is_left_out(self):
+        task = self.make_task("Gone", assignee=self.user, reporter=self.user2)
+        self.task_note(task, self.user2, self.user2, title="Of a deleted task")
+        TaskMaster.objects.filter(pk=task.pk).update(is_deleted=True)
+        self.assertEqual(self.note_items(), [])
 
     def test_a_project_filter_leaves_out_chats_and_notes(self):
         channel = self.channel([self.user, self.user2])
