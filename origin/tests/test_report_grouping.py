@@ -356,7 +356,7 @@ class TestTheStoredReport(SimpleTestCase):
         }
         out = schedule_delivery.clean_report(report, "t")
         self.assertEqual(out["sections"][0]["items"], [{"text": "x", "link": "/workspace/a"}])
-        self.assertEqual(set(out), {"title", "text", "sections"})
+        self.assertEqual(set(out), {"version", "title", "text", "sections"})
 
     def test_the_private_sort_key_is_never_stored(self):
         report = {

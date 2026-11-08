@@ -189,6 +189,7 @@ class TestWhatToDoToday(JobBase):
             todays,
             [
                 {
+                    "kind": "todo",  # MIP-1208: a typed field beside `text` and `link`
                     "text": "Call the bank",
                     "link": f"/workspace/todo/{today}/item/{open_item.item_id}",
                 }
@@ -335,6 +336,7 @@ class TestWhatYouDid(JobBase):
             todos,
             [
                 {
+                    "kind": "todo",  # MIP-1208
                     "text": "Ship it",
                     "link": f"/workspace/todo/{self.midnight_jst().date()}/item/{done.item_id}",
                 }

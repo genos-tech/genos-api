@@ -28,6 +28,19 @@ from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item,
 
 DEFAULT_CHANGED_HOURS = 24
 
+# What each section is, for the card (MIP-1208). "Changed in the last N hours" carries N.
+_SECTION_KEYS = {
+    "Start with": "start_with",
+    "Overdue": "overdue",
+    "Due today": "due_today",
+    "To-dos for today": "todos_today",
+    "To-dos left over from earlier": "todos_earlier",
+    "On your calendar": "calendar",
+    "Waiting on you": "waiting_on_you",
+    "You are waiting on others": "waiting_on_others",
+    "Gone quiet": "gone_quiet",
+}
+
 
 def _task_text(row: dict[str, Any]) -> str:
     text = f"{row.get('display_id') or 'Task'} · {plain(row.get('title')) or 'untitled'}"
@@ -68,6 +81,7 @@ def _calendar_items(calendar: dict[str, Any], zone: ZoneInfo) -> list[dict[str, 
             item(
                 f"{when} · {title}" if when else title,
                 link if isinstance(link, str) and link.startswith("https://") else None,
+                "event",
             )
         )
     return out
@@ -83,14 +97,18 @@ def _mention_item(entry: dict[str, Any], links: Links) -> dict[str, Any]:
     elif source in ("task", "task_comment"):
         where = f"{entry.get('display_id') or 'a task'} {plain(entry.get('title'))}".strip()
         text = f"{who} mentioned you in {where}"
-        return links.task_item(f"{text}: {snippet}" if snippet else text, entry.get("task_id"))
+        return links.task_item(
+            f"{text}: {snippet}" if snippet else text,
+            entry.get("task_id"),
+            f"{who} mentioned you: {snippet}" if snippet else f"{who} mentioned you",
+        )
     elif source == "note":
         where = plain(entry.get("title")) or "a note"
         link = links.note(entry.get("note_type"), entry.get("note_id"))
     else:
         where, link = "Genos", None
     text = f"{who} mentioned you in {where}"
-    return item(f"{text}: {snippet}" if snippet else text, link)
+    return item(f"{text}: {snippet}" if snippet else text, link, "mention")
 
 
 def _changed_item(row: dict[str, Any], links: Links) -> dict[str, Any]:
@@ -107,12 +125,13 @@ def _changed_item(row: dict[str, Any], links: Links) -> dict[str, Any]:
     latest = events[-1] if events else {}
     by = plain(latest.get("by")) or "someone"
     what = latest.get("summary") or latest.get("what") or "changed"
-    text = f"{label}: {what} by {by}"
+    said = f"{what} by {by}"
     if (row.get("events_total") or 0) > 1:
-        text += f" (+{row['events_total'] - 1} more)"
+        said += f" (+{row['events_total'] - 1} more)"
+    text = f"{label}: {said}"
     if kind == "task":
-        return links.task_item(text, row.get("task_id"))
-    return item(text, link)
+        return links.task_item(text, row.get("task_id"), said)
+    return item(text, link, "note" if kind == "note" else "chat")
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
@@ -163,7 +182,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         shown = arrange(list(items), today)
         if total is not None and total > len(shown):
             shown.append(more(total - len(shown), noun))
-        sections.append({"heading": heading, "items": shown})
+        section: ReportSection = {"heading": heading, "items": shown}
+        key = _SECTION_KEYS.get(heading) or ("changed" if heading.startswith("Changed in") else "")
+        if key:
+            section["key"] = key
+        sections.append(section)
 
     start = [
         links.task_item(
@@ -171,6 +194,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             if t.get("reasons")
             else _task_text(t),
             t["task_id"],
+            "; ".join(t.get("reasons") or []),
         )
         for t in data["suggested_next"]
     ]
@@ -182,7 +206,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     add(
         "To-dos for today",
         [
-            item(plain(t.get("title")) or "untitled", links.todo(todo_date, t.get("item_id")))
+            item(
+                plain(t.get("title")) or "untitled",
+                links.todo(todo_date, t.get("item_id")),
+                "todo",
+            )
             for t in agenda["todos_today"]
             if not t.get("is_completed")
         ],
@@ -193,6 +221,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             item(
                 f"{plain(t.get('title')) or 'untitled'} (from {t.get('local_date')})",
                 links.todo(t.get("local_date"), t.get("item_id")),
+                "todo",
             )
             for t in agenda["todos_unfinished_earlier"]
         ],
@@ -208,6 +237,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         item(
             f"{r.get('type') or 'Request'} from {plain(r.get('from')) or 'someone'}"
             + (f": {plain(r.get('text'))}" if r.get("text") else ""),
+            kind="request",
         )
         for r in waiting["requests"]
     ]
@@ -238,6 +268,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                     for e in t.get("waiting_for") or []
                 ),
                 t["task_id"],
+                "waiting for "
+                + ", ".join(
+                    f"{e['display_id']} ({plain(e.get('assignee')) or 'nobody yet'})"
+                    for e in t.get("waiting_for") or []
+                ),
             )
             for t in others["blocked_tasks"]
         ],
@@ -245,7 +280,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     add(
         "Gone quiet",
         [
-            links.task_item(f"{_task_text(t)}: untouched for {t['days_idle']} days", t["task_id"])
+            links.task_item(
+                f"{_task_text(t)}: untouched for {t['days_idle']} days",
+                t["task_id"],
+                f"untouched for {t['days_idle']} days",
+            )
             for t in data["stale_mine"]
         ],
     )
@@ -265,6 +304,17 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         "title": f"What to do today, {agenda['local_date']}",
         "summary": clip(summary),
         "sections": sections,
+        "stats": [
+            {"key": key, "count": n}
+            for key, n in (
+                ("overdue", agenda["overdue_count"]),
+                ("due_today", agenda["due_today_count"]),
+                ("waiting_on_you", len(waiting["requests"]) + len(waiting["mentions"])),
+                ("waiting_on_others", len(others["blocked_tasks"])),
+                ("gone_quiet", len(data["stale_mine"])),
+            )
+            if n
+        ],
     }
 
 
