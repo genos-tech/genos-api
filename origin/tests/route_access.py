@@ -190,6 +190,24 @@ REGISTRY = {
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
     ),
+    # views.common.memory_views (MIP-1088): the member comes from the token, the team is checked
+    # with require_team_member_or_response, and every query in the services filters on the
+    # member (and team); no call takes a user id
+    "origin.views.common.memory_views.MemoryOverviewView": self_only(
+        "the caller's own stored data and corrections (user on every query, in the service)"
+    ),
+    "origin.views.common.memory_views.MemoryTopView": self_only(
+        "the caller's own ranking (a ToolContext built from request.user)"
+    ),
+    "origin.views.common.memory_views.MemoryMarkView": self_only(
+        "the caller's own mark on a task they can open (LabelAccess, user and team on the row)"
+    ),
+    "origin.views.common.memory_views.MemoryTuningView": self_only(
+        "the caller's own tuning (user and team on the row)"
+    ),
+    "origin.views.common.memory_views.MemoryForgetView": self_only(
+        "deletes only the caller's rows (filter on request.user.id in the service)"
+    ),
     # views.common.schedule_views (MIP-1150): every call builds its context from request.user
     # and the service filters on user AND team; someone else's id is the same 404
     "origin.views.common.schedule_views.ScheduleListView": self_only(

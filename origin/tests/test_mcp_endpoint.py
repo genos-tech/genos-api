@@ -1854,6 +1854,9 @@ class TestPlantedInstructions(McpBase):
                 "delete_todo_item",
                 # The member's own schedules: recreatable, but a delete still asks (MIP-1151).
                 "delete_my_schedule",
+                # What Genos stored about the member from their activity: theirs to delete,
+                # the same as the Settings page does (MIP-1088).
+                "forget_my_memory",
             },
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))

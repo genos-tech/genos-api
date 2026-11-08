@@ -51,6 +51,13 @@ from origin.views.common.inbox_ai_views import (
 from origin.views.common.inbox_views import *
 from origin.views.common.mcp_connection_views import McpConnectionDetailView, McpConnectionListView
 from origin.views.common.mcp_consent_views import McpConsentContextView, McpConsentDecisionView
+from origin.views.common.memory_views import (
+    MemoryForgetView,
+    MemoryMarkView,
+    MemoryOverviewView,
+    MemoryTopView,
+    MemoryTuningView,
+)
 from origin.views.common.mention_group_views import (
     MentionGroupMembersView,
     MentionGroupResolveView,
@@ -406,6 +413,17 @@ urlpatterns = [
         MemberEventsPreferenceView.as_view(),
         name="member_events_preference",
     ),
+    # What Genos remembers: see, correct, delete (MIP-1088). The delete route is last so the
+    # fixed words above it are never read as a `what`.
+    path("api/v2/user/memory/", MemoryOverviewView.as_view(), name="memory_overview"),
+    path("api/v2/user/memory/top/", MemoryTopView.as_view(), name="memory_top"),
+    path(
+        "api/v2/user/memory/marks/<int:task_id>/",
+        MemoryMarkView.as_view(),
+        name="memory_mark",
+    ),
+    path("api/v2/user/memory/tuning/", MemoryTuningView.as_view(), name="memory_tuning"),
+    path("api/v2/user/memory/<slug:what>/", MemoryForgetView.as_view(), name="memory_forget"),
     path(
         "api/v2/user/calendar-sync/backfill/",
         CalendarSyncBackfillView.as_view(),

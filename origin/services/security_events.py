@@ -514,7 +514,8 @@ def note_mcp_rejected(request, reason: str, connection=None) -> None:
 # are the member's content, and a security log that held them would outlive the thing they
 # were deleted from. A key is kept only when it names a thing (`*_id`, `*_ids`) or is one of
 # the few small switches that say WHAT was done to it.
-_DESTRUCTIVE_ARG_KEYS = frozenset({"action", "status", "note_type", "role"})
+# `what` is `forget_my_memory`'s (MIP-1088): which of its four lists was deleted.
+_DESTRUCTIVE_ARG_KEYS = frozenset({"action", "status", "note_type", "role", "what"})
 _DESTRUCTIVE_ARG_STR_MAX = 80
 _DESTRUCTIVE_ARG_LIST_MAX = 10
 _DROP = object()
@@ -545,7 +546,7 @@ def destructive_arguments(arguments, declared=None) -> dict:
     `declared` maps each argument the tool's published schema defines to its `enum` (or None).
     Only an allowlisted key (see `_identifier_key`) the tool declares is kept, so an argument a
     caller invented is not, however it is named; and only a scalar, or a list of at most ten
-    of them. The four switches (`action`, `status`, `note_type`, `role`) are kept only when
+    of them. The five switches (`action`, `status`, `note_type`, `role`, `what`) are kept only when
     the schema lists their values and the one sent is on that list: a free-text value in
     one of them is not a switch. Everything else is dropped: nested objects, longer lists,
     floats, nulls, and every key that is not an identifier.

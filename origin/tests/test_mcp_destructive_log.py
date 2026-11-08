@@ -50,6 +50,7 @@ EXPECTED_KEPT = {
     "delete_note_folder": {"folder_id"},
     "manage_note_sharing": {"action", "note_type", "note_id", "user_id", "role"},
     "delete_my_schedule": {"schedule_id"},
+    "forget_my_memory": {"what"},
 }
 
 
@@ -466,6 +467,7 @@ class TestWhatTheWriterKeeps(SimpleTestCase):
         "status": ["Open", "Deleted"],
         "note_type": ["personal", "team"],
         "role": ["editor", "viewer"],
+        "what": ["events", "everything"],
     }
 
     def kept(self, arguments, declared=None):
@@ -482,6 +484,7 @@ class TestWhatTheWriterKeeps(SimpleTestCase):
             "status": "Deleted",
             "note_type": "team",
             "role": "viewer",
+            "what": "events",
             "force": True,
             "flag_id": True,
         }
@@ -505,6 +508,8 @@ class TestWhatTheWriterKeeps(SimpleTestCase):
         self.assertEqual(self.kept({"role": "a long sentence somebody wrote"}), {})
         self.assertEqual(self.kept({"status": "Open"}), {"status": "Open"})
         self.assertEqual(self.kept({"action": ["share"]}), {})
+        self.assertEqual(self.kept({"what": "my diary"}, {"what": ["events"]}), {})
+        self.assertEqual(self.kept({"what": "events"}, {"what": ["events"]}), {"what": "events"})
         self.assertEqual(self.kept({"role": "editor"}, {"role": None}), {}, "no list, no switch")
 
     def test_values_must_be_scalars(self):

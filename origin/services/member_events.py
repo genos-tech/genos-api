@@ -188,6 +188,10 @@ NO_SINGLE_ITEM = frozenset(
         "get_my_importance",
         "set_item_importance",
         "tune_my_importance",
+        # What Genos remembers (MIP-1088): a read of the counts, and a delete of the member's own
+        # rows. Neither names a work item, so neither may leave a marker on one.
+        "get_my_memory",
+        "forget_my_memory",
         "list_my_schedules",
         "create_my_schedule",
         "update_my_schedule",
