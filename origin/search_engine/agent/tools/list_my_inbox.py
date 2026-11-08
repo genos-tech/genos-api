@@ -25,7 +25,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
+from origin.models.common.inbox_models import (
+    ACTIVITY_INBOX_ITEM_TYPES,
+    ITEM_TYPE_GENOS_REPORT,
+    InboxItems,
+)
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _MAX_LIMIT = 50
@@ -52,6 +56,37 @@ _ITEM_TYPE_LABELS = {
 def _is_request(item_type: int) -> bool:
     """The app's rule (and `unread_badge`'s): anything that is not an activity."""
     return item_type not in ACTIVITY_INBOX_ITEM_TYPES
+
+
+def _model_body(row) -> Any:
+    """The body as the model has always seen it. A schedule report (type 10) stored since the
+    typed fields (MIP-1207, MIP-1208) carries a `version`, section `key` and `emoji`, `stats`
+    and per-item `kind`, `project`, `status` and the rest, for the card to draw. The model saw
+    none of them before, so none is passed on (MIP-1235): `{title, text, sections: [{heading,
+    items: [{text, link?}]}]}`, whatever else the body holds. A body without a `version`
+    (stored before) and every other kind of item are returned as they are. The row itself is
+    never changed: the card and the REST payloads keep the typed fields."""
+    body = row.item_body
+    if (
+        row.item_type != ITEM_TYPE_GENOS_REPORT
+        or not isinstance(body, dict)
+        or "version" not in body
+    ):
+        return body
+    sections = []
+    for section in body.get("sections") if isinstance(body.get("sections"), list) else []:
+        if not isinstance(section, dict):
+            continue
+        items = []
+        for entry in section.get("items") if isinstance(section.get("items"), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            item = {"text": entry.get("text")}
+            if entry.get("link"):
+                item["link"] = entry["link"]
+            items.append(item)
+        sections.append({"heading": section.get("heading"), "items": items})
+    return {"title": body.get("title"), "text": body.get("text"), "sections": sections}
 
 
 def _target(row) -> dict[str, Any] | None:
@@ -112,7 +147,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "sender_username": sender.username if sender else None,
                 "is_read": row.is_read,
                 "request_status": (row.request_status if _is_request(row.item_type) else None),
-                "item_body": row.item_body,
+                "item_body": _model_body(row),
                 "ts_created_at": row.ts_created_at.isoformat(),
             }
         )
