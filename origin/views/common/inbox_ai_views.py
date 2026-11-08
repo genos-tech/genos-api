@@ -63,6 +63,12 @@ class _Switch(_Base):
             return Response(inbox_ai.switch(request.user, item, self.on), status=status.HTTP_200_OK)
         except inbox_ai.NothingToSwitch as exc:
             return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except schedules.SchedulePlanRequired as exc:
+            # Turning a schedule back on needs Core (MIP-1213): the same 403 + code `/schedules/`
+            # answers, so the card shows its upgrade note instead of the bare sentence.
+            return Response(
+                {"error": str(exc), "code": "plan_required"}, status=status.HTTP_403_FORBIDDEN
+            )
         except schedules.ScheduleError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 

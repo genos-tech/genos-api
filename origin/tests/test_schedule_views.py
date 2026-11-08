@@ -20,8 +20,9 @@ from origin.models.common.api_key_models import ApiKey, generate_key, hash_key
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedules
+from origin.services import schedule_text, schedules
 from origin.services.schedule_jobs import JOBS, Job
+from origin.services.user_time import user_zone
 from origin.tests.test_base import BaseAPITestCase
 
 LIST = "/api/v2/schedules/"
@@ -371,6 +372,39 @@ class TestChangePauseDelete(ScheduleViewBase):
         self.assertTrue(resumed["enabled"])
         self.assertIsNotNone(resumed["nextRun"])
         self.assertNotIn("pausedReason", resumed)
+
+    def test_the_pause_comes_as_a_code_beside_the_unchanged_label(self):
+        # MIP-1231: `pausedReason` stays the English label (the page matches five of them), and
+        # `pausedReasonCode` is the stable code it can key on later.
+        expected = {
+            "manual": "paused by the member",
+            "failures": "paused after repeated failures",
+            "left_team": "the member left the team",
+            "inactive": "the account is inactive",
+            "plan": "the plan does not include scheduled reports",
+        }
+        for code, label in expected.items():
+            with self.subTest(code=code):
+                MemberSchedule.objects.filter(pk=self.row["id"]).update(
+                    enabled=False, paused_reason=code, next_run_at=None
+                )
+                listed = self.client.get(LIST + self.q).data["schedules"][0]
+                self.assertEqual(
+                    (listed["pausedReasonCode"], listed["pausedReason"]), (code, label)
+                )
+
+    def test_an_enabled_schedule_has_neither_pause_field(self):
+        listed = self.client.get(LIST + self.q).data["schedules"][0]
+        self.assertNotIn("pausedReasonCode", listed)
+        self.assertNotIn("pausedReason", listed)
+
+    def test_the_connected_ai_app_tools_keep_their_shape(self):
+        # The code is REST-only: the MCP tools' dict has not grown a key.
+        sched = MemberSchedule.objects.get(pk=self.row["id"])
+        sched.enabled, sched.paused_reason = False, "manual"
+        out = schedule_text.present(sched, user_zone(self.user))
+        self.assertEqual(out["paused_reason"], "paused by the member")
+        self.assertNotIn("paused_reason_code", out)
 
     def test_resuming_forgets_a_pause_from_failures(self):
         MemberSchedule.objects.filter(pk=self.row["id"]).update(

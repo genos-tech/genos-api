@@ -87,6 +87,10 @@ def _row(sched, zone) -> dict[str, Any]:
     ):
         if key in p:
             out[wire] = p[key]
+    # The stable code beside the English label above (MIP-1231): `manual`, `failures`,
+    # `left_team`, `inactive` or `plan`. REST only; the connected-AI-app tools keep their shape.
+    if not sched.enabled and sched.paused_reason:
+        out["pausedReasonCode"] = sched.paused_reason
     return out
 
 

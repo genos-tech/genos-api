@@ -386,6 +386,28 @@ class TestTurnItOff(AiJobBase):
         self.assertTrue(sched.enabled)
         self.assertIsNotNone(sched.next_run_at)
 
+    def test_a_free_member_turning_a_report_on_gets_403_plan_required(self):
+        # MIP-1231: the same refusal /schedules/ gives (403 + code), so the Inbox card can show
+        # its upgrade note. Pausing stays allowed on any plan.
+        item, sched = self.report_item()
+        self.assertEqual(self.client.post(self.url(item, "off/")).status_code, 200)
+        with mock.patch.object(schedules, "plan_allows", return_value=False):
+            res = self.client.post(self.url(item, "on/"))
+            off = self.client.post(self.url(item, "off/"))
+        self.assertEqual(res.status_code, 403, res.data)
+        self.assertEqual(res.data, {"error": schedules.PLAN_SENTENCE, "code": "plan_required"})
+        sched.refresh_from_db()
+        self.assertFalse(sched.enabled)
+        self.assertEqual(off.status_code, 200)
+
+    def test_another_schedule_refusal_stays_a_400_without_a_code(self):
+        item, _ = self.report_item()
+        with mock.patch.object(
+            schedules, "set_enabled", side_effect=schedules.ScheduleError("No.")
+        ):
+            res = self.client.post(self.url(item, "off/"))
+        self.assertEqual((res.status_code, res.data), (400, {"error": "No."}))
+
     def test_turning_off_twice_says_it_was_already_off(self):
         item = self.digest_item()
         self.client.post(self.url(item, "off/"))
