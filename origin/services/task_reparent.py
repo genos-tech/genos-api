@@ -135,6 +135,51 @@ def milestone_for_parent(parent_task_id):
     )
 
 
+def parent_implied_milestone(parent_task_id):
+    """`(found, milestone_id)`: the milestone a task has by hanging under
+    `parent_task_id`, with `found` False when no such task exists.
+
+    `milestone_for_parent` answers None both for "the parent is in no
+    milestone" and for "there is no such parent". A caller that has to decide
+    whether a payload CONTRADICTS the tree needs the two told apart: a
+    dangling parent proves nothing, while a parent in no milestone proves the
+    child is in none either.
+    """
+    if parent_task_id is None:
+        return False, None
+    backed = (
+        MilestoneMaster.objects.filter(task_id=parent_task_id, is_deleted=False)
+        .values_list("milestone_id", flat=True)
+        .first()
+    )
+    if backed is not None:
+        return True, backed
+    row = TaskMaster.objects.filter(task_id=parent_task_id).values_list("milestone_id").first()
+    if row is None:
+        return False, None
+    return True, row[0]
+
+
+def payload_contradicts_tree(requested_milestone_id, parent_task_id) -> bool:
+    """Does a payload that files a task in `requested_milestone_id` while
+    hanging it under `parent_task_id` disagree with where that parent is?
+
+    A task's milestone is a consequence of where it hangs, so the two cannot
+    differ: the parent is the milestone's backing row, or an ordinary task
+    that lives in that milestone. The app's full save re-sends BOTH values
+    from its working copy on every edit, and a copy that is older than a
+    move (a cached task opened after a teammate, a tool or a cascade moved
+    its tree) carries the OLD milestone next to the CURRENT parent. Honoring
+    that pair wrote a milestone the tree does not have and carried the whole
+    sub-tree there (MIP-1168). The milestone picker never sends such a pair:
+    it moves the parent with the milestone, to the new backing row.
+    """
+    if parent_task_id is None:
+        return False
+    found, implied = parent_implied_milestone(parent_task_id)
+    return found and implied != requested_milestone_id
+
+
 def reparent_task(task, parent_task_id):
     """Settle a task's own links after its parent edge changed with no
     `milestone` key in the payload.
