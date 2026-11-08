@@ -8,9 +8,14 @@ anything that is not an activity (0 notice, 6 digest, 9 reminder) is a request.
 
 from __future__ import annotations
 
-from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
+from origin.models.common.inbox_models import (
+    ACTIVITY_INBOX_ITEM_TYPES,
+    ITEM_TYPE_GENOS_REPORT,
+    InboxItems,
+)
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
+from origin.services.schedule_delivery import clean_report
 from origin.tests.test_base import BaseAPITestCase
 
 GM_UUID = "0b9a1b8e-4c2f-4a51-9d3e-2f7f2f6a1c11"
@@ -137,3 +142,157 @@ class ListMyInboxTests(BaseAPITestCase):
         self.item(7, optionals={"connection_id": 1})
         for row in self.run_tool(category="requests")["items"]:
             self.assertNotIn("target", row)
+
+
+class ReportBodyShapeTests(BaseAPITestCase):
+    """The model sees a schedule report exactly as before the typed fields (MIP-1235)."""
+
+    # What `list_my_inbox` handed the model for a report before MIP-1207 / MIP-1208.
+    OLD_SHAPE = {
+        "title": "What to do today",
+        "text": "Two things need you.",
+        "sections": [
+            {
+                "heading": "Start with",
+                "items": [
+                    {
+                        "text": "WRD-7 Fix login (Open, High, due 2026-11-09)",
+                        "link": "/workspace/x",
+                    },
+                    {"text": "Reply to Sam"},
+                ],
+            },
+            {"heading": "Calendar", "items": [{"text": "10:00 Standup"}]},
+        ],
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.ctx = ToolContext(user_id=str(self.user.id), team_id=str(self.team.team_id))
+
+    def typed_report(self):
+        """A report with every typed field a job can fill, stored through the real cleaner."""
+        return clean_report(
+            {
+                "title": "What to do today",
+                "summary": "Two things need you.",
+                "stats": [{"key": "overdue", "count": 1}, {"key": "due_today", "count": 2}],
+                "sections": [
+                    {
+                        "heading": "Start with",
+                        "key": "start_with",
+                        "items": [
+                            {
+                                "text": "WRD-7 Fix login (Open, High, due 2026-11-09)",
+                                "link": "/workspace/x",
+                                "kind": "task",
+                                "display_id": "WRD-7",
+                                "title": "Fix login",
+                                "status": "Open",
+                                "priority": "High",
+                                "due_date": "2026-11-09",
+                                "overdue_days": 3,
+                                "detail": "busy all week",
+                                "project": {"id": 4, "name": "Website", "code": "WRD"},
+                            },
+                            {"text": "Reply to Sam", "kind": "chat"},
+                        ],
+                    },
+                    {
+                        "heading": "Calendar",
+                        "key": "calendar",
+                        "items": [{"text": "10:00 Standup", "kind": "event"}],
+                    },
+                ],
+            },
+            "fallback",
+        )
+
+    def report_item(self, body, item_type=ITEM_TYPE_GENOS_REPORT):
+        return InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_body=body,
+            item_type=item_type,
+            item_optionals={
+                "kind": "schedule_report",
+                "schedule_id": "x",
+                "job": "what_to_do_today",
+            },
+            request_status="",
+        )
+
+    def body_seen(self):
+        (row,) = LIST_MY_INBOX.run({"include_read": True}, self.ctx)["items"]
+        return row["item_body"]
+
+    def test_a_typed_report_is_the_old_shape_exactly(self):
+        stored = self.typed_report()
+        # The fixture really is the typed one (the test would prove nothing otherwise).
+        self.assertEqual(stored["version"], 2)
+        self.assertIn("stats", stored)
+        self.assertEqual(stored["sections"][0]["key"], "start_with")
+        self.assertEqual(stored["sections"][0]["items"][0]["project"]["code"], "WRD")
+        self.report_item(stored)
+        self.assertEqual(self.body_seen(), self.OLD_SHAPE)
+
+    def test_none_of_the_typed_fields_gets_through_anywhere(self):
+        self.report_item(self.typed_report())
+        seen = self.body_seen()
+        self.assertEqual(set(seen), {"title", "text", "sections"})
+        for section in seen["sections"]:
+            self.assertEqual(set(section), {"heading", "items"})
+            for entry in section["items"]:
+                self.assertLessEqual(set(entry), {"text", "link"})
+
+    def test_the_card_still_has_the_typed_fields(self):
+        stored = self.typed_report()
+        item = self.report_item(stored)
+        self.body_seen()
+        item.refresh_from_db()
+        self.assertEqual(item.item_body, stored)
+
+    def test_a_body_stored_before_the_typed_fields_is_returned_as_it_is(self):
+        old = {**self.OLD_SHAPE, "extra_old_field": "kept"}
+        self.report_item(old)
+        self.assertEqual(self.body_seen(), old)
+
+    def test_other_item_types_are_not_touched_even_with_a_version_in_the_body(self):
+        body = {
+            "title": "t",
+            "text": "x",
+            "version": 2,
+            "sections": [{"heading": "h", "key": "k", "items": []}],
+        }
+        for item_type in (0, 6, 9):
+            InboxItems.objects.all().delete()
+            self.report_item(body, item_type=item_type)
+            self.assertEqual(self.body_seen(), body, item_type)
+
+    def test_a_malformed_typed_body_does_not_break_the_tool(self):
+        for body in (
+            {"version": 2, "title": "t", "text": "x"},
+            {"version": 2, "title": "t", "text": "x", "sections": "no"},
+            {
+                "version": 2,
+                "title": "t",
+                "text": "x",
+                "sections": [5, {"heading": "h", "items": 3}],
+            },
+            {
+                "version": 2,
+                "title": "t",
+                "text": "x",
+                "sections": [{"heading": "h", "items": [None, {"text": "a", "link": ""}]}],
+            },
+        ):
+            InboxItems.objects.all().delete()
+            self.report_item(body)
+            seen = self.body_seen()
+            self.assertEqual(set(seen), {"title", "text", "sections"})
+        self.assertEqual(seen["sections"], [{"heading": "h", "items": [{"text": "a"}]}])
+
+    def test_a_string_body_on_a_report_is_returned_as_it_is(self):
+        self.report_item("plain")
+        self.assertEqual(self.body_seen(), "plain")
