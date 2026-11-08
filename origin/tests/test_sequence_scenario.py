@@ -575,7 +575,6 @@ class TestTheTaskNoteOnTheLine(Story):
             self.assertIn("Y: progress summary", found[step]["note"])
         self.assertLess(found[9]["_index"], found["9b"]["_index"])
 
-    @unittest.expectedFailure
     def test_gap_5_a_note_event_says_what_the_note_says(self):
         """GAP-5: step 9 is on the line only as 'edited the note' with the note's title; what C
         wrote (the progress summary) is not on the line, unlike a comment, which carries a

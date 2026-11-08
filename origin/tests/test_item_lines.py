@@ -75,6 +75,10 @@ def body_with(*inlines):
     return [{"type": "paragraph", "content": list(inlines)}]
 
 
+def text_inline(text):
+    return {"type": "text", "text": text, "styles": {}}
+
+
 class LineBase(McpBase):
     def setUp(self):
         super().setUp()
@@ -435,6 +439,59 @@ class TestTaskNotes(LineBase):
         self.assertEqual(events[0]["summary"], "edited the note")
         self.assertEqual(events[1]["summary"], "restored an earlier version")
         self.assertEqual(events[0]["note_type"], "task")
+
+    def test_a_note_event_carries_a_fenced_bounded_plain_text_snippet(self):
+        """MIP-1286: what the version says, as a comment's text is told: plain words (no
+        block JSON), fenced as teammate text, cut at the comment length."""
+        task = self.make_task()
+        note = self.task_note(task)
+        long_words = "word " * 80
+        self.version(2, note, self.user2, 10, body=body_with(text_inline("Fixed the export")))
+        self.version(
+            2,
+            note,
+            self.user2,
+            20,
+            body=[
+                {"type": "heading", "content": [text_inline("Plan")]},
+                {"type": "paragraph", "content": [text_inline(long_words)]},
+            ],
+        )
+        first, second = self.events(task)
+        self.assertTrue(first["text"].startswith("<workspace_content>"))
+        self.assertEqual(self.plain(first["text"]).strip(), "Fixed the export")
+        text = self.plain(second["text"]).strip()
+        self.assertTrue(text.startswith("Plan"))
+        self.assertLessEqual(len(text), item_lines.SNIPPET_CHARS)
+        self.assertTrue(text.endswith("\u2026"))
+        self.assertNotIn("paragraph", text)
+
+    def test_a_note_without_a_body_has_no_text_key(self):
+        task = self.make_task()
+        note = self.task_note(task)
+        self.version(2, note, self.user2, 10, body=None)
+        self.version(2, note, self.user2, 20, body=[])
+        self.assertTrue(all("text" not in e for e in self.events(task)))
+
+    def test_the_snippet_follows_the_note_rule(self):
+        """A note the member cannot open is left out whole, snippet included."""
+        task = self.make_task()
+        note = self.task_note(task, owner=self.user2, project=self.hidden_project())
+        self.version(2, note, self.user2, 10, body=body_with(text_inline("Merger plans")))
+        out = self.line(task)
+        self.assertEqual(out["line"]["events"], [])
+        self.assertNotIn("Merger plans", self.blob(out))
+
+    def test_the_snippet_of_a_note_that_points_at_the_task_is_told_too(self):
+        note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Mine", body=[]
+        )
+        self.version(
+            1, note, self.user, 10, body=body_with(chip(self.task.task_id), text_inline(" done"))
+        )
+        event = self.events(self.task)[0]
+        self.assertEqual(event["via"], "chip")
+        self.assertIn("done", self.plain(event["text"]))
 
     def test_another_tasks_note_is_not_on_this_line(self):
         task, other = self.make_task(), self.make_task()
