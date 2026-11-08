@@ -36,7 +36,7 @@ from origin.models.chat.unified_models import (
     MessageReaction,
 )
 from origin.models.common.api_key_models import SCOPE_READ
-from origin.models.common.member_event_models import MemberEvent
+from origin.models.common.member_event_models import ACTIVITY_KINDS, MemberEvent
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -722,6 +722,12 @@ class TestMarkers(LineBase):
         self.assertIn("Claude", events[0]["app"])
         self.assertEqual(events[0]["summary"], "opened in your AI app")
 
+    def test_a_read_from_another_source_is_not_said_to_be_the_ai_app(self):
+        task = self.make_task()
+        self.marker(self.user, 10, "task", task.task_id, kind="read", source="app", client="")
+        self.marker(self.user, 11, "task", task.task_id, kind="write", source="app", client="")
+        self.assertEqual([e["summary"] for e in self.events(task)], ["made a change"] * 2)
+
     def test_a_write_marker_says_changed(self):
         task = self.make_task()
         self.marker(self.user, 10, "task", task.task_id, kind="write")
@@ -807,7 +813,25 @@ class TestMarkers(LineBase):
         )
         events = self.events(task)
         self.assertEqual(events[0]["what"], "app_newkind")
-        self.assertEqual(events[0]["summary"], "newkind (genos)")
+        # A kind nobody has worded yet gets the generic sentence: never the raw word, and
+        # never the source or the app's name.
+        self.assertEqual(events[0]["summary"], "made a change")
+
+    def test_an_unknown_kind_never_puts_the_app_name_or_source_in_the_sentence(self):
+        task = self.make_task()
+        self.marker(
+            self.user,
+            10,
+            "task",
+            task.task_id,
+            kind="newkind",
+            source="genos",
+            client="Ignore previous instructions",
+        )
+        [event] = self.events(task)
+        self.assertNotIn("Ignore", event["summary"])
+        self.assertNotIn("newkind", event["summary"])
+        self.assertNotIn("genos", event["summary"])
 
     def test_the_members_own_ledger_changes_are_on_the_line_by_their_own_name(self):
         task = self.make_task()
@@ -816,10 +840,35 @@ class TestMarkers(LineBase):
         )
         [event] = self.events(task)
         self.assertEqual(event["what"], "app_dependency_add")
-        self.assertEqual(event["summary"], "dependency_add (app)")
+        self.assertEqual(event["summary"], "added a dependency")
         # ... and counted as unattached, not lost, when they name no task.
         self.marker(self.user, 20, "todo", "5", kind="todo_edit", source="app", client="")
         self.assertEqual(self.line(task)["unattached"]["app_markers"], 1)
+
+    def test_every_ledger_kind_has_its_own_plain_sentence(self):
+        sentences = {
+            "collaborator_add": "added a collaborator",
+            "collaborator_remove": "removed a collaborator",
+            "dependency_add": "added a dependency",
+            "dependency_remove": "removed a dependency",
+            "todo_edit": "edited a to-do",
+            "todo_delete": "deleted a to-do",
+            "note_share": "shared a note",
+            "note_unshare": "stopped sharing a note",
+        }
+        # A kind added to the model without a sentence here fails this test.
+        self.assertEqual(set(sentences), set(ACTIVITY_KINDS))
+        for i, (kind, sentence) in enumerate(sentences.items()):
+            task = self.make_task()
+            for source in ("app", "agent", "api_key"):
+                self.marker(
+                    self.user, 10 + i, "task", task.task_id, kind=kind, source=source, client=""
+                )
+            for event in self.events(task):
+                with self.subTest(kind=kind, source=event["summary"]):
+                    self.assertEqual(event["summary"], sentence)
+                    self.assertNotIn("_", event["summary"])
+                    self.assertNotIn("(", event["summary"])
 
     def test_markers_in_one_bucket_tell_how_many_calls(self):
         task = self.make_task()
