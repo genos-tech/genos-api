@@ -595,6 +595,23 @@ class TestChangedThreadsAndNotes(BriefingBase):
         Message.objects.filter(pk=reply.pk).update(deleted_at=timezone.now())
         self.assertEqual([i for i in self.changed() if i["type"] == "thread"], [])
 
+    def test_the_mirror_of_a_task_comment_is_not_a_second_item(self):
+        """A task comment is mirrored into the project chat as a thread reply (metadata
+        `taskCommentId`). The task item tells the comment; the thread must not tell it again
+        (MIP-1284). A real reply in the same thread is still news."""
+        channel = self.channel([self.user, self.user2])
+        root = self.message(channel, self.user, "Task card", at=self.ago(hours=5))
+        mirror = self.message(
+            channel, self.user2, "mirrored words", root=root, at=self.ago(hours=2)
+        )
+        Message.objects.filter(pk=mirror.pk).update(metadata={"taskCommentId": 7})
+        self.assertEqual([i for i in self.changed() if i["type"] == "thread"], [])
+        self.assertNotIn("mirrored words", json.dumps(self.brief()))
+        self.message(channel, self.user2, "a real reply", root=root, at=self.ago(hours=1))
+        items = [i for i in self.changed() if i["type"] == "thread"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual([e["text"] for e in items[0]["events"]], ["a real reply"])
+
     def test_a_note_i_own_edited_by_someone_else_appears(self):
         note = PersonalNoteMaster.objects.create(
             team=self.team, owner=self.user, title="Spec", body=[]
