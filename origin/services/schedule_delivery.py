@@ -14,14 +14,25 @@ could not be written. A push that fails never does: the report is already in the
 * `item_body`: `{title, text, sections}`. `title` and `text` are the same pair the digest
   (type 6) and the reminders (type 9) carry, so anything that only knows those two reads a
   report as "a title and a one-line summary"; `sections` is `[{heading, items: [{text,
-  link?, project?}]}]`. `project` (MIP-1207) is `{id, name, code?}` on an item that is a task:
-  the items of one project are contiguous in a section, so a card draws a header where it
-  changes. An item without it is not a task of a project (a to-do, an event, a note).
+  link?, ...}]}]`. Every item carries `text`, the whole line, so a reader that knows none of
+  the typed fields below still works; the typed fields are OPTIONAL and a report stored before
+  they existed is still valid (see "The typed fields" and `operations/SCHEDULER.md`).
 * `item_optionals`: `{kind, schedule_id, job, run_at?}`. The facts the client and the
   de-duplication need; nothing a person typed.
 * `sender` is NULL (system-authored), `request_status` is "" (not a request, so no approve or
   decline buttons), and the type is in `ACTIVITY_INBOX_ITEM_TYPES`: it lands on the Activities
   tab and does not count toward the Requests badge.
+
+## The typed fields (MIP-1207, MIP-1208)
+
+So a card can draw a report without parsing its text. Each is kept only if it has the right
+type, is in its enum or is within its length; anything else is dropped, never repaired, and
+the server never stores HTML, markup or script:
+
+* body: `version` (2), `stats` `[{key, count, emoji}]` (the headline counts);
+* section: `key` (from `schedule_jobs.EMOJI`) and the `emoji` the server stamps from it;
+* item: `kind` (`ITEM_KINDS`), `project` `{id, name, code?}`, and for a task `display_id`,
+  `title`, `status`, `priority`, `due_date` (ISO), `overdue_days`, `detail`.
 
 ## A job's output is not trusted
 
@@ -50,7 +61,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from datetime import timezone as dt_timezone
 from typing import Any
 from urllib.parse import urlsplit
@@ -60,7 +71,13 @@ from django.db import transaction
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
 from origin.services.mcp_oauth import clean_name
-from origin.services.schedule_jobs import Report
+from origin.services.schedule_jobs import (
+    EMOJI,
+    ITEM_KINDS,
+    TASK_PRIORITIES,
+    TASK_STATUSES,
+    Report,
+)
 from origin.services.webpush_dispatch import dispatch_push_for_inbox_item
 
 log = logging.getLogger("origin.schedules")
@@ -76,6 +93,12 @@ MAX_TEXT_CHARS = 240
 MAX_LINK_CHARS = 500
 MAX_PROJECT_NAME_CHARS = 100
 MAX_PROJECT_CODE_CHARS = 6
+MAX_DISPLAY_ID_CHARS = 24
+MAX_STATS = 8
+MAX_COUNT = 99999
+MAX_OVERDUE_DAYS = 36500
+REPORT_VERSION = 2
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PUSH_BODY_CHARS = 140
 DEFAULT_SUMMARY = "Nothing to report."
 
@@ -134,6 +157,64 @@ def clean_project(value: Any) -> dict[str, Any] | None:
     return out
 
 
+def _enum(value: Any, allowed: tuple[str, ...]) -> str:
+    return value if isinstance(value, str) and value in allowed else ""
+
+
+def _int(value: Any, low: int, high: int) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        return None
+    return value
+
+
+def _iso_date(value: Any) -> str:
+    if not isinstance(value, str) or not _ISO_DATE.match(value):
+        return ""
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return ""
+
+
+def clean_typed_fields(entry: dict[str, Any]) -> dict[str, Any]:
+    """The typed fields of one item that pass their checks (MIP-1208)."""
+    out: dict[str, Any] = {}
+    if project := clean_project(entry.get("project")):
+        out["project"] = project
+    if kind := _enum(entry.get("kind"), ITEM_KINDS):
+        out["kind"] = kind
+    if display_id := _text(entry.get("display_id"), MAX_DISPLAY_ID_CHARS):
+        out["display_id"] = display_id
+    if title := _text(entry.get("title"), MAX_TEXT_CHARS):
+        out["title"] = title
+    if status := _enum(entry.get("status"), TASK_STATUSES):
+        out["status"] = status
+    if priority := _enum(entry.get("priority"), TASK_PRIORITIES):
+        out["priority"] = priority
+    if due := _iso_date(entry.get("due_date")):
+        out["due_date"] = due
+    if (overdue := _int(entry.get("overdue_days"), 1, MAX_OVERDUE_DAYS)) is not None:
+        out["overdue_days"] = overdue
+    if detail := _text(entry.get("detail"), MAX_TEXT_CHARS):
+        out["detail"] = detail
+    return out
+
+
+def clean_stats(value: Any) -> list[dict[str, Any]]:
+    """`[{key, count, emoji}]`: a key the server knows, a whole count, each key once; the emoji is
+    the server's own for that key, never the job's."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in (value if isinstance(value, list) else [])[:MAX_STATS]:
+        if not isinstance(raw, dict):
+            continue
+        key, count = _enum(raw.get("key"), tuple(EMOJI)), _int(raw.get("count"), 0, MAX_COUNT)
+        if key and count is not None and key not in seen:
+            seen.add(key)
+            out.append({"key": key, "count": count, "emoji": EMOJI[key]})
+    return out
+
+
 def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
     """The report as it is stored: `{title, text, sections}`, every part checked."""
     raw_sections = report.get("sections")
@@ -152,19 +233,26 @@ def clean_report(report: Report, fallback_title: str) -> dict[str, Any]:
             item: dict[str, Any] = {"text": text}
             if link := clean_link(entry.get("link")):
                 item["link"] = link
-            if project := clean_project(entry.get("project")):
-                item["project"] = project
+            item.update(clean_typed_fields(entry))
             items.append(item)
         heading = _text(raw.get("heading"), MAX_HEADING_CHARS)
         if items:
-            sections.append({"heading": heading, "items": items})
+            section: dict[str, Any] = {"heading": heading, "items": items}
+            if key := _enum(raw.get("key"), tuple(EMOJI)):
+                section["key"] = key
+                section["emoji"] = EMOJI[key]
+            sections.append(section)
     title = _text(report.get("title"), MAX_TITLE_CHARS) or _text(fallback_title, MAX_TITLE_CHARS)
     summary = _text(report.get("summary"), MAX_SUMMARY_CHARS)
-    return {
+    body: dict[str, Any] = {
+        "version": REPORT_VERSION,
         "title": title or "Genos report",
         "text": summary or DEFAULT_SUMMARY,
         "sections": sections,
     }
+    if stats := clean_stats(report.get("stats")):
+        body["stats"] = stats
+    return body
 
 
 def _run_key(run_at: datetime) -> str:

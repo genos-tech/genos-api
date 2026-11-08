@@ -52,7 +52,11 @@ def _looked_item(entry: dict[str, Any], links: Links):
         link = links.milestone(entry["project_id"], entry["milestone_id"])
     else:
         link = links.project(entry["project_id"])
-    return item(f"{title}: {verb} by {app_text} at {entry['at']}", link)
+    return item(
+        f"{title}: {verb} by {app_text} at {entry['at']}",
+        link,
+        kind if kind in ("note", "milestone", "project") else None,
+    )
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
@@ -78,12 +82,14 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Tasks",
+                "key": "tasks",
                 "items": arrange(
                     [
                         links.task_item(
                             f"{t['display_id']} · {plain(t['title'])}: "
                             f"{_events_text(t['events'], t['events_total'])}",
                             t["task_id"],
+                            _events_text(t["events"], t["events_total"]),
                         )
                         for t in tasks
                     ],
@@ -96,11 +102,13 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Notes",
+                "key": "notes",
                 "items": [
                     item(
                         f"{plain(n['title']) or 'Untitled note'}: "
                         f"{_events_text(n['events'], n['events_total'])}",
                         links.note(n["note_type"], n["note_id"]),
+                        "note",
                     )
                     for n in notes
                 ],
@@ -110,9 +118,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "To-dos finished",
+                "key": "todos_done",
                 "items": [
                     item(
-                        plain(t["title"]) or "untitled", links.todo(did["local_date"], t["item_id"])
+                        plain(t["title"]) or "untitled",
+                        links.todo(did["local_date"], t["item_id"]),
+                        "todo",
                     )
                     for t in did["todos_done"]
                 ],
@@ -122,11 +133,13 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Messages sent",
+                "key": "messages",
                 "items": [
                     item(
                         f"{plain(c['title']) or 'a chat'}: {c['messages']} "
                         f"message{'s' if c['messages'] != 1 else ''}",
                         links.chat(c["chat_type"], c["chat_id"]),
+                        "chat",
                     )
                     for c in did["chats"]
                 ],
@@ -137,6 +150,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Looked at with your AI app",
+                "key": "looked_at",
                 "items": arrange([_looked_item(i, links) for i in looked], today),
             }
         )
@@ -155,6 +169,17 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         "title": f"What you did {day}, {did['local_date']}",
         "summary": clip(summary),
         "sections": sections,
+        "stats": [
+            {"key": key, "count": n}
+            for key, n in (
+                ("items", totals["items"]),
+                ("comments", totals["comments"]),
+                ("todos_done", totals["todos_done"]),
+                ("messages", totals["messages"]),
+                ("looked_at", len(looked)),
+            )
+            if n
+        ],
     }
 
 

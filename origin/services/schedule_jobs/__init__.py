@@ -32,6 +32,56 @@ from typing import Any, NotRequired, TypedDict
 
 from origin.search_engine.agent.tools.base import ToolContext
 
+# The typed vocabulary of a report (MIP-1208). A job names things from these sets; the delivery
+# step keeps only a value that is in them (`schedule_delivery`), and the card draws them with the
+# app's own components. Nothing here is markup: the server never sends HTML or script.
+ITEM_KINDS = (
+    "task",
+    "todo",
+    "event",
+    "note",
+    "chat",
+    "request",
+    "mention",
+    "milestone",
+    "project",
+    "more",
+)
+TASK_STATUSES = ("Open", "WIP", "Blocked", "Pending", "Closed")
+TASK_PRIORITIES = ("Minimal", "Low", "Normal", "High", "Critical")
+# One emoji per section or headline key, chosen HERE and stamped on the stored report by the
+# delivery step: a job never supplies an emoji, so nothing a person typed can become one.
+EMOJI = {
+    "start_with": "🎯",
+    "overdue": "🔥",
+    "due_today": "📅",
+    "todos_today": "✅",
+    "todos_earlier": "🕘",
+    "calendar": "🗓️",
+    "waiting_on_you": "🙋",
+    "changed": "🔔",
+    "waiting_on_others": "⏳",
+    "gone_quiet": "💤",
+    "tasks": "🛠️",
+    "notes": "📝",
+    "todos_done": "☑️",
+    "messages": "💬",
+    "looked_at": "👀",
+    "still_open": "🔓",
+    "closed": "🎉",
+    "todos_left": "📌",
+    "where_it_stands": "📊",
+    "ready": "🚀",
+    "blocked": "🚧",
+    "comments": "💭",
+    "items": "📋",
+}
+
+
+class ReportStat(TypedDict):
+    key: str
+    count: int
+
 
 class ReportProject(TypedDict):
     id: int
@@ -47,17 +97,31 @@ class ReportItem(TypedDict):
     # section, so a card draws a header whenever it changes. Never on a to-do, an event or a
     # note.
     project: NotRequired[ReportProject]
+    # Typed fields for a card (MIP-1208). All optional; `text` is always the whole line, so a
+    # reader that knows none of them still works.
+    kind: NotRequired[str]
+    display_id: NotRequired[str]
+    title: NotRequired[str]
+    status: NotRequired[str]
+    priority: NotRequired[str]
+    due_date: NotRequired[str]
+    overdue_days: NotRequired[int]
+    detail: NotRequired[str]
 
 
 class ReportSection(TypedDict):
     heading: str
     items: list[ReportItem]
+    # What the section is, from `EMOJI`: the card picks the icon from it (MIP-1208).
+    key: NotRequired[str]
 
 
 class Report(TypedDict):
     title: str
     summary: str
     sections: list[ReportSection]
+    # The headline counts a card shows above the sections (MIP-1208), from `EMOJI`'s keys.
+    stats: NotRequired[list[ReportStat]]
 
 
 @dataclass(frozen=True)

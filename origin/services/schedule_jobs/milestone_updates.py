@@ -128,10 +128,14 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     for task_id, slot in ranked[:MAX_CHANGED]:
         task = readable[task_id]
         who = names.get(str(slot["who"]), "someone") if slot["who"] else (slot["label"] or "system")
-        text = f"{task.display_id} · {task.title or 'untitled'}: {slot['what']} by {who}"
+        said = f"{slot['what']} by {who}"
         if slot["n"] > 1:
-            text += f" (+{slot['n'] - 1} more)"
-        changed_items.append(links.task_item(text, task_id))
+            said += f" (+{slot['n'] - 1} more)"
+        changed_items.append(
+            links.task_item(
+                f"{task.display_id} · {task.title or 'untitled'}: {said}", task_id, said
+            )
+        )
     changed_items = arrange(changed_items, today)
     if len(ranked) > MAX_CHANGED:
         changed_items.append(more(len(ranked) - MAX_CHANGED, "changed tasks"))
@@ -151,12 +155,20 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if summary.get("due_date"):
         stands.append(item(f"Due {summary['due_date']}"))
 
-    sections: list[ReportSection] = [{"heading": "Where it stands", "items": stands}]
+    sections: list[ReportSection] = [
+        {"heading": "Where it stands", "key": "where_it_stands", "items": stands}
+    ]
     if changed_items:
-        sections.append({"heading": f"Changed in the last {hours} hours", "items": changed_items})
-    for heading, key, count_key in (
-        ("Ready to start", "ready_now", "ready_now_count"),
-        ("Waiting on blockers", "blocked", "blocked_count"),
+        sections.append(
+            {
+                "heading": f"Changed in the last {hours} hours",
+                "key": "changed",
+                "items": changed_items,
+            }
+        )
+    for heading, key, count_key, section_key in (
+        ("Ready to start", "ready_now", "ready_now_count", "ready"),
+        ("Waiting on blockers", "blocked", "blocked_count", "blocked"),
     ):
         rows = summary.get(key) or []
         if rows:
@@ -166,11 +178,23 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             total = summary.get(count_key, len(rows)) if all_openable else len(shown)
             if total > len(shown):
                 shown.append(more(total - len(shown), "tasks"))
-            sections.append({"heading": heading, "items": shown})
+            sections.append({"heading": heading, "key": section_key, "items": shown})
 
     title = summary.get("title") or "Milestone"
     line = f"{len(by_task)} task(s) changed in the last {hours} hours; {summary['total_tasks']} in all."
-    return {"title": f"Milestone: {title}", "summary": clip(line), "sections": sections}
+    return {
+        "title": f"Milestone: {title}",
+        "summary": clip(line),
+        "sections": sections,
+        "stats": [
+            {"key": key, "count": n}
+            for key, n in (
+                ("changed", len(by_task)),
+                ("overdue", summary.get("overdue_count") or 0),
+            )
+            if n
+        ],
+    }
 
 
 register_job(

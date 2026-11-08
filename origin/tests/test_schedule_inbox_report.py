@@ -73,6 +73,7 @@ class DeliverTests(ScheduleBase):
         self.assertEqual(
             item.item_body,
             {
+                "version": 2,  # MIP-1208: the typed fields exist; an older body has no version
                 "title": "Overdue",
                 "text": "Two tasks are overdue.",
                 "sections": [

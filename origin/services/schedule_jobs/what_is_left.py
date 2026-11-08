@@ -51,7 +51,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     def line(t: dict[str, Any]) -> dict[str, Any]:
         text = f"{t['display_id']} · {plain(t['title']) or 'untitled'} ({t['status']})"
         said = _latest(t["events"])
-        return links.task_item(f"{text}: {said}" if said else text, t["task_id"])
+        return links.task_item(f"{text}: {said}" if said else text, t["task_id"], said)
 
     today_date = now.astimezone(zone).date()
     still_open = [t for t in tasks if t["status"] not in _GONE]
@@ -66,6 +66,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Still open from last time",
+                "key": "still_open",
                 "items": arrange([line(t) for t in still_open], today_date),
             }
         )
@@ -73,6 +74,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append(
             {
                 "heading": "Closed after your work",
+                "key": "closed",
                 "items": arrange([line(t) for t in finished], today_date),
             }
         )
@@ -81,12 +83,13 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             item(
                 f"{plain(t.get('title')) or 'untitled'} (from {t['local_date']})",
                 links.todo(t["local_date"], t.get("item_id")),
+                "todo",
             )
             for t in left_todos[:MAX_TODOS]
         ]
         if len(left_todos) > MAX_TODOS:
             shown.append(more(len(left_todos) - MAX_TODOS, "to-dos"))
-        sections.append({"heading": "To-dos left unfinished", "items": shown})
+        sections.append({"heading": "To-dos left unfinished", "key": "todos_left", "items": shown})
 
     facts = [
         (len(still_open), "task still open"),
@@ -103,6 +106,15 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         "title": f"What is left from the last {days} days, {today}",
         "summary": clip(summary),
         "sections": sections,
+        "stats": [
+            {"key": key, "count": n}
+            for key, n in (
+                ("still_open", len(still_open)),
+                ("closed", len(finished)),
+                ("todos_left", len(left_todos)),
+            )
+            if n
+        ],
     }
 
 

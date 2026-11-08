@@ -41,10 +41,12 @@ def clip(text: str, limit: int = LINE_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def item(text: str, link: str | None = None) -> ReportItem:
+def item(text: str, link: str | None = None, kind: str | None = None) -> ReportItem:
     out: ReportItem = {"text": clip(text)}
     if link:
         out["link"] = link
+    if kind:
+        out["kind"] = kind
     return out
 
 
@@ -54,6 +56,29 @@ def _urgency(facts: TaskFacts) -> tuple:
     task of a group has the same project code)."""
     due = facts.due_date
     return (due or date.max, facts.number or 0, facts.task_id)
+
+
+def _typed_fields(facts: TaskFacts, today: date) -> dict[str, Any]:
+    """The fields a card draws a task with, from the task's own row: its id, title, status,
+    priority and due date, and how many days overdue it is."""
+    out: dict[str, Any] = {
+        "display_id": (
+            f"{facts.project_code}-{facts.number}"
+            if facts.project_code and facts.number is not None
+            else f"#{facts.task_id}"
+        )
+    }
+    if facts.title:
+        out["title"] = clip(facts.title)
+    if facts.status:
+        out["status"] = facts.status
+    if facts.priority:
+        out["priority"] = facts.priority
+    if facts.due_date is not None:
+        out["due_date"] = facts.due_date.isoformat()
+        if facts.due_date < today and facts.status not in ("Closed", "Deleted"):
+            out["overdue_days"] = (today - facts.due_date).days
+    return out
 
 
 def arrange(items: list[ReportItem], today: date) -> list[ReportItem]:
@@ -75,13 +100,13 @@ def arrange(items: list[ReportItem], today: date) -> list[ReportItem]:
         )
     )
     for i in grouped:
-        del i["_facts"]  # type: ignore[typeddict-item]
+        i.update(_typed_fields(i.pop("_facts"), today))  # type: ignore[typeddict-item, misc]
     return [*grouped, *rest]
 
 
 def more(count: int, noun: str) -> ReportItem:
     """The closing line of a capped list: how many are not shown."""
-    return {"text": f"and {count} more {noun}"}
+    return {"text": f"and {count} more {noun}", "kind": "more"}
 
 
 @dataclass(frozen=True)
@@ -98,6 +123,7 @@ class TaskFacts:
     due_date: date | None
     status: str
     priority: str
+    title: str = ""
 
 
 class Links:
@@ -122,6 +148,7 @@ class Links:
                     due_date=row["due_date"],
                     status=row["status"] or "",
                     priority=row["priority"] or "",
+                    title=row["title"] or "",
                 )
                 for row in TaskMaster.objects.filter(
                     task_id__in=wanted, team_id=self._team, is_deleted=False
@@ -134,6 +161,7 @@ class Links:
                     "due_date",
                     "status",
                     "priority",
+                    "title",
                 )
             }
             for task_id in wanted:
@@ -158,10 +186,13 @@ class Links:
             return None
         return f"/workspace/tasks/project/{facts.project_id}/task/{int(task_id)}"
 
-    def task_item(self, text: str, task_id: Any) -> ReportItem:
+    def task_item(self, text: str, task_id: Any, detail: str | None = None) -> ReportItem:
         """A report line about a task: its link, its project, and what `arrange` sorts it by
-        (the private `_facts`, removed by `arrange`)."""
-        out = item(text, self.task(task_id))
+        and turns into typed fields (the private `_facts`, removed by `arrange`). `detail` is
+        the sentence about the task that is not in its fields (what changed, why it is here)."""
+        out = item(text, self.task(task_id), "task")
+        if detail:
+            out["detail"] = clip(detail)
         facts = self.facts(task_id)
         if facts is not None and facts.project_id and facts.project_name:
             project: dict[str, Any] = {"id": facts.project_id, "name": facts.project_name}
