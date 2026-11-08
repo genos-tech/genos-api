@@ -347,6 +347,54 @@ def _heat_of(events: list[dict[str, Any]]) -> int:
     return sum(HEAT.get(e["kind"], 1) for e in events if not e.get("automated"))
 
 
+def _requested_task_ids(
+    ctx: ToolContext, win: Window, project_id: int | None, held_ids: Any
+) -> set[int]:
+    """Tasks made from a chat thread the member STARTED, whose status changed in the window.
+
+    The person who asked for something in a thread and the PM who made a task of it are
+    two people; the task holds only the PM. Without this the requester is never told the
+    task they asked for was closed (MIP-1283). Only the tasks with a status change in the
+    window are looked at, so the work is bounded by the window, not by the member's history.
+    The starter is the sender of the thread's root message (`TaskMaster.thread_id`), who
+    has not deleted it. Whether the member may open the task is asked later, with every
+    other candidate (`LabelAccess.tasks`)."""
+    me = ctx.user_id
+    status_rows = TaskActivity.objects.filter(
+        team_id=ctx.team_id,
+        action_type=TaskActivityActionType.STATUS,
+        ts_created_at__gte=win.since,
+        ts_created_at__lte=win.until,
+    )
+    tasks = (
+        TaskMaster.objects.filter(
+            team_id=ctx.team_id,
+            is_deleted=False,
+            is_init_task=False,
+            task_id__in=status_rows.values("task_id"),
+        )
+        .exclude(thread_id__isnull=True)
+        .exclude(task_id__in=held_ids)
+    )
+    if project_id is not None:
+        tasks = tasks.filter(project_id=project_id)
+    by_thread: dict[uuid.UUID, list[int]] = {}
+    for task_id, thread_id in tasks.values_list("task_id", "thread_id")[:EVENT_POOL]:
+        try:
+            by_thread.setdefault(uuid.UUID(str(thread_id)), []).append(task_id)
+        except ValueError:
+            continue  # a legacy numeric thread id names no message here
+    if not by_thread:
+        return set()
+    started = Message.objects.filter(
+        id__in=list(by_thread),
+        sender_id=me,
+        is_thread_reply=False,
+        deleted_at__isnull=True,
+    ).values_list("id", flat=True)
+    return {task_id for root_id in started for task_id in by_thread[root_id]}
+
+
 def _changed_tasks(
     ctx: ToolContext, win: Window, project_id: int | None, names: _Names, automated_only: list
 ) -> list[dict[str, Any]]:
@@ -360,10 +408,14 @@ def _changed_tasks(
     if project_id is not None:
         mine = mine.filter(project_id=project_id)
     mine_ids = mine.values("task_id")
+    # Tasks made from a thread the member started: they hear the status changes (the close
+    # above all), not the work, which stays with the people who hold the task.
+    requested = _requested_task_ids(ctx, win, project_id, mine_ids)
 
     activities = list(
         TaskActivity.objects.filter(
-            task_id__in=mine_ids,
+            Q(task_id__in=mine_ids)
+            | Q(task_id__in=requested, action_type=TaskActivityActionType.STATUS),
             team_id=ctx.team_id,
             ts_created_at__gte=win.since,
             ts_created_at__lte=win.until,
@@ -422,6 +474,11 @@ def _changed_tasks(
                 "status": task.status,
                 "project": task.project.project_name if task.project_id else None,
                 "assigned_to_me": str(task.assignee_id) == me,
+                **(
+                    {"why": "you started the chat thread this task was made from"}
+                    if task_id in requested
+                    else {}
+                ),
                 "_events": events,
             }
         )
