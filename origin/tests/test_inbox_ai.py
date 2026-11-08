@@ -32,7 +32,11 @@ from django.core.management import call_command
 from django.test import SimpleTestCase
 from django.utils import timezone
 
-from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
+from origin.models.common.inbox_models import (
+    ACTIVITY_INBOX_ITEM_TYPES,
+    ITEM_TYPE_GENOS_REPORT,
+    InboxItems,
+)
 from origin.models.common.schedule_models import MemberSchedule
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent.tools import ToolContext
@@ -346,7 +350,9 @@ class TestTurnItOff(AiJobBase):
     def test_the_digest_is_turned_off_and_back_on_and_the_item_stays(self):
         item = self.digest_item()
         before = self.client.get(self.url(item)).data
-        self.assertEqual(before, {"kind": "digest", "enabled": True, "label": "Genos digest"})
+        self.assertEqual(
+            before, {"kind": "digest", "enabled": True, "label": "Genos digest", "used_ai": True}
+        )
         off = self.client.post(self.url(item, "off/"))
         self.assertEqual(off.status_code, 200, off.data)
         self.assertEqual(
@@ -523,7 +529,13 @@ class TestTurnItOff(AiJobBase):
         self.assertEqual(rows[digest.item_id]["aiSource"]["kind"], "digest")
         self.assertEqual(
             rows[report.item_id]["aiSource"],
-            {"kind": "schedule", "enabled": True, "label": "Report", "schedule_id": str(sched.id)},
+            {
+                "kind": "schedule",
+                "enabled": True,
+                "label": "Report",
+                "schedule_id": str(sched.id),
+                "used_ai": True,
+            },
         )
         self.assertNotIn("aiSource", rows[plain.item_id])
         self.assertIn("ai", rows[digest.item_id]["itemOptionals"])
@@ -532,6 +544,216 @@ class TestTurnItOff(AiJobBase):
         rows = {r["itemId"]: r for r in res.data["data"]["items"]}
         self.assertFalse(rows[report.item_id]["aiSource"]["enabled"])
         self.assertTrue(rows[digest.item_id]["aiSource"]["enabled"])
+
+    # -- every digest and every report has a switch, AI or not (MIP-1234) --
+
+    def plain_report(self, name="Morning plan", user=None):
+        """A report of a job that uses no AI, filed by the real delivery."""
+        sched = self.schedule("plain", name=name)
+        return schedule_delivery.deliver(sched, JOBS["plain"].run(self.ctx, {})), sched
+
+    def test_a_report_that_used_no_ai_still_has_its_source_and_says_no_ai(self):
+        item, sched = self.plain_report()
+        self.assertNotIn("ai", item.item_optionals)
+        res = self.client.get(self.url(item))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            res.data,
+            {
+                "kind": "schedule",
+                "enabled": True,
+                "label": "Morning plan",
+                "schedule_id": str(sched.id),
+                "used_ai": False,
+            },
+        )
+        rows = self.client.get(f"{LIST}?team_id={self.team.team_id}").data["data"]["items"]
+        (row,) = [r for r in rows if r["itemId"] == item.item_id]
+        self.assertEqual(row["aiSource"], res.data)
+        self.assertNotIn("ai", row["itemOptionals"])
+
+    def test_a_report_that_used_ai_says_so_and_a_digest_always_does(self):
+        report, _ = self.report_item()
+        digest = self.digest_item()
+        # An older digest that kept no cost block is still an AI item.
+        old_digest = InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=6,
+            item_body={"title": "Old", "text": "x"},
+            item_optionals=None,
+            request_status="",
+        )
+        for item in (report, digest, old_digest):
+            self.assertIs(self.client.get(self.url(item)).data["used_ai"], True, item.item_id)
+
+    def test_a_report_that_used_no_ai_is_turned_off_and_back_on_from_the_item(self):
+        item, sched = self.plain_report()
+        off = self.client.post(self.url(item, "off/"))
+        self.assertEqual(off.status_code, 200, off.data)
+        self.assertEqual(
+            (off.data["kind"], off.data["enabled"], off.data["was_enabled"]),
+            ("schedule", False, True),
+        )
+        sched.refresh_from_db()
+        self.assertFalse(sched.enabled)
+        self.assertEqual(sched.paused_reason, "manual")
+        self.assertFalse(self.client.get(self.url(item)).data["enabled"])
+        on = self.client.post(self.url(item, "on/"))
+        self.assertTrue(on.data["enabled"])
+        sched.refresh_from_db()
+        self.assertTrue(sched.enabled)
+        self.assertTrue(self.reports().filter(pk=item.pk).exists(), "the item stays")
+
+    def test_the_other_member_cannot_switch_a_plain_report_of_mine(self):
+        item, sched = self.plain_report()
+        self.authenticate(self.user2)
+        self.assertEqual(self.client.get(self.url(item)).status_code, 404)
+        self.assertEqual(self.client.post(self.url(item, "off/")).status_code, 404)
+        sched.refresh_from_db()
+        self.assertTrue(sched.enabled)
+
+    def test_a_deleted_plain_report_item_is_a_404(self):
+        item, _ = self.plain_report()
+        InboxItems.objects.filter(pk=item.pk).update(is_deleted=True)
+        self.assertEqual(self.client.post(self.url(item, "off/")).status_code, 404)
+
+    def test_the_source_comes_from_the_type_not_from_the_blob(self):
+        sched = self.schedule("plain", name="Mine")
+        theirs = schedules.create(
+            ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id)),
+            name="Theirs",
+            job="plain",
+            frequency="daily",
+            time_of_day="10:00",
+        )
+        for item_type in (0, 1, 2, 3, 4, 5, 7, 8, 9):
+            forged = InboxItems.objects.create(
+                team=self.team,
+                receiver=self.user,
+                item_type=item_type,
+                item_body={"title": "t", "text": "x"},
+                item_optionals={
+                    "kind": "schedule_report",
+                    "schedule_id": str(sched.id),
+                    "job": "plain",
+                    "ai": {"producer": "schedule"},
+                },
+                request_status="" if item_type in ACTIVITY_INBOX_ITEM_TYPES else "pending",
+            )
+            self.assertEqual(self.client.get(self.url(forged)).status_code, 404, item_type)
+            self.assertEqual(self.client.post(self.url(forged, "off/")).status_code, 404, item_type)
+        # A digest item whose blob names a schedule (someone else's, even) is only the digest.
+        digest_forged = InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=6,
+            item_body={"title": "t", "text": "x"},
+            item_optionals={"ai": {"producer": "schedule"}, "schedule_id": str(theirs.id)},
+            request_status="",
+        )
+        res = self.client.post(self.url(digest_forged, "off/"))
+        self.assertEqual((res.data["kind"], res.data["label"]), ("digest", "Genos digest"))
+        for row in (sched, theirs):
+            row.refresh_from_db()
+            self.assertTrue(row.enabled)
+
+    def test_a_report_without_a_real_schedule_id_has_no_source(self):
+        for optionals in (
+            None,
+            {},
+            {"schedule_id": ""},
+            {"schedule_id": "nope"},
+            {"schedule_id": 5},
+            "x",
+        ):
+            InboxItems.objects.all().delete()
+            item = InboxItems.objects.create(
+                team=self.team,
+                sender=None,
+                receiver=self.user,
+                item_type=ITEM_TYPE_GENOS_REPORT,
+                item_body={"title": "t", "text": "x"},
+                item_optionals=optionals,
+                request_status="",
+            )
+            self.assertEqual(self.client.get(self.url(item)).status_code, 404, optionals)
+
+    def test_a_plain_report_naming_someone_elses_schedule_switches_nothing(self):
+        theirs = schedules.create(
+            ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id)),
+            name="Theirs",
+            job="plain",
+            frequency="daily",
+            time_of_day="10:00",
+        )
+        forged = InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=ITEM_TYPE_GENOS_REPORT,
+            item_body={"title": "t", "text": "x"},
+            item_optionals={
+                "kind": "schedule_report",
+                "schedule_id": str(theirs.id),
+                "job": "plain",
+            },
+            request_status="",
+        )
+        self.assertTrue(self.client.get(self.url(forged)).data["gone"])
+        self.assertEqual(self.client.post(self.url(forged, "off/")).status_code, 404)
+        theirs.refresh_from_db()
+        self.assertTrue(theirs.enabled)
+
+    def test_an_ai_block_of_the_wrong_producer_does_not_make_a_report_an_ai_report(self):
+        sched = self.schedule("plain", name="Mine")
+        item = InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=ITEM_TYPE_GENOS_REPORT,
+            item_body={"title": "t", "text": "x"},
+            item_optionals={
+                "kind": "schedule_report",
+                "schedule_id": str(sched.id),
+                "ai": {"producer": "digest"},
+            },
+            request_status="",
+        )
+        res = self.client.get(self.url(item))
+        self.assertEqual((res.data["kind"], res.data["used_ai"]), ("schedule", False))
+
+    def test_a_deleted_schedules_report_still_says_whether_it_used_ai(self):
+        plain, plain_sched = self.plain_report()
+        smart, smart_sched = self.report_item()
+        schedules.delete(self.ctx, plain_sched.id)
+        schedules.delete(self.ctx, smart_sched.id)
+        for item, used in ((plain, False), (smart, True)):
+            res = self.client.get(self.url(item))
+            self.assertTrue(res.data["gone"])
+            self.assertIs(res.data["used_ai"], used)
+
+    def test_the_list_gives_every_report_and_digest_a_source_and_nothing_else_one(self):
+        plain_report, _ = self.plain_report()
+        ai_report, _ = self.report_item(self.schedule("smart", name="Smart", at="10:30"))
+        digest = self.digest_item()
+        notice = InboxItems.objects.create(
+            team=self.team, receiver=self.user, item_type=0, item_body={"title": "t", "text": "x"}
+        )
+        reminder = InboxItems.objects.create(
+            team=self.team, receiver=self.user, item_type=9, item_body={"title": "t", "text": "x"}
+        )
+        rows = {
+            r["itemId"]: r
+            for r in self.client.get(f"{LIST}?team_id={self.team.team_id}").data["data"]["items"]
+        }
+        self.assertIs(rows[plain_report.item_id]["aiSource"]["used_ai"], False)
+        self.assertIs(rows[ai_report.item_id]["aiSource"]["used_ai"], True)
+        self.assertIs(rows[digest.item_id]["aiSource"]["used_ai"], True)
+        self.assertNotIn("aiSource", rows[notice.item_id])
+        self.assertNotIn("aiSource", rows[reminder.item_id])
 
     def test_the_list_costs_one_query_for_all_the_schedules(self):
         for n in range(3):
