@@ -8,6 +8,8 @@ The rule, the same in every section of every job (`report_kit.arrange`):
     due date last, then by display id (the task number);
   * anything that is not a task of a known project (to-dos, calendar events, requests, notes,
     chats) keeps its own order and follows the project groups;
+  * EXCEPT "Start with" (MIP-1236): it is the briefing's top items in the order of what matters
+    to the member, so it keeps that order and is not grouped; its items still carry `project`;
   * the stored report carries `project` ({id, name, code?}) per task item, whitelisted by type
     and length, so nothing else a job puts there is stored.
 """
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from unittest import mock
 
 from django.test import SimpleTestCase
 
@@ -23,7 +26,7 @@ from origin.models.chat.todo_models import ToDoGroup, ToDoItem
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.services import schedule_delivery
+from origin.services import briefing, schedule_delivery
 from origin.services.schedule_jobs import report_kit
 from origin.services.schedule_jobs.report_kit import TaskFacts, arrange
 from origin.tests.test_schedule_jobs import JobBase
@@ -185,7 +188,8 @@ class TestWhatToDoToday(Base):
             )
         report = self.run_job("what_to_do_today")
         checked = 0
-        for heading in ("Start with", "Due today", "Gone quiet"):
+        # ("Start with" is not here: it keeps the briefing's rank order, MIP-1236 below.)
+        for heading in ("Due today", "Gone quiet"):
             items = self.section(report, heading)
             self.assertTrue(items, heading)
             self.assert_contiguous(items)
@@ -193,7 +197,7 @@ class TestWhatToDoToday(Base):
                 self.names(items), sorted(self.names(items), key=str.casefold), heading
             )
             checked += 1
-        self.assertEqual(checked, 3)
+        self.assertEqual(checked, 2)
 
     def test_changed_tasks_are_grouped_and_notes_and_threads_follow(self):
         b = self.make_task("Beta work", project=self.beta)
@@ -377,3 +381,90 @@ class TestTheKit(SimpleTestCase):
         self.assertEqual(
             [i["text"] for i in report_kit.arrange(items, TODAY)], ["a", "and 3 more tasks"]
         )
+
+
+class TestStartWithKeepsTheRank(Base):
+    """The "Start with" section lists the briefing's top items in the briefing's order (MIP-1236)."""
+
+    def ranked(self, tasks):
+        """Run the job with the briefing's `suggested_next` in exactly this order."""
+        real = briefing.build_briefing
+
+        def build(*args, **kwargs):
+            data = real(*args, **kwargs)
+            by_id = {t["task_id"]: t for t in data["suggested_next"]}
+            data["suggested_next"] = [by_id[t.task_id] for t in tasks if t.task_id in by_id]
+            return data
+
+        with mock.patch.object(briefing, "build_briefing", build):
+            return self.run_job("what_to_do_today")
+
+    def three(self):
+        """Tasks of two projects, all due today so the briefing offers them: ranked
+        beta, alpha, beta, which grouping by project would turn into alpha, beta, beta."""
+        return [
+            self.make_task(f"T{n}", project=project, due_date=self.local_today(), priority="High")
+            for n, project in enumerate((self.beta, self.alpha, self.beta))
+        ]
+
+    def test_the_rank_order_is_kept_and_not_grouped_by_project(self):
+        tasks = self.three()
+        report = self.ranked(tasks)
+        items = self.section(report, "Start with")
+        self.assertEqual([i["link"] for i in items], [self.task_link(t) for t in tasks])
+        self.assertEqual(self.names(items), ["beta", "Alpha", "beta"])
+        # Not contiguous: that is the point, and a card must not draw headers for it.
+        with self.assertRaises(AssertionError):
+            self.assert_contiguous(items)
+
+    def test_each_row_still_has_its_project_and_typed_fields(self):
+        tasks = self.three()
+        items = self.section(self.ranked(tasks), "Start with")
+        for task, entry in zip(tasks, items):
+            self.assertEqual(entry["project"]["id"], task.project_id)
+            self.assertEqual(entry["display_id"], f"{task.project.code}-{task.project_task_number}")
+            self.assertEqual(entry["kind"], "task")
+            self.assertEqual(entry["priority"], "High")
+            self.assertNotIn("_facts", entry)
+
+    def test_the_section_is_marked_so_the_card_knows(self):
+        report = self.ranked(self.three())
+        (section,) = [s for s in report["sections"] if s["heading"] == "Start with"]
+        self.assertEqual(section["key"], "start_with")
+
+    def test_every_other_section_is_still_grouped_by_project(self):
+        self.three()
+        report = self.ranked(self.three()[::-1])
+        items = self.section(report, "Due today")
+        self.assertTrue(items)
+        self.assert_contiguous(items)
+        self.assertEqual(self.names(items), sorted(self.names(items), key=str.casefold))
+
+    def test_the_stored_report_keeps_the_order_and_the_projects(self):
+        tasks = self.three()
+        stored = schedule_delivery.clean_report(self.ranked(tasks), "x")
+        section = next(s for s in stored["sections"] if s["key"] == "start_with")
+        self.assertEqual(
+            [i["project"]["name"] for i in section["items"]], ["beta", "Alpha", "beta"]
+        )
+
+    def test_a_member_with_a_recorded_week_gets_the_importance_order(self):
+        """No stand-in for the briefing: a week of activity is recorded, the busiest task is
+        in beta, then one in alpha, then a quiet one in beta."""
+        busy = self.make_task("Busy", project=self.beta)
+        middle = self.make_task("Middle", project=self.alpha)
+        quiet = self.make_task("Quiet", project=self.beta)
+        # Others' events count 3 each up to six, plus 2 per busy day: 32, then 15, then 10.
+        for days in range(1, 8):
+            for k in range(4):
+                self.comment(busy, self.user2, f"b{k}", at=self.ago(days=days, hours=k))
+        for days in (1, 4, 7):
+            self.comment(middle, self.user2, "m", at=self.ago(days=days))
+        for days in (2, 5):
+            self.comment(quiet, self.user2, "q", at=self.ago(days=days))
+        report = self.run_job("what_to_do_today")
+        links = [i["link"] for i in self.section(report, "Start with")]
+        expected = [self.task_link(t) for t in (busy, middle, quiet)]
+        self.assertEqual(links[:3], expected)
+        names = self.names(self.section(report, "Start with")[:3])
+        self.assertEqual(names, ["beta", "Alpha", "beta"])
