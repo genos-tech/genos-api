@@ -121,7 +121,9 @@ class AiBase(JobBase):
             title, project=project, due_date=self.local_today() - timedelta(days=days), **kw
         )
         if comment:
-            self.comment(task, self.user2, comment)
+            # A few days old, on the patched clock: a comment stamped with the real clock is
+            # "just now" before 15:00 JST and would make the task "changed by someone else".
+            self.comment(task, self.user2, comment, at=self.now - timedelta(days=5))
         return task
 
     def details(self, report):
