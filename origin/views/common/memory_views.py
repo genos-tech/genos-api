@@ -3,8 +3,11 @@
     GET    /api/v2/user/memory/?team_id=                  the switch, what is stored, this team's
                                                           tuning and marks, the words (cheap)
     GET    /api/v2/user/memory/top/?team_id=&limit=       what Genos has noticed: top items, why
-    PUT    /api/v2/user/memory/marks/<task_id>/?team_id=  mark a task (`{"mark": ...}`)
-    DELETE /api/v2/user/memory/marks/<task_id>/?team_id=  clear the mark
+    PUT    /api/v2/user/memory/marks/<task_id>/?team_id=  mark a task (`{"mark": "not_important" |
+                                                          "on_it" | "priority_is_right", "source"?:
+                                                          "report" | "settings"}`); answers
+                                                          `{taskId, displayId, mark, previous}`
+    DELETE /api/v2/user/memory/marks/<task_id>/?team_id=  clear the mark; the same answer
     PATCH  /api/v2/user/memory/tuning/?team_id=           `{"weights": {signal: level}}`
     DELETE /api/v2/user/memory/tuning/?team_id=           every signal back to normal
     DELETE /api/v2/user/memory/<what>/                    delete: importance | summaries |
@@ -30,7 +33,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from origin.models.common.member_importance_models import MARKS
+from origin.models.common.member_importance_models import ALL_MARKS
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.services import importance, memory_control
@@ -38,6 +41,9 @@ from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import as_int, as_uuid
 from origin.views.utils.scope_guards import require_team_member_or_response
+
+# Where a REST answer may say it came from (`mcp` is the connected-app tool's own).
+REST_SOURCES = ("report", "settings")
 
 _SNAKE = re.compile(r"_([a-z])")
 
@@ -153,19 +159,22 @@ class MemoryMarkView(_Base):
         if isinstance(ctx, Response):
             return ctx
         mark = request.data.get("mark")
-        if mark not in MARKS:
-            return _error(f"`mark` must be one of: {', '.join(MARKS)}.")
-        return self._set(ctx, task_id, mark)
+        if mark not in ALL_MARKS:
+            return _error(f"`mark` must be one of: {', '.join(ALL_MARKS)}.")
+        source = request.data.get("source")
+        if source is not None and source not in REST_SOURCES:
+            return _error(f"`source` must be one of: {', '.join(REST_SOURCES)}.")
+        return self._set(ctx, task_id, mark, source)
 
     def delete(self, request, task_id):
         ctx = self._ctx(request)
         if isinstance(ctx, Response):
             return ctx
-        return self._set(ctx, task_id, "clear")
+        return self._set(ctx, task_id, "clear", None)
 
-    def _set(self, ctx: ToolContext, task_id: int, mark: str) -> Response:
+    def _set(self, ctx: ToolContext, task_id: int, mark: str, source: str | None) -> Response:
         try:
-            out = importance.set_mark(ctx, task_id, mark)
+            out = importance.set_mark(ctx, task_id, mark, allowed=ALL_MARKS, source=source)
         except ToolError as exc:
             return self._refusal(exc)
         return Response(camel(out))

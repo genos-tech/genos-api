@@ -6,6 +6,15 @@ app, in Claude and in the morning report. No model, no cost, and nothing is writ
 does NOT move the member's "since your last briefing" marker (it asks for a fixed look-back
 window, never `since_last`), so a scheduled report does not use up what their own Claude
 would have told them.
+
+## It does not repeat itself (MIP-1211, `services/report_memory.py`)
+
+A task row whose state did not change since the member's last (opened) report of this job is held
+back and counted ("4 unchanged since your last report"), unless a hard rule says it is worth
+reporting every time (due within 2 days, in an active sprint with a due date, newly blocked,
+newly overdue, changed by somebody else, one of the top tasks). The member's own answer ("On it",
+"Not important") beats the rules until the task changes. Calendar, to-dos, "Waiting on you" and
+"Changed" are never held back. With no memory (the first report, nothing opened) nothing is.
 """
 
 from __future__ import annotations
@@ -17,7 +26,7 @@ from zoneinfo import ZoneInfo
 from django.utils import timezone
 
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import briefing
+from origin.services import briefing, report_memory
 from origin.services.schedule_jobs import (
     Job,
     Report,
@@ -177,10 +186,37 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ],
     )
 
-    def tasks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [links.task_item(_task_text(r), r["task_id"]) for r in rows]
-
     today = date.fromisoformat(agenda["local_date"])
+
+    # Which task rows are worth listing again (MIP-1211): decided once per task, before any row
+    # is built, so a held-back task is in no section.
+    verdict = report_memory.judge(
+        ctx,
+        "what_to_do_today",
+        [
+            *(t["task_id"] for t in data["suggested_next"]),
+            *(t["task_id"] for t in agenda["overdue"]),
+            *(t["task_id"] for t in agenda["due_today"]),
+            *(t["task_id"] for t in others["blocked_tasks"]),
+            *(t["task_id"] for t in data["stale_mine"]),
+        ],
+        links.facts,
+        today=today,
+        now=now,
+        start_with={t["task_id"] for t in data["suggested_next"]},
+        changed={c["task_id"] for c in changed["items"] if c["type"] == "task"},
+    )
+    links.why = verdict.why
+    links.can_answer = verdict.can_answer
+
+    def kept(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [r for r in rows if r["task_id"] not in verdict.held]
+
+    def held_in(rows: list[dict[str, Any]]) -> int:
+        return len(rows) - len(kept(rows))
+
+    def tasks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [links.task_item(_task_text(r), r["task_id"]) for r in kept(rows)]
 
     sections: list[ReportSection] = []
 
@@ -210,11 +246,21 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             t["task_id"],
             "; ".join(t.get("reasons") or []),
         )
-        for t in data["suggested_next"]
+        for t in kept(data["suggested_next"])
     ]
     add("Start with", start)
-    add("Overdue", tasks(agenda["overdue"]), agenda["overdue_count"], "overdue tasks")
-    add("Due today", tasks(agenda["due_today"]), agenda["due_today_count"], "tasks due today")
+    add(
+        "Overdue",
+        tasks(agenda["overdue"]),
+        agenda["overdue_count"] - held_in(agenda["overdue"]),
+        "overdue tasks",
+    )
+    add(
+        "Due today",
+        tasks(agenda["due_today"]),
+        agenda["due_today_count"] - held_in(agenda["due_today"]),
+        "tasks due today",
+    )
 
     todo_date = agenda["local_date"]
     add(
@@ -288,7 +334,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                     for e in t.get("waiting_for") or []
                 ),
             )
-            for t in others["blocked_tasks"]
+            for t in kept(others["blocked_tasks"])
         ],
     )
     add(
@@ -299,7 +345,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 t["task_id"],
                 f"untouched for {t['days_idle']} days",
             )
-            for t in data["stale_mine"]
+            for t in kept(data["stale_mine"])
         ],
     )
 
@@ -314,6 +360,10 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         if n
     ]
     summary = f"{', '.join(said)}." if said else "Nothing is overdue, due today or waiting on you."
+    if verdict.same:
+        summary += f" {verdict.same} unchanged since your last report."
+    if verdict.quieted:
+        summary += f" {verdict.quieted} quieted by you."
     return {
         "title": f"What to do today, {agenda['local_date']}",
         "summary": clip(summary),
@@ -326,9 +376,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 ("waiting_on_you", len(waiting["requests"]) + len(waiting["mentions"])),
                 ("waiting_on_others", len(others["blocked_tasks"])),
                 ("gone_quiet", len(data["stale_mine"])),
+                (report_memory.STAT_STILL_SAME, verdict.same),
+                (report_memory.STAT_QUIETED, verdict.quieted),
             )
             if n
         ],
+        "seen": verdict.seen,
     }
 
 

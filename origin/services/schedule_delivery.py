@@ -32,7 +32,12 @@ the server never stores HTML, markup or script:
 * body: `version` (2), `stats` `[{key, count, emoji}]` (the headline counts);
 * section: `key` (from `schedule_jobs.EMOJI`) and the `emoji` the server stamps from it;
 * item: `kind` (`ITEM_KINDS`), `project` `{id, name, code?}`, and for a task `display_id`,
-  `title`, `status`, `priority`, `due_date` (ISO), `overdue_days`, `detail`.
+  `title`, `status`, `priority`, `due_date` (ISO), `overdue_days`, `detail`, and (MIP-1211)
+  `task_id` (what an answer is sent by), `why` (`report_memory.WHY_VALUES`: why the row is
+  listed) and `can_answer` (true: the card may offer "On it" and "Not important").
+
+`item_optionals["seen"]` (MIP-1211) is the report's memory for the next one, `{task_id:
+signature}`: see `services/report_memory.py`.
 
 ## A job's output is not trusted
 
@@ -70,8 +75,9 @@ from django.db import transaction
 
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
-from origin.services import inbox_ai
+from origin.services import inbox_ai, report_memory
 from origin.services.mcp_oauth import clean_name
+from origin.services.report_memory import WHY_VALUES
 from origin.services.schedule_jobs import (
     EMOJI,
     ITEM_KINDS,
@@ -99,6 +105,9 @@ MAX_DISPLAY_ID_CHARS = 24
 MAX_STATS = 8
 MAX_COUNT = 99999
 MAX_OVERDUE_DAYS = 36500
+MAX_TASK_ID = 2**62
+MAX_SEEN = report_memory.MAX_SEEN
+MAX_SIGNATURE_CHARS = 130
 REPORT_VERSION = 2
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PUSH_BODY_CHARS = 140
@@ -199,6 +208,31 @@ def clean_typed_fields(entry: dict[str, Any]) -> dict[str, Any]:
         out["overdue_days"] = overdue
     if detail := _text(entry.get("detail"), MAX_TEXT_CHARS):
         out["detail"] = detail
+    if (task_id := _int(entry.get("task_id"), 1, MAX_TASK_ID)) is not None:
+        out["task_id"] = task_id
+    if why := _enum(entry.get("why"), WHY_VALUES):
+        out["why"] = why
+    if entry.get("can_answer") is True:
+        out["can_answer"] = True
+    return out
+
+
+def clean_seen(value: Any) -> dict[str, str]:
+    """The report's memory for the next one: `{task_id: signature}`, whole-number keys, a
+    bounded signature each, at most `MAX_SEEN` entries. Anything else is dropped."""
+    out: dict[str, str] = {}
+    for key, sig in (value if isinstance(value, dict) else {}).items():
+        if len(out) >= MAX_SEEN:
+            break
+        if (
+            isinstance(key, str)
+            and key.isascii()
+            and key.isdigit()
+            and isinstance(sig, str)
+            and 0 < len(sig) <= MAX_SIGNATURE_CHARS
+            and _int(int(key), 1, MAX_TASK_ID) is not None
+        ):
+            out[key] = sig
     return out
 
 
@@ -281,6 +315,10 @@ def deliver(
     }
     if run_at is not None:
         optionals["run_at"] = _run_key(run_at)
+    # What this report showed, for the next one to hold back what did not change (MIP-1211).
+    # In `item_optionals`, not `item_body`: it is bookkeeping, and the body is what a model reads.
+    if seen := clean_seen(report.get("seen")):
+        optionals["seen"] = seen
     # A job that spends AI usage is filed only with what it cost (MIP-1209): `require_cost`
     # raises when the job did not say which request paid, so the run fails and nothing is filed.
     # A job that uses none says nothing about cost.

@@ -137,6 +137,8 @@ class TaskFacts:
     status: str
     priority: str
     title: str = ""
+    # In a sprint that is active now (MIP-1211: with a due date it is always worth a report).
+    in_active_sprint: bool = False
 
 
 class Links:
@@ -146,6 +148,10 @@ class Links:
     def __init__(self, ctx: ToolContext) -> None:
         self._team = ctx.team_id
         self._facts: dict[int, TaskFacts | None] = {}
+        # What a report says about each task row it lists (MIP-1211): `why` it is listed, and
+        # whether the card may offer the two answers. Set by a job that suppresses repeats.
+        self.why: dict[int, str] = {}
+        self.can_answer: bool = False
         self._task_of_note: dict[int, tuple[int | None, int | None]] = {}
 
     def preload(self, *, tasks: Iterable[Any] = (), task_notes: Iterable[Any] = ()) -> None:
@@ -162,6 +168,9 @@ class Links:
                     status=row["status"] or "",
                     priority=row["priority"] or "",
                     title=row["title"] or "",
+                    in_active_sprint=(
+                        row["sprint__status"] == "active" and row["sprint__is_deleted"] is False
+                    ),
                 )
                 for row in TaskMaster.objects.filter(
                     task_id__in=wanted, team_id=self._team, is_deleted=False
@@ -175,6 +184,8 @@ class Links:
                     "status",
                     "priority",
                     "title",
+                    "sprint__status",
+                    "sprint__is_deleted",
                 )
             }
             for task_id in wanted:
@@ -204,6 +215,14 @@ class Links:
         and turns into typed fields (the private `_facts`, removed by `arrange`). `detail` is
         the sentence about the task that is not in its fields (what changed, why it is here)."""
         out = item(text, self.task(task_id), "task")
+        facts_known = self.facts(task_id)
+        if facts_known is not None and facts_known.project_id:
+            # The id the card answers by (a display id changes when a task moves project).
+            out["task_id"] = facts_known.task_id
+            if facts_known.task_id in self.why:
+                out["why"] = self.why[facts_known.task_id]
+            if self.can_answer:
+                out["can_answer"] = True
         if detail:
             out["detail"] = clip(detail)
         facts = self.facts(task_id)
