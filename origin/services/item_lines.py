@@ -539,6 +539,9 @@ def _read_tasks(
                     + ("" if via == "note_task" else " that points at this task"),
                     actor=v.editor_id,
                     via=via,
+                    # What the version says, bounded like a comment's text: read now, through
+                    # the access check above, never stored. The renderer fences it.
+                    text=_snippet(extract_text(v.body)),
                     extra={
                         "note": wrap_workspace_content(note.title or ""),
                         "note_type": _NOTE_NAMES[v.note_type],
