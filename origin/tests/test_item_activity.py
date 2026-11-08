@@ -758,7 +758,7 @@ class TestBriefing(ActivityBase):
         self.assertEqual(MemberItemDay.objects.count(), 0)
 
     def test_a_failure_in_the_rollups_never_fails_the_briefing(self):
-        with mock.patch.object(item_activity, "week", side_effect=RuntimeError("boom")):
+        with mock.patch.object(item_activity, "week_series", side_effect=RuntimeError("boom")):
             with self.assertLogs(item_activity.log, level="WARNING"):
                 brief = self.brief()
         self.assertIsNone(brief["activity"])
@@ -777,7 +777,7 @@ class TestBriefing(ActivityBase):
     def test_nothing_else_in_the_briefing_changes(self):
         task = self.make_task()
         self.comment(task, self.user2, self.day_minutes(2, 10))
-        with mock.patch.object(item_activity, "briefing_section", return_value=None):
+        with mock.patch.object(item_activity, "briefing_data", return_value=(None, None)):
             without = self.brief()  # opens the window; the next call repeats it
         with_rollups = self.brief()
         self.assertIsNotNone(with_rollups["activity"])
@@ -793,6 +793,7 @@ class TestBriefing(ActivityBase):
                 "stale_mine",
                 "what_you_did",
                 "suggested_next",
+                "importance",  # additive (MIP-1087): null for a member it has nothing to say to
                 "__summary__",
             },
         )

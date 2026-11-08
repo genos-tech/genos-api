@@ -182,6 +182,12 @@ NO_SINGLE_ITEM = frozenset(
         "favorite_note",
         "delete_note_folder",
         "get_my_briefing",
+        # What matters to the member (MIP-1087): the first reads their own rollups, the other
+        # two keep a mark or a weight of their own. None changes anything on a task, so none
+        # may leave a "changed in your AI app" marker on one.
+        "get_my_importance",
+        "set_item_importance",
+        "tune_my_importance",
         "list_my_schedules",
         "create_my_schedule",
         "update_my_schedule",

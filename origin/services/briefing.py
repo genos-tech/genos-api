@@ -22,6 +22,7 @@ suggestions; priority and due date are weak hints, because they go stale.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -64,6 +65,8 @@ from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSON
 from origin.services import member_events
 from origin.services.channel_scope import readable_chats_qs
 from origin.services.user_time import zone_for_user_id
+
+log = logging.getLogger(__name__)
 
 WINDOWS = ("since_last", "today", "week")
 
@@ -1424,6 +1427,54 @@ def _activity_reason(kinds: list[str], since_text: str) -> str:
     return f"{' and '.join(parts)} from others since {since_text}"
 
 
+def _suggestion_pool(
+    ctx: ToolContext, items: list[dict[str, Any]], project_id: int | None
+) -> list[TaskMaster]:
+    """The member's own open tasks a suggestion may be made from: the newest hundred, and any
+    task that changed for them and is assigned to them."""
+    activity = {i["task_id"]: i for i in items if i["type"] == "task"}
+    pool = list(_my_active_tasks(ctx, project_id).order_by("-ts_updated_at")[:100])
+    pooled = {t.task_id for t in pool}
+    missing = [tid for tid, i in activity.items() if i["assigned_to_me"] and tid not in pooled]
+    if missing:
+        pool += list(_my_active_tasks(ctx, project_id).filter(task_id__in=missing))
+    return pool
+
+
+def important_next(
+    ctx: ToolContext,
+    now: datetime,
+    zone,
+    items: list[dict[str, Any]],
+    project_id: int | None,
+    week: Any,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None, set[int]]:
+    """`(top, importance block, excluded)` (MIP-1087): the top few ranked by what the member's
+    activity says matters to them (`services/importance.py`: priority, due date and status are
+    only weak hints, and where activity disagrees with them it is a suggestion, never a change).
+
+    `top` is None for a member without a recorded week: they get the plain `suggested_next`,
+    minus the tasks in `excluded` (what they marked not important). Never raises: a failure here
+    is logged and the briefing falls back to the plain ranking, as it did before this existed."""
+    from origin.services import importance  # noqa: PLC0415 - it reads item_lines, which reads this module
+
+    try:
+        prefs = importance.load(ctx)
+        if not importance.engaged(week):
+            return None, importance.briefing_block(prefs, []), importance.excluded(prefs)
+        pool = _suggestion_pool(ctx, items, project_id)
+        scored, live = importance.rank(ctx, now, prefs, week, pool, project_id)
+        top = scored[: importance.TOP_BRIEFING]
+        people = importance.people_counts(ctx, now, [s.task for s in top])
+        today = now.astimezone(zone).date()
+        shown = [importance.shaped(s, _task_row(s.task, today), people) for s in top]
+        found = importance.suggestions(ctx, now, prefs, week, pool, scored, live)
+        return shown, importance.briefing_block(prefs, found), importance.excluded(prefs)
+    except Exception:  # noqa: BLE001 - what matters to the member never fails a briefing
+        log.warning("Importance ranking failed; using the plain ranking", exc_info=True)
+        return None, None, set()
+
+
 def suggested_next(
     ctx: ToolContext,
     now: datetime,
@@ -1431,8 +1482,10 @@ def suggested_next(
     win: Window,
     items: list[dict[str, Any]],
     project_id: int | None,
+    exclude: set[int] | frozenset[int] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """The top few things to look at, with why.
+    """The top few things to look at, with why. `exclude` is the tasks the member marked not
+    important (MIP-1087): left out, and nothing else about the ranking changes.
 
     Ranked by what is going on, not by what the fields say: how much happened on a task
     and what kind (comments count for more than field changes), whether it is due or
@@ -1440,11 +1493,7 @@ def suggested_next(
     that really fired, so the member can disagree with it."""
     today = now.astimezone(zone).date()
     activity = {i["task_id"]: i for i in items if i["type"] == "task"}
-    pool = list(_my_active_tasks(ctx, project_id).order_by("-ts_updated_at")[:100])
-    pooled = {t.task_id for t in pool}
-    missing = [tid for tid, i in activity.items() if i["assigned_to_me"] and tid not in pooled]
-    if missing:
-        pool += list(_my_active_tasks(ctx, project_id).filter(task_id__in=missing))
+    pool = [t for t in _suggestion_pool(ctx, items, project_id) if t.task_id not in exclude]
 
     since_text = win.since.astimezone(zone).strftime("%b %-d %H:%M")
     scored = []
@@ -1506,12 +1555,18 @@ def build_briefing(
     agenda_section = agenda(ctx, now, zone, project)
     waiting_me = waiting_on_me(ctx, now, names)
     waiting_others = waiting_on_others(ctx, names)
-    suggestions = suggested_next(ctx, now, zone, win, items, project)
-    did = what_you_did(ctx, now, zone, names)
-    # The per-day table (MIP-1084), read when it has rows; None before the first fill.
+    # The per-day table (MIP-1084): brought up to yesterday and read ONCE, before anything is
+    # ranked, so the first briefing ranks with the same week the second one does.
     from origin.services import item_activity  # noqa: PLC0415 - it reads item_lines, which reads this module
 
-    activity = item_activity.briefing_section(ctx, now)
+    activity, week = item_activity.briefing_data(ctx, now)
+    ranked, importance_block, excluded = important_next(ctx, now, zone, items, project, week)
+    suggestions = (
+        ranked
+        if ranked is not None
+        else suggested_next(ctx, now, zone, win, items, project, excluded)
+    )
+    did = what_you_did(ctx, now, zone, names)
 
     # People are named in one batch, after every section has said who it needs.
     for item in items:
@@ -1549,6 +1604,7 @@ def build_briefing(
         "what_you_did": did,
         "activity": activity,
         "suggested_next": suggestions,
+        "importance": importance_block,
     }
     names.fill()
     asked = waiting_me["requests"], waiting_me["mentions"]

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -383,9 +384,29 @@ def trend(totals: list[int]) -> str:
     return "steady"
 
 
-def week(ctx: ToolContext, now: datetime | None = None) -> dict[str, Any] | None:
-    """The member's last seven complete days, per item, summed on read; None when there are
-    no rows (nothing built yet, or recording is off). Only items the member can open now."""
+@dataclass
+class WeekSeries:
+    """The member's last seven complete days, per task they can open now: `days` (oldest
+    first), `readable` (`task_id -> TaskMaster`), `series` (`task_id -> seven daily totals`),
+    `kinds` (`task_id -> counts by kind`), `capped` (tasks with a floor, not a count), and
+    `complete`: some row sits on the week's first two days, which is how a week that was really
+    recorded in full differs from one that begins where recording was switched back on."""
+
+    days: list[date]
+    readable: dict[int, Any]
+    series: dict[int, list[int]]
+    kinds: dict[int, Counter]
+    capped: set[int]
+    complete: bool
+    # `task_id -> seven {kind: count}`, oldest day first: what a ranking needs to leave a kind
+    # out of the days and the trend as well as out of the points.
+    daily: dict[int, list[dict[str, int]]] = field(default_factory=dict)
+
+
+def week_series(ctx: ToolContext, now: datetime | None = None) -> WeekSeries | None:
+    """The week's rows summed per task; None when there are no rows (nothing built yet, or
+    recording is off). Only tasks the member can open now: the rest are dropped before anything
+    is summed."""
     now = now or timezone.now()
     me, team = str(ctx.user_id), str(ctx.team_id)
     today = now.astimezone(zone_for_user_id(me)).date()
@@ -401,18 +422,43 @@ def week(ctx: ToolContext, now: datetime | None = None) -> dict[str, Any] | None
     readable = access.tasks({r.task_id for r in rows})
     series: dict[int, list[int]] = {}
     kinds: dict[int, Counter] = {}
+    daily: dict[int, list[dict[str, int]]] = {}
     capped: set[int] = set()
     for r in rows:
         if r.task_id not in readable:
             continue
         total = series.setdefault(r.task_id, [0] * WEEK_DAYS)
         by_kind = kinds.setdefault(r.task_id, Counter())
+        per_day = daily.setdefault(r.task_id, [{} for _ in range(WEEK_DAYS)])[days.index(r.day)]
         for name in COUNT_FIELDS:
             n = getattr(r, name)
             total[days.index(r.day)] += n
             by_kind[name] += n
+            if n:
+                per_day[name] = n
         if r.capped:
             capped.add(r.task_id)
+    complete = any(r.day <= days[1] for r in rows)
+    return WeekSeries(days, readable, series, kinds, capped, complete, daily)
+
+
+def week(ctx: ToolContext, now: datetime | None = None) -> dict[str, Any] | None:
+    """The member's last seven complete days, per item, summed on read; None when there are
+    no rows (nothing built yet, or recording is off). Only items the member can open now."""
+    return shape_week(ctx, week_series(ctx, now))
+
+
+def shape_week(ctx: ToolContext, data: WeekSeries | None) -> dict[str, Any] | None:
+    """The briefing's `activity` section from a read week."""
+    if data is None:
+        return None
+    days, readable, series, kinds, capped = (
+        data.days,
+        data.readable,
+        data.series,
+        data.kinds,
+        data.capped,
+    )
     ranked = sorted(
         series,
         key=lambda t: (-sum(series[t]), -series[t][-1], t),
@@ -480,17 +526,26 @@ def _safely(call):
     return call()
 
 
-def briefing_section(ctx: ToolContext, now: datetime | None = None) -> dict[str, Any] | None:
-    """What the briefing carries: bring the table up to yesterday, then read the week. None when
-    recording is off or nothing has been built. A failure in either step is logged at WARNING
-    and never fails the briefing (a failed fill still shows what was already built). The fill
-    and the read are separate, so the row lock the fill takes is not held while reading."""
+def briefing_data(
+    ctx: ToolContext, now: datetime | None = None
+) -> tuple[dict[str, Any] | None, WeekSeries | None]:
+    """What the briefing carries, and the week it was made from: bring the table up to
+    yesterday, then read the week ONCE. The section is None when recording is off or nothing
+    has been built. A failure in either step is logged at WARNING and never fails the briefing
+    (a failed fill still shows what was already built). The fill and the read are separate, so
+    the row lock the fill takes is not held while reading."""
     try:
         _safely(lambda: fill_forward(ctx, now))
     except Exception:  # noqa: BLE001 - a rollup is never a reason for a briefing to fail
         log.warning("Item activity rollups not filled for the briefing", exc_info=True)
     try:
-        return _safely(lambda: week(ctx, now))
+        data = _safely(lambda: week_series(ctx, now))
+        return shape_week(ctx, data), data
     except Exception:  # noqa: BLE001 - a rollup is never a reason for a briefing to fail
         log.warning("Item activity rollups not read for the briefing", exc_info=True)
-        return None
+        return None, None
+
+
+def briefing_section(ctx: ToolContext, now: datetime | None = None) -> dict[str, Any] | None:
+    """The briefing's `activity` section alone: see `briefing_data`."""
+    return briefing_data(ctx, now)[0]
