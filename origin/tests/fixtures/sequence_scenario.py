@@ -29,6 +29,8 @@ ENTRY POINTS (test C, MIP-1271, reuses these)::
             self.briefing_as(seq.b, seq, at=seq.minutes(17 * 60))   # `build_briefing` as B
             self.events_for(seq, seq.c)       # {step: event dict} found on C's line
             seq.token[7]        # the unique text of step 7's comment: find it in any output
+            ground_truth(seq)   # the story as facts in time order: who did what, when (the
+                                # answer key for a case: what an answer must contain, in order)
 
 `build_sequence` options:
 
@@ -42,8 +44,15 @@ ENTRY POINTS (test C, MIP-1271, reuses these)::
                       to read a surface AS OF that moment: a briefing is current-state aware (a
                       closed task is no longer "open work"), so "what did C's briefing say right
                       after the assignment" needs a story that stops there.
+  texts               `{step: text}` overrides what a step says (1, 2, 3, "3b", 7, 8, 10, "12a"),
+                      e.g. Japanese. The token is added in front, so lookups still work.
   announce            True: after the close B tells A in the task's thread, with an @mention
                       (the only thing that can reach a client who is not on the project).
+
+OBSERVER EFFECT. An MCP read of the task writes the reader's own seen marker at the REAL time
+(the clock is frozen only while a step is built). So the FIRST `line_as` of a member shows
+`last_seen_at` as of the story (step 11 for B, 12 for A); every later read moves it to now and
+`since_seen` restarts. Read what depends on it first, or build a fresh story.
 
 Every text step carries a unique token (`seq.token[n]`, e.g. `S07`), so an output is searched by
 what it says, never by its position.
@@ -66,7 +75,9 @@ from django.utils import timezone
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
 from origin.models.common.api_key_models import SCOPE_WRITE, ApiKey, generate_key, hash_key
 from origin.models.common.team_models import TeamMembers
+from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools import ToolContext
 from origin.services import briefing
@@ -149,6 +160,7 @@ class Sequence:
     close_at: datetime = None  # the move to Closed: 30 s after step 10's comment
     last_at: datetime = None  # the instant of the last step built
     token: dict = field(default_factory=dict)  # step -> unique text token
+    text: dict = field(default_factory=dict)  # step -> what the step says (override: `texts`)
 
     def minutes(self, minutes: int, seconds: int = 0) -> datetime:
         return self.base + timedelta(minutes=minutes, seconds=seconds)
@@ -221,7 +233,7 @@ class SequenceScenario(McpBase):
 
     def _say(self, seq, user, step, *, root=None, mention=None, task=None) -> Message:
         """A chat message as the app sends it: `POST /api/v3/channels/<id>/messages/`."""
-        text = f"{seq.token[step]} {TEXT[step]}"
+        text = f"{seq.token[step]} {seq.text[step]}"
         inlines = [mention_chip(mention)] if mention else []
         metadata = {"taskId": task.task_id} if task else {}
         with self.frozen(seq.minutes(SCHEDULE[step])):
@@ -247,6 +259,7 @@ class SequenceScenario(McpBase):
         c_in_gm: bool = False,
         announce: bool = False,
         upto: Any = 12,
+        texts: dict | None = None,
     ) -> Sequence:
         assert chat_shape in ("flat", "threaded")
         stop = ORDER.index(upto)
@@ -278,6 +291,7 @@ class SequenceScenario(McpBase):
             c_in_gm=c_in_gm,
             announce=announce,
         )
+        seq.text = {**TEXT, **(texts or {})}
         seq.token = {n: f"S{n:02d}" if isinstance(n, int) else f"S{n}" for n in SCHEDULE}
         seq.step_at = {n: seq.minutes(m) for n, m in SCHEDULE.items()}
         seq.last_at = seq.step_at[upto]
@@ -322,7 +336,7 @@ class SequenceScenario(McpBase):
                     self.b,
                     "add_comment",
                     task_id=seq.task.task_id,
-                    body_text=f"{seq.token[8]} [@C](user:{self.c.id}) {TEXT[8]}",
+                    body_text=f"{seq.token[8]} [@C](user:{self.c.id}) {seq.text[8]}",
                 )
             seq.comments[8] = self._last_comment(seq)
         # 9: C writes the task note (`create_note`, then `update_note`: two versions).
@@ -353,7 +367,7 @@ class SequenceScenario(McpBase):
                     self.c,
                     "add_comment",
                     task_id=seq.task.task_id,
-                    body_text=f"{seq.token[10]} {TEXT[10]}",
+                    body_text=f"{seq.token[10]} {seq.text[10]}",
                 )
             seq.comments[10] = self._last_comment(seq)
             seq.close_at = seq.minutes(SCHEDULE[10], 30)
@@ -429,7 +443,7 @@ class SequenceScenario(McpBase):
                 "/api/v2/task/comment/",
                 {
                     "task_id": seq.task.task_id,
-                    "comment_body": paragraph(f"{seq.token[step]} {TEXT[step]}"),
+                    "comment_body": paragraph(f"{seq.token[step]} {seq.text[step]}"),
                 },
                 format="json",
             )
@@ -497,6 +511,66 @@ ACTOR = {
     "12a": "B",
     12: "A",
 }
+
+
+def ground_truth(seq: Sequence) -> list[dict]:
+    """The story as facts in time order, `[{"step", "who", "at", "fact", "token"}]`: what really
+    happened, built from the rows themselves (not from any tool's output), so a test or a case
+    can hold an answer or a line against it. Only steps that were built are listed."""
+    facts = []
+
+    def add(step, who, at, fact):
+        if at is not None:
+            facts.append(
+                {"step": step, "who": who, "at": at, "fact": fact, "token": seq.token.get(step)}
+            )
+
+    for step, who, fact in (
+        (1, "A", "asked X in the GM chat"),
+        (2, "B", "answered A about X"),
+        (3, "A", "asked B to handle Y because of X"),
+        ("3b", "B", "said they would open a task"),
+    ):
+        message = seq.messages.get(step)
+        add(step, who, message.ts_sent_at if message else None, fact)
+    if seq.task is not None:
+        created = TaskActivity.objects.filter(task=seq.task, action_type="created").first()
+        add(4, "B", created.ts_created_at if created else None, "created the task for Y")
+        for row in TaskActivity.objects.filter(task=seq.task).order_by("ts_created_at"):
+            if row.action_type == "assignee_changed":
+                add(5, "B", row.ts_created_at, "assigned the task to C")
+            elif row.action_type == "status_changed" and row.new_value == "WIP":
+                add(6, "C", row.ts_created_at, "started handling it (status WIP)")
+            elif row.action_type == "status_changed" and row.new_value == "Closed":
+                add("close", "C", row.ts_created_at, "closed the task")
+    for step, who, fact in (
+        (7, "C", "commented progress"),
+        (8, "B", "replied to the comment"),
+        (10, "C", "commented that Y is fixed"),
+    ):
+        comment = seq.comments.get(step)
+        add(step, who, comment.ts_sent_at if comment else None, fact)
+    if seq.note is not None:
+        versions = NoteVersionMaster.objects.filter(
+            note_type=2, note_id=seq.note["note_id"]
+        ).order_by("version_no")
+        for step, version in zip((9, "9b"), versions):
+            add(step, "C", version.ts_updated_at, "wrote the progress summary in the task note")
+    for step, who, fact in (
+        (11, "B", "noticed the task is closed"),
+        (12, "A", "looked at the closed task"),
+    ):
+        if (
+            step in seq.step_at
+            and (step == 11 or seq.client_on_project)
+            and seq.last_at >= seq.step_at[step]
+        ):
+            add(step, who, seq.step_at[step], fact)
+    message = seq.messages.get("12a")
+    add(
+        "12a", "B", message.ts_sent_at if message else None, "told A in the thread that Y is solved"
+    )
+    return sorted(facts, key=lambda f: f["at"])
 
 
 def who_of(event: dict) -> str | None:

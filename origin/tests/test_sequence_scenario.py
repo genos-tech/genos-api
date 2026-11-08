@@ -36,7 +36,8 @@ The gaps, in one place:
   GAP-5  a note event on a line says "edited the note" and never what it says;
   GAP-6  the briefing's "waiting on others" never names the task B handed to C;
   GAP-7  in-app `fetch_task` names neither the task's thread nor its note;
-  GAP-8  the in-app agent has no merged line (`get_item_line` is MCP only).
+  GAP-8  the in-app agent has no merged line (`get_item_line` is MCP only);
+  GAP-9  B's top-level answer to A's question (step 2) is not in A's briefing.
 
 Time: every instant is the local midnight three days ago plus minutes, the clock is frozen per
 step and every briefing is given its `now`, so no test depends on the hour it runs at.
@@ -56,6 +57,7 @@ from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolCo
 from origin.tests.fixtures.sequence_scenario import (
     ACTOR,
     SequenceScenario,
+    ground_truth,
     locate_steps,
     who_of,
 )
@@ -117,6 +119,33 @@ class TestTheStoryIsBuiltTheRealWay(SequenceScenario):
         self.assertEqual(closed.ts_created_at, seq.close_at)
 
 
+class TestTheFixtureForTheNextTest(SequenceScenario):
+    """What MIP-1271 (behaviour cases for the in-app agent) reuses: the answer key and the
+    text override."""
+
+    def test_the_ground_truth_lists_every_step_in_the_order_it_happened(self):
+        seq = self.build_sequence(announce=True)
+        self.assertEqual(
+            [f["step"] for f in ground_truth(seq)],
+            [1, 2, 3, "3b", 4, 5, 6, 7, 8, 9, "9b", 10, "close", 11, "12a", 12],
+        )
+        self.assertEqual(
+            [f["who"] for f in ground_truth(seq)],
+            ["A", "B", "A", "B", "B", "B", "C", "C", "B", "C", "C", "C", "C", "B", "B", "A"],
+        )
+
+    def test_a_story_that_stops_early_lists_only_what_happened(self):
+        seq = self.build_sequence(upto=5)
+        self.assertEqual([f["step"] for f in ground_truth(seq)], [1, 2, 3, "3b", 4, 5])
+
+    def test_the_texts_can_be_overridden_for_another_language(self):
+        seq = self.build_sequence(texts={7: "進捗：原因は権限不足でした", 3: "Yを対応してください"})
+        found = self.events_for(seq, seq.b)
+        self.assertIn("進捗", found[7]["text"])
+        self.assertIn("Yを対応", found[3]["text"])
+        self.assertIn(seq.token[7], found[7]["text"])
+
+
 # --------------------------------------------------------------------------- #
 # get_item_line                                                                #
 # --------------------------------------------------------------------------- #
@@ -137,6 +166,12 @@ class TestTheLineAsThePM(Story):
         self.assertEqual(by_index, [3, "3b", 4, 5, 6, 7, 8, 9, "9b", 10, "close", 11])
         for step in steps:
             self.assertEqual(who_of(found[step]), ACTOR[step], f"step {step}")
+
+    def test_the_line_tells_the_steps_it_holds_in_the_order_they_happened(self):
+        seq = self.build_sequence(announce=True)
+        found = self.events_for(seq, seq.b)
+        truth = [f["step"] for f in ground_truth(seq) if f["step"] in found]
+        self.assertEqual(sorted(found, key=lambda s: found[s]["_index"]), truth)
 
     def test_every_step_sits_at_its_own_instant(self):
         seq = self.build_sequence()
@@ -163,9 +198,20 @@ class TestTheLineAsThePM(Story):
 
     def test_the_pms_own_notice_is_a_seen_marker_and_nothing_more(self):
         seq = self.build_sequence()
-        found = self.events_for(seq, seq.b)
+        out, _ = self.line_as(seq.b, seq)  # the FIRST read: see the fixture's OBSERVER EFFECT
+        found = locate_steps(seq, out["line"]["events"], viewer=seq.b)
         self.assertEqual(found[11]["summary"], "opened in your AI app")
         self.assertTrue(found[11]["mine"])
+        self.assertEqual(datetime.fromisoformat(out["line"]["last_seen_at"]), seq.step_at[11])
+
+    def test_reading_the_line_marks_the_task_seen_so_the_next_read_moves_last_seen(self):
+        """Observer effect (not a gap: an AI-app read IS a look): the second read of the same
+        line says the member last looked now, and `since_seen` restarts from there."""
+        seq = self.build_sequence()
+        first, _ = self.line_as(seq.b, seq)
+        second, _ = self.line_as(seq.b, seq)
+        self.assertEqual(datetime.fromisoformat(first["line"]["last_seen_at"]), seq.step_at[11])
+        self.assertGreater(datetime.fromisoformat(second["line"]["last_seen_at"]), seq.step_at[11])
 
     def test_an_ai_app_write_is_on_the_line_twice_by_design(self):
         """A write over MCP leaves its history row AND the member's own marker (MIP-1198)."""
@@ -365,6 +411,15 @@ class TestTheBriefingForThePM(Story):
         for own in ("S02", "S3b", "S08", "assignee"):
             self.assertNotIn(own, text)
 
+    def test_the_pms_notice_of_the_close_is_not_in_the_briefing_at_all(self):
+        """Step 11 (B opened the closed task) is only a seen marker. B acted on the task today,
+        so the briefing tells it once, as an item B changed, and does not list it under
+        `looked_at`; the read is on the line (see `TestTheLineAsThePM`) and nowhere here."""
+        seq = self.build_sequence(upto=11)
+        did = self.briefing_as(seq.b, seq)["what_you_did"]["today"]
+        self.assertEqual(did["looked_at"], [])
+        self.assertEqual([i["display_id"] for i in did["items"]], [seq.task.display_id])
+
     @unittest.expectedFailure
     def test_gap_3_a_task_comment_is_one_item_in_the_briefing_not_two(self):
         """GAP-3: a task comment is mirrored into the project chat as a thread reply, and the
@@ -461,6 +516,16 @@ class TestTheBriefingForTheClientOnTheProject(TheClientsBriefing, Story):
         self.assertEqual([row["display_id"] for row in looked], [seq.task.display_id])
 
     @unittest.expectedFailure
+    def test_gap_9_a_top_level_answer_to_the_clients_question_reaches_her_briefing(self):
+        """GAP-9: in a flat chat B answers A's question (step 2) with an ordinary message, not a
+        thread reply and not an @mention, and the briefing reads only those two, so nothing in
+        A's briefing says B answered her. Desired: a reply to the member's own message, or any
+        message in a chat they asked in, since they last looked, is news. (A product call: the
+        app's unread badge covers it for a person; the briefing is what an AI app reads.)"""
+        seq = self.build_sequence(upto=2)
+        self.assertIn("S02", briefing_text(self.briefing_as(seq.a, seq)))
+
+    @unittest.expectedFailure
     def test_gap_2_the_client_on_the_project_is_told_the_task_closed(self):
         """GAP-2 (V1): A asked for Y in a thread and is on the project, but A holds no role on
         the task (not assignee, reporter, collaborator or commenter), so step 10 never reaches
@@ -486,8 +551,9 @@ class TestTheBriefingForTheClientOffTheProject(TheClientsBriefing, Story):
 
     @unittest.expectedFailure
     def test_gap_2_the_origin_thread_hears_the_close(self):
-        """GAP-2 (the thread): after the close nothing is posted in the thread the task was
-        created from; its last word is still the card that says 'created'."""
+        """GAP-2 (the thread), ONLY IF the fix chosen is a post in the origin thread (the other
+        option is the briefing: then delete this test): after the close nothing is posted in the
+        thread the task was created from; its last word is still the card that says 'created'."""
         seq = self.build_sequence(upto=10, client_on_project=False)
         after = Message.objects.filter(
             thread_root_id=seq.thread_root.id, ts_sent_at__gte=seq.close_at
@@ -627,5 +693,6 @@ class TestWhatTheInAppToolsReturnAndInWhichOrder(Story):
         self.assertIn("get_item_line", REGISTRY)
 
     def test_today_the_line_is_an_mcp_only_tool(self):
+        """Delete this guard together with `test_gap_8_...`: the fix flips both."""
         self.assertIn("get_item_line", MCP_ONLY_REGISTRY)
         self.assertNotIn("get_item_line", REGISTRY)
