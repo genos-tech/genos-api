@@ -7,8 +7,9 @@ the generation settings explicitly.
 
 Three guards, in this order, each a reason NOT to spend:
 
-1. the operator switch `REPORT_AI_SENTENCES` (default on; "false" turns every report's AI off
-   without a deploy of code);
+1. the operator switch `REPORT_AI_SENTENCES`: **off unless it is set to "true"**. Merging this code
+   makes no model call by itself; the operator turns it on (the first real calls, so after the
+   cost measurement is approved), and "false" turns it off again without a code deploy;
 2. the cost meter is ON. A call that would not be recorded is silent spend, which is never
    allowed: the `schedule-tick` cron service has not been given the meter or the model's
    credentials (see operations/SCHEDULER.md), so there an AI report is a plain one;
@@ -51,12 +52,9 @@ class CallResult:
 
 
 def enabled() -> bool:
-    return os.environ.get("REPORT_AI_SENTENCES", "true").strip().lower() not in (
-        "false",
-        "0",
-        "off",
-        "no",
-    )
+    """Off unless the operator set `REPORT_AI_SENTENCES` to true: no deploy of this code is a
+    decision to spend."""
+    return os.environ.get("REPORT_AI_SENTENCES", "").strip().lower() in ("true", "1", "on", "yes")
 
 
 def configured(provider: str) -> bool:

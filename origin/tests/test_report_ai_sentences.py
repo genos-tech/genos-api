@@ -23,6 +23,7 @@ request is made by this file. What is pinned, each by a test that fails when its
 from __future__ import annotations
 
 import json
+import os
 from datetime import timedelta
 from unittest import mock
 
@@ -102,6 +103,10 @@ class AiBase(JobBase):
         super().setUp()
         cache.clear()
         self.addCleanup(cache.clear)
+        # The operator switch is on for these tests; it is OFF by default (below).
+        switch = mock.patch.dict("os.environ", {"REPORT_AI_SENTENCES": "true"})
+        switch.start()
+        self.addCleanup(switch.stop)
         self.model = FakeModel()
         patcher = mock.patch.object(llm, "_client", self.model)
         patcher.start()
@@ -702,6 +707,17 @@ class TestWhereItMayNotSpend(AiBase):
     def test_the_operator_switch_turns_it_off(self):
         with mock.patch.dict("os.environ", {"REPORT_AI_SENTENCES": "false"}):
             self.plain_run("operator_off")
+
+    def test_it_is_off_until_the_operator_turns_it_on(self):
+        # Merging the code spends nothing: no variable, no call. Any value but "true" is off.
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("REPORT_AI_SENTENCES", None)
+            self.plain_run("operator_off")
+        for value in ("", "false", "0", "no", "maybe"):
+            with mock.patch.dict("os.environ", {"REPORT_AI_SENTENCES": value}):
+                self.model.calls.clear()
+                cache.clear()
+                self.assertFalse(llm.enabled(), value)
 
     def test_cached_sentences_still_show_when_the_model_cannot_be_called(self):
         task = self.overdue(comment="x")
