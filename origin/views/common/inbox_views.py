@@ -8,6 +8,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
+from origin.services import inbox_ai
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (
@@ -328,23 +329,27 @@ class InboxItemView(AuthenticatedAPIView):
         if has_more:
             rows = rows[:page_size]
 
+        # The AI source (digest on or off, the schedule and whether it is paused) of the items
+        # that spent AI usage (MIP-1209): one query for all of them, additive.
+        ai_sources = inbox_ai.sources_public(request.user, rows)
         items = []
         for item in rows:
-            items.append(
-                {
-                    "itemId": item.item_id,
-                    "itemBody": item.item_body,
-                    "itemType": item.item_type,
-                    "isRead": item.is_read,
-                    "requestStatus": item.request_status,
-                    "isDeleted": item.is_deleted,
-                    "tsSent": item.ts_created_at,
-                    # Request routing payload (e.g. note-access items carry
-                    # note_type/note_id/note_title so the client can open the
-                    # referenced note). Null for plain activity items.
-                    "itemOptionals": item.item_optionals,
-                }
-            )
+            entry = {
+                "itemId": item.item_id,
+                "itemBody": item.item_body,
+                "itemType": item.item_type,
+                "isRead": item.is_read,
+                "requestStatus": item.request_status,
+                "isDeleted": item.is_deleted,
+                "tsSent": item.ts_created_at,
+                # Request routing payload (e.g. note-access items carry
+                # note_type/note_id/note_title so the client can open the
+                # referenced note). Null for plain activity items.
+                "itemOptionals": item.item_optionals,
+            }
+            if item.item_id in ai_sources:
+                entry["aiSource"] = ai_sources[item.item_id]
+            items.append(entry)
 
         body = build_delta_response({"items": items}, server_time, force_full_reload=force_full)
         if paged:

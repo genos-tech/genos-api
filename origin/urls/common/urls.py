@@ -43,6 +43,11 @@ from origin.views.common.github_views import (
     GithubWebhookView,
 )
 from origin.views.common.health_views import AlertingHealthView, HealthView
+from origin.views.common.inbox_ai_views import (
+    InboxAiOffView,
+    InboxAiOnView,
+    InboxAiSourceView,
+)
 from origin.views.common.inbox_views import *
 from origin.views.common.mcp_connection_views import McpConnectionDetailView, McpConnectionListView
 from origin.views.common.mcp_consent_views import McpConsentContextView, McpConsentDecisionView
@@ -575,6 +580,10 @@ urlpatterns = [
     path("api/v2/team-emoji/", TeamEmojiView.as_view(), name="team_emoji"),
     # Inbox
     path("api/v2/inbox/", InboxItemView.as_view(), name="inbox_item"),
+    # What an AI-made item cost is on the item; these turn its source off and back on (MIP-1209).
+    path("api/v2/inbox/<int:item_id>/ai/", InboxAiSourceView.as_view(), name="inbox_ai_source"),
+    path("api/v2/inbox/<int:item_id>/ai/off/", InboxAiOffView.as_view(), name="inbox_ai_off"),
+    path("api/v2/inbox/<int:item_id>/ai/on/", InboxAiOnView.as_view(), name="inbox_ai_on"),
     path(
         "api/v2/inbox/joinTeamRequest/",
         InboxItemForJoinTeamRequestView.as_view(),

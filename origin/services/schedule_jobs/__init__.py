@@ -122,6 +122,9 @@ class Report(TypedDict):
     sections: list[ReportSection]
     # The headline counts a card shows above the sections (MIP-1208), from `EMOJI`'s keys.
     stats: NotRequired[list[ReportStat]]
+    # The `request_id` of the metered request that paid for this report: required of a job with
+    # `uses_ai`, never stored on the item as given (the delivery reads the cost by it).
+    ai_request_id: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,10 @@ class Job:
     description: str
     run: Callable[[ToolContext, dict[str, Any]], Report]
     params_schema: dict[str, Any] = field(default_factory=dict)
+    # True for a job that spends AI usage (calls a model). Its report is filed only with the cost
+    # of the request that paid for it (`Report.ai_request_id`, MIP-1209): none of the built-in
+    # jobs does today.
+    uses_ai: bool = False
 
 
 JOBS: dict[str, Job] = {}

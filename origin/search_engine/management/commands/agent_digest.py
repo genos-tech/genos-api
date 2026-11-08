@@ -84,6 +84,7 @@ from origin.search_engine.agent.languages import LANGUAGE_NAMES
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
+from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
     LlmChoice,
     _server_default_choice,
@@ -91,7 +92,7 @@ from origin.search_engine.llm.choice import (
     set_llm_choice,
 )
 from origin.search_engine.metered import metered_request
-from origin.services import crypto
+from origin.services import crypto, inbox_ai
 from origin.services.user_time import resolve_zone
 from origin.services.webpush_dispatch import dispatch_push_for_inbox_item
 from origin.services.webpush_sender import vapid_configured
@@ -482,6 +483,7 @@ class Command(HeartbeatCommand):
                 sent += 1
                 continue
 
+            self._last_request_id = None
             try:
                 text = self._generate(user, team_id, cadence=cadence, local=local, now=now)
             except Exception:  # noqa: BLE001 — one user's failure never kills the pass
@@ -525,6 +527,11 @@ class Command(HeartbeatCommand):
                 item_optionals={
                     "cadence": cadence,
                     "generated_at": now.isoformat(),
+                    # What it cost, in credits, and what turns it off (MIP-1209). Always
+                    # present on a digest: `metered: false` when the meter could not say.
+                    "ai": inbox_ai.cost_block(
+                        inbox_ai.PRODUCER_DIGEST, getattr(self, "_last_request_id", None), uid
+                    ),
                 },
                 request_status="",  # not a request item
             )
@@ -564,6 +571,10 @@ class Command(HeartbeatCommand):
         token = set_llm_choice(chosen) if chosen is not None else None
         try:
             with metered_request(surface="digest", user_id=user_id, team_id=team_id, chosen=chosen):
+                # The request that pays for this digest: its cost goes on the Inbox item
+                # (MIP-1209), so the member sees the AI usage it spent.
+                bound = spend.current_context()
+                self._last_request_id = bound.request_id if bound is not None else None
                 run_agent(
                     prompt,
                     ctx,
