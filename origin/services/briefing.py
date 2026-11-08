@@ -481,17 +481,34 @@ def _changed_threads(ctx: ToolContext, win: Window, names: _Names) -> list[dict[
 _NOTE_KIND = {1: "personal", 2: "task", 3: "chat"}
 
 
+# Task notes of tasks the member holds (not their own) are read through the note access rule,
+# one lookup per note, so the notes checked in one briefing are capped.
+HELD_NOTES_CHECKED = 40
+
+
 def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[str, Any]]:
-    """Edits by other people to notes the caller owns."""
+    """Edits by other people to notes the caller owns, and to the task notes of the tasks the
+    caller holds (assignee, reporter or collaborator): the PM who handed a task over hears
+    about the summary the developer wrote in the task's note.
+
+    A task note the caller does not own is shown only when the caller can open it now (the
+    rule `get_note` applies, per note)."""
     me, team = ctx.user_id, ctx.team_id
     owned = {
         1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team),
         2: TaskNoteMaster.objects.filter(owner_id=me, team_id=team),
         3: ChatNoteMaster.objects.filter(owner_id=me, team_id=team),
     }
+    held_tasks = TaskMaster.objects.filter(team_id=team, is_deleted=False).filter(
+        Q(assignee_id=me) | Q(reporter_id=me) | Q(collaborators__id=me)
+    )
+    held_notes = TaskNoteMaster.objects.filter(
+        team_id=team, task_id__in=held_tasks.values("task_id")
+    )
     scope = Q()
     for note_type, qs in owned.items():
         scope |= Q(note_type=note_type, note_id__in=qs.values("note_id"))
+    scope |= Q(note_type=2, note_id__in=held_notes.values("note_id"))
     versions = list(
         NoteVersionMaster.objects.filter(
             scope, team_id=team, ts_updated_at__gte=win.since, ts_updated_at__lte=win.until
@@ -499,8 +516,23 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
         .exclude(editor_id=me)
         .order_by("-ts_updated_at")[:EVENT_POOL]
     )
+    # Task notes the caller does not own: asked once per note, newest activity first.
+    foreign = {
+        n.note_id: n
+        for n in TaskNoteMaster.objects.filter(
+            note_id__in={v.note_id for v in versions if v.note_type == 2}
+        ).exclude(owner_id=me)
+    }
+    may_read: dict[int, bool] = {}
     notes: dict[tuple[int, int], dict[str, Any]] = {}
     for v in versions:
+        if v.note_type == 2 and v.note_id in foreign:
+            if v.note_id not in may_read:
+                may_read[v.note_id] = len(may_read) < HELD_NOTES_CHECKED and _may_read_note(
+                    ctx, 2, foreign[v.note_id]
+                )
+            if not may_read[v.note_id]:
+                continue
         key = (v.note_type, v.note_id)
         note = notes.setdefault(
             key,

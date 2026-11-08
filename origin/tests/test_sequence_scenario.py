@@ -431,7 +431,6 @@ class TestTheBriefingForThePM(Story):
         holding_s07 = [i for i in items if "S07" in briefing_text({"x": i}, "x")]
         self.assertEqual(len(holding_s07), 1)
 
-    @unittest.expectedFailure
     def test_gap_4_b_is_told_about_the_note_c_wrote_for_b_s_task(self):
         """GAP-4: the briefing reads edits to notes the member OWNS. C owns the task note, so
         step 9 reaches neither B (who reported and assigned the task) nor anyone else."""
