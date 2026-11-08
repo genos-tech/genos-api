@@ -47,19 +47,39 @@ def normalize_version(value: object) -> str:
 # themselves like anyone.
 VISITOR_NAMES = {"en": "Sam Taylor", "ja": "佐藤 結衣"}
 
-# The team the visitor works in. `team_name` IS unique across the database, so
-# `team_name_for` below adds a number on a collision instead of a slug.
-TEAM_NAMES = {"en": "Product & Design", "ja": "プロダクト＆デザイン"}
+# The team the visitor works in. `team_name` is unique across the database and
+# several demo workspaces exist at once, so a visitor gets the first name in
+# the pool nobody is using; a visitor who finds the pool empty gets the first
+# name with a number. (A visible "Product & Design 9" reads like a test fixture.)
+TEAM_NAMES = {
+    "en": [
+        "Product & Design",
+        "Product Studio",
+        "Product Lab",
+        "Launch Crew",
+        "Design & Engineering",
+        "Product Team",
+    ],
+    "ja": [
+        "プロダクト＆デザイン",
+        "プロダクトスタジオ",
+        "プロダクトラボ",
+        "ローンチチーム",
+        "デザイン＆エンジニアリング",
+        "プロダクトチーム",
+    ],
+}
 
 
 def team_name_for(lang: str, taken: set[str]) -> str:
-    base = TEAM_NAMES.get(lang, TEAM_NAMES["en"])
-    if base not in taken:
-        return base
+    pool = TEAM_NAMES.get(lang, TEAM_NAMES["en"])
+    for name in pool:
+        if name not in taken:
+            return name
     n = 2
-    while f"{base} {n}" in taken:
+    while f"{pool[0]} {n}" in taken:
         n += 1
-    return f"{base} {n}"
+    return f"{pool[0]} {n}"
 
 
 # Tags and effort by task `key` (language-neutral wiring, like `assignee` and

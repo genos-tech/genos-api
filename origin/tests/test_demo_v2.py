@@ -87,11 +87,15 @@ class DemoV2ContentTests(TestCase):
             self.assertEqual(roadmap["milestone"]["title"], milestone)
             self.assertEqual(adapted.TODO_CONTENT["cat_q2"], name)
 
-    def test_team_name_takes_the_next_free_number(self):
-        base = demo_v2.TEAM_NAMES["en"]
-        self.assertEqual(demo_v2.team_name_for("en", set()), base)
-        self.assertEqual(demo_v2.team_name_for("en", {base}), f"{base} 2")
-        self.assertEqual(demo_v2.team_name_for("en", {base, f"{base} 2"}), f"{base} 3")
+    def test_team_name_takes_the_next_free_name_then_the_next_number(self):
+        pool = demo_v2.TEAM_NAMES["en"]
+        self.assertEqual(demo_v2.team_name_for("en", set()), pool[0])
+        self.assertEqual(demo_v2.team_name_for("en", {pool[0]}), pool[1])
+        self.assertEqual(demo_v2.team_name_for("en", set(pool)), f"{pool[0]} 2")
+        self.assertEqual(demo_v2.team_name_for("en", set(pool) | {f"{pool[0]} 2"}), f"{pool[0]} 3")
+
+    def test_both_languages_have_the_same_pool_size(self):
+        self.assertEqual(len(demo_v2.TEAM_NAMES["en"]), len(demo_v2.TEAM_NAMES["ja"]))
 
 
 class DemoV2SeedingTests(TestCase):
@@ -103,11 +107,12 @@ class DemoV2SeedingTests(TestCase):
         cls.ja_team = create_demo_environment(cls.ja_user, short="v2ja", lang="ja", version="v2")
 
     def test_the_team_has_a_human_name_not_a_slug(self):
-        self.assertEqual(self.en_team["team_name"], demo_v2.TEAM_NAMES["en"])
+        pool = demo_v2.TEAM_NAMES["en"]
+        self.assertEqual(self.en_team["team_name"], pool[0])
         self.assertNotIn("v2en", self.en_team["team_name"])
-        # A second visitor in the same language gets the next number.
+        # A second visitor in the same language gets the next free name.
         second = create_demo_environment(_user("v2_en_2"), short="v2en2", lang="en", version="v2")
-        self.assertEqual(second["team_name"], f"{demo_v2.TEAM_NAMES['en']} 2")
+        self.assertEqual(second["team_name"], pool[1])
 
     def test_project_names_and_task_codes_are_clean(self):
         for team in (self.en_team, self.ja_team):
@@ -164,6 +169,6 @@ class DemoV2SignInTests(TestCase):
                 self.assertEqual(res.status_code, 201, res.content)
                 body = res.json()
                 self.assertEqual(body["username"], demo_v2.VISITOR_NAMES[lang])
-                self.assertTrue(body["team_name"].startswith(demo_v2.TEAM_NAMES[lang]))
+                self.assertIn(body["team_name"], demo_v2.TEAM_NAMES[lang])
                 self.assertNotIn("demo", body["team_name"].lower())
                 self.assertEqual(User.objects.get(pk=body["user_id"]).username, body["username"])

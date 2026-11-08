@@ -1450,11 +1450,10 @@ def _create_v2_team(demo_user: CustomUser, short: str, lang: str) -> TeamMaster:
     """
     from django.db import IntegrityError
 
+    pool = demo_v2.TEAM_NAMES[lang]
     taken = set(
-        TeamMaster.objects.filter(team_name__startswith=demo_v2.TEAM_NAMES[lang]).values_list(
-            "team_name", flat=True
-        )
-    )
+        TeamMaster.objects.filter(team_name__startswith=pool[0]).values_list("team_name", flat=True)
+    ) | set(TeamMaster.objects.filter(team_name__in=pool).values_list("team_name", flat=True))
     for _ in range(20):
         name = demo_v2.team_name_for(lang, taken)
         try:
