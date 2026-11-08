@@ -23,7 +23,8 @@ from origin.search_engine.agent.tools.get_milestone_summary import GET_MILESTONE
 from origin.services import briefing
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, clip, item, more, plain
+from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
+from origin.services.user_time import zone_for_user_id
 
 DEFAULT_HOURS = 168
 MAX_CHANGED = 15
@@ -41,7 +42,7 @@ def _ref(row: dict[str, Any], links: Links) -> dict[str, Any]:
     text = f"{row.get('display_id')} · {plain(row.get('title')) or 'untitled'}"
     if row.get("status"):
         text += f" ({row['status']})"
-    return item(text, links.task(row.get("task_id")))
+    return links.task_item(text, row.get("task_id"))
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
@@ -113,6 +114,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     summary["ready_now"] = [r for r in summary.get("ready_now", []) if r["task_id"] in openable]
     summary["blocked"] = [r for r in summary.get("blocked", []) if r["task_id"] in openable]
 
+    today = timezone.now().astimezone(zone_for_user_id(ctx.user_id)).date()
     links = Links(ctx)
     links.preload(
         tasks=[
@@ -129,7 +131,8 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         text = f"{task.display_id} · {task.title or 'untitled'}: {slot['what']} by {who}"
         if slot["n"] > 1:
             text += f" (+{slot['n'] - 1} more)"
-        changed_items.append(item(text, links.task(task_id)))
+        changed_items.append(links.task_item(text, task_id))
+    changed_items = arrange(changed_items, today)
     if len(ranked) > MAX_CHANGED:
         changed_items.append(more(len(ranked) - MAX_CHANGED, "changed tasks"))
 
@@ -157,7 +160,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     ):
         rows = summary.get(key) or []
         if rows:
-            shown = [_ref(r, links) for r in rows[:MAX_LIST]]
+            shown = arrange([_ref(r, links) for r in rows[:MAX_LIST]], today)
             # The summary's counts include tasks the member may not open; once any was
             # dropped they would give its number away, so the "and N more" is left out.
             total = summary.get(count_key, len(rows)) if all_openable else len(shown)

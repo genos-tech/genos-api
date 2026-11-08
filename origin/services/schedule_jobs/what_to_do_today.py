@@ -10,7 +10,7 @@ would have told them.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -24,7 +24,7 @@ from origin.services.schedule_jobs import (
     ReportSection,
     register_job,
 )
-from origin.services.schedule_jobs.report_kit import Links, clip, item, more, plain
+from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
 
 DEFAULT_CHANGED_HOURS = 24
 
@@ -82,7 +82,8 @@ def _mention_item(entry: dict[str, Any], links: Links) -> dict[str, Any]:
         link = links.chat(entry.get("chat_type"), entry.get("chat_id"), entry.get("thread_id"))
     elif source in ("task", "task_comment"):
         where = f"{entry.get('display_id') or 'a task'} {plain(entry.get('title'))}".strip()
-        link = links.task(entry.get("task_id"))
+        text = f"{who} mentioned you in {where}"
+        return links.task_item(f"{text}: {snippet}" if snippet else text, entry.get("task_id"))
     elif source == "note":
         where = plain(entry.get("title")) or "a note"
         link = links.note(entry.get("note_type"), entry.get("note_id"))
@@ -96,7 +97,7 @@ def _changed_item(row: dict[str, Any], links: Links) -> dict[str, Any]:
     kind = row.get("type")
     title = plain(row.get("title")) or "untitled"
     if kind == "task":
-        label, link = f"{row.get('display_id') or 'Task'} · {title}", links.task(row.get("task_id"))
+        label, link = f"{row.get('display_id') or 'Task'} · {title}", None
     elif kind == "note":
         label, link = f"Note · {title}", links.note(row.get("note_type"), row.get("note_id"))
     else:
@@ -109,6 +110,8 @@ def _changed_item(row: dict[str, Any], links: Links) -> dict[str, Any]:
     text = f"{label}: {what} by {by}"
     if (row.get("events_total") or 0) > 1:
         text += f" (+{row['events_total'] - 1} more)"
+    if kind == "task":
+        return links.task_item(text, row.get("task_id"))
     return item(text, link)
 
 
@@ -144,7 +147,9 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     )
 
     def tasks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [item(_task_text(r), links.task(r["task_id"])) for r in rows]
+        return [links.task_item(_task_text(r), r["task_id"]) for r in rows]
+
+    today = date.fromisoformat(agenda["local_date"])
 
     sections: list[ReportSection] = []
 
@@ -153,17 +158,19 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     ) -> None:
         if not items:
             return
-        shown = list(items)
+        # Tasks grouped by project and sorted inside each group (MIP-1207); anything else keeps
+        # its order. The "and N more" line is added after, so it stays last.
+        shown = arrange(list(items), today)
         if total is not None and total > len(shown):
             shown.append(more(total - len(shown), noun))
         sections.append({"heading": heading, "items": shown})
 
     start = [
-        item(
+        links.task_item(
             f"{_task_text(t)}: {'; '.join(t.get('reasons') or [])}"
             if t.get("reasons")
             else _task_text(t),
-            links.task(t["task_id"]),
+            t["task_id"],
         )
         for t in data["suggested_next"]
     ]
@@ -224,13 +231,13 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     add(
         "You are waiting on others",
         [
-            item(
+            links.task_item(
                 f"{t.get('display_id')} · {plain(t.get('title'))}: waiting for "
                 + ", ".join(
                     f"{e['display_id']} ({plain(e.get('assignee')) or 'nobody yet'})"
                     for e in t.get("waiting_for") or []
                 ),
-                links.task(t["task_id"]),
+                t["task_id"],
             )
             for t in others["blocked_tasks"]
         ],
@@ -238,7 +245,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     add(
         "Gone quiet",
         [
-            item(f"{_task_text(t)}: untouched for {t['days_idle']} days", links.task(t["task_id"]))
+            links.task_item(f"{_task_text(t)}: untouched for {t['days_idle']} days", t["task_id"])
             for t in data["stale_mine"]
         ],
     )

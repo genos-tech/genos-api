@@ -18,7 +18,7 @@ from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.services import briefing
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, clip, item, more, plain
+from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
 from origin.services.user_time import zone_for_user_id
 
 DEFAULT_DAYS = 7
@@ -51,8 +51,9 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     def line(t: dict[str, Any]) -> dict[str, Any]:
         text = f"{t['display_id']} · {plain(t['title']) or 'untitled'} ({t['status']})"
         said = _latest(t["events"])
-        return item(f"{text}: {said}" if said else text, links.task(t["task_id"]))
+        return links.task_item(f"{text}: {said}" if said else text, t["task_id"])
 
+    today_date = now.astimezone(zone).date()
     still_open = [t for t in tasks if t["status"] not in _GONE]
     finished = [t for t in tasks if t["status"] in _FINISHED]
 
@@ -63,10 +64,18 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     sections: list[ReportSection] = []
     if still_open:
         sections.append(
-            {"heading": "Still open from last time", "items": [line(t) for t in still_open]}
+            {
+                "heading": "Still open from last time",
+                "items": arrange([line(t) for t in still_open], today_date),
+            }
         )
     if finished:
-        sections.append({"heading": "Closed after your work", "items": [line(t) for t in finished]})
+        sections.append(
+            {
+                "heading": "Closed after your work",
+                "items": arrange([line(t) for t in finished], today_date),
+            }
+        )
     if left_todos:
         shown = [
             item(
