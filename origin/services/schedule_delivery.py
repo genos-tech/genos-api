@@ -70,10 +70,12 @@ from django.db import transaction
 
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
+from origin.services import inbox_ai
 from origin.services.mcp_oauth import clean_name
 from origin.services.schedule_jobs import (
     EMOJI,
     ITEM_KINDS,
+    JOBS,
     TASK_PRIORITIES,
     TASK_STATUSES,
     Report,
@@ -279,6 +281,12 @@ def deliver(
     }
     if run_at is not None:
         optionals["run_at"] = _run_key(run_at)
+    # A job that spends AI usage is filed only with what it cost (MIP-1209): `require_cost`
+    # raises when the job did not say which request paid, so the run fails and nothing is filed.
+    # A job that uses none says nothing about cost.
+    job = JOBS.get(schedule.job)
+    if job is not None and job.uses_ai:
+        optionals["ai"] = inbox_ai.require_cost(schedule.job, report, schedule.user_id)
 
     with transaction.atomic():
         # Lock the schedule row: of two deliveries of one run (a taken-over claim), the second

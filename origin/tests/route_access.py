@@ -201,6 +201,17 @@ REGISTRY = {
     "origin.views.common.schedule_views.ScheduleRunView": self_only(
         "the caller's own schedule: looked up by id AND user AND team, anything else is a 404"
     ),
+    # views.common.inbox_ai_views (MIP-1209): the item is looked up by id AND receiver=request.user
+    # and not deleted; anything else (someone else's, deleted, not an AI item) is the same 404
+    "origin.views.common.inbox_ai_views.InboxAiSourceView": self_only(
+        "the caller's own Inbox item: looked up by id AND receiver=request.user, else a 404"
+    ),
+    "origin.views.common.inbox_ai_views.InboxAiOffView": self_only(
+        "the caller's own Inbox item: looked up by id AND receiver=request.user, else a 404"
+    ),
+    "origin.views.common.inbox_ai_views.InboxAiOnView": self_only(
+        "the caller's own Inbox item: looked up by id AND receiver=request.user, else a 404"
+    ),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(
         "exchanges the HttpOnly refresh cookie for a new access token; the cookie is the credential"
