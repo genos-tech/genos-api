@@ -57,17 +57,54 @@ from origin.search_engine.chunkers.base import (
 
 log = logging.getLogger(__name__)
 
-# Matches BOTH citation forms the agent emits (§4.6 D5): the natural-prose
-# link `[prose](type:id)` (id in group 1) and the bare `[type:id]` fallback
-# (id in group 2). The link alternative is FIRST and consumes the whole
-# `[label](id)`. Anchored to the known entity prefixes so an unrelated
-# bracketed phrase ("[reminder: ship Friday]") doesn't trip it. Keep this
-# prefix set in sync with `CITATION_PATTERN` / `CITATION_LINK_PATTERN` in the
-# frontend's citationUtils.ts: a type the frontend strips but this resolver
-# can't back-fill would be silently dropped (no chip) when cited from context
-# rather than retrieved.
-_ENTITY_ID = r"(?:chat|task|note|project|todo|milestone):[^)\]\s]+"
-_CITATION_RE = re.compile(rf"\[[^\]]*\]\(({_ENTITY_ID})\)|\[({_ENTITY_ID})\]")
+# Every spelling of a citation the agent emits (§4.6 D5 + MIP-1279):
+#   - the natural-prose link `[prose](type:id)` and the bare `[type:id]`;
+#   - a GROUP `[task:1, task:2]` (separators `,` `;` `、` `，`);
+#   - a raw id in parentheses / CJK brackets `(task:1)` `（task:12）` `【task:5】`;
+#   - a bare id in a sentence ("blocked by task:42.");
+#   - an un-prefixed chat token `gm:<uuid>[:thread:<uuid>]`, which models copy
+#     from the source entity_id (the frontend accepts it too).
+# The frontend strips all of them (citationUtils.ts), so a source cited in
+# any spelling the resolver misses is stripped from the prose AND gets no
+# chip: it just vanishes. Rather than model each bracket shape, scan for the
+# TOKEN wherever it sits. The token grammar is what keeps this from biting
+# prose, and mirrors the frontend's `_RAW_LEAK_STRIP_PATTERN`:
+#   - re.ASCII, so `\w` is ASCII like JS: an id run stops at `）` or `、`, and a
+#     token right after a CJK character ("参照task:12。") still starts;
+#   - the entity prefix is the known set, and the id tail must contain a digit
+#     ("note: remember", "task:done", "chat: hello" stay prose);
+#   - the leading boundary stops it biting into a URL/path/word
+#     (`https://x/project:18`, `docs.task:5`, `foo:task:1`);
+#   - an un-prefixed chat label (`dm|gm|pm|mdm`) only counts when its id holds a
+#     UUID, so "5 pm:30" cannot become a chat lookup.
+# Keep the prefix set in sync with `CITATION_PATTERN` / `CITATION_LINK_PATTERN`
+# in the frontend's citationUtils.ts: a type the frontend strips but this
+# resolver can't back-fill would be silently dropped (no chip) when cited from
+# context rather than retrieved.
+_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+_CITATION_TOKEN_RE = re.compile(
+    r"(?<![\w:/.-])(?:"
+    r"(?P<typed>(?:chat|task|note|project|todo|milestone):[\w:-]*\d[\w:-]*)"
+    rf"|(?P<chat>(?:dm|gm|pm|mdm):[\w:-]*{_UUID}[\w:-]*)"
+    r")",
+    re.ASCII,
+)
+
+
+def extract_citation_tokens(answer: str) -> set[str]:
+    """Return the canonical `type:id` token of every citation in `answer`.
+
+    Un-prefixed chat tokens come back prefixed (`chat:gm:...`), the form the
+    rest of this module parses. Whether the entity exists or the user may see
+    it is decided later, per type; this only finds the spelling.
+    """
+    tokens: set[str] = set()
+    for m in _CITATION_TOKEN_RE.finditer(answer):
+        # A sentence can end on the id ("task:42: blocked", "note:x-").
+        token = (m.group("typed") or "chat:" + m.group("chat")).rstrip(":-")
+        tokens.add(token)
+    return tokens
+
 
 # Frontend uses "my" as the URL label for personal notes; the LLM
 # tends to echo what it sees in the system prompt (which uses
@@ -118,7 +155,7 @@ def resolve_unresolved_citations(
     if not answer:
         return []
 
-    tokens = {(m.group(1) or m.group(2)) for m in _CITATION_RE.finditer(answer)}
+    tokens = extract_citation_tokens(answer)
     if not tokens:
         return []
 
