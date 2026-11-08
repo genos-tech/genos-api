@@ -50,7 +50,11 @@ from origin.services.task_reparent import normalize_task_id as _normalize_task_i
 from origin.services.task_reparent import parent_implied_milestone as _parent_implied_milestone
 from origin.services.task_reparent import payload_contradicts_tree as _payload_contradicts_tree
 from origin.services.task_reparent import reparent_task as _reparent_task
-from origin.services.thread_link import find_thread_link_conflict
+from origin.services.thread_link import (
+    THREAD_NOT_FOUND,
+    find_thread_link_conflict,
+    thread_link_is_unreadable,
+)
 from origin.services.throttles import BatchReadThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_MENTIONS_PER_COMMENT, check_batch_size
@@ -130,6 +134,12 @@ def _no_task():
     `BigAutoField`) tells nobody which tasks exist.
     """
     return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _thread_not_found():
+    """One answer for a thread that is missing, someone else's, in another team or a message
+    of a different chat: the refusal cannot tell a caller which of them it was."""
+    return Response({"error": THREAD_NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
 
 
 def _refuse_unreachable_task_links(request, project):
@@ -374,6 +384,14 @@ class TaskMasterView(AuthenticatedAPIView):
         if message := refuse_changed_values(raw_custom_values, cleaned_values, {}, project):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
         data["custom_field_values"] = cleaned_values
+
+        # The thread has to be one the writer can read, judged before the
+        # one-task-per-thread answer below so that answer (which names the other
+        # task) is never given to someone outside the chat (MIP-1314).
+        if thread_link_is_unreadable(
+            request.user.id, data["team"], data.get("chat_id"), data.get("thread_id")
+        ):
+            return _thread_not_found()
 
         # One task per chat thread. The frontend hides its "Create task"
         # action once a thread has a task, but that gate is client state —
@@ -627,6 +645,21 @@ class TaskMasterView(AuthenticatedAPIView):
             ):
                 return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
             update_data["custom_field_values"] = cleaned_values
+
+        # A link this PUT changes has to name a chat the writer can read (MIP-1314), and
+        # is judged before the one-task-per-thread answer for the same reason as in the POST.
+        # A link that is already there and sent back unchanged is not judged again: a writer
+        # who has since left the chat still saves the task.
+        if any(
+            update_data.get(key) and str(update_data[key]) != str(getattr(task, key) or "")
+            for key in ("chat_id", "thread_id")
+        ) and thread_link_is_unreadable(
+            request.user.id,
+            task.team_id,
+            update_data.get("chat_id") or task.chat_id,
+            update_data.get("thread_id") or task.thread_id,
+        ):
+            return _thread_not_found()
 
         # One task per chat thread. Enforced only when this PUT *claims*
         # a (new) thread linkage — the create-form finalize path — so

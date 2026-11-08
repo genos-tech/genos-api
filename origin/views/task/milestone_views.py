@@ -38,7 +38,11 @@ from origin.services.task_collaborators import (
     sync_task_collaborators,
 )
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
-from origin.services.thread_link import find_thread_link_conflict
+from origin.services.thread_link import (
+    THREAD_NOT_FOUND,
+    find_thread_link_conflict,
+    thread_link_is_unreadable,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.mention_handler import resolve_mentions
 from origin.views.utils.request_validators import (
@@ -401,6 +405,10 @@ class MilestoneView(AuthenticatedAPIView):
         chat_id = request.data.get("chat_id")
         thread_id = request.data.get("thread_id")
         if chat_id and thread_id:
+            # Readable by the writer first (MIP-1314), so the answer below, which names the
+            # other task, is never given to someone outside the chat.
+            if thread_link_is_unreadable(request.user.id, project.team_id, chat_id, thread_id):
+                return Response({"error": THREAD_NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
             conflict_task_id = find_thread_link_conflict(project.team_id, chat_id, thread_id)
             if conflict_task_id is not None:
                 return Response(
