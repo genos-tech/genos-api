@@ -767,15 +767,36 @@ def _resolve_markers(team: str, markers: list) -> dict[Any, int | None]:
     return out
 
 
+# One plain sentence per ledger kind (MIP-1198). A connected AI app tells the member what the
+# line says, so it gets words, not the kind's code name. A sentence is fixed text: it never
+# holds the app's name, a person's name or any teammate-written text. A kind nobody has
+# worded yet (a new one added to `member_event_models`) gets `_GENERIC_SENTENCE`, so it still
+# appears on the line; `what` keeps the machine name (`app_<kind>`).
+_MCP_SENTENCES = {
+    "read": "opened in your AI app",
+    "write": "changed in your AI app",
+}
+_KIND_SENTENCES = {
+    "collaborator_add": "added a collaborator",
+    "collaborator_remove": "removed a collaborator",
+    "dependency_add": "added a dependency",
+    "dependency_remove": "removed a dependency",
+    "todo_edit": "edited a to-do",
+    "todo_delete": "deleted a to-do",
+    "note_share": "shared a note",
+    "note_unshare": "stopped sharing a note",
+}
+_GENERIC_SENTENCE = "made a change"
+
+
 def _marker_event(marker: Any, me: str) -> Ev:
     kind = str(marker.kind)
-    if marker.source == member_events.SOURCE_MCP:
-        summary = {
-            "read": "opened in your AI app",
-            "write": "changed in your AI app",
-        }.get(kind, f"{kind} in your AI app")
+    # `read` and `write` are the AI-app markers (source `mcp`). The same words from another
+    # source (a web-app open, should one ever be recorded) are not an AI app's doing.
+    if marker.source == member_events.SOURCE_MCP and kind in _MCP_SENTENCES:
+        summary = _MCP_SENTENCES[kind]
     else:
-        summary = f"{kind} ({marker.source})"
+        summary = _KIND_SENTENCES.get(kind, _GENERIC_SENTENCE)
     client = str(marker.client or "")
     extra: dict[str, Any] = {
         "app": client if client == "api_key" else wrap_workspace_content(client)
