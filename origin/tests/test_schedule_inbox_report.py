@@ -224,7 +224,7 @@ class IdempotenceTests(ScheduleBase):
         self.assertEqual(reports(self.user).count(), 2)
 
     def test_two_schedules_at_one_time_are_two_items(self):
-        a, b = self.make(name="A"), self.make(name="B")
+        a, b = self.make(name="A"), self.make(name="B", time_of_day="09:30")
         schedule_delivery.deliver(a, self.REPORT, run_at=SCHEDULED)
         schedule_delivery.deliver(b, self.REPORT, run_at=SCHEDULED)
         self.assertEqual(reports(self.user).count(), 2)

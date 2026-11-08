@@ -89,6 +89,12 @@ class ScheduleToolBase(McpBase):
             "frequency": "weekdays",
             "time_of_day": "09:00",
         }
+        # A member's schedules may not be alike (MIP-1201): the first one made here is
+        # "Morning" at 09:00, each next one is named and timed apart unless the test says.
+        made = self._made = getattr(self, "_made", -1) + 1
+        if made:
+            args["name"] = f"Morning {made}"
+            args["time_of_day"] = f"09:{made % 60:02d}"
         args.update(over)
         return self.ok("create_my_schedule", **args)["schedule"]
 
@@ -185,9 +191,11 @@ class TestCreateAndList(ScheduleToolBase):
             ({"frequency": "monthly", "month_day": 11}, "on the 11th of every month at 09:00"),
         ]
         for over, expected in cases:
-            self.assertEqual(self.create(**over)["when"], expected)
+            self.assertEqual(self.create(time_of_day="09:00", **over)["when"], expected)
         once = self.create(
-            frequency="once", run_date=(timezone.now() + timedelta(days=3)).date().isoformat()
+            time_of_day="09:00",
+            frequency="once",
+            run_date=(timezone.now() + timedelta(days=3)).date().isoformat(),
         )
         self.assertTrue(once["when"].startswith("once, on 20"))
 
@@ -236,6 +244,20 @@ class TestCreateAndList(ScheduleToolBase):
                 time_of_day="09:00",
             ),
         )
+
+    def test_a_schedule_like_one_the_member_has_is_refused_in_a_sentence(self):
+        self.create(name="Morning plan", time_of_day="09:00", frequency="daily")
+        base = {"job": "fake_day", "frequency": "daily"}
+        same = self.refused("create_my_schedule", name="Plan again", time_of_day="09:00", **base)
+        self.assertIn("You already have 'Morning plan' every day at 09:00", same)
+        named = self.refused("create_my_schedule", name="morning PLAN", time_of_day="10:00", **base)
+        self.assertIn("Pick a different name", named)
+        later = self.create(name="Later", time_of_day="10:00", frequency="daily")
+        edit = self.refused(
+            "update_my_schedule", schedule_id=later["schedule_id"], time_of_day="09:00"
+        )
+        self.assertIn("You already have 'Morning plan'", edit)
+        self.assertEqual(MemberSchedule.objects.count(), 2)
 
     def test_push_is_off_unless_asked_for(self):
         self.assertFalse(self.create()["deliver_push"])

@@ -82,7 +82,7 @@ from origin.models.common.schedule_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_delivery
+from origin.services import schedule_delivery, schedule_text
 from origin.services.mcp_oauth import clean_name
 from origin.services.schedule_jobs import JOBS, Report
 from origin.services.user_time import user_zone
@@ -435,6 +435,50 @@ def _first_run(rec: Recurrence, zone, now: datetime) -> datetime:
     return moment
 
 
+def _name_key(name: str) -> str:
+    """What "the same name" means: trimmed, one line, runs of spaces folded, case ignored."""
+    return clean_name(name).casefold()
+
+
+def _refuse_duplicate(
+    ctx: ToolContext,
+    *,
+    name: str,
+    job: str,
+    params: dict[str, Any],
+    rec: Recurrence,
+    check_name: bool = True,
+    check_content: bool = True,
+) -> None:
+    """Refuse a schedule that would be the SAME as another one of the member's in this team
+    (MIP-1201): the same job, parameters and recurrence at the same time of day, or the same
+    name (two reports with one name cannot be told apart in the Inbox). A different time or
+    different parameters is a different schedule. A paused schedule still counts. The sentence
+    names the one in the way.
+
+    An edit calls it before the row is saved, asking only about what it CHANGED (`check_name`,
+    `check_content`): the row being edited is still read as it was, which differs from what it
+    is being changed to, so it is never "another" by itself, and a row that is already
+    duplicated is not refused for what it did not change. Call it inside the transaction that
+    holds the member's row lock."""
+    others = list_schedules(ctx)
+    if check_content:
+        for other in others:
+            if other.job == job and (other.params or {}) == params and _recurrence_of(other) == rec:
+                raise ScheduleError(
+                    f"You already have {other.name!r} {schedule_text.describe_recurrence(other)}, "
+                    "which does the same thing."
+                )
+    if check_name:
+        key = _name_key(name)
+        for other in others:
+            if _name_key(other.name) == key:
+                raise ScheduleError(
+                    f"You already have a schedule called {other.name!r} "
+                    f"({schedule_text.describe_recurrence(other)}). Pick a different name."
+                )
+
+
 def create(
     ctx: ToolContext,
     *,
@@ -470,6 +514,7 @@ def create(
                 f"You can keep at most {MAX_SCHEDULES_PER_MEMBER} schedules. "
                 "Delete one you no longer need first."
             )
+        _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec)
         return MemberSchedule.objects.create(
             user_id=user.pk,
             team_id=ctx.team_id,
@@ -499,7 +544,12 @@ def update(
         raise ScheduleError(f"These cannot be changed: {', '.join(unknown)}.")
     user = _require_member(ctx)
     with transaction.atomic():
+        # The member's row first, as `create` does: two edits (or an edit and a create) that
+        # would each make the same schedule must not both pass the duplicate check.
+        CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         sched = _get(ctx, schedule_id, lock=True)
+        was_name = _name_key(sched.name)
+        was_content = (sched.job, dict(sched.params or {}), _recurrence_of(sched))
         dirty = ["claimed_at", "ts_updated_at"]
         if "name" in changes:
             sched.name = _clean_name(changes["name"])
@@ -529,6 +579,20 @@ def update(
                 sched.next_run_at = _first_run(rec, zone, now)
                 sched.tz_used = zone.key
                 dirty += ["next_run_at", "tz_used"]
+        # Refused only when what this edit CHANGED now equals another row: rows that were
+        # already duplicated stay editable (deliver_push, a pause, a rename, a time that makes
+        # them different), and an edit that leaves the name or the settings alone is not asked
+        # about them.
+        content = (sched.job, dict(sched.params or {}), _recurrence_of(sched))
+        _refuse_duplicate(
+            ctx,
+            name=sched.name,
+            job=sched.job,
+            params=dict(sched.params or {}),
+            rec=content[2],
+            check_name=_name_key(sched.name) != was_name,
+            check_content=content != was_content,
+        )
         # An edit takes over a run in progress: the tick's own write-back is conditional on
         # its claim, so it will find the claim gone and leave the member's edit alone.
         sched.claimed_at = None
