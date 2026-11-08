@@ -116,9 +116,11 @@ class TestTheInventory(SimpleTestCase):
             },
         )
 
-    def test_no_built_in_job_claims_to_use_ai_yet(self):
-        # When one does, its report must name the request that paid (below); this is the reminder.
-        self.assertEqual([k for k, j in JOBS.items() if j.uses_ai], [])
+    def test_only_the_jobs_known_to_use_ai_claim_it(self):
+        # A job that can use AI must name the request that paid, or say why it spent nothing
+        # (below); adding one to this list is the reminder to answer that. `what_to_do_today` does
+        # since MIP-1210 (its AI sentences; the member can turn them off).
+        self.assertEqual([k for k, j in JOBS.items() if j.uses_ai], ["what_to_do_today"])
 
 
 class TestTheCostBlock(BaseAPITestCase):

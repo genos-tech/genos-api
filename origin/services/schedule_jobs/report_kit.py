@@ -152,6 +152,9 @@ class Links:
         # whether the card may offer the two answers. Set by a job that suppresses repeats.
         self.why: dict[int, str] = {}
         self.can_answer: bool = False
+        # One sentence of context per task (MIP-1210), shown the first time the task is drawn
+        # and not again: a task in two sections would otherwise say it twice.
+        self.ai_sentences: dict[int, str] = {}
         self._task_of_note: dict[int, tuple[int | None, int | None]] = {}
 
     def preload(self, *, tasks: Iterable[Any] = (), task_notes: Iterable[Any] = ()) -> None:
@@ -223,6 +226,12 @@ class Links:
                 out["why"] = self.why[facts_known.task_id]
             if self.can_answer:
                 out["can_answer"] = True
+        # The sentence goes in `detail` ONLY, never in `text`: the in-app model is shown `text`
+        # (`list_my_inbox._model_body`) and not `detail`, so it never sees model-written lines.
+        # It comes first; the deterministic reason, if any, follows it.
+        sentence = self._take_sentence(task_id)
+        if sentence:
+            detail = f"{sentence} · {detail}" if detail else sentence
         if detail:
             out["detail"] = clip(detail)
         facts = self.facts(task_id)
@@ -233,6 +242,12 @@ class Links:
             out["project"] = project  # type: ignore[typeddict-item]
             out["_facts"] = facts  # type: ignore[typeddict-unknown-key]
         return out
+
+    def _take_sentence(self, task_id: Any) -> str:
+        try:
+            return self.ai_sentences.pop(int(task_id), "") if task_id is not None else ""
+        except (TypeError, ValueError):
+            return ""
 
     def note(self, note_type: Any, note_id: Any) -> str | None:
         if note_id is None:
