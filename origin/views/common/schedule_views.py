@@ -108,6 +108,12 @@ class _Base(AuthenticatedAPIView):
             return call(), None
         except schedules.ScheduleNotFound as exc:
             return None, _error(str(exc), status.HTTP_404_NOT_FOUND)
+        except schedules.SchedulePlanRequired as exc:
+            # Free (MIP-1213): the upgrade sentence, 403, and a code the page keys on to show
+            # its upgrade call instead of a form. Listing, pausing and deleting still work.
+            return None, Response(
+                {"error": str(exc), "code": "plan_required"}, status=status.HTTP_403_FORBIDDEN
+            )
         except schedules.ScheduleError as exc:
             return None, _error(str(exc))
 
@@ -119,13 +125,18 @@ class ScheduleListView(_Base):
             return ctx
         # A member's first list in their default team creates the suggested schedules
         # (MIP-1178). Never raises, and only for a live member of this team.
-        schedule_defaults.seed_if_default_team(request.user, ctx.team_id)
+        allowed = schedules.plan_allows(request.user.pk)
+        if allowed:  # Core and up (MIP-1213); a Free member is never seeded, so skip the work
+            schedule_defaults.seed_if_default_team(request.user, ctx.team_id)
         rows, problem = self._run(lambda: schedules.list_schedules(ctx))
         if problem:
             return problem
         zone = user_zone(request.user)
         return Response(
             {
+                # Core and up (MIP-1213): False shows the upgrade call instead of the form.
+                "planAllowed": allowed,
+                "planMessage": "" if allowed else schedules.PLAN_SENTENCE,
                 "timeZone": zone.key,
                 "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
                 "jobs": schedule_text.job_catalog(),
@@ -140,7 +151,7 @@ class ScheduleListView(_Base):
                         "frequency": d["frequency"],
                         "timeOfDay": d["time_of_day"],
                     }
-                    for d in schedule_defaults.suggestions_for(rows)
+                    for d in (schedule_defaults.suggestions_for(rows) if allowed else [])
                 ],
             }
         )

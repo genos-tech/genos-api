@@ -39,6 +39,12 @@ or None when there is none. The wall-clock time is read in `zone`:
   ERROR is for the tick's own infrastructure only, since `CronCommand` turns it into a red run.
 - If the member's zone changed since the next run was computed, it is recomputed first, so
   "09:00" follows the member to a new city.
+- **Core and up (MIP-1213).** Scheduled reports are not part of Free. Creating, editing,
+  turning on and "run now" are refused with an upgrade sentence (`SchedulePlanRequired`);
+  listing, pausing and deleting still work. No report is filed for a member without the plan:
+  the tick pauses their schedules with the reason `plan` (`sync_plan`, and a guard in
+  `_process`), keeps them, and resumes exactly those when the plan comes back. The EFFECTIVE
+  tier decides (`quota.get_schedules_enabled`): the best of the member's own and their teams'.
 """
 
 from __future__ import annotations
@@ -73,6 +79,7 @@ from origin.models.common.schedule_models import (
     PAUSE_INACTIVE,
     PAUSE_LEFT_TEAM,
     PAUSE_MANUAL,
+    PAUSE_PLAN,
     STATUS_FAILED,
     STATUS_OK,
     STATUS_SKIPPED_ACCESS,
@@ -115,6 +122,11 @@ _CLOCK = re.compile(r"^(\d{1,2}):(\d{2})$")
 class ScheduleError(Exception):
     """Something wrong with what the member asked for. The message is in plain words and is
     meant to be shown to them."""
+
+
+class SchedulePlanRequired(ScheduleError):
+    """The member's plan does not include scheduled reports (Free). The message is the upgrade
+    sentence, written to be shown as it is; the REST layer adds `code: plan_required`."""
 
 
 class ScheduleNotFound(ScheduleError):
@@ -365,6 +377,24 @@ def clean_params(job_key: str, params: Any) -> dict[str, Any]:
 
 # ── access and lookup ───────────────────────────────────────────────────
 
+PLAN_SENTENCE = (
+    "Scheduled reports are part of the Core plan and up. Upgrade to turn them on; "
+    "your schedules are kept until then."
+)
+
+
+def plan_allows(user_id: Any) -> bool:
+    """Whether the member's plan includes scheduled reports (Core and up, MIP-1213). The
+    EFFECTIVE tier decides: the best of their own tier and their teams' plans (`quota`)."""
+    from origin.search_engine import quota  # noqa: PLC0415 - search_engine is heavy
+
+    return quota.get_schedules_enabled(str(user_id))
+
+
+def _require_plan(user: CustomUser) -> None:
+    if not plan_allows(user.pk):
+        raise SchedulePlanRequired(PLAN_SENTENCE)
+
 
 def _access_problem(user: CustomUser | None, team_id: str) -> str | None:
     """Why this member cannot have schedules run in this team, as a `paused_reason`; None
@@ -495,6 +525,7 @@ def create(
 ) -> MemberSchedule:
     now = now or timezone.now()
     user = _require_member(ctx)
+    _require_plan(user)
     clean = _clean_name(name)
     cleaned_params = clean_params(job, params)
     rec = clean_recurrence(
@@ -543,6 +574,7 @@ def update(
     if unknown:
         raise ScheduleError(f"These cannot be changed: {', '.join(unknown)}.")
     user = _require_member(ctx)
+    _require_plan(user)
     with transaction.atomic():
         # The member's row first, as `create` does: two edits (or an edit and a create) that
         # would each make the same schedule must not both pass the duplicate check.
@@ -607,6 +639,8 @@ def set_enabled(
     the next run from now."""
     now = now or timezone.now()
     user = _require_member(ctx)
+    if enabled:
+        _require_plan(user)  # pausing is always allowed; turning one on is a Core feature
     with transaction.atomic():
         sched = _get(ctx, schedule_id, lock=True)
         if enabled:
@@ -675,7 +709,7 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
     alone: a test run does not use up today's run or push a schedule toward pausing.
     """
     now = now or timezone.now()
-    _require_member(ctx)
+    _require_plan(_require_member(ctx))
     sched = _get(ctx, schedule_id)
     if sched.last_run_at is not None and timedelta(0) <= now - sched.last_run_at < RUN_NOW_COOLDOWN:
         wait = int((RUN_NOW_COOLDOWN - (now - sched.last_run_at)).total_seconds()) + 1
@@ -707,6 +741,7 @@ class RunSummary:
     failed: int = 0
     skipped_late: int = 0
     skipped_access: int = 0
+    skipped_plan: int = 0
     claimed_elsewhere: int = 0
     rezoned: int = 0
     deferred: int = 0
@@ -807,6 +842,23 @@ def _process(row: MemberSchedule, now: datetime, summary: RunSummary) -> None:
         log.info("schedule_paused schedule=%s reason=%s", sched.pk, problem)
         return
 
+    if not plan_allows(sched.user_id):
+        # Free (MIP-1213): no report is filed. Kept, not deleted; `sync_plan` resumes it when
+        # the plan comes back.
+        summary.skipped_plan += 1
+        _finish(
+            sched,
+            now,
+            now,
+            last_status=STATUS_SKIPPED_ACCESS,
+            last_error="",
+            enabled=False,
+            paused_reason=PAUSE_PLAN,
+            next_run_at=None,
+        )
+        log.info("schedule_paused schedule=%s reason=%s", sched.pk, PAUSE_PLAN)
+        return
+
     next_run = _advance(sched, now, zone)
     if now - sched.next_run_at > LATE_GRACE:
         summary.skipped_late += 1
@@ -851,6 +903,85 @@ def _process(row: MemberSchedule, now: datetime, summary: RunSummary) -> None:
             fields.update(enabled=False, paused_reason=PAUSE_FAILURES, next_run_at=None)
             log.warning("schedule_paused schedule=%s reason=%s", sched.pk, PAUSE_FAILURES)
     _finish(sched, now, now, **fields)
+
+
+@dataclass
+class PlanSync:
+    paused: int = 0
+    resumed: int = 0
+
+
+def _pages(qs, size: int, max_pages: int):
+    """Rows of `qs` in primary-key order, `size` at a time, up to `max_pages` pages: each page
+    starts after the last row of the one before, so rows changed while we go are not met twice
+    and a pass is bounded without ever looking only at the same first rows."""
+    last = None
+    for _ in range(max_pages):
+        page = qs.order_by("pk")
+        if last is not None:
+            page = page.filter(pk__gt=last)
+        rows = list(page[:size])
+        if not rows:
+            return
+        yield from rows
+        last = rows[-1].pk
+
+
+def sync_plan(now: datetime | None = None, limit: int = 500, max_pages: int = 20) -> PlanSync:
+    """Make the schedules follow the member's plan (MIP-1213), kept and never deleted.
+
+    A schedule that is ON for a member whose plan does not include scheduled reports is paused
+    with the reason `plan`; one paused for `plan` whose member has the plan again is resumed (the
+    next run counted from now, failures forgotten). A schedule paused for any other reason
+    (the member's own pause, repeated failures, left the team) is never touched, so a manual
+    pause stays manual. Rows are read `limit` at a time, at most `max_pages` pages of each kind per
+    pass (so a pass is bounded, and never looks only at the same first rows); the tick runs it every
+    five minutes, which is also how rows seeded before the gate existed are paused after a deploy.
+    """
+    now = now or timezone.now()
+    out = PlanSync()
+    verdict: dict[str, bool] = {}
+
+    def allowed(user_id: Any) -> bool:
+        key = str(user_id)
+        if key not in verdict:
+            verdict[key] = plan_allows(key)
+        return verdict[key]
+
+    for row in _pages(MemberSchedule.objects.filter(enabled=True), limit, max_pages):
+        if not allowed(row.user_id):
+            changed = MemberSchedule.objects.filter(pk=row.pk, enabled=True).update(
+                enabled=False,
+                paused_reason=PAUSE_PLAN,
+                next_run_at=None,
+                claimed_at=None,
+                ts_updated_at=now,
+            )
+            out.paused += changed
+            if changed:
+                log.info("schedule_paused schedule=%s reason=%s", row.pk, PAUSE_PLAN)
+    held = MemberSchedule.objects.filter(enabled=False, paused_reason=PAUSE_PLAN)
+    for row in _pages(held.select_related("user"), limit, max_pages):
+        if not allowed(row.user_id) or _access_problem(row.user, str(row.team_id)):
+            continue
+        zone = user_zone(row.user)
+        moment = next_run_after(row, now, zone)
+        if moment is None:  # a one-off whose day has passed: nothing to resume
+            continue
+        changed = MemberSchedule.objects.filter(
+            pk=row.pk, enabled=False, paused_reason=PAUSE_PLAN
+        ).update(
+            enabled=True,
+            paused_reason="",
+            consecutive_failures=0,
+            next_run_at=moment,
+            tz_used=zone.key,
+            ts_updated_at=now,
+        )
+        out.resumed += changed
+        if changed:
+            log.info("schedule_resumed schedule=%s reason=%s", row.pk, PAUSE_PLAN)
+    return out
 
 
 def run_due(

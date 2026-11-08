@@ -47,11 +47,15 @@ PAUSE_MANUAL = "manual"
 PAUSE_FAILURES = "failures"
 PAUSE_LEFT_TEAM = "left_team"
 PAUSE_INACTIVE = "inactive"
+# The member's plan does not include scheduled reports (Free; MIP-1213). Kept, not deleted:
+# resumed by the tick when the plan comes back, and only these (a manual pause stays manual).
+PAUSE_PLAN = "plan"
 PAUSE_CHOICES = [
     (PAUSE_MANUAL, "paused by the member"),
     (PAUSE_FAILURES, "paused after repeated failures"),
     (PAUSE_LEFT_TEAM, "the member left the team"),
     (PAUSE_INACTIVE, "the account is inactive"),
+    (PAUSE_PLAN, "the plan does not include scheduled reports"),
 ]
 
 STATUS_OK = "ok"

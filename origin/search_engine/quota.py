@@ -404,6 +404,31 @@ def get_mcp_enabled(user_id: str) -> bool:
     return v
 
 
+def get_schedules_enabled(user_id: str) -> bool:
+    """May this user have scheduled jobs and Genos reports? (Core and up; not Free; MIP-1213.)
+
+    The EFFECTIVE tier decides, like every other capability: the best of the member's own tier
+    and their teams' plans. Fail-open like `get_mcp_enabled` for an infrastructure error, for the
+    same reason: this gates a paid feature, and a Redis hiccup must never pause a paying member's
+    reports.
+
+    A MISSING (or malformed) value is not "allow" but "the tier's own default": Core and up yes,
+    Free no. `TIER_QUOTAS_JSON` is a FULL replace, so a production override written before this
+    key existed has no `schedules_enabled` on Free, and a blanket permissive default would leave
+    the gate doing nothing there. Reading Free's missing key as "no" cannot pause a paying member.
+    """
+    try:
+        paid = get_effective_tier(user_id) != "free"
+    except Exception:  # noqa: BLE001
+        log.exception("schedules_enabled: tier lookup failed for user=%s", user_id)
+        return True
+    v = _capability(user_id, "schedules_enabled", paid)
+    if not isinstance(v, bool):
+        log.warning("TIER_QUOTAS schedules_enabled=%r is not a bool; using the tier default", v)
+        return paid
+    return v
+
+
 def get_digest_cadence(user_id: str) -> str | None:
     """None (no digest) | 'weekly' | 'daily'.
 

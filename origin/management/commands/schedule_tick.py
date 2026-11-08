@@ -61,6 +61,9 @@ class Command(CronCommand):
             return
 
         started = time.monotonic()
+        # Schedules follow the plan (MIP-1213): pause Free members', resume the ones paused for
+        # the plan whose member has it again. Before the run, so nothing runs that should not.
+        plan = schedules.sync_plan(now=now)
         summary = schedules.run_due(
             now=now, budget_seconds=options["budget_seconds"], limit=options["limit"]
         )
@@ -80,5 +83,6 @@ class Command(CronCommand):
             f"{summary.deferred} deferred (of {summary.due} due, "
             f"oldest {summary.max_late_seconds}s late); "
             f"seeded {seeded.members} member(s) with {seeded.schedules} schedule(s), "
-            f"{seeded.failed} seeding failed"
+            f"{seeded.failed} seeding failed; plan: {plan.paused} paused, {plan.resumed} resumed, "
+            f"{summary.skipped_plan} skipped"
         )
