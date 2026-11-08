@@ -57,6 +57,7 @@ from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.invite_models import TeamInvite
+from origin.models.common.item_activity_models import purge_for_user as purge_item_activity
 from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.notification_models import NotificationPreference, PushSubscription
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
@@ -177,6 +178,7 @@ def _delete_personal_data(user) -> None:
     # tag, whose owner IS the user.
     PersonalChannelTag.objects.filter(user=user).delete()
     user.member_events.all().delete()  # what their AI apps opened (MIP-1143)
+    purge_item_activity(user.pk)  # the per-day table (MIP-1084)
 
     # Personal notes are private by definition, so they are erasable
     # content rather than team content. Folders cascade nothing (the

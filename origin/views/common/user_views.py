@@ -9,6 +9,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
+from origin.models.common.item_activity_models import purge_for_user as purge_item_activity
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
@@ -731,7 +732,7 @@ class MemberEventsPreferenceView(AuthenticatedAPIView):
     flag (so a failure leaves neither half done), and the recorder reads the flag in the
     statement it writes with, so nothing is noted after the commit. Every PATCH to false
     purges, not only the change: a repeat is harmless. Turning it back on starts fresh:
-    nothing is back-filled.
+    nothing is back-filled (the per-day table, MIP-1084, begins at today as well).
     """
 
     def get(self, request):
@@ -750,11 +751,18 @@ class MemberEventsPreferenceView(AuthenticatedAPIView):
         with transaction.atomic():
             # The row lock the recorder's `FOR SHARE` waits on: a call that is writing right
             # now finishes first and is purged below; one that starts later sees the flag.
-            CustomUser.objects.select_for_update().filter(pk=request.user.pk).first()
+            locked = CustomUser.objects.select_for_update().filter(pk=request.user.pk).first()
+            was_enabled = bool(locked.member_events_enabled) if locked else False
             request.user.member_events_enabled = value
             request.user.save(update_fields=["member_events_enabled"])
             if not value:
                 request.user.member_events.all().delete()
+                purge_item_activity(request.user.pk)  # the per-day table (MIP-1084)
+            elif not was_enabled:
+                # Back on: the per-day table starts today, it does not rebuild the time it was off.
+                from origin.services import item_activity  # noqa: PLC0415 - heavy, rarely needed
+
+                item_activity.start_fresh(str(request.user.pk))
         return Response({"member_events_enabled": value}, status=status.HTTP_200_OK)
 
 

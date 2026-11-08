@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from django.db.models import Q
+from django.db.models import Max, Q
 from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoItem
@@ -70,6 +70,7 @@ from origin.models.chat.unified_models import (
     MessageMention,
     MessageReaction,
 )
+from origin.models.common.member_event_models import MemberEvent
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -657,6 +658,24 @@ def _read_tasks(
     return read
 
 
+def read_events(
+    ctx: ToolContext,
+    access: LabelAccess,
+    tasks: dict[int, TaskMaster],
+    since: datetime,
+    until: datetime,
+) -> tuple[dict[int, list[Ev]], bool]:
+    """Every event of every source for `tasks` in `[since, until)`, by task, under the rules of
+    a line (MIP-1084 counts them per day with the very same attachment and access rules, so the
+    two cannot drift). `tasks` must already be ones the member may open (`access.tasks`).
+    The second value is True when a source hit its read cap: the events are then a floor."""
+    read = _read_tasks(ctx, access, tasks, since, until)
+    return (
+        {task_id: list(found.values()) for task_id, found in read.events.items()},
+        read.pool_capped or read.notes_capped,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The member's own markers                                                     #
 # --------------------------------------------------------------------------- #
@@ -773,6 +792,50 @@ def _marker_event(marker: Any, me: str) -> Ev:
         via="marker",
         extra=extra,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Seen markers (MIP-1084)                                                      #
+# --------------------------------------------------------------------------- #
+
+# Markers on a milestone, a task note or a chat thread are resolved to their task from the
+# newest of them only.
+SEEN_POOL = POOL
+
+
+def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
+    """`task_id -> when the member last looked at it`, for the tasks that have such a time.
+
+    A TIME ONLY: the latest of the member's own AI-app read or write markers (`MemberEvent`)
+    on the task, or on its milestone row, task note or linked chat thread (resolved to the
+    task like any marker). No first time, no span, no count and no bucket is ever returned, so
+    no duration can be worked out from it. Nothing is stored for this: it is read from the
+    ledger. Only the member's own markers; a web-app open leaves none (see MIP-1084), so a
+    member who works only in the web app has no seen time."""
+    me, team = str(ctx.user_id), str(ctx.team_id)
+    wanted = {int(t) for t in task_ids if str(t).isdigit()}
+    out: dict[int, datetime] = {}
+    if not wanted:
+        return out
+    floor = timezone.now() - member_events.RETENTION
+    base = MemberEvent.objects.filter(
+        user_id=me, team_id=team, kind__in=member_events.MCP_KINDS, ts__gte=floor
+    )
+    for row in (
+        base.filter(object_type="task", object_id__in=[str(t) for t in wanted])
+        .values("object_id")
+        .annotate(last=Max("ts"))
+    ):
+        out[int(row["object_id"])] = row["last"]
+    others = list(
+        base.filter(object_type__in=("milestone", "note", "chat_thread")).order_by(
+            "-ts", "-event_id"
+        )[:SEEN_POOL]
+    )
+    for marker, task_id in _resolve_markers(team, others).items():
+        if task_id in wanted and (task_id not in out or marker.ts > out[task_id]):
+            out[task_id] = marker.ts
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -978,6 +1041,25 @@ _RELATION_RANK = {
 }
 
 
+def _add_seen(
+    ctx: ToolContext, line: dict[str, Any], task_id: int, events: list[Ev], start: datetime, me: str
+) -> None:
+    """`last_seen_at` (a time, or None) and, when there is one, `since_seen`: how many events
+    by other people came after it (automation has no actor, and the member's own markers are
+    theirs, so neither counts),
+    counted from `max(last look, window start)` (`from`), so a look older than the window is
+    not passed off as a full count. Exact, because it counts real event times, not days."""
+    seen = seen_at(ctx, [task_id]).get(task_id)
+    line["last_seen_at"] = seen.isoformat() if seen else None
+    if seen is None:
+        return
+    after = max(seen, start)
+    line["since_seen"] = {
+        "from": after.isoformat(),
+        "by_others": sum(1 for e in events if e.at > after and e.actor and str(e.actor) != me),
+    }
+
+
 def _build(
     ctx: ToolContext,
     item_ref: Any,
@@ -1009,6 +1091,7 @@ def _build(
         "line": _line(root, root_events, limit, names, me, pending),
         "people": _people(root_events, names, me),
     }
+    _add_seen(ctx, result["line"], root.task_id, root_events, start, me)
     if related_limit:
         with_events = [
             (relation, task) for relation, task in candidates if read.events[task.task_id]
