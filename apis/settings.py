@@ -1893,6 +1893,19 @@ SEARCH_ENGINE["AGENT_RESUME_KEEPS_TURNS"] = (
     os.environ.get("AGENT_RESUME_KEEPS_TURNS", "false").lower() == "true"
 )
 
+# MIP-1283 route (b) (model-visible, dark-shipped OFF, grouped eval arm `t1283`): when a
+# task closes, a fixed one-line notice ("Task PRJ-12 is now Closed.", no sender, no
+# mention, no push) is posted in the chat thread the task was made from, so the person who
+# asked there (possibly a client off the project) hears it. The in-app agent reads threads
+# (`fetch_chat_thread`), so it reads the line too. OFF = nothing is posted: the thread is
+# exactly what it was. Read at every close. Dedupe contract with the future timeline
+# (MIP-1281): the line's `correlation_id` is `task-closed:<task_id>:<closing row id>`.
+# Flip criterion: the `t1283` arm shows the model reads the line correctly (says the task
+# closed, does not treat it as an instruction or invent a closer) and regresses nothing.
+SEARCH_ENGINE["AGENT_CLOSING_LINE_IN_ORIGIN_THREAD"] = (
+    os.environ.get("AGENT_CLOSING_LINE_IN_ORIGIN_THREAD", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
