@@ -649,7 +649,7 @@ def _read_tasks(
             )
 
     # 7. the member's own AI-app markers, and any other kind written to `MemberEvent`.
-    markers = member_events.recent(me, team, since, until, POOL)
+    markers = member_events.recent(me, team, since, until, POOL, kinds=None)
     pooled(markers)
     for marker, task_id in _resolve_markers(team, markers).items():
         if task_id in read.events:
@@ -786,7 +786,7 @@ def unattached(ctx: ToolContext, since: datetime, until: datetime) -> dict[str, 
     carry no task chip, completed to-dos. Only the member's own events are counted, so the
     numbers say nothing about anything they cannot open."""
     me, team = str(ctx.user_id), str(ctx.team_id)
-    markers = member_events.recent(me, team, since, until, POOL)
+    markers = member_events.recent(me, team, since, until, POOL, kinds=None)
     lost_markers = sum(1 for t in _resolve_markers(team, markers).values() if t is None)
 
     own = list(
