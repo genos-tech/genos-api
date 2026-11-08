@@ -58,6 +58,8 @@ PAUSE_CHOICES = [
     (PAUSE_PLAN, "the plan does not include scheduled reports"),
 ]
 
+AI_EFFORT_CHOICES = [("low", "low"), ("medium", "medium"), ("high", "high")]
+
 STATUS_OK = "ok"
 STATUS_FAILED = "failed"
 STATUS_SKIPPED_LATE = "skipped_late"
@@ -89,6 +91,10 @@ class MemberSchedule(models.Model):
     # code, and a key that is gone after a deploy must fail one run, not break the model.
     job = models.CharField(max_length=64)
     params = models.JSONField(default=dict, blank=True)
+    # The AI effort an AI job runs at (MIP-1212): "" = the job's own default, else one of
+    # `AI_EFFORT_CHOICES`. Read only by a job with `uses_ai`; any other ignores it. A value the
+    # catalog no longer has falls back to the job's default at run time, never fails a run.
+    ai_effort = models.CharField(max_length=8, choices=AI_EFFORT_CHOICES, blank=True, default="")
 
     frequency = models.CharField(max_length=16, choices=FREQUENCY_CHOICES)
     # 0-6, Monday = 0 (Python's `date.weekday()`). Used by `weekly` only.

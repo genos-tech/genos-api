@@ -91,7 +91,7 @@ from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import schedule_delivery, schedule_text
 from origin.services.mcp_oauth import clean_name
-from origin.services.schedule_jobs import JOBS, Report
+from origin.services.schedule_jobs import AI_EFFORT_KEY, JOBS, Report
 from origin.services.user_time import user_zone
 
 log = logging.getLogger("origin.schedules")
@@ -329,6 +329,22 @@ _JSON_TYPES = {
 }
 
 
+def clean_ai_effort(value: Any) -> str:
+    """The AI effort a member chose, as stored: "" (the job's default; also `None`) or one of the
+    catalog's levels. Anything else is refused by name when it is SAVED; at run time an unknown
+    level (one the catalog dropped since) just falls back to the job's default."""
+    from origin.services.report_ai import effort as effort_mod  # noqa: PLC0415
+
+    if value is None or value == "":
+        return ""
+    level = effort_mod.valid(value)
+    if level is None or value != level:
+        raise ScheduleError(
+            "`ai_effort` must be low, medium or high, or empty for the job's own default."
+        )
+    return level
+
+
 def clean_params(job_key: str, params: Any) -> dict[str, Any]:
     """Check `params` against the job's `params_schema` (see `schedule_jobs`)."""
     job = JOBS.get(job_key)
@@ -444,6 +460,7 @@ _EDITABLE = {
     "run_date",
     "time_of_day",
     "deliver_push",
+    "ai_effort",
 }
 _RECURRENCE_FIELDS = {"frequency", "weekdays", "month_day", "run_date", "time_of_day"}
 
@@ -521,12 +538,14 @@ def create(
     month_day: Any = None,
     run_date: Any = None,
     deliver_push: bool = False,
+    ai_effort: Any = None,
     now: datetime | None = None,
 ) -> MemberSchedule:
     now = now or timezone.now()
     user = _require_member(ctx)
     _require_plan(user)
     clean = _clean_name(name)
+    effort = clean_ai_effort(ai_effort)
     cleaned_params = clean_params(job, params)
     rec = clean_recurrence(
         frequency=frequency,
@@ -561,6 +580,7 @@ def create(
             tz_used=zone.key,
             next_run_at=first,
             deliver_push=bool(deliver_push),
+            ai_effort=effort,
         )
 
 
@@ -594,6 +614,9 @@ def update(
         if "deliver_push" in changes:
             sched.deliver_push = bool(changes["deliver_push"])
             dirty.append("deliver_push")
+        if "ai_effort" in changes:
+            sched.ai_effort = clean_ai_effort(changes["ai_effort"])
+            dirty.append("ai_effort")
         if _RECURRENCE_FIELDS & set(changes):
             merged = {
                 name: changes.get(name, getattr(sched, name))
@@ -709,8 +732,13 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
 
 
 def _run_params(sched: MemberSchedule, job) -> dict[str, Any]:
-    """What the job is run with: the schedule's own parameters."""
-    return dict(sched.params or {})
+    """What the job is run with: the schedule's own parameters, and for a job that uses AI the
+    schedule's effort level under a key no member can send (`AI_EFFORT_KEY`). An empty or
+    unknown level is the job's default (`report_ai.effort.resolve`)."""
+    params = dict(sched.params or {})
+    if job.uses_ai:
+        params[AI_EFFORT_KEY] = sched.ai_effort or ""
+    return params
 
 
 # "Run now" on a job that spends AI usage: a few a day per schedule, then the sentence below.

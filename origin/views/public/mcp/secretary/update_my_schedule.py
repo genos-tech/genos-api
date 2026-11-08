@@ -12,13 +12,14 @@ from origin.search_engine.agent.tools import Tool, ToolContext, ToolError
 from origin.services import schedule_text, schedules
 from origin.services.user_time import user_zone
 from origin.views.public.mcp.secretary._schedule_args import (
+    AI_EFFORT_PROPERTY,
     RECURRENCE_PROPERTIES,
     guarded,
     job_params_schema,
     recurrence_args,
 )
 
-_CHANGES = ("name", "job", "params", "deliver_push")
+_CHANGES = ("name", "job", "params", "deliver_push", "ai_effort")
 
 
 def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -55,6 +56,7 @@ UPDATE_MY_SCHEDULE = Tool(
             "params": job_params_schema(),
             **RECURRENCE_PROPERTIES,
             "deliver_push": {"type": "BOOLEAN", "description": "Send a push with the report."},
+            "ai_effort": AI_EFFORT_PROPERTY,
             "enabled": {
                 "type": "BOOLEAN",
                 "description": "false pauses the schedule, true resumes it from now.",

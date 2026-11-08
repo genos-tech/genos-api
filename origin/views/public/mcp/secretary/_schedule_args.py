@@ -55,6 +55,16 @@ def job_params_schema() -> dict[str, Any]:
     }
 
 
+AI_EFFORT_PROPERTY: dict[str, Any] = {
+    "type": "STRING",
+    "enum": ["low", "medium", "high"],
+    "description": (
+        "For a job that uses AI (`uses_ai` in `jobs`): how much effort it spends, low, medium or "
+        "high. Leave it out for the job's own `effort_default`. Ignored by a job that uses no AI."
+    ),
+}
+
+
 def recurrence_args(args: dict[str, Any]) -> dict[str, Any]:
     return {k: args[k] for k in RECURRENCE_PROPERTIES if k in args}
 
@@ -69,6 +79,7 @@ def guarded(call: Callable[[], Any]) -> Any:
 
 
 __all__ = [
+    "AI_EFFORT_PROPERTY",
     "RECURRENCE_PROPERTIES",
     "guarded",
     "job_params_schema",
