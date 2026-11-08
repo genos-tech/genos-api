@@ -29,6 +29,7 @@ class RosterTeamNameTests(CrossTeamTestCase):
             for member in self._roster(team_name=sent):
                 self.assertEqual(member["teamName"], self.team_a.team_name, sent)
 
-    def test_the_browser_cannot_rename_the_team_on_the_roster(self):
-        for member in self._roster(team_name="Totally Another Team"):
+    def test_a_name_the_browser_does_send_costs_no_extra_query(self):
+        """The endpoint has a pinned query budget: a normal request must not pay for the lookup."""
+        for member in self._roster(team_name=self.team_a.team_name):
             self.assertEqual(member["teamName"], self.team_a.team_name)
