@@ -290,11 +290,21 @@ class TestWhichItems(ActivityBase):
 
     def test_a_pool_hit_marks_the_row(self):
         task = self.make_task()
-        for i in range(3):
+        for i in range(4):
             self.comment(task, self.user2, 10 + i)
         with mock.patch.object(item_lines, "POOL", 3):
             self.fill()
         self.assertTrue(self.rows()[(task.task_id, self.d(0))]["capped"])
+        self.assertEqual(self.counts(task)["others"], 3)
+
+    def test_a_pool_that_is_exactly_full_cut_nothing(self):
+        """MIP-1295: only a row really left out marks the counts as a floor."""
+        task = self.make_task()
+        for i in range(3):
+            self.comment(task, self.user2, 10 + i)
+        with mock.patch.object(item_lines, "POOL", 3):
+            self.fill()
+        self.assertFalse(self.rows()[(task.task_id, self.d(0))]["capped"])
         self.assertEqual(self.counts(task)["others"], 3)
 
     def test_a_build_does_not_grow_its_queries_with_the_number_of_tasks(self):

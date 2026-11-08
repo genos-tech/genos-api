@@ -105,6 +105,11 @@ class LineBase(McpBase):
         self._n += 1
         return self._n
 
+    def assertAt(self, iso, minutes):
+        """`iso` (as a result tells it, in UTC) is the moment `minutes` after the base."""
+        self.assertIsNotNone(iso)
+        self.assertEqual(datetime.fromisoformat(iso), self.at(minutes))
+
     # -- fixtures --
 
     def make_task(self, title="A task", *, project=None, assignee=None, reporter=None, **extra):
@@ -749,7 +754,10 @@ class TestMarkers(LineBase):
         self.link_thread(task, root)
         self.marker(self.user, 10, "note", f"task:{note.note_id}")
         self.marker(self.user, 11, "chat_thread", str(root.id))
-        self.assertEqual([e["source"] for e in self.events(task)], ["message", "app", "app"])
+        # Both are on the task; two opens in a row of one app are told as one (MIP-1295).
+        events = self.events(task)
+        self.assertEqual([e["source"] for e in events], ["message", "app"])
+        self.assertEqual(events[1]["calls"], 2)
 
     def test_a_marker_on_a_thread_two_tasks_claim_is_on_neither_and_is_unattached(self):
         chat = self.channel([self.user, self.user2])
@@ -905,7 +913,9 @@ class TestUnattached(LineBase):
         ChannelMember.objects.filter(channel=chat, user=self.user).update(is_deleted=True)
         self.assertEqual(self.line(self.make_task())["unattached"]["chat_messages"], 0)
 
-    def test_completed_todos_are_counted_never_linked(self):
+    def test_completed_todos_are_not_on_a_line_nor_counted_under_it(self):
+        """MIP-1295: a to-do belongs to no item, and the briefing's `what_you_did` already
+        tells them once, so a line no longer repeats the member's count of them."""
         task = self.make_task()
         group = ToDoGroup.objects.create(
             team=self.team, user=self.user, local_date=self.base.date()
@@ -926,8 +936,9 @@ class TestUnattached(LineBase):
         )
         out = self.line(task)
         self.assertEqual(out["line"]["events"], [])
-        self.assertEqual(out["unattached"]["todos_completed"], 1)
-        self.assertEqual(out["unattached"]["total"], 1)
+        self.assertNotIn("todos_completed", out["unattached"])
+        self.assertEqual(out["unattached"]["total"], 0)
+        self.assertEqual(sorted(out["unattached"]), ["app_markers", "chat_messages", "total"])
         self.assertTrue(item.pk and other.pk)
 
     def test_unattached_counts_only_the_members_own_events(self):
@@ -938,6 +949,428 @@ class TestUnattached(LineBase):
         self.comment(hidden, self.user2, 10)
         self.marker(self.user2, 10, "project", 1)
         self.assertEqual(self.line(task)["unattached"]["total"], 0)
+
+
+# --------------------------------------------------------------------------- #
+# Line noise (MIP-1295)                                                        #
+# --------------------------------------------------------------------------- #
+
+
+class TestMarkerNoise(LineBase):
+    """The member's AI-app opens are context, not news: they must not push a neighbour's real
+    change out of its few latest events, and a run of them on the line is one entry."""
+
+    def setUp(self):
+        super().setUp()
+        self.backing = self.make_task("Beta", is_milestone=True)
+        self.milestone = MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="Beta",
+            reporter=self.user,
+            task=self.backing,
+        )
+        TaskMaster.objects.filter(pk=self.backing.pk).update(milestone=self.milestone)
+        self.parent = self.make_task("Parent")
+        self.task = self.make_task("Child", parent_task_id=self.parent.task_id)
+
+    def opens(self, task, first, n, step=10, **kw):
+        return [
+            self.marker(self.user, first + i * step, "task", task.task_id, **kw) for i in range(n)
+        ]
+
+    def test_a_neighbour_with_a_real_event_and_ten_opens_shows_the_event_not_the_opens(self):
+        self.comment(self.parent, self.user2, 5, text="the real change")
+        self.opens(self.parent, 100, 10)
+        related = self.full(self.task)["related"]
+        self.assertEqual([r["task_id"] for r in related], [self.parent.task_id])
+        self.assertEqual([e["source"] for e in related[0]["events"]], ["comment"])
+        self.assertEqual(related[0]["events_total"], 1)
+        self.assertEqual(related[0]["older_events"], 0)
+        self.assertAt(related[0]["latest_at"], 5)
+
+    def test_a_neighbour_says_when_the_member_last_opened_it(self):
+        self.comment(self.parent, self.user2, 5)
+        self.opens(self.parent, 100, 3)
+        related = self.full(self.task)["related"][0]
+        self.assertAt(related["last_opened_at"], 120)
+
+    def test_a_neighbour_never_opened_says_so(self):
+        self.comment(self.parent, self.user2, 5)
+        self.assertIsNone(self.full(self.task)["related"][0]["last_opened_at"])
+
+    def test_a_neighbour_that_was_only_opened_is_quiet(self):
+        self.opens(self.parent, 100, 2)
+        out = self.full(self.task)
+        self.assertEqual(out["related"], [])
+        self.assertEqual(out["related_quiet"], 1)
+
+    def test_a_change_in_the_ledger_is_not_an_open_and_stays_on_the_neighbour(self):
+        self.marker(self.user, 10, "task", self.parent.task_id, kind="todo_edit")
+        related = self.full(self.task)["related"][0]
+        self.assertEqual([e["what"] for e in related["events"]], ["app_todo_edit"])
+
+    def test_only_the_members_own_opens_are_ever_read_for_a_neighbour(self):
+        self.comment(self.parent, self.user2, 5)
+        self.marker(self.user2, 100, "task", self.parent.task_id)
+        self.assertIsNone(self.full(self.task)["related"][0]["last_opened_at"])
+
+    def test_a_run_of_opens_on_the_line_is_one_entry_with_its_calls(self):
+        self.opens(self.task, 10, 5, count=2)
+        events = self.events(self.task)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["what"], "app_read")
+        self.assertEqual(events[0]["summary"], "opened in your AI app")
+        self.assertEqual(events[0]["calls"], 10)
+        self.assertAt(events[0]["first_at"], 10)
+        self.assertAt(events[0]["at"], 50)
+        line = self.line(self.task)["line"]
+        self.assertEqual((line["events_total"], line["older_events"]), (1, 0))
+
+    def test_a_single_open_is_left_as_it_was(self):
+        self.opens(self.task, 10, 1)
+        event = self.events(self.task)[0]
+        self.assertNotIn("first_at", event)
+        self.assertNotIn("calls", event)
+
+    def test_a_real_event_between_two_runs_keeps_them_apart(self):
+        self.opens(self.task, 10, 3)
+        self.comment(self.task, self.user2, 45, text="a teammate wrote")
+        self.opens(self.task, 50, 2)
+        events = self.events(self.task)
+        self.assertEqual(
+            [(e["source"], e.get("calls")) for e in events],
+            [("app", 3), ("comment", None), ("app", 2)],
+        )
+
+    def test_a_long_pause_keeps_two_runs_apart(self):
+        self.opens(self.task, 10, 2)
+        gap = int(item_lines.APP_BURST_GAP.total_seconds() // 60)
+        self.opens(self.task, 20 + gap + 1, 2)
+        self.assertEqual([e.get("calls") for e in self.events(self.task)], [2, 2])
+
+    def test_a_gap_of_exactly_the_limit_still_joins(self):
+        gap = int(item_lines.APP_BURST_GAP.total_seconds() // 60)
+        self.opens(self.task, 10, 2, step=gap)
+        self.assertEqual([e.get("calls") for e in self.events(self.task)], [2])
+
+    def test_two_apps_are_two_runs(self):
+        self.marker(self.user, 10, "task", self.task.task_id, client="Claude")
+        self.marker(self.user, 11, "task", self.task.task_id, client="ChatGPT")
+        self.marker(self.user, 12, "task", self.task.task_id, client="ChatGPT")
+        events = self.events(self.task)
+        self.assertEqual([e.get("calls") for e in events], [None, 2])
+        self.assertIn("Claude", events[0]["app"])
+        self.assertIn("ChatGPT", events[1]["app"])
+
+    def test_a_run_that_changed_something_says_changed(self):
+        self.marker(self.user, 10, "task", self.task.task_id, kind="read")
+        self.marker(self.user, 11, "task", self.task.task_id, kind="write")
+        self.marker(self.user, 12, "task", self.task.task_id, kind="read")
+        events = self.events(self.task)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["what"], "app_write")
+        self.assertEqual(events[0]["summary"], "changed in your AI app")
+
+    def test_ledger_changes_are_never_folded_into_a_run(self):
+        self.marker(self.user, 10, "task", self.task.task_id)
+        self.marker(self.user, 11, "task", self.task.task_id, kind="todo_edit")
+        self.marker(self.user, 12, "task", self.task.task_id)
+        self.assertEqual(
+            [e["what"] for e in self.events(self.task)], ["app_read", "app_todo_edit", "app_read"]
+        )
+
+    def test_the_cap_counts_runs_not_opens(self):
+        for i in range(item_lines.DEFAULT_LIMIT + 5):
+            self.comment(self.task, self.user2, 600 + i)
+        self.opens(self.task, 10, 40)
+        line = self.line(self.task)["line"]
+        self.assertEqual(line["events_total"], item_lines.DEFAULT_LIMIT + 6)
+
+    def test_what_others_did_since_the_last_open_still_counts_after_the_folding(self):
+        self.opens(self.task, 10, 3)
+        self.comment(self.task, self.user2, 100)
+        self.assertEqual(self.line(self.task)["line"]["since_seen"]["by_others"], 1)
+
+
+class TestPoolFlags(LineBase):
+    """`capped.pool_capped` is true only when events of THIS line were left out, and names the
+    source; the neighbours' reads are their own (`related_sources`)."""
+
+    def setUp(self):
+        super().setUp()
+        self.parent = self.make_task("Parent")
+        self.task = self.make_task("Child", parent_task_id=self.parent.task_id)
+
+    def pool(self, n):
+        return mock.patch.object(item_lines, "POOL", n)
+
+    def test_a_pool_that_is_exactly_full_cut_nothing(self):
+        for i in range(3):
+            self.comment(self.task, self.user2, 10 + i)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["line"]["events_total"], 3)
+        self.assertEqual(out["capped"], {})
+
+    def test_a_cut_names_the_source_and_the_line_says_it_is_a_floor(self):
+        for i in range(4):
+            self.comment(self.task, self.user2, 10 + i)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["line"]["events_total"], 3)
+        self.assertEqual(out["capped"], {"pool_capped": True, "pool_sources": ["comments"]})
+
+    def test_several_sources_are_all_named_in_a_fixed_order(self):
+        for i in range(4):
+            self.comment(self.task, self.user2, 10 + i)
+            self.activity(self.task, self.user2, 10 + i, new=f"s{i}")
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"]["pool_sources"], ["comments", "history"])
+
+    def test_other_items_markers_do_not_cap_this_line(self):
+        """The old flag was `rows >= pool` on ALL of the member's markers in the window, whatever
+        item they were on: a member who uses an AI app a lot saw every line flagged."""
+        self.comment(self.task, self.user2, 10)
+        for i in range(8):
+            self.marker(self.user, 20 + i, "task", self.make_task(f"other {i}").task_id)
+            self.marker(self.user, 40 + i, "project", 1)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"], {})
+        self.assertEqual(out["line"]["events_total"], 1)
+
+    def test_this_lines_own_markers_beyond_the_pool_do(self):
+        for i in range(4):
+            self.marker(self.user, 20 + i, "task", self.task.task_id)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"], {"pool_capped": True, "pool_sources": ["app_markers"]})
+
+    def test_a_neighbours_busy_source_does_not_cap_or_crowd_out_this_line(self):
+        for i in range(2):
+            self.comment(self.task, self.user2, 10 + i, text=f"old {i}")
+        for i in range(6):
+            self.comment(self.parent, self.user2, 100 + i)
+        with self.pool(3):
+            out = self.full(self.task)
+        self.assertEqual(out["line"]["events_total"], 2, "the line has its own pool")
+        self.assertNotIn("pool_capped", out["capped"])
+        self.assertEqual(out["capped"], {"related_sources": ["comments"]})
+        self.assertEqual(out["related"][0]["events_total"], 3)
+
+    def test_related_lines_alone_report_the_neighbours_cut_too(self):
+        for i in range(6):
+            self.comment(self.parent, self.user2, 100 + i)
+        with self.pool(3):
+            out = item_lines.related_lines(self.ctx, self.task.task_id, self.since, self.until)
+        self.assertEqual(out["capped"], {"related_sources": ["comments"]})
+
+    def test_the_activity_counts_still_read_a_full_pool_as_a_floor(self):
+        """`read_events` (the per-day counts) keeps its two-value answer."""
+        for i in range(4):
+            self.comment(self.task, self.user2, 10 + i)
+        with self.pool(3):
+            events, capped = item_lines.read_events(
+                self.ctx,
+                item_lines.LabelAccess(self.ctx),
+                {self.task.task_id: self.task},
+                self.since,
+                self.until,
+            )
+        self.assertTrue(capped)
+        self.assertEqual(len(events[self.task.task_id]), 3)
+
+
+class TestFlagsAreSetAfterTheAccessFilter(LineBase):
+    """MIP-1195: a row the member cannot open must never tip a truncation flag."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self.make_task("Mine")
+        self.hidden = self.hidden_task()
+
+    def pool(self, n):
+        return mock.patch.object(item_lines, "POOL", n)
+
+    def chip_comment(self, on, minutes):
+        return self.comment(on, self.user2, minutes, body=body_with(chip(self.task.task_id)))
+
+    def test_comments_on_a_task_the_member_cannot_open_do_not_tip_the_pool_flag(self):
+        for i in range(5):
+            self.chip_comment(self.hidden, 10 + i)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"], {})
+        self.assertEqual(out["line"]["events"], [])
+
+    def test_the_same_comments_on_a_task_they_can_open_do(self):
+        other = self.make_task("Other")
+        for i in range(5):
+            self.chip_comment(other, 10 + i)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"], {"pool_capped": True, "pool_sources": ["comment_chips"]})
+
+    def test_unreadable_rows_in_front_of_readable_ones_do_not_use_up_the_pool(self):
+        other = self.make_task("Other")
+        self.chip_comment(other, 10)
+        for i in range(5):
+            self.chip_comment(self.hidden, 20 + i)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(len(out["line"]["events"]), 1)
+        self.assertEqual(out["capped"], {})
+
+    def test_notes_the_member_cannot_open_do_not_tip_the_notes_flag(self):
+        for i in range(item_lines.MAX_NOTES_CHECKED + 3):
+            note = self.task_note(
+                self.task, owner=self.user2, project=self.hidden.project, title=f"n{i}"
+            )
+            self.version(2, note, self.user2, 10 + i)
+        out = self.line(self.task)
+        self.assertEqual(out["line"]["events"], [])
+        self.assertEqual(out["capped"], {})
+
+    def test_readable_notes_among_unreadable_ones_are_all_told_and_say_nothing(self):
+        for i in range(item_lines.MAX_NOTES_CHECKED):
+            hidden_note = self.task_note(
+                self.task, owner=self.user2, project=self.hidden.project, title=f"h{i}"
+            )
+            self.version(2, hidden_note, self.user2, 50 + i)
+        for i in range(item_lines.MAX_NOTES_CHECKED):
+            self.version(2, self.task_note(self.task, title=f"r{i}"), self.user2, 10 + i)
+        out = self.line(self.task)
+        self.assertEqual(len(out["line"]["events"]), item_lines.MAX_NOTES_CHECKED)
+        self.assertEqual(out["capped"], {})
+
+    def test_a_readable_note_left_out_by_the_cap_does_say_so(self):
+        for i in range(item_lines.MAX_NOTES_CHECKED + 1):
+            self.version(2, self.task_note(self.task, title=f"r{i}"), self.user2, 10 + i)
+        out = self.line(self.task)
+        self.assertEqual(len(out["line"]["events"]), item_lines.MAX_NOTES_CHECKED)
+        self.assertEqual(out["capped"], {"notes_capped": True})
+
+    def test_the_notes_that_are_kept_are_the_newest(self):
+        for i in range(item_lines.MAX_NOTES_CHECKED + 2):
+            self.version(2, self.task_note(self.task, title=f"r{i}"), self.user2, 10 + i)
+        notes = [e["note"] for e in self.events(self.task)]
+        self.assertNotIn("r0", " ".join(notes))
+        self.assertIn(f"r{item_lines.MAX_NOTES_CHECKED + 1}", " ".join(notes))
+
+    def test_notes_the_member_cannot_open_after_the_cap_do_not_tip_it_either(self):
+        for i in range(item_lines.MAX_NOTES_CHECKED):
+            self.version(2, self.task_note(self.task, title=f"r{i}"), self.user2, 50 + i)
+        for i in range(3):
+            note = self.task_note(
+                self.task, owner=self.user2, project=self.hidden.project, title=f"h{i}"
+            )
+            self.version(2, note, self.user2, 10 + i)
+        out = self.line(self.task)
+        self.assertEqual(len(out["line"]["events"]), item_lines.MAX_NOTES_CHECKED)
+        self.assertEqual(out["capped"], {})
+
+    def test_when_the_note_lookups_run_out_nobody_knows_and_it_says_so(self):
+        """Only the member's own readable notes may tip the flag, except where the answer is
+        genuinely unknown: more candidate notes than can be looked up."""
+        for i in range(5):
+            note = self.task_note(
+                self.task, owner=self.user2, project=self.hidden.project, title=f"h{i}"
+            )
+            self.version(2, note, self.user2, 10 + i)
+        with mock.patch.object(item_lines, "MAX_NOTES_SCANNED", 3):
+            out = self.line(self.task)
+        self.assertEqual(out["line"]["events"], [])
+        self.assertEqual(out["capped"], {"notes_capped": True})
+
+    def test_exactly_as_many_unreadable_notes_as_can_be_looked_up_is_not_a_cut(self):
+        for i in range(3):
+            note = self.task_note(
+                self.task, owner=self.user2, project=self.hidden.project, title=f"h{i}"
+            )
+            self.version(2, note, self.user2, 10 + i)
+        with mock.patch.object(item_lines, "MAX_NOTES_SCANNED", 3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"], {})
+
+    def test_looking_up_many_notes_the_member_cannot_open_is_a_bounded_number_of_statements(self):
+        def statements():
+            with CaptureQueriesContext(connection) as queries:
+                self.line(self.task)
+            return len(queries)
+
+        base = statements()
+        for i in range(15):
+            note = self.task_note(
+                self.task, owner=self.user2, project=self.hidden.project, title=f"h{i}"
+            )
+            self.version(2, note, self.user2, 10 + i)
+        with_notes = statements()
+        print(f"\n[MIP-1195 queries] no notes={base}; 15 unreadable notes={with_notes}")
+        # One row fetch for all of them, and the access rule per note (a few statements each).
+        self.assertLessEqual(with_notes - base, 15 * 4 + 2)
+
+    def test_a_chip_in_notes_the_member_cannot_open_does_not_tip_either_flag(self):
+        for i in range(item_lines.MAX_NOTES_CHECKED + 3):
+            note = PersonalNoteMaster.objects.create(
+                team=self.team, owner=self.user2, title=f"p{i}", body=[]
+            )
+            self.version(1, note, self.user2, 10 + i, body=body_with(chip(self.task.task_id)))
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"], {})
+
+    def test_the_readable_task_rule_in_sql_is_the_rule_of_the_access_check(self):
+        """The pre-filter is a second statement of `LabelAccess.task_readable`: pinned equal over
+        every way a task can be mine, theirs, deleted or in another team."""
+        from origin.search_engine.agent.label_acl import LabelAccess  # noqa: PLC0415
+
+        outside = self.hidden.project  # a project the member is NOT in
+        mine = self.make_task("assigned", project=outside, assignee=self.user, reporter=self.user2)
+        reported = self.make_task(
+            "reported", project=outside, assignee=self.user2, reporter=self.user
+        )
+        in_project = self.make_task("in project", assignee=self.user2, reporter=self.user2)
+        elsewhere = self.hidden
+        deleted = self.make_task("deleted", is_deleted=True)
+        other_team = self.make_task("other team")
+        from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
+
+        team = TeamMaster.objects.create(
+            team_name="Else", team_email="e@example.com", owner=self.user2
+        )
+        TaskMaster.objects.filter(pk=other_team.pk).update(team=team)
+        ids = [t.task_id for t in (mine, reported, in_project, elsewhere, deleted, other_team)]
+        python_rule = set(LabelAccess(self.ctx).tasks(ids))
+        sql_rule = set(
+            TaskMaster.objects.filter(task_id__in=ids)
+            .filter(item_lines.readable_task_q(self.ctx, ""))
+            .values_list("task_id", flat=True)
+        )
+        self.assertEqual(sql_rule, python_rule)
+        self.assertEqual(python_rule, {mine.task_id, reported.task_id, in_project.task_id})
+
+
+class TestArguments(LineBase):
+    def test_a_limit_that_is_not_a_number_is_a_readable_error(self):
+        task = self.make_task()
+        for bad in ("many", "5.5", [3], {"n": 1}, True):
+            with self.assertRaises(ToolError, msg=repr(bad)) as raised:
+                item_lines.line_for_item(self.ctx, task.task_id, self.since, self.until, limit=bad)
+            self.assertIn("`limit`", str(raised.exception))
+
+    def test_the_tool_answers_it_as_a_tool_error_not_a_crash(self):
+        task = self.make_task()
+        text, is_error = self.tool(task_id=task.display_id, limit="many")
+        self.assertTrue(is_error)
+        self.assertIn("limit", text)
+
+    def test_a_number_given_as_text_still_works(self):
+        task = self.make_task()
+        self.comment(task, self.user2, 10)
+        out = item_lines.line_for_item(self.ctx, task.task_id, self.since, self.until, limit="2")
+        self.assertEqual(len(out["line"]["events"]), 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -1162,7 +1595,9 @@ class TestQueryBound(LineBase):
         return len(ctx), out
 
     def test_fifty_events_and_ten_items_cost_the_same_as_five_events_and_one(self):
-        root_small = self.populate(1, 5)
+        # Two items, so that both runs read a line AND its neighbours (a second read of the
+        # sources, a fixed number of statements since MIP-1295).
+        root_small = self.populate(2, 5)
         n_small, _ = self.count(root_small)
         TaskMaster.objects.all().delete()
         Message.objects.all().delete()
@@ -1175,7 +1610,8 @@ class TestQueryBound(LineBase):
         # The same number of statements: every source is read once for the whole set, so
         # neither an event nor an item adds one.
         self.assertEqual(n_big, n_small)
-        self.assertLessEqual(n_big, 32, n_big)
+        # 33 after MIP-1294 (the subtasks query), 51 after MIP-1295 (neighbours read apart).
+        self.assertLessEqual(n_big, 52, n_big)
         print(f"\n[MIP-1083 queries] 5 events/1 item={n_small}; 50 events/11 items={n_big}")
 
     def test_a_lone_line_is_a_fixed_small_number_of_queries(self):
