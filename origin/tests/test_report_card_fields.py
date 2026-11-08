@@ -271,6 +271,9 @@ class TestWhatTheJobsFill(Base):
             {
                 "link": self.task_link(task),
                 "kind": "task",
+                "task_id": task.task_id,
+                "why": "overdue",
+                "can_answer": True,
                 "project": {"id": self.alpha.project_id, "name": "Alpha", "code": "ALP"},
                 "display_id": task.display_id,
                 "title": "Fix the login",

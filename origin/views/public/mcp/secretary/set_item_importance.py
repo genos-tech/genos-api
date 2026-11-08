@@ -13,7 +13,8 @@ from origin.services import importance
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    done = importance.set_mark(ctx, args.get("task_id"), args.get("mark"))
+    done = importance.set_mark(ctx, args.get("task_id"), args.get("mark"), source="mcp")
+    done.pop("previous", None)  # the Undo of the report card; this tool's answer is as it was
     what = {
         None: "cleared",
         "not_important": "marked not important",

@@ -75,6 +75,10 @@ EMOJI = {
     "blocked": "🚧",
     "comments": "💭",
     "items": "📋",
+    # What a report held back (MIP-1211): unchanged since the last report, and quieted by the
+    # member's own answer.
+    "still_same": "🔁",
+    "quieted": "🔕",
 }
 
 
@@ -107,6 +111,12 @@ class ReportItem(TypedDict):
     due_date: NotRequired[str]
     overdue_days: NotRequired[int]
     detail: NotRequired[str]
+    # A TASK item only (MIP-1211): the task's id (what an answer is sent by), why the row is
+    # listed (one of `report_memory.WHY_VALUES`), and whether the card may offer the member's
+    # two answers ("On it", "Not important"; false when recording is off).
+    task_id: NotRequired[int]
+    why: NotRequired[str]
+    can_answer: NotRequired[bool]
 
 
 class ReportSection(TypedDict):
@@ -125,6 +135,10 @@ class Report(TypedDict):
     # The `request_id` of the metered request that paid for this report: required of a job with
     # `uses_ai`, never stored on the item as given (the delivery reads the cost by it).
     ai_request_id: NotRequired[str]
+    # `{task_id: signature}` for every task row this report listed or held back as unchanged
+    # (MIP-1211): the next report's memory, stored on the item's `item_optionals`, never in its
+    # body (`services/report_memory.py`).
+    seen: NotRequired[dict[str, str]]
 
 
 @dataclass(frozen=True)

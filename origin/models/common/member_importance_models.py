@@ -5,8 +5,13 @@ How important an item is to a member is WORKED OUT from their activity (see
 What is stored is only what the member said themselves, two small things per member and team:
 
   * `MemberImportanceMark`: one row per task the member marked `not_important` (it is never
-    offered to them as a top item or as a suggestion), or `priority_is_right` (leave its
-    priority alone: no "raise it?" for this item). A task id only, no text, no title.
+    offered to them as a top item or as a suggestion, and a report leaves it out until the task
+    changes), `on_it` (a report leaves it out for 7 days or until the task changes: MIP-1211), or
+    `priority_is_right` (leave its priority alone: no "raise it?" for this item). A task id
+    only, no text, no title. `sig` is the task's state signature when the member answered
+    (`services/report_memory.py`), so "until it changes" is exact; `source` is where the answer
+    came from (`report`, `mcp`, `settings`). Both are empty on a mark made before MIP-1211, which
+    keeps its old meaning.
   * `MemberImportanceTuning`: how much each named signal counts for this member, as
     `{signal: level}`. Only what they changed is stored; an absent signal is `normal`.
 
@@ -31,7 +36,12 @@ from origin.models.common.user_models import CustomUser
 
 MARK_NOT_IMPORTANT = "not_important"
 MARK_PRIORITY_IS_RIGHT = "priority_is_right"
+MARK_ON_IT = "on_it"
+# The marks the MCP tool offers (unchanged); the Settings page and a report's two buttons also
+# have `on_it` (MIP-1211).
 MARKS = (MARK_NOT_IMPORTANT, MARK_PRIORITY_IS_RIGHT)
+ALL_MARKS = (*MARKS, MARK_ON_IT)
+MARK_SOURCES = ("report", "mcp", "settings")
 
 
 class MemberImportanceMark(models.Model):
@@ -51,8 +61,12 @@ class MemberImportanceMark(models.Model):
     # A plain integer, not a foreign key: a mark outlives nothing it should not, and a task
     # the member can no longer open is simply never read back.
     task_id = models.BigIntegerField()
-    mark = models.CharField(max_length=24, choices=tuple((m, m) for m in MARKS))
+    mark = models.CharField(max_length=24, choices=tuple((m, m) for m in ALL_MARKS))
     ts = models.DateTimeField(default=timezone.now)
+    # The task's state signature when the member answered, and where the answer came from
+    # (MIP-1211). Null on a mark made before: it keeps its old meaning, until cleared.
+    sig = models.CharField(max_length=80, null=True, blank=True)
+    source = models.CharField(max_length=12, null=True, blank=True)
 
     class Meta:
         constraints = [

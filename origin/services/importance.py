@@ -48,8 +48,11 @@ from django.db import transaction
 from django.utils import timezone
 
 from origin.models.common.member_importance_models import (
+    ALL_MARKS,
     MARK_NOT_IMPORTANT,
+    MARK_ON_IT,
     MARK_PRIORITY_IS_RIGHT,
+    MARK_SOURCES,
     MARKS,
     MemberImportanceMark,
     MemberImportanceTuning,
@@ -119,7 +122,12 @@ LEVEL_WORDS = {
 MARK_WORDS = {
     MARK_NOT_IMPORTANT: (
         "Not important",
-        "Never offered as a top item or a suggestion, until you clear it.",
+        "Never offered as a top item or a suggestion, until you clear it. Reports leave it out "
+        "until the task changes.",
+    ),
+    MARK_ON_IT: (
+        "On it",
+        "Reports leave it out for 7 days, or until the task changes.",
     ),
     MARK_PRIORITY_IS_RIGHT: (
         "Priority is right",
@@ -168,12 +176,20 @@ def enabled(user_id: Any) -> bool:
 
 
 class Prefs:
-    """What the caller set for one team: `marks` (`task_id -> mark`) and `levels`
-    (`signal -> level name`, only those that differ from the default)."""
+    """What the caller set for one team: `marks` (`task_id -> mark`), `levels`
+    (`signal -> level name`, only those that differ from the default) and `info` (`task_id ->
+    (sig, ts)`: the task's state signature and the time when the member answered, MIP-1211;
+    `sig` is None on a mark made before)."""
 
-    def __init__(self, marks: dict[int, str], levels: dict[str, str]):
+    def __init__(
+        self,
+        marks: dict[int, str],
+        levels: dict[str, str],
+        info: dict[int, tuple[str | None, datetime]] | None = None,
+    ):
         self.marks = marks
         self.levels = levels
+        self.info = info or {}
 
     @property
     def tuned(self) -> bool:
@@ -201,14 +217,15 @@ def clean_levels(raw: Any) -> dict[str, str]:
 
 def load(ctx: ToolContext) -> Prefs:
     me, team = str(ctx.user_id), str(ctx.team_id)
-    marks = {
-        task_id: mark
-        for task_id, mark in MemberImportanceMark.objects.filter(
-            user_id=me, team_id=team, mark__in=MARKS
-        ).values_list("task_id", "mark")
-    }
+    marks: dict[int, str] = {}
+    info: dict[int, tuple[str | None, datetime]] = {}
+    for task_id, mark, sig, ts in MemberImportanceMark.objects.filter(
+        user_id=me, team_id=team, mark__in=ALL_MARKS
+    ).values_list("task_id", "mark", "sig", "ts"):
+        marks[task_id] = mark
+        info[task_id] = (sig, ts)
     row = MemberImportanceTuning.objects.filter(user_id=me, team_id=team).first()
-    return Prefs(marks, clean_levels(row.weights) if row else {})
+    return Prefs(marks, clean_levels(row.weights) if row else {}, info)
 
 
 def _lock_enabled_member(ctx: ToolContext) -> None:
@@ -233,19 +250,34 @@ def _task_id(raw: Any) -> int:
     return raw
 
 
-def set_mark(ctx: ToolContext, raw_task_id: Any, mark: Any) -> dict[str, Any]:
-    """Mark a task `not_important` or `priority_is_right`, or `clear` the mark. Only a task the
-    caller can open (the same words as one that does not exist, so nothing is given away)."""
-    if mark not in (*MARKS, "clear"):
-        raise ToolError(f"`mark` must be one of: {', '.join((*MARKS, 'clear'))}.")
+def set_mark(
+    ctx: ToolContext,
+    raw_task_id: Any,
+    mark: Any,
+    *,
+    allowed: tuple[str, ...] = MARKS,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Mark a task `not_important` or `priority_is_right` (and `on_it` where the caller allows
+    it: the REST door, MIP-1211), or `clear` the mark. Only a task the caller can open (the same
+    words as one that does not exist, so nothing is given away). Answers with the mark that was
+    there before (`previous`), so an Undo can put it back. The task's state signature and the
+    source of the answer are kept with it, so a report can tell "until the task changes"."""
+    if mark not in (*allowed, "clear"):
+        raise ToolError(f"`mark` must be one of: {', '.join((*allowed, 'clear'))}.")
     task_id = _task_id(raw_task_id)
     task = LabelAccess(ctx).task(task_id)
     if task is None:
         raise TaskNotFound(f"Task {raw_task_id} not found.")
     me, team = str(ctx.user_id), str(ctx.team_id)
+    from origin.services import report_memory  # noqa: PLC0415 - it reads this module
+
+    now = timezone.now()
+    sig = report_memory.signature_of_task(task, now.astimezone(zone_for_user_id(me)).date())
     with transaction.atomic():
         _lock_enabled_member(ctx)
         mine = MemberImportanceMark.objects.filter(user_id=me, team_id=team)
+        previous = mine.filter(task_id=task_id).values_list("mark", flat=True).first()
         if mark == "clear":
             mine.filter(task_id=task_id).delete()
         else:
@@ -257,12 +289,18 @@ def set_mark(ctx: ToolContext, raw_task_id: Any, mark: Any) -> dict[str, Any]:
                 user_id=me,
                 team_id=team,
                 task_id=task_id,
-                defaults={"mark": mark, "ts": timezone.now()},
+                defaults={
+                    "mark": mark,
+                    "ts": now,
+                    "sig": sig,
+                    "source": source if source in MARK_SOURCES else None,
+                },
             )
     return {
         "task_id": task.task_id,
         "display_id": task.display_id,
         "mark": None if mark == "clear" else mark,
+        "previous": previous,
     }
 
 
@@ -326,6 +364,7 @@ def export_rows(user_id: str) -> dict[str, list[dict[str, Any]]]:
                 "task_id": m.task_id,
                 "mark": m.mark,
                 "marked_at": m.ts.isoformat(),
+                "source": m.source,
             }
             for m in marks
             if m.task_id in readable[str(m.team_id)]

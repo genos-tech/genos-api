@@ -5,6 +5,10 @@ start of the member's day and reads only what they themselves did and what is al
 (the briefing's "what you did", MIP-1145): the tasks they worked on that are still not
 closed, the ones they closed, and the to-dos they left unfinished. Nothing is asked of them
 and nothing is written; no model, no cost.
+
+Like `what_to_do_today` it does not repeat itself (MIP-1211, `services/report_memory.py`): a
+still-open task whose state did not change since the member's last opened "what is left" is held
+back and counted. "Closed after your work" and the to-dos are records, never held back.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from django.utils import timezone
 
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
-from origin.services import briefing
+from origin.services import briefing, report_memory
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
 from origin.services.user_time import zone_for_user_id
@@ -48,26 +52,41 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     links = Links(ctx)
     links.preload(tasks=[t["task_id"] for t in tasks])
 
+    today_date = now.astimezone(zone).date()
+    still_open = [t for t in tasks if t["status"] not in _GONE]
+    finished = [t for t in tasks if t["status"] in _FINISHED]
+
+    verdict = report_memory.judge(
+        ctx,
+        "what_is_left",
+        [t["task_id"] for t in tasks],
+        links.facts,
+        today=today_date,
+        now=now,
+        start_with=set(),
+        changed=set(),
+        holdable={t["task_id"] for t in still_open},
+    )
+    links.why = verdict.why
+    links.can_answer = verdict.can_answer
+    open_listed = [t for t in still_open if t["task_id"] not in verdict.held]
+
     def line(t: dict[str, Any]) -> dict[str, Any]:
         text = f"{t['display_id']} · {plain(t['title']) or 'untitled'} ({t['status']})"
         said = _latest(t["events"])
         return links.task_item(f"{text}: {said}" if said else text, t["task_id"], said)
-
-    today_date = now.astimezone(zone).date()
-    still_open = [t for t in tasks if t["status"] not in _GONE]
-    finished = [t for t in tasks if t["status"] in _FINISHED]
 
     todos = LIST_UNCOMPLETED_TODOS.run({"date_range_days": days}, ctx).get("items", [])
     today = now.astimezone(zone).date().isoformat()
     left_todos = [t for t in todos if t.get("local_date") and t["local_date"] < today]
 
     sections: list[ReportSection] = []
-    if still_open:
+    if open_listed:
         sections.append(
             {
                 "heading": "Still open from last time",
                 "key": "still_open",
-                "items": arrange([line(t) for t in still_open], today_date),
+                "items": arrange([line(t) for t in open_listed], today_date),
             }
         )
     if finished:
@@ -102,6 +121,10 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         if said
         else f"Nothing saved in Genos for the last {days} days."
     )
+    if verdict.same:
+        summary += f" {verdict.same} unchanged since your last report."
+    if verdict.quieted:
+        summary += f" {verdict.quieted} quieted by you."
     return {
         "title": f"What is left from the last {days} days, {today}",
         "summary": clip(summary),
@@ -112,9 +135,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 ("still_open", len(still_open)),
                 ("closed", len(finished)),
                 ("todos_left", len(left_todos)),
+                (report_memory.STAT_STILL_SAME, verdict.same),
+                (report_memory.STAT_QUIETED, verdict.quieted),
             )
             if n
         ],
+        "seen": verdict.seen,
     }
 
 

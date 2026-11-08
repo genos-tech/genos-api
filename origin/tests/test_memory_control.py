@@ -261,7 +261,7 @@ class TestOverview(MemoryBase):
         catalog = self.get().data["catalog"]
         self.assertEqual([c["key"] for c in catalog["levels"]], list(importance.LEVELS))
         self.assertEqual(
-            [c["key"] for c in catalog["marks"]], ["not_important", "priority_is_right"]
+            [c["key"] for c in catalog["marks"]], ["not_important", "on_it", "priority_is_right"]
         )
         for row in (*catalog["levels"], *catalog["marks"]):
             self.assertEqual(set(row), {"key", "name", "means"})
@@ -495,7 +495,12 @@ class TestMarks(MemoryBase):
         self.assertEqual(res.status_code, 200, res.data)
         self.assertEqual(
             res.data,
-            {"taskId": task.task_id, "displayId": task.display_id, "mark": "not_important"},
+            {
+                "taskId": task.task_id,
+                "displayId": task.display_id,
+                "mark": "not_important",
+                "previous": None,
+            },
         )
         self.assertEqual(MemberImportanceMark.objects.get().mark, "not_important")
         self.assertEqual(
@@ -1013,7 +1018,7 @@ class TestTheWords(MemoryBase):
         self.assertEqual(set(importance.SIGNAL_NAMES), set(importance.SIGNALS))
         self.assertEqual(set(importance.SIGNAL_WORDS), set(importance.SIGNALS))
         self.assertEqual(set(importance.LEVEL_WORDS), set(importance.LEVELS))
-        self.assertEqual(set(importance.MARK_WORDS), set(importance.MARKS))
+        self.assertEqual(set(importance.MARK_WORDS), set(importance.ALL_MARKS))
         for text in (
             *importance.SIGNAL_NAMES.values(),
             *importance.SIGNAL_WORDS.values(),
