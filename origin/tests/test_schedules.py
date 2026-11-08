@@ -5,16 +5,20 @@ offsets are in the comments), never by asking the code under test.
 """
 
 import json
+import threading
+import time as _time
 import types
 from datetime import date, datetime, time, timedelta, timezone
 from io import StringIO
 from unittest import mock
 from zoneinfo import ZoneInfo
 
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection
-from django.test import SimpleTestCase
+from django.db import connection, connections
+from django.test import SimpleTestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 
 from origin.models.common.ops_models import CronHeartbeat
 from origin.models.common.schedule_models import MemberSchedule
@@ -228,7 +232,11 @@ class ScheduleBase(BaseAPITestCase):
 
     def make(self, name="Daily", job="ok", due_at=None, ctx=None, **kw):
         kw.setdefault("frequency", "daily")
-        kw.setdefault("time_of_day", "09:00")
+        if "time_of_day" not in kw:
+            # Two schedules of one member may not be the same (MIP-1201): the first made here
+            # is at 09:00, each next one a minute later, unless the test says a time.
+            made = self._made = getattr(self, "_made", -1) + 1
+            kw["time_of_day"] = f"09:{made:02d}" if made < 60 else f"10:{made - 60:02d}"
         sched = schedules.create(ctx or self.ctx, name=name, job=job, **kw)
         if due_at is not None:
             MemberSchedule.objects.filter(pk=sched.pk).update(next_run_at=due_at)
@@ -1147,3 +1155,306 @@ class ErasureAndExportTests(ScheduleBase):
         self.assertEqual(row["last_result"], {"title": "Your day", "items": 2})
         self.assertNotIn("not exported", json.dumps(doc))
         self.assertEqual(sched.pk, MemberSchedule.objects.get(name="Monday").pk)
+
+
+# --------------------------------------------------------------------------- #
+# A schedule that is the same as another one of the member's (MIP-1201)        #
+# --------------------------------------------------------------------------- #
+
+
+class DuplicateTests(ScheduleBase):
+    """Within a member's team, a schedule may not be the SAME as another (same job, params,
+    recurrence and time), nor carry the same name (trimmed, case-insensitive). A different time
+    or different params is a different schedule. An edit is refused only when what it CHANGES
+    now equals another row; rows that are already duplicated stay editable, pausable, deletable."""
+
+    def refuse_create(self, **kw):
+        kw.setdefault("name", "Another")
+        kw.setdefault("job", "ok")
+        kw.setdefault("frequency", "daily")
+        kw.setdefault("time_of_day", "09:00")
+        before = MemberSchedule.objects.count()
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.create(self.ctx, **kw)
+        self.assertEqual(MemberSchedule.objects.count(), before)
+        return str(caught.exception)
+
+    def raw(self, name, time_of_day="09:00", ctx=None, **kw):
+        """A row as it may already exist, written past the service."""
+        ctx = ctx or self.ctx
+        kw.setdefault("job", "ok")
+        kw.setdefault("frequency", "daily")
+        return MemberSchedule.objects.create(
+            user_id=ctx.user_id,
+            team_id=ctx.team_id,
+            name=name,
+            params=kw.pop("params", {}),
+            time_of_day=time.fromisoformat(time_of_day),
+            tz_used="Asia/Tokyo",
+            **kw,
+        )
+
+    # -- create --
+
+    def test_the_same_job_settings_and_time_is_refused_in_a_sentence_naming_the_other(self):
+        self.make(name="Morning plan")
+        text = self.refuse_create(name="Plan for the morning")
+        self.assertEqual(
+            text, "You already have 'Morning plan' every day at 09:00, which does the same thing."
+        )
+
+    def test_the_same_name_is_refused_trimmed_and_whatever_the_case(self):
+        self.make(name="Morning plan", time_of_day="09:00")
+        for name in ("morning plan", "  MORNING   Plan ", "Morning Plan"):
+            text = self.refuse_create(name=name, time_of_day="10:00")
+            self.assertEqual(
+                text,
+                "You already have a schedule called 'Morning plan' (every day at 09:00). "
+                "Pick a different name.",
+            )
+
+    def test_a_different_time_params_job_or_recurrence_is_a_different_schedule(self):
+        self.make(name="One", job="weekly_report", params={"scope": "mine"})
+        schedules.create(
+            self.ctx,
+            name="Later",
+            job="weekly_report",
+            params={"scope": "mine"},
+            frequency="daily",
+            time_of_day="09:01",
+        )
+        schedules.create(
+            self.ctx,
+            name="Team",
+            job="weekly_report",
+            params={"scope": "team"},
+            frequency="daily",
+            time_of_day="09:00",
+        )
+        schedules.create(
+            self.ctx,
+            name="Other job",
+            job="ok",
+            frequency="daily",
+            time_of_day="09:00",
+        )
+        schedules.create(
+            self.ctx,
+            name="Weekdays",
+            job="weekly_report",
+            params={"scope": "mine"},
+            frequency="weekdays",
+            time_of_day="09:00",
+        )
+        self.assertEqual(MemberSchedule.objects.count(), 5)
+
+    def test_a_different_job_with_the_same_settings_is_a_different_schedule(self):
+        self.make(name="One", job="ok", time_of_day="09:00")
+        schedules.create(self.ctx, name="Two", job="boom", frequency="daily", time_of_day="09:00")
+        self.assertEqual(MemberSchedule.objects.count(), 2)
+
+    def test_a_name_stored_with_stray_spaces_or_case_still_counts(self):
+        # Rows written before this rule (or past the service) may carry whatever was stored.
+        self.raw("  Morning   PLAN ", time_of_day="08:00")
+        text = self.refuse_create(name="morning plan", time_of_day="10:00")
+        self.assertIn("Pick a different name", text)
+
+    def test_weekdays_month_day_and_run_date_count_in_the_comparison(self):
+        self.make(name="Mon", frequency="weekly", weekdays=[0], time_of_day="09:00")
+        self.make(
+            name="Tue", frequency="weekly", weekdays=[1], time_of_day="09:00"
+        )  # another day: allowed
+        self.make(name="Mon+Tue", frequency="weekly", weekdays=[1, 0], time_of_day="09:00")
+        self.assertIn("same thing", self.refuse_create(frequency="weekly", weekdays=[0, 1]))
+        self.make(name="First", frequency="monthly", month_day=1, time_of_day="09:00")
+        self.make(name="Second", frequency="monthly", month_day=2, time_of_day="09:00")
+        self.assertIn("same thing", self.refuse_create(frequency="monthly", month_day=2))
+        day = (timezone_now().date() + timedelta(days=5)).isoformat()
+        other = (timezone_now().date() + timedelta(days=6)).isoformat()
+        self.make(name="Once", frequency="once", run_date=day, time_of_day="09:00")
+        self.make(name="Once more", frequency="once", run_date=other, time_of_day="09:00")
+        self.assertIn("same thing", self.refuse_create(frequency="once", run_date=day))
+
+    def test_params_are_compared_as_data_not_as_text(self):
+        self.make(
+            name="A", job="weekly_report", params={"days": 7, "scope": "mine"}, time_of_day="09:00"
+        )
+        text = self.refuse_create(job="weekly_report", params={"scope": "mine", "days": 7})
+        self.assertIn("same thing", text)
+
+    def test_another_member_or_another_team_may_have_the_same(self):
+        self.make(name="Morning plan")
+        self.make(name="Morning plan", ctx=self.ctx2)
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="o@example.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=other_team, attendee=self.user)
+        other_ctx = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user.id))
+        self.make(name="Morning plan", ctx=other_ctx)
+        self.assertEqual(MemberSchedule.objects.count(), 3)
+
+    def test_a_paused_schedule_still_counts(self):
+        made = self.make(name="Morning plan")
+        schedules.set_enabled(self.ctx, made.pk, False)
+        self.assertIn("Morning plan", self.refuse_create(name="x"))
+
+    def test_the_check_runs_under_the_members_row_lock(self):
+        """Two creates at once must not both pass the check: the member's row is locked FIRST,
+        and the existing schedules are read only after it."""
+        self.make(name="Morning plan")
+        with CaptureQueriesContext(connection) as queries:
+            self.refuse_create(name="x")
+        sql = [q["sql"] for q in queries.captured_queries]
+        locked = next(
+            i for i, s in enumerate(sql) if "FOR UPDATE" in s and "customuser" in s.lower()
+        )
+        read = next(
+            i
+            for i, s in enumerate(sql)
+            if 'FROM "origin_memberschedule"' in s and "FOR UPDATE" not in s and i > locked
+        )
+        self.assertLess(locked, read)
+
+    # -- update --
+
+    def test_an_edit_into_another_rows_time_or_name_is_refused(self):
+        self.make(name="Morning plan", time_of_day="09:00")
+        other = self.make(name="Evening", time_of_day="17:00")
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.update(self.ctx, other.pk, time_of_day="09:00")
+        self.assertIn("'Morning plan' every day at 09:00", str(caught.exception))
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.update(self.ctx, other.pk, name=" morning PLAN")
+        self.assertIn("Pick a different name", str(caught.exception))
+        other.refresh_from_db()
+        self.assertEqual((other.name, other.time_of_day), ("Evening", time(17, 0)))
+
+    def test_an_edit_may_keep_or_re_case_its_own_name_and_settings(self):
+        mine = self.make(name="Morning plan")
+        schedules.update(self.ctx, mine.pk, name="Morning plan", time_of_day="09:00")
+        schedules.update(self.ctx, mine.pk, name="MORNING PLAN")
+        schedules.update(self.ctx, mine.pk, time_of_day="09:00", deliver_push=True)
+        mine.refresh_from_db()
+        self.assertEqual(mine.name, "MORNING PLAN")
+
+    def test_a_change_of_job_or_params_into_another_row_is_refused(self):
+        self.make(name="A", job="weekly_report", params={"scope": "mine"}, time_of_day="09:00")
+        other = self.make(
+            name="B", job="weekly_report", params={"scope": "team"}, time_of_day="09:00"
+        )
+        with self.assertRaises(schedules.ScheduleError):
+            schedules.update(self.ctx, other.pk, params={"scope": "mine"})
+        third = self.make(name="C", job="ok", time_of_day="09:00")
+        with self.assertRaises(schedules.ScheduleError):
+            schedules.update(self.ctx, third.pk, job="weekly_report", params={"scope": "mine"})
+        schedules.update(
+            self.ctx, third.pk, job="weekly_report", params={"scope": "team"}, time_of_day="09:30"
+        )
+
+    def test_a_recurrence_change_into_another_row_is_refused_and_one_away_is_not(self):
+        self.make(name="Daily", frequency="daily", time_of_day="09:00")
+        weekly = self.make(name="Weekly", frequency="weekly", weekdays=[0], time_of_day="09:00")
+        with self.assertRaises(schedules.ScheduleError):
+            schedules.update(self.ctx, weekly.pk, frequency="daily")
+        schedules.update(self.ctx, weekly.pk, frequency="weekdays")
+
+    def test_rows_that_are_already_duplicated_stay_editable_pausable_and_deletable(self):
+        a = self.raw("Morning plan")
+        b = self.raw("morning plan")  # same name AND same content as `a`
+        # Nothing about the duplicate itself blocks an edit that does not touch what is equal.
+        schedules.update(self.ctx, b.pk, deliver_push=True)
+        schedules.update(self.ctx, b.pk, name="morning plan")
+        schedules.set_enabled(self.ctx, b.pk, False)
+        schedules.set_enabled(self.ctx, b.pk, True)
+        # Into something different is allowed, and gets it out of the way.
+        schedules.update(self.ctx, b.pk, time_of_day="10:00")
+        b.refresh_from_db()
+        self.assertEqual(b.time_of_day, time(10, 0))
+        # ... but not into a third row.
+        c = self.raw("Third", time_of_day="12:00")
+        with self.assertRaises(schedules.ScheduleError):
+            schedules.update(self.ctx, c.pk, time_of_day="09:00")
+        # Deleting works as ever.
+        schedules.delete(self.ctx, a.pk)
+        self.assertFalse(MemberSchedule.objects.filter(pk=a.pk).exists())
+
+    def test_a_duplicate_may_be_renamed_while_its_settings_stay(self):
+        self.raw("Morning plan")
+        dup = self.raw("Copy")
+        schedules.update(self.ctx, dup.pk, name="Copy of the morning plan")
+        dup.refresh_from_db()
+        self.assertEqual(dup.name, "Copy of the morning plan")
+
+    def test_an_edit_takes_the_members_row_lock_before_reading_the_others(self):
+        self.make(name="One", time_of_day="09:00")
+        two = self.make(name="Two", time_of_day="10:00")
+        with CaptureQueriesContext(connection) as queries:
+            schedules.update(self.ctx, two.pk, time_of_day="11:00")
+        sql = [q["sql"] for q in queries.captured_queries]
+        locked = next(
+            i for i, s in enumerate(sql) if "FOR UPDATE" in s and "customuser" in s.lower()
+        )
+        read = next(
+            i
+            for i, s in enumerate(sql)
+            if 'FROM "origin_memberschedule"' in s and "FOR UPDATE" not in s and i > locked
+        )
+        self.assertLess(locked, read)
+
+    # -- the suggested ones --
+
+    def test_accepting_a_suggestion_the_member_already_has_is_refused_the_same_way(self):
+        self.make(name="Morning plan", job="ok")
+        text = self.refuse_create(name="Morning plan", job="ok", time_of_day="09:00")
+        self.assertIn("You already have", text)
+
+
+def timezone_now():
+    return datetime.now(UTC)
+
+
+class TwoCreatesAtOnceTests(TransactionTestCase):
+    """Real threads on real transactions (a `TestCase` wraps everything in one the threads
+    cannot see). The check is slowed down AFTER it has looked, so without the member's row lock
+    both creates would pass it and both would insert."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="racer", email="racer@example.com", password="x"
+        )
+        self.team = TeamMaster.objects.create(
+            team_name="Race", team_email="race@example.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.user)
+        patcher = mock.patch.dict(JOBS, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        register_job(Job("ok", "OK", "Fine.", lambda ctx, params: {}))
+
+    def test_only_one_of_two_identical_creates_succeeds(self):
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        real = schedules._refuse_duplicate
+        outcomes = []
+
+        def slow_after_looking(*args, **kwargs):
+            real(*args, **kwargs)
+            _time.sleep(0.4)
+
+        def attempt(name):
+            try:
+                schedules.create(ctx, name=name, job="ok", frequency="daily", time_of_day="09:00")
+                outcomes.append("created")
+            except schedules.ScheduleError:
+                outcomes.append("refused")
+            finally:
+                connections.close_all()
+
+        with mock.patch.object(schedules, "_refuse_duplicate", slow_after_looking):
+            threads = [threading.Thread(target=attempt, args=(f"Plan {n}",)) for n in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+        self.assertEqual(sorted(outcomes), ["created", "refused"])
+        self.assertEqual(MemberSchedule.objects.filter(user=self.user).count(), 1)

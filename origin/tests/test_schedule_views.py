@@ -78,6 +78,12 @@ class ScheduleViewBase(BaseAPITestCase):
         return data
 
     def create(self, **over):
+        # A member's schedules may not be alike (MIP-1201): the first one made here is
+        # "Morning" at 09:00, each next one is named and timed apart unless the test says.
+        made = self._made = getattr(self, "_made", -1) + 1
+        if made:
+            over.setdefault("name", f"Morning {made}")
+            over.setdefault("timeOfDay", f"09:{made % 60:02d}")
         res = self.client.post(LIST, self.body(**over), format="json")
         self.assertEqual(res.status_code, 201, res.data)
         return res.data["schedule"]
@@ -177,6 +183,70 @@ class TestListAndCreate(ScheduleViewBase):
             frequency="once", runDate=(timezone.now() + timedelta(days=2)).date().isoformat()
         )
         self.assertIn("runDate", once)
+
+    def test_a_second_schedule_like_the_first_is_refused_in_one_sentence_in_error(self):
+        first = self.create(name="Morning plan", timeOfDay="09:00", frequency="daily")
+        res = self.client.post(
+            LIST,
+            self.body(name="Plan again", timeOfDay="09:00", frequency="daily"),
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(
+            res.data,
+            {
+                "error": "You already have 'Morning plan' every day at 09:00, which does the same thing."
+            },
+        )
+        # The same name, whatever the case and the spaces, at another time.
+        res = self.client.post(
+            LIST,
+            self.body(name=" MORNING  plan ", timeOfDay="10:00", frequency="daily"),
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(
+            res.data,
+            {
+                "error": "You already have a schedule called 'Morning plan' "
+                "(every day at 09:00). Pick a different name."
+            },
+        )
+        self.assertEqual(MemberSchedule.objects.filter(user=self.user).count(), 1)
+        # A different time is another schedule; a PATCH into the first one's name is refused.
+        other = self.create(name="Later", timeOfDay="10:00", frequency="daily")
+        res = self.client.patch(
+            f"{LIST}{other['id']}/{self.q}", {"name": "morning plan"}, format="json"
+        )
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertIn("Pick a different name", res.data["error"])
+        res = self.client.patch(
+            f"{LIST}{other['id']}/{self.q}", {"timeOfDay": "09:00"}, format="json"
+        )
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertIn(first["name"], res.data["error"])
+        # Pausing and deleting are never refused for it.
+        res = self.client.patch(f"{LIST}{other['id']}/{self.q}", {"enabled": False}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_accepting_a_suggestion_twice_is_refused_and_it_is_no_longer_offered(self):
+        with mock.patch.dict(
+            JOBS,
+            {"what_to_do_today": Job("what_to_do_today", "Today", "d", fake_job, {})},
+        ):
+            offered = self.client.get(LIST + self.q).data["suggestions"][0]
+            accept = {k: v for k, v in offered.items() if k != "key"}
+            body = {**accept, "team_id": self.team_id}
+            self.assertEqual(self.client.post(LIST, body, format="json").status_code, 201)
+            again = self.client.post(LIST, body, format="json")
+            self.assertEqual(again.status_code, 400)
+            self.assertIn("You already have 'Morning plan'", again.data["error"])
+            # Moved to another time, "Morning plan" is still the member's name for it, so the
+            # suggestion is not offered again: accepting it would be refused.
+            row = MemberSchedule.objects.get(user=self.user, name="Morning plan")
+            MemberSchedule.objects.filter(pk=row.pk).update(time_of_day="08:00")
+            offered_now = [x["key"] for x in self.client.get(LIST + self.q).data["suggestions"]]
+            self.assertNotIn("morning_plan", offered_now)
 
     def test_push_is_off_unless_asked_for(self):
         self.assertTrue(self.create(deliverPush=True)["deliverPush"])

@@ -82,7 +82,7 @@ class TestTheCatalog(JobBase):
         def save(job, **params):
             return schedules.create(
                 self.ctx,
-                name="x",
+                name=f"x {job} {len(params)}",
                 job=job,
                 params=params,
                 frequency="daily",

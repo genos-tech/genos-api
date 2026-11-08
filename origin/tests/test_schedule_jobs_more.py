@@ -27,7 +27,12 @@ class TestCatalog(JobBase):
 
         def save(job, **params):
             return schedules.create(
-                self.ctx, name="x", job=job, params=params, frequency="daily", time_of_day="09:00"
+                self.ctx,
+                name=f"x {job}",
+                job=job,
+                params=params,
+                frequency="daily",
+                time_of_day="09:00",
             )
 
         for job, params in (

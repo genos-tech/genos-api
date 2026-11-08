@@ -81,11 +81,16 @@ def _same(suggestion: dict[str, Any], sched: MemberSchedule) -> bool:
 
 
 def suggestions_for(existing: list[MemberSchedule]) -> list[dict[str, Any]]:
-    """The suggestions this member does not already have, whose job still exists."""
+    """The suggestions this member does not already have, whose job still exists. One whose
+    name they already use for something else is left out too: accepting it would be refused as
+    a duplicate (MIP-1201), so it is not offered."""
+    taken = {schedules._name_key(sched.name) for sched in existing}
     return [
         dict(s)
         for s in SUGGESTED
-        if s["job"] in JOBS and not any(_same(s, sched) for sched in existing)
+        if s["job"] in JOBS
+        and schedules._name_key(s["name"]) not in taken
+        and not any(_same(s, sched) for sched in existing)
     ]
 
 

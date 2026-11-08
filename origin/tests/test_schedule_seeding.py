@@ -179,7 +179,7 @@ class TestSeedDefaults(SeedBase):
                 params={},
                 frequency="weekly",
                 weekdays=[i % 7],
-                time_of_day="08:00",
+                time_of_day=f"08:{i:02d}",
             )
         made = schedule_defaults.seed_defaults(self.user, self.team, now=NOW)
         self.assertEqual([s.name for s in made], ["Morning plan"])
@@ -198,7 +198,7 @@ class TestSeedDefaults(SeedBase):
                 params={},
                 frequency="weekly",
                 weekdays=[i % 7],
-                time_of_day="08:00",
+                time_of_day=f"08:{i:02d}",
             )
         self.assertEqual(schedule_defaults.seed_defaults(self.user, self.team, now=NOW), [])
         self.assertTrue(MemberScheduleSeed.objects.filter(user=self.user).exists())
