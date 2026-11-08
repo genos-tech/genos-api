@@ -86,7 +86,10 @@ answer is a hang. Two consequences, both load-bearing:
   since a user asks an assistant to delete a milestone or "that to-do" by
   name; `delete_my_schedule` (MIP-1147) deletes one of the member's own
   schedules, which is MCP-only, so it has no in-app twin to hold the
-  opt-in. Each delete is published deliberately, behind the opt-in below, and
+  opt-in; `forget_my_memory` (MIP-1088) deletes what Genos stored about
+  the member from their activity (marks, per-day counts, the record of
+  what their AI apps opened), the same delete as the Settings page. Each
+  delete is published deliberately, behind the opt-in below, and
   not as a side effect of the tool having been built; the asymmetry is on
   purpose rather than an oversight to be "fixed" by adding more. (The one
   removal besides them, `remove_task_delivery` (MIP-834), is not a delete in
@@ -1788,6 +1791,45 @@ CATALOG: tuple[McpTool, ...] = (
             "Requires a write-scoped API key."
         ),
         write=True,
+    ),
+    McpTool(
+        name="get_my_memory",
+        registry_name="get_my_memory",
+        description=(
+            "Read what Genos has stored about the member from their activity, and whether it "
+            "is recording. Use it when they ask 'what do you remember about me', 'what are "
+            "you recording', 'is Genos tracking me' or before deleting anything. `recording` "
+            "is the switch (Settings, What Genos remembers); when it is off nothing is learned "
+            "or kept. `stored` counts what is held, in every team, with the dates it covers "
+            "and how long it is kept: `ledger` (which items their AI apps opened or changed, "
+            "and their own changes nothing else saves: references and times, never any text, "
+            "kept 180 days), `summaries` (how busy each task was on each day, counts only, "
+            "never time spent, kept a year) and `importance` (the tasks they marked and the "
+            "signals they tuned). It is only the member's own data and holds no task titles: "
+            "`get_my_importance` shows the items and marks. To delete any of it, "
+            "`forget_my_memory`. Turning recording off is in Settings (it also deletes all of "
+            "this); there is no tool for it."
+        ),
+    ),
+    McpTool(
+        name="forget_my_memory",
+        registry_name="forget_my_memory",
+        description=(
+            "Delete what Genos stored about the member from their activity, for good, in "
+            "every team. `what`: 'importance' (the tasks they marked and how they tuned the "
+            "signals; the ranking goes back to the defaults), 'summaries' (the per-day "
+            "activity counts; recording resumes with tomorrow, the past and the rest of "
+            "today are not rebuilt), "
+            "'events' (the record of which items their AI apps opened or changed), or "
+            "'everything' (all three). It does NOT touch their tasks, notes, comments, chats, "
+            "Genos conversations, Inbox or schedules, and it does not switch recording off "
+            "(that is in Settings), so Genos goes on recording from now. Call this only when "
+            "the member asked for it to go, and say which of the four you are deleting. See "
+            "the counts first with `get_my_memory`. Requires a write-scoped API key that its "
+            "owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
     ),
     McpTool(
         name="list_my_schedules",

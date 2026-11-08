@@ -348,17 +348,22 @@ def rebuild(ctx: ToolContext, since_day: date, until_day: date, now: datetime | 
 purge = purge_for_user
 
 
-def start_fresh(user_id: str, now: datetime | None = None) -> None:
-    """The member turned recording back on: begin at today. The watermark of every team they are
-    in is set to yesterday (their zone), so nothing from the time it was off is rebuilt by the
-    next fill (an explicit `rebuild` still can)."""
+def start_fresh(user_id: str, now: datetime | None = None, *, through_today: bool = False) -> None:
+    """Begin recording from here: the watermark of every team the member is in is moved, so
+    nothing from before is rebuilt by the next fill (an explicit `rebuild` still can).
+
+    Turning recording back on (the default) sets it to yesterday in the member's zone, so the
+    next fill builds today. A member DELETING their summaries (`through_today`, MIP-1088) sets
+    it to today: the day of the delete is never stored either, because it would be built from
+    task history, this morning's activity included, and "deleted" must stay deleted."""
     now = now or timezone.now()
-    yesterday = now.astimezone(zone_for_user_id(user_id)).date() - timedelta(days=1)
+    today = now.astimezone(zone_for_user_id(user_id)).date()
+    through = today if through_today else today - timedelta(days=1)
     for team_id in TeamMembers.objects.filter(attendee_id=user_id).values_list(
         "team_id", flat=True
     ):
         MemberItemDayState.objects.update_or_create(
-            user_id=user_id, team_id=team_id, defaults={"built_through": yesterday}
+            user_id=user_id, team_id=team_id, defaults={"built_through": through}
         )
 
 

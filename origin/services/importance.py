@@ -49,6 +49,7 @@ from django.utils import timezone
 
 from origin.models.common.member_importance_models import (
     MARK_NOT_IMPORTANT,
+    MARK_PRIORITY_IS_RIGHT,
     MARKS,
     MemberImportanceMark,
     MemberImportanceTuning,
@@ -64,6 +65,15 @@ from origin.services.user_time import zone_for_user_id
 log = logging.getLogger(__name__)
 
 purge = purge_for_user
+
+
+class TaskNotFound(ToolError):
+    """The task is not one the member can open (or does not exist): one answer for both."""
+
+
+class RecordingOff(ToolError):
+    """A write refused because the member switched recording off."""
+
 
 # --- the signals ------------------------------------------------------------------------
 
@@ -86,6 +96,35 @@ SIGNAL_WORDS = {
     "spread": "how many of the last seven days it was busy on",
     "trend": "whether it is heating up or cooling down",
     "hints": "its due date, priority and Blocked status (weak hints)",
+}
+# The same signals as a short title for a settings page (`SIGNAL_WORDS` is the sentence after it).
+# Keys plus English: the page owns the translations, keyed by the signal.
+SIGNAL_NAMES = {
+    "others": "Other people",
+    "mine": "You",
+    "chat": "Chat",
+    "notes": "Notes",
+    "prs": "Pull requests",
+    "spread": "Busy days",
+    "trend": "Heating up or cooling down",
+    "hints": "Due date, priority, Blocked",
+}
+# What each level does to a signal, for the same page.
+LEVEL_WORDS = {
+    "off": ("Don't count", "Genos ignores this signal."),
+    "low": ("Count less", "This signal counts half as much."),
+    "normal": ("Normal", "The default."),
+    "high": ("Count more", "This signal counts twice as much."),
+}
+MARK_WORDS = {
+    MARK_NOT_IMPORTANT: (
+        "Not important",
+        "Never offered as a top item or a suggestion, until you clear it.",
+    ),
+    MARK_PRIORITY_IS_RIGHT: (
+        "Priority is right",
+        "Genos stops asking whether to change its priority. Its ranking does not change.",
+    ),
 }
 _KIND_WORDS = {
     "others": "from others",
@@ -177,7 +216,7 @@ def _lock_enabled_member(ctx: ToolContext) -> None:
     recording is off. A write after the purge would break "off keeps nothing"."""
     user = CustomUser.objects.select_for_update().filter(pk=str(ctx.user_id)).first()
     if user is None or not user.member_events_enabled:
-        raise ToolError(
+        raise RecordingOff(
             "Genos is not recording your activity, so there is nothing to rank and nothing "
             "is kept. Turn recording on first (Settings, What Genos remembers)."
         )
@@ -202,7 +241,7 @@ def set_mark(ctx: ToolContext, raw_task_id: Any, mark: Any) -> dict[str, Any]:
     task_id = _task_id(raw_task_id)
     task = LabelAccess(ctx).task(task_id)
     if task is None:
-        raise ToolError(f"Task {raw_task_id} not found.")
+        raise TaskNotFound(f"Task {raw_task_id} not found.")
     me, team = str(ctx.user_id), str(ctx.team_id)
     with transaction.atomic():
         _lock_enabled_member(ctx)
@@ -588,13 +627,28 @@ def people_counts(ctx: ToolContext, now: datetime, tasks: list[TaskMaster]) -> d
     }
 
 
-def shaped(s: Scored, row: dict[str, Any], people: dict[int, int] | None = None) -> dict[str, Any]:
-    """An item as the briefing and the tool show it: the task's own row, the score and why."""
+def shaped(
+    s: Scored,
+    row: dict[str, Any],
+    people: dict[int, int] | None = None,
+    structured: bool = False,
+) -> dict[str, Any]:
+    """An item as the briefing and the tool show it: the task's own row, the score and why.
+    `structured` (the settings page) adds `why`: the same reasons as numbers, so a page can say
+    them in the member's language; the sentences in `reasons` are English only."""
     reasons = list(s.reasons)
     n = (people or {}).get(s.task.task_id, 0)
     if n and sum(s.counts.values()):
         reasons.append(f"{_plural(n, 'other person')} involved")
-    return {**row, "score": s.shown_score, "reasons": reasons}
+    out = {**row, "score": s.shown_score, "reasons": reasons}
+    if structured:
+        out["why"] = {
+            **{kind: s.counts[kind] for kind in KIND_POINTS},
+            "days": s.days,
+            "trend": s.trend,
+            "people": n if sum(s.counts.values()) else 0,
+        }
+    return out
 
 
 def excluded(prefs: Prefs) -> set[int]:
@@ -621,10 +675,12 @@ _OFF_NOTE = (
 )
 
 
-def describe(ctx: ToolContext, limit: Any = None, project_id: Any = None) -> dict[str, Any]:
+def describe(
+    ctx: ToolContext, limit: Any = None, project_id: Any = None, structured: bool = False
+) -> dict[str, Any]:
     """`get_my_importance`: the caller's top items with the reason for each, the suggestions,
     how each signal is tuned and what they marked. Brings the per-day table up to yesterday
-    first, like the briefing."""
+    first, like the briefing. `structured` is the settings page's read (see `shaped`)."""
     from origin.services import briefing  # noqa: PLC0415 - it reads item_lines, which reads this module
 
     shown = TOP_TOOL
@@ -666,7 +722,7 @@ def describe(ctx: ToolContext, limit: Any = None, project_id: Any = None) -> dic
     return {
         "enabled": True,
         "history": history,
-        "top": [shaped(s, briefing._task_row(s.task, today), people) for s in top],
+        "top": [shaped(s, briefing._task_row(s.task, today), people, structured) for s in top],
         "suggestions": found,
         "tuning": [
             {
