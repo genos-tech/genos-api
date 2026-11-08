@@ -1326,13 +1326,19 @@ class GetTeamMembersView(AuthenticatedAPIView):
 
     def get(self, request):
         team_id = request.GET.get("team_id")
-        team_name = request.GET.get("team_name")
 
         if not team_id:
             return Response(
                 {"error": "team_id is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # The name every row carries is the team's own, read here. It used to be echoed
+        # from the query: a session restored from the refresh cookie has no team name in
+        # the browser, so the roster went out with "" (or "undefined") and the profile card
+        # showed no team. The query value is only a fallback for a team that cannot be read.
+        team_name = TeamMaster.objects.filter(team_id=team_id).values_list(
+            "team_name", flat=True
+        ).first() or request.GET.get("team_name")
         # A guest is not a team member and never will be, so the plain
         # guard would 404 them out of their own project's people picker.
         # They get the roster narrowed to the projects they're in — or,
@@ -1372,34 +1378,31 @@ class GetTeamMembersView(AuthenticatedAPIView):
         if position is not None:
             name, row_id = position
             ordered = ordered.filter(
-                Q(attendee__username__gt=name)
-                | Q(attendee__username=name, attendee__id__gt=row_id)
+                Q(attendee__username__gt=name) | Q(attendee__username=name, attendee__id__gt=row_id)
             )
         if paged:
             # One past the page, to know whether another follows without a COUNT.
             ordered = ordered[: page_size + 1]
-        attendees = (
-            ordered.values(
-                "is_deleted",
-                "member_role",
-                "attendee__id",
-                "attendee__username",
-                "attendee__email",
-                "attendee__profile_image_file_name",
-                "attendee__is_offline_forced",
-                "attendee__role",
-                "attendee__base_country",
-                "attendee__phone_number",
-                "attendee__current_location",
-                "attendee__timezone",
-                "attendee__location_shared",
-                "attendee__about_me",
-                "attendee__custom_status",
-                "attendee__custom_status_expiry",
-                "attendee__ts_created_at",
-                "attendee__is_system_user",
-                "attendee__is_deleted",
-            )
+        attendees = ordered.values(
+            "is_deleted",
+            "member_role",
+            "attendee__id",
+            "attendee__username",
+            "attendee__email",
+            "attendee__profile_image_file_name",
+            "attendee__is_offline_forced",
+            "attendee__role",
+            "attendee__base_country",
+            "attendee__phone_number",
+            "attendee__current_location",
+            "attendee__timezone",
+            "attendee__location_shared",
+            "attendee__about_me",
+            "attendee__custom_status",
+            "attendee__custom_status_expiry",
+            "attendee__ts_created_at",
+            "attendee__is_system_user",
+            "attendee__is_deleted",
         )
 
         attendees = list(attendees)
