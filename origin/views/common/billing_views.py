@@ -283,6 +283,7 @@ _PLAN_LIMIT_KEYS = (
     "integrations",
     "digest_cadence",
     "mcp_enabled",
+    "schedules_enabled",
 )
 
 

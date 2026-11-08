@@ -20,7 +20,8 @@ When: lazily on the member's first Schedules list in that team (REST or MCP), an
 `schedule_tick` cron for members who were recently signed in and have not opened it
 (`seed_pending`, a few per tick, never a dormant or inactive account).
 
-No plan gate, and push stays off: the seeded schedules are created exactly like an
+Core and up only (MIP-1213): a Free member is not seeded and gets no marker, so they are seeded,
+once, when they upgrade. Push stays off: the seeded schedules are created exactly like an
 accepted suggestion.
 """
 
@@ -49,6 +50,8 @@ log = logging.getLogger("origin.schedules")
 # The tick seeds at most this many members a pass: seeding is a few writes each, and the
 # backlog (every member who never opened the page) drains over a few ticks.
 SEED_BATCH = 25
+# Pending members read per pass, as a multiple of the batch (see `seed_pending`).
+SCAN_FACTOR = 4
 # A member counts as recently around when a refresh token was issued to them in this window.
 ACTIVE_WITHIN = timedelta(days=30)
 
@@ -116,6 +119,10 @@ def default_team_id(user: CustomUser) -> str | None:
 def _seed(user: CustomUser, team_id: str, now: datetime) -> list[MemberSchedule] | None:
     """Seed once; None when nothing was done (already seeded, or not eligible)."""
     if user.is_demo or schedules._access_problem(user, team_id) is not None:
+        return None
+    # Core and up (MIP-1213). No marker is written for a member whose plan does not include
+    # scheduled reports, so they are seeded, once, when they upgrade.
+    if not schedules.plan_allows(user.pk):
         return None
     ctx = ToolContext(team_id=team_id, user_id=str(user.pk))
     with transaction.atomic():
@@ -216,9 +223,17 @@ def seed_pending(
     summary = SeedSummary()
     if deadline is not None and time.monotonic() >= deadline:
         return summary  # the due runs used the budget: no query either
-    for user in pending_members(now=now, limit=limit):
+    attempted = 0
+    # A member without the plan is skipped with no marker (they are seeded when they upgrade),
+    # so they stay "pending": look further than `limit` rows, or they would use up every pass.
+    for user in pending_members(now=now, limit=limit * SCAN_FACTOR):
         if deadline is not None and time.monotonic() >= deadline:
             break
+        if not schedules.plan_allows(user.pk):
+            continue
+        if attempted >= limit:
+            break
+        attempted += 1
         try:
             team_id = default_team_id(user)
             made = _seed(user, team_id, now) if team_id else None

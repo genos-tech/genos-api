@@ -29,6 +29,18 @@ if _test_db_name:
     DATABASES["default"].setdefault("TEST", {})  # noqa: F405
     DATABASES["default"]["TEST"]["NAME"] = _test_db_name  # noqa: F405
 
+# Scheduled reports are Core and up (MIP-1213) and every test user is Free by default. The suites
+# that are about schedules, not about the plan, run with the capability on for every tier, as the
+# MCP suites do for `mcp_enabled`. The unchanged table stays available for the gate's own tests
+# (`origin/tests/test_schedule_plan_gate.py`).
+PRODUCTION_TIER_QUOTAS = SEARCH_ENGINE["TIER_QUOTAS"]  # noqa: F405
+SEARCH_ENGINE = {  # noqa: F405
+    **SEARCH_ENGINE,  # noqa: F405
+    "TIER_QUOTAS": {
+        tier: {**cfg, "schedules_enabled": True} for tier, cfg in PRODUCTION_TIER_QUOTAS.items()
+    },
+}
+
 # Speed up user-creation-heavy tests.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
