@@ -74,7 +74,7 @@ from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import AgentRun, AgentSession, RagChunk
-from origin.services import member_events
+from origin.services import demo_v2, member_events
 from origin.services.activity_suppression import suppress_task_activity
 
 # BlockNote body builders live in `demo_blocks` so the per-language
@@ -1149,7 +1149,11 @@ def _assert_seq_monotonic(team) -> None:
 
 
 def create_demo_environment(
-    demo_user: CustomUser, *, short: str | None = None, lang: str = "en"
+    demo_user: CustomUser,
+    *,
+    short: str | None = None,
+    lang: str = "en",
+    version: str = demo_v2.DEFAULT_VERSION,
 ) -> dict:
     """Provision a fresh demo team + bot peers + sample data for
     `demo_user`. Returns `{"team_id": str, "team_name": str}` so the
@@ -1174,10 +1178,20 @@ def create_demo_environment(
 
     Only ONE language is seeded per visitor, so the second content table
     costs source lines, not rows or latency.
+
+    `version`: "v1" (the default) is the frozen eval corpus, byte for byte
+    what this function always seeded; "v2" is the visitor-facing
+    presentation of the same story (a human team and project names, tags
+    and effort on every task, the story's quarters moved to today's; see
+    `demo_v2`). Only `DemoSignInView` passes "v2". The default must stay
+    "v1" for the same reason the default language stays "en": the eval
+    fixture passes neither, and `test_demo_v1_golden` pins its output.
     """
     if short is None:
         short = uuid.uuid4().hex[:8]
     lang = _demo_lang(lang)
+    version = demo_v2.normalize_version(version)
+    is_v2 = version == "v2"
 
     with transaction.atomic():
         # Set on the user so the agent's locale fallback resolves even
@@ -1214,14 +1228,17 @@ def create_demo_environment(
         # `plan_set_by=operator` because a hand-set plan is not Stripe's
         # to take away (see the field comment in team_models.py) — and
         # this team self-destructs on logout anyway.
-        team = TeamMaster.objects.create(
-            team_name=f"Demo Team {short}",
-            team_email=f"demo-team-{short}@genos.app",
-            owner=demo_user,
-            is_demo=True,
-            plan="pro",
-            plan_set_by=TIER_SET_BY_OPERATOR,
-        )
+        if is_v2:
+            team = _create_v2_team(demo_user, short, lang)
+        else:
+            team = TeamMaster.objects.create(
+                team_name=f"Demo Team {short}",
+                team_email=f"demo-team-{short}@genos.app",
+                owner=demo_user,
+                is_demo=True,
+                plan="pro",
+                plan_set_by=TIER_SET_BY_OPERATOR,
+            )
 
         # 3. Team members (demo user + bots)
         all_members = [demo_user] + bots
@@ -1234,10 +1251,19 @@ def create_demo_environment(
 
         # 5-10. Projects + sprints + milestones + tasks (per blueprint)
         content = _content(lang)
+        if is_v2:
+            content = demo_v2.adapt_content(content)
         seeded_projects = []
         for blueprint in content.PROJECT_BLUEPRINTS:
             seeded = _create_project_from_blueprint(
-                team, demo_user, all_members, bots, short, blueprint, content
+                team,
+                demo_user,
+                all_members,
+                bots,
+                short,
+                blueprint,
+                content,
+                slug_suffix=not is_v2,
             )
             seeded_projects.append(seeded)
 
@@ -1415,6 +1441,36 @@ def kick_off_demo_reindex(since_minutes: int = 5) -> None:
     threading.Thread(target=_run, daemon=True, name="demo-reindex").start()
 
 
+def _create_v2_team(demo_user: CustomUser, short: str, lang: str) -> TeamMaster:
+    """The visitor's team with a human name.
+
+    `team_name` is unique across the database, so two visitors seeding at the
+    same moment can pick the same free name. The create runs in a savepoint and
+    takes the next number on a collision, instead of failing the sign-in.
+    """
+    from django.db import IntegrityError
+
+    pool = demo_v2.TEAM_NAMES[lang]
+    taken = set(
+        TeamMaster.objects.filter(team_name__startswith=pool[0]).values_list("team_name", flat=True)
+    ) | set(TeamMaster.objects.filter(team_name__in=pool).values_list("team_name", flat=True))
+    for _ in range(20):
+        name = demo_v2.team_name_for(lang, taken)
+        try:
+            with transaction.atomic():
+                return TeamMaster.objects.create(
+                    team_name=name,
+                    team_email=f"demo-team-{short}@genos.app",
+                    owner=demo_user,
+                    is_demo=True,
+                    plan="pro",
+                    plan_set_by=TIER_SET_BY_OPERATOR,
+                )
+        except IntegrityError:
+            taken.add(name)
+    raise RuntimeError("could not find a free demo team name")
+
+
 def _create_bot_users(short: str, lang: str = "en") -> List[CustomUser]:
     """The four bot peers. Names stay ASCII in every language and only
     `role` is localised — see the comment on `BOT_ROLES` for the two
@@ -1448,7 +1504,7 @@ def _resolve_user(key: str, demo_user: CustomUser, bots: List[CustomUser]) -> Cu
 
 
 def _create_project_from_blueprint(
-    team, demo_user, all_members, bots, short, blueprint, content
+    team, demo_user, all_members, bots, short, blueprint, content, *, slug_suffix=True
 ):
     """Create one project, its tags, sprint, milestone (with backing
     task), and all tasks + subtasks + comments. Returns
@@ -1459,7 +1515,10 @@ def _create_project_from_blueprint(
     table rather than from any one project's blueprint."""
     from origin.services.project_code import derive_project_code
 
-    project_name = f"{blueprint['name']} · demo-{short}"
+    # v1 keeps the slug (the eval corpus has always carried it). v2 drops it:
+    # `project_name` is unique per TEAM, so a visitor's own team needs no
+    # suffix, and the code derived from the name stops reading "QDC-1".
+    project_name = f"{blueprint['name']} · demo-{short}" if slug_suffix else blueprint["name"]
     # Derive a 2–6 letter code so each task gets a real PRJ-123 display
     # id instead of the "#42" fallback. Scope uniqueness to the team
     # (different demo teams can both have a "WR" code).
@@ -2247,7 +2306,11 @@ def _create_blueprint_tasks(
             priority=spec["priority"],
             content=spec["body"],
             due_date=today + timedelta(days=spec.get("due_offset_days", 7)),
-            tags=[],
+            # Only v2 specs carry these (`demo_v2.adapt_content`); v1 and the
+            # starter seeder have never set them, and still don't.
+            tags=spec.get("tags_json", []),
+            effort_level=spec.get("effort_level"),
+            effort_level_code=demo_v2.EFFORT_CODES.get(spec.get("effort_level")),
             mentioned_user_ids=[],
             parent_task_id=parent_task_id,
         )

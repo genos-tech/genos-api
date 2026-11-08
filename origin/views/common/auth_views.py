@@ -26,6 +26,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
+from origin.services import demo_v2
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
     create_demo_environment,
@@ -406,8 +407,10 @@ class DemoSignInView(APIView):
     def post(self, request: Request):
         short = uuid.uuid4().hex[:8]
         email = f"demo+{short}@genos.app"
-        username = f"Demo User {short}"
         lang = _demo_language(request)
+        # The visitor is a person in a team, not "Demo User 1ce530b4": the
+        # workspace is what the landing page's screenshots show (MIP-1237).
+        username = demo_v2.VISITOR_NAMES.get(lang, demo_v2.VISITOR_NAMES["en"])
 
         try:
             with transaction.atomic():
@@ -418,7 +421,9 @@ class DemoSignInView(APIView):
                     is_demo=True,
                     is_email_verified=True,
                 )
-                team_info = create_demo_environment(user, lang=lang)
+                team_info = create_demo_environment(
+                    user, lang=lang, version=demo_v2.VISITOR_VERSION
+                )
         except Exception as exc:
             logger.exception("Demo signin failed: %s", exc)
             return Response(
