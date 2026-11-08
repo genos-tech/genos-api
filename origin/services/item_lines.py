@@ -3,8 +3,8 @@
 A LINE is one item's events from every source, in time order. One comment is a dot; a
 comment, a reply in the linked chat thread, a note edit and a merged PR on the same task
 are a line that says what is going on. `related_lines` joins a line to the lines of the
-items around it: the parent task, the milestone and its siblings, the dependency
-neighbours.
+items around it: the parent task, the milestone, the dependency neighbours, the task's own
+subtasks, and last the milestone's other work.
 
 **Computed on read, nothing copied.** Every event is read live from the table that already
 holds it (task history, task comments and their reactions and mentions, chat messages and
@@ -109,6 +109,7 @@ POOL = 300
 RELATED_MAX = 10
 CANDIDATE_CAP = 40
 SIBLING_POOL = 150
+CHILD_POOL = 150
 NEIGHBOUR_POOL = 20
 RELATED_EVENTS = 5
 # Note access is one role lookup per note, so the notes checked in one call are capped.
@@ -1015,9 +1016,10 @@ def _candidates(
     ctx: ToolContext, access: LabelAccess, root: TaskMaster
 ) -> tuple[list[tuple[str, TaskMaster]], bool]:
     """The items around `root` the member may open, `[(relation, task)]` in priority order
-    (parent, milestone, what blocks it, what it blocks, the milestone's other work), at most
-    `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are dropped
-    before anything is counted."""
+    (parent, milestone, what blocks it, what it blocks, its own subtasks, the milestone's other
+    work), at most `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are
+    dropped before anything is counted. The subtasks come before the milestone's work: a phase
+    and its steps are the closest lines there are, and the work only fills what is left."""
     wanted: list[tuple[str, int]] = []
     if root.parent_task_id:
         wanted.append(("parent", root.parent_task_id))
@@ -1042,8 +1044,18 @@ def _candidates(
         .order_by("-ts_created_at", "-pk")
         .values_list("blocked_task_id", flat=True)[:NEIGHBOUR_POOL]
     )
+    # Live subtasks, the most recently changed first (the order they are shown in is by the
+    # latest event in the window, below). An unsaved create form is not a subtask.
+    children = (
+        TaskMaster.objects.filter(
+            parent_task_id=root.task_id, team_id=ctx.team_id, is_deleted=False, is_init_task=False
+        )
+        .order_by("-ts_updated_at", "-task_id")
+        .values_list("task_id", flat=True)[:CHILD_POOL]
+    )
     wanted += [("blocked_by", t) for t in blockers]
     wanted += [("blocks", t) for t in blocked]
+    wanted += [("child", t) for t in children]
     wanted += [("milestone_work", t) for t in sibling_ids]
     readable = access.tasks({t for _r, t in wanted})
     seen = {root.task_id}
@@ -1061,7 +1073,8 @@ _RELATION_RANK = {
     "milestone": 1,
     "blocked_by": 2,
     "blocks": 3,
-    "milestone_work": 4,
+    "child": 4,
+    "milestone_work": 5,
 }
 
 
@@ -1175,8 +1188,8 @@ def related_lines(
     until: datetime | None = None,
     limit: int = RELATED_MAX,
 ) -> dict[str, Any]:
-    """The lines of the items around a task: its parent, its milestone and the milestone's
-    other work, what blocks it and what it blocks, with the people on the line. At most
+    """The lines of the items around a task: its parent, its milestone, what blocks it and
+    what it blocks, its own subtasks and the milestone's other work, with the people on the line. At most
     `limit` (never more than `RELATED_MAX`) items that have events in the window, the
     busiest group first; `related_capped` says when some were left out."""
     out = _build(ctx, item_ref, since, until, DEFAULT_LIMIT, limit)

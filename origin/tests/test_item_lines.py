@@ -1173,6 +1173,125 @@ class TestRelated(LineBase):
         out = self.full(self.backing)
         self.assertEqual(sorted(self.relations(out).values()), ["milestone_work", "milestone_work"])
 
+    def phase(self, steps, *, milestone=None):
+        """A parent task and `steps` subtasks, all in the milestone."""
+        milestone = milestone or self.milestone
+        parent = self.make_task("Phase", milestone=milestone)
+        kids = [
+            self.make_task(f"Step {i}", parent_task_id=parent.task_id, milestone=milestone)
+            for i in range(steps)
+        ]
+        return parent, kids
+
+    def test_a_parents_subtasks_are_its_related_lines_ahead_of_the_milestones_other_work(self):
+        """MIP-1294: 12 children and a busy milestone. The milestone's newer work used to take
+        every slot; the children are what "where does this phase stand?" is about."""
+        parent, kids = self.phase(12)
+        for i, kid in enumerate(kids):
+            self.comment(kid, self.user2, 10 + i, text=f"step {i}")
+        for i in range(15):
+            self.comment(
+                self.make_task(f"Other {i}", milestone=self.milestone), self.user2, 300 + i
+            )
+        out = self.full(parent)
+        self.assertEqual({r["relation"] for r in out["related"]}, {"child"})
+        self.assertEqual(len(out["related"]), item_lines.RELATED_MAX)
+        # Most recently active first.
+        self.assertEqual(
+            [r["task_id"] for r in out["related"]],
+            [k.task_id for k in reversed(kids)][: item_lines.RELATED_MAX],
+        )
+        self.assertTrue(out["related_capped"])
+        self.assertEqual(out["related_total"], 12 + 15)
+
+    def test_milestone_work_only_fills_what_the_children_leave(self):
+        parent, kids = self.phase(3)
+        for i, kid in enumerate(kids):
+            self.comment(kid, self.user2, 10 + i)
+        for i in range(4):
+            self.comment(
+                self.make_task(f"Other {i}", milestone=self.milestone), self.user2, 300 + i
+            )
+        out = self.full(parent)
+        self.assertEqual(
+            [r["relation"] for r in out["related"]], ["child"] * 3 + ["milestone_work"] * 4
+        )
+        self.assertFalse(out["related_capped"])
+
+    def test_children_are_candidates_before_the_milestones_other_work_is(self):
+        """The candidates are capped before events are looked at: a milestone with more work
+        than the cap must not leave the children out of the candidates."""
+        parent, kids = self.phase(2)
+        for i in range(item_lines.CANDIDATE_CAP + 5):
+            self.make_task(f"Other {i}", milestone=self.milestone)
+        self.comment(kids[0], self.user2, 10)
+        self.comment(kids[1], self.user2, 11)
+        out = self.full(parent)
+        self.assertEqual([r["task_id"] for r in out["related"]], [kids[1].task_id, kids[0].task_id])
+
+    def test_a_child_that_is_also_milestone_work_is_a_child(self):
+        parent, kids = self.phase(1)
+        self.comment(kids[0], self.user2, 10)
+        self.assertEqual(self.relations(self.full(parent)), {kids[0].task_id: "child"})
+
+    def test_a_child_the_member_cannot_open_is_left_out_without_a_trace(self):
+        parent, kids = self.phase(1)
+        hidden = self.make_task(
+            "Merger plans",
+            project=self.hidden_project(),
+            assignee=self.user2,
+            reporter=self.user2,
+            parent_task_id=parent.task_id,
+        )
+        self.comment(hidden, self.user2, 10, text="secret thing")
+        self.comment(kids[0], self.user2, 11)
+        out = self.full(parent)
+        text = self.blob(out)
+        self.assertNotIn(hidden.display_id, text)
+        self.assertNotIn("Merger", text)
+        self.assertNotIn("secret thing", text)
+        self.assertEqual([r["task_id"] for r in out["related"]], [kids[0].task_id])
+        self.assertEqual(out["related_total"], 1)
+
+    def test_a_deleted_child_and_an_unsaved_form_are_not_children(self):
+        parent, kids = self.phase(1)
+        gone = self.make_task("Gone", parent_task_id=parent.task_id, is_deleted=True)
+        draft = self.make_task("Draft", parent_task_id=parent.task_id, is_init_task=True)
+        for task in (gone, draft, kids[0]):
+            self.comment(task, self.user2, 10)
+        self.assertEqual(self.relations(self.full(parent)), {kids[0].task_id: "child"})
+
+    def test_deleted_children_do_not_use_up_the_read_of_the_live_ones(self):
+        """The access check would drop a deleted child anyway; the filter is what keeps the
+        newest rows of a long-lived parent from being all deleted ones."""
+        parent, kids = self.phase(1)
+        for i in range(3):
+            self.make_task(f"Gone {i}", parent_task_id=parent.task_id, is_deleted=True)
+        self.comment(kids[0], self.user2, 10)
+        with mock.patch.object(item_lines, "CHILD_POOL", 2):
+            out = self.full(parent)
+        self.assertEqual(self.relations(out), {kids[0].task_id: "child"})
+
+    def test_a_row_of_another_team_does_not_use_up_the_read_of_the_children(self):
+        from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
+
+        parent, kids = self.phase(1)
+        elsewhere = TeamMaster.objects.create(
+            team_name="Else", team_email="else@example.com", owner=self.user2
+        )
+        for i in range(3):
+            stray = self.make_task(f"Stray {i}", parent_task_id=parent.task_id)
+            TaskMaster.objects.filter(pk=stray.pk).update(team=elsewhere)
+        self.comment(kids[0], self.user2, 10)
+        with mock.patch.object(item_lines, "CHILD_POOL", 2):
+            out = self.full(parent)
+        self.assertEqual(self.relations(out), {kids[0].task_id: "child"})
+
+    def test_a_child_sees_its_parent_as_parent_not_as_child(self):
+        parent, kids = self.phase(1)
+        self.comment(parent, self.user2, 10)
+        self.assertEqual(self.relations(self.full(kids[0])), {parent.task_id: "parent"})
+
     def test_people_are_those_on_the_line_only(self):
         self.comment(self.task, self.user2, 10)
         self.comment(self.parent, self.outsider, 11)
@@ -1232,7 +1351,8 @@ class TestQueryBound(LineBase):
         # The same number of statements: every source is read once for the whole set, so
         # neither an event nor an item adds one.
         self.assertEqual(n_big, n_small)
-        self.assertLessEqual(n_big, 32, n_big)
+        # 33 after MIP-1294 (the subtasks query), 51 after MIP-1295 (neighbours read apart).
+        self.assertLessEqual(n_big, 52, n_big)
         print(f"\n[MIP-1083 queries] 5 events/1 item={n_small}; 50 events/11 items={n_big}")
 
     def test_a_lone_line_is_a_fixed_small_number_of_queries(self):
