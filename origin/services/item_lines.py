@@ -32,9 +32,15 @@ stays UNATTACHED, it is never guessed):
   7. an AI-app marker (`MemberEvent`) by item id: a task, a milestone (its backing task), a
      task note, the thread linked to a task. Only the member's own;
   8. anything else stays out and is counted in `unattached`: the member's own markers that
-     name no live task (a project, a chat, a personal note, an unknown type), the member's
-     own chat messages that are in no linked thread and carry no task chip, the member's
-     completed to-dos (a to-do's title is plain text with no id to follow).
+     name no live task (a project, a chat, a personal note, an unknown type) and the member's
+     own chat messages that are in no linked thread and carry no task chip. (Completed
+     to-dos belong to no item by design and are told once in the briefing's `what_you_did`,
+     not under every line.)
+
+**Noise.** The member's AI-app opens are context, not news. On the line they are folded: a
+run of them by one app with nothing else between, each within `APP_BURST_GAP` of the one
+before, is one entry (`calls`, `first_at`). On a neighbour they take no slot at all: its
+latest events are real ones, and `last_opened_at` says when the member last opened it.
 
 **Access.** An event is shown only when the member can open BOTH the item and the event's own
 container, now: the task (`LabelAccess`), the chat the message is in (`readable_chats_qs`),
@@ -45,11 +51,14 @@ A milestone's neighbours appear only when the member can open the milestone itse
 something they cannot. A task they cannot open is refused with the same words as one that
 does not exist. Another person's AI-app markers are never read: the member's own only.
 
-**Bounded.** Every source is read once for the WHOLE set of items (a line and its related
-lines together), so the number of queries does not grow with events or items. What is capped
-says so: events beyond `limit` (`older_events`), related items beyond the cap
-(`related_capped`), a source cut at its pool (`pool_capped`), note access checks past their
-cap (`notes_capped`).
+**Bounded.** Every source is read once for a whole set of items (the line alone, then its
+neighbours together: a neighbour's busy source can neither crowd out nor flag the line), so
+the number of queries does not grow with events or items. What is capped says so: events
+beyond `limit` (`older_events`), related items beyond the cap (`related_capped`), a source
+that had more rows than its pool (`pool_capped` and `pool_sources`, for the line;
+`related_sources` for the neighbours), notes past the cap on how many are told
+(`notes_capped`). A flag is set only by a row the member may open: the pool is cut after the
+access filter (in SQL where the rule is a filter, per note where it is not), never before it.
 """
 
 from __future__ import annotations
@@ -59,12 +68,13 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import reduce
+from operator import or_
 from typing import Any
 
 from django.db.models import Max, Q
 from django.utils import timezone
 
-from origin.models.chat.todo_models import ToDoItem
 from origin.models.chat.unified_models import (
     Message,
     MessageMention,
@@ -75,6 +85,7 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
@@ -112,8 +123,14 @@ SIBLING_POOL = 150
 CHILD_POOL = 150
 NEIGHBOUR_POOL = 20
 RELATED_EVENTS = 5
-# Note access is one role lookup per note, so the notes checked in one call are capped.
+# Note access is one role lookup per note. At most this many notes the member may open are
+# told in one call (past it `notes_capped` is set, and only by a note they may open), and at
+# most `MAX_NOTES_SCANNED` notes are looked up to find them.
 MAX_NOTES_CHECKED = 10
+MAX_NOTES_SCANNED = 50
+# Opens by one app, with nothing else on the line between them and no more than this apart,
+# are one entry.
+APP_BURST_GAP = timedelta(minutes=30)
 PEOPLE_MAX = 8
 SNIPPET_CHARS = briefing.SNIPPET_CHARS
 
@@ -198,6 +215,9 @@ class Ev:
     via: str = ""
     mentions: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
+    # The member's own AI-app open or change (a `read` / `write` marker of the MCP source): the
+    # events a line folds and a neighbour leaves out. Other ledger kinds are real changes.
+    ai_app: bool = False
 
     def sort_key(self) -> tuple:
         return (self.at, _RANK.get(self.source, 9), str(self.key))
@@ -257,30 +277,54 @@ def _uuid_text(value: Any) -> str | None:
 @dataclass
 class _Read:
     events: dict[int, dict[tuple, Ev]]
-    pool_capped: bool = False
+    # The sources that had more rows than `POOL` for this set of items: rows really left out.
+    cut: set[str] = field(default_factory=set)
     notes_capped: bool = False
 
+    @property
+    def pool_capped(self) -> bool:
+        return bool(self.cut)
 
-def _note_checker(ctx: ToolContext):
-    """`may(note_type, note_id) -> note | None`: the note row when the member can open it now
-    (the rule `get_note` applies), asked once per note and at most `MAX_NOTES_CHECKED` notes
-    in one call. Past the cap the answer is None and `capped` says so."""
-    cache: dict[tuple[int, int], Any] = {}
-    state = {"capped": False}
 
-    def may(note_type: int, note_id: int):
-        key = (note_type, note_id)
-        if key in cache:
-            return cache[key]
-        if len(cache) >= MAX_NOTES_CHECKED:
-            state["capped"] = True
-            return None
-        note = _NOTE_MODELS[note_type].objects.filter(note_id=note_id).first()
-        ok = note is not None and briefing._may_read_note(ctx, note_type, note)
-        cache[key] = note if ok else None
-        return cache[key]
+def readable_task_q(ctx: ToolContext, prefix: str = "") -> Q:
+    """`LabelAccess.task_readable` as a filter: this team, not deleted, and the member is on the
+    project, the assignee or the reporter. `prefix` reaches the task from another model
+    (`"task__"`). It is a second statement of that rule, here so that a pool can be cut AFTER
+    the access filter (MIP-1195); a test pins the two equal over every way a task can be
+    readable or not."""
+    me = str(ctx.user_id)
+    projects = ProjectMembers.objects.filter(attendee_id=me).values("project_id")
+    return Q(**{f"{prefix}team_id": ctx.team_id, f"{prefix}is_deleted": False}) & (
+        Q(**{f"{prefix}project_id__in": projects})
+        | Q(**{f"{prefix}assignee_id": me})
+        | Q(**{f"{prefix}reporter_id": me})
+    )
 
-    return may, state
+
+def _readable_notes(ctx: ToolContext, candidates: list[tuple[int, int]], exceeded: bool):
+    """`(notes, capped)`: the notes among `candidates` (newest version first) the member can
+    open now (the rule `get_note` applies), at most `MAX_NOTES_CHECKED` of them.
+
+    The cap is on notes they may open: a note they may not is looked up and skipped, and never
+    counts, so it cannot tip `capped`. `capped` is True when a note they may open was left out,
+    or when `MAX_NOTES_SCANNED` lookups ran out with candidates still unchecked (`exceeded`
+    says there were more than the caller could list): then nobody knows, and "may be cut" is
+    the honest answer."""
+    candidates = [k for k in candidates[:MAX_NOTES_SCANNED] if k[0] in _NOTE_MODELS]
+    rows: dict[tuple[int, int], Any] = {}
+    for note_type in {t for t, _i in candidates}:
+        wanted = [i for t, i in candidates if t == note_type]
+        for row in _NOTE_MODELS[note_type].objects.filter(note_id__in=wanted):
+            rows[(note_type, row.note_id)] = row
+    notes: dict[tuple[int, int], Any] = {}
+    for key in candidates:
+        note = rows.get(key)
+        if note is None or not briefing._may_read_note(ctx, key[0], note):
+            continue
+        if len(notes) >= MAX_NOTES_CHECKED:
+            return notes, True
+        notes[key] = note
+    return notes, exceeded
 
 
 def _claims(team_id: str, thread_ids: list[str]) -> dict[str, list[int]]:
@@ -314,27 +358,30 @@ def _read_tasks(
         # the task that also chips it) is one event.
         read.events[task_id].setdefault(ev.key, ev)
 
-    def pooled(rows: list) -> list:
-        if len(rows) >= POOL:
-            read.pool_capped = True
+    def pooled(source: str, qs) -> list:
+        """The newest `POOL` rows of `qs` (ordered newest first). One more is asked for: only a
+        row that really was left out marks the source as cut, not a pool that is merely full."""
+        rows = list(qs[: POOL + 1])
+        if len(rows) > POOL:
+            read.cut.add(source)
+            del rows[POOL:]
         return rows
 
     window = {"gte": since, "lt": until}
 
     # 1. the task's own id: history (a comment's rows are told once, from the comment) ...
     activities = pooled(
-        list(
-            TaskActivity.objects.filter(
-                team_id=team,
-                task_id__in=ids,
-                ts_created_at__gte=window["gte"],
-                ts_created_at__lt=window["lt"],
-            )
-            .exclude(action_type__in=_COMMENT_ACTIONS)
-            # Nobody to credit for "created it": automation and imports, not news.
-            .exclude(actor__isnull=True, action_type=TaskActivityActionType.CREATED)
-            .order_by("-ts_created_at", "-pk")[:POOL]
+        "history",
+        TaskActivity.objects.filter(
+            team_id=team,
+            task_id__in=ids,
+            ts_created_at__gte=window["gte"],
+            ts_created_at__lt=window["lt"],
         )
+        .exclude(action_type__in=_COMMENT_ACTIONS)
+        # Nobody to credit for "created it": automation and imports, not news.
+        .exclude(actor__isnull=True, action_type=TaskActivityActionType.CREATED)
+        .order_by("-ts_created_at", "-pk"),
     )
     for row in activities:
         shaped = briefing.activity_event(row, me)
@@ -355,31 +402,33 @@ def _read_tasks(
 
     # ... its comments, and the comments elsewhere that point at it with a `#` chip (5).
     comment_rows = pooled(
-        list(
+        "comments",
+        TaskComments.objects.filter(
+            task_id__in=ids,
+            is_deleted=False,
+            ts_sent_at__gte=window["gte"],
+            ts_sent_at__lt=window["lt"],
+        ).order_by("-ts_sent_at", "-pk"),
+    )
+    # The container of a referencing comment is the task it sits on: the member must open it.
+    # That is part of the query, so the pool is cut after it and a comment on a task they
+    # cannot open can neither take a slot nor tip the flag (MIP-1195).
+    chip_comments = pooled(
+        "comment_chips",
+        _chip_filter(
             TaskComments.objects.filter(
-                task_id__in=ids,
+                readable_task_q(ctx, "task__"),
                 is_deleted=False,
                 ts_sent_at__gte=window["gte"],
                 ts_sent_at__lt=window["lt"],
-            ).order_by("-ts_sent_at", "-pk")[:POOL]
-        )
+            ),
+            "comment_body",
+            ids,
+        ).order_by("-ts_sent_at", "-pk"),
     )
-    chip_comments = pooled(
-        list(
-            _chip_filter(
-                TaskComments.objects.filter(
-                    task__team_id=team,
-                    is_deleted=False,
-                    ts_sent_at__gte=window["gte"],
-                    ts_sent_at__lt=window["lt"],
-                ),
-                "comment_body",
-                ids,
-            ).order_by("-ts_sent_at", "-pk")[:POOL]
-        )
-    )
-    # The container of a referencing comment is the task it sits on: the member must open it.
     source_tasks = access.tasks({c.task_id for c in chip_comments})
+    # The filter above is the rule of `access`; this keeps the two from ever disagreeing in
+    # what is shown.
     chip_comments = [c for c in chip_comments if c.task_id in source_tasks]
     all_comments = comment_rows + chip_comments
     comment_mentions: dict[tuple[int, int], list[str]] = {}
@@ -426,13 +475,12 @@ def _read_tasks(
 
     # ... reactions to its comments.
     for r in pooled(
-        list(
-            TaskCommentReactionFact.objects.filter(
-                task_id__in=ids,
-                ts_created_at__gte=window["gte"],
-                ts_created_at__lt=window["lt"],
-            ).order_by("-ts_created_at", "-pk")[:POOL]
-        )
+        "comment_reactions",
+        TaskCommentReactionFact.objects.filter(
+            task_id__in=ids,
+            ts_created_at__gte=window["gte"],
+            ts_created_at__lt=window["lt"],
+        ).order_by("-ts_created_at", "-pk"),
     ):
         add(
             r.task_id,
@@ -451,14 +499,13 @@ def _read_tasks(
 
     # 2. a PR delivery of the task that merged. (Linking and unlinking a PR are history rows.)
     for d in pooled(
-        list(
-            TaskDelivery.objects.filter(
-                task_id__in=ids,
-                state=TaskDeliveryState.MERGED,
-                merged_at__gte=window["gte"],
-                merged_at__lt=window["lt"],
-            ).order_by("-merged_at", "-pk")[:POOL]
-        )
+        "pr_merges",
+        TaskDelivery.objects.filter(
+            task_id__in=ids,
+            state=TaskDeliveryState.MERGED,
+            merged_at__gte=window["gte"],
+            merged_at__lt=window["lt"],
+        ).order_by("-merged_at", "-pk"),
     ):
         add(
             d.task_id,
@@ -480,49 +527,58 @@ def _read_tasks(
         )
 
     # 3. task notes: the versions of the notes that belong to these tasks, and (5) of any
-    # note that points at them with a chip. Each note must be one the member can open.
-    may_note, note_state = _note_checker(ctx)
+    # note that points at them with a chip. Each note must be one the member can open, and that
+    # is decided BEFORE the versions are read: the notes with a version in the window are
+    # listed newest first, the member's notes among them are kept (at most `MAX_NOTES_CHECKED`),
+    # and only then are their versions read, so no note they cannot open takes a slot or a flag.
     task_notes = {
         n.note_id: n.task_id
         for n in TaskNoteMaster.objects.filter(team_id=team, task_id__in=ids).only(
             "note_id", "task_id"
         )
     }
-    versions: list[tuple[NoteVersionMaster, str, set[int]]] = []
+    in_window = NoteVersionMaster.objects.filter(
+        team_id=team, ts_updated_at__gte=window["gte"], ts_updated_at__lt=window["lt"]
+    )
+    chip_versions = _chip_filter(in_window, "body", ids)
+    note_sources = [chip_versions]
     if task_notes:
-        for v in pooled(
-            list(
-                NoteVersionMaster.objects.filter(
-                    team_id=team,
-                    note_type=2,
-                    note_id__in=list(task_notes),
-                    ts_updated_at__gte=window["gte"],
-                    ts_updated_at__lt=window["lt"],
-                ).order_by("-ts_updated_at", "-pk")[:POOL]
-            )
-        ):
-            versions.append((v, "note_task", {task_notes[v.note_id]}))
-    for v in pooled(
-        list(
-            _chip_filter(
-                NoteVersionMaster.objects.filter(
-                    team_id=team,
-                    ts_updated_at__gte=window["gte"],
-                    ts_updated_at__lt=window["lt"],
-                ),
-                "body",
-                ids,
-            ).order_by("-ts_updated_at", "-pk")[:POOL]
+        note_sources.append(in_window.filter(note_type=2, note_id__in=list(task_notes)))
+    newest: dict[tuple[int, int], datetime] = {}
+    exceeded = False
+    for source in note_sources:
+        listed = list(
+            source.values("note_type", "note_id")
+            .annotate(last=Max("ts_updated_at"))
+            .order_by("-last")[: MAX_NOTES_SCANNED + 1]
         )
-    ):
-        versions.append((v, "chip", chip_task_ids(v.body) & set(ids)))
+        exceeded = exceeded or len(listed) > MAX_NOTES_SCANNED
+        for row in listed[:MAX_NOTES_SCANNED]:
+            key = (row["note_type"], row["note_id"])
+            newest[key] = max(newest.get(key, row["last"]), row["last"])
+    exceeded = exceeded or len(newest) > MAX_NOTES_SCANNED
+    candidates = sorted(newest, key=lambda k: (newest[k], k), reverse=True)[:MAX_NOTES_SCANNED]
+    notes, read.notes_capped = _readable_notes(ctx, candidates, exceeded)
+    versions: list[tuple[NoteVersionMaster, str, set[int]]] = []
+    if notes:
+        of_those = reduce(or_, (Q(note_type=t, note_id=i) for t, i in notes))
+        if task_notes:
+            for v in pooled(
+                "note_versions",
+                in_window.filter(of_those, note_type=2, note_id__in=list(task_notes)).order_by(
+                    "-ts_updated_at", "-pk"
+                ),
+            ):
+                versions.append((v, "note_task", {task_notes[v.note_id]}))
+        for v in pooled(
+            "note_chips", chip_versions.filter(of_those).order_by("-ts_updated_at", "-pk")
+        ):
+            versions.append((v, "chip", chip_task_ids(v.body) & set(ids)))
     for v, via, targets in sorted(
         versions, key=lambda t: (t[0].ts_updated_at, t[0].pk), reverse=True
     ):
-        if not targets or v.note_type not in _NOTE_MODELS:
-            continue
-        note = may_note(v.note_type, v.note_id)
-        if note is None:
+        note = notes.get((v.note_type, v.note_id))
+        if not targets or note is None:
             continue
         for target in targets:
             add(
@@ -549,7 +605,6 @@ def _read_tasks(
                     },
                 ),
             )
-    read.notes_capped = note_state["capped"]
 
     # 4. the chat thread linked to the task, and (5) messages that point at it with a chip.
     readable_chats = readable_chats_qs(team, me).values("id")
@@ -576,21 +631,17 @@ def _read_tasks(
     if thread_of:
         roots = list(thread_of)
         for m in pooled(
-            list(
-                said.filter(Q(id__in=roots, is_thread_reply=False) | Q(thread_root_id__in=roots))
-                .select_related("channel")
-                .order_by("-ts_sent_at", "-pk")[:POOL]
-            )
+            "thread_messages",
+            said.filter(Q(id__in=roots, is_thread_reply=False) | Q(thread_root_id__in=roots))
+            .select_related("channel")
+            .order_by("-ts_sent_at", "-pk"),
         ):
             root = str(m.thread_root_id or m.id)
             if root in thread_of:
                 messages.append((m, "thread", thread_of[root]))
     for m in pooled(
-        list(
-            _chip_filter(said, "body", ids)
-            .select_related("channel")
-            .order_by("-ts_sent_at", "-pk")[:POOL]
-        )
+        "message_chips",
+        _chip_filter(said, "body", ids).select_related("channel").order_by("-ts_sent_at", "-pk"),
     ):
         for target in chip_task_ids(m.body) & set(ids):
             messages.append((m, "chip", target))
@@ -603,13 +654,12 @@ def _read_tasks(
         ):
             message_mentions.setdefault(mm.message_id, []).append(str(mm.mentioned_user_id))
         message_reactions = pooled(
-            list(
-                MessageReaction.objects.filter(
-                    message_id__in=message_ids,
-                    ts_created_at__gte=window["gte"],
-                    ts_created_at__lt=window["lt"],
-                ).order_by("-ts_created_at", "-pk")[:POOL]
-            )
+            "message_reactions",
+            MessageReaction.objects.filter(
+                message_id__in=message_ids,
+                ts_created_at__gte=window["gte"],
+                ts_created_at__lt=window["lt"],
+            ).order_by("-ts_created_at", "-pk"),
         )
     attached_to: dict[Any, set[int]] = {}
     for m, via, target in messages:
@@ -654,8 +704,9 @@ def _read_tasks(
             )
 
     # 7. the member's own AI-app markers, and any other kind written to `MemberEvent`.
-    markers = member_events.recent(me, team, since, until, POOL, kinds=None)
-    pooled(markers)
+    # Read for THESE items (by the ids a marker can name them with), not "the member's newest
+    # 300 of anything": that pool was full of other items' markers and flagged every line.
+    markers = pooled("app_markers", _own_markers_of(me, team, tasks, task_notes, since, until))
     for marker, task_id in _resolve_markers(team, markers).items():
         if task_id in read.events:
             add(task_id, _marker_event(marker, me))
@@ -690,6 +741,37 @@ def _thread_of_marker(object_id: str) -> str | None:
     A marker for a whole chat, with no thread, names no thread."""
     _chat, sep, thread = object_id.partition(":")
     return _uuid_text(thread if sep else object_id) if (thread or not sep) else None
+
+
+def _own_markers_of(
+    me: str,
+    team: str,
+    tasks: dict[int, TaskMaster],
+    task_notes: dict[int, int],
+    since: datetime,
+    until: datetime,
+):
+    """The member's own markers in `[since, until)` that can name one of `tasks`, newest first:
+    by the task, its milestone row, its task notes and its linked thread (alone or as
+    `<chat>:<thread>`). Which of them really belong to a task is `_resolve_markers`' decision
+    (a thread two tasks claim, a deleted task); this only narrows the read to the items asked
+    about, so a pool over it can only be cut by markers of those items."""
+    ids = list(tasks)
+    milestones = MilestoneMaster.objects.filter(
+        task_id__in=ids, team_id=team, is_deleted=False
+    ).values_list("milestone_id", flat=True)
+    threads = sorted({th for t in tasks.values() if (th := _uuid_text(t.thread_id))})
+    named = Q(object_type="task", object_id__in=[str(i) for i in ids])
+    named |= Q(object_type="milestone", object_id__in=[str(m) for m in milestones])
+    if task_notes:
+        named |= Q(object_type="note", object_id__in=[f"task:{n}" for n in task_notes])
+    if threads:
+        on_thread = reduce(or_, (Q(object_id__endswith=f":{th}") for th in threads))
+        named |= Q(object_type="chat_thread") & (Q(object_id__in=threads) | on_thread)
+    floor = timezone.now() - member_events.RETENTION
+    return MemberEvent.objects.filter(
+        named, user_id=me, team_id=team, ts__gte=max(since, floor), ts__lt=until
+    ).order_by("-ts", "-event_id")
 
 
 def _resolve_markers(team: str, markers: list) -> dict[Any, int | None]:
@@ -797,7 +879,8 @@ def _marker_event(marker: Any, me: str) -> Ev:
     kind = str(marker.kind)
     # `read` and `write` are the AI-app markers (source `mcp`). The same words from another
     # source (a web-app open, should one ever be recorded) are not an AI app's doing.
-    if marker.source == member_events.SOURCE_MCP and kind in _MCP_SENTENCES:
+    ai_app = marker.source == member_events.SOURCE_MCP and kind in _MCP_SENTENCES
+    if ai_app:
         summary = _MCP_SENTENCES[kind]
     else:
         summary = _KIND_SENTENCES.get(kind, _GENERIC_SENTENCE)
@@ -816,7 +899,62 @@ def _marker_event(marker: Any, me: str) -> Ev:
         actor=me,
         via="marker",
         extra=extra,
+        ai_app=ai_app,
     )
+
+
+def _fold_app_runs(events: list[Ev]) -> list[Ev]:
+    """`events` in line order with each run of AI-app opens folded into one entry.
+
+    A run is opens or changes by ONE app with no other event between them, each no more than
+    `APP_BURST_GAP` after the one before. It is told at its last time, with `first_at` and the
+    `calls` it holds; it says "changed" if any of them changed something. Other ledger kinds
+    (a to-do edited, a collaborator added) are real changes: never folded."""
+    folded: list[Ev] = []
+    run: list[Ev] = []
+
+    def close() -> None:
+        if len(run) == 1:
+            folded.append(run[0])
+        elif run:
+            last = run[-1]
+            wrote = any(e.what == "app_write" for e in run)
+            kind = "write" if wrote else "read"
+            folded.append(
+                Ev(
+                    at=last.at,
+                    source="app",
+                    key=last.key,
+                    what=f"app_{kind}",
+                    summary=_MCP_SENTENCES[kind],
+                    actor=last.actor,
+                    via="marker",
+                    extra={
+                        **last.extra,
+                        "calls": sum(int(e.extra.get("calls") or 1) for e in run),
+                        "first_at": run[0].at.isoformat(),
+                    },
+                    ai_app=True,
+                )
+            )
+        run.clear()
+
+    for ev in sorted(events, key=Ev.sort_key):
+        if (
+            ev.ai_app
+            and run
+            and ev.extra.get("app") == run[-1].extra.get("app")
+            and ev.at - run[-1].at <= APP_BURST_GAP
+        ):
+            run.append(ev)
+            continue
+        close()
+        if ev.ai_app:
+            run.append(ev)
+        else:
+            folded.append(ev)
+    close()
+    return folded
 
 
 # --------------------------------------------------------------------------- #
@@ -871,8 +1009,9 @@ def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
 def unattached(ctx: ToolContext, since: datetime, until: datetime) -> dict[str, Any]:
     """The member's OWN events in `[since, until)` that no item claims, counted and never
     guessed onto one: markers that name no live task, chat messages in no linked thread that
-    carry no task chip, completed to-dos. Only the member's own events are counted, so the
-    numbers say nothing about anything they cannot open."""
+    carry no task chip. Only the member's own events are counted, so the numbers say nothing
+    about anything they cannot open. (Completed to-dos are not here: they are told once in the
+    briefing's `what_you_did`, MIP-1295.)"""
     me, team = str(ctx.user_id), str(ctx.team_id)
     markers = member_events.recent(me, team, since, until, POOL, kinds=None)
     lost_markers = sum(1 for t in _resolve_markers(team, markers).values() if t is None)
@@ -895,18 +1034,10 @@ def unattached(ctx: ToolContext, since: datetime, until: datetime) -> dict[str, 
     lost_messages = sum(
         1 for m in own if str(m.thread_root_id or m.id) not in claimed and not chip_task_ids(m.body)
     )
-    todos = ToDoItem.objects.filter(
-        group__user_id=me,
-        group__team_id=team,
-        is_completed=True,
-        ts_completed_at__gte=since,
-        ts_completed_at__lt=until,
-    ).count()
     return {
         "app_markers": lost_markers,
         "chat_messages": lost_messages,
-        "todos_completed": todos,
-        "total": lost_markers + lost_messages + todos,
+        "total": lost_markers + lost_messages,
     }
 
 
@@ -1097,6 +1228,16 @@ def _add_seen(
     }
 
 
+def _whole_number(value: Any, name: str) -> int:
+    """`value` as a whole number, or the usual argument error (a model sends text for a number)."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ToolError(f"`{name}` must be a whole number (got {value!r}).")
+    try:
+        return int(value)
+    except ValueError:
+        raise ToolError(f"`{name}` must be a whole number (got {value!r}).")
+
+
 def _build(
     ctx: ToolContext,
     item_ref: Any,
@@ -1107,8 +1248,8 @@ def _build(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     me = str(ctx.user_id)
-    limit = max(1, min(int(limit), MAX_LIMIT))
-    related_limit = max(0, min(int(related_limit), RELATED_MAX))
+    limit = max(1, min(_whole_number(limit, "limit"), MAX_LIMIT))
+    related_limit = max(0, min(_whole_number(related_limit, "related_limit"), RELATED_MAX))
     start, end = resolve_window(me, since, until, now)
     access = LabelAccess(ctx)
     root = _open_task(ctx, access, item_ref)
@@ -1117,12 +1258,15 @@ def _build(
     fanout_capped = False
     if related_limit:
         candidates, fanout_capped = _candidates(ctx, access, root)
-    tasks = {root.task_id: root, **{t.task_id: t for _r, t in candidates}}
-    read = _read_tasks(ctx, access, tasks, start, end)
+    # Two reads: the line alone, then its neighbours together. A neighbour's busy source can
+    # neither crowd the line's events out of a shared pool nor mark the line as cut.
+    line_read = _read_tasks(ctx, access, {root.task_id: root}, start, end)
+    neighbours = {t.task_id: t for _r, t in candidates}
+    near_read = _read_tasks(ctx, access, neighbours, start, end) if neighbours else None
 
     names = briefing._Names(ctx)
     pending: list = []
-    root_events = list(read.events[root.task_id].values())
+    root_events = _fold_app_runs(list(line_read.events[root.task_id].values()))
     result: dict[str, Any] = {
         "window": {"since": start.isoformat(), "until": end.isoformat()},
         "line": _line(root, root_events, limit, names, me, pending),
@@ -1130,28 +1274,29 @@ def _build(
     }
     _add_seen(ctx, result["line"], root.task_id, root_events, start, me)
     if related_limit:
-        with_events = [
-            (relation, task) for relation, task in candidates if read.events[task.task_id]
-        ]
+        # A neighbour's events are the real ones: the member's own AI-app opens say nothing
+        # about what happened there, and used to fill its few latest slots.
+        real: dict[int, list[Ev]] = {
+            task_id: [e for e in found.values() if not e.ai_app]
+            for task_id, found in (near_read.events if near_read else {}).items()
+        }
+        with_events = [(relation, task) for relation, task in candidates if real[task.task_id]]
         with_events.sort(
             key=lambda rt: (
                 _RELATION_RANK[rt[0]],
-                -max(e.at for e in read.events[rt[1].task_id].values()).timestamp(),
+                -max(e.at for e in real[rt[1].task_id]).timestamp(),
                 rt[1].task_id,
             )
         )
         shown = with_events[:related_limit]
+        opened = seen_at(ctx, [task.task_id for _r, task in shown]) if shown else {}
         result["related"] = [
             {
                 "relation": relation,
-                **_line(
-                    task,
-                    list(read.events[task.task_id].values()),
-                    RELATED_EVENTS,
-                    names,
-                    me,
-                    pending,
-                ),
+                **_line(task, real[task.task_id], RELATED_EVENTS, names, me, pending),
+                "last_opened_at": opened[task.task_id].isoformat()
+                if task.task_id in opened
+                else None,
             }
             for relation, task in shown
         ]
@@ -1159,8 +1304,17 @@ def _build(
         result["related_quiet"] = len(candidates) - len(with_events)
         result["related_capped"] = len(with_events) > related_limit or fanout_capped
     result["unattached"] = unattached(ctx, start, end)
-    flags = {"pool_capped": read.pool_capped, "notes_capped": read.notes_capped}
-    result["capped"] = {k: v for k, v in flags.items() if v}
+    capped: dict[str, Any] = {}
+    if line_read.pool_capped:
+        capped["pool_capped"] = True
+        capped["pool_sources"] = sorted(line_read.cut)
+    if line_read.notes_capped:
+        capped["notes_capped"] = True
+    if near_read is not None and (near_read.pool_capped or near_read.notes_capped):
+        capped["related_sources"] = sorted(
+            near_read.cut | ({"notes"} if near_read.notes_capped else set())
+        )
+    result["capped"] = capped
     names.fill()
     for event, holders in pending:
         event["mentions"] = [h["name"] for h in holders]
