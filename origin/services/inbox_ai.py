@@ -13,11 +13,13 @@ fails when a new place appears that is not listed, so the question is asked of e
   * the Genos digest (item type 6, `agent_digest`): AI. Source: the member's `digest_enabled`;
   * a scheduled report (item type 10, `schedule_delivery`): AI only when its job says
     `uses_ai` (none of the built-in jobs does today; a job that will must also report the
-    request that paid for it). Source: that schedule;
+    request that paid for it). Source: that schedule, AI or not (MIP-1234);
   * everything else (requests to join or approve, ownership claims, project and cross-team
     notices, to-do and message reminders): no AI, nothing to attach.
 
-An item that used no AI says nothing about cost: no `ai` key, no "0 credits" noise.
+An item that used no AI says nothing about cost: no `ai` key, no "0 credits" noise. A digest or
+a scheduled report says so in words instead: its `aiSource.used_ai` is false (MIP-1234), and the
+card shows "No AI used"; nothing claims a charge that did not happen.
 
 ## What is stored
 
@@ -43,6 +45,14 @@ but is still AI usage the member should see and may switch off.
 The source is read from the item on the server (never from what the client sends), and only
 the member's own items work. `turn_off` pauses/disables it and says what it did in a sentence;
 `turn_on` is the undo. Neither deletes anything: past items stay.
+
+**Every digest and every scheduled report has a switch, AI or not (MIP-1234).** The source comes
+from the item's TYPE: a digest (6) is the member's digest, a report (10) is the schedule its own
+`item_optionals["schedule_id"]` names (a UUID, looked up for the caller only). A report whose job
+used no AI, like all four built-in jobs today, is switched off the same way, so a member can stop
+"Morning plan" from the item itself. The `ai` block decides nothing about WHICH source it is, so
+a forged block on an item of another type switches nothing; it only says whether AI was used:
+`Source.used_ai` is what the card reads to say "No AI used" (false) or show the cost (true).
 """
 
 from __future__ import annotations
@@ -147,9 +157,17 @@ class Source:
     gone: bool = False
     # The schedule's own team: the switch works in the schedule's team, not the item's.
     team_id: str | None = None
+    # Whether this item spent AI usage (MIP-1234): a digest always did; a report did when it
+    # carries its cost block. The card says "No AI used" when False. Never decides the source.
+    used_ai: bool = False
 
     def public(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"kind": self.kind, "enabled": self.enabled, "label": self.label}
+        out: dict[str, Any] = {
+            "kind": self.kind,
+            "enabled": self.enabled,
+            "label": self.label,
+            "used_ai": self.used_ai,
+        }
         if self.schedule_id:
             out["schedule_id"] = self.schedule_id
         if self.gone:
@@ -168,37 +186,47 @@ def _ai(item) -> dict[str, Any] | None:
 
 
 def sources_for(user, items: list) -> dict[int, Source]:
-    """`item_id -> source` for the AI items among `items` (the member's own): one query for all
-    the schedules."""
+    """`item_id -> source` for the digests and scheduled reports among `items` (the member's own),
+    AI or not (MIP-1234): one query for all the schedules. The source comes from the item's TYPE
+    (and, for a report, the schedule id the delivery wrote); the `ai` block only says whether
+    AI was used."""
     from origin.models.common.schedule_models import MemberSchedule  # noqa: PLC0415
 
-    wanted: dict[int, tuple[str, str | None]] = {}
+    wanted: dict[int, tuple[str, str | None, bool]] = {}
     for item in items:
         ai = _ai(item)
-        if ai is None:
-            continue
-        if ai["producer"] == PRODUCER_DIGEST and item.item_type == ITEM_TYPE_DIGEST:
-            wanted[item.item_id] = (PRODUCER_DIGEST, None)
-        elif ai["producer"] == PRODUCER_SCHEDULE and item.item_type == ITEM_TYPE_REPORT:
-            sid = str((item.item_optionals or {}).get("schedule_id") or "")
+        if item.item_type == ITEM_TYPE_DIGEST:
+            # The digest is an AI producer by definition, whether or not this item kept a cost.
+            wanted[item.item_id] = (PRODUCER_DIGEST, None, True)
+        elif item.item_type == ITEM_TYPE_REPORT:
+            optionals = item.item_optionals if isinstance(item.item_optionals, dict) else {}
+            sid = str(optionals.get("schedule_id") or "")
             if _UUID.match(sid):
-                wanted[item.item_id] = (PRODUCER_SCHEDULE, sid)
+                used = ai is not None and ai["producer"] == PRODUCER_SCHEDULE
+                wanted[item.item_id] = (PRODUCER_SCHEDULE, sid, used)
     schedules = {
         str(s.id): s
         for s in MemberSchedule.objects.filter(
-            user_id=user.pk, id__in=[sid for kind, sid in wanted.values() if sid]
+            user_id=user.pk, id__in=[sid for kind, sid, _ in wanted.values() if sid]
         )
     }
-    out: dict[int, dict[str, Any]] = {}
-    for item_id, (kind, sid) in wanted.items():
+    out: dict[int, Source] = {}
+    for item_id, (kind, sid, used) in wanted.items():
         if kind == PRODUCER_DIGEST:
-            out[item_id] = Source(kind, bool(user.digest_enabled), "Genos digest")
+            out[item_id] = Source(kind, bool(user.digest_enabled), "Genos digest", used_ai=used)
         else:
             sched = schedules.get(sid or "")
             out[item_id] = (
-                Source(kind, bool(sched.enabled), sched.name, sid, team_id=str(sched.team_id))
+                Source(
+                    kind,
+                    bool(sched.enabled),
+                    sched.name,
+                    sid,
+                    team_id=str(sched.team_id),
+                    used_ai=used,
+                )
                 if sched
-                else Source(kind, False, "", sid, gone=True)
+                else Source(kind, False, "", sid, gone=True, used_ai=used)
             )
     return out
 
