@@ -948,7 +948,9 @@ class TestItIsTheCallersOwnView(BriefingBase):
         # The one task they did comment on is theirs to see in what THEY did (they can open it);
         # it is nowhere else in their view.
         self.assertIn("Private plan", json.dumps(brief["what_you_did"]))
-        rest = {k: v for k, v in brief.items() if k != "what_you_did"}
+        # Their per-day table (MIP-1084) may list it too, once that day has closed: they
+        # commented on it, so it is theirs. 'Hidden plan' is checked above, over everything.
+        rest = {k: v for k, v in brief.items() if k not in ("what_you_did", "activity")}
         self.assertNotIn("Private plan", json.dumps(rest))
 
     def test_people_are_only_named_when_the_caller_may_see_them(self):

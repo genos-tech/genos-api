@@ -1508,6 +1508,10 @@ def build_briefing(
     waiting_others = waiting_on_others(ctx, names)
     suggestions = suggested_next(ctx, now, zone, win, items, project)
     did = what_you_did(ctx, now, zone, names)
+    # The per-day table (MIP-1084), read when it has rows; None before the first fill.
+    from origin.services import item_activity  # noqa: PLC0415 - it reads item_lines, which reads this module
+
+    activity = item_activity.briefing_section(ctx, now)
 
     # People are named in one batch, after every section has said who it needs.
     for item in items:
@@ -1543,6 +1547,7 @@ def build_briefing(
         "waiting_on_others": waiting_others,
         "stale_mine": stale_mine(ctx, now, zone, project),
         "what_you_did": did,
+        "activity": activity,
         "suggested_next": suggestions,
     }
     names.fill()

@@ -1168,6 +1168,10 @@ class TestTool(LineBase):
             task_id=str(task.task_id), since=self.since.isoformat(), until=self.until.isoformat()
         )
         self.assertEqual(a["line"]["task_id"], task.task_id)
+        # The first call is itself a look (an AI-app marker), so only the second has a seen
+        # time (MIP-1084); everything else about the line is the same.
+        for line in (a["line"], b["line"]):
+            line.pop("last_seen_at"), line.pop("since_seen", None)
         self.assertEqual(a["line"], b["line"])
 
     def test_the_result_is_the_line_related_people_and_unattached(self):

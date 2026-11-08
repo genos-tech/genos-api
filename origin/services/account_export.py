@@ -53,6 +53,7 @@ def build_export(user) -> dict:
     )
     from origin.models.task.task_models import TaskComments, TaskMaster
     from origin.search_engine.models import AgentSession
+    from origin.services import item_activity
     from origin.services.member_roles import resolve_team_role
 
     prefs = NotificationPreference.objects.filter(user=user).first()
@@ -189,6 +190,9 @@ def build_export(user) -> dict:
         )
     ]
 
+    # The per-day activity table (MIP-1084): counts by kind per task and day, no title.
+    item_activity_days = item_activity.export_rows(str(user.id))
+
     tasks = [
         {
             "task_id": t.task_id,
@@ -291,6 +295,7 @@ def build_export(user) -> dict:
         "schedule_reports": schedule_reports,
         "mcp_use": mcp_use,
         "activity": activity,
+        "item_activity": item_activity_days,
         "tasks": tasks,
         "messages": messages,
         "task_comments": comments,
@@ -303,6 +308,7 @@ def build_export(user) -> dict:
             "schedule_reports": len(schedule_reports),
             "mcp_use": len(mcp_use),
             "activity": len(activity),
+            "item_activity": len(item_activity_days),
             "tasks": len(tasks),
             "messages": len(messages),
             "task_comments": len(comments),
