@@ -16,8 +16,11 @@ from origin.views.public.mcp.secretary.create_my_schedule import CREATE_MY_SCHED
 from origin.views.public.mcp.secretary.delete_my_schedule import DELETE_MY_SCHEDULE
 from origin.views.public.mcp.secretary.get_item_line import GET_ITEM_LINE
 from origin.views.public.mcp.secretary.get_my_briefing import GET_MY_BRIEFING
+from origin.views.public.mcp.secretary.get_my_importance import GET_MY_IMPORTANCE
 from origin.views.public.mcp.secretary.list_my_schedules import LIST_MY_SCHEDULES
 from origin.views.public.mcp.secretary.run_my_schedule import RUN_MY_SCHEDULE
+from origin.views.public.mcp.secretary.set_item_importance import SET_ITEM_IMPORTANCE
+from origin.views.public.mcp.secretary.tune_my_importance import TUNE_MY_IMPORTANCE
 from origin.views.public.mcp.secretary.update_my_schedule import UPDATE_MY_SCHEDULE
 
 SCHEDULE_TOOLS = (
@@ -27,7 +30,8 @@ SCHEDULE_TOOLS = (
     DELETE_MY_SCHEDULE,
     RUN_MY_SCHEDULE,
 )
-SECRETARY_TOOLS = (GET_MY_BRIEFING, GET_ITEM_LINE, *SCHEDULE_TOOLS)
+IMPORTANCE_TOOLS = (GET_MY_IMPORTANCE, SET_ITEM_IMPORTANCE, TUNE_MY_IMPORTANCE)
+SECRETARY_TOOLS = (GET_MY_BRIEFING, GET_ITEM_LINE, *IMPORTANCE_TOOLS, *SCHEDULE_TOOLS)
 
 for _tool in SECRETARY_TOOLS:
     register_tool(_tool)

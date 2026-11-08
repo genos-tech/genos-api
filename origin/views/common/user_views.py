@@ -10,6 +10,9 @@ from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
 from origin.models.common.item_activity_models import purge_for_user as purge_item_activity
+from origin.models.common.member_importance_models import (
+    purge_for_user as purge_importance,
+)
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
@@ -758,6 +761,7 @@ class MemberEventsPreferenceView(AuthenticatedAPIView):
             if not value:
                 request.user.member_events.all().delete()
                 purge_item_activity(request.user.pk)  # the per-day table (MIP-1084)
+                purge_importance(request.user.pk)  # what they marked and tuned (MIP-1087)
             elif not was_enabled:
                 # Back on: the per-day table starts today, it does not rebuild the time it was off.
                 from origin.services import item_activity  # noqa: PLC0415 - heavy, rarely needed

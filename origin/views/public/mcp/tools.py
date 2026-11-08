@@ -1680,7 +1680,13 @@ CATALOG: tuple[McpTool, ...] = (
             "opened or changed it; counts of saved actions, never time spent, so say it as "
             "how busy an item has been, not how long they worked); and `suggested_next`, the top "
             "three with the reasons. The reasons come from activity and dates, and priority "
-            "is only a hint: say them, and let the member disagree. `window` is since_last "
+            "is only a hint: say them, and let the member disagree. Once a week of activity is "
+            "recorded (or the member has tuned or marked something) the top three is ranked by "
+            "what matters to THEM, from how busy an item has been, and `importance` carries "
+            "`suggestions` (questions like 'busy all week but marked Low: raise it?': ask "
+            "them, never change a priority unasked), how many tasks they marked not important "
+            "and whether they tuned it; `get_my_importance` and `tune_my_importance` go "
+            "deeper. `window` is since_last "
             "(the default: since they last asked, never empty on a repeat call within two "
             "hours), today or week; `since` looks back to a time instead; `project_id` "
             "limits it to one project's tasks. Everything is the member's own view: only "
@@ -1726,6 +1732,62 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="get_my_importance",
+        registry_name="get_my_importance",
+        description=(
+            "Read what matters most to the member right now, worked out from what they do, "
+            "with the reason for each item. Use it when they ask 'what matters most', 'what "
+            "should I focus on', 'why is this at the top', or before changing how it is "
+            "ranked. `top` is their most important open tasks, best first, each with a `score` "
+            "and `reasons` in words (what others did, what they did, chat, notes, PRs, how "
+            "many of the last 7 days it was busy on, rising or cooling; due date, priority and "
+            "Blocked are only weak hints). It counts saved actions, never time spent, so say "
+            "it as how busy an item has been, not how long they worked on it. `suggestions` "
+            "are questions where activity and the fields disagree ('busy all week but marked "
+            "Low: raise it?'): ASK them, and change a priority only if they say yes, with "
+            "`update_task`. Nothing here changes a task. `tuning` lists every signal with its "
+            "level (off, low, normal, high) and what it means; `marked` lists the tasks they "
+            "marked not important or as having the right priority. `history` says whether a "
+            "full week of activity has been recorded (full, partial, none). If `enabled` is "
+            "false they switched recording off and nothing is learned or kept. Only the "
+            "member's own view: only tasks they can open, people only as a count."
+        ),
+    ),
+    McpTool(
+        name="set_item_importance",
+        registry_name="set_item_importance",
+        description=(
+            "Correct what matters to the member on ONE task. `mark` 'not_important': never "
+            "offer it as a top item or a suggestion again (it sticks until they clear it). "
+            "'priority_is_right': stop asking whether to change its priority, its ranking is "
+            "unchanged. 'clear': remove the mark. Use it when they say 'this isn't important', "
+            "'stop showing me this' or 'leave its priority alone'. It changes nothing on the "
+            "task itself. Name the task by its display id (PRJ-123), its Genos URL, or its "
+            "numeric id. It refuses while the member has recording switched off. See the "
+            "marks with `get_my_importance`. Requires a write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="tune_my_importance",
+        registry_name="tune_my_importance",
+        description=(
+            "Change how much each signal counts when Genos works out what matters to the "
+            "member. `weights` maps a signal to a level: off, low, normal (the default) or "
+            "high. Signals: others (what other people do on a task), mine (what they do), chat, "
+            "notes, prs, spread (how many days it was busy on), trend (heating up or cooling "
+            "down), hints (due date, priority and Blocked, all weak). For example "
+            "{'chat': 'off', 'others': 'high'} for 'stop counting chat, what my teammates do "
+            "matters most'. `reset` true puts every signal back to normal first. Only what "
+            "differs from normal is kept. It changes no task. See the current levels with "
+            "`get_my_importance`. It refuses while the member has recording switched off. "
+            "Requires a write-scoped API key."
+        ),
+        write=True,
     ),
     McpTool(
         name="list_my_schedules",
@@ -2022,6 +2084,8 @@ OVERWRITE_TOOLS = frozenset(
         "update_tasks_bulk",
         "update_todo_item",
         "update_my_schedule",
+        "set_item_importance",  # replaces the member's mark on one task
+        "tune_my_importance",  # replaces how a signal counts
     }
 )
 
