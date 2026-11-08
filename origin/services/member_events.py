@@ -504,24 +504,22 @@ def recent(
     since: datetime,
     until: datetime,
     limit: int = 60,
-    kinds: tuple[str, ...] = MCP_KINDS,
+    kinds: tuple[str, ...] | None = MCP_KINDS,
 ):
     """The member's own rows in `[since, until)` for one team, newest first, never older
     than the retention. ALWAYS filtered by the member: nothing here can return another's.
 
     `kinds` defaults to the AI-app markers (`read`, `write`): the briefing tells those as
     "opened / changed with your AI app" and must never tell an activity event that way. Ask
-    for `ACTIVITY_KINDS` to read the member's own changes."""
+    for `ACTIVITY_KINDS` to read the member's own changes, or `None` for every kind there is
+    (what an item's line reads: it tells each kind by its own name)."""
     floor = timezone.now() - RETENTION
-    return list(
-        MemberEvent.objects.filter(
-            user_id=user_id,
-            team_id=team_id,
-            kind__in=kinds,
-            ts__gte=max(since, floor),
-            ts__lt=until,
-        ).order_by("-ts", "-event_id")[:limit]
+    rows = MemberEvent.objects.filter(
+        user_id=user_id, team_id=team_id, ts__gte=max(since, floor), ts__lt=until
     )
+    if kinds is not None:
+        rows = rows.filter(kind__in=kinds)
+    return list(rows.order_by("-ts", "-event_id")[:limit])
 
 
 def purge(user_id: str) -> int:

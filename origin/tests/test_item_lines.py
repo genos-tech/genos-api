@@ -809,6 +809,18 @@ class TestMarkers(LineBase):
         self.assertEqual(events[0]["what"], "app_newkind")
         self.assertEqual(events[0]["summary"], "newkind (genos)")
 
+    def test_the_members_own_ledger_changes_are_on_the_line_by_their_own_name(self):
+        task = self.make_task()
+        self.marker(
+            self.user, 10, "task", task.task_id, kind="dependency_add", source="app", client=""
+        )
+        [event] = self.events(task)
+        self.assertEqual(event["what"], "app_dependency_add")
+        self.assertEqual(event["summary"], "dependency_add (app)")
+        # ... and counted as unattached, not lost, when they name no task.
+        self.marker(self.user, 20, "todo", "5", kind="todo_edit", source="app", client="")
+        self.assertEqual(self.line(task)["unattached"]["app_markers"], 1)
+
     def test_markers_in_one_bucket_tell_how_many_calls(self):
         task = self.make_task()
         self.marker(self.user, 10, "task", task.task_id, count=4)
