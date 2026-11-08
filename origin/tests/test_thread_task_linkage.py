@@ -16,7 +16,7 @@ from django.core.management import call_command
 from django.urls import reverse
 from rest_framework import status
 
-from origin.models.chat.unified_models import Channel, ChannelKind, Message
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.tests.test_base import BaseAPITestCase
@@ -38,6 +38,8 @@ class ThreadLinkTestBase(BaseAPITestCase):
             title="Linkage DM",
             owner=self.user,
         )
+        # A task can only be linked to a chat its writer can read (MIP-1314).
+        ChannelMember.objects.create(channel=self.channel, user=self.user)
         self.thread_root = Message.objects.create(
             channel=self.channel,
             sender=self.user,
