@@ -366,8 +366,9 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     share_answers_with_team = models.BooleanField(default=True)
 
     # Genos notes WHICH items (task, note, project, ...) the member's connected AI apps
-    # open or change over MCP (`MemberEvent`, MIP-1143): references only, never text,
-    # visible only to this member, kept 180 days. ON by default; Settings turns it off,
+    # open or change over MCP (`MemberEvent`, MIP-1143), and the changes of their own that
+    # nothing else saves (collaborators, dependencies, to-do edits, note shares: MIP-1085):
+    # references only, never text, visible only to this member, kept 180 days. ON by default; Settings turns it off,
     # which also deletes everything noted. `db_default` because the MCP write reads it
     # in SQL, so a row inserted without the column still counts as on.
     member_events_enabled = models.BooleanField(default=True, db_default=True)

@@ -20,6 +20,10 @@ inconsistent rather than merely wrong:
 * **Finishing a to-do retires its pending reminder** (`apply_completion`).
 * **Deleting cascades** to sub-items and their reminders through the FKs,
   and leaves the search index to a best-effort purge.
+* **The owner's ledger is told** (MIP-1085): an edit of the title, the notes, the tag or the
+  day (`todo_edit`) and a delete (`todo_delete`), as the to-do's id only, never its title.
+  Nothing else saves either: the row is overwritten or gone. Here, not in a signal, so the
+  seeders and the account deletion's cascade stay out of it.
 
 Nothing here knows about requests. A refusal is a `TodoItemError`; the
 caller turns it into whatever its surface says (a 400, a `ToolError`).
@@ -33,8 +37,13 @@ from django.db import transaction
 from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoGroup, ToDoItem
+from origin.models.common.member_event_models import (
+    KIND_TODO_DELETE,
+    KIND_TODO_EDIT,
+    OBJECT_TODO,
+)
 from origin.search_engine.purge import purge_todo_item
-from origin.services import todo_reminders
+from origin.services import member_events, todo_reminders
 
 SUBITEM_MOVE_REFUSAL = "Subitems move with their parent — move the parent instead."
 SUBITEM_CATEGORY_REFUSAL = "Children inherit the parent's tag — set it on the parent."
@@ -155,9 +164,31 @@ def save_item(item, *, move_to=None) -> ItemSave:
     """
     with transaction.atomic():
         old_group_id = item.group_id
+        owner_id = item.group.user_id
+        # What is stored now, to tell an edit from a save that changed nothing the ledger
+        # keeps (a tick, a reorder). Only read when the owner's ledger could take the row.
+        stored = None
+        if item.pk is not None and member_events.recording_activity_for(owner_id):
+            stored = (
+                ToDoItem.objects.filter(pk=item.pk)
+                .values("title", "notes", "category_id", "group_id")
+                .first()
+            )
         if move_to is not None and move_to != item.group.local_date:
             item.group = get_or_create_group(item.group.team_id, item.group.user_id, move_to)
         item.save()
+        if stored is not None and (
+            stored["title"] != item.title
+            or stored["notes"] != item.notes
+            or stored["category_id"] != item.category_id
+            or stored["group_id"] != item.group_id
+        ):
+            member_events.record_activity(
+                user_id=owner_id,
+                team_id=item.group.team_id,
+                kind=KIND_TODO_EDIT,
+                items=[(OBJECT_TODO, str(item.item_id), "")],
+            )
 
         moved_child_ids: list[int] = []
         moved = item.group_id != old_group_id
@@ -188,9 +219,17 @@ def delete_item(item) -> None:
     # Django clears the pk off the instance once it is deleted.
     item_id = item.item_id
     group_id = item.group_id
+    owner_id = item.group.user_id
+    team_id = item.group.team_id
     with transaction.atomic():
         item.delete()
         recompute_group_completion(group_id)
+        member_events.record_activity(
+            user_id=owner_id,
+            team_id=team_id,
+            kind=KIND_TODO_DELETE,
+            items=[(OBJECT_TODO, str(item_id), "")],
+        )
     # Best-effort: drop the item's chunk from OpenSearch — chunkers never
     # revisit deleted rows. The orphan sweep retries if this fails.
     purge_todo_item(item_id)

@@ -43,7 +43,7 @@ def build_export(user) -> dict:
     from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
     from origin.models.chat.unified_models import Message
     from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
-    from origin.models.common.member_event_models import MemberEvent
+    from origin.models.common.member_event_models import ACTIVITY_KINDS, MCP_KINDS, MemberEvent
     from origin.models.common.notification_models import NotificationPreference
     from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
     from origin.models.common.team_models import TeamMembers
@@ -166,7 +166,27 @@ def build_export(user) -> dict:
             "calls": e.count,
             "last_at": _iso(e.ts),
         }
-        for e in MemberEvent.objects.filter(user=user).order_by("ts", "event_id")
+        for e in MemberEvent.objects.filter(user=user, kind__in=MCP_KINDS).order_by(
+            "ts", "event_id"
+        )
+    ]
+    # What they changed that nothing else saves (MIP-1085): collaborators, dependencies,
+    # to-do edits and deletes, note shares. References only. `other_id` is the other end:
+    # a person's id, or for a dependency the blocking task's id.
+    activity = [
+        {
+            "team_id": str(e.team_id),
+            "kind": e.kind,
+            "object_type": e.object_type,
+            "object_id": e.object_id,
+            "other_id": e.other_id,
+            "source": e.source,
+            "times": e.count,
+            "last_at": _iso(e.ts),
+        }
+        for e in MemberEvent.objects.filter(user=user, kind__in=ACTIVITY_KINDS).order_by(
+            "ts", "event_id"
+        )
     ]
 
     tasks = [
@@ -270,6 +290,7 @@ def build_export(user) -> dict:
         "schedule_defaults_seeded": schedule_defaults_seeded,
         "schedule_reports": schedule_reports,
         "mcp_use": mcp_use,
+        "activity": activity,
         "tasks": tasks,
         "messages": messages,
         "task_comments": comments,
@@ -281,6 +302,7 @@ def build_export(user) -> dict:
             "schedules": len(schedules),
             "schedule_reports": len(schedule_reports),
             "mcp_use": len(mcp_use),
+            "activity": len(activity),
             "tasks": len(tasks),
             "messages": len(messages),
             "task_comments": len(comments),

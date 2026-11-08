@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import uuid
 
+from origin.models.common.member_event_models import (
+    KIND_COLLABORATOR_ADD,
+    KIND_COLLABORATOR_REMOVE,
+    OBJECT_TASK,
+)
 from origin.models.common.user_models import CustomUser
+from origin.services import member_events
 from origin.views.utils.scope_guards import is_project_member, is_team_member
 
 
@@ -147,4 +153,23 @@ def sync_task_collaborators(task, raw_ids) -> None:
         except (ValueError, AttributeError, TypeError):
             continue
     valid = list(CustomUser.objects.filter(id__in=candidate_ids).values_list("id", flat=True))
+    # The acting member's ledger notes who was added and who was taken off (MIP-1085):
+    # nothing else saves it. Only when something can be written for them, so a member
+    # who opted out costs no extra query.
+    actor = member_events.acting_user_id()
+    before: set[str] | None = None
+    if member_events.recording_activity_for(actor):
+        before = {str(pk) for pk in task.collaborators.values_list("id", flat=True)}
     task.collaborators.set(valid)
+    if before is not None:
+        after = {str(pk) for pk in valid}
+        for kind, people in (
+            (KIND_COLLABORATOR_ADD, sorted(after - before)),
+            (KIND_COLLABORATOR_REMOVE, sorted(before - after)),
+        ):
+            member_events.record_activity(
+                user_id=actor,
+                team_id=task.team_id,
+                kind=kind,
+                items=[(OBJECT_TASK, str(task.task_id), person) for person in people],
+            )
