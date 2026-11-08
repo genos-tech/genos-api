@@ -104,6 +104,19 @@ def arrange(items: list[ReportItem], today: date) -> list[ReportItem]:
     return [*grouped, *rest]
 
 
+def in_order(items: list[ReportItem], today: date) -> list[ReportItem]:
+    """The typed fields of a section's task items, in the order the job gave them (MIP-1236).
+
+    For a section whose ORDER is the point: "Start with" is the briefing's top three by what
+    matters to the member (MIP-1087), and grouping it by project would regroup them and lose
+    the ranking. Every task still carries its `project`, so a card can name it on the row; the
+    card draws no group headers for such a section (it has the key `start_with`)."""
+    for i in items:
+        if "_facts" in i:
+            i.update(_typed_fields(i.pop("_facts"), today))  # type: ignore[typeddict-item, misc]
+    return items
+
+
 def more(count: int, noun: str) -> ReportItem:
     """The closing line of a capped list: how many are not shown."""
     return {"text": f"and {count} more {noun}", "kind": "more"}

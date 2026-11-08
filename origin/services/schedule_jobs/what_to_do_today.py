@@ -24,7 +24,15 @@ from origin.services.schedule_jobs import (
     ReportSection,
     register_job,
 )
-from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
+from origin.services.schedule_jobs.report_kit import (
+    Links,
+    arrange,
+    clip,
+    in_order,
+    item,
+    more,
+    plain,
+)
 
 DEFAULT_CHANGED_HOURS = 24
 
@@ -40,6 +48,10 @@ _SECTION_KEYS = {
     "You are waiting on others": "waiting_on_others",
     "Gone quiet": "gone_quiet",
 }
+
+
+# Sections whose order is the content: not grouped by project.
+_KEEP_ORDER = ("Start with",)
 
 
 def _task_text(row: dict[str, Any]) -> str:
@@ -178,8 +190,10 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         if not items:
             return
         # Tasks grouped by project and sorted inside each group (MIP-1207); anything else keeps
-        # its order. The "and N more" line is added after, so it stays last.
-        shown = arrange(list(items), today)
+        # its order. "Start with" keeps the briefing's rank order instead (MIP-1236): the
+        # ranking is the point of that section. The "and N more" line is added after, so it
+        # stays last.
+        shown = (in_order if heading in _KEEP_ORDER else arrange)(list(items), today)
         if total is not None and total > len(shown):
             shown.append(more(total - len(shown), noun))
         section: ReportSection = {"heading": heading, "items": shown}
