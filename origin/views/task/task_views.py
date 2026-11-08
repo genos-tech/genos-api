@@ -47,6 +47,8 @@ from origin.services.task_project_move import (
 from origin.services.task_project_move import relocate_task_satellites, relocate_tasks
 from origin.services.task_reparent import is_nested_task as _is_nested_task
 from origin.services.task_reparent import normalize_task_id as _normalize_task_id
+from origin.services.task_reparent import parent_implied_milestone as _parent_implied_milestone
+from origin.services.task_reparent import payload_contradicts_tree as _payload_contradicts_tree
 from origin.services.task_reparent import reparent_task as _reparent_task
 from origin.services.thread_link import find_thread_link_conflict
 from origin.services.throttles import BatchReadThrottle, with_defaults
@@ -280,6 +282,19 @@ class TaskMasterView(AuthenticatedAPIView):
             except Exception:
                 pass
 
+        milestone_overridden = False
+        # A new task cannot be filed in a milestone its parent is not in
+        # (MIP-1168): where it hangs decides, as in the PUT. The form sends the
+        # parent's own milestone, so this only changes a payload that
+        # contradicts itself.
+        if milestone_id and parent_task_id not in (None, "", "null"):
+            parent_found, implied_milestone_id = _parent_implied_milestone(
+                _normalize_task_id(parent_task_id)
+            )
+            if parent_found and implied_milestone_id != _normalize_task_id(milestone_id):
+                milestone_id = implied_milestone_id
+                milestone_overridden = True
+
         # Derive the sprint from the (possibly inferred) milestone so a
         # newly created task always lands in the same sprint bucket as
         # its milestone. The frontend doesn't expose a direct sprint
@@ -297,6 +312,9 @@ class TaskMasterView(AuthenticatedAPIView):
                 sprint_id = m_for_sprint.sprint_id
             except MilestoneMaster.DoesNotExist:
                 sprint_id = None
+        elif milestone_overridden:
+            # The parent is in no milestone, so the task is in none and has no sprint.
+            sprint_id = None
 
         # Build the create payload. A missing required field is a client
         # error: a 400 naming the first one missing, not a KeyError 500. Presence,
@@ -812,6 +830,41 @@ class TaskMasterView(AuthenticatedAPIView):
                 milestone_in_request = True
                 requested_milestone_id = None
 
+        # The tree wins over a milestone that contradicts it (MIP-1168).
+        #
+        # A task's milestone, sprint and root are consequences of where it
+        # hangs. The app's full save re-sends `milestone` AND `parent_task_id`
+        # from its working copy on every edit, and a copy older than a move
+        # carries the OLD milestone next to the CURRENT parent. Believing the
+        # pair wrote a milestone the parent chain does not have and carried
+        # the whole sub-tree there: MIP-598, edited by its description,
+        # slipped from "Genos secretary" back to "Improve Genos capability"
+        # while its parents stayed put, and vanished from both milestones'
+        # tables. The picker never sends such a pair (it moves the parent
+        # with the milestone), so a payload that disagrees with its own
+        # parent is a stale echo: drop its milestone and settle the task
+        # from the parent, which also heals a row an earlier save broke.
+        settle_from_tree = False
+        #
+        # Only a payload that names BOTH is judged: a milestone with no parent
+        # key is a request to move the task there, and the bridge hangs it
+        # under that milestone's row.
+        if milestone_in_request and parent_in_request and not project_changed:
+            if not task.is_milestone and _payload_contradicts_tree(
+                _normalize_task_id(requested_milestone_id), parent_task_id
+            ):
+                logger.warning(
+                    "task PUT %s: milestone %r contradicts parent %s; the tree wins",
+                    task_id,
+                    requested_milestone_id,
+                    parent_task_id,
+                )
+                milestone_in_request = False
+                requested_milestone_id = None
+                update_data.pop("milestone", None)
+                update_data.pop("sprint", None)
+                settle_from_tree = True
+
         # Partial=True so callers (e.g. the task-graph diagram) can PUT
         # a subset of fields like `{task_id, start_date}` without being
         # forced to round-trip the full TaskProps object. The full-PUT
@@ -883,7 +936,7 @@ class TaskMasterView(AuthenticatedAPIView):
             # second kind ran neither bridge nor cascade, so dragging a
             # task under a row in another milestone left it, and
             # everything beneath it, filed under the old one.
-            if milestone_in_request or parent_changed:
+            if milestone_in_request or parent_changed or settle_from_tree:
                 task.refresh_from_db()
                 before = (task.milestone_id, task.sprint_id, task.root_task_id)
                 if milestone_in_request:
