@@ -323,8 +323,13 @@ def deliver(
     # raises when the job did not say which request paid, so the run fails and nothing is filed.
     # A job that uses none says nothing about cost.
     job = JOBS.get(schedule.job)
-    if job is not None and job.uses_ai:
-        optionals["ai"] = inbox_ai.require_cost(schedule.job, report, schedule.user_id)
+    if job is not None and job.ai_applies(schedule.params):
+        if report.get("ai_request_id") or not report.get("ai_skipped"):
+            optionals["ai"] = inbox_ai.require_cost(schedule.job, report, schedule.user_id)
+        else:
+            # The job says it spent nothing this time, and why (a code, never text a person
+            # wrote): filed plain, with no cost block, and the run's result says so.
+            result["ai_skipped"] = _text(report["ai_skipped"], 40)
 
     with transaction.atomic():
         # Lock the schedule row: of two deliveries of one run (a taken-over claim), the second

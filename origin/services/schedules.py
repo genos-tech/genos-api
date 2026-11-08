@@ -691,15 +691,65 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
         return STATUS_FAILED, "That job no longer exists."
     ctx = ToolContext(team_id=str(sched.team_id), user_id=str(sched.user_id))
     try:
+        # The job and the delivery are two savepoints, not one (MIP-1210): a job that calls a
+        # model has recorded what it spent (`AiSpendEvent`, `AiRequestCost`) by the time it
+        # returns, and a delivery that then fails must not roll that record back. The money is
+        # spent either way; losing its row would be spend nobody can see. Jobs write nothing to
+        # the workspace, so nothing else needs the two to stand or fall together.
         with transaction.atomic():
-            report: Report = job.run(ctx, dict(sched.params or {}))
-            _check_report(report)
+            report: Report = job.run(ctx, _run_params(sched, job))
+        _check_report(report)
+        with transaction.atomic():
             schedule_delivery.deliver(sched, report, run_at=run_at)
     except ScheduleRunError as exc:
         return STATUS_FAILED, exc.public[:MAX_ERROR_CHARS]
     except Exception as exc:  # noqa: BLE001 - one schedule's failure is that schedule's
         return STATUS_FAILED, describe_exception(exc)[:MAX_ERROR_CHARS]
     return STATUS_OK, ""
+
+
+def _run_params(sched: MemberSchedule, job) -> dict[str, Any]:
+    """What the job is run with: the schedule's own parameters."""
+    return dict(sched.params or {})
+
+
+# "Run now" on a job that spends AI usage: a few a day per schedule, then the sentence below.
+# Each press is a billed model call made inside a web request, and "never spend silently" is as
+# much about a button pressed in a loop as about a cron. A scheduled run is not counted, and a
+# run that used no AI (turned off, cached, the model not reachable) is not either.
+AI_RUN_NOW_PER_DAY = 3
+
+
+def _ai_run_now_count(sched: MemberSchedule, now: datetime) -> int:
+    """How many hand-made reports of this schedule spent AI usage since the member's midnight."""
+    from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems  # noqa: PLC0415
+
+    midnight = now.astimezone(user_zone(sched.user)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return (
+        InboxItems.objects.filter(
+            receiver_id=sched.user_id,
+            item_type=ITEM_TYPE_GENOS_REPORT,
+            item_optionals__schedule_id=str(sched.id),
+            item_optionals__has_key="ai",
+            ts_created_at__gte=midnight,
+        )
+        .exclude(item_optionals__has_key="run_at")
+        .count()
+    )
+
+
+def _require_ai_run_now_room(sched: MemberSchedule, now: datetime) -> None:
+    job = JOBS.get(sched.job)
+    if job is None or not job.ai_applies(sched.params):
+        return
+    if _ai_run_now_count(sched, now) >= AI_RUN_NOW_PER_DAY:
+        raise ScheduleError(
+            f"This report uses AI each time it runs, and you have already run it by hand "
+            f"{AI_RUN_NOW_PER_DAY} times today. It still runs on its schedule. Turn off its AI "
+            "sentences to run it as often as you like."
+        )
 
 
 def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) -> dict[str, Any]:
@@ -714,6 +764,7 @@ def run_now(ctx: ToolContext, schedule_id: Any, *, now: datetime | None = None) 
     if sched.last_run_at is not None and timedelta(0) <= now - sched.last_run_at < RUN_NOW_COOLDOWN:
         wait = int((RUN_NOW_COOLDOWN - (now - sched.last_run_at)).total_seconds()) + 1
         raise ScheduleError(f"This schedule ran a moment ago. Try again in {wait} seconds.")
+    _require_ai_run_now_room(sched, now)
     status, error = _execute(sched)
     MemberSchedule.objects.filter(pk=sched.pk).update(
         last_run_at=now, last_status=status, last_error=error, ts_updated_at=now

@@ -139,6 +139,10 @@ class Report(TypedDict):
     # (MIP-1211): the next report's memory, stored on the item's `item_optionals`, never in its
     # body (`services/report_memory.py`).
     seen: NotRequired[dict[str, str]]
+    # Why an AI job's run had no AI part this time (switch off, nothing worth asking, the model
+    # not reachable from this process): a short code. A run that spent nothing says so instead
+    # of naming a request, and its report is filed plain (no `ai` block, "No AI used").
+    ai_skipped: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -148,11 +152,24 @@ class Job:
     description: str
     run: Callable[[ToolContext, dict[str, Any]], Report]
     params_schema: dict[str, Any] = field(default_factory=dict)
-    # True for a job that spends AI usage (calls a model). Its report is filed only with the cost
-    # of the request that paid for it (`Report.ai_request_id`, MIP-1209): none of the built-in
-    # jobs does today.
+    # True for a job that CAN spend AI usage (calls a model). When it does, its report is filed
+    # only with the cost of the request that paid for it (`Report.ai_request_id`, MIP-1209).
     uses_ai: bool = False
+    # For a job that uses AI only under some parameters (a member can turn the AI part off):
+    # `ai_when(params)` says whether THESE params use it. None = always, when `uses_ai`.
+    ai_when: Callable[[dict[str, Any]], bool] | None = None
 
+    def ai_applies(self, params: dict[str, Any] | None) -> bool:
+        """Whether a run with `params` spends AI usage, and so must name what it cost."""
+        if not self.uses_ai:
+            return False
+        return True if self.ai_when is None else bool(self.ai_when(params or {}))
+
+
+# The key under which the runner hands an AI job its schedule's effort level (MIP-1212). Never
+# stored and never accepted from a member (`clean_params` refuses unknown names): a run-time
+# value only.
+AI_EFFORT_KEY = "_ai_effort"
 
 JOBS: dict[str, Job] = {}
 

@@ -2,7 +2,7 @@
 
 It is the briefing (`services.briefing`) read as a list a person can act on: the same
 sections, the same access rules, so "what should I do today" says the same thing in the
-app, in Claude and in the morning report. No model, no cost, and nothing is written. It
+app, in Claude and in the morning report. No model unless the member keeps the AI sentences on (below), and nothing is written. It
 does NOT move the member's "since your last briefing" marker (it asks for a fixed look-back
 window, never `since_last`), so a scheduled report does not use up what their own Claude
 would have told them.
@@ -15,6 +15,18 @@ reporting every time (due within 2 days, in an active sprint with a due date, ne
 newly overdue, changed by somebody else, one of the top tasks). The member's own answer ("On it",
 "Not important") beats the rules until the task changes. Calendar, to-dos, "Waiting on you" and
 "Changed" are never held back. With no memory (the first report, nothing opened) nothing is.
+
+## The AI sentences (MIP-1210)
+
+When a task in the report has comments or changes that explain its state, one plain sentence
+about it goes in the item's `detail` ("Blocked: waiting for the vendor's reply, asked again on
+7 Nov"). One batched model call per report, on the model the schedule's effort level names,
+cached per task until the task changes, at most `report_ai.sentences.MAX_SENTENCES` of them, and
+only for tasks the member can open. The parameter `ai_sentences` turns it off (default ON, Core
+and up are the only members with schedules: it is the paid part of a report, the cost is on the
+item and the item has its one-click off). A run that could not or need not ask the model
+(switch off, nothing worth asking, the model unreachable from the process that runs the tick, all
+cached) is the plain report, filed with no cost block, and never fails.
 """
 
 from __future__ import annotations
@@ -26,8 +38,9 @@ from zoneinfo import ZoneInfo
 from django.utils import timezone
 
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import briefing, report_memory
+from origin.services import briefing, report_ai, report_memory
 from origin.services.schedule_jobs import (
+    AI_EFFORT_KEY,
     Job,
     Report,
     ReportSection,
@@ -44,6 +57,16 @@ from origin.services.schedule_jobs.report_kit import (
 )
 
 DEFAULT_CHANGED_HOURS = 24
+# The AI part's effort when the schedule names none: the cheapest rung (the sentence is a short
+# fact read off a few comments, the "flash-lite class" the task asked for). A job declares its own
+# default; this one is `low` until a real-call comparison says the next rung is worth its price.
+EFFORT_DEFAULT = "low"
+
+
+def ai_sentences_on(params: dict[str, Any]) -> bool:
+    """The AI sentences are on unless the member turned them off (`ai_sentences: false`)."""
+    return params.get("ai_sentences", True) is not False
+
 
 # What each section is, for the card (MIP-1208). "Changed in the last N hours" carries N.
 _SECTION_KEYS = {
@@ -218,6 +241,19 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     def tasks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [links.task_item(_task_text(r), r["task_id"]) for r in kept(rows)]
 
+    # One sentence of context for the tasks the report lists, in the order the report values them.
+    ai = report_ai.Sentences()
+    if ai_sentences_on(params):
+        ai = report_ai.sentences_for(
+            ctx,
+            [t for t in _listed_task_ids(data) if t not in verdict.held],  # held rows cost no tokens
+            effort=params.get(AI_EFFORT_KEY),
+            default_effort=EFFORT_DEFAULT,
+            now=now,
+            today_iso=agenda["local_date"],
+        )
+        links.ai_sentences = dict(ai.by_task)
+
     sections: list[ReportSection] = []
 
     def add(
@@ -364,7 +400,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         summary += f" {verdict.same} unchanged since your last report."
     if verdict.quieted:
         summary += f" {verdict.quieted} quieted by you."
-    return {
+    report: Report = {
         "title": f"What to do today, {agenda['local_date']}",
         "summary": clip(summary),
         "sections": sections,
@@ -383,6 +419,32 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ],
         "seen": verdict.seen,
     }
+    if ai_sentences_on(params):
+        if ai.request_id:
+            report["ai_request_id"] = ai.request_id
+        else:
+            report["ai_skipped"] = ai.skipped or "cached"
+    return report
+
+
+def _listed_task_ids(data: dict[str, Any]) -> list[int]:
+    """The tasks the report lists, most important first and each once: what to start with,
+    overdue, due today, waiting on you, changed, waiting on others, gone quiet."""
+    agenda, waiting, others = data["agenda"], data["waiting_on_me"], data["waiting_on_others"]
+    ordered = [
+        *(t["task_id"] for t in data["suggested_next"]),
+        *(t["task_id"] for t in agenda["overdue"]),
+        *(t["task_id"] for t in agenda["due_today"]),
+        *(
+            m.get("task_id")
+            for m in waiting["mentions"]
+            if m.get("source") in ("task", "task_comment")
+        ),
+        *(c["task_id"] for c in data["changed_for_me"]["items"] if c["type"] == "task"),
+        *(t["task_id"] for t in others["blocked_tasks"]),
+        *(t["task_id"] for t in data["stale_mine"]),
+    ]
+    return list(dict.fromkeys(int(t) for t in ordered if t is not None))
 
 
 register_job(
@@ -399,7 +461,17 @@ register_job(
             "properties": {
                 "changed_hours": {"type": "integer", "minimum": 1, "maximum": 168},
                 "project_id": {"type": "integer", "minimum": 1},
+                "ai_sentences": {
+                    "type": "boolean",
+                    "description": (
+                        "One short AI-written sentence under a task when its comments or "
+                        "history explain its state. On by default; false gives the plain "
+                        "report, with no AI usage."
+                    ),
+                },
             }
         },
+        uses_ai=True,
+        ai_when=ai_sentences_on,
     )
 )
