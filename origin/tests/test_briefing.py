@@ -727,6 +727,117 @@ class TestChangedThreadsAndNotes(BriefingBase):
         self.assertEqual({i["type"] for i in items}, {"task"})
 
 
+class TestTheRequesterHearsTheStatus(BriefingBase):
+    """MIP-1283 route (a): the person who started the chat thread a task was made from is told
+    the task's status changes, and only those, when they can open the task."""
+
+    def started_task(self, starter=None, **task_args):
+        """A task whose origin thread was started by `starter` (default: the member)."""
+        channel = self.channel([self.user, self.user2])
+        root = self.message(channel, starter or self.user, "Please fix Y", at=self.ago(hours=9))
+        task = self.make_task(
+            "Y", assignee=self.user2, reporter=self.user2, thread_id=str(root.id), **task_args
+        )
+        return task, root
+
+    def test_the_starter_is_told_each_status_change_and_the_close(self):
+        task, _ = self.started_task()
+        self.activity(task, self.user2, old="Open", new="WIP", at=self.ago(hours=3))
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        item = self.item_for(task)
+        self.assertIsNotNone(item)
+        self.assertEqual([e["what"] for e in item["events"]], ["status", "status"])
+        self.assertTrue(item["events"][-1]["summary"].endswith("Closed"))
+        self.assertEqual(item["status"], "Open")  # the row's own status; the events tell it
+        self.assertFalse(item["assigned_to_me"])
+        self.assertIn("started the chat thread", item["why"])
+
+    def test_the_starter_is_not_told_the_work(self):
+        """Comments, assignment, priority: that stays with the people who hold the task."""
+        task, _ = self.started_task()
+        self.comment(task, self.user2, "internal progress", at=self.ago(hours=3))
+        self.activity(task, self.user2, "priority_changed", "Normal", "High", at=self.ago(hours=2))
+        self.activity(task, self.user2, "assignee_changed", "a", "b", at=self.ago(hours=2))
+        self.assertIsNone(self.item_for(task))
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        item = self.item_for(task)
+        self.assertEqual([e["what"] for e in item["events"]], ["status"])
+        self.assertNotIn("internal progress", json.dumps(item))
+
+    def test_a_task_the_member_also_holds_is_the_normal_item(self):
+        task, _ = self.started_task()
+        TaskMaster.objects.filter(pk=task.pk).update(reporter=self.user)
+        self.comment(task, self.user2, "hello", at=self.ago(hours=3))
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        item = self.item_for(task)
+        self.assertEqual([e["what"] for e in item["events"]], ["comment", "status"])
+        self.assertNotIn("why", item)
+
+    def test_a_thread_someone_else_started_tells_the_member_nothing(self):
+        task, _ = self.started_task(starter=self.user2)
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        self.assertIsNone(self.item_for(task))
+
+    def test_a_reply_of_the_member_does_not_make_them_the_starter(self):
+        channel = self.channel([self.user, self.user2])
+        root = self.message(channel, self.user2, "Question", at=self.ago(hours=9))
+        reply = self.message(channel, self.user, "Me too", root=root, at=self.ago(hours=8))
+        task = self.make_task("Y", assignee=self.user2, thread_id=str(reply.id))
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        self.assertIsNone(self.item_for(task))
+
+    def test_a_deleted_root_a_legacy_thread_id_and_a_deleted_task_tell_nothing(self):
+        gone, root = self.started_task()
+        Message.objects.filter(pk=root.pk).update(deleted_at=timezone.now())
+        legacy = self.make_task("Old", assignee=self.user2, thread_id="12345")
+        deleted_task, _ = self.started_task()
+        TaskMaster.objects.filter(pk=deleted_task.pk).update(is_deleted=True)
+        for task in (gone, legacy, deleted_task):
+            self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        self.assertEqual(self.changed(), [])
+
+    def test_my_own_status_change_is_not_news(self):
+        task, _ = self.started_task()
+        self.activity(task, self.user, old="WIP", new="Closed", at=self.ago(hours=1))
+        self.assertIsNone(self.item_for(task))
+
+    def test_a_task_the_member_cannot_open_is_not_told_and_not_named(self):
+        """The thread's author can be on no project (a client in a GM chat): the task is not
+        theirs to open, so nothing about it reaches the briefing."""
+        elsewhere = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Theirs",
+            code="THR",
+            owner=self.user2,
+            project_system_user=self.user2,
+        )
+        ProjectMembers.objects.create(team=self.team, project=elsewhere, attendee=self.user2)
+        task, _ = self.started_task(project=elsewhere)
+        TaskMaster.objects.filter(pk=task.pk).update(title="Hidden title")
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        self.assertIsNone(self.item_for(task))
+        self.assertNotIn("Hidden title", json.dumps(self.brief()))
+
+    def test_the_project_filter_applies(self):
+        task, _ = self.started_task()
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(hours=1))
+        self.assertIsNotNone(self.item_for(task, project_id=self.project.project_id))
+        other = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Other",
+            code="OTH",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=other, attendee=self.user)
+        self.assertIsNone(self.item_for(task, project_id=other.project_id))
+
+    def test_a_status_change_before_the_window_is_not_news(self):
+        task, _ = self.started_task()
+        self.activity(task, self.user2, old="WIP", new="Closed", at=self.ago(days=3))
+        self.assertIsNone(self.item_for(task, window="today"))
+
+
 class TestAgenda(BriefingBase):
     def agenda(self, **args):
         return self.brief(**args)["agenda"]

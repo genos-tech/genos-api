@@ -523,7 +523,6 @@ class TestTheBriefingForTheClientOnTheProject(TheClientsBriefing, Story):
         seq = self.build_sequence(upto=2)
         self.assertIn("S02", briefing_text(self.briefing_as(seq.a, seq)))
 
-    @unittest.expectedFailure
     def test_gap_2_the_client_on_the_project_is_told_the_task_closed(self):
         """GAP-2 (V1): A asked for Y in a thread and is on the project, but A holds no role on
         the task (not assignee, reporter, collaborator or commenter), so step 10 never reaches
