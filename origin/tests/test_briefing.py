@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -1066,10 +1067,24 @@ class TestWhatYouDid(BriefingBase):
     def did(self, **args):
         return self.brief(**args)["what_you_did"]
 
+    def recent(self, minutes):
+        """A moment of today that keeps the order of "`minutes` ago" at any hour.
+
+        A literal "30 minutes ago" is yesterday for the first half hour after local midnight
+        (MIP-1183, MIP-1297), and a fixed offset from midnight can be in the future. This maps
+        the last hour onto the time between local midnight and now, so the moment is always
+        today and never ahead of the clock, and a smaller `minutes` is still the later one."""
+        assert 0 <= minutes < 60
+        zone = ZoneInfo("Asia/Tokyo")
+        start = self.now.astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+        return start + (self.now - start) * (1 - minutes / 60)
+
     def test_my_changes_comments_and_note_edits_are_what_i_did_today(self):
         task = self.make_task("Fix the login redirect")
-        self.activity(task, self.user, "status_changed", "Open", "Closed", at=self.ago(minutes=30))
-        self.comment(task, self.user, "Done, merged", at=self.ago(minutes=20))
+        self.activity(
+            task, self.user, "status_changed", "Open", "Closed", at=self.recent(minutes=30)
+        )
+        self.comment(task, self.user, "Done, merged", at=self.recent(minutes=20))
         note = PersonalNoteMaster.objects.create(
             team=self.team, owner=self.user, title="Spec", body=[]
         )
@@ -1081,7 +1096,7 @@ class TestWhatYouDid(BriefingBase):
             editor=self.user,
             title="Spec",
         )
-        NoteVersionMaster.objects.filter(pk=v.pk).update(ts_updated_at=self.ago(minutes=10))
+        NoteVersionMaster.objects.filter(pk=v.pk).update(ts_updated_at=self.recent(minutes=10))
         today = self.did()["today"]
         by_type = {i["type"]: i for i in today["items"]}
         self.assertEqual(by_type["task"]["display_id"], task.display_id)
@@ -1094,8 +1109,8 @@ class TestWhatYouDid(BriefingBase):
 
     def test_what_other_people_did_is_not_mine(self):
         task = self.make_task()
-        self.activity(task, self.user2, "status_changed", "Open", "WIP", at=self.ago(minutes=30))
-        self.comment(task, self.user2, "Looking", at=self.ago(minutes=20))
+        self.activity(task, self.user2, "status_changed", "Open", "WIP", at=self.recent(minutes=30))
+        self.comment(task, self.user2, "Looking", at=self.recent(minutes=20))
         today = self.did()["today"]
         self.assertEqual(today["items"], [])
         self.assertEqual(today["totals"]["comments"], 0)
@@ -1119,7 +1134,7 @@ class TestWhatYouDid(BriefingBase):
             "priority_changed",
             "High",
             "Low",
-            at=start_today + timedelta(minutes=1),
+            at=self.recent(minutes=1),
         )
         did = self.did()
         self.assertEqual(did["today"]["totals"]["items"], 1)
@@ -1135,7 +1150,7 @@ class TestWhatYouDid(BriefingBase):
         theirs = self.make_task("Theirs", assignee=self.user2)
         for task in (mine, theirs):
             self.activity(
-                task, None, "pr_linked", None, None, at=self.ago(minutes=30), pr_title="x"
+                task, None, "pr_linked", None, None, at=self.recent(minutes=30), pr_title="x"
             )
         today = self.did()["today"]
         self.assertEqual([i["task_id"] for i in today["items"]], [mine.task_id])
@@ -1151,10 +1166,10 @@ class TestWhatYouDid(BriefingBase):
             "priority_changed",
             "Low",
             "High",
-            at=self.ago(minutes=5),
+            at=self.recent(minutes=5),
             via={"kind": "api_key", "client_name": "Claude"},
         )
-        self.activity(task, self.user, "title_changed", "a", "b", at=self.ago(minutes=4))
+        self.activity(task, self.user, "title_changed", "a", "b", at=self.recent(minutes=4))
         events = self.did()["today"]["items"][0]["events"]
         self.assertEqual(events[0]["via"], "api_key")
         self.assertNotIn("via", events[1])
@@ -1164,7 +1179,7 @@ class TestWhatYouDid(BriefingBase):
             team=self.team, user=self.user, local_date=timezone.localdate()
         )
         ToDoItem.objects.create(
-            group=group, title="Ship it", is_completed=True, ts_completed_at=self.ago(minutes=5)
+            group=group, title="Ship it", is_completed=True, ts_completed_at=self.recent(minutes=5)
         )
         ToDoItem.objects.create(group=group, title="Still open")
         ToDoItem.objects.create(
@@ -1174,7 +1189,7 @@ class TestWhatYouDid(BriefingBase):
             team=self.team, user=self.user2, local_date=timezone.localdate()
         )
         ToDoItem.objects.create(
-            group=other, title="Theirs", is_completed=True, ts_completed_at=self.ago(minutes=5)
+            group=other, title="Theirs", is_completed=True, ts_completed_at=self.recent(minutes=5)
         )
         today = self.did()["today"]
         self.assertEqual([t["title"] for t in today["todos_done"]], ["Ship it"])
@@ -1183,8 +1198,8 @@ class TestWhatYouDid(BriefingBase):
     def test_messages_are_counted_per_chat_and_never_read(self):
         channel = self.channel([self.user, self.user2], title="Design")
         for n in range(3):
-            self.message(channel, self.user, f"secret plan {n}", at=self.ago(minutes=n + 1))
-        self.message(channel, self.user2, "not mine", at=self.ago(minutes=1))
+            self.message(channel, self.user, f"secret plan {n}", at=self.recent(minutes=n + 1))
+        self.message(channel, self.user2, "not mine", at=self.recent(minutes=1))
         today = self.did()["today"]
         self.assertEqual(today["chats"][0]["messages"], 3)
         self.assertEqual(today["chats"][0]["chat_type"], "gm")
@@ -1196,8 +1211,8 @@ class TestWhatYouDid(BriefingBase):
         the member did it twice."""
         task = self.make_task()
         channel = self.channel([self.user, self.user2], title="Project")
-        self.comment(task, self.user, "hello", at=self.ago(minutes=5))
-        mirror = self.message(channel, self.user, "hello", at=self.ago(minutes=5))
+        self.comment(task, self.user, "hello", at=self.recent(minutes=5))
+        mirror = self.message(channel, self.user, "hello", at=self.recent(minutes=5))
         Message.objects.filter(pk=mirror.pk).update(metadata={"taskCommentId": 1})
         today = self.did()["today"]
         self.assertEqual(today["totals"]["comments"], 1)
@@ -1212,7 +1227,7 @@ class TestWhatYouDid(BriefingBase):
             project_system_user=self.user2,
         )
         task = self.make_task("Not for me now", assignee=self.user2, project=elsewhere)
-        self.activity(task, self.user, "priority_changed", "a", "b", at=self.ago(minutes=5))
+        self.activity(task, self.user, "priority_changed", "a", "b", at=self.recent(minutes=5))
         self.assertEqual(self.did()["today"]["items"], [])
         self.assertNotIn("Not for me now", json.dumps(self.brief()))
 
@@ -1258,14 +1273,11 @@ class TestWhatYouDid(BriefingBase):
                 "priority_changed",
                 "a",
                 "b",
-                at=self.midnight_jst() + timedelta(seconds=n + 1),
+                at=self.recent(minutes=n + 10),
             )
         busy = self.make_task("Busy")
         for n in range(3):
-            # From local midnight, not "3 hours ago": that is yesterday before 03:00.
-            self.comment(
-                busy, self.user, f"c{n}", at=self.midnight_jst() + timedelta(seconds=30 + n)
-            )
+            self.comment(busy, self.user, f"c{n}", at=self.recent(minutes=n + 1))
         today = self.did()["today"]
         self.assertEqual(len(today["items"]), briefing.DID_ITEMS["today"])
         self.assertIs(today["items_truncated"], True)
@@ -1276,7 +1288,7 @@ class TestWhatYouDid(BriefingBase):
     def test_events_per_item_are_capped_but_counted(self):
         task = self.make_task()
         for n in range(briefing.DID_EVENTS["today"] + 3):
-            self.comment(task, self.user, f"c{n}", at=self.ago(minutes=n + 1))
+            self.comment(task, self.user, f"c{n}", at=self.recent(minutes=n + 1))
         item = self.did()["today"]["items"][0]
         self.assertEqual(item["events_total"], briefing.DID_EVENTS["today"] + 3)
         self.assertEqual(len(item["events"]), briefing.DID_EVENTS["today"])
@@ -1296,7 +1308,7 @@ class TestWhatYouDid(BriefingBase):
         """Read only: no briefing stamp beyond the one the briefing already keeps, and the
         member typed nothing."""
         task = self.make_task()
-        self.activity(task, self.user, "priority_changed", "a", "b", at=self.ago(minutes=5))
+        self.activity(task, self.user, "priority_changed", "a", "b", at=self.recent(minutes=5))
         self.did()
         self.assertEqual(MemberBriefingState.objects.count(), 1, "only the briefing's own stamp")
 
@@ -1304,9 +1316,7 @@ class TestWhatYouDid(BriefingBase):
         """The briefing has one budget: today gets more items and events than yesterday."""
         task = self.make_task("Busy both days")
         for n in range(briefing.DID_EVENTS["today"] + 2):
-            self.comment(
-                task, self.user, f"t{n}", at=self.midnight_jst() + timedelta(minutes=n + 1)
-            )
+            self.comment(task, self.user, f"t{n}", at=self.recent(minutes=n + 1))
         for n in range(briefing.DID_EVENTS["yesterday"] + 2):
             self.comment(
                 task,
@@ -1323,7 +1333,7 @@ class TestWhatYouDid(BriefingBase):
 
     def test_an_event_carries_the_local_time_of_day(self):
         task = self.make_task()
-        # 00:01 local: always today and already past, whatever the hour the suite runs at.
-        self.comment(task, self.user, "early", at=self.midnight_jst() + timedelta(minutes=1))
+        moment = self.recent(minutes=30)
+        self.comment(task, self.user, "early", at=moment)
         event = self.did()["today"]["items"][0]["events"][0]
-        self.assertEqual(event["at"], "00:01")
+        self.assertEqual(event["at"], moment.astimezone(ZoneInfo("Asia/Tokyo")).strftime("%H:%M"))
