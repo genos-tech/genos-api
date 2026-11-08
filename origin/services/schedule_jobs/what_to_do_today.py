@@ -246,7 +246,9 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if ai_sentences_on(params):
         ai = report_ai.sentences_for(
             ctx,
-            [t for t in _listed_task_ids(data) if t not in verdict.held],  # held rows cost no tokens
+            [
+                t for t in _listed_task_ids(data) if t not in verdict.held
+            ],  # held rows cost no tokens
             effort=params.get(AI_EFFORT_KEY),
             default_effort=EFFORT_DEFAULT,
             now=now,
@@ -473,5 +475,6 @@ register_job(
         },
         uses_ai=True,
         ai_when=ai_sentences_on,
+        effort_default=EFFORT_DEFAULT,
     )
 )

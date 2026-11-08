@@ -51,6 +51,7 @@ _FIELDS = {
     "monthDay": "month_day",
     "runDate": "run_date",
     "deliverPush": "deliver_push",
+    "aiEffort": "ai_effort",
 }
 
 
@@ -81,6 +82,8 @@ def _row(sched, zone) -> dict[str, Any]:
         ("monthDay", "month_day"),
         ("runDate", "run_date"),
         ("pausedReason", "paused_reason"),
+        ("aiEffort", "ai_effort"),
+        ("aiEffortEffective", "ai_effort_effective"),
         ("lastError", "last_error"),
         ("lastResult", "last_result"),
         ("problem", "problem"),
@@ -92,6 +95,37 @@ def _row(sched, zone) -> dict[str, Any]:
     if not sched.enabled and sched.paused_reason:
         out["pausedReasonCode"] = sched.paused_reason
     return out
+
+
+def _job(entry: dict[str, Any]) -> dict[str, Any]:
+    """A job of the catalog with the camelCase keys the page reads: `usesAi` (false: hide the AI
+    effort control), `effortDefault`, and `effortCost`, an ESTIMATE per level."""
+    return {
+        "job": entry["job"],
+        "title": entry["title"],
+        "description": entry["description"],
+        "params": entry["params"],
+        "usesAi": entry["uses_ai"],
+        "effortDefault": entry["effort_default"],
+        "effortCost": _camel_cost(entry["effort_cost"]),
+    }
+
+
+def _camel_cost(cost: dict[str, Any] | None) -> dict[str, Any] | None:
+    if cost is None:
+        return None
+    return {
+        "estimate": cost["estimate"],
+        "basis": cost["basis"],
+        "levels": {
+            level: {
+                "model": row["model"],
+                "creditsMilli": row["credits_milli"],
+                "usdMicro": row["usd_micro"],
+            }
+            for level, row in cost["levels"].items()
+        },
+    }
 
 
 class _Base(AuthenticatedAPIView):
@@ -143,7 +177,7 @@ class ScheduleListView(_Base):
                 "planMessage": "" if allowed else schedules.PLAN_SENTENCE,
                 "timeZone": zone.key,
                 "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
-                "jobs": schedule_text.job_catalog(),
+                "jobs": [_job(j) for j in schedule_text.job_catalog()],
                 "schedules": [_row(s, zone) for s in rows],
                 # What the member does not have of the two defaults: one step to (re-)add.
                 "suggestions": [
@@ -178,6 +212,7 @@ class ScheduleListView(_Base):
                 month_day=fields.get("month_day"),
                 run_date=fields.get("run_date"),
                 deliver_push=bool(fields.get("deliver_push", False)),
+                ai_effort=fields.get("ai_effort"),
             )
         )
         if problem:

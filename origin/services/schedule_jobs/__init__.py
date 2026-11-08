@@ -158,6 +158,10 @@ class Job:
     # For a job that uses AI only under some parameters (a member can turn the AI part off):
     # `ai_when(params)` says whether THESE params use it. None = always, when `uses_ai`.
     ai_when: Callable[[dict[str, Any]], bool] | None = None
+    # The AI effort a schedule of this job runs at when it names none (MIP-1212): "low" for a job
+    # that only reads a few facts, "medium" for one that summarises many comments. Only read for
+    # a job with `uses_ai`; it is `None` in the catalog for any other.
+    effort_default: str = "low"
 
     def ai_applies(self, params: dict[str, Any] | None) -> bool:
         """Whether a run with `params` spends AI usage, and so must name what it cost."""

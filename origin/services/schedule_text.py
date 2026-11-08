@@ -80,6 +80,12 @@ def present(sched: MemberSchedule, zone) -> dict[str, Any]:
         out["run_date"] = sched.run_date.isoformat()
     if not sched.enabled and sched.paused_reason:
         out["paused_reason"] = sched.get_paused_reason_display()
+    if job is not None and job.uses_ai:
+        # The AI effort (MIP-1212), only for a job that uses AI: what the member chose ("" = the
+        # job's own default) and the level a run will use (the choice or the default, held to the
+        # plan's ceiling). A job with no AI has neither: there is nothing to choose.
+        out["ai_effort"] = sched.ai_effort or None
+        out["ai_effort_effective"] = effective_effort(sched, job)
     if sched.last_error:
         out["last_error"] = sched.last_error
     if sched.last_result:
@@ -89,14 +95,53 @@ def present(sched: MemberSchedule, zone) -> dict[str, Any]:
     return out
 
 
+def effective_effort(sched: MemberSchedule, job) -> str:
+    """The level a run of this schedule will use: its own choice if the catalog still has it,
+    else the job's default, held to the member's plan ceiling (never an error)."""
+    from origin.services.report_ai import effort as effort_mod  # noqa: PLC0415
+
+    run = effort_mod.resolve(sched.ai_effort, job.effort_default, sched.user_id, clamp=True)
+    return (
+        run.effort if run else (effort_mod.valid(job.effort_default) or effort_mod.FALLBACK_EFFORT)
+    )
+
+
+def _effort_cost(job) -> dict[str, Any] | None:
+    """What one run costs at each level: an ESTIMATE from the size of the real prompt and the
+    catalog's prices (`report_ai.estimate`), never a measurement. None for a job with no AI."""
+    if not job.uses_ai:
+        return None
+    from origin.services.report_ai import effort as effort_mod  # noqa: PLC0415
+    from origin.services.report_ai import estimate  # noqa: PLC0415
+
+    levels = {}
+    for level in effort_mod.EFFORTS:
+        row = estimate.estimate(level)
+        if row is not None:
+            levels[level] = {
+                "model": row["model"],
+                "credits_milli": row["credits_milli"],
+                "usd_micro": row["usd_micro"],
+            }
+    return {
+        "estimate": True,
+        "basis": "a report listing 10 tasks with comments, nothing cached; each range is [fewest, most]",
+        "levels": levels,
+    }
+
+
 def job_catalog() -> list[dict[str, Any]]:
-    """What a schedule can run: key, title, what it does and the parameters it takes."""
+    """What a schedule can run: key, title, what it does and the parameters it takes, and
+    (MIP-1212) whether it uses AI, the effort it defaults to and what a run costs at each level."""
     return [
         {
             "job": job.key,
             "title": job.title,
             "description": job.description,
             "params": job.params_schema.get("properties", {}),
+            "uses_ai": job.uses_ai,
+            "effort_default": job.effort_default if job.uses_ai else None,
+            "effort_cost": _effort_cost(job),
         }
         for job in sorted(JOBS.values(), key=lambda j: j.key)
     ]
