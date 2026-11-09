@@ -29,6 +29,7 @@ from origin.views.task.task_activity_views import (
     TaskVelocityView,
 )
 from origin.views.task.task_delivery_views import TaskDeliveryListView
+from origin.views.task.task_progress_views import TaskProgressListView
 from origin.views.task.task_recent_views import RecentTasksView, RecordTaskOpenView
 from origin.views.task.task_views import *
 
@@ -73,6 +74,7 @@ urlpatterns = [
     ),
     path("api/v2/task/comment/", TaskCommentsView.as_view(), name="add_task_comment"),
     path("api/v2/task/activity/", TaskActivityListView.as_view(), name="task_activity_list"),
+    path("api/v2/task/progress/", TaskProgressListView.as_view(), name="task_progress_list"),
     path(
         "api/v2/task/activity/restore-body/",
         TaskBodyRestoreView.as_view(),
