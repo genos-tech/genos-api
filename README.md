@@ -46,6 +46,8 @@ messaging and editor collaboration live in the sibling
 | `REDIS_URL`             | —        | Cache backend. Outside DEBUG, plain `redis://` only to a private host (`*.railway.internal`, a private IP, a compose service name); anything else needs `rediss://`. |
 | `COLLAB_INTERNAL_URL`   | —        | genos-collab's http(s) base URL for the task/note body push. Plain `http://` only to a private host. Empty = no push. |
 | `COLLAB_INTERNAL_SECRET`| with the above | Signs that push. Same value on genos-collab; must differ from `JWT_SECRET_KEY`. |
+| `SOCKETS_INTERNAL_URL`   | —        | genos-sockets' http(s) base URL for the task-comment push (MIP-1348): after a comment written outside the sockets `task_comment` handler commits (agent / MCP comment tools, undo, plain REST), sockets announces it to the project room so other people's open tasks update live. Plain `http://` only to a private host. Empty = no push. |
+| `SOCKETS_INTERNAL_SECRET`| with the above | Signs that push (HMAC-SHA256). Same value on genos-sockets; must differ from `JWT_SECRET_KEY` and `COLLAB_INTERNAL_SECRET`. |
 | `OPENSEARCH_HOST` / `OPENSEARCH_PORT` / `OPENSEARCH_INDEX` | — | Search engine. |
 | `EMBEDDING_PROVIDER`    | —        | `openai` / `vertex` — selects the embedding backend.               |
 | `LLM_PROVIDER`          | —        | `claude` / `gemini` / `openai` for the agent + judge.              |

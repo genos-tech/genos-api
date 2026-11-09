@@ -23,7 +23,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from origin.models.task.task_models import TaskComments, TaskMaster
-from origin.services import mention_extractor, unified_writer, v3_activity, webhook_enqueue
+from origin.services import (
+    mention_extractor,
+    realtime_push,
+    unified_writer,
+    v3_activity,
+    webhook_enqueue,
+)
 from origin.services.webpush_dispatch import schedule_push_for_activities
 from origin.views.utils.mention_handler import resolve_mentions
 
@@ -131,6 +137,11 @@ def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
     sender_id = str(comment.sender_id) if comment.sender_id else None
 
     _schedule_webhook(comment, task_id)
+
+    # Tell the project room, so a colleague's open task shows it now. Before the
+    # mirror and its early returns, and independent of them: the comment exists
+    # whether or not the thread mirror or the activities could be built.
+    realtime_push.push_task_comment(task_id, comment.comment_id, realtime_push.CREATED)
 
     # Mirror the comment as a v3 thread-reply Message under the PM task
     # header, so PM task threads render comments through the unified
