@@ -652,3 +652,55 @@ class TestPublicRoutesArePinned(SimpleTestCase):
             and not any(callback.__module__.startswith(m) for m in _PLAIN_DJANGO_MODULES)
         )
         self.assertEqual(stray, [])
+
+
+class TestValidateSocketsPush(SimpleTestCase):
+    """The api → sockets task-comment push (MIP-1348): same rules as the collab one."""
+
+    SOCKETS = "http://backend-sockets.railway.internal:8889"
+
+    def _sockets(self, **overrides):
+        kwargs = {
+            "sockets_internal_url": self.SOCKETS,
+            "sockets_internal_secret": "test-only-sockets-secret",
+        }
+        kwargs.update(overrides)
+        _transport(**kwargs)
+
+    def test_the_railway_shape_boots(self):
+        self._sockets()
+
+    def test_unset_means_the_push_is_off_and_needs_nothing(self):
+        _transport(sockets_internal_url="", sockets_internal_secret="")
+
+    def test_refuses_plaintext_sockets_off_the_private_network(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "SOCKETS_INTERNAL_URL is plaintext"):
+            self._sockets(sockets_internal_url="http://sockets.genosai.dev")
+
+    def test_accepts_https_sockets(self):
+        self._sockets(sockets_internal_url="https://sockets.genosai.dev")
+
+    def test_refuses_a_non_http_sockets_url(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "must be an http(s) URL"):
+            self._sockets(sockets_internal_url="sockets.genosai.dev")
+
+    def test_refuses_a_push_without_its_own_secret(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "SOCKETS_INTERNAL_SECRET is not"):
+            self._sockets(sockets_internal_secret="")
+
+    def test_refuses_a_secret_shared_with_the_user_token_key(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "equals JWT_SECRET_KEY"):
+            self._sockets(sockets_internal_secret="same", jwt_signing_key="same")
+
+    def test_refuses_a_secret_shared_with_the_collab_hop(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "equals COLLAB_INTERNAL_SECRET"):
+            self._sockets(
+                sockets_internal_secret="shared-secret", collab_internal_secret="shared-secret"
+            )
+
+    def test_debug_skips_the_checks(self):
+        _transport(
+            debug=True,
+            sockets_internal_url="http://sockets.example.com",
+            sockets_internal_secret="",
+        )

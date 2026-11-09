@@ -15,7 +15,7 @@ from typing import Any
 
 from origin.models.task.task_models import TaskComments
 from origin.search_engine.purge import purge_task_comment
-from origin.services import unified_writer, v3_activity
+from origin.services import realtime_push, unified_writer, v3_activity
 from origin.services.task_comment_fanout import mentioned_ids, task_team_id
 from origin.services.webpush_dispatch import schedule_push_for_activities
 
@@ -37,7 +37,8 @@ def soft_delete_comment(comment: TaskComments) -> int:
     (a COMMENT_DELETED activity), and every live-comment reader already filters
     on the flag. Idempotent: deleting a deleted comment writes nothing again.
     """
-    if not comment.is_deleted:
+    newly_deleted = not comment.is_deleted
+    if newly_deleted:
         # `ts_updated_at` is `auto_now`, so it must be listed for the save to
         # refresh it.
         comment.is_deleted = True
@@ -51,7 +52,16 @@ def soft_delete_comment(comment: TaskComments) -> int:
         # `ts_updated_at` bump also marks the task dirty for the incremental
         # reindexer, which re-chunks without it.
         purge_task_comment(comment.task_id, comment.comment_id)
-    return live_comment_count(comment.task_id)
+    count = live_comment_count(comment.task_id)
+    if newly_deleted:
+        # Counted after the delete: the app SETs its chip from this number.
+        realtime_push.push_task_comment(
+            comment.task_id,
+            comment.comment_id,
+            realtime_push.DELETED,
+            task_comment_count=count,
+        )
+    return count
 
 
 def edit_comment(comment: TaskComments, body: list[dict[str, Any]]) -> list[str]:
@@ -66,6 +76,7 @@ def edit_comment(comment: TaskComments, body: list[dict[str, Any]]) -> list[str]
     before = mentioned_ids(comment.comment_body, team_id)
     comment.comment_body = body
     comment.save(update_fields=["comment_body", "ts_updated_at"])
+    realtime_push.push_task_comment(comment.task_id, comment.comment_id, realtime_push.EDITED)
 
     mirror = unified_writer.update_task_comment_thread_reply(
         task_id=int(comment.task_id), comment_id=int(comment.comment_id), body=body

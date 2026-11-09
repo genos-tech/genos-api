@@ -610,6 +610,8 @@ def _validate_transport(
     collab_internal_url: str,
     collab_internal_secret: str,
     jwt_signing_key: str,
+    sockets_internal_url: str = "",
+    sockets_internal_secret: str = "",
 ) -> None:
     """Refuse to boot a production process whose internal hops could be
     read off the wire (MIP-621).
@@ -629,6 +631,9 @@ def _validate_transport(
       and signed with its own `COLLAB_INTERNAL_SECRET`. Signed with the
       user-token key, as it used to be, a leak of collab's copy of that key
       let someone mint user tokens for the api.
+    - The api → sockets task-comment push (MIP-1348): the same three rules, and
+      its secret must also differ from `COLLAB_INTERNAL_SECRET`, so a leak of
+      one internal hop is not a leak of the other.
     """
     if debug:
         return
@@ -666,6 +671,31 @@ def _validate_transport(
         if collab_internal_secret == jwt_signing_key:
             raise ImproperlyConfigured(
                 "COLLAB_INTERNAL_SECRET equals JWT_SECRET_KEY. Give the collab push its own secret."
+            )
+    if sockets_internal_url:
+        sockets = urlsplit(sockets_internal_url)
+        if sockets.scheme not in ("http", "https"):
+            raise ImproperlyConfigured("SOCKETS_INTERNAL_URL must be an http(s) URL.")
+        if sockets.scheme == "http" and not _is_private_host(sockets.hostname):
+            raise ImproperlyConfigured(
+                f"SOCKETS_INTERNAL_URL is plaintext http:// to {sockets.hostname}, "
+                "which is not on a private network. Use https:// or the private "
+                "domain."
+            )
+        if not sockets_internal_secret:
+            raise ImproperlyConfigured(
+                "SOCKETS_INTERNAL_URL is set but SOCKETS_INTERNAL_SECRET is not. "
+                "Set the same value on genos-sockets."
+            )
+        if sockets_internal_secret == jwt_signing_key:
+            raise ImproperlyConfigured(
+                "SOCKETS_INTERNAL_SECRET equals JWT_SECRET_KEY. Give the sockets push its "
+                "own secret."
+            )
+        if sockets_internal_secret == collab_internal_secret:
+            raise ImproperlyConfigured(
+                "SOCKETS_INTERNAL_SECRET equals COLLAB_INTERNAL_SECRET. Give each internal "
+                "hop its own secret."
             )
 
 
@@ -2410,6 +2440,21 @@ COLLAB_INTERNAL_URL = os.environ.get("COLLAB_INTERNAL_URL", "").rstrip("/")
 # and must differ from JWT_SECRET_KEY (`_validate_transport`).
 COLLAB_INTERNAL_SECRET = os.environ.get("COLLAB_INTERNAL_SECRET", "")
 
+# genos-sockets' base URL, http(s). After a task comment written OUTSIDE the
+# sockets `task_comment` handler commits (the agent's and MCP's add / update /
+# delete_comment, undo, plain REST), genos-api tells sockets so it can announce
+# it to the project room and other people's open tasks update live
+# (origin/services/realtime_push.py, MIP-1348). Empty = no push: the comment
+# is still saved, but only a comment typed in the app is announced. Railway:
+# `https://${{backend-sockets.RAILWAY_PUBLIC_DOMAIN}}` (signed, like the collab
+# push). Not the private domain yet: sockets binds 0.0.0.0, IPv4 only, and
+# Railway's private network can be IPv6-only.
+SOCKETS_INTERNAL_URL = os.environ.get("SOCKETS_INTERNAL_URL", "").rstrip("/")
+# Signs that push, and nothing else. genos-sockets verifies it under the same
+# name. Required with DEBUG off whenever SOCKETS_INTERNAL_URL is set, and must
+# differ from JWT_SECRET_KEY and COLLAB_INTERNAL_SECRET (`_validate_transport`).
+SOCKETS_INTERNAL_SECRET = os.environ.get("SOCKETS_INTERNAL_SECRET", "")
+
 # --- Size cap on bodies written by an agent (MIP-822) ---
 # The most UTF-8 bytes of ONE note, comment, task or to-do-note body that an
 # agent tool will accept (the in-app Spotlight agent, MCP, and anything else
@@ -2427,4 +2472,6 @@ _validate_transport(
     collab_internal_url=COLLAB_INTERNAL_URL,
     collab_internal_secret=COLLAB_INTERNAL_SECRET,
     jwt_signing_key=SIMPLE_JWT["SIGNING_KEY"],
+    sockets_internal_url=SOCKETS_INTERNAL_URL,
+    sockets_internal_secret=SOCKETS_INTERNAL_SECRET,
 )

@@ -21,7 +21,7 @@ from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
-from origin.services import unified_writer
+from origin.services import realtime_push, unified_writer
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_cache import (
@@ -2478,6 +2478,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                     comment_id=int(comment_id),
                     body=serializer.instance.comment_body,
                 )
+            realtime_push.push_task_comment(int(task_id), int(comment_id), realtime_push.EDITED)
             return Response(
                 {**serializer.data, **_comment_broadcast_context(task_id)},
                 status=status.HTTP_200_OK,
