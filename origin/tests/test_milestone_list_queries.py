@@ -424,6 +424,7 @@ EXPECTED_KEY_ORDER = [
     "isDeleted",
     "tsCreatedAt",
     "tsUpdatedAt",
+    "lastProgressAt",
     "assignees",
     "tasksTotal",
     "tasksClosed",
@@ -475,6 +476,7 @@ EXPECTED_MILESTONES = [
         "isDeleted": False,
         "tsCreatedAt": "2026-01-01T12:00:00Z",
         "tsUpdatedAt": "2026-01-01T12:03:00Z",
+        "lastProgressAt": None,
         "assignees": [
             {
                 "userId": "userId#3",
@@ -541,6 +543,7 @@ EXPECTED_MILESTONES = [
         "isDeleted": False,
         "tsCreatedAt": "2026-01-01T12:00:00Z",
         "tsUpdatedAt": "2026-01-01T12:02:00Z",
+        "lastProgressAt": None,
         "assignees": [],
         "tasksTotal": 0,
         "tasksClosed": 0,
@@ -575,6 +578,7 @@ EXPECTED_MILESTONES = [
         "isDeleted": False,
         "tsCreatedAt": "2026-01-01T12:00:00Z",
         "tsUpdatedAt": "2026-01-01T12:01:00Z",
+        "lastProgressAt": None,
         "assignees": [
             {
                 "userId": "userId#6",
@@ -634,6 +638,7 @@ EXPECTED_MILESTONES = [
         "isDeleted": False,
         "tsCreatedAt": "2026-01-01T12:00:00Z",
         "tsUpdatedAt": "2026-01-01T12:00:00Z",
+        "lastProgressAt": None,
         "assignees": [
             {
                 "userId": "userId#1",

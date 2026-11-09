@@ -41,6 +41,7 @@ from origin.services.task_milestone_move import (
 from origin.services.task_milestone_move import (
     cascade_tree_position_to_subtasks as _cascade_tree_position_to_subtasks,
 )
+from origin.services.task_progress import progress_at
 from origin.services.task_project_move import (
     collect_descendant_task_ids as _collect_descendant_task_ids,
 )
@@ -1221,6 +1222,7 @@ def _team_task_row(t) -> dict:
         "effortLevel": t.effort_level,
         "createdDate": str(t.ts_created_at.date()),
         "updatedAt": str(t.ts_updated_at),
+        "lastProgressAt": progress_at(t),
         "dueDate": str(t.due_date) if t.due_date else None,
         "startDate": str(t.start_date) if t.start_date else None,
         "daysLeft": (max(-1, (t.due_date - datetime.now().date()).days) if t.due_date else None),
@@ -1277,6 +1279,7 @@ _TEAM_TASK_ROW_FIELDS = (
     "effort_level",
     "ts_created_at",
     "ts_updated_at",
+    "last_progress_at",
     "due_date",
     "start_date",
     "status",
@@ -1738,6 +1741,7 @@ class GetTaskByThreadIdView(AuthenticatedAPIView):
                     ],
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
+                    "lastProgressAt": progress_at(t),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
@@ -1916,6 +1920,7 @@ class GetTaskView(AuthenticatedAPIView):
                     ],
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
+                    "lastProgressAt": progress_at(t),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
@@ -2073,7 +2078,11 @@ class GetProjectTasksView(AuthenticatedAPIView):
             # Incremental: include deleted rows so the client can apply
             # tombstones; bound by ts_updated_at against the checkpoint,
             # less the look-back (see the class docstring).
-            qs = qs.filter(ts_updated_at__gt=since - self.DELTA_LOOKBACK)
+            # A task whose CHILD changed has a newer `last_progress_at` and an
+            # untouched `ts_updated_at` (MIP-1351): without the second arm no
+            # browser would ever hear that a parent or milestone moved.
+            since_floor = since - self.DELTA_LOOKBACK
+            qs = qs.filter(Q(ts_updated_at__gt=since_floor) | Q(last_progress_at__gt=since_floor))
 
         response_data = []
         for t in qs:
@@ -2086,6 +2095,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
+                    "lastProgressAt": progress_at(t),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (
@@ -2185,6 +2195,7 @@ class GetMyAssignedTasksView(AuthenticatedAPIView):
                     "effortLevel": t.effort_level,
                     "createdDate": str(t.ts_created_at.date()),
                     "updatedAt": str(t.ts_updated_at),
+                    "lastProgressAt": progress_at(t),
                     "dueDate": str(t.due_date) if t.due_date else None,
                     "startDate": str(t.start_date) if t.start_date else None,
                     "daysLeft": (

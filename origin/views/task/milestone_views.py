@@ -37,6 +37,7 @@ from origin.services.task_collaborators import (
     refuse_new_milestone_people,
     sync_task_collaborators,
 )
+from origin.services.task_progress import progress_at
 from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import (
     THREAD_NOT_FOUND,
@@ -241,6 +242,9 @@ def _serialize_milestone(
         "isDeleted": m.is_deleted,
         "tsCreatedAt": m.ts_created_at,
         "tsUpdatedAt": m.ts_updated_at,
+        # When the milestone, or any task under it, last had real progress
+        # (MIP-1351). Carried on the backing task row, like the custom fields.
+        "lastProgressAt": progress_at(m.task) if m.task_id is not None and m.task else None,
         "assignees": [_serialize_assignee(a) for a in assignees],
     }
     if with_aggregates:

@@ -65,6 +65,13 @@ log = logging.getLogger(__name__)
 MAX_DEPTH = 64
 
 
+def progress_at(task) -> Optional[str]:
+    """`last_progress_at` as the task payloads show it (the same `str()` form as
+    their `updatedAt`), or None when nothing is recorded yet."""
+    value = getattr(task, "last_progress_at", None)
+    return str(value) if value else None
+
+
 def counts_as_progress(metadata: Optional[Mapping]) -> bool:
     """Is an audit row with this metadata progress? See the module docstring."""
     metadata = metadata or {}
