@@ -292,7 +292,14 @@ def flush() -> None:
     """Drain this thread's pending set: clear caches, THEN bump versions.
 
     Registered once per `bump` (rule 2); the first call does the work and the
-    rest find nothing queued."""
+    rest find nothing queued.
+
+    Task progress (MIP-1351) is refreshed FIRST: the value a client reads after
+    it sees the new version, and the response cache this flush clears, must both
+    be built from the new `last_progress_at`."""
+    from origin.services import task_progress
+
+    task_progress.drain()
     keys = set(_pending.keys)
     task_caches = set(_pending.task_caches)
     project_lists = set(_pending.project_lists)

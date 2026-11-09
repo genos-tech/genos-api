@@ -30,17 +30,20 @@ import uuid
 from typing import Any, Optional
 
 from django.db import transaction
+from django.db.models import QuerySet
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 
 from origin.middleware.current_user import get_current_source, get_current_user
+from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectCustomField, ProjectMaster
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskAttachments, TaskComments, TaskMaster
+from origin.services import task_progress
 from origin.services.activity_suppression import activity_suppressed
 from origin.services.calendar_sync import (
     LINK_ONLY_FIELDS,
@@ -408,7 +411,7 @@ def _record(
     # the same person. Absent when unknown (webhooks, commands).
     if "via" not in metadata and (via := get_current_source()) is not None:
         metadata["via"] = via
-    TaskActivity.objects.create(
+    activity = TaskActivity.objects.create(
         team=task.team,
         project=task.project,
         task=task,
@@ -419,6 +422,9 @@ def _record(
         new_value=_to_jsonable(new_value),
         metadata=_to_jsonable(metadata),
     )
+    # Progress (MIP-1351): the task and every ancestor above it learn of the
+    # change. Best effort; never raises.
+    task_progress.offer(activity, task)
 
 
 def record_activity(
@@ -798,8 +804,31 @@ def _task_or_none(instance) -> Optional[TaskMaster]:
         return None
 
 
+def _going_with_its_task(kwargs) -> bool:
+    """Is this row being deleted because its TASK (or project, or team) is?
+
+    Django tells a `post_delete` receiver what started the deletion (`origin`: the
+    instance, or the queryset, that `.delete()` was called on). A comment or
+    attachment removed by a task, project or team delete has no history worth
+    writing: the audit row would be about to cascade away with the task, and
+    writing it can leave an orphan the foreign key rejects at COMMIT.
+
+    `_task_or_none` used to be the only guard, and it works by the task row
+    already being gone. Whether it is depends on the order Django deletes models
+    in, which shifts when ANY model gains a foreign key into the task graph
+    (MIP-1351's `TaskProgressFact` did): the comment was then deleted while its
+    task and project still existed, and the audit row broke the project delete.
+    This does not depend on the order.
+    """
+    origin = kwargs.get("origin")
+    model = origin.model if isinstance(origin, QuerySet) else type(origin)
+    return model in (TaskMaster, ProjectMaster, TeamMaster)
+
+
 @receiver(post_delete, sender=TaskComments)
 def comment_record_delete(sender, instance: TaskComments, **kwargs):
+    if _going_with_its_task(kwargs):
+        return
     task = _task_or_none(instance)
     if task is None:
         return
@@ -837,6 +866,8 @@ def attachment_record_add(sender, instance: TaskAttachments, created: bool, **kw
 
 @receiver(post_delete, sender=TaskAttachments)
 def attachment_record_remove(sender, instance: TaskAttachments, **kwargs):
+    if _going_with_its_task(kwargs):
+        return
     task = _task_or_none(instance)
     if task is None:
         return
@@ -888,6 +919,8 @@ def milestone_assignee_record_add(sender, instance: MilestoneAssignees, created:
 
 @receiver(post_delete, sender=MilestoneAssignees)
 def milestone_assignee_record_remove(sender, instance: MilestoneAssignees, **kwargs):
+    if _going_with_its_task(kwargs):
+        return
     task = _milestone_backing_task(instance.milestone)
     if task is None:
         return

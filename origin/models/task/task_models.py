@@ -144,6 +144,16 @@ class TaskMaster(models.Model):
     project_task_number = models.IntegerField(null=True, blank=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+    # When this task, or anything under it, last had real progress (MIP-1351):
+    # the later of its own last change and the last change to any descendant.
+    # A milestone's value is on its backing task. Differs from `ts_updated_at`
+    # only when a child changes (the parent's row is untouched but this moves),
+    # and in the other direction for cascades and derived flips, which move
+    # `ts_updated_at` for sync but are not progress. Written only by
+    # `origin.services.task_progress`, with a queryset `.update()` so
+    # `ts_updated_at` stays put. NULL = nothing recorded yet (no history, or
+    # not backfilled).
+    last_progress_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
