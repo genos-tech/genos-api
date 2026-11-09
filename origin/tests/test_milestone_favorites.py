@@ -12,6 +12,8 @@ from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneFavorite, MilestoneMaster
+from origin.models.task.task_models import TaskMaster
+from origin.services.milestone_service import ensure_backing_task
 
 from .test_base import BaseAPITestCase
 
@@ -154,6 +156,82 @@ class MilestoneFavoriteTests(BaseAPITestCase):
         # A later open of Beta moves it back.
         self.client.post(OPENED, {"milestone_id": self.m2.milestone_id}, format="json")
         self.assertEqual(self._titles(), ["Beta", "Launch"])
+
+    # -- order by progress (MIP-1352) ---------------------------------------------
+
+    def _with_progress(self, milestone, when):
+        """Give the milestone its backing task, and a `last_progress_at` of `when`."""
+        task = ensure_backing_task(milestone)
+        TaskMaster.objects.filter(pk=task.pk).update(last_progress_at=when)
+        return task
+
+    def test_the_most_recent_progress_comes_first(self):
+        now = timezone.now()
+        self._with_progress(self.m1, now - timedelta(days=5))
+        self._with_progress(self.m2, now - timedelta(days=1))
+        self._star(self.m2.milestone_id)
+        self._star(self.m1.milestone_id)  # starred LAST, but its progress is older
+        self.assertEqual(self._titles(), ["Beta", "Launch"])
+
+    def test_opening_a_milestone_does_not_move_it_above_a_newer_progress(self):
+        now = timezone.now()
+        self._with_progress(self.m1, now - timedelta(days=5))
+        self._with_progress(self.m2, now - timedelta(days=1))
+        self._star(self.m1.milestone_id)
+        self._star(self.m2.milestone_id)
+        self.authenticate()
+        self.client.post(OPENED, {"milestone_id": self.m1.milestone_id}, format="json")
+        self.assertEqual(self._titles(), ["Beta", "Launch"])
+
+    def test_a_child_changing_moves_its_milestone_up(self):
+        now = timezone.now()
+        self._with_progress(self.m1, now - timedelta(days=5))
+        self._with_progress(self.m2, now - timedelta(days=1))
+        self._star(self.m1.milestone_id)
+        self._star(self.m2.milestone_id)
+        self.assertEqual(self._titles(), ["Beta", "Launch"])
+        with self.captureOnCommitCallbacks(execute=True):
+            child = TaskMaster.objects.create(
+                team=self.team,
+                project=self.project,
+                title="Do it",
+                status="Open",
+                parent_task_id=self.m1.task_id,
+                milestone=self.m1,
+            )
+            child.status = "WIP"
+            child.save()
+        self.assertEqual(self._titles(), ["Launch", "Beta"])
+
+    def test_no_recorded_progress_goes_after_the_milestones_that_have_some(self):
+        now = timezone.now()
+        self._with_progress(self.m1, now - timedelta(days=30))  # old, but recorded
+        self._star(self.m1.milestone_id)
+        self._star(self.m2.milestone_id)  # no backing task: nothing recorded
+        self.assertEqual(self._titles(), ["Launch", "Beta"])
+
+    def test_milestones_with_the_same_progress_keep_the_opened_order(self):
+        when = timezone.now() - timedelta(days=2)
+        self._with_progress(self.m1, when)
+        self._with_progress(self.m2, when)
+        self._star(self.m1.milestone_id)
+        self._star(self.m2.milestone_id)
+        self.assertEqual(self._titles(), ["Beta", "Launch"])
+        self.authenticate()
+        self.client.post(OPENED, {"milestone_id": self.m1.milestone_id}, format="json")
+        self.assertEqual(self._titles(), ["Launch", "Beta"])
+
+    def test_the_list_carries_each_milestones_last_progress(self):
+        when = timezone.now() - timedelta(days=2)
+        task = self._with_progress(self.m1, when)
+        self._star(self.m1.milestone_id)
+        self._star(self.m2.milestone_id)
+        rows = {f["title"]: f for f in self._list()}
+        self.assertEqual(
+            rows["Launch"]["lastProgressAt"],
+            str(TaskMaster.objects.get(pk=task.pk).last_progress_at),
+        )
+        self.assertIsNone(rows["Beta"]["lastProgressAt"])
 
     def test_an_old_open_does_not_outrank_a_newer_star(self):
         self._star(self.m1.milestone_id)
