@@ -808,12 +808,11 @@ CATALOG: tuple[McpTool, ...] = (
             "Open tasks nobody has touched for at least `stale_days` days "
             "(required), oldest first, with `days_stale`. Use it for 'what is "
             "stuck?'. Scoped to the caller's projects; `project_id` narrows it "
-            "and `limit` caps the list (default 20). `days_stale` is about the task's own "
-            "edits: a milestone or parent whose sub-tasks are moving still appears. "
-            "`last_progress_at` and `days_since_progress` say when anything under it last "
-            "moved (null until there is any), so skip the rows where that is recent."
+            "and `limit` caps the list (default 20). 'Nobody has touched' covers "
+            "the task itself and everything under it: a milestone or parent whose "
+            "sub-tasks are moving is not listed. `last_progress_at` says when "
+            "anything under a row last moved (null until there is any)."
         ),
-        augment=progress.with_stale_progress,
     ),
     McpTool(
         name="get_progress_history",

@@ -2,9 +2,9 @@
 
 REST: every task payload and the milestone payload carry it, and the `since=`
 delta sends a parent whose CHILD changed although its own `ts_updated_at` did not
-move. MCP: `get_task`, `list_tasks`, `list_milestones`, `get_milestone_summary` and
-`get_stale_tasks` carry it, `get_progress_history` lists what moved, and the in-app
-agent, which shares the registry tools, sees none of it.
+move. MCP: `get_task`, `list_tasks`, `list_milestones` and `get_milestone_summary` carry
+it, `get_progress_history` lists what moved, and the in-app agent, which shares those
+registry tools, sees none of it.
 """
 
 from datetime import timedelta
@@ -226,23 +226,6 @@ class McpTests(Tree, McpBase):
             out["last_progress_at"],
             TaskMaster.objects.get(pk=self.ms.pk).last_progress_at.isoformat(),
         )
-
-    def test_get_stale_tasks_says_which_stale_parents_have_children_moving(self):
-        self.age()
-        self.edit(self.sub, status="WIP")
-        # the tool judges by the task's own `ts_updated_at`: put the sibling and parents back to old
-        TaskMaster.objects.filter(project=self.project).update(
-            ts_updated_at=timezone.now() - timedelta(days=30)
-        )
-        rows = {
-            r["task_id"]: r
-            for r in self._ok(
-                "get_stale_tasks", {"stale_days": 7, "project_id": self.project.project_id}
-            )["tasks"]
-        }
-        self.assertEqual(rows[self.sibling.task_id]["days_since_progress"], 30)
-        self.assertEqual(rows[self.ms.task_id]["days_since_progress"], 0)
-        self.assertIsNotNone(rows[self.ms.task_id]["last_progress_at"])
 
     def test_the_in_app_agent_sees_none_of_it(self):
         """The registry tools are untouched: anything that changes what the in-app model

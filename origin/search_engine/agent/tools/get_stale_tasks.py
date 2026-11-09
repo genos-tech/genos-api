@@ -1,8 +1,13 @@
 """`get_stale_tasks` tool — surface tasks that haven't moved in N days.
 
-Returns non-Closed tasks whose `ts_updated_at` is older than `stale_days`
-days ago, oldest first. Use to identify stuck work: tasks that haven't
-been touched for a while and may need attention or cleanup.
+Returns non-Closed tasks with no activity for `stale_days` days, oldest first.
+Use to identify stuck work: tasks that haven't been touched for a while and
+may need attention or cleanup.
+
+"Activity" is the task's own last edit (`ts_updated_at`) AND the last progress
+anywhere under it (`last_progress_at`, MIP-1351): a milestone or parent whose
+sub-tasks are moving is not stale, however long since its own row was edited.
+A task with no progress recorded yet (null) is judged by its own edits alone.
 
 This is the inverse of `get_task_throughput_stats` — throughput tells
 you what is moving; this tells you what is not.
@@ -19,6 +24,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
+from django.db.models import Q
+from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
@@ -81,14 +88,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             is_init_task=False,
             ts_updated_at__lt=cutoff,
         )
+        .filter(Q(last_progress_at__isnull=True) | Q(last_progress_at__lt=cutoff))
         .exclude(status__in=["Closed", "Deleted"])
         .select_related("project")
-        .order_by("ts_updated_at")[:limit]
+        # The later of the task's own edit and the progress under it; the oldest
+        # of those first. Greatest ignores a NULL on PostgreSQL, but a Coalesce
+        # keeps it true on any database.
+        .annotate(
+            last_activity=Greatest("ts_updated_at", Coalesce("last_progress_at", "ts_updated_at"))
+        )
+        .order_by("last_activity")[:limit]
     )
 
     tasks = []
     for t in qs:
-        days_stale = (now - t.ts_updated_at).days
+        days_stale = (now - t.last_activity).days
         tasks.append(
             {
                 "task_id": t.task_id,
@@ -101,6 +115,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "project_name": t.project.project_name if t.project else None,
                 "days_stale": days_stale,
                 "ts_updated_at": t.ts_updated_at.isoformat() if t.ts_updated_at else None,
+                "last_progress_at": t.last_progress_at.isoformat() if t.last_progress_at else None,
             }
         )
 
@@ -123,11 +138,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 GET_STALE_TASKS = Tool(
     name="get_stale_tasks",
     description=(
-        "Return non-Closed tasks that haven't been updated for at least "
-        "`stale_days` days, oldest first. Use to identify stuck work — "
+        "Return non-Closed tasks with no activity for at least "
+        "`stale_days` days, oldest first. Activity is the task's own last "
+        "edit and any progress under it, so a milestone or parent whose "
+        "sub-tasks are moving is not stale. Use to identify stuck work — "
         "tasks that may need attention, reassignment, or cleanup. "
         "Returns task_id, title, status, priority, assignee_id, "
-        "project_id, project_name, days_stale, and ts_updated_at. Scoped to projects "
+        "project_id, project_name, days_stale, ts_updated_at and "
+        "last_progress_at. Scoped to projects "
         "the current user is a member of."
     ),
     parameters_schema={
@@ -136,9 +154,9 @@ GET_STALE_TASKS = Tool(
             "stale_days": {
                 "type": "INTEGER",
                 "description": (
-                    f"Minimum days since last update (1–{_MAX_DAYS}). "
-                    "A task is included if ts_updated_at is older than "
-                    "(now - stale_days)."
+                    f"Minimum days since last activity (1–{_MAX_DAYS}). "
+                    "A task is included if both ts_updated_at and "
+                    "last_progress_at are older than (now - stale_days)."
                 ),
             },
             "project_id": {
@@ -151,8 +169,7 @@ GET_STALE_TASKS = Tool(
             "limit": {
                 "type": "INTEGER",
                 "description": (
-                    f"Max number of tasks to return (1–{_MAX_LIMIT}). "
-                    f"Default {_DEFAULT_LIMIT}."
+                    f"Max number of tasks to return (1–{_MAX_LIMIT}). Default {_DEFAULT_LIMIT}."
                 ),
             },
         },

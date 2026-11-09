@@ -7,8 +7,7 @@ client, never shown to the in-app agent.
   * `get_progress_history`, an MCP-only tool (see `secretary/__init__.py` for why those
     live outside `origin/search_engine/`);
   * `augment` functions that add `last_progress_at` to the results of tools the in-app
-    agent shares (`get_task`, `list_tasks`, `list_milestones`, `get_milestone_summary`,
-    `get_stale_tasks`). They run AFTER the registry tool, so its access check has already
+    agent shares (`get_task`, `list_tasks`, `list_milestones`, `get_milestone_summary`). They run AFTER the registry tool, so its access check has already
     decided what is shown, and they add a field to what it returned and never change what
     it returned. Anything that changes what the in-app model sees waits for the December
     eval, so the registry tools are left as they are.
@@ -20,8 +19,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Iterable
-
-from django.utils import timezone
 
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -88,32 +85,3 @@ def with_milestone_progress(payload: dict, args: dict, mcp_args: dict, ctx: Tool
     )
     times = _times([backing], ctx)
     return {**payload, "last_progress_at": _iso(times.get(backing))}
-
-
-def with_stale_progress(payload: dict, args: dict, mcp_args: dict, ctx: ToolContext) -> dict:
-    """`get_stale_tasks`: tell a task that is quiet itself from one with activity under it.
-
-    The tool judges by the task's own `ts_updated_at`, so a milestone whose tasks are
-    moving every day still lists as stale. Each row gets `last_progress_at` and
-    `days_since_progress` (null when nothing is recorded yet), and nothing is dropped: the
-    tool's limit applies before this, so removing rows here would hand back fewer than
-    asked for with no way to ask for more."""
-    rows = payload.get("tasks")
-    if not isinstance(rows, list):
-        return payload
-    times = _times((r.get("task_id") for r in rows if isinstance(r, dict)), ctx)
-    now = timezone.now()
-    out = []
-    for r in rows:
-        if not isinstance(r, dict):
-            out.append(r)
-            continue
-        last = times.get(r.get("task_id"))
-        out.append(
-            {
-                **r,
-                "last_progress_at": _iso(last),
-                "days_since_progress": (now - last).days if last else None,
-            }
-        )
-    return {**payload, "tasks": out}
