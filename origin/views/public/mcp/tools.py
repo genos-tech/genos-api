@@ -135,7 +135,10 @@ from origin.services.security_events import (
     DESTRUCTIVE_REFUSED,
     note_refusal,
 )
-from origin.views.public.mcp import secretary  # noqa: F401  (registers the MCP-only tools)
+from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
+    progress,
+    secretary,
+)
 from origin.views.public.mcp.resolve import (
     resolve_milestone_ref,
     resolve_note_ref,
@@ -274,11 +277,15 @@ CATALOG: tuple[McpTool, ...] = (
             "is never returned twice). Each comment's `markdown` keeps its "
             "paragraphs, lists and code fences. `body_hash` identifies the body "
             "you were shown: pass it to `update_task` as `base_body_hash` to "
-            "refuse an edit that would overwrite a newer one. This is the first call when the "
+            "refuse an edit that would overwrite a newer one. `last_progress_at` is when "
+            "this task, or anything under it, last had real progress (null until there is "
+            "any): it moves when a sub-task changes, which the task's own history does not "
+            "show; `get_progress_history` lists what. This is the first call when the "
             "user names a task to work on."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+        augment=progress.with_task_progress,
     ),
     McpTool(
         name="list_my_tasks",
@@ -316,8 +323,10 @@ CATALOG: tuple[McpTool, ...] = (
             "have. Each row carries its tag names. Rows are newest-updated first, at most "
             "50 a page: when `has_more` is true the list is partial, and "
             "`next_cursor` (passed back as `cursor`, with the same filters) "
-            "returns the next page."
+            "returns the next page. `last_progress_at` is when the task, or anything "
+            "under it, last had real progress (null until there is any)."
         ),
+        augment=progress.with_rows_progress,
     ),
     McpTool(
         name="list_projects",
@@ -341,8 +350,11 @@ CATALOG: tuple[McpTool, ...] = (
             "own title, dates, assignees, folder and sprint change. "
             "`has_goal` is false when nobody has written what the milestone "
             "is for. For the milestones the caller is on, pass their own id "
-            "from `get_current_user` as `assignee_id`."
+            "from `get_current_user` as `assignee_id`. `last_progress_at` is when the "
+            "milestone, or any task under it, last had real progress (null until there "
+            "is any); `get_progress_history` lists what."
         ),
+        augment=progress.with_rows_progress,
         # The registry description of `assignee_id` points at
         # `list_my_milestones`, which this surface does not publish —
         # `_rewrite_refs` can only rename a tool, not remove a reference
@@ -376,8 +388,10 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone: it lists what is ready to start now (every blocker "
             "closed, including its parent's), what is blocked and by what, and "
             "the critical path. `has_goal` is false when nobody has written "
-            "what the milestone is for."
+            "what the milestone is for. `last_progress_at` is when the milestone, or any "
+            "task under it, last had real progress (null until there is any)."
         ),
+        augment=progress.with_milestone_progress,
     ),
     McpTool(
         name="list_sprints",
@@ -794,8 +808,30 @@ CATALOG: tuple[McpTool, ...] = (
             "Open tasks nobody has touched for at least `stale_days` days "
             "(required), oldest first, with `days_stale`. Use it for 'what is "
             "stuck?'. Scoped to the caller's projects; `project_id` narrows it "
-            "and `limit` caps the list (default 20)."
+            "and `limit` caps the list (default 20). `days_stale` is about the task's own "
+            "edits: a milestone or parent whose sub-tasks are moving still appears. "
+            "`last_progress_at` and `days_since_progress` say when anything under it last "
+            "moved (null until there is any), so skip the rows where that is recent."
         ),
+        augment=progress.with_stale_progress,
+    ),
+    McpTool(
+        name="get_progress_history",
+        registry_name="get_progress_history",
+        description=(
+            "What changed at or under one task or milestone, newest first: the task "
+            "that changed (`task_id`, `display_id`, `title`), how far below the one "
+            "asked about (`depth`: 0 is its own change, 1 a direct child's), the kind "
+            "of change (`action_type`, with `field`), who, when and `via`, how it "
+            "arrived. Pass a milestone's own task row to see a milestone. Use it for "
+            "'is this milestone moving?' or 'what happened under this since Monday?'. "
+            "`since` is an ISO date or datetime; `limit` caps the list (default 30, "
+            "max 100) and `has_more` says whether older changes remain. Bulk moves "
+            "(a milestone or project move) and automatic Blocked/Open flips are not "
+            "listed: they are not progress. Needs project membership."
+        ),
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
     ),
     McpTool(
         name="get_team_task_summary",
