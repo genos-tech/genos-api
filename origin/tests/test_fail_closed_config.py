@@ -657,7 +657,7 @@ class TestPublicRoutesArePinned(SimpleTestCase):
 class TestValidateSocketsPush(SimpleTestCase):
     """The api → sockets task-comment push (MIP-1348): same rules as the collab one."""
 
-    SOCKETS = "http://backend-sockets.railway.internal:8889"
+    SOCKETS = "http://backend-flask.railway.internal:8889"
 
     def _sockets(self, **overrides):
         kwargs = {

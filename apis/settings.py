@@ -2446,7 +2446,7 @@ COLLAB_INTERNAL_SECRET = os.environ.get("COLLAB_INTERNAL_SECRET", "")
 # it to the project room and other people's open tasks update live
 # (origin/services/realtime_push.py, MIP-1348). Empty = no push: the comment
 # is still saved, but only a comment typed in the app is announced. Railway:
-# `https://${{backend-sockets.RAILWAY_PUBLIC_DOMAIN}}` (signed, like the collab
+# `https://${{backend-flask.RAILWAY_PUBLIC_DOMAIN}}` (signed, like the collab
 # push). Not the private domain yet: sockets binds 0.0.0.0, IPv4 only, and
 # Railway's private network can be IPv6-only.
 SOCKETS_INTERNAL_URL = os.environ.get("SOCKETS_INTERNAL_URL", "").rstrip("/")
