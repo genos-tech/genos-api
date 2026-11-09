@@ -9,7 +9,7 @@ the list checks access every time rather than trusting the row.
 
 from __future__ import annotations
 
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -53,8 +53,11 @@ def mark_opened(*, user_id, milestone_id) -> bool:
 
 
 def visible_favorites(user_id, team_id=None) -> list[MilestoneFavorite]:
-    """The user's favorites they can still open, most recently opened first (a
-    star that was never opened sorts by when it was starred)."""
+    """The user's favorites they can still open, the most recent progress first
+    (MIP-1352): the milestone's `last_progress_at`, i.e. when it or anything under it
+    last changed. A milestone with none recorded (null) goes after the ones that
+    have, and ties and those nulls keep the earlier rule: most recently opened first,
+    a star never opened sorting by when it was starred."""
     qs = MilestoneFavorite.objects.filter(
         user_id=user_id,
         milestone__is_deleted=False,
@@ -63,7 +66,7 @@ def visible_favorites(user_id, team_id=None) -> list[MilestoneFavorite]:
     if team_id is not None:
         qs = qs.filter(Q(team_id=team_id))
     qs = qs.annotate(ts_last_touched=Coalesce("ts_last_opened_at", "ts_created_at")).order_by(
-        "-ts_last_touched", "-id"
+        F("milestone__task__last_progress_at").desc(nulls_last=True), "-ts_last_touched", "-id"
     )
     allowed: dict = {}
     out = []

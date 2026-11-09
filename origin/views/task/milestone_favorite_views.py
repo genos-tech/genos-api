@@ -11,6 +11,7 @@ from origin.services.milestone_favorites import (
     unstar_milestone,
     visible_favorites,
 )
+from origin.services.task_progress import progress_at
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import validate_request_data
 
@@ -41,6 +42,9 @@ def _serialize_favorite(fav) -> dict:
         "projectId": m.project_id,
         "projectName": m.project.project_name,
         "teamId": fav.team_id,
+        # When the milestone, or anything under it, last had progress (MIP-1351); the
+        # sidebar orders the list by it (MIP-1352). Null until recorded.
+        "lastProgressAt": progress_at(task) if task is not None else None,
         "tsFavorited": fav.ts_created_at,
         "tsLastOpened": fav.ts_last_opened_at,
     }
