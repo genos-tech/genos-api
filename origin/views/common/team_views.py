@@ -32,7 +32,11 @@ from origin.serializers.common.team_serializers import TeamMasterSerializer, Tea
 from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.external_grants import host_team_ids_for_user
-from origin.services.member_removal import clean_up_after_removal, count_open_work
+from origin.services.member_removal import (
+    clean_up_after_removal,
+    count_open_work,
+    memberships_in_team,
+)
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     GUEST,
@@ -44,6 +48,7 @@ from origin.services.member_roles import (
     resolve_project_role,
     resolve_team_role,
 )
+from origin.services.realtime_push import push_membership_removed
 from origin.services.security_events import record_security_event, user_label
 from origin.services.team_membership import (
     InviteAcceptError,
@@ -1803,9 +1808,19 @@ class RemoveTeamMemberView(AuthenticatedAPIView):
             return error
         unassign = request.data.get("unassign_open_tasks") is True
         removed_role = row.member_role
+        lost_projects, lost_channels = memberships_in_team(team.team_id, user_id)
         with transaction.atomic():
             remove_team_member(team.team_id, user_id)
             unassigned = clean_up_after_removal(team.team_id, user_id, unassign=unassign)
+            # After commit, and in the transaction so a rollback never pushes: their open
+            # browser leaves the team's rooms now, not when it reconnects.
+            push_membership_removed(
+                user_id=user_id,
+                team_id=team.team_id,
+                scope="team",
+                project_ids=lost_projects,
+                channels=lost_channels,
+            )
             record_security_event(
                 SecurityAction.MEMBER_REMOVED,
                 request=request,

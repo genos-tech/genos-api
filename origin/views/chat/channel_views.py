@@ -65,6 +65,7 @@ from origin.services.member_roles import (
     resolve_gm_role,
     resolve_team_role,
 )
+from origin.services.realtime_push import push_membership_removed
 from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
@@ -1347,6 +1348,14 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
         member.is_deleted = True
         member.save(update_fields=["is_deleted", "ts_updated_at"])
         if manager_may_remove:
+            # Their open browser leaves the chat's room now (MIP-1371). Leaving yourself is
+            # already handled by your own socket; this is for someone else being removed.
+            push_membership_removed(
+                user_id=user_id,
+                team_id=channel.team_id,
+                scope="channel",
+                channels=[(int(channel.kind), str(channel.id))],
+            )
             # A removal by someone else leaves a trace (MIP-1371); leaving does not.
             record_security_event(
                 SecurityAction.MEMBER_REMOVED,

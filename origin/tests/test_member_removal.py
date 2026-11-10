@@ -661,3 +661,189 @@ class ToolRemovalTests(Base):
             MANAGE_PROJECT_MEMBERS.parameters_schema["properties"]["action"]["enum"],
         )
         self.assertIn("unassign_open_tasks", MANAGE_PROJECT_MEMBERS.parameters_schema["properties"])
+
+
+# ---------------------------------------------------------------------------
+# The live cut-off: genos-sockets is told after the removal commits (MIP-1371)
+# ---------------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import json  # noqa: E402
+
+import requests  # noqa: E402
+from django.db import transaction  # noqa: E402
+from django.test import override_settings  # noqa: E402
+
+from origin.services import realtime_push  # noqa: E402
+
+SOCKETS = "http://sockets.internal:8889"
+SECRET = "test-only-sockets-internal-secret"
+PUSH_URL = f"{SOCKETS}/internal/membership/removed"
+
+
+@override_settings(SOCKETS_INTERNAL_URL=SOCKETS, SOCKETS_INTERNAL_SECRET=SECRET)
+class LiveCutOffTests(Base):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(realtime_push.requests, "post")
+        self.post = patcher.start()
+        self.post.return_value = mock.Mock(status_code=200)
+        self.addCleanup(patcher.stop)
+        # A project's chat is created with it (a signal), and its members mirror the project's.
+        self.pm = Channel.objects.get(kind=ChannelKind.PM, project=self.project)
+        ChannelMember.objects.get_or_create(
+            channel=self.pm, user=self.viewer, defaults={"role": "member"}
+        )
+        self.gm = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="GM", owner=self.owner
+        )
+        ChannelMember.objects.create(channel=self.gm, user=self.owner, role="owner")
+        ChannelMember.objects.create(channel=self.gm, user=self.viewer, role="member")
+
+    def body(self, call=None):
+        call = call or self.post.call_args
+        return json.loads(call.kwargs["data"])
+
+    def run_removal(self, fn):
+        with self.captureOnCommitCallbacks(execute=True):
+            return fn()
+
+    def test_a_team_removal_names_every_project_and_chat_they_lost_and_the_team(self):
+        self.auth(self.owner)
+        res = self.run_removal(lambda: self.remove_team(self.viewer))
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(self.post.call_count, 1)
+        body = self.body()
+        self.assertEqual(body["scope"], "team")
+        self.assertEqual(body["userId"], str(self.viewer.id))
+        self.assertEqual(body["teamId"], str(self.team.team_id))
+        self.assertEqual(
+            sorted(body["projectIds"]),
+            sorted([self.project.project_id, self.other_project.project_id]),
+        )
+        self.assertIn({"kind": int(ChannelKind.PM), "id": str(self.pm.id)}, body["channels"])
+        self.assertIn({"kind": int(ChannelKind.GM), "id": str(self.gm.id)}, body["channels"])
+
+    def test_the_lists_are_read_before_the_rows_go(self):
+        # Read after the removal they would be empty and nothing would be cut off.
+        self.auth(self.owner)
+        self.run_removal(lambda: self.remove_team(self.viewer))
+        self.assertTrue(self.body()["projectIds"])
+        self.assertTrue(self.body()["channels"])
+
+    def test_a_project_removal_names_that_project_and_its_chat_only(self):
+        self.auth(self.owner)
+        self.run_removal(lambda: self.remove_project(self.viewer))
+        body = self.body()
+        self.assertEqual(body["scope"], "project")
+        self.assertEqual(body["projectIds"], [self.project.project_id])
+        self.assertEqual(body["channels"], [{"kind": int(ChannelKind.PM), "id": str(self.pm.id)}])
+
+    def test_removing_someone_from_a_chat_names_that_chat(self):
+        self.auth(self.owner)
+        res = self.run_removal(
+            lambda: self.client.delete(f"/api/v3/channels/{self.gm.id}/members/{self.viewer.id}/")
+        )
+        self.assertEqual(res.status_code, 204)
+        body = self.body()
+        self.assertEqual(body["scope"], "channel")
+        self.assertEqual(body["channels"], [{"kind": int(ChannelKind.GM), "id": str(self.gm.id)}])
+        self.assertEqual(body["projectIds"], [])
+
+    def test_leaving_a_chat_yourself_sends_nothing(self):
+        self.auth(self.viewer)
+        res = self.run_removal(
+            lambda: self.client.delete(f"/api/v3/channels/{self.gm.id}/members/{self.viewer.id}/")
+        )
+        self.assertEqual(res.status_code, 204)
+        self.post.assert_not_called()
+
+    def test_it_goes_to_the_membership_route_signed_with_the_secret(self):
+        self.auth(self.owner)
+        self.run_removal(lambda: self.remove_project(self.viewer))
+        call = self.post.call_args
+        self.assertEqual(call.args[0], PUSH_URL)
+        headers = call.kwargs["headers"]
+        expected = (
+            "sha256="
+            + hmac.new(
+                SECRET.encode(),
+                headers[realtime_push.TIMESTAMP_HEADER].encode() + b"." + call.kwargs["data"],
+                hashlib.sha256,
+            ).hexdigest()
+        )
+        self.assertEqual(headers[realtime_push.SIGNATURE_HEADER], expected)
+
+    def test_nothing_is_sent_before_the_commit(self):
+        self.auth(self.owner)
+        self.remove_project(self.viewer)  # no on_commit callbacks run
+        self.post.assert_not_called()
+
+    def test_a_refused_removal_pushes_nothing(self):
+        self.auth(self.editor)
+        res = self.run_removal(lambda: self.remove_project(self.editor2))
+        self.assertEqual(res.status_code, 403)
+        self.post.assert_not_called()
+
+    def test_a_rolled_back_removal_never_pushes(self):
+        self.auth(self.owner)
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            try:
+                with transaction.atomic():
+                    from origin.services.project_manage import remove_member
+
+                    remove_member(
+                        self.project, self.viewer.id, actor_id=self.owner.id, unassign=False
+                    )
+                    raise RuntimeError("roll it back")
+            except RuntimeError:
+                pass
+        self.assertEqual(callbacks, [])
+        self.post.assert_not_called()
+
+    def test_a_sockets_outage_costs_the_live_cut_off_only_never_the_removal(self):
+        self.post.side_effect = requests.ConnectionError("down")
+        self.auth(self.owner)
+        with self.assertLogs("origin.services.realtime_push", level="WARNING") as logs:
+            res = self.run_removal(lambda: self.remove_team(self.viewer))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(self.on_team(self.viewer))
+        self.assertIn("membership push failed", logs.output[0])
+
+    def test_a_refusal_from_sockets_is_only_logged(self):
+        self.post.return_value = mock.Mock(status_code=401)
+        self.auth(self.owner)
+        with self.assertLogs("origin.services.realtime_push", level="WARNING") as logs:
+            res = self.run_removal(lambda: self.remove_project(self.viewer))
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("membership push refused", logs.output[0])
+
+    @override_settings(SOCKETS_INTERNAL_URL="")
+    def test_with_no_sockets_url_it_is_a_quiet_no_op(self):
+        self.auth(self.owner)
+        res = self.run_removal(lambda: self.remove_project(self.viewer))
+        self.assertEqual(res.status_code, 200)
+        self.post.assert_not_called()
+
+    @override_settings(SOCKETS_INTERNAL_SECRET="")
+    def test_with_no_secret_it_says_so_and_sends_nothing(self):
+        self.auth(self.owner)
+        with self.assertLogs("origin.services.realtime_push", level="WARNING") as logs:
+            self.run_removal(lambda: self.remove_project(self.viewer))
+        self.post.assert_not_called()
+        self.assertIn("SOCKETS_INTERNAL_SECRET is unset", logs.output[0])
+
+    def test_the_removed_persons_project_list_refreshes_for_everyone(self):
+        from origin.services import change_feed
+
+        with mock.patch.object(change_feed, "bump_team") as bump:
+            self.auth(self.owner)
+            self.run_removal(lambda: self.remove_project(self.viewer))
+        bump.assert_called_with(self.team.team_id)
+
+    def test_the_existing_comment_push_still_works_beside_it(self):
+        # The shared `_post` now takes a path; the old call keeps its default.
+        with self.captureOnCommitCallbacks(execute=True):
+            realtime_push.push_task_comment(self.task("t").task_id, 1, realtime_push.CREATED)
+        self.assertEqual(self.post.call_args.args[0], f"{SOCKETS}/internal/broadcast/task-comment")

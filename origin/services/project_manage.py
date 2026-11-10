@@ -37,6 +37,7 @@ from origin.services.member_roles import (
     resolve_project_role,
 )
 from origin.services.project_code import derive_project_code
+from origin.services.realtime_push import push_membership_removed
 from origin.services.security_events import record_security_event, user_label
 from origin.views.utils.scope_guards import is_team_member
 
@@ -241,10 +242,29 @@ def remove_member(
         raise ProjectRefused("The project owner cannot be removed. Transfer ownership first.", 400)
     if not can_remove_member(actor_role, target_role):
         raise ProjectRefused("Only the project owner can remove an editor.", 403)
+    from origin.models.chat.unified_models import Channel, ChannelKind
+    from origin.services import change_feed
+
+    pm_channels = [
+        (int(ChannelKind.PM), str(cid))
+        for cid in Channel.objects.filter(
+            kind=ChannelKind.PM, project_id=project.project_id
+        ).values_list("id", flat=True)
+    ]
     with transaction.atomic():
         row.delete()
         unassigned = clean_up_after_removal(
             project.team_id, user_id, project_id=project.project_id, unassign=unassign
+        )
+        # Everyone's project list refreshes on the team change feed, the removed person's
+        # included, so the project leaves their sidebar; their open browser leaves the rooms.
+        change_feed.bump_team(project.team_id)
+        push_membership_removed(
+            user_id=user_id,
+            team_id=project.team_id,
+            scope="project",
+            project_ids=[project.project_id],
+            channels=pm_channels,
         )
         record_security_event(
             SecurityAction.MEMBER_REMOVED,

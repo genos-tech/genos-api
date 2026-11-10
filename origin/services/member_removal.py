@@ -112,6 +112,26 @@ def withdraw_join_requests(team_id, user_id, *, project_id=None) -> int:
     return qs.update(request_status="rejected")
 
 
+def memberships_in_team(team_id, user_id) -> tuple[list[int], list[tuple[int, str]]]:
+    """(project ids, [(channel kind, channel id)]) the person is in within the team, read BEFORE
+    a removal deletes the rows, for the live socket cut-off (`push_membership_removed`)."""
+    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.project.prj_models import ProjectMembers
+
+    projects = list(
+        ProjectMembers.objects.filter(team_id=team_id, attendee_id=user_id).values_list(
+            "project_id", flat=True
+        )
+    )
+    channels = [
+        (int(kind), str(cid))
+        for kind, cid in ChannelMember.objects.filter(
+            channel__team_id=team_id, user_id=user_id, is_deleted=False
+        ).values_list("channel__kind", "channel_id")
+    ]
+    return projects, channels
+
+
 def mark_search_acl_dirty(team_id, user_id) -> None:
     """Ask search to refresh the projects whose tasks the person is on.
 
