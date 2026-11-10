@@ -441,6 +441,7 @@ REGISTRY = {
         "removes the caller's own membership"
     ),
     "origin.views.common.team_views.TeamMasterView": checked("can_manage"),
+    "origin.views.common.team_views.RemoveTeamMemberView": checked("can_remove_member"),
     "origin.views.common.team_views.TeamMemberRoleView": checked("can_manage"),
     "origin.views.common.team_views.TeamMembersView": checked("is_team_member"),
     "origin.views.common.team_views.TeamProfileImageView": checked("can_manage"),
@@ -568,6 +569,7 @@ REGISTRY = {
         "is_project_member",
     ),
     "origin.views.project.prj_views.ProjectMemberRoleView": checked("can_manage"),
+    "origin.views.project.prj_views.RemoveProjectMemberView": checked("can_manage"),
     "origin.views.project.prj_views.ProjectMembersView": checked(
         "require_project_member_or_response"
     ),

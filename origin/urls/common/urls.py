@@ -528,6 +528,11 @@ urlpatterns = [
         name="team_member_role",
     ),
     path(
+        "api/v2/team/member/remove/",
+        RemoveTeamMemberView.as_view(),
+        name="team_member_remove",
+    ),
+    path(
         "api/v2/team/getTeamMemberInfo/",
         GetTeamMemberInfoView.as_view(),
         name="get_team_member_info",

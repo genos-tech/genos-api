@@ -51,6 +51,7 @@ from origin.services.calendar_sync import (
     get_google_connected_account,
     sync_task_event,
 )
+from origin.services.member_removal import active_team_member_ids
 from origin.services.task_cache import (
     clear_project_tasks_cache,
     invalidate_project_tasks_cache,
@@ -970,6 +971,10 @@ def _run_upsert(task_pk: int) -> None:
             return
         user = task.assignee
         if not getattr(user, "auto_sync_tasks_to_calendar", False):
+            return
+        # A removed member still assigned to the task (the remover chose not to unassign it)
+        # gets no more updates on their calendar (MIP-1371).
+        if task.team_id and not active_team_member_ids(task.team_id, [task.assignee_id]):
             return
         account = get_google_connected_account(user)
         if account is None:

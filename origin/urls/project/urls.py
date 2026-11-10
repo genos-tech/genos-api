@@ -31,6 +31,11 @@ urlpatterns = [
         name="project_member_role",
     ),
     path(
+        "api/v2/project/member/remove/",
+        RemoveProjectMemberView.as_view(),
+        name="project_member_remove",
+    ),
+    path(
         "api/v2/project/label/assign/",
         ProjectLabelAssignmentView.as_view(),
         name="project_label_assign",

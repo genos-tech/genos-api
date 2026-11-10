@@ -13,6 +13,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
+from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework import permissions, status
@@ -31,12 +32,14 @@ from origin.serializers.common.team_serializers import TeamMasterSerializer, Tea
 from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.external_grants import host_team_ids_for_user
+from origin.services.member_removal import clean_up_after_removal, count_open_work
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     GUEST,
     OWNER,
     VIEWER,
     can_manage,
+    can_remove_member,
     is_assignable,
     resolve_project_role,
     resolve_team_role,
@@ -1607,6 +1610,131 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
 
         cache.set(cache_key, response_data, timeout=60)
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class RemoveTeamMemberView(AuthenticatedAPIView):
+    """POST /api/v2/team/member/remove/ — an owner or editor removes ANOTHER member (MIP-1371).
+
+    Body: `team_id`, `user_id`, and optionally `unassign_open_tasks` (bool, default false).
+    `GET` with the same `team_id` / `user_id` returns what the confirm dialog names:
+    how many open tasks and milestones the person holds.
+
+    Who may remove whom is `can_remove_member`: the owner anyone but themselves; an editor
+    viewers only (a guest has no team row, so a guest is removed from their project). Nobody
+    removes themselves here, since leaving is its own action and the owner cannot leave.
+    The cascade is the one Leave runs (`remove_team_member`: projects, chats, folder
+    permissions, cross-team shares, team API keys, seat count), plus `member_removal`
+    (open work, pending requests, search ACL). One error for "no such team", "not a member"
+    and "not a manager", so a member learns nothing about people they may not remove.
+    """
+
+    @staticmethod
+    def _resolve(request, team_id, user_id):
+        """(team, target row, error response). The error is None when removal is allowed."""
+        not_found = Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not team_id or not user_id:
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "team_id and user_id are required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        try:
+            team = TeamMaster.objects.get(team_id=team_id, is_deleted=False)
+        except (TeamMaster.DoesNotExist, DjangoValidationError, ValueError):
+            return None, None, not_found
+        # `resolve_team_role` reads only live rows, so a non-member (or a removed one) is a
+        # viewer here and gets the same answer as a team that does not exist.
+        actor_role = resolve_team_role(team, request.user.id)
+        if not can_manage(actor_role):
+            return None, None, not_found
+        if str(user_id) == str(request.user.id):
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "Use Leave to remove yourself."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        row = TeamMembers.objects.filter(
+            team_id=team.team_id, attendee_id=user_id, is_deleted=False
+        ).first()
+        if row is None:
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "That user is not a member of this team."},
+                    status=status.HTTP_404_NOT_FOUND,
+                ),
+            )
+        target_role = resolve_team_role(team, user_id, row.member_role)
+        if target_role == OWNER:
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "The team owner cannot be removed. Transfer ownership first."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            )
+        if not can_remove_member(actor_role, target_role):
+            return (
+                None,
+                None,
+                Response(
+                    {"error": "Only the team owner can remove an editor."},
+                    status=status.HTTP_403_FORBIDDEN,
+                ),
+            )
+        return team, row, None
+
+    def get(self, request):
+        team, row, error = self._resolve(
+            request, request.query_params.get("team_id"), request.query_params.get("user_id")
+        )
+        if error is not None:
+            return error
+        return Response(
+            {
+                "userId": str(row.attendee_id),
+                "openWork": count_open_work(team.team_id, row.attendee_id),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        user_id = request.data.get("user_id")
+        team, row, error = self._resolve(request, team_id, user_id)
+        if error is not None:
+            return error
+        unassign = request.data.get("unassign_open_tasks") is True
+        removed_role = row.member_role
+        with transaction.atomic():
+            remove_team_member(team.team_id, user_id)
+            unassigned = clean_up_after_removal(team.team_id, user_id, unassign=unassign)
+            record_security_event(
+                SecurityAction.MEMBER_REMOVED,
+                request=request,
+                team_id=team.team_id,
+                target_type="user",
+                target_id=user_id,
+                target_label=user_label(user_id),
+                metadata={
+                    "via": "removed",
+                    "scope": "team",
+                    "role": removed_role,
+                    "unassigned": unassigned,
+                },
+            )
+        return Response(
+            {"teamId": str(team.team_id), "userId": str(user_id), "unassigned": unassigned},
+            status=status.HTTP_200_OK,
+        )
 
 
 class TeamMemberRoleView(AuthenticatedAPIView):

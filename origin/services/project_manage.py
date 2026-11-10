@@ -27,7 +27,15 @@ from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.acl_dirty import mark_projects_dirty
-from origin.services.member_roles import ASSIGNABLE_ROLES, is_assignable
+from origin.services.member_removal import clean_up_after_removal
+from origin.services.member_roles import (
+    ASSIGNABLE_ROLES,
+    OWNER,
+    can_manage,
+    can_remove_member,
+    is_assignable,
+    resolve_project_role,
+)
 from origin.services.project_code import derive_project_code
 from origin.services.security_events import record_security_event, user_label
 from origin.views.utils.scope_guards import is_team_member
@@ -204,3 +212,55 @@ def change_member_role(project: ProjectMaster, user_id, role, *, request=None, a
             },
         )
     return previous
+
+
+def remove_member(
+    project: ProjectMaster, user_id, *, actor_id, unassign: bool, request=None, actor=None
+) -> dict:
+    """An owner or editor removes ANOTHER member from a project (MIP-1371); returns what was
+    unassigned. The page and the agent tool both come through here.
+
+    `can_remove_member` decides: the owner removes anyone but themselves, an editor removes
+    viewers and guests only. Yourself is `leave`, and the owner cannot leave or be removed.
+    A manager check that fails is the same 404 as a missing project, so a member learns
+    nothing about people they may not remove. The membership row is a hard delete (there is
+    no `is_deleted` here); its receivers take the person out of the project's chat and mark
+    the project for a search ACL refresh. Their open tasks IN THIS PROJECT are unassigned
+    when `unassign`; their other projects are untouched.
+    """
+    actor_role = resolve_project_role(project, actor_id)
+    if not can_manage(actor_role):
+        raise ProjectRefused("Project not found.", 404)
+    if str(user_id) == str(actor_id):
+        raise ProjectRefused("Use Leave to remove yourself.", 400)
+    row = ProjectMembers.objects.filter(project_id=project.project_id, attendee_id=user_id).first()
+    if row is None:
+        raise ProjectRefused("That user is not a member of this project.", 404)
+    target_role = resolve_project_role(project, user_id, row.member_role)
+    if target_role == OWNER:
+        raise ProjectRefused("The project owner cannot be removed. Transfer ownership first.", 400)
+    if not can_remove_member(actor_role, target_role):
+        raise ProjectRefused("Only the project owner can remove an editor.", 403)
+    with transaction.atomic():
+        row.delete()
+        unassigned = clean_up_after_removal(
+            project.team_id, user_id, project_id=project.project_id, unassign=unassign
+        )
+        record_security_event(
+            SecurityAction.MEMBER_REMOVED,
+            request=request,
+            actor=actor,
+            team_id=project.team_id,
+            target_type="user",
+            target_id=user_id,
+            target_label=user_label(user_id),
+            metadata={
+                "via": "removed",
+                "scope": "project",
+                "project_id": project.project_id,
+                "project": project.project_name,
+                "role": target_role,
+                "unassigned": unassigned,
+            },
+        )
+    return unassigned

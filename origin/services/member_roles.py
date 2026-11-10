@@ -103,6 +103,25 @@ def can_manage(role: str | None) -> bool:
     return role in MANAGER_ROLES
 
 
+def can_remove_member(actor_role: str | None, target_role: str | None) -> bool:
+    """May someone with `actor_role` take someone with `target_role` out of a team, project
+    or group chat (MIP-1371)?
+
+    The owner may remove anyone but themselves (the caller keeps "yourself" out: leaving
+    is its own action, and the owner cannot leave). An editor may remove viewers and
+    guests, never another editor and never the owner. That is the same reason team API
+    keys are owner-only: an editor removing another editor is a dispute between peers with
+    nobody above them to appeal to, and it is the one place it would happen.
+
+    Takes RESOLVED roles (`resolve_*_role`): the owner's stored column value is `viewer`.
+    """
+    if actor_role == OWNER:
+        return target_role != OWNER
+    if actor_role == EDITOR:
+        return target_role in (VIEWER, GUEST)
+    return False
+
+
 def is_assignable(role: str | None) -> bool:
     """Is this a role a manager may assign to another TEAM member?"""
     return role in ASSIGNABLE_ROLES

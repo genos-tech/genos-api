@@ -38,6 +38,7 @@ from origin.models.chat.unified_models import (
     MessageReaction,
     ReadCursor,
 )
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
@@ -58,11 +59,13 @@ from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     OWNER,
     can_manage,
+    can_remove_member,
     is_assignable,
     member_role_to_channel_role,
     resolve_gm_role,
     resolve_team_role,
 )
+from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     body_object,
@@ -1294,7 +1297,29 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             if channel.is_external
             else None
         )
-        if not (is_self or can_manage(resolve_gm_role(channel, request.user.id))):
+        actor_role = resolve_gm_role(channel, request.user.id)
+        if is_self and actor_role == OWNER:
+            # The page hides Leave for the owner; the server now refuses it too, as it does
+            # for a team and a project: an ownerless channel has nobody to manage it.
+            return Response(
+                {"error": "The channel owner cannot leave. Transfer ownership first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        manager_may_remove = False
+        if not is_self and can_manage(actor_role):
+            # Taking out SOMEONE ELSE follows `can_remove_member` (MIP-1371): the owner removes
+            # anyone but themselves, an editor only viewers. This used to let an editor remove
+            # the channel owner or another editor. Leaving (yourself) is unchanged.
+            if not can_remove_member(actor_role, resolve_gm_role(channel, user_id)):
+                return Response(
+                    {
+                        "error": "Only the channel owner can remove an editor, and the owner "
+                        "cannot be removed."
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            manager_may_remove = True
+        if not (is_self or manager_may_remove):
             if grant is None:
                 return Response(
                     {"error": "Only the channel owner or an editor can remove other members."},
@@ -1321,6 +1346,22 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
 
         member.is_deleted = True
         member.save(update_fields=["is_deleted", "ts_updated_at"])
+        if manager_may_remove:
+            # A removal by someone else leaves a trace (MIP-1371); leaving does not.
+            record_security_event(
+                SecurityAction.MEMBER_REMOVED,
+                request=request,
+                team_id=channel.team_id,
+                target_type="user",
+                target_id=user_id,
+                target_label=user_label(user_id),
+                metadata={
+                    "via": "removed",
+                    "scope": "chat",
+                    "channel_id": str(channel.id),
+                    "channel": channel.title,
+                },
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
