@@ -1,0 +1,52 @@
+name: migration-guard-report
+
+# Posts the `migration-leaf` commit status for a pull_request run of `migration-guard`
+# (MIP-1098). The check itself runs with a read-only token, because a pull_request run by
+# Dependabot or from a fork gets nothing else; a `workflow_run` workflow runs from the default
+# branch with a write token and executes none of the PR's code: it only reads the small result
+# file the check saved and posts it on the PR's head commit.
+#
+# The head SHA comes from the event, never from the file, and the file's contents are treated as
+# text: a code outside 0-2 is an error, and the message is cut to a status's 140 characters.
+
+on:
+  workflow_run:
+    workflows: [migration-guard]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  statuses: write
+
+jobs:
+  report:
+    name: migration-guard-report
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONTEXT: migration-leaf
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the result the check saved
+        id: result
+        run: |
+          set +e
+          # A run that was cancelled (the PR was updated) saved nothing; the newer run reports.
+          if ! gh run download "${{ github.event.workflow_run.id }}" --repo "$GITHUB_REPOSITORY" \
+               --name migration-leaf-result --dir result; then
+            echo "no result saved by run ${{ github.event.workflow_run.id }}; nothing to report"
+            echo "have=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "have=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post the status
+        if: steps.result.outputs.have == 'true'
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          code=$(python3 -c 'import json; c = json.load(open("result/result.json")).get("code"); print(c if isinstance(c, int) and c in (0, 1) else 2)')
+          msg=$(python3 -c 'import json; print(str(json.load(open("result/result.json")).get("message", ""))[:1000])')
+          bash scripts/post_migration_status.sh "$SHA" "$code" "$msg"

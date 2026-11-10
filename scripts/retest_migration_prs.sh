@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 # usage: retest_migration_prs.sh <base branch>
-# Re-tests every open PR into <base> that adds or changes a migration, merged into <base>
-# as it is now, and posts the `migration-leaf` status on each PR's head (MIP-1098).
-# A PR that touches no migrations can't create a second leaf, so it is left alone.
+# Re-tests every open PR into <base>, merged into <base> as it is now, and posts the
+# `migration-leaf` status on each PR's head (MIP-1098).
+#
+# A PR that adds or changes a migration is merged into <base> and its migration graph checked.
+# A PR that touches none can't create a second leaf, so it is posted green without a merge: that
+# also gives a PR that was opened before the guard existed (and so has no status) the one it
+# needs, since the status is a required check.
 set -u
 base="$1"
 git fetch -q origin "$base"
 prs=$(gh pr list --base "$base" --state open --limit 200 \
   --json number,headRefOid,files \
-  --jq '.[] | select(any(.files[]?; .path | test("/migrations/[0-9]"))) | "\(.number) \(.headRefOid)"')
-if [ -z "$prs" ]; then echo "no open PR into $base touches a migrations folder"; exit 0; fi
+  --jq '.[] | "\(.number) \(.headRefOid) \(any(.files[]?; .path | test("/migrations/[0-9]")))"')
+if [ -z "$prs" ]; then echo "no open PR into $base"; exit 0; fi
 
 status=0
-while read -r number sha; do
+while read -r number sha touches; do
   [ -z "$number" ] && continue
+  if [ "$touches" != "true" ]; then
+    printf '#%s %s\nno migrations in this PR\n' "$number" "${sha:0:9}"
+    bash scripts/post_migration_status.sh "$sha" 0 "No migrations in this PR."
+    continue
+  fi
   work=$(mktemp -d)
   git worktree add -q --detach "$work" "origin/$base"
   if ! git fetch -q origin "pull/${number}/head"; then

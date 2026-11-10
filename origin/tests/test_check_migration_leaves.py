@@ -369,7 +369,7 @@ class RetestOpenPrsTests(TestCase):
     def test_a_pr_that_clashes_with_what_just_landed_turns_red(self):
         b = self.open_pr(7, "0003_b", ["0002_a"])
         self.land("0003_a", ["0002_a"])  # PR A merged first, same number
-        calls, out = self.retest(f"7 {b}\n")
+        calls, out = self.retest(f"7 {b} true\n")
         self.assertEqual(len(calls), 1, out)
         self.assertIn(f"statuses/{b}", calls[0])
         self.assertIn("state=failure", calls[0])
@@ -377,67 +377,126 @@ class RetestOpenPrsTests(TestCase):
 
     def test_a_pr_that_still_fits_stays_green(self):
         b = self.open_pr(7, "0003_b", ["0002_a"])
-        calls, out = self.retest(f"7 {b}\n")
+        calls, out = self.retest(f"7 {b} true\n")
         self.assertIn("state=success", calls[0], out)
 
     def test_a_pr_built_on_what_landed_stays_green(self):
         # It depends on the migration that landed, so there is still one leaf.
         self.land("0003_a", ["0002_a"])
         b = self.open_pr(7, "0004_b", ["0003_a"])
-        calls, out = self.retest(f"7 {b}\n")
+        calls, out = self.retest(f"7 {b} true\n")
         self.assertIn("state=success", calls[0], out)
 
     def test_each_open_pr_gets_its_own_status(self):
         b = self.open_pr(7, "0003_b", ["0002_a"])
         c = self.open_pr(8, "0003_c", ["0002_a"])
-        calls, _ = self.retest(f"7 {b}\n8 {c}\n")
+        calls, _ = self.retest(f"7 {b} true\n8 {c} true\n")
         self.assertEqual(len(calls), 2)
         self.assertTrue(any(f"statuses/{b}" in c_ for c_ in calls))
         self.assertTrue(any(f"statuses/{c}" in c_ for c_ in calls))
 
-    def test_no_migration_pr_means_no_status_and_a_clean_run(self):
+    def test_a_pr_with_no_migrations_is_posted_green_without_a_merge(self):
+        # It can't create a second leaf, and a PR opened before the guard has no status at all,
+        # which as a required check would block it forever.
+        b = self.open_pr(7, "0003_b", ["0002_a"])
+        self.land("0003_a", ["0002_a"])  # would be a clash if it were tested
+        calls, out = self.retest(f"7 {b} false\n")
+        self.assertEqual(len(calls), 1, out)
+        self.assertIn(f"statuses/{b}", calls[0])
+        self.assertIn("state=success", calls[0])
+        self.assertIn("no migrations in this PR", out)
+
+    def test_an_empty_list_means_no_status_and_a_clean_run(self):
         calls, out = self.retest("")
         self.assertEqual(calls, [])
-        self.assertIn("no open PR", out)
+        self.assertIn("no open PR into main", out)
 
     def test_a_pr_that_no_longer_merges_cleanly_is_red_not_skipped(self):
         # Same file name, different content: a textual conflict with what landed.
         b = self.open_pr(7, "0003_x", ["0002_a"])
         self.land("0003_x", ["0001_initial"])
-        calls, out = self.retest(f"7 {b}\n")
+        calls, out = self.retest(f"7 {b} true\n")
         self.assertIn("state=failure", calls[0], out)
         self.assertIn("no longer merges cleanly", calls[0] + out)
 
 
 class WorkflowTextTests(TestCase):
-    """The workflow's wiring. Lose one of these and the guard is off while every check is green."""
+    """The workflows' wiring. Lose one of these and the guard is off while every check is green."""
 
     text = (ROOT / ".github" / "workflows" / "migration-guard.yml").read_text()
+    report = (ROOT / ".github" / "workflows" / "migration-guard-report.yml").read_text()
+
+    def job(self, name):
+        start = self.text.index(f"\n  {name}:\n")
+        nxt = re.search(r"\n  [a-z]+:\n", self.text[start + 1 :])
+        return self.text[start : start + 1 + nxt.start()] if nxt else self.text[start:]
 
     def test_it_runs_on_prs_on_pushes_to_main_and_by_hand(self):
         self.assertRegex(self.text, r"(?m)^  push:\n    branches: \[main\]")
         self.assertRegex(self.text, r"(?m)^  pull_request:")
         self.assertRegex(self.text, r"(?m)^  workflow_dispatch:")
 
-    def test_it_may_write_statuses_and_nothing_else_wide(self):
-        self.assertIn("statuses: write", self.text)
-        self.assertNotIn("contents: write", self.text)
-        self.assertNotIn("pull-requests: write", self.text)
+    def test_the_pr_check_has_no_write_access_at_all(self):
+        # A Dependabot or fork PR runs it with a read-only token, and it must work there.
+        check = self.job("check")
+        self.assertIn("github.event_name == 'pull_request'", check)
+        self.assertIn("contents: read", check)
+        self.assertNotIn("write", check)
+        self.assertNotIn("statuses", check)
+
+    def test_only_the_retest_and_the_reporter_can_write_statuses_and_nothing_wider(self):
+        retest = self.job("retest")
+        self.assertIn("github.event_name != 'pull_request'", retest)
+        self.assertIn("statuses: write", retest)
+        for text in (self.text, self.report):
+            self.assertNotIn("contents: write", text)
+            self.assertNotIn("pull-requests: write", text)
+            self.assertNotIn("actions: write", text)
+
+    def test_the_context_is_the_one_the_ruleset_requires(self):
+        self.assertIn("CONTEXT: migration-leaf", self.report)
+        self.assertIn("CONTEXT:-migration-leaf", (SCRIPTS / "post_migration_status.sh").read_text())
 
     def test_a_push_retests_the_branch_that_was_pushed(self):
         # Not a hard-coded `main`: the guard is exercised on a scratch base branch.
         self.assertIn("BASE: ${{ inputs.base || github.ref_name }}", self.text)
 
-    def test_the_context_is_the_one_the_ruleset_will_require(self):
-        self.assertIn("CONTEXT: migration-leaf", self.text)
+    def test_the_retest_checks_out_full_history_to_merge_a_pr_head(self):
+        self.assertIn("fetch-depth: 0", self.job("retest"))
 
-    def test_it_checks_out_full_history_to_merge_a_pr_head(self):
-        self.assertIn("fetch-depth: 0", self.text)
+    def test_the_check_saves_its_result_even_when_it_fails(self):
+        check = self.job("check")
+        self.assertRegex(check, r"if: always\(\)\n\s+uses: actions/upload-artifact@")
+        self.assertIn("name: migration-leaf-result", check)
 
     def test_actions_are_pinned_to_a_commit(self):
-        for line in self.text.splitlines():
-            if re.match(r"\s*(- )?uses:", line):
-                self.assertRegex(line, r"@[0-9a-f]{40}\b", line)
+        for text in (self.text, self.report):
+            for line in text.splitlines():
+                if re.match(r"\s*(- )?uses:", line):
+                    self.assertRegex(line, r"@[0-9a-f]{40}\b", line)
+
+    def test_the_reporter_runs_for_the_guard_and_only_for_pull_requests(self):
+        self.assertRegex(self.report, r"workflow_run:\n\s+workflows: \[migration-guard\]")
+        self.assertIn("types: [completed]", self.report)
+        self.assertIn("github.event.workflow_run.event == 'pull_request'", self.report)
+
+    def test_the_reporter_takes_the_sha_from_the_event_not_from_the_file(self):
+        self.assertIn("SHA: ${{ github.event.workflow_run.head_sha }}", self.report)
+        self.assertNotRegex(self.report, r'json\.load\([^)]*\)\.get\("(sha|head)')
+
+    def test_the_reporter_runs_none_of_the_prs_code(self):
+        # It checks out the default branch (no `ref:`) and only reads a JSON file.
+        self.assertNotIn("ref:", self.report)
+        self.assertNotIn("pull_request.head", self.report)
+
+    def test_a_cancelled_run_that_saved_nothing_is_a_quiet_no_op(self):
+        self.assertIn("have=false", self.report)
+        self.assertIn("steps.result.outputs.have == 'true'", self.report)
+
+    def test_the_reporter_treats_the_files_code_as_untrusted(self):
+        # Anything but 0 or 1 is an error (state=error), never a pass.
+        self.assertIn("c in (0, 1) else 2", self.report)
+        self.assertIn("[:1000]", self.report)
 
     def test_ci_runs_the_checker_before_installing_anything(self):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
