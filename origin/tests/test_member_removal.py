@@ -655,7 +655,7 @@ class ToolRemovalTests(Base):
     def test_the_description_says_remove_exists_and_cannot_be_undone(self):
         self.assertNotIn("no way to remove", MANAGE_PROJECT_MEMBERS.description)
         self.assertIn("remove", MANAGE_PROJECT_MEMBERS.description)
-        self.assertIn("can't be undone", MANAGE_PROJECT_MEMBERS.description)
+        self.assertIn("can't be undone", MANAGE_PROJECT_MEMBERS.description.lower())
         self.assertIn(
             "remove",
             MANAGE_PROJECT_MEMBERS.parameters_schema["properties"]["action"]["enum"],

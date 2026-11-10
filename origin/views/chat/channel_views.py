@@ -1311,7 +1311,9 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
             # Taking out SOMEONE ELSE follows `can_remove_member` (MIP-1371): the owner removes
             # anyone but themselves, an editor only viewers. This used to let an editor remove
             # the channel owner or another editor. Leaving (yourself) is unchanged.
-            if not can_remove_member(actor_role, resolve_gm_role(channel, user_id)):
+            if can_remove_member(actor_role, resolve_gm_role(channel, user_id)):
+                manager_may_remove = True
+            elif grant is None:
                 return Response(
                     {
                         "error": "Only the channel owner can remove an editor, and the owner "
@@ -1319,7 +1321,9 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            manager_may_remove = True
+            # else: on a shared chat the admitting grant decides below. A guest team's manager
+            # may pull one of their OWN people even when, at the editor ceiling, both are
+            # channel editors; the rule above is for the chat's own roster.
         if not (is_self or manager_may_remove):
             if grant is None:
                 return Response(

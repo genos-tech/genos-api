@@ -142,15 +142,10 @@ MANAGE_PROJECT_MEMBERS = Tool(
     name="manage_project_members",
     description=(
         "Add a person to a project, change a member's role, or remove one. REQUIRES USER "
-        "APPROVAL — it changes who can see and edit the project. Call `list_projects` FIRST "
-        "for the project_id and `get_team_members` for the user_id. action 'add': any member "
-        "of the project may add a teammate; they also get the project's chat. action "
-        "'set_role': the owner or an editor sets role to 'editor' or 'viewer'; the owner's "
-        "role can't be changed. action 'remove': takes someone ELSE out of the project and "
-        "its chat. The owner can remove anyone but themselves; an editor only viewers and "
-        "guests; the owner can't be removed. It can't be undone from here (adding them back "
-        "is a new 'add'). Pass unassign_open_tasks=true to also take them off their open "
-        "tasks and milestones in this project."
+        "APPROVAL. Call `list_projects` FIRST for project_id and `get_team_members` for "
+        "user_id. 'add': any member may add a teammate. 'set_role': owner or editor sets "
+        "'editor' or 'viewer'. 'remove': takes someone ELSE out; the owner anyone but "
+        "themselves, an editor only viewers and guests. Can't be undone from here."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -175,10 +170,7 @@ MANAGE_PROJECT_MEMBERS = Tool(
             },
             "unassign_open_tasks": {
                 "type": "BOOLEAN",
-                "description": (
-                    "remove: also unassign the person's open tasks and milestones in this "
-                    "project. Closed work keeps its assignee."
-                ),
+                "description": "remove: also unassign their open work in this project.",
             },
         },
         "required": ["action", "project_id", "user_id"],
