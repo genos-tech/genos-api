@@ -712,6 +712,7 @@ def markdown_to_blocks(
     *,
     entity_link_resolver: EntityLinkResolver | None = None,
     entity_chip_resolver: EntityChipResolver | None = None,
+    line_breaks: bool = False,
 ) -> list[dict[str, Any]]:
     """Parse the agent's markdown into BlockNote `PartialBlock`-shaped dicts.
 
@@ -723,6 +724,11 @@ def markdown_to_blocks(
 
     Returns `[]` for empty input (a deliberately title-only note), matching
     the previous `_wrap_blocknote` contract.
+
+    `line_breaks=True` keeps every line of running text as its own paragraph
+    instead of joining a paragraph's lines with a space, the markdown rule.
+    To-do notes take it (MIP-1334): they were stored one paragraph per line
+    before they were markdown, so a plain-text note keeps the look it had.
     """
     text = (markdown or "").strip("\n")
     if not text.strip():
@@ -846,7 +852,7 @@ def markdown_to_blocks(
         list_stack.clear()
         buf = [stripped.rstrip("\\")]
         i += 1
-        while i < n:
+        while i < n and not line_breaks:
             nxt = lines[i].strip()
             if not nxt or _starts_block(nxt, lines, i):
                 break
@@ -855,6 +861,30 @@ def markdown_to_blocks(
         blocks.append(_block("paragraph", " ".join(buf), resolver=resolver, chips=chips))
 
     return blocks
+
+
+def todo_notes_blocks(
+    markdown: str, *, entity_chip_resolver: EntityChipResolver | None = None
+) -> list[dict[str, Any]] | None:
+    """A to-do's notes written by a tool, shaped like notes the editor saved
+    (MIP-1334). The notes editor is BlockNote on the shared schema, so the
+    same markdown as a task body: links, lists, checklists, code, tables and
+    `@`/`#` chips. Two differences from `task_body_blocks`: each line of
+    running text stays its own paragraph (`line_breaks`), as the plain-text
+    notes always did, and empty input is None, which is what "no notes" is
+    on `ToDoItem.notes`.
+
+    A chip is display only here: to-dos notify nobody (no mention extraction
+    on this surface), so a `@` in a note shows the person and pings no one.
+    """
+    blocks = markdown_to_blocks(
+        (markdown or "").strip(), entity_chip_resolver=entity_chip_resolver, line_breaks=True
+    )
+    if not blocks:
+        return None
+    for block in blocks:
+        block.setdefault("id", str(uuid.uuid4()))
+    return blocks + [{"id": str(uuid.uuid4()), **_block("paragraph", "")}]
 
 
 def task_body_blocks(
