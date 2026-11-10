@@ -22,34 +22,15 @@ from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.todo_args import (
+    NOTES_TEXT_DESCRIPTION,
     REMIND_AT_SCHEMA,
     REMIND_IN_MINUTES_SCHEMA,
     local_iso,
+    notes_blocks,
     reminder_from_args,
 )
 from origin.services import todo_reminders
 from origin.services.user_time import today_for_user_id, zone_for_user_id
-
-
-def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
-    """Wrap plain text into a minimal BlockNote paragraph list, matching
-    the shape `extract_text` walks during indexing.
-    """
-    if not text:
-        return None
-    return [
-        {
-            "type": "paragraph",
-            "props": {
-                "textColor": "default",
-                "textAlignment": "left",
-                "backgroundColor": "default",
-            },
-            "content": [{"type": "text", "text": line, "styles": {}}] if line else [],
-            "children": [],
-        }
-        for line in text.split("\n")
-    ]
 
 
 def _parse_date(value, default):
@@ -95,7 +76,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             group=group,
             category=category,
             title=title,
-            notes=_wrap_notes(notes_text),
+            notes=notes_blocks(notes_text, ctx),
         )
         # Newly created incomplete item flips the group's completion
         # back to False if it had been all-done before.
@@ -126,7 +107,7 @@ CREATE_TODO_ITEM = Tool(
         "Create a new todo item for the user. REQUIRES USER APPROVAL — the "
         "user will see your proposed arguments and decide whether to "
         "execute. Use this when the user asks to add / create / file a "
-        "todo. Required: title. Optional: notes_text (plain-text "
+        "todo. Required: title. Optional: notes_text (markdown "
         "description), category (free-form label; created if new), "
         "target_date (ISO YYYY-MM-DD; default the user's own today), remind_at / "
         "remind_in_minutes (also remind the user; one at most). 'Remind me "
@@ -143,7 +124,7 @@ CREATE_TODO_ITEM = Tool(
             },
             "notes_text": {
                 "type": "STRING",
-                "description": "Optional plain-text body for the todo.",
+                "description": "Optional body for the todo. " + NOTES_TEXT_DESCRIPTION,
             },
             "category": {
                 "type": "STRING",

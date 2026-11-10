@@ -16,6 +16,9 @@ from zoneinfo import ZoneInfo
 
 from origin.models.chat.todo_models import ToDoItem
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.blocknote_md import todo_notes_blocks
+from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
+from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.services.reminder_input import (
     DEFAULT_REMINDER_HOUR,
     ReminderInputError,
@@ -44,6 +47,35 @@ REMIND_IN_MINUTES_SCHEMA = {
         "At least 1, at most a year. Not with `remind_at`."
     ),
 }
+
+
+# What `notes_text` is, for both write tools (MIP-1334). The notes editor is
+# BlockNote, so a note takes the same markdown as a task body; a `@` shows the
+# person and pings nobody, since to-dos notify no one.
+NOTES_TEXT_DESCRIPTION = (
+    "Markdown: links `[text](https://...)`, **bold**, *italic*, `code`, "
+    "lists, `- [ ]` checklists, code fences and tables render as rich text. "
+    "Each line stays its own line. A task's display id written bare "
+    "(`#PRJ-123`) or `[#title](task:<id>)` shows as a chip, and "
+    "`[@name](user:<uuid>)` shows the person, but a to-do notifies no one."
+)
+
+
+def notes_blocks(text: str, ctx: ToolContext) -> list[dict[str, Any]] | None:
+    """`notes_text` as the BlockNote document `ToDoItem.notes` stores, or None
+    for empty text (no notes). Chips resolve against what the caller can read."""
+    return todo_notes_blocks(
+        text, entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id)
+    )
+
+
+def notes_markdown(item: ToDoItem) -> str | None:
+    """A to-do's notes as markdown for a read tool, None when it has none. The
+    inverse of `notes_blocks`: what an agent reads back it can write back, so an
+    edit keeps the links and lists a person typed in the editor."""
+    if not item.notes:
+        return None
+    return blocks_to_markdown(item.notes).strip() or None
 
 
 def load_owned_item(raw_id: Any, ctx: ToolContext) -> ToDoItem:

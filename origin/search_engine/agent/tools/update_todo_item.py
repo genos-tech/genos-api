@@ -28,33 +28,17 @@ from origin.models.chat.todo_models import ToDoCategory
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.todo_args import (
+    NOTES_TEXT_DESCRIPTION,
     REMIND_AT_SCHEMA,
     REMIND_IN_MINUTES_SCHEMA,
     load_owned_item,
     local_iso,
+    notes_blocks,
     parse_iso_date,
     reminder_from_args,
 )
 from origin.services import todo_items, todo_reminders
 from origin.services.user_time import zone_for_user_id
-
-
-def _wrap_notes(text: str) -> list[dict[str, Any]] | None:
-    if not text:
-        return None
-    return [
-        {
-            "type": "paragraph",
-            "props": {
-                "textColor": "default",
-                "textAlignment": "left",
-                "backgroundColor": "default",
-            },
-            "content": [{"type": "text", "text": line, "styles": {}}] if line else [],
-            "children": [],
-        }
-        for line in text.split("\n")
-    ]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -111,10 +95,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if new_title is not None:
             item.title = new_title
 
-        # Notes — replace with wrapped paragraphs. Pass an empty string
-        # to clear notes entirely.
+        # Notes — replace with the markdown parsed to BlockNote (MIP-1334).
+        # Pass an empty string to clear notes entirely.
         if "notes_text" in args:
-            item.notes = _wrap_notes((args.get("notes_text") or "").strip())
+            item.notes = notes_blocks((args.get("notes_text") or "").strip(), ctx)
 
         # Completion — ticking it off retires the pending reminder.
         if "is_completed" in args and args["is_completed"] is not None:
@@ -175,8 +159,8 @@ UPDATE_TODO_ITEM = Tool(
         "USER APPROVAL. Common uses: mark complete/incomplete, edit title, "
         "change category, replace or clear the notes body, move it to "
         "another day, set or cancel its reminder. Required: item_id. "
-        "Optional patch fields: title, notes_text (empty string "
-        "clears it), is_completed, category (free-form), clear_category "
+        "Optional patch fields: title, notes_text (markdown; replaces the "
+        "whole body, empty string clears it), is_completed, category (free-form), clear_category "
         "(set true to remove the existing category; a sub-item takes its "
         "parent's category, so set it on the parent), target_date (move to "
         "that day), remind_at / remind_in_minutes (remind the user; one at "
@@ -196,9 +180,13 @@ UPDATE_TODO_ITEM = Tool(
             "notes_text": {
                 "type": "STRING",
                 "description": (
-                    "Replace the item's notes body with this plain text. "
-                    "Pass an empty string to clear notes."
-                ),
+                    "Replace the item's notes body with this. Pass an empty "
+                    "string to clear notes. Read the current notes first "
+                    "(`notes_markdown` from list_today_todos / "
+                    "list_uncompleted_todos) and send them back with your "
+                    "change, so formatting the user typed is kept. "
+                )
+                + NOTES_TEXT_DESCRIPTION,
             },
             "is_completed": {
                 "type": "BOOLEAN",

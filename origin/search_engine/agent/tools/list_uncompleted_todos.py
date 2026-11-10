@@ -12,7 +12,7 @@ from typing import Any
 
 from origin.models.chat.todo_models import ToDoItem
 from origin.search_engine.agent.tools.base import Tool, ToolContext
-from origin.search_engine.agent.tools.todo_args import local_iso
+from origin.search_engine.agent.tools.todo_args import local_iso, notes_markdown
 from origin.services import todo_reminders
 from origin.services.user_time import today_for_user_id, zone_for_user_id
 
@@ -57,6 +57,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "local_date": i.group.local_date.isoformat(),
             "category_name": i.category.name if i.category_id else None,
         }
+        # The notes as markdown (MIP-1334), only when there are some, so an
+        # agent reads them before `update_todo_item` replaces them.
+        notes = notes_markdown(i)
+        if notes:
+            row["notes_markdown"] = notes
         if i.item_id in reminders:
             row["reminder_at"] = local_iso(reminders[i.item_id], zone)
         items.append(row)
