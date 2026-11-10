@@ -40,8 +40,8 @@ _PROJECT_JOIN = 2
 
 
 def open_assigned_tasks(team_id, user_id, *, project_id=None):
-    """The person's tasks that are still open: not closed, not deleted, milestones' backing
-    rows excluded (a milestone is unassigned through its own assignee rows)."""
+    """The person's tasks that are still open: not closed and not deleted. (A milestone's own
+    assignees are separate rows, `open_assigned_milestones`.)"""
     from origin.models.task.task_models import TaskMaster
     from origin.services.task_blocking import CLOSED_STATUSES
 
