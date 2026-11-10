@@ -424,6 +424,10 @@ class WorkflowTextTests(TestCase):
         self.assertNotIn("contents: write", self.text)
         self.assertNotIn("pull-requests: write", self.text)
 
+    def test_a_push_retests_the_branch_that_was_pushed(self):
+        # Not a hard-coded `main`: the guard is exercised on a scratch base branch.
+        self.assertIn("BASE: ${{ inputs.base || github.ref_name }}", self.text)
+
     def test_the_context_is_the_one_the_ruleset_will_require(self):
         self.assertIn("CONTEXT: migration-leaf", self.text)
 

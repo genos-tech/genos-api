@@ -26,8 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: "Branch whose open PRs are re-tested (default: main)"
-        default: main
+        description: "Branch whose open PRs are re-tested (default: the branch the run is on)"
         required: false
 
 permissions:
@@ -36,7 +35,7 @@ permissions:
 # The newest `main` is the only one worth testing against, and a PR's newest commit is the
 # only one whose status counts.
 concurrency:
-  group: migration-guard-${{ github.event_name == 'pull_request' && github.ref || format('base-{0}', inputs.base || 'main') }}
+  group: migration-guard-${{ github.event_name == 'pull_request' && github.ref || format('base-{0}', inputs.base || github.ref_name) }}
   cancel-in-progress: true
 
 env:
@@ -76,5 +75,5 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE: ${{ inputs.base || 'main' }}
+          BASE: ${{ inputs.base || github.ref_name }}
         run: bash scripts/retest_migration_prs.sh "$BASE"
