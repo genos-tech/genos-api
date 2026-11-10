@@ -49,7 +49,12 @@ from origin.views.common.inbox_ai_views import (
     InboxAiSourceView,
 )
 from origin.views.common.inbox_views import *
-from origin.views.common.mcp_connection_views import McpConnectionDetailView, McpConnectionListView
+from origin.views.common.mcp_connection_views import (
+    McpConnectionDetailView,
+    McpConnectionListView,
+    TeamMcpConnectionDetailView,
+    TeamMcpConnectionListView,
+)
 from origin.views.common.mcp_consent_views import McpConsentContextView, McpConsentDecisionView
 from origin.views.common.memory_views import (
     MemoryForgetView,
@@ -471,6 +476,16 @@ urlpatterns = [
     ),
     path("api/v2/team/api-keys/", TeamApiKeyListView.as_view(), name="team_api_keys"),
     path(
+        "api/v2/team/mcp-connections/",
+        TeamMcpConnectionListView.as_view(),
+        name="team_mcp_connections",
+    ),
+    path(
+        "api/v2/team/mcp-connections/<uuid:connection_id>/",
+        TeamMcpConnectionDetailView.as_view(),
+        name="team_mcp_connection_detail",
+    ),
+    path(
         "api/v2/team/api-keys/<uuid:key_id>/",
         TeamApiKeyDetailView.as_view(),
         name="team_api_key_detail",
@@ -503,6 +518,8 @@ urlpatterns = [
     ),
     # Invite by email (owner-only send; public preview; authed accept).
     path("api/v2/team/invite/", InviteTeamMembersView.as_view(), name="team_invite"),
+    path("api/v2/team/invites/", TeamInviteListView.as_view(), name="team_invites"),
+    path("api/v2/team/invite/revoke/", TeamInviteRevokeView.as_view(), name="team_invite_revoke"),
     path(
         "api/v2/team/invite/preview/",
         InvitePreviewView.as_view(),
@@ -526,6 +543,11 @@ urlpatterns = [
         "api/v2/team/member-role/",
         TeamMemberRoleView.as_view(),
         name="team_member_role",
+    ),
+    path(
+        "api/v2/team/member/remove/",
+        RemoveTeamMemberView.as_view(),
+        name="team_member_remove",
     ),
     path(
         "api/v2/team/getTeamMemberInfo/",

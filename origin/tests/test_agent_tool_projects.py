@@ -539,7 +539,7 @@ class AddMemberTests(ProjectToolBase):
     def test_an_unknown_action_is_refused_and_named(self):
         with self.assertRaises(ToolError) as caught:
             MANAGE_PROJECT_MEMBERS.run(
-                {"action": "remove", "project_id": 1, "user_id": "x"}, self.ctx
+                {"action": "archive", "project_id": 1, "user_id": "x"}, self.ctx
             )
         self.assertIn("`action` must be one of", str(caught.exception))
 

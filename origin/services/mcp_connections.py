@@ -83,6 +83,51 @@ def prune_left_teams(connection: McpConnection) -> bool:
     return True
 
 
+def prune_user_connections(user) -> int:
+    """`prune_left_teams` for every live connection of `user`, now (MIP-1371).
+
+    A member who is removed from a team keeps their connected AI apps, and a call into
+    the team is refused anyway, because membership is checked live. Pruning at the moment of
+    removal rather than "within the hour, on the next call" makes the connection stop
+    listing the team at once, so the team's own view of its connections is true. Returns how
+    many connections changed."""
+    changed = 0
+    for connection in McpConnection.objects.filter(user=user, revoked_at__isnull=True):
+        if prune_left_teams(connection):
+            changed += 1
+    return changed
+
+
+def drop_team(connection: McpConnection, team_id, *, request=None) -> bool:
+    """Take ONE team out of a connection (a manager of that team ending its access); True if
+    that left the connection with no team and so ended it altogether.
+
+    The person's access to their other teams is untouched: the team's owner or editor has
+    authority over their own team, not over the person's whole app. If the team was the
+    connection's default, the default moves to a team still granted."""
+    team_id = str(team_id)
+    kept = [t for t in connection.team_ids if t != team_id]
+    if not kept:
+        revoke_connection(connection)
+        return True
+    connection.team_ids = kept
+    fields = ["team_ids", "ts_updated_at"]
+    if str(connection.default_team_id) == team_id:
+        connection.default_team_id = kept[0]
+        fields.append("default_team")
+    connection.save(update_fields=fields)
+    record_security_event(
+        SecurityAction.MCP_UPDATED,
+        request=request,
+        team_id=team_id,
+        target_type="mcp_connection",
+        target_id=connection.id,
+        target_label=connection.application.name or connection.application.client_id,
+        metadata={"reason": "removed_by_team", "teams": len(kept)},
+    )
+    return False
+
+
 def prunable_clients(now, days: int):
     """Client registrations nothing refers to, old enough to go (MIP-1104).
 

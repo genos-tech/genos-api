@@ -134,10 +134,21 @@ def task_acl_user_ids(project_id: int | None, assignee_id, reporter_id) -> set[s
             )
             if uid
         )
-    if assignee_id:
-        out.add(str(assignee_id))
-    if reporter_id:
-        out.add(str(reporter_id))
+    # The assignee and reporter can read the task even outside its project, but only while
+    # they are still on the team (MIP-1371): a removed member is no longer one of them.
+    involved = {str(u) for u in (assignee_id, reporter_id) if u}
+    if involved and project_id:
+        from origin.models.project.prj_models import ProjectMaster
+        from origin.services.member_removal import active_team_member_ids
+
+        team_id = (
+            ProjectMaster.objects.filter(project_id=project_id)
+            .values_list("team_id", flat=True)
+            .first()
+        )
+        if team_id is not None:
+            involved = active_team_member_ids(team_id, involved)
+    out.update(involved)
     return out
 
 
@@ -256,9 +267,7 @@ def team_folder_acl_user_ids(folder_id) -> set[str]:
     )
 
     team_id = (
-        PersonalNoteFolder.objects.filter(
-            folder_id=folder_id, scope=PersonalNoteFolder.SCOPE_TEAM
-        )
+        PersonalNoteFolder.objects.filter(folder_id=folder_id, scope=PersonalNoteFolder.SCOPE_TEAM)
         .values_list("team_id", flat=True)
         .first()
     )

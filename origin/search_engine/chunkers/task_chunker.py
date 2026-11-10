@@ -49,6 +49,7 @@ from origin.search_engine.chunkers.base import (
     typed_display_id,
 )
 from origin.search_engine.text_extraction import extract_text
+from origin.services.member_removal import active_team_member_ids
 
 # v2 — content longer than this triggers the title+content split. Below
 # the threshold, one chunk holds title + full content (matches v1
@@ -110,6 +111,21 @@ def iter_task_chunks(
     ):
         comments_by_task[c.task_id].append(c)
 
+    # The assignee and reporter stay in a task's ACL even outside its project, but only while
+    # they are still on the team: a removed member kept finding the tasks they were on
+    # (MIP-1371). One lookup per team for the people the page will name.
+    involved_by_team: dict[str, set[str]] = defaultdict(set)
+    for team_id_, assignee_id_, reporter_id_ in task_qs.values_list(
+        "team_id", "assignee_id", "reporter_id"
+    ):
+        if team_id_:
+            involved_by_team[str(team_id_)].update(
+                str(u) for u in (assignee_id_, reporter_id_) if u
+            )
+    still_on_team: dict[str, set[str]] = {
+        t: active_team_member_ids(t, ids) for t, ids in involved_by_team.items()
+    }
+
     for task in task_qs:
         if not task.team_id:
             continue
@@ -119,9 +135,9 @@ def iter_task_chunks(
         # Tasks are also legible to the assignee/reporter; include them
         # so they can find tasks they're personally involved in even
         # outside their project membership.
-        if task.assignee_id:
+        if task.assignee_id and str(task.assignee_id) in still_on_team.get(team_id, ()):
             acl_user_ids = list(set(acl_user_ids) | {str(task.assignee_id)})
-        if task.reporter_id:
+        if task.reporter_id and str(task.reporter_id) in still_on_team.get(team_id, ()):
             acl_user_ids = list(set(acl_user_ids) | {str(task.reporter_id)})
 
         entity_id = f"task:{task.task_id}"

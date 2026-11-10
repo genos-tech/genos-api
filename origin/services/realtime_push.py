@@ -39,6 +39,7 @@ from origin.models.task.task_models import TaskMaster
 logger = logging.getLogger(__name__)
 
 BROADCAST_PATH = "/internal/broadcast/task-comment"
+MEMBERSHIP_PATH = "/internal/membership/removed"
 # Must match genos-sockets `utils/internal_auth`.
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
 SIGNATURE_HEADER = "X-Genos-Signature"
@@ -58,15 +59,15 @@ def _sign(secret: str, timestamp: str, body: bytes) -> str:
     return "sha256=" + digest
 
 
-def _post(payload: dict[str, Any]) -> bool:
-    """One signed push. True only when sockets accepted it (HTTP 200)."""
+def _post(payload: dict[str, Any], path: str = BROADCAST_PATH, what: str = "task-comment") -> bool:
+    """One signed push to `path`. True only when sockets accepted it (HTTP 200)."""
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     # Stamped when it is SENT, not when the write happened: the receiver rejects
     # a stale timestamp, and on commit this can run after a slow request.
     timestamp = str(int(time.time()))
     try:
         resp = requests.post(
-            f"{settings.SOCKETS_INTERNAL_URL}{BROADCAST_PATH}",
+            f"{settings.SOCKETS_INTERNAL_URL}{path}",
             data=body,
             headers={
                 "Content-Type": "application/json",
@@ -78,17 +79,21 @@ def _post(payload: dict[str, Any]) -> bool:
         )
     except requests.RequestException as exc:
         logger.warning(
-            "sockets task-comment push failed task=%s comment=%s: %s",
+            "sockets %s push failed task=%s comment=%s user=%s: %s",
+            what,
             payload.get("taskId"),
             payload.get("commentId"),
+            payload.get("userId"),
             exc,
         )
         return False
     if resp.status_code != 200:
         logger.warning(
-            "sockets task-comment push refused task=%s comment=%s status=%s",
+            "sockets %s push refused task=%s comment=%s user=%s status=%s",
+            what,
             payload.get("taskId"),
             payload.get("commentId"),
+            payload.get("userId"),
             resp.status_code,
         )
         return False
@@ -139,3 +144,49 @@ def push_task_comment(
         transaction.on_commit(lambda: _post(payload), robust=True)
     except Exception:  # noqa: BLE001 — the comment is saved; an observer must not break it
         logger.warning("sockets task-comment push could not be scheduled", exc_info=True)
+
+
+# Sockets takes at most this many of each (genos-sockets `MAX_ROOMS`); a person in more than that
+# is cut off from the first ones and the rest at their next reconnect, which is the same answer
+# they got before this push existed.
+MAX_ROOMS = 500
+
+
+def push_membership_removed(
+    *,
+    user_id,
+    team_id,
+    scope: str,
+    project_ids=(),
+    channels=(),
+) -> None:
+    """Tell genos-sockets that `user_id` lost a team, project or chat (MIP-1371), so it takes
+    their open sockets out of those rooms now.
+
+    Removing a membership row does not end a socket that already joined a room: the person kept
+    receiving that project's task events and that chat's messages until their browser
+    reconnected. `scope` is "team", "project" or "channel"; `project_ids` and `channels`
+    (`[(kind, id), ...]`) are what they lost, read BEFORE the rows went. Sends once the current
+    transaction commits (a rolled-back removal never pushes), best-effort like the comment push:
+    the removal is done whatever sockets says, and a sockets outage costs the live cut-off only.
+    A no-op when `SOCKETS_INTERNAL_URL` is unset. Never raises.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning(
+                "sockets membership push skipped user=%s: SOCKETS_INTERNAL_SECRET is unset",
+                user_id,
+            )
+            return
+        payload: dict[str, Any] = {
+            "userId": str(user_id),
+            "teamId": str(team_id),
+            "scope": scope,
+            "projectIds": [int(p) for p in project_ids][:MAX_ROOMS],
+            "channels": [{"kind": int(k), "id": str(i)} for k, i in channels][:MAX_ROOMS],
+        }
+        transaction.on_commit(lambda: _post(payload, MEMBERSHIP_PATH, "membership"), robust=True)
+    except Exception:  # noqa: BLE001 — the removal is done; an observer must not break it
+        logger.warning("sockets membership push could not be scheduled", exc_info=True)

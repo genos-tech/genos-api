@@ -1,4 +1,4 @@
-"""`manage_project_members` write tool (MIP-882): add a member, or change a role.
+"""`manage_project_members` write tool (MIP-882): add a member, change a role, or remove one (MIP-1371).
 
 Who can see and edit a project is access, and MCP has no approval card, so this is
 its own tool: on MCP it needs the key's opt-in (as a delete does), which creating or
@@ -8,7 +8,9 @@ The page's rules, kept. Any member of the project may add someone, and the perso
 added must already be on the team. Adding a member also gives them the project's chat
 channel (a signal mirrors the membership). Changing a role is for the owner or an
 editor; the role is `editor` or `viewer`, never `owner`, and the owner's own role is
-never changed (that is a transfer). There is no removal here: the page has none.
+never changed (that is a transfer). Removing someone else (`remove`) is the owner's, or an
+editor's for a viewer or guest only; yourself is Leave, and the owner can't be removed.
+`unassign_open_tasks` also takes them off their open tasks in this project.
 
 Approval flow: `requires_approval=True`.
 """
@@ -30,10 +32,11 @@ from origin.services.project_manage import (
     ProjectRefused,
     change_member_role,
     record_member_added,
+    remove_member,
 )
 from origin.views.utils.scope_guards import is_team_member
 
-_ACTIONS = ("add", "set_role")
+_ACTIONS = ("add", "set_role", "remove")
 
 
 def _user_id(raw: Any) -> str:
@@ -102,22 +105,47 @@ def _set_role(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
 
 
+def _remove(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    project = load_project(args.get("project_id"), ctx)
+    require_member(project, ctx)
+    user_id = _user_id(args.get("user_id"))
+    actor = CustomUser.objects.filter(id=ctx.user_id).first()
+    try:
+        unassigned = remove_member(
+            project,
+            user_id,
+            actor_id=ctx.user_id,
+            unassign=args.get("unassign_open_tasks") is True,
+            actor=actor,
+        )
+    except ProjectRefused as refused:
+        raise ToolError(f"{refused.message} Nothing was changed.")
+    except Exception as e:  # noqa: BLE001
+        ref = log_failure("manage_project_members remove failed", e)
+        raise ToolError(f"Failed to remove the member (ref {ref}).")
+    return {
+        "project_id": project.project_id,
+        "user_id": user_id,
+        "unassigned": unassigned,
+        "__summary__": f'Removed a member from "{project.project_name}"',
+    }
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     action = args.get("action")
     if action not in _ACTIONS:
         raise ToolError(f"`action` must be one of {list(_ACTIONS)} (got {action!r}).")
-    return _add(args, ctx) if action == "add" else _set_role(args, ctx)
+    return {"add": _add, "set_role": _set_role, "remove": _remove}[action](args, ctx)
 
 
 MANAGE_PROJECT_MEMBERS = Tool(
     name="manage_project_members",
     description=(
-        "Add a person to a project, or change a member's role. REQUIRES USER APPROVAL — it "
-        "changes who can see and edit the project. Call `list_projects` FIRST for the "
-        "project_id and `get_team_members` for the user_id. action 'add': any member of the "
-        "project may add a teammate; they also get the project's chat. action 'set_role': "
-        "the owner or an editor sets role to 'editor' or 'viewer'; the owner's role can't be "
-        "changed. There is no way to remove someone."
+        "Add a person to a project, change a member's role, or remove one. REQUIRES USER "
+        "APPROVAL. Call `list_projects` FIRST for project_id and `get_team_members` for "
+        "user_id. 'add': any member may add a teammate. 'set_role': owner or editor sets "
+        "'editor' or 'viewer'. 'remove': takes someone ELSE out; the owner anyone but "
+        "themselves, an editor only viewers and guests. Can't be undone from here."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -125,7 +153,7 @@ MANAGE_PROJECT_MEMBERS = Tool(
             "action": {
                 "type": "STRING",
                 "enum": list(_ACTIONS),
-                "description": "'add' a member, or 'set_role' to change one's role.",
+                "description": "'add' a member, 'set_role' to change one's role, or 'remove' one.",
             },
             "project_id": {
                 "type": "INTEGER",
@@ -139,6 +167,10 @@ MANAGE_PROJECT_MEMBERS = Tool(
                 "type": "STRING",
                 "enum": ["editor", "viewer"],
                 "description": "set_role: the new role.",
+            },
+            "unassign_open_tasks": {
+                "type": "BOOLEAN",
+                "description": "remove: also unassign their open work in this project.",
             },
         },
         "required": ["action", "project_id", "user_id"],

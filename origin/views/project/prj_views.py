@@ -15,6 +15,7 @@ from origin.models.project.prj_models import *
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
+from origin.services.member_removal import count_open_work
 from origin.services.member_roles import (
     OWNER,
     can_manage,
@@ -34,6 +35,7 @@ from origin.services.project_manage import (
     ProjectRefused,
     change_member_role,
     new_system_user,
+    remove_member,
     set_project_code,
     set_project_name,
 )
@@ -822,9 +824,7 @@ class JoinProjectFromInboxView(AuthenticatedAPIView):
             project_id = int((item.item_optionals or {}).get("project_id"))
         except (TypeError, ValueError, AttributeError):
             return not_found()
-        project = ProjectMaster.objects.filter(
-            team_id=item.team_id, project_id=project_id
-        ).first()
+        project = ProjectMaster.objects.filter(team_id=item.team_id, project_id=project_id).first()
         if project is None or not can_manage(resolve_project_role(project, request.user.id)):
             return not_found()
 
@@ -2276,6 +2276,65 @@ class ProjectLabelAssignmentView(AuthenticatedAPIView):
         labels = replace_project_labels(project, raw_ids)
         return Response(
             [_label_payload(label) for label in labels],
+            status=status.HTTP_200_OK,
+        )
+
+
+class RemoveProjectMemberView(AuthenticatedAPIView):
+    """POST /api/v2/project/member/remove/ — an owner or editor removes ANOTHER member
+    (MIP-1371). Body: `project_id`, `user_id`, optional `unassign_open_tasks` (bool).
+    `GET` with `project_id` and `user_id` answers what the confirm dialog names: how many
+    open tasks and milestones the person holds in this project. The rules and the cleanup
+    are `project_manage.remove_member`'s, which the agent tool shares."""
+
+    @staticmethod
+    def _project(project_id):
+        try:
+            return ProjectMaster.objects.get(project_id=project_id, is_deleted=False)
+        except (ProjectMaster.DoesNotExist, ValueError, TypeError):
+            return None
+
+    def get(self, request):
+        project = self._project(request.query_params.get("project_id"))
+        user_id = request.query_params.get("user_id")
+        if project is None or not user_id:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not can_manage(resolve_project_role(project, request.user.id)):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not ProjectMembers.objects.filter(
+            project_id=project.project_id, attendee_id=user_id
+        ).exists():
+            return Response(
+                {"error": "That user is not a member of this project."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(
+            {
+                "userId": str(user_id),
+                "openWork": count_open_work(
+                    project.team_id, user_id, project_id=project.project_id
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        project = self._project(request.data.get("project_id"))
+        user_id = request.data.get("user_id")
+        if project is None or not user_id:
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            unassigned = remove_member(
+                project,
+                user_id,
+                actor_id=request.user.id,
+                unassign=request.data.get("unassign_open_tasks") is True,
+                request=request,
+            )
+        except ProjectRefused as refused:
+            return Response({"error": refused.message}, status=refused.status)
+        return Response(
+            {"projectId": project.project_id, "userId": str(user_id), "unassigned": unassigned},
             status=status.HTTP_200_OK,
         )
 

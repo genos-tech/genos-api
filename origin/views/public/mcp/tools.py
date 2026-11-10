@@ -1517,7 +1517,7 @@ CATALOG: tuple[McpTool, ...] = (
         name="manage_project_members",
         registry_name="manage_project_members",
         description=(
-            "Add a person to a project, or change a member's role. **This "
+            "Add a person to a project, change a member's role, or remove one. **This "
             "changes who can see and edit the project, and nothing on this surface "
             "asks the user first**, so it needs a write-scoped API key that its "
             "owner also opted into destructive tools, the same opt-in a delete "
@@ -1525,7 +1525,12 @@ CATALOG: tuple[McpTool, ...] = (
             "teammate (`user_id` from `get_team_members`), who also gets the "
             "project's chat. `action` 'set_role': the owner or an editor sets "
             "`role` to 'editor' or 'viewer'; the owner's own role can't be "
-            "changed. There is no way to remove someone. Get `project_id` from "
+            "changed. `action` 'remove' takes someone else out of the project and "
+            "its chat: the owner can remove anyone but themselves, an editor only "
+            "viewers and guests, and the owner can't be removed. **Not "
+            "reversible from here** (adding them back is a new 'add'). "
+            "`unassign_open_tasks: true` also takes them off their open tasks "
+            "and milestones in this project. Get `project_id` from "
             "`list_projects`."
         ),
         write=True,
