@@ -50,6 +50,11 @@ RANK_CASES = [
         "https://x.dev/task:3 and docs.task:3",
         ["task:1", "task:2", "task:3"],
     ),
+    (
+        "external_link_is_not_a_citation",
+        "[MDN docs](https://mdn.dev/task)",
+        ["task:1", "task:2", "task:3"],
+    ),
     ("id_prefix_is_not_the_id", "see [task:30]", ["task:1", "task:2", "task:3"]),
 ]
 
