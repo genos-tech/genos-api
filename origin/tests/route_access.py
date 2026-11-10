@@ -177,8 +177,8 @@ REGISTRY = {
         "ApiKey filtered on user=request.user"
     ),
     "origin.views.common.api_key_views.ApiKeyListCreateView": checked("is_team_member"),
-    "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_owned_team"),
-    "origin.views.common.api_key_views.TeamApiKeyListView": checked("_owned_team"),
+    "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_managed_team"),
+    "origin.views.common.api_key_views.TeamApiKeyListView": checked("_managed_team"),
     # views.common.mcp_consent_views (MIP-1077)
     "origin.views.common.mcp_consent_views.McpConsentContextView": checked("_teams_of"),
     "origin.views.common.mcp_consent_views.McpConsentDecisionView": checked("_teams_of"),
@@ -186,6 +186,10 @@ REGISTRY = {
     "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
         "the caller's own connected apps (user=request.user on every query)"
     ),
+    "origin.views.common.mcp_connection_views.TeamMcpConnectionDetailView": checked(
+        "_managed_team"
+    ),
+    "origin.views.common.mcp_connection_views.TeamMcpConnectionListView": checked("_managed_team"),
     "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
@@ -442,6 +446,8 @@ REGISTRY = {
     ),
     "origin.views.common.team_views.TeamMasterView": checked("can_manage"),
     "origin.views.common.team_views.RemoveTeamMemberView": checked("can_remove_member"),
+    "origin.views.common.team_views.TeamInviteListView": checked("can_manage"),
+    "origin.views.common.team_views.TeamInviteRevokeView": checked("can_manage"),
     "origin.views.common.team_views.TeamMemberRoleView": checked("can_manage"),
     "origin.views.common.team_views.TeamMembersView": checked("is_team_member"),
     "origin.views.common.team_views.TeamProfileImageView": checked("can_manage"),

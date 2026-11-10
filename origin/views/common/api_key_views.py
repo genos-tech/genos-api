@@ -3,8 +3,9 @@
     GET    /api/v2/api-keys/                         list (never the key itself)
     POST   /api/v2/api-keys/                         create — the ONLY time the key is shown
     DELETE /api/v2/api-keys/<id>/                    revoke
-    GET    /api/v2/team/api-keys/?team_id=<uuid>     every live team key (owner only)
-    DELETE /api/v2/team/api-keys/<id>/?team_id=<uuid>  revoke a member's team key (owner only)
+    GET    /api/v2/team/api-keys/?team_id=<uuid>     every live team key (owner or editor)
+    DELETE /api/v2/team/api-keys/<id>/?team_id=<uuid>  revoke a member's team key (owner; an
+                                                     editor only a viewer's)
 
 Authenticated with a JWT, deliberately not with an API key: a leaked key
 must not be able to mint further keys or revoke the ones that would let
@@ -32,7 +33,7 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services.member_roles import can_manage, resolve_team_role
+from origin.services.member_roles import can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_team_member
@@ -219,26 +220,39 @@ class ApiKeyDetailView(AuthenticatedAPIView):
         return Response({"id": str(key.id), "revokedAt": key.revoked_at}, status=status.HTTP_200_OK)
 
 
-def _owned_team(request):
-    """The team named by `?team_id=`, iff the caller OWNS it; else `None`.
+def _managed_team(request):
+    """(team, the caller's role) for the team named by `?team_id=`, iff the caller is its
+    owner or an editor; else `(None, None)`.
 
-    Owner, not owner-or-editor, although editors may mint team keys: an
-    editor revoking another editor's integration is a dispute between
-    peers, and this is the place it would happen with no one above them
-    to appeal to. The owner is the one person accountable for what acts
-    on the team's behalf, so the oversight is theirs. One `None` for "no
-    such team", "not a member" and "not the owner" — a member asking about
-    a team's keys learns nothing either way.
+    MIP-1371 widened this from owner-only. It was owner-only because an editor revoking
+    another editor's integration is a dispute between peers with nobody above them to
+    appeal to; that is kept by `can_remove_member` in the revoke, not by hiding the list:
+    owner and editors see every team key, the owner revokes any of them, an editor only a
+    viewer's or guest's (and any member their own, from their own list). One `None` for "no
+    such team", "not a member" and "not a manager" — a member asking about a team's keys
+    learns nothing either way.
     """
     raw = request.query_params.get("team_id")
     try:
         team_id = str(uuid.UUID(str(raw)))
     except (ValueError, AttributeError, TypeError):
-        return None
+        return None, None
     team = TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
-    if team is None or team.owner_id is None or str(team.owner_id) != str(request.user.id):
-        return None
-    return team
+    if team is None:
+        return None, None
+    role = resolve_team_role(team, request.user.id)
+    if not can_manage(role):
+        return None, None
+    return team, role
+
+
+def _owned_team(request):
+    """The team named by `?team_id=`, iff the caller OWNS it; else `None`.
+
+    Still owner-only for the security log (`security_event_views`), which MIP-1371 left as
+    it was; the team's keys and connected apps use `_managed_team`."""
+    team, role = _managed_team(request)
+    return team if role == "owner" else None
 
 
 def _team_not_found():
@@ -253,13 +267,13 @@ class TeamApiKeyListView(AuthenticatedAPIView):
     which acts on the team for up to a year — was invisible to the person
     answerable for it. Expired keys are left out alongside revoked ones:
     they authenticate nothing, and listing them would bury the ones that
-    do.
+    do. Each row says whether THIS caller may revoke it (`revocable`).
     """
 
     authentication_classes = [JWTAuthentication]
 
     def get(self, request):
-        team = _owned_team(request)
+        team, role = _managed_team(request)
         if team is None:
             return _team_not_found()
         keys = (
@@ -275,6 +289,7 @@ class TeamApiKeyListView(AuthenticatedAPIView):
                         "userId": str(k.user_id),
                         "userName": k.user.username,
                         "userEmail": k.user.email,
+                        "revocable": _may_revoke(request, team, role, k),
                     }
                     for k in keys
                 ]
@@ -283,17 +298,30 @@ class TeamApiKeyListView(AuthenticatedAPIView):
         )
 
 
+def _may_revoke(request, team, role, key: ApiKey) -> bool:
+    """Is `key`, bound to `team`, one this manager may revoke? Their own always; someone
+    else's by `can_remove_member` against the key holder's role in the team."""
+    if str(key.user_id) == str(request.user.id):
+        return True
+    return can_remove_member(role, resolve_team_role(team, key.user_id))
+
+
 class TeamApiKeyDetailView(AuthenticatedAPIView):
     authentication_classes = [JWTAuthentication]
 
     def delete(self, request, key_id):
-        team = _owned_team(request)
+        team, role = _managed_team(request)
         if team is None:
             return _team_not_found()
         # Bound to THIS team. A personal token, or another team's key, is
-        # not the owner's to revoke — same 404 as a key that doesn't exist.
+        # not the manager's to revoke — same 404 as a key that doesn't exist.
         key = ApiKey.objects.filter(id=key_id, team=team).first()
         if key is None:
             return Response({"error": "API key not found."}, status=status.HTTP_404_NOT_FOUND)
-        _revoke(request, key, by="team_owner")
+        if not _may_revoke(request, team, role, key):
+            return Response(
+                {"error": "Only the team owner can revoke an editor's key."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        _revoke(request, key, by="team_owner" if role == "owner" else "team_editor")
         return Response({"id": str(key.id), "revokedAt": key.revoked_at}, status=status.HTTP_200_OK)

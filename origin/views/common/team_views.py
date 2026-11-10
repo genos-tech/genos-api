@@ -1612,6 +1612,95 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+class TeamInviteListView(AuthenticatedAPIView):
+    """GET /api/v2/team/invites/?team_id= — the invitations still waiting (MIP-1371).
+
+    Owner or editor. Pending and not yet expired, newest first: an accepted, revoked or
+    expired invite opens nothing, so listing it would bury the ones that do. The address is
+    decrypted for the manager only, the one place an invite's email is shown after sending.
+    """
+
+    def get(self, request):
+        try:
+            team = TeamMaster.objects.get(
+                team_id=request.query_params.get("team_id"), is_deleted=False
+            )
+        except (TeamMaster.DoesNotExist, DjangoValidationError, ValueError):
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not can_manage(resolve_team_role(team, request.user.id)):
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+        rows = (
+            TeamInvite.objects.filter(team=team, status="pending", expires_at__gt=timezone.now())
+            .select_related("project", "invited_by")
+            .order_by("-ts_created_at")
+        )
+        return Response(
+            {
+                "invites": [
+                    {
+                        "id": str(i.id),
+                        "email": i.invited_email,
+                        "memberRole": i.member_role,
+                        "projectId": i.project_id,
+                        "projectName": i.project.project_name if i.project_id else None,
+                        "invitedBy": i.invited_by.username if i.invited_by_id else None,
+                        "expiresAt": i.expires_at,
+                        "createdAt": i.ts_created_at,
+                    }
+                    for i in rows
+                ]
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class TeamInviteRevokeView(AuthenticatedAPIView):
+    """POST /api/v2/team/invite/revoke/ {team_id, invite_id} — cancel a pending invitation.
+
+    The link in the email stops working at once (`accept_invite` refuses anything that is not
+    `pending`). Owner or editor, or the person who sent that invite. Revoking one that is not
+    pending changes nothing and says so (409), and an unknown invite is the same 404 as a team
+    the caller does not manage.
+    """
+
+    def post(self, request):
+        team_id = request.data.get("team_id")
+        invite_id = request.data.get("invite_id")
+        not_found = Response({"error": "Invite not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not team_id or not invite_id:
+            return Response(
+                {"error": "team_id and invite_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            team = TeamMaster.objects.get(team_id=team_id, is_deleted=False)
+            invite = TeamInvite.objects.filter(id=invite_id, team=team).first()
+        except (TeamMaster.DoesNotExist, DjangoValidationError, ValueError):
+            return not_found
+        if invite is None:
+            return not_found
+        manager = can_manage(resolve_team_role(team, request.user.id))
+        if not (manager or str(invite.invited_by_id) == str(request.user.id)):
+            return not_found
+        if invite.status != "pending":
+            return Response(
+                {"error": f"This invite is already {invite.status}."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        invite.status = "revoked"
+        invite.save(update_fields=["status", "ts_updated_at"])
+        record_security_event(
+            SecurityAction.INVITE_REVOKED,
+            request=request,
+            team_id=team.team_id,
+            target_type="invite",
+            target_id=str(invite.id),
+            target_label=invite.invited_email,
+            metadata={"role": invite.member_role},
+        )
+        return Response({"id": str(invite.id), "status": "revoked"}, status=status.HTTP_200_OK)
+
+
 class RemoveTeamMemberView(AuthenticatedAPIView):
     """POST /api/v2/team/member/remove/ — an owner or editor removes ANOTHER member (MIP-1371).
 

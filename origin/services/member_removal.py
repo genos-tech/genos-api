@@ -138,6 +138,14 @@ def clean_up_after_removal(team_id, user_id, *, project_id=None, unassign: bool)
         out = unassign_open_work(team_id, user_id, project_id=project_id)
     withdraw_join_requests(team_id, user_id, project_id=project_id)
     mark_search_acl_dirty(team_id, user_id)
+    if project_id is None:
+        # Leaving the TEAM: their connected AI apps stop listing it now, not within the hour.
+        from origin.models.common.user_models import CustomUser
+        from origin.services.mcp_connections import prune_user_connections
+
+        user = CustomUser.objects.filter(id=user_id).first()
+        if user is not None:
+            prune_user_connections(user)
     return out
 
 

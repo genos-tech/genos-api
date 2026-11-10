@@ -23,9 +23,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
+from origin.models.common.team_models import TeamMembers
 from origin.services import mcp_connections, mcp_oauth
+from origin.services.member_roles import can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
+from origin.views.common.api_key_views import _managed_team
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.common.mcp_consent_views import _problem, _teams_of
 
@@ -140,3 +143,94 @@ class McpConnectionDetailView(_Base):
     def delete(self, request, connection_id):
         mcp_connections.revoke_connection(self._mine(request, connection_id))
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --- The team's own view of the connected AI apps in it (MIP-1371) -----------------------
+
+
+def _team_connection_row(connection: McpConnection, team_id: str, revocable: bool) -> dict:
+    user = connection.user
+    return {
+        "id": str(connection.id),
+        "userId": str(user.id),
+        "userName": user.username,
+        "userEmail": user.email,
+        "client": mcp_oauth.client_summary(connection.application),
+        "scope": connection.scope,
+        "allowDestructive": connection.allow_destructive,
+        "isDefaultTeam": str(connection.default_team_id) == team_id,
+        "otherTeams": max(len(connection.team_ids) - 1, 0),
+        "lastUsedAt": connection.last_used_at,
+        "createdAt": connection.ts_created_at,
+        "revocable": revocable,
+    }
+
+
+class TeamMcpConnectionListView(_Base):
+    """GET /api/v2/team/mcp-connections/?team_id= — every connected AI app that can work in
+    the team, whoever connected it (owner or editor). Who may END each is `revocable`."""
+
+    def get(self, request):
+        team, role = _managed_team(request)
+        if team is None:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+        team_id = str(team.team_id)
+        live = {
+            str(m)
+            for m in TeamMembers.objects.filter(team=team, is_deleted=False).values_list(
+                "attendee_id", flat=True
+            )
+        } | {str(team.owner_id)}
+        rows = (
+            McpConnection.objects.filter(revoked_at__isnull=True, team_ids__contains=[team_id])
+            .select_related("application", "user")
+            .order_by("user__username", "-ts_created_at")
+        )
+        return Response(
+            {
+                "connections": [
+                    _team_connection_row(
+                        c,
+                        team_id,
+                        str(c.user_id) == str(request.user.id)
+                        or can_remove_member(role, resolve_team_role(team, c.user_id)),
+                    )
+                    for c in rows
+                    if str(c.user_id) in live
+                ]
+            }
+        )
+
+
+class TeamMcpConnectionDetailView(_Base):
+    """DELETE /api/v2/team/mcp-connections/<id>/?team_id= — end an app's access to THIS team.
+
+    Their other teams are untouched; an app left with no team ends. The owner may do it for
+    anyone, an editor only for a viewer or guest (`can_remove_member`), and anyone for their
+    own (the Settings page already does that). Same 404 for an unknown connection, another
+    team's, or a team the caller does not manage."""
+
+    def delete(self, request, connection_id):
+        team, role = _managed_team(request)
+        if team is None:
+            return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+        team_id = str(team.team_id)
+        connection = (
+            McpConnection.objects.filter(
+                id=connection_id, revoked_at__isnull=True, team_ids__contains=[team_id]
+            )
+            .select_related("application", "user")
+            .first()
+        )
+        if connection is None:
+            raise Http404
+        if str(connection.user_id) != str(request.user.id) and not can_remove_member(
+            role, resolve_team_role(team, connection.user_id)
+        ):
+            return Response(
+                {"error": "Only the team owner can end an editor's connection."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        with transaction.atomic():
+            ended = mcp_connections.drop_team(connection, team_id, request=request)
+        return Response({"id": str(connection.id), "ended": ended}, status=status.HTTP_200_OK)

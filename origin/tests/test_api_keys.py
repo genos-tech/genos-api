@@ -513,15 +513,54 @@ class TestOwnerOversightOfTeamKeys(ApiKeyBase):
         self._as_key(self.editors_raw)
         self.assertEqual(self.client.get(PROBE_URL).status_code, 401)
 
-    def test_an_editor_may_not_list_or_revoke_the_teams_keys(self):
-        """Editors mint team keys but don't police each other's."""
-        self._create_key(user=self.user, team=self.team, name="owner's bot")
+    def test_an_editor_sees_the_teams_keys_but_revokes_only_a_viewers_or_their_own(self):
+        """MIP-1371: the list is open to the editors, the revoking follows who may remove whom.
+
+        It used to be owner-only because an editor revoking another editor's key is a dispute
+        between peers; that stays true (an editor cannot revoke the owner's or another
+        editor's), while a viewer's key can be ended by an editor."""
+        owners = self._create_key(user=self.user, team=self.team, name="owner's bot")[0]
+        viewer = User.objects.create_user(
+            username="keyviewer", email="keyviewer@example.com", password="pw"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=viewer)
+        viewers = self._create_key(user=viewer, team=self.team, name="viewer's bot")[0]
+        editor2 = User.objects.create_user(
+            username="keyeditor2", email="keyeditor2@example.com", password="pw"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=editor2, member_role=EDITOR)
+        editor2s = self._create_key(user=editor2, team=self.team, name="editor2's bot")[0]
+
         self.authenticate(self.user2)
+        res = self._list()
+        self.assertEqual(res.status_code, 200)
+        rows = {r["name"]: r for r in res.json()["api_keys"]}
+        self.assertEqual(
+            {n: r["revocable"] for n, r in rows.items()},
+            {
+                "owner's bot": False,
+                "editor's bot": True,  # their own
+                "viewer's bot": True,
+                "editor2's bot": False,
+            },
+        )
+        self.assertEqual(self._revoke(owners).status_code, 403)
+        self.assertEqual(self._revoke(editor2s).status_code, 403)
+        for k in (owners, editor2s):
+            k.refresh_from_db()
+            self.assertIsNone(k.revoked_at)
+        self.assertEqual(self._revoke(viewers).status_code, 200)
+        viewers.refresh_from_db()
+        self.assertIsNotNone(viewers.revoked_at)
+
+    def test_a_plain_member_still_cannot_list_the_teams_keys(self):
+        viewer = User.objects.create_user(
+            username="keyviewer2", email="keyviewer2@example.com", password="pw"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=viewer)
+        self.authenticate(viewer)
         self.assertEqual(self._list().status_code, 404)
-        owners = ApiKey.objects.get(name="owner's bot")
-        self.assertEqual(self._revoke(owners).status_code, 404)
-        owners.refresh_from_db()
-        self.assertIsNone(owners.revoked_at)
+        self.assertEqual(self._revoke(self.editors_key).status_code, 404)
 
     def test_an_outsider_learns_nothing(self):
         outsider = User.objects.create_user(
