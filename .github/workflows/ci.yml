@@ -114,6 +114,11 @@ jobs:
         id: setup-python
         with:
           python-version: "3.11"
+      # Seconds, no install: two leaf migrations fail here instead of after the run (MIP-1098).
+      # The merge-time guard is migration-guard.yml.
+      - name: Migration leaf check
+        if: matrix.shard == 1
+        run: python3 scripts/check_migration_leaves.py .
       - run: pip install pipenv==2026.7.1
       - name: Cache venv
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

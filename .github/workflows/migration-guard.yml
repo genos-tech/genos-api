@@ -1,0 +1,79 @@
+name: migration-guard
+
+# Two PRs that each add `0220_*` pass CI alone and only conflict once both are on
+# `main`: `manage.py migrate` then refuses to run and the deploy fails (MIP-873 on
+# 2026-11-01, MIP-1071 on 2026-11-06). CI tests each PR against the `main` of the
+# moment it ran, so the second PR's green check is stale by the time it merges.
+#
+# This posts one commit status, `migration-leaf`, on a PR's head commit:
+#   * when a PR is opened or updated: the PR merged with its base must have exactly one
+#     leaf migration per app (scripts/check_migration_leaves.py);
+#   * when `main` changes: every OPEN PR that touches a migrations folder is tested
+#     again against the new `main`. When PR A merges, PR B turns red here, before B is
+#     merged, with nothing else re-run and no "branch is out of date" step for anyone.
+#
+# It is a commit STATUS (not this job's own check run) so that both triggers write the
+# same context. Make `migration-leaf` a required check in the branch ruleset: a PR that
+# doesn't touch migrations only ever sees green, so nothing else is held up.
+#
+# `workflow_dispatch` takes a `base` branch, which is how the guard is exercised
+# without touching `main`: a scratch base with two PRs that add the same number.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Branch whose open PRs are re-tested (default: the branch the run is on)"
+        required: false
+
+permissions:
+  contents: read
+
+# The newest `main` is the only one worth testing against, and a PR's newest commit is the
+# only one whose status counts.
+concurrency:
+  group: migration-guard-${{ github.event_name == 'pull_request' && github.ref || format('base-{0}', inputs.base || github.ref_name) }}
+  cancel-in-progress: true
+
+env:
+  CONTEXT: migration-leaf
+
+jobs:
+  guard:
+    name: migration-guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Merging a PR head into the base needs both histories.
+          fetch-depth: 0
+
+      # A PR event: the checkout is GitHub's merge of the PR into its base as of now.
+      - name: Test the PR merged with its base
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          out=$(python3 scripts/check_migration_leaves.py . 2>&1); code=$?
+          printf '%s\n' "$out"
+          bash scripts/post_migration_status.sh "$SHA" "$code" "$out"
+          # The status is the gate; this job fails too so the run is red where people look.
+          exit $code
+
+      # A push to main, or a manual run: every open PR into that branch that touches a
+      # migrations folder, merged into the branch as it is now.
+      - name: Re-test open migration PRs against the new base
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ inputs.base || github.ref_name }}
+        run: bash scripts/retest_migration_prs.sh "$BASE"
