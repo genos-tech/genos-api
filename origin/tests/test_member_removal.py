@@ -311,9 +311,12 @@ class CleanupTests(Base):
         open_task.refresh_from_db()
         self.assertEqual(open_task.assignee_id, self.viewer.id)
         # Only a literal true counts: a truthy string is not a yes.
+        held = self.task("held", assignee=self.editor)
         self.auth(self.owner)
         res = self.remove_team(self.editor, unassign_open_tasks="true")
         self.assertEqual(res.json()["unassigned"], {"tasks": 0, "milestones": 0})
+        held.refresh_from_db()
+        self.assertEqual(held.assignee_id, self.editor.id)
 
     def test_a_milestone_assignment_is_removed_too(self):
         backing = self.task("Milestone", is_milestone=True)
@@ -483,12 +486,23 @@ class ProjectRemovalTests(Base):
 
         here = req(self.project.project_id)
         there = req(str(self.other_project.project_id))  # stored as a string by some senders
+        # A request of ANOTHER kind that happens to name this project's id is not a project
+        # join request, and a project removal leaves it alone.
+        other_kind = InboxItems.objects.create(
+            team=self.team,
+            sender=self.viewer,
+            receiver=self.owner,
+            item_type=3,
+            request_status="pending",
+            item_optionals={"project_id": self.project.project_id},
+        )
         self.auth(self.owner)
         self.remove_project(self.viewer)
-        here.refresh_from_db()
-        there.refresh_from_db()
+        for item in (here, there, other_kind):
+            item.refresh_from_db()
         self.assertEqual(here.request_status, "rejected")
         self.assertEqual(there.request_status, "pending")
+        self.assertEqual(other_kind.request_status, "pending")
 
     def test_the_event_names_the_project_and_the_actor(self):
         self.auth(self.owner)
@@ -604,6 +618,18 @@ class ToolRemovalTests(Base):
         )
         t.refresh_from_db()
         self.assertIsNone(t.assignee_id)
+
+    def test_without_the_flag_the_tool_unassigns_nothing(self):
+        t = self.task("open", assignee=self.viewer)
+        out = self.run_tool(self.owner, self.viewer)
+        self.assertEqual(out["unassigned"], {"tasks": 0, "milestones": 0})
+        t.refresh_from_db()
+        self.assertEqual(t.assignee_id, self.viewer.id)
+        # And only a literal true counts there too.
+        t2 = self.task("open2", assignee=self.editor)
+        self.run_tool(self.owner, self.editor, unassign_open_tasks="yes")
+        t2.refresh_from_db()
+        self.assertEqual(t2.assignee_id, self.editor.id)
 
     def test_the_tool_enforces_the_same_rule(self):
         with self.assertRaises(ToolError) as cm:
