@@ -1279,24 +1279,14 @@ class TestCitationResolver(BaseAPITestCase):
 
 
 # --------------------------------------------------------------------------- #
-# controller._INLINE_CITATION_RE — link-aware cited-id extraction (§4.6 D5)    #
+# controller._rank_sources_by_citation — link-aware cited-id ranking (§4.6 D5)  #
 # --------------------------------------------------------------------------- #
 
 
 class TestInlineCitationScanner(SimpleTestCase):
-    """The chip-ranking scanner must extract ids from BOTH citation forms:
-    the natural-prose link `[prose](type:id)` and the bare `[type:id]`."""
-
-    def test_extracts_id_from_both_forms(self):
-        from origin.search_engine.agent.controller import _iter_cited_ids
-
-        text = (
-            "team [ruled out framer](task:42), the [spike](task:7), "
-            "[note:personal:9], and the [MDN docs](https://mdn.dev)."
-        )
-        # Link form yields the URL id (not the prose label); bare form
-        # yields the token; a real external link is ignored.
-        self.assertEqual(set(_iter_cited_ids(text)), {"task:42", "task:7", "note:personal:9"})
+    """Chip ranking must count BOTH basic citation forms: the natural-prose
+    link `[prose](type:id)` and the bare `[type:id]` (every other spelling is
+    table-tested in test_chip_rank_citations.py)."""
 
     def test_ranks_link_form_cited_source_first(self):
         from origin.search_engine.agent.controller import _rank_sources_by_citation

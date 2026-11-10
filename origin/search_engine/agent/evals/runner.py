@@ -662,7 +662,9 @@ def _run_multiturn_case(case: dict[str, Any], case_id: str) -> CaseResult:
 # group 1, link alternative FIRST so it consumes the whole `[label](id)`) and
 # the bare `[type:id]` fallback (id in group 2). The id pattern matches what
 # the agent uses: `chat:pm:1:thread:3`, `task:42`, `note:personal:7`, etc.
-# Keep in sync with `_INLINE_CITATION_RE` in controller.py.
+# Eval scoring is pinned to THIS pattern: the controller's chip ranking now
+# uses `citation_resolver.extract_citation_tokens` (groups, raw ids), and this
+# one is left narrower on purpose so eval numbers do not move.
 _CITATION_RE = re.compile(r"\[[^\]]*\]\(([a-z][a-z0-9_:\-]+)\)|\[([a-z][a-z0-9_:\-]+)\]")
 
 # Bare-form-only counterpart of `judge.CITATION_LINK_RE`, for the D5

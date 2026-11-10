@@ -135,7 +135,7 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 # Link-form citation PAIR extractor: captures (visible prose label,
 # cited entity id) from `[prose](type:id)`. This is deliberately a
 # different tool from the id-only scanners (`_CITATION_RE` in
-# runner.py / `_INLINE_CITATION_RE` in controller.py, which throw the
+# runner.py / `extract_citation_tokens` in citation_resolver.py, which throw the
 # label away): the D5 prose-faithfulness axis judges the LABEL against
 # the cited source, so both halves are needed. Anchored to the known
 # entity-type vocabulary so ordinary markdown links (https://…,
