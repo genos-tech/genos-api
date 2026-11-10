@@ -68,6 +68,7 @@ from apis.request_id import describe_exception
 from origin.search_engine.agent import approval_edits, tool_cache, undo
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import (
+    canonical_citation_token,
     extract_citation_tokens,
     resolve_unresolved_citations,
 )
@@ -1993,7 +1994,9 @@ def _rank_sources_by_citation(
     if not sources:
         return sources
 
-    cited_tokens = {tok.lower() for tok in extract_citation_tokens(answer_text or "")}
+    cited_tokens = {
+        canonical_citation_token(tok) for tok in extract_citation_tokens(answer_text or "")
+    }
     if not cited_tokens:
         return sources
 
@@ -2002,7 +2005,7 @@ def _rank_sources_by_citation(
         eid = (src.get("entity_id") or "").lower()
         if not eid:
             return ""
-        return eid if eid.startswith(f"{etype}:") else f"{etype}:{eid}"
+        return canonical_citation_token(eid if eid.startswith(f"{etype}:") else f"{etype}:{eid}")
 
     def _citation_count(src: dict[str, Any]) -> int:
         key = _token_key(src)

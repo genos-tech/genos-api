@@ -119,6 +119,20 @@ _NOTE_LABEL_TO_CODE: dict[str, int] = {
 _CHAT_LABEL_TO_CODE: dict[str, int] = {v: k for k, v in CHAT_TYPE_LABEL.items()}
 
 
+def canonical_citation_token(token: str) -> str:
+    """Lowercase `token` and spell a personal note `note:personal:<id>`.
+
+    `[note:my:9]` and `[note:personal:9]` cite the same note (see
+    `_NOTE_LABEL_TO_CODE`), and a source chip carries the `personal` spelling.
+    Anything that compares a cited token with a source key (chip ranking) goes
+    through this, so the two spellings cannot disagree.
+    """
+    token = token.lower()
+    if token.startswith("note:my:"):
+        return "note:personal:" + token[len("note:my:") :]
+    return token
+
+
 # Caller signatures for the source builders (kept loose with `Any`
 # because the controller's helpers take positional args that don't
 # map 1:1 across types).

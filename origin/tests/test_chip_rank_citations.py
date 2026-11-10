@@ -59,6 +59,20 @@ RANK_CASES = [
 ]
 
 
+_N9 = "note:personal:9"
+NOTE_MY_CASES = [
+    ("my_bare", "see [note:my:9]", [_N9, "task:1", "note:task:4"]),
+    ("personal_bare", "see [note:personal:9]", [_N9, "task:1", "note:task:4"]),
+    ("my_link", "the [plan](note:my:9)", [_N9, "task:1", "note:task:4"]),
+    ("my_group", "see [note:my:9, note:task:4]", [_N9, "note:task:4", "task:1"]),
+    ("my_raw_paren", "done (note:my:9)", [_N9, "task:1", "note:task:4"]),
+    ("my_raw_fullwidth", "完了（note:my:9）", [_N9, "task:1", "note:task:4"]),
+    ("task_note_still_works", "[note:task:4]", ["note:task:4", "task:1", _N9]),
+    ("my_other_id_is_uncited", "see [note:my:90]", ["task:1", _N9, "note:task:4"]),
+    ("my_id_prefix_is_not_the_id", "see [note:my:99]", ["task:1", _N9, "note:task:4"]),
+]
+
+
 class TestChipRankCitationForms(SimpleTestCase):
     def test_rank_cases(self):
         for name, answer, expected in RANK_CASES:
@@ -97,6 +111,19 @@ class TestChipRankCitationForms(SimpleTestCase):
             with self.subTest(name):
                 ranked = _rank_sources_by_citation(answer, [_src("task", "task:1"), chat])
                 self.assertEqual(ranked[0], chat)
+
+    def test_note_my_and_note_personal_are_the_same_citation(self):
+        # MIP-1383: the frontend and the resolver accept `[note:my:9]` for a personal
+        # note, whose chip carries `note:personal:9`; the ranker used to count it uncited.
+        sources = [
+            _src("task", "task:1"),
+            _src("note", "note:personal:9"),
+            _src("note", "note:task:4"),
+        ]
+        for name, answer, expected in NOTE_MY_CASES:
+            with self.subTest(name):
+                ranked = _rank_sources_by_citation(answer, [dict(s) for s in sources])
+                self.assertEqual([s["entity_id"] for s in ranked], expected)
 
     def test_uppercase_uuid_in_answer_still_matches(self):
         chat = _src("chat", f"gm:{_UUID}")
