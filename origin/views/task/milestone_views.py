@@ -11,7 +11,6 @@ from origin.models.task.milestone_models import (
     MilestoneMaster,
 )
 from origin.models.task.sprint_models import Sprint
-from origin.models.task.task_models import TaskMaster
 from origin.services import mention_extractor
 from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.milestone_manage import (
@@ -24,7 +23,7 @@ from origin.services.milestone_manage import (
     folder_name_taken,
     update_milestone,
 )
-from origin.services.milestone_rollup import milestone_work_counts, milestone_work_q
+from origin.services.milestone_rollup import milestone_work_counts
 from origin.services.milestone_service import (
     create_milestone,
     ensure_backing_task,
@@ -249,14 +248,15 @@ def _serialize_milestone(
     }
     if with_aggregates:
         # Progress is counted over the milestone's live work (MIP-777): not its
-        # own backing row, and not "Deleted" tasks (gone, not finished). One
-        # definition, shared with the agent/MCP rollups so they reconcile.
+        # own backing row, and not "Deleted" tasks (gone, not finished). A task
+        # under a Closed ancestor counts as closed, one under a Deleted ancestor
+        # is not counted (MIP-1389: the rule the client applies everywhere). The
+        # agent/MCP rollups share the rest of the definition (`milestone_work_q`)
+        # but not that rule yet: it is model-visible, so it waits for the eval.
         if counts is not None:
             total, closed = counts
         else:
-            tasks = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
-            total = tasks.count()
-            closed = tasks.filter(status="Closed").count()
+            total, closed = milestone_work_counts([m], ancestor_rule=True)[m.milestone_id]
         out["tasksTotal"] = total
         out["tasksClosed"] = closed
     return out
@@ -318,7 +318,7 @@ class ProjectMilestonesView(AuthenticatedAPIView):
                 _ensure_backing_task(m)
 
         # After the backfill, so every milestone has its backing row to count by.
-        counts = milestone_work_counts(milestones_list)
+        counts = milestone_work_counts(milestones_list, ancestor_rule=True)
         milestones = [
             _serialize_milestone(
                 m, counts=counts[m.milestone_id], assignees=m.milestone_assignees.all()
