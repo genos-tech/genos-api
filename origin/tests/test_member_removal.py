@@ -725,6 +725,25 @@ class LiveCutOffTests(Base):
         self.assertIn({"kind": int(ChannelKind.PM), "id": str(self.pm.id)}, body["channels"])
         self.assertIn({"kind": int(ChannelKind.GM), "id": str(self.gm.id)}, body["channels"])
 
+    def test_a_chat_they_had_already_left_is_not_named(self):
+        left = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="Left", owner=self.owner
+        )
+        ChannelMember.objects.create(channel=left, user=self.viewer, role="member", is_deleted=True)
+        self.auth(self.owner)
+        self.run_removal(lambda: self.remove_team(self.viewer))
+        ids = {c["id"] for c in self.body()["channels"]}
+        self.assertNotIn(str(left.id), ids)
+        self.assertIn(str(self.gm.id), ids)
+
+    def test_a_push_that_cannot_even_be_built_never_raises_into_the_removal(self):
+        with self.assertLogs("origin.services.realtime_push", level="WARNING") as logs:
+            realtime_push.push_membership_removed(
+                user_id=self.viewer.id, team_id=self.team.team_id, scope="team", project_ids=[None]
+            )
+        self.assertIn("could not be scheduled", logs.output[0])
+        self.post.assert_not_called()
+
     def test_the_lists_are_read_before_the_rows_go(self):
         # Read after the removal they would be empty and nothing would be cut off.
         self.auth(self.owner)
