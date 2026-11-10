@@ -148,6 +148,12 @@ class ReadsReturnMarkdown(TodoToolBase):
             self.assertNotIn("notes_markdown", self._today_row(item))
             self.assertNotIn("notes_markdown", self._open_row(item))
 
+    def test_notes_markdown_is_none_for_a_body_with_no_words(self):
+        from origin.search_engine.agent.tools.todo_args import notes_markdown
+
+        for notes in (None, [], [{"type": "paragraph", "content": []}]):
+            self.assertIsNone(notes_markdown(ToDoItem(notes=notes)), notes)
+
     def test_what_is_read_writes_back_unchanged(self):
         # An agent that reads the notes and sends them back with an edit keeps
         # the person's links and lists: the round trip is lossless.
