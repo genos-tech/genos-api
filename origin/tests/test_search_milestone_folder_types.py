@@ -53,11 +53,11 @@ class SchemaTests(SimpleTestCase):
     def test_the_description_says_what_each_type_is_and_that_folders_are_opt_in(self):
         schema = search_kb.SEARCH_KNOWLEDGE_BASE.parameters_schema["properties"]["entity_types"]
         text = schema["description"]
-        for word in ("milestone", "note_folder", "only returned when asked"):
+        for word in ("note_folder", "only returned when asked"):
             self.assertIn(word, text)
         # The model is told the ids exist, or it will not use them.
         description = search_kb.SEARCH_KNOWLEDGE_BASE.description
-        for word in ("note_folder", "milestone_id", "folder_id"):
+        for word in ("milestone", "note_folder", "milestone_id", "folder_id"):
             self.assertIn(word, description)
 
 

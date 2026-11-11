@@ -233,11 +233,8 @@ SEARCH_KNOWLEDGE_BASE = Tool(
         "vague or you don't know which specific entity to fetch. Returns "
         "the top matches with title, short snippet, and a few full chunks "
         "of text per match. ACL is enforced automatically — the user only "
-        "sees results they have access to. Milestones and note folders "
-        "are not searched unless asked for with `entity_types`: pass "
-        '["milestone"] to find a milestone by what it is about (its '
-        'hit carries `milestone_id`), or ["note_folder"] to find a '
-        "folder by name (its hit carries `folder_id`)."
+        "sees results they have access to. `entity_types` also takes "
+        "`milestone` (hit has `milestone_id`) and `note_folder` (`folder_id`)."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -250,13 +247,8 @@ SEARCH_KNOWLEDGE_BASE = Tool(
                 "type": "ARRAY",
                 "items": {"type": "STRING", "enum": SEARCHABLE_ENTITY_TYPES},
                 "description": (
-                    "Optional. Restrict to a subset of entity types: `chat` "
-                    "messages, `task`s (with their comments), `note`s, `todo`s, "
-                    "`milestone`s (a milestone's own title and description) "
-                    "and `note_folder`s (a folder's name; its notes are "
-                    "`note` hits). Omit to search chats, tasks, notes, todos "
-                    "and milestones; folders are only returned when asked "
-                    "for by name here."
+                    "Optional. Restrict to a subset of entity types. Omit to "
+                    "search all; `note_folder` is only returned when asked for."
                 ),
             },
             "limit": {
@@ -268,21 +260,19 @@ SEARCH_KNOWLEDGE_BASE = Tool(
             "project_id": {
                 "type": "INTEGER",
                 "description": (
-                    "Optional. Search only this project (a project id from "
-                    "`list_projects`). Applied in the search itself, so the "
-                    "`limit` is filled from this project. It drops everything "
-                    "that belongs to no project: DMs, personal notes and "
+                    "Optional. Search only this project (id from "
+                    "`list_projects`); `limit` is filled from it. Drops "
+                    "whatever belongs to no project: DMs, personal notes, "
                     "todos. Omit to search everywhere."
                 ),
             },
             "milestone_id": {
                 "type": "INTEGER",
                 "description": (
-                    "Optional. Search only this milestone: its tasks, their "
-                    "comments, and the milestone itself (an id from "
-                    "`list_milestones`). A task attached to a milestone only "
-                    "as a child of its row, with no milestone set, is not "
-                    "matched. Omit to search the whole project or workspace."
+                    "Optional. Search only this milestone (id from "
+                    "`list_milestones`): its tasks, their comments and the "
+                    "milestone itself. A task under a milestone's row with no "
+                    "milestone set is not matched."
                 ),
             },
             "person_id": {
@@ -292,7 +282,7 @@ SEARCH_KNOWLEDGE_BASE = Tool(
                     "to, or owned by this team member (user_id UUID from "
                     "get_team_members or the USER-PROVIDED REFERENCES "
                     "block). Use for 'what did X say / write / work on' "
-                    "questions. Omit for regular searches."
+                    "questions."
                 ),
             },
         },
