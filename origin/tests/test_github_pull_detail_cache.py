@@ -534,3 +534,95 @@ class TestOnlyAPrIsCached(DetailBase):
         self.world.calls.clear()
         self.detail(url="/api/v2/github/pulls/acme/rocket/07/")
         self.assertEqual(self.world.calls, [])
+
+
+class TestFreshSkipsTheCache(DetailBase):
+    """`?fresh=1` (MIP-1410) is the PR column's Refresh click asking for the
+    answer GitHub gives now. It does what the same parameter does on the
+    lookups routes: skip the READ of the cache, still WRITE the answer, so the
+    next natural request benefits. An open PR's CI finishing sends no webhook,
+    so without this the detail is only ever as new as `_PULL_DETAIL_TTL`."""
+
+    FRESH = URL + "?fresh=1"
+
+    def test_a_fresh_request_asks_github_although_the_entry_is_warm(self):
+        self.detail()
+        self.assertEqual(
+            self.logged(lambda: self.detail(url=self.FRESH)), ("pull_detail", "miss", 3)
+        )
+
+    def test_a_plain_request_still_hits(self):
+        self.detail()
+        self.assertEqual(self.logged(self.detail), ("pull_detail", "hit", 0))
+
+    def test_it_returns_the_new_answer_and_stores_it_for_the_next_request(self):
+        before = self.detail().json()
+        self.world.runs = [{"status": "completed", "conclusion": "failure"}]
+
+        # The warm entry still says what it said ...
+        self.assertEqual(self.detail().json(), before)
+        # ... a fresh request says what GitHub says now ...
+        fresh = self.detail(url=self.FRESH).json()
+        self.assertEqual(fresh["check_runs"]["check_runs"], self.world.runs)
+        self.assertNotEqual(fresh, before)
+        # ... and the next plain request reads that, without asking GitHub.
+        self.world.calls.clear()
+        self.assertEqual(self.detail().json(), fresh)
+        self.assertEqual(self.world.calls, [])
+
+    def test_only_the_value_1_asks_for_it(self):
+        self.detail()
+        for value in ("0", "true", "yes", "", "2", "1 "):
+            with self.subTest(fresh=value):
+                self.world.calls.clear()
+                self.assertEqual(self.detail(url=f"{URL}?fresh={value}").status_code, 200)
+                self.assertEqual(self.world.calls, [])
+
+    def test_it_gets_past_a_remembered_refusal(self):
+        # B is refused, and the refusal is remembered for ten minutes ...
+        self.assertEqual(self.detail(self.client_b).status_code, 502)
+        # ... then B's access is granted (a reconnect, a repo invite).
+        self.world.access[TOK_B] = {"branches", "pulls", "pr", "status", "checks"}
+        self.assertEqual(self.detail(self.client_b).status_code, 502)
+        # A fresh request does not wait the ten minutes out.
+        self.assertEqual(self.detail(self.client_b, url=self.FRESH).status_code, 200)
+        self.assertEqual(self.detail(self.client_b).status_code, 200)
+
+    def test_a_fresh_refusal_is_remembered_like_any_other(self):
+        self.assertEqual(self.detail(self.client_b, url=self.FRESH).status_code, 502)
+        self.world.calls.clear()
+        self.assertEqual(self.detail(self.client_b).status_code, 502)
+        self.assertEqual(self.world.calls, [])
+
+    def test_a_fresh_request_that_fails_leaves_the_stored_answer_alone(self):
+        good = self.detail().json()
+        self.world.forced[(TOK_A, "pr")] = lambda: _resp(500, {"message": "boom"})
+
+        failed = self.detail(url=self.FRESH)
+        self.assertEqual(failed.status_code, 502)
+        self.assertEqual(failed.json(), {"detail": "github_api_error", "upstream_status": 500})
+
+        del self.world.forced[(TOK_A, "pr")]
+        self.world.calls.clear()
+        self.assertEqual(self.detail().json(), good)
+        self.assertEqual(self.world.calls, [])
+
+    def test_a_fresh_request_with_a_degraded_ci_answer_is_served_but_not_stored(self):
+        good = self.detail().json()
+        self.world.forced[(TOK_A, "checks")] = lambda: _resp(500, {"message": "boom"})
+
+        degraded = self.detail(url=self.FRESH)
+        self.assertEqual(degraded.status_code, 200)
+        self.assertIsNone(degraded.json()["check_runs"])
+
+        del self.world.forced[(TOK_A, "checks")]
+        self.world.calls.clear()
+        self.assertEqual(self.detail().json(), good)
+        self.assertEqual(self.world.calls, [])
+
+    def test_a_fresh_request_does_not_touch_another_accounts_entry(self):
+        self.detail()
+        self.detail(self.client_b, url=self.FRESH)
+        self.world.calls.clear()
+        self.assertEqual(self.detail().status_code, 200)
+        self.assertEqual(self.world.calls, [])
