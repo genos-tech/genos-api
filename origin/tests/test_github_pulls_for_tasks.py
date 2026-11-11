@@ -239,3 +239,232 @@ class TestPullsForTasksView(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["pulls_by_task"][str(orphan.task_id)], [])
         mock_get.assert_not_called()
+
+    # ── Which answers are "could not look" (MIP-1412) ─────────────
+    #
+    # A GitHub call that fails for a reason that is not about access (a 5xx, a
+    # rate limit, a 401) used to read as "this branch has no PR": the task's list
+    # was just shorter or empty, in a 200 that looks like any other. The response
+    # now also names the tasks it could not fully look at, in `incomplete`. A
+    # REFUSAL (404, or a 403 that is not a rate limit) is not one of them: it is
+    # GitHub saying this account cannot read the thing, which the server already
+    # remembers for ten minutes, and "no PR" is the true answer for this user.
+
+    BRANCH_A = "feature/GEN-42-add-thing"
+    BRANCH_B = "fix/GEN-43-hotfix"
+
+    @staticmethod
+    def _failure(status, headers=None):
+        resp = MagicMock(spec=requests.Response)
+        resp.ok = False
+        resp.status_code = status
+        resp.headers = headers or {}
+        resp.json.return_value = {"message": "boom"}
+        return resp
+
+    @staticmethod
+    def _pr(number):
+        return {
+            "number": number,
+            "html_url": f"https://github.com/acme/rocket/pull/{number}",
+            "title": f"PR {number}",
+            "state": "open",
+            "draft": False,
+            "merged_at": None,
+        }
+
+    def _github(self, mock_get, *, lookup=None, branches=None, by_number=None, names=None):
+        """A fake GitHub for acme/rocket with a branch per task. `lookup` maps a
+        branch name to the response of its PR lookup (default: its PR), `branches`
+        maps a repo to the response of its branch list, `by_number` a PR number to
+        the response of a lookup by number, `names` the branches acme/rocket has."""
+        lookup, branches, by_number = lookup or {}, branches or {}, by_number or {}
+        prs = {self.BRANCH_A: self._pr(7), self.BRANCH_B: self._pr(8)}
+
+        def side_effect(_account, path, params=None):
+            if path.endswith("/branches"):
+                repo = path.split("/")[3]
+                if repo in branches:
+                    return branches[repo]
+                return self._branches_response(names or ["main", self.BRANCH_A, self.BRANCH_B])
+            if path.endswith("/pulls"):
+                branch = (params or {})["head"].split(":", 1)[1]
+                if branch in lookup:
+                    return lookup[branch]
+                return self._pulls_response([prs[branch]] if branch in prs else [])
+            number = int(path.rsplit("/", 1)[1])
+            if number in by_number:
+                return by_number[number]
+            self.fail(f"Unexpected GitHub path: {path}")
+
+        mock_get.side_effect = side_effect
+
+    def _ids(self):
+        return f"{self.task_a.task_id},{self.task_b.task_id}"
+
+    def _body(self, query=""):
+        resp = self.client.get(f"/api/v2/github/pulls/for-tasks/?task_ids={self._ids()}{query}")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_healthy_batch_reports_nothing_incomplete(self, mock_get):
+        self._github(mock_get)
+        body = self._body()
+        self.assertEqual(body["incomplete"], [])
+        self.assertEqual(len(body["pulls_by_task"][str(self.task_a.task_id)]), 1)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_5xx_on_one_lookup_names_that_task_and_no_other(self, mock_get):
+        self._github(mock_get, lookup={self.BRANCH_A: self._failure(500)})
+        body = self._body()
+        self.assertEqual(body["incomplete"], [str(self.task_a.task_id)])
+        self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)], [])
+        # The healthy task is answered in the same request, and is not named.
+        self.assertEqual(body["pulls_by_task"][str(self.task_b.task_id)][0]["number"], 8)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_rate_limit_or_a_401_is_a_failed_lookup(self, mock_get):
+        for label, failure in (
+            ("429", lambda: self._failure(429)),
+            ("403 with no quota left", lambda: self._failure(403, {"X-RateLimit-Remaining": "0"})),
+            ("403 with Retry-After", lambda: self._failure(403, {"Retry-After": "30"})),
+            ("401", lambda: self._failure(401)),
+        ):
+            with self.subTest(failure=label):
+                cache.clear()
+                self._github(mock_get, lookup={self.BRANCH_A: failure()})
+                self.assertEqual(self._body()["incomplete"], [str(self.task_a.task_id)])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_refusal_is_not_incomplete_it_is_the_answer(self, mock_get):
+        for label, failure in (
+            ("404", lambda: self._failure(404)),
+            ("403 that is not a rate limit", lambda: self._failure(403)),
+        ):
+            with self.subTest(failure=label):
+                cache.clear()
+                self._github(mock_get, lookup={self.BRANCH_A: failure()})
+                for _ in range(2):  # the second is the remembered refusal
+                    body = self._body()
+                    self.assertEqual(body["incomplete"], [])
+                    self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_failed_lookup_is_not_cached_so_the_next_request_heals(self, mock_get):
+        self._github(mock_get, lookup={self.BRANCH_A: self._failure(502)})
+        self.assertEqual(self._body()["incomplete"], [str(self.task_a.task_id)])
+
+        self._github(mock_get)  # GitHub is back
+        body = self._body()
+        self.assertEqual(body["incomplete"], [])
+        self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)][0]["number"], 7)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_both_failing_are_both_named_in_id_order(self, mock_get):
+        self._github(
+            mock_get,
+            lookup={self.BRANCH_A: self._failure(500), self.BRANCH_B: self._failure(500)},
+        )
+        self.assertEqual(
+            self._body()["incomplete"],
+            sorted([str(self.task_a.task_id), str(self.task_b.task_id)], key=int),
+        )
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_repo_whose_branch_list_failed_makes_every_task_incomplete(self, mock_get):
+        # The branch we could not read may be the one that carries a task's PR, so
+        # no task can be called complete. The repo that did answer still counts.
+        GithubWebhookRegistration.objects.create(
+            owner="acme", repo="other", hook_id=2, registered_by=self.user
+        )
+        self._github(mock_get, branches={"other": self._failure(503)})
+        body = self._body()
+        self.assertEqual(
+            body["incomplete"],
+            sorted([str(self.task_a.task_id), str(self.task_b.task_id)], key=int),
+        )
+        self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)][0]["number"], 7)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_repo_that_refuses_us_is_not_incomplete(self, mock_get):
+        GithubWebhookRegistration.objects.create(
+            owner="acme", repo="other", hook_id=2, registered_by=self.user
+        )
+        self._github(mock_get, branches={"other": self._failure(404)})
+        self.assertEqual(self._body()["incomplete"], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_persisted_pr_that_fails_to_load_is_a_failed_lookup(self, mock_get):
+        # The PR of a deleted branch comes from the task's persisted auto-link.
+        self.task_a.links = [{"url": "https://github.com/acme/rocket/pull/9", "isAutoLinked": True}]
+        self.task_a.save(update_fields=["links"])
+        self._github(
+            mock_get,
+            lookup={self.BRANCH_A: self._pulls_response([])},
+            by_number={9: self._failure(500)},
+        )
+        self.assertEqual(self._body()["incomplete"], [str(self.task_a.task_id)])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_persisted_pr_that_is_refused_is_not_incomplete(self, mock_get):
+        self.task_a.links = [{"url": "https://github.com/acme/rocket/pull/9", "isAutoLinked": True}]
+        self.task_a.save(update_fields=["links"])
+        self._github(
+            mock_get,
+            lookup={self.BRANCH_A: self._pulls_response([])},
+            by_number={9: self._failure(404)},
+        )
+        self.assertEqual(self._body()["incomplete"], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_ids_are_ordered_as_numbers_not_as_text(self, mock_get):
+        # "1000000000" < "900000001" as text; the other way round as numbers.
+        tasks = [
+            TaskMaster.objects.create(
+                task_id=task_id,
+                team=self.team,
+                project=self.project,
+                assignee=self.user,
+                reporter=self.user,
+                title=f"Task {number}",
+                status="Open",
+                project_task_number=number,
+            )
+            for task_id, number in ((1_000_000_000, 62), (900_000_001, 61))
+        ]
+        branches = ["main", "feature/GEN-61-x", "feature/GEN-62-y"]
+        self._github(
+            mock_get,
+            names=branches,
+            lookup={name: self._failure(500) for name in branches[1:]},
+        )
+        ids = ",".join(str(t.task_id) for t in tasks)
+        resp = self.client.get(f"/api/v2/github/pulls/for-tasks/?task_ids={ids}")
+        self.assertEqual(resp.json()["incomplete"], ["900000001", "1000000000"])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_fresh_reports_it_the_same_way(self, mock_get):
+        self._github(mock_get, lookup={self.BRANCH_A: self._failure(500)})
+        self.assertEqual(self._body("&fresh=1")["incomplete"], [str(self.task_a.task_id)])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_every_answer_carries_the_key_so_a_client_can_tell_the_server_reports_it(
+        self, mock_get
+    ):
+        # Present and empty means "I looked and it is complete"; absent means an
+        # older server that cannot say. Every path of the route has to say it.
+        mock_get.return_value = self._branches_response(["main"])
+        self.assertEqual(self._get("").json()["incomplete"], [])
+        self.assertEqual(self._get(self._ids()).json()["incomplete"], [])
+        orphan = TaskMaster.objects.create(
+            team=self.team,
+            project=None,
+            assignee=self.user,
+            reporter=self.user,
+            title="Orphan",
+            status="Open",
+        )
+        self.assertEqual(self._get(str(orphan.task_id)).json()["incomplete"], [])
+        self.account.delete()
+        self.assertEqual(self._get(self._ids()).json()["incomplete"], [])

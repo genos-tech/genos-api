@@ -86,6 +86,12 @@ class _GithubCredential:
         self._owner_thread = threading.get_ident()
         self._token: str | None = None
         self.upstream = 0
+        # Lookups that failed for a reason that is NOT about access (a 5xx, a rate
+        # limit, a 401), and the repos whose branch list failed the same way. The
+        # batched PR route names the tasks it could not fully look at (MIP-1412);
+        # a refusal is not counted, it is the answer for this account.
+        self.failed_lookups = 0
+        self.failed_repos: set[tuple[str, str]] = set()
 
     def resolve(self) -> "_GithubCredential":
         if self._token is None:
@@ -1431,6 +1437,13 @@ def _is_refusal(resp) -> bool:
     return resp.status_code == 403 and not _is_rate_limited(resp)
 
 
+def _note_failed_lookup(account) -> None:
+    """A GitHub lookup failed in a way that says nothing about access, so its
+    caller's "no PR" is really "could not look" (MIP-1412)."""
+    if isinstance(account, _GithubCredential):
+        account.failed_lookups += 1
+
+
 def _call_github(account, path: str, params: dict | None = None):
     """One GitHub call from the request thread, tallied on the request's
     credential (if it has one)."""
@@ -1501,6 +1514,8 @@ def _branch_lists(
             cache.set(keys[i], out[i], _BRANCH_CACHE_TTL)
         elif _is_refusal(resp):
             cache.set(keys[i], _DENIED, _DENIED_CACHE_TTL)
+        else:
+            account.failed_repos.add(repos[i])
     return out
 
 
@@ -1554,6 +1569,8 @@ def _find_pr_for_branch(
     if not resp.ok:
         if _is_refusal(resp):
             cache.set(key, _DENIED, _DENIED_CACHE_TTL)
+        else:
+            _note_failed_lookup(account)
         return None
     items = resp.json() or []
     if not items:
@@ -1608,6 +1625,8 @@ def _fetch_pr_by_number(
     if not resp.ok:
         if _is_refusal(resp):
             cache.set(key, _DENIED, _DENIED_CACHE_TTL)
+        else:
+            _note_failed_lookup(account)
         return None
     pr = resp.json() or {}
     slim = {
@@ -1917,11 +1936,21 @@ class GithubPullsForTasksView(APIView):
     backstop, html_url dedupe) are shared with the single view via
     `_pulls_for_task`.
 
-    Response: `{"pulls_by_task": {"<taskId>": [slim pull dicts]}}`.
+    Response: `{"pulls_by_task": {"<taskId>": [slim pull dicts]}, "incomplete": ["<taskId>", ...]}`.
     Every requested id gets a key; unknown ids, tasks without a
     project-scoped display ID, and tasks with no PRs all map to `[]`
     (unlike the single view's 404) so one bad id can't fail the batch
     and the client can cache negatives uniformly.
+
+    `incomplete` (MIP-1412) names the tasks whose list may be SHORT because a
+    GitHub call failed in a way that says nothing about access: a 5xx, a rate
+    limit, a 401, or a repo whose branch list could not be read (that one makes
+    every task incomplete: the branch we missed may be theirs). For those, `[]`
+    means "could not look", not "no PR". A REFUSAL (404, a 403 that is not a rate
+    limit) is not in it: it is the true answer for this account, and is
+    remembered for `_DENIED_CACHE_TTL`. A failed lookup is never cached, so the
+    next request retries it. The key is on every answer, empty when all is
+    well, so a client can tell a server that reports it from one that cannot.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -1947,11 +1976,11 @@ class GithubPullsForTasksView(APIView):
             )
         pulls_by_task: dict[str, list[dict]] = {str(tid): [] for tid in task_ids}
         if not task_ids:
-            return Response({"pulls_by_task": pulls_by_task})
+            return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
         account = _connected_account(request.user)
         if account is None:
-            return Response({"pulls_by_task": pulls_by_task})
+            return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
         with_display: list[tuple[TaskMaster, str]] = []
         # Same walkable-id batch as the task-dependency endpoint closed
@@ -1964,16 +1993,22 @@ class GithubPullsForTasksView(APIView):
                 continue
             with_display.append((task, display_id))
         if not with_display:
-            return Response({"pulls_by_task": pulls_by_task})
+            return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
         account = _GithubCredential(account)
 
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
         repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
 
+        incomplete: list[str] = []
         for task, display_id in with_display:
+            failed_before = account.failed_lookups
             pulls_by_task[str(task.task_id)] = _pulls_for_task(
                 account, task, display_id, repo_branches, bypass_cache=bypass_cache
             )
+            # A repo whose branch list could not be read may hold this task's
+            # branch, so then no task can be called complete.
+            if account.failed_repos or account.failed_lookups > failed_before:
+                incomplete.append(str(task.task_id))
         _log_links("pulls_for_tasks", account)
-        return Response({"pulls_by_task": pulls_by_task})
+        return Response({"pulls_by_task": pulls_by_task, "incomplete": sorted(incomplete, key=int)})
