@@ -55,7 +55,10 @@ class SchemaTests(SimpleTestCase):
         text = schema["description"]
         for word in ("milestone", "note_folder", "only returned when asked"):
             self.assertIn(word, text)
-        self.assertIn("note_folder", search_kb.SEARCH_KNOWLEDGE_BASE.description)
+        # The model is told the ids exist, or it will not use them.
+        description = search_kb.SEARCH_KNOWLEDGE_BASE.description
+        for word in ("note_folder", "milestone_id", "folder_id"):
+            self.assertIn(word, description)
 
 
 class ToolPassThroughTests(SimpleTestCase):
@@ -109,6 +112,8 @@ class HitShapeTests(SimpleTestCase):
     def test_a_malformed_id_is_left_out_rather_than_guessed(self):
         for hit in (
             _hit("milestone", "milestone:abc"),
+            _hit("milestone", "milestone:12abc"),
+            _hit("milestone", "x-milestone:12"),
             _hit("milestone", "task:12"),
             _hit("note_folder", "note_folder:"),
         ):
