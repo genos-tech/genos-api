@@ -478,7 +478,13 @@ CATALOG: tuple[McpTool, ...] = (
             "the limit is filled from it, not from other projects. Each "
             "returned chunk's `text` is cut at 1,000 characters, and a cut "
             "chunk carries `truncated: true`: call `get_task` / `get_note` "
-            "for the full text."
+            "for the full text. By default it searches chats, tasks, notes, "
+            "todos and milestones; narrow it with `entity_types`, which also "
+            "accepts `milestone` (find a milestone by what it is about: its "
+            "hit carries `milestone_id`, for `get_milestone_summary`) and "
+            "`note_folder` (find a folder by name: its hit carries "
+            "`folder_id`, for `create_note` / `update_note`; folders are only "
+            "returned when asked for)."
         ),
     ),
     McpTool(
@@ -642,9 +648,10 @@ CATALOG: tuple[McpTool, ...] = (
             "My-Notes folders (`folders`) and the Team Notes folders they can "
             "reach (`team_folders`, each with `your_role` and `can_add_notes`), "
             "with each folder's id and the notes in it. This is the only tool "
-            "that sees folders — `search_workspace` does not. Call it to turn a "
-            "folder NAME into the `folder_id` that `create_note` and "
-            "`update_note` take."
+            "that lists the whole tree — `search_workspace` finds a folder by "
+            'name only with `entity_types=["note_folder"]` and never shows '
+            "its contents. Call this to turn a folder NAME into the "
+            "`folder_id` that `create_note` and `update_note` take."
         ),
     ),
     McpTool(

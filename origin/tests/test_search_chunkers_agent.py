@@ -612,6 +612,15 @@ class TestMilestoneChunker(BaseAPITestCase):
         self.assertIn(str(self.user.id), c.acl_user_ids)  # project member
         self.assertIn(str(self.user2.id), c.acl_user_ids)  # assignee + reporter
 
+    def test_a_non_member_is_not_in_the_acl(self):
+        # MIP-1377: `entity_types=["milestone"]` makes milestones directly searchable, so who
+        # may match one is the whole access story. user2 is on the team but not on the project,
+        # is not assigned to the milestone and did not report it.
+        self._ms(title="Private MS")
+        acl = list(iter_milestone_chunks())[0].chunks[0].acl_user_ids
+        self.assertIn(str(self.user.id), acl)
+        self.assertNotIn(str(self.user2.id), acl)
+
     def test_deleted_milestone_skipped(self):
         self._ms(title="Gone", is_deleted=True)
         self.assertEqual(list(iter_milestone_chunks()), [])
