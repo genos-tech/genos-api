@@ -11,6 +11,7 @@ NDJSON event (deduplicated against earlier searches in the same run).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from django.conf import settings
@@ -25,6 +26,11 @@ from origin.search_engine.agent.tools.base import (
 from origin.search_engine.search import search
 
 _MAX_LIMIT = 20
+
+# What a caller may ask for. `milestone` and `note_folder` are in the index (MIP-1377); a
+# folder stays out of an unrestricted search on purpose (MIP-841: it has no body to ground an
+# answer on), so it only comes back when named here. The ACL filter is the same for all six.
+SEARCHABLE_ENTITY_TYPES = ["chat", "task", "note", "todo", "milestone", "note_folder"]
 
 # Longest chunk text an MCP caller gets back (MIP-798). A task body is indexed
 # as one chunk, so a single hit could carry thousands of characters next to a
@@ -71,6 +77,33 @@ def _as_int(value: Any) -> Any:
         return int(value) if value not in (None, "") else None
     except (TypeError, ValueError):
         return value
+
+
+_MILESTONE_ENTITY_RE = re.compile(r"^milestone:(\d+)$")
+_FOLDER_ENTITY_RE = re.compile(r"^note_folder:(\d+)$")
+
+
+def _own_ids(entity: dict[str, Any]) -> dict[str, Any]:
+    """The id a milestone or note-folder hit is known by (MIP-1377).
+
+    Both come back as `entity_id` ("milestone:12", "note_folder:7"), which the next call
+    (`get_milestone_summary`, `create_note`, ...) does not take. Reported as a number, like
+    `project_id`, and only on the hit it belongs to: a task hit has no `milestone_id` of its
+    own here, so none is invented. A milestone document carries no id field; a folder one
+    carries `folder_id`, with the `entity_id` as a fallback.
+    """
+    kind = entity.get("entity_type")
+    entity_id = str(entity.get("entity_id") or "")
+    if kind == "milestone":
+        m = _MILESTONE_ENTITY_RE.match(entity_id)
+        return {"milestone_id": int(m.group(1))} if m else {}
+    if kind == "note_folder":
+        folder_id = _as_int(entity.get("folder_id"))
+        if not isinstance(folder_id, int):
+            m = _FOLDER_ENTITY_RE.match(entity_id)
+            folder_id = int(m.group(1)) if m else None
+        return {"folder_id": folder_id} if folder_id is not None else {}
+    return {}
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -162,6 +195,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "note_id": entity.get("note_id"),
                 "note_type": entity.get("note_type"),
                 "project_id": _as_int(entity.get("project_id")),
+                **_own_ids(entity),
                 # Where a note lives (folders, project > task, chat), for a
                 # viewer who may see it (MIP-839). Names are user-typed, so
                 # they go through the same fence as the snippet.
@@ -199,7 +233,8 @@ SEARCH_KNOWLEDGE_BASE = Tool(
         "vague or you don't know which specific entity to fetch. Returns "
         "the top matches with title, short snippet, and a few full chunks "
         "of text per match. ACL is enforced automatically — the user only "
-        "sees results they have access to."
+        "sees results they have access to. `entity_types` also takes "
+        "`milestone` (hit has `milestone_id`) and `note_folder` (`folder_id`)."
     ),
     parameters_schema={
         "type": "OBJECT",
@@ -210,9 +245,10 @@ SEARCH_KNOWLEDGE_BASE = Tool(
             },
             "entity_types": {
                 "type": "ARRAY",
-                "items": {"type": "STRING", "enum": ["chat", "task", "note", "todo"]},
+                "items": {"type": "STRING", "enum": SEARCHABLE_ENTITY_TYPES},
                 "description": (
-                    "Optional. Restrict to a subset of entity types. Omit to search all."
+                    "Optional. Restrict to a subset of entity types. Omit to "
+                    "search all; `note_folder` is only returned when asked for."
                 ),
             },
             "limit": {
@@ -224,21 +260,19 @@ SEARCH_KNOWLEDGE_BASE = Tool(
             "project_id": {
                 "type": "INTEGER",
                 "description": (
-                    "Optional. Search only this project (a project id from "
-                    "`list_projects`). Applied in the search itself, so the "
-                    "`limit` is filled from this project. It drops everything "
-                    "that belongs to no project: DMs, personal notes and "
+                    "Optional. Search only this project (id from "
+                    "`list_projects`); `limit` is filled from it. Drops "
+                    "whatever belongs to no project: DMs, personal notes, "
                     "todos. Omit to search everywhere."
                 ),
             },
             "milestone_id": {
                 "type": "INTEGER",
                 "description": (
-                    "Optional. Search only this milestone: its tasks, their "
-                    "comments, and the milestone itself (an id from "
-                    "`list_milestones`). A task attached to a milestone only "
-                    "as a child of its row, with no milestone set, is not "
-                    "matched. Omit to search the whole project or workspace."
+                    "Optional. Search only this milestone (id from "
+                    "`list_milestones`): its tasks, their comments and the "
+                    "milestone itself. A task under a milestone's row with no "
+                    "milestone set is not matched."
                 ),
             },
             "person_id": {
@@ -248,7 +282,7 @@ SEARCH_KNOWLEDGE_BASE = Tool(
                     "to, or owned by this team member (user_id UUID from "
                     "get_team_members or the USER-PROVIDED REFERENCES "
                     "block). Use for 'what did X say / write / work on' "
-                    "questions. Omit for regular searches."
+                    "questions."
                 ),
             },
         },
