@@ -277,6 +277,13 @@ class GithubPullDetailView(APIView):
     three live GitHub calls in a row every time (pull, then commit status,
     then check runs), about 1.7 s at the median. A miss now costs two round
     trips (the pull, then the two CI calls together) and a hit none.
+
+    `?fresh=1` skips the READ (also of a remembered refusal) and still writes
+    the answer, as it does on the lookups routes: the PR column's Refresh click
+    (MIP-1410). An open PR's CI finishing sends no webhook, so without it the
+    CI dot is only as new as `_PULL_DETAIL_TTL`. A fresh request that fails
+    stores nothing, so the entry it skipped is still there for the next plain
+    request.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -289,7 +296,8 @@ class GithubPullDetailView(APIView):
         # Read before GitHub is asked, so a webhook that lands while the
         # fetch is in flight orphans the key this answer is written under.
         key = _pull_detail_cache_key(credential, owner, repo, number)
-        if key is not None:
+        bypass_cache = request.GET.get("fresh") == "1"
+        if key is not None and not bypass_cache:
             cached = cache.get(key)
             if cached is not None:
                 _log_links("pull_detail", credential)
