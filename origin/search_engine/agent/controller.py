@@ -53,7 +53,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import re
 import threading
 import time
 import uuid
@@ -68,7 +67,11 @@ from django.utils import timezone
 from apis.request_id import describe_exception
 from origin.search_engine.agent import approval_edits, tool_cache, undo
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
-from origin.search_engine.agent.citation_resolver import resolve_unresolved_citations
+from origin.search_engine.agent.citation_resolver import (
+    canonical_citation_token,
+    extract_citation_tokens,
+    resolve_unresolved_citations,
+)
 from origin.search_engine.agent.egress import EgressRefused, check_web_query
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.label_acl import LabelAccess
@@ -1963,20 +1966,12 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
 # Phase 4.2 — source-chip ranking by citation density                         #
 # --------------------------------------------------------------------------- #
 
-# Matches BOTH citation forms the agent emits (§4.6 D5): the natural-prose
-# link `[prose](type:id)` (id captured in group 1) and the bare `[type:id]`
-# fallback (id in group 2). The link alternative is FIRST and consumes the
-# whole `[label](id)` so a single-word label (`[spike](task:42)`) yields the
-# id, not the label. Keep in sync with the frontend rewriter (citationUtils.ts
-# CITATION_PATTERN / CITATION_LINK_PATTERN) and `_CITATION_RE` in
-# evals/runner.py.
-_INLINE_CITATION_RE = re.compile(r"\[[^\]]*\]\(([a-z][a-z0-9_:\-]+)\)|\[([a-z][a-z0-9_:\-]+)\]")
-
-
-def _iter_cited_ids(text: str):
-    """Yield the entity-id token from every citation (either form) in `text`."""
-    for m in _INLINE_CITATION_RE.finditer(text or ""):
-        yield (m.group(1) or m.group(2))
+# Cited ids come from `citation_resolver.extract_citation_tokens`, the same
+# scanner that back-fills chips, so every spelling the frontend strips counts
+# toward the ranking: `[type:id]`, `[prose](type:id)`, a group
+# `[task:1, task:2]`, and a raw `(task:1)` / `（task:12）` / bare `task:1`.
+# (`_CITATION_RE` in evals/runner.py is a deliberately separate, narrower
+# scanner: eval scoring is pinned to it.)
 
 
 def _rank_sources_by_citation(
@@ -1999,7 +1994,9 @@ def _rank_sources_by_citation(
     if not sources:
         return sources
 
-    cited_tokens = {tok.lower() for tok in _iter_cited_ids(answer_text)}
+    cited_tokens = {
+        canonical_citation_token(tok) for tok in extract_citation_tokens(answer_text or "")
+    }
     if not cited_tokens:
         return sources
 
@@ -2008,7 +2005,7 @@ def _rank_sources_by_citation(
         eid = (src.get("entity_id") or "").lower()
         if not eid:
             return ""
-        return eid if eid.startswith(f"{etype}:") else f"{etype}:{eid}"
+        return canonical_citation_token(eid if eid.startswith(f"{etype}:") else f"{etype}:{eid}")
 
     def _citation_count(src: dict[str, Any]) -> int:
         key = _token_key(src)
