@@ -15,6 +15,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
+from origin.models.chat.unified_models import Message
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
@@ -2622,8 +2623,25 @@ class TaskCommentsView(AuthenticatedAPIView):
                 )
             )
 
+            # The comment's mirror `Message` (a thread reply under the PM task header, see
+            # `unified_writer.write_task_comment_as_thread_reply`). Flags and reminders on a
+            # comment ride on that message, so the client needs its id: it has no uuid
+            # library and the namespace is a server fact. `None` when the mirror is missing
+            # (the drift cron repairs it), so the client offers nothing it cannot honour.
+            comments = list(comments)
+            mirror_ids = {
+                c["comment_id"]: unified_writer.task_comment_message_uuid(task_id, c["comment_id"])
+                for c in comments
+            }
+            mirrored = set(
+                Message.objects.filter(id__in=list(mirror_ids.values())).values_list(
+                    "id", flat=True
+                )
+            )
+
             response_data = []
             for comment in comments:
+                mirror_id = mirror_ids[comment["comment_id"]]
                 response_data.append(
                     {
                         "taskId": comment["task"],
@@ -2631,6 +2649,7 @@ class TaskCommentsView(AuthenticatedAPIView):
                         "senderName": comment["sender__username"],
                         "commentId": comment["comment_id"],
                         "commentBody": comment["comment_body"],
+                        "messageId": str(mirror_id) if mirror_id in mirrored else None,
                         "reactions": reactions_by_comment.get(int(comment["comment_id"]), []),
                         "tsSent": str(comment["ts_sent_at"]),
                         "tsUpdated": str(comment["ts_updated_at"]),
