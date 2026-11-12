@@ -116,6 +116,10 @@ REGISTRY = {
     # views.chat.activity_views_v3
     "origin.views.chat.activity_views_v3.ActivityCommentSurfaceView": checked("is_team_member"),
     "origin.views.chat.activity_views_v3.ActivityListView": self_only(_OWN_ACTIVITY),
+    "origin.views.chat.activity_views_v3.ActivityUnreadView": self_only(
+        "the caller's own unread activity (recipient=request.user); each item is re-checked "
+        "against what they can open now"
+    ),
     "origin.views.chat.activity_views_v3.ActivityReadAllView": self_only(_OWN_ACTIVITY),
     "origin.views.chat.activity_views_v3.ActivityReadBatchView": self_only(_OWN_ACTIVITY),
     "origin.views.chat.activity_views_v3.ActivityReadView": self_only(_OWN_ACTIVITY),

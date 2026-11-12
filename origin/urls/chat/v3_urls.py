@@ -60,6 +60,7 @@ from origin.views.chat.activity_views_v3 import (
     ActivityReadBatchView,
     ActivityReadView,
     ActivitySurfaceView,
+    ActivityUnreadView,
 )
 from origin.views.chat.channel_views import (
     ChannelDetailView,
@@ -230,6 +231,11 @@ urlpatterns = [
         "api/v3/activities/",
         ActivityListView.as_view(),
         name="v3_activity_list",
+    ),
+    path(
+        "api/v3/activities/unread/",
+        ActivityUnreadView.as_view(),
+        name="v3_activity_unread",
     ),
     path(
         "api/v3/activities/<uuid:activity_id>/read/",

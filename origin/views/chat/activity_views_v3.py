@@ -10,6 +10,9 @@ v3 activity feed endpoints.
                                                     team — a user in two teams
                                                     must not see one team's
                                                     feed while in the other.
+  GET    /api/v3/activities/unread/?team_id=       — the raw unread data and its
+                                                    stats (MIP-1375), grouped by
+                                                    chat / thread / task / note.
   PUT    /api/v3/activities/{id}/read/             — mark one entry read.
   PUT    /api/v3/activities/read-all/              — mark every entry the
                                                     user can see read
@@ -194,6 +197,48 @@ class ActivityListView(AuthenticatedAPIView):
                 "next_cursor": _encode_cursor(rows[-1]) if has_more else None,
             }
         )
+
+
+class ActivityUnreadView(AuthenticatedAPIView):
+    """GET /api/v3/activities/unread/?team_id=UUID[&since=&limit=&kinds=&chat_id=&task_id=]
+
+    What the caller has not read yet in one team, as raw data plus counts (MIP-1375): the
+    same answer the `list_my_unread` MCP tool gives, from the same service
+    (`services/unread_digest.py`, which documents the rules). Read-only; it marks nothing
+    read and summarizes nothing.
+
+    Unlike `ActivityListView` this is not a feed of rows: items are grouped (a chat, a
+    thread, a task, a note), every item is checked against what the caller can open NOW,
+    and `stats` counts all of it while `items` is capped. `team_id` is required, because
+    the access rules are per team. `kinds` is comma-separated (`dm,task`).
+
+    A caller who is not in the team simply has no rows there: the rows are
+    `recipient=request.user`, and each item is re-checked.
+    """
+
+    def get(self, request):
+        from origin.search_engine.agent.tools.base import ToolContext, ToolError
+        from origin.services import unread_digest
+
+        raw_team = request.GET.get("team_id")
+        try:
+            team_id = str(uuid.UUID(str(raw_team)))
+        except (ValueError, AttributeError, TypeError):
+            return Response({"error": "team_id must be a team's UUID."}, status=400)
+        kinds = [k for k in (request.GET.get("kinds") or "").split(",") if k] or None
+        try:
+            result = unread_digest.build_unread(
+                ToolContext(team_id=team_id, user_id=str(request.user.id)),
+                since=request.GET.get("since"),
+                limit=request.GET.get("limit"),
+                kinds=kinds,
+                chat_id=request.GET.get("chat_id"),
+                task_id=request.GET.get("task_id"),
+            )
+        except ToolError as exc:
+            return Response({"error": str(exc)}, status=400)
+        result.pop("__summary__", None)
+        return Response(result)
 
 
 class ActivityReadView(AuthenticatedAPIView):
