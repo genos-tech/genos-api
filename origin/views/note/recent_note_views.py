@@ -6,6 +6,7 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.services import activity_seen
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import readable_note_ids, readable_note_ref
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
@@ -77,12 +78,20 @@ class RecordNoteOpenView(AuthenticatedAPIView):
             id__in=ids_to_keep
         ).delete()
 
+        # Seen now: the note's unread activity for the caller is read (MIP-1421).
+        read_ids = activity_seen.safely(
+            activity_seen.mark_note_activity_read,
+            request_user_id,
+            recent.note_type,
+            recent.note_id,
+        )
         return Response(
             {
                 "message": "Note open recorded.",
                 "noteId": recent.note_id,
                 "noteType": recent.note_type,
                 "tsOpenedAt": recent.ts_opened_at,
+                "readActivityIds": read_ids,
             },
             status=status.HTTP_200_OK,
         )
