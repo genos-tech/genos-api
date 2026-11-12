@@ -15,6 +15,7 @@ Pinned here:
 
 from __future__ import annotations
 
+import itertools
 import json
 
 from django.db import connection
@@ -28,6 +29,7 @@ from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services.milestone_service import ensure_backing_task
 from origin.services.task_ancestry import (
+    MAX_DEPTH,
     Verdict,
     ancestor_verdicts,
     effective,
@@ -96,6 +98,17 @@ class WalkerTests(SimpleTestCase):
         ]
         self.assertEqual(ancestor_verdicts(rows)[2], Verdict("Closed", 1))
 
+    def test_above_the_parent_the_parent_link_is_read_before_the_milestone_link(self):
+        # Task 4 sits under 3, which has a Closed parent (1) and a Closed milestone row (10).
+        # Nearest first applies at every level, not only to the task's own two links.
+        rows = [
+            row(10, milestone=7, is_milestone=True, status="Closed"),
+            row(1, status="Closed"),
+            row(3, parent=1, milestone=7),
+            row(4, parent=3),
+        ]
+        self.assertEqual(ancestor_verdicts(rows)[4], Verdict("Closed", 1))
+
     def test_a_cycle_is_survived(self):
         rows = [row(1, parent=2), row(2, parent=1), row(3, parent=1)]
         self.assertEqual(ancestor_verdicts(rows), {})
@@ -103,6 +116,52 @@ class WalkerTests(SimpleTestCase):
         v = ancestor_verdicts(closed_cycle)
         self.assertEqual(v[2], Verdict("Closed", 1))
         self.assertEqual(v[3], Verdict("Closed", 1))
+
+    def test_a_loop_with_a_closed_task_reads_the_same_in_every_row_order(self):
+        # MIP-1426. Rows 1 -> 3 -> 5 (Closed) -> 2 -> 1. 1, 2 and 3 are under the Closed
+        # task 5; 5 is not (its own status is never the reason). The walker used to
+        # memoise a result computed while its loop guard had cut the walk short, so the
+        # answer depended on which row came first: four different answers over the 24
+        # orders (some missed row 2, some also flagged the Closed row 5 itself).
+        rows = [
+            row(1, parent=3),
+            row(2, parent=1),
+            row(3, parent=5),
+            row(5, parent=2, status="Closed"),
+        ]
+        closed_by_5 = Verdict("Closed", 5)
+        want = {1: closed_by_5, 2: closed_by_5, 3: closed_by_5}
+        for order in itertools.permutations(rows):
+            with self.subTest(order=[r[0] for r in order]):
+                self.assertEqual(ancestor_verdicts(order), want)
+
+    def test_a_loop_that_holds_a_deleted_task_names_it_in_every_row_order(self):
+        # Deleted beats Closed also inside a loop: 4 (Closed) -> 3 -> 2 (Deleted) -> 1 -> 4.
+        rows = [
+            row(1, parent=4),
+            row(2, parent=1, status="Deleted"),
+            row(3, parent=2),
+            row(4, parent=3, status="Closed"),
+        ]
+        deleted_2, closed_4 = Verdict("Deleted", 2), Verdict("Closed", 4)
+        # Row 2 is the Deleted one: its own status is not the reason, so it reads the Closed 4.
+        want = {1: deleted_2, 2: closed_4, 3: deleted_2, 4: deleted_2}
+        for order in itertools.permutations(rows):
+            with self.subTest(order=[r[0] for r in order]):
+                self.assertEqual(ancestor_verdicts(order), want)
+
+    def test_a_task_that_is_its_own_parent_is_not_under_itself(self):
+        rows = [row(1, parent=1, status="Closed"), row(2, parent=2)]
+        self.assertEqual(ancestor_verdicts(rows), {})
+
+    def test_a_branch_deeper_than_the_cap_is_a_bad_link_and_ends_short(self):
+        depth = MAX_DEPTH + 5
+        rows = [row(0, status="Closed")] + [row(i, parent=i - 1) for i in range(1, depth + 1)]
+        v = ancestor_verdicts(rows)
+        self.assertEqual(v[1], Verdict("Closed", 0))
+        self.assertEqual(v[MAX_DEPTH], Verdict("Closed", 0))
+        self.assertNotIn(MAX_DEPTH + 1, v)
+        self.assertNotIn(depth, v)
 
     def test_a_missing_parent_ends_the_walk(self):
         rows = [row(2, parent=999), row(3, parent=2)]

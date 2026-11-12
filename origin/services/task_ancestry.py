@@ -53,7 +53,6 @@ from origin.models.task.task_models import TaskMaster
 
 CLOSED = "Closed"
 DELETED = "Deleted"
-_ENDING = (CLOSED, DELETED)
 
 # A branch deeper than any real tree is a bad link, not a task tree: stop short.
 MAX_DEPTH = 200
@@ -76,42 +75,48 @@ def ancestor_verdicts(rows) -> dict[int, Verdict]:
     `rows` are `(task_id, milestone_id, parent_task_id, is_milestone, status)` tuples, the
     tasks AND their ancestors (a project's rows, whole). See the module docstring for the
     rule. Rows with no such ancestor have no entry.
+
+    One plain walk up per row, with its own `seen` set (MIP-1426). The row itself starts in
+    it, so its own status is never the reason, not even through a loop in the links. It is
+    not a memoised recursion on purpose: a result computed while the loop guard had cut a
+    walk short was remembered, so with a Closed task inside a loop of parent links the
+    answer for the other members depended on which row came first (rows `1 -> 3 -> 5
+    (Closed) -> 2 -> 1` gave four different answers over their 24 orders). The web client
+    had the same flaw and the same fix (`closedByAncestor.ts`, genos-frontend #910).
+
+    Order is the rule: ancestors are visited nearest first (a parent before what is above
+    it, the parent link before the milestone link). The first Deleted wins outright (it
+    beats Closed); otherwise the first Closed is named. A node reached twice (the parent
+    link and the milestone link) is read once.
     """
     by_id = {r[0]: r for r in rows}
     backing_of = {r[1]: r[0] for r in rows if r[3] and r[1] is not None}
-    memo: dict[int, Verdict | None] = {}
-    visiting: set[int] = set()
 
-    def verdict(task_id, depth=0) -> Verdict | None:
-        if task_id in memo:
-            return memo[task_id]
-        if task_id in visiting or task_id not in by_id or depth > MAX_DEPTH:
-            return None
-        visiting.add(task_id)
-        _, milestone_id, parent_id, is_milestone, _status = by_id[task_id]
-        found: Verdict | None = None
+    def parents_of(row) -> list[int]:
+        _, milestone_id, parent_id, is_milestone, _status = row
         parents = [parent_id]
         if not is_milestone and milestone_id is not None:
             parents.append(backing_of.get(milestone_id))
-        for parent in parents:
-            if parent is None or parent not in by_id:
+        return [p for p in parents if p is not None]
+
+    def verdict(task_id) -> Verdict | None:
+        seen = {task_id}
+        # (ancestor id, links from the task). The farther link is pushed first so the
+        # nearer one is popped first.
+        stack = [(p, 1) for p in reversed(parents_of(by_id[task_id]))]
+        closed: Verdict | None = None
+        while stack:
+            ancestor_id, depth = stack.pop()
+            if ancestor_id in seen or ancestor_id not in by_id or depth > MAX_DEPTH:
                 continue
-            own = by_id[parent][4]
-            for candidate in (
-                Verdict(own, parent) if own in _ENDING else None,
-                verdict(parent, depth + 1),
-            ):
-                if candidate is None:
-                    continue
-                # Deleted beats Closed; the first one found (the nearest, on the parent
-                # chain before the milestone row) names the ancestor.
-                if candidate.status == DELETED and (found is None or found.status != DELETED):
-                    found = candidate
-                elif candidate.status == CLOSED and found is None:
-                    found = candidate
-        visiting.discard(task_id)
-        memo[task_id] = found
-        return found
+            seen.add(ancestor_id)
+            ancestor = by_id[ancestor_id]
+            if ancestor[4] == DELETED:
+                return Verdict(DELETED, ancestor_id)
+            if closed is None and ancestor[4] == CLOSED:
+                closed = Verdict(CLOSED, ancestor_id)
+            stack.extend((p, depth + 1) for p in reversed(parents_of(ancestor)))
+        return closed
 
     return {task_id: v for task_id in by_id if (v := verdict(task_id)) is not None}
 
