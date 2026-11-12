@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.task.task_models import TaskMaster
+from origin.services import activity_seen
 from origin.services.task_recents import can_open, record_open, visible_recents
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import as_int, as_uuid, validate_request_data
@@ -52,8 +53,14 @@ class RecordTaskOpenView(AuthenticatedAPIView):
         if task is None or not can_open(request.user.id, task):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
         row = record_open(user_id=request.user.id, task=task)
+        # Seen now: the task's unread activity for the caller is read (MIP-1421). The client
+        # flips these ids in its activity store; an old client ignores the field.
+        read_ids = activity_seen.safely(
+            activity_seen.mark_task_activity_read, request.user.id, task.task_id
+        )
         return Response(
-            {"taskId": task.task_id, "tsOpened": row.ts_opened_at}, status=status.HTTP_200_OK
+            {"taskId": task.task_id, "tsOpened": row.ts_opened_at, "readActivityIds": read_ids},
+            status=status.HTTP_200_OK,
         )
 
 
