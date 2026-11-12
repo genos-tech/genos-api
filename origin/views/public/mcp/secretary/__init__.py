@@ -20,6 +20,7 @@ from origin.views.public.mcp.secretary.get_my_briefing import GET_MY_BRIEFING
 from origin.views.public.mcp.secretary.get_my_importance import GET_MY_IMPORTANCE
 from origin.views.public.mcp.secretary.get_my_memory import GET_MY_MEMORY
 from origin.views.public.mcp.secretary.list_my_schedules import LIST_MY_SCHEDULES
+from origin.views.public.mcp.secretary.list_my_unread import LIST_MY_UNREAD
 from origin.views.public.mcp.secretary.run_my_schedule import RUN_MY_SCHEDULE
 from origin.views.public.mcp.secretary.set_item_importance import SET_ITEM_IMPORTANCE
 from origin.views.public.mcp.secretary.tune_my_importance import TUNE_MY_IMPORTANCE
@@ -38,6 +39,7 @@ MEMORY_TOOLS = (GET_MY_MEMORY, FORGET_MY_MEMORY)
 SECRETARY_TOOLS = (
     GET_MY_BRIEFING,
     GET_ITEM_LINE,
+    LIST_MY_UNREAD,
     *IMPORTANCE_TOOLS,
     *MEMORY_TOOLS,
     *SCHEDULE_TOOLS,
