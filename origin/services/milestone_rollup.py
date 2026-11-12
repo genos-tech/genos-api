@@ -27,6 +27,7 @@ from collections import defaultdict
 from django.db.models import Q
 
 from origin.models.task.task_models import TaskMaster
+from origin.services.task_ancestry import ancestor_verdicts
 
 
 def milestone_tasks_q(milestone, *, own_row: bool = True, deleted: bool = True) -> Q:
@@ -59,49 +60,13 @@ def milestone_work_q(milestone) -> Q:
     return milestone_tasks_q(milestone, own_row=False, deleted=False)
 
 
-_MAX_ANCESTOR_DEPTH = 200
-
-
 def _ancestor_verdicts(rows) -> dict[int, str]:
     """`{task_id: "Closed" | "Deleted"}` for the rows under a Closed or Deleted ancestor.
 
-    `rows` are `(task_id, milestone_id, parent_task_id, is_milestone, status)`. A row's
-    ancestors are its `parent_task_id` chain and, when it is not a milestone itself, the
-    backing row of its milestone (the same two links the table follows on the client:
-    `closedByAncestor.ts`). Deleted beats Closed, a row's own status is never the reason,
-    a parent that is not in `rows` ends the walk, and a cycle in the links is survived.
+    The rule is `task_ancestry.ancestor_verdicts` (MIP-1413), the one walker the server has;
+    the progress bar only needs the verdict, not which ancestor gave it.
     """
-    by_id = {r[0]: r for r in rows}
-    backing_of = {r[1]: r[0] for r in rows if r[3] and r[1] is not None}
-    memo: dict[int, str | None] = {}
-    visiting: set[int] = set()
-
-    def verdict(task_id, depth=0):
-        if task_id in memo:
-            return memo[task_id]
-        # A branch deeper than any real tree is a bad link, not a task tree: stop short.
-        if task_id in visiting or task_id not in by_id or depth > _MAX_ANCESTOR_DEPTH:
-            return None
-        visiting.add(task_id)
-        _, milestone_id, parent_id, is_milestone, _status = by_id[task_id]
-        found = None
-        parents = [parent_id]
-        if not is_milestone and milestone_id is not None:
-            parents.append(backing_of.get(milestone_id))
-        for parent in parents:
-            if parent is None or parent not in by_id:
-                continue
-            for candidate in (
-                by_id[parent][4] if by_id[parent][4] in ("Closed", "Deleted") else None,
-                verdict(parent, depth + 1),
-            ):
-                if candidate == "Deleted" or (candidate == "Closed" and found is None):
-                    found = candidate
-        visiting.discard(task_id)
-        memo[task_id] = found
-        return found
-
-    return {task_id: v for task_id in by_id if (v := verdict(task_id)) is not None}
+    return {task_id: v.status for task_id, v in ancestor_verdicts(rows).items()}
 
 
 def milestone_work_counts(milestones, *, ancestor_rule: bool = False) -> dict[int, tuple[int, int]]:

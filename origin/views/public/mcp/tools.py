@@ -136,6 +136,7 @@ from origin.services.security_events import (
     note_refusal,
 )
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
+    ancestry,
     progress,
     secretary,
 )
@@ -236,6 +237,17 @@ class McpTool:
     ) = None
 
 
+def _chain(*augments):
+    """Several `augment` functions as one, run in order (each sees the previous result)."""
+
+    def run(payload, args, mcp_args, ctx):
+        for augment in augments:
+            payload = augment(payload, args, mcp_args, ctx)
+        return payload
+
+    return run
+
+
 def _with_comment_threads(
     payload: dict[str, Any], args: dict[str, Any], mcp_args: dict[str, Any], ctx: ToolContext
 ) -> dict[str, Any]:
@@ -280,12 +292,16 @@ CATALOG: tuple[McpTool, ...] = (
             "refuse an edit that would overwrite a newer one. `last_progress_at` is when "
             "this task, or anything under it, last had real progress (null until there is "
             "any): it moves when a sub-task changes, which the task's own history does not "
-            "show; `get_progress_history` lists what. This is the first call when the "
+            "show; `get_progress_history` lists what. `effective_status` is the status "
+            "the task reads as: a task under a Closed or Deleted parent, grandparent or "
+            "milestone counts as Closed or Deleted even when its own `status` is still "
+            "open, and then `closed_by_ancestor` names that ancestor. Its own `status` is "
+            "never changed by this, so do not 'fix' it. This is the first call when the "
             "user names a task to work on."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
-        augment=progress.with_task_progress,
+        augment=_chain(progress.with_task_progress, ancestry.with_task_ancestry),
     ),
     McpTool(
         name="list_my_tasks",
@@ -324,9 +340,14 @@ CATALOG: tuple[McpTool, ...] = (
             "50 a page: when `has_more` is true the list is partial, and "
             "`next_cursor` (passed back as `cursor`, with the same filters) "
             "returns the next page. `last_progress_at` is when the task, or anything "
-            "under it, last had real progress (null until there is any)."
+            "under it, last had real progress (null until there is any). `effective_status` "
+            "is the status a row reads as: a task under a Closed or Deleted parent, "
+            "grandparent or milestone counts as Closed or Deleted (`closed_by_ancestor` "
+            "names which), whatever its own `status`. The `status` filter reads the row's "
+            "own status, so an Open task under a Closed parent is still listed by "
+            "`status: [Open]`: check `effective_status` before calling it open work."
         ),
-        augment=progress.with_rows_progress,
+        augment=_chain(progress.with_rows_progress, ancestry.with_rows_ancestry),
     ),
     McpTool(
         name="list_projects",
