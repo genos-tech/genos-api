@@ -2066,9 +2066,12 @@ class GetProjectTasksView(AuthenticatedAPIView):
         # single JOIN. `team_id` / `project_id` use the FK column values
         # directly (the FKs use `to_field="team_id"` / `to_field="project_id"`
         # so these match what `t.team.team_id` returned previously) — no
-        # JOIN needed.
+        # JOIN needed. `project` IS joined, though: every row's `displayId`
+        # reads `project.code`, which cost one query per task (3,004 for a
+        # 3,000-task project) on every cache miss (MIP-1416,
+        # test_project_tasks_query_count).
         qs = (
-            TaskMaster.objects.select_related("assignee")
+            TaskMaster.objects.select_related("assignee", "project")
             .prefetch_related("task_tags")
             .filter(team=team_id, project=project_id, is_init_task=False)
         )
