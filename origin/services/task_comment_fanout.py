@@ -162,7 +162,10 @@ def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
             body=comment.comment_body,
             bypass_flag=True,
         )
-    except Exception:  # noqa: BLE001 — the drift cron catches divergence
+    except Exception:  # noqa: BLE001 — the saved comment must survive a failed mirror
+        # Nothing repairs this on its own (there is no drift job): a comment left without
+        # its mirror cannot be flagged or reminded. `manage.py repair_task_comment_mirrors`
+        # lists such comments and, with --apply, writes the mirror (MIP-1440).
         logger.warning("task-comment v3 mirror failed", exc_info=True)
         return result
 
