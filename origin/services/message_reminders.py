@@ -148,6 +148,17 @@ def chat_href(message) -> str:
         token = ChannelKind(channel.kind).label
     except (ValueError, AttributeError):
         return "/workspace/chat"
+    # A task comment's mirror (MIP-1437): the PM thread shows comments on its Comments tab, which
+    # has its own deep link and scrolls to and highlights the comment. The generic thread/seq link
+    # below opens the right task but cannot say which comment.
+    comment_id = (message.metadata or {}).get("taskCommentId")
+    if (
+        channel.kind == ChannelKind.PM
+        and message.task_id
+        and isinstance(comment_id, int)
+        and not isinstance(comment_id, bool)
+    ):
+        return f"/workspace/chat/{token}/{channel.id}/thread/{message.task_id}/comment/{comment_id}"
     href = f"/workspace/chat/{token}/{channel.id}"
     root_id = message.thread_root_id or (message.parent_id if message.is_thread_reply else None)
     if root_id:
