@@ -1401,6 +1401,40 @@ class TestWhatYouDid(BriefingBase):
         self.assertEqual(today["totals"]["messages"], 3)
         self.assertNotIn("secret plan", json.dumps(self.brief()["what_you_did"]))
 
+    def test_a_dm_is_named_after_the_other_person_not_left_blank(self):
+        # MIP-1333: a DM has no title of its own, so the report said "a chat: 2 messages".
+        dm = self.channel([self.user, self.user2], kind=ChannelKind.DM, title="")
+        for n in range(2):
+            self.message(dm, self.user, f"hello {n}", at=self.recent(minutes=n + 1))
+        today = self.did()["today"]
+        self.assertEqual(today["chats"][0]["chat_type"], "dm")
+        self.assertIn(self.user2.username, today["chats"][0]["title"])
+        self.assertNotIn("hello", json.dumps(self.brief()["what_you_did"]))
+
+    def test_a_chat_whose_name_cannot_be_found_stays_blank_and_the_briefing_still_works(self):
+        dm = self.channel([self.user, self.user2], kind=ChannelKind.DM, title="")
+        self.message(dm, self.user, "x", at=self.recent(minutes=1))
+        with mock.patch(
+            "origin.search_engine.friendly_titles.friendly_chat_title",
+            side_effect=RuntimeError("db"),
+        ):
+            with self.assertLogs("origin.services.briefing", level="WARNING"):
+                today = self.did()["today"]
+        self.assertEqual(today["chats"][0]["messages"], 1)
+        self.assertNotIn(self.user2.username, today["chats"][0]["title"])
+
+    def test_a_calendar_that_fails_says_so_in_the_log_and_not_only_in_the_note(self):
+        with mock.patch.object(briefing, "LIST_CALENDAR_EVENTS") as tool:
+            tool.run.side_effect = RuntimeError("invalid_client: the OAuth client was not found")
+            with self.assertLogs("origin.services.briefing", level="WARNING") as logs:
+                calendar = self.brief()["agenda"]["calendar"]
+        self.assertEqual(calendar["events"], None)
+        self.assertEqual(calendar["note"], "The calendar could not be read right now.")
+        text = "\n".join(logs.output)
+        self.assertIn("briefing_calendar_unreadable", text)
+        self.assertIn("RuntimeError", text)
+        self.assertIn("invalid_client", text)
+
     def test_a_task_comment_is_one_thing_done_not_also_a_chat_message(self):
         """A comment is mirrored into the project chat as a message; counting both would say
         the member did it twice."""

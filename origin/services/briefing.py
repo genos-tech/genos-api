@@ -751,7 +751,16 @@ def _calendar_today(ctx: ToolContext, now: datetime, zone) -> dict[str, Any]:
         )
     except ToolError as exc:
         return {"events": None, "note": str(exc)}
-    except Exception:  # noqa: BLE001 - Google being down must not cost the member their briefing
+    except Exception as exc:  # noqa: BLE001 - Google being down must not cost the member their briefing
+        # MIP-1333: this used to say nothing, so a deployment that could not refresh the Google
+        # token (a cron service without the OAuth client variables) looked like a calendar that
+        # was merely "down". The type and a short message make the cause findable in the logs.
+        log.warning(
+            "briefing_calendar_unreadable user=%s error=%s detail=%s",
+            ctx.user_id,
+            type(exc).__name__,
+            str(exc)[:160],
+        )
         return {"events": None, "note": "The calendar could not be read right now."}
     return {"events": out.get("events", [])}
 
@@ -1226,6 +1235,27 @@ def _looked_at(
     return out
 
 
+def _chat_name(me: str, row: dict[str, Any]) -> str:
+    """The chat's name as the member sees it (MIP-1333). A DM has no shared title (its "name" is
+    the other person), so an empty title is resolved the way search and the agent's source chips
+    do; anything it cannot resolve stays empty and the report says "a chat"."""
+    title = row["channel__title"] or ""
+    if title:
+        return title
+    from origin.search_engine.friendly_titles import friendly_chat_title  # noqa: PLC0415
+
+    try:
+        return (
+            friendly_chat_title(
+                str(me), CHAT_TYPE_LABEL.get(row["channel__kind"]), row["channel_id"]
+            )
+            or ""
+        )
+    except Exception:  # noqa: BLE001 - a name is a nicety, never a failed briefing
+        log.warning("briefing_chat_name_failed channel=%s", row.get("channel_id"))
+        return ""
+
+
 def _did_in(
     ctx: ToolContext,
     since: datetime,
@@ -1395,7 +1425,7 @@ def _did_in(
         {
             "chat_id": str(row["channel_id"]),
             "chat_type": CHAT_TYPE_LABEL.get(row["channel__kind"]),
-            "title": wrap_workspace_content(row["channel__title"] or ""),
+            "title": wrap_workspace_content(_chat_name(me, row)),
             "messages": row["n"],
         }
         for row in sent[:DID_CHATS]
