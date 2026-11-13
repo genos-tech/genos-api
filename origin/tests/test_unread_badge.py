@@ -48,6 +48,7 @@ from origin.models.chat.unified_models import (
 from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
 from origin.models.common.notification_models import PushSubscription
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.management.commands import agent_digest
 from origin.services import unread_badge, webpush_dispatch
 from origin.services.message_reminders import ITEM_TYPE_MESSAGE_REMINDER
@@ -101,6 +102,19 @@ class _Fixture(BaseAPITestCase):
 
     # -- chats ------------------------------------------------------------
     def chat(self, kind=ChannelKind.GM, *, team=None, me_in=True, **kw):
+        if kind == ChannelKind.PM:
+            # A project chat is its project's people (MIP-1480): the channel rows only mirror them.
+            project = ProjectMaster.objects.create(
+                team=team or self.team_a,
+                project_name=f"p-{uuid.uuid4().hex[:6]}",
+                owner=self.other,
+                project_system_user=self.other,
+            )
+            for who in (self.other, self.me) if me_in else (self.other,):
+                ProjectMembers.objects.create(
+                    team=team or self.team_a, project=project, attendee=who
+                )
+            return Channel.objects.get(project=project, kind=ChannelKind.PM)
         channel = Channel.objects.create(
             team=team or self.team_a, kind=kind, title=f"chat-{uuid.uuid4().hex[:6]}", **kw
         )

@@ -12,7 +12,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services.unified_writer import task_comment_message_uuid
 from origin.tests.test_base import BaseAPITestCase
@@ -35,9 +35,10 @@ class TaskCommentMessageIdTests(BaseAPITestCase):
         )
         self.channel = Channel.objects.get(project_id=self.project.project_id, kind=ChannelKind.PM)
         # The project owner is a PM channel member in the app (adding a project member adds the
-        # channel row); a project built straight in the ORM has none, so add it.
-        ChannelMember.objects.get_or_create(
-            channel=self.channel, user=self.user, defaults={"role": "owner"}
+        # channel row); a project built straight in the ORM has neither, so add the membership
+        # (its signal writes the channel row, and the project is what decides: MIP-1480).
+        ProjectMembers.objects.get_or_create(
+            team=self.team, project=self.project, attendee=self.user
         )
         self.header = Message.objects.create(
             channel=self.channel,
@@ -136,8 +137,8 @@ class TaskCommentMessageIdForNonMembersTests(BaseAPITestCase):
             team=self.team, project_name="Gate", owner=self.user, project_system_user=self.user
         )
         self.channel = Channel.objects.get(project_id=self.project.project_id, kind=ChannelKind.PM)
-        ChannelMember.objects.get_or_create(
-            channel=self.channel, user=self.user, defaults={"role": "owner"}
+        ProjectMembers.objects.get_or_create(
+            team=self.team, project=self.project, attendee=self.user
         )
         self.task = TaskMaster.objects.create(
             team=self.team,
@@ -193,10 +194,15 @@ class TaskCommentMessageIdForNonMembersTests(BaseAPITestCase):
         self.assertIsNone(self._message_id_for(self.user2, claims_to_be=self.user))
         self.assertEqual(self._message_id_for(self.user, claims_to_be=self.user2), self.mirror_id)
 
-    def test_someone_who_left_the_channel_gets_none(self):
-        ChannelMember.objects.create(channel=self.channel, user=self.user2, role="member")
+    def test_someone_who_left_the_project_gets_none(self):
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.assertEqual(self._message_id_for(self.user2), self.mirror_id)
-        ChannelMember.objects.filter(channel=self.channel, user=self.user2).update(is_deleted=True)
+        ProjectMembers.objects.filter(project=self.project, attendee=self.user2).delete()
+        self.assertIsNone(self._message_id_for(self.user2))
+
+    def test_a_stray_channel_row_is_not_a_member_either(self):
+        """MIP-1480: the flag endpoint refuses a row with no project behind it, so no id."""
+        ChannelMember.objects.create(channel=self.channel, user=self.user2, role="member")
         self.assertIsNone(self._message_id_for(self.user2))
 
     def test_none_means_the_server_would_refuse_and_an_id_means_it_accepts(self):

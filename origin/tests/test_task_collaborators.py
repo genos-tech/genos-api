@@ -369,6 +369,9 @@ class RealCardPathCommentTests(BaseAPITestCase):
         self.channel = Channel.objects.get(
             project_id=self.project.project_id, kind=ChannelKind.PM
         )
+        ProjectMembers.objects.get_or_create(
+            team=self.team, project=self.project, attendee=self.user
+        )
         ChannelMember.objects.get_or_create(channel=self.channel, user=self.user)
 
     def test_real_card_then_comment_notifies_without_duplicate_header(self):

@@ -41,7 +41,7 @@ from origin.models.chat.unified_models import (
     MessageReminder,
     ReadCursor,
 )
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 
 from .test_base import BaseAPITestCase
@@ -99,6 +99,9 @@ class _ChatClient(BaseAPITestCase):
         )
         # The PM channel is created by a signal on project save.
         self.pm = Channel.objects.get(project_id=self.project.project_id, kind=ChannelKind.PM)
+        ProjectMembers.objects.get_or_create(
+            team=self.team, project=self.project, attendee=self.user
+        )
         ChannelMember.objects.get_or_create(
             channel=self.pm, user=self.user, defaults={"role": "member"}
         )
