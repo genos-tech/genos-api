@@ -122,6 +122,22 @@ class LeavingAChat(Base):
         self.assertIsNone(self.explicit(self.reader, self.note))
         self.assertEveryoneSays(self.note, False)
 
+    def test_withdrawing_a_guest_from_a_shared_chat_ends_access_to_its_notes(self):
+        """`remove_external_participants` soft-deletes the member row by queryset update."""
+        from types import SimpleNamespace
+
+        from origin.models.common.team_models import ExternalGrant
+        from origin.services.external_grants import _remove_participant
+
+        grant = SimpleNamespace(
+            object_type=ExternalGrant.ObjectType.CHANNEL,
+            object_id=self.chat.id,
+            owner_team_id=self.team.team_id,
+        )
+        self.assertEqual(_remove_participant(grant, self.reader.id), 1)
+        self.assertIsNone(self.explicit(self.reader, self.note))
+        self.assertEveryoneSays(self.note, False)
+
     def test_the_others_keep_their_rows(self):
         third = self.gm_member("third")
         self.leave_group(self.chat, self.reader)
