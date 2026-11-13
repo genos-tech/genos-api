@@ -1,0 +1,110 @@
+# MIP-889 (flag AGENT_TELL_MODEL_UNDO): tell the model when the person UNDID an approved write.
+# ON = a replayed result of an undone write carries `undone_by_user`, and the earlier answer in
+# the next ask's conversation ends with one bracketed factual note ("... the person undid
+# create_task ..."). (The approval-EDIT note of the first version was dropped: the write tool's
+# result already carries the applied values.)
+#
+# The write is approved, then undone through the production undo (`undo: true`), then a follow-up
+# ask in the same session asks about it. Per language: a positive (asks if the task is still
+# there), an edge (asks what was done in this conversation), a negative (the write is NOT undone:
+# no note, the model must keep saying it is there).
+
+- id: t889-undo.still-there.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-undo]
+  fixture: false
+  polarity: pos
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "Is the task you created for me still there? Answer in one sentence."
+  expect:
+    follow_up_prompt_contains: ["undid create_task"]
+    answer_contains_any: ["undone", "undid", "deleted", "removed", "no longer", "not there"]
+
+- id: t889-undo.still-there.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-undo]
+  fixture: false
+  polarity: pos
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "さっき作ってもらったタスクはまだ残っていますか?一文で答えてください。"
+  expect:
+    follow_up_prompt_contains: ["undid create_task"]
+    answer_contains_any: ["取り消", "削除", "元に戻", "ありません", "残っていません"]
+
+- id: t889-undo.what-was-done.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-undo]
+  fixture: false
+  polarity: pos
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "Briefly, what have you done for me in this conversation so far?"
+  expect:
+    follow_up_prompt_contains: ["undid create_task"]
+    answer_contains_any: ["undone", "undid", "deleted", "removed", "no longer", "reverted", "undo"]
+
+- id: t889-undo.what-was-done.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-undo]
+  fixture: false
+  polarity: pos
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "この会話でこれまでにあなたが私のためにしたことを簡単に教えてください。"
+  expect:
+    follow_up_prompt_contains: ["undid create_task"]
+    answer_contains_any: ["取り消", "削除", "元に戻", "取消"]
+
+- id: t889-undo.not-undone.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-undo]
+  fixture: false
+  polarity: neg
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  follow_up: "Is the task you created for me still there? Answer in one sentence."
+  expect:
+    follow_up_prompt_excludes: ["undid create_task", "undone_by_user"]
+    answer_excludes: ["undone", "undid", "was deleted", "no longer"]
+
+- id: t889-undo.not-undone.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-undo]
+  fixture: false
+  polarity: neg
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  follow_up: "さっき作ってもらったタスクはまだ残っていますか?一文で答えてください。"
+  expect:
+    follow_up_prompt_excludes: ["undid create_task", "undone_by_user"]
+    answer_excludes: ["取り消", "削除されました", "元に戻"]

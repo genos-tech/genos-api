@@ -40,7 +40,7 @@ display id (`PRJ-12`) already used.
 
 Telling the model: by default undo does not. After an undo the next turn's replay still
 shows the write as done, so the model may speak as if it stands. With
-`SEARCH_ENGINE["AGENT_TELL_MODEL_EDIT_UNDO"]` on (default off, measured by the grouped eval)
+`SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"]` on (default off, measured by the grouped eval)
 the next turn's earlier answer ends with a short factual note, and a replayed result carries
 `undone_by_user` (`agent/approval_notes.py`; the outcome is kept on `AgentStep.undo_outcome_json`).
 

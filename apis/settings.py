@@ -1920,16 +1920,16 @@ SEARCH_ENGINE["AGENT_REJECT_REASON"] = (
     os.environ.get("AGENT_REJECT_REASON", "false").lower() == "true"
 )
 
-# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-applied`): tell the model
-# what an approval EDIT applied and what an UNDO undid. ON = after an edit-before-approve the
-# tool result it is replayed carries `user_edits_applied` ({path: value}, capped); after an undo
-# a replayed result carries `undone_by_user` ({restored, not_restored}) and the earlier answer
-# in the next ask's conversation ends with one bracketed factual note. OFF = the replay is
-# exactly what it was (the model's original call and the result). Flip criterion: after an
-# edit the final answer describes what was applied, after an undo the next turn does not speak
-# of the write as standing, and nothing else moves.
-SEARCH_ENGINE["AGENT_TELL_MODEL_EDIT_UNDO"] = (
-    os.environ.get("AGENT_TELL_MODEL_EDIT_UNDO", "false").lower() == "true"
+# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-undo`): tell the model when
+# the person UNDID an approved write. ON = a replayed result of an undone write carries
+# `undone_by_user` ({restored, not_restored}) and the earlier answer in the next ask's
+# conversation ends with one bracketed factual note. OFF = the replay is exactly what it was.
+# (An earlier version also told the model what an approval EDIT applied; dropped: the real write
+# tool's result already echoes the applied values.) The undo's outcome is stored on the step
+# whatever this says. Flip criterion: after an undo the next turn does not speak of the write as
+# standing, and nothing else moves.
+SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"] = (
+    os.environ.get("AGENT_TELL_MODEL_UNDO", "false").lower() == "true"
 )
 
 # MIP-1288 (model-visible, dark-shipped OFF, grouped eval arm `t1288`): `fetch_task` (and MCP

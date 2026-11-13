@@ -1,6 +1,6 @@
 """MIP-889: an undo keeps what it did on its step (`AgentStep.undo_outcome_json`).
 
-Stored whatever `AGENT_TELL_MODEL_EDIT_UNDO` says: by itself it is not model-visible, and the
+Stored whatever `AGENT_TELL_MODEL_UNDO` says: by itself it is not model-visible, and the
 undo's answer to the browser already carries the same. It is what lets the model be told,
 later, which fields were put back and which were skipped. Field names and reason codes only.
 """

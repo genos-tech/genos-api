@@ -2272,9 +2272,8 @@ def resume_agent(
     #   shown_args the same, as typed, for the events.
     # The model's replay (`function_call` above, and `_rebuild_messages` on a later
     # pause) is still its original call beside the result of what ran, so its final answer
-    # can describe the proposal rather than the edit. `AGENT_TELL_MODEL_EDIT_UNDO` (off by
-    # default, measured by the grouped eval) adds what was edited beside the result
-    # (`approval_notes.with_edit_note`); off, nothing changes.
+    # can describe the proposal rather than the edit. That is deliberate and stays: the
+    # write tool's own result carries the applied values (an edit note was tried and dropped).
     run_args = call_args
     shown_args = call_args
     edit_patch: dict[str, Any] = {}
@@ -2527,14 +2526,7 @@ def resume_agent(
                     )
                     emit({"type": "sources", "sources": hydrated})
                 messages.append(_assistant_function_call_turn(function_call))
-                # With `AGENT_TELL_MODEL_EDIT_UNDO` on, what the person edited on the card is
-                # said beside the result (`approval_notes`); off, `result` as it always was.
-                # (`result` itself, which is persisted and shown, is never changed.)
-                messages.append(
-                    _function_response_turn(
-                        call_name, approval_notes.with_edit_note(result, edit_patch)
-                    )
-                )
+                messages.append(_function_response_turn(call_name, result))
 
     # Continue the loop from the next step. The original run wrote
     # steps 0..step_index inclusive, so we resume at step_index + 1.
@@ -4172,8 +4164,8 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
         elif step.error:
             messages.append(_function_response_turn(step.tool_name, {"error": step.error}))
         else:
-            # A later leg replays what the earlier one saw, so the edit note and the undo
-            # marker (`AGENT_TELL_MODEL_EDIT_UNDO`) are added here too; off, the row as it was.
+            # A later leg replays what the earlier one saw, so the undo
+            # marker (`AGENT_TELL_MODEL_UNDO`) is added here too; off, the row as it was.
             messages.append(
                 _function_response_turn(
                     step.tool_name, approval_notes.with_step_notes(step.result_json or {}, step)
