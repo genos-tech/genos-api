@@ -437,6 +437,90 @@ class TestTheDefaults(GateBase):
         self.assertEqual(sum(len(self.seeded_names(u)) for u in free), 0)
 
 
+class TestThePassNeverScansMembersWhoCannotHaveSchedules(GateBase):
+    """MIP-1226: Free members used to take a place in the seeding scan, so 100 or more of them
+    ahead of a Core member could delay that member's cron seeding. They are now left out in SQL."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(
+            JOBS,
+            {
+                key: Job(
+                    key,
+                    key,
+                    "d",
+                    lambda ctx, params: {"title": "t", "summary": "s", "sections": []},
+                    {"properties": {"day": {"type": "string", "enum": ["today", "yesterday"]}}},
+                )
+                for key in ("what_to_do_today", "what_you_did")
+            },
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def member(self, n, **fields):
+        from rest_framework_simplejwt.tokens import RefreshToken  # noqa: PLC0415
+
+        from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+        user = CustomUser.objects.create_user(
+            username=f"scan{n}", email=f"scan{n}@example.com", password="x", **fields
+        )
+        TeamMembers.objects.create(team=self.team, attendee=user)
+        RefreshToken.for_user(user)
+        return user
+
+    def pending(self):
+        with override_settings(SEARCH_ENGINE=production()):
+            return [u.pk for u in schedule_defaults.pending_members(now=NOW, limit=500)]
+
+    def test_free_members_are_not_returned_and_a_core_member_is_(self):
+        self.set_plan("free")
+        free = [self.member(n) for n in range(120)]
+        core = self.member(999, tier="core")
+        got = self.pending()
+        self.assertIn(core.pk, got)
+        self.assertEqual({u.pk for u in free} & set(got), set())
+
+    def test_a_pass_with_a_batch_of_one_seeds_the_core_member_in_the_first_tick(self):
+        self.set_plan("free")
+        for n in range(120):
+            self.member(n)
+        core = self.member(999, tier="core")
+        quota.invalidate_effective_tier([str(core.id)])
+        with override_settings(SEARCH_ENGINE=production()):
+            out = schedule_defaults.seed_pending(now=NOW, limit=1)
+        self.assertEqual(out.members, 1)
+        self.assertEqual(MemberSchedule.objects.filter(user=core).count(), 2)
+
+    def test_a_free_member_in_a_paid_teams_plan_stays_in(self):
+        # The effective tier is the best of the member's own tier and their teams' plans.
+        self.set_plan("pro")
+        lifted = self.member(1)  # own tier free, the team is Pro
+        with override_settings(SEARCH_ENGINE=production()):
+            quota.invalidate_effective_tier([str(lifted.id)])
+        self.assertIn(lifted.pk, self.pending())
+
+    def test_a_tier_the_operator_turned_on_is_not_filtered_out(self):
+        # `TIER_QUOTAS_JSON` may switch the capability on for Free: the query must not decide.
+        self.set_plan("free")
+        free = self.member(1)
+        with override_settings(SEARCH_ENGINE=production(free=True)):
+            got = [u.pk for u in schedule_defaults.pending_members(now=NOW, limit=500)]
+        self.assertIn(free.pk, got)
+
+    def test_the_off_tiers_follow_the_table_not_a_hard_coded_free(self):
+        with override_settings(SEARCH_ENGINE=production()):
+            self.assertEqual(schedules.tiers_without_schedules(), {"free"})
+        with override_settings(SEARCH_ENGINE=production(free=True)):
+            self.assertEqual(schedules.tiers_without_schedules(), set())
+        with override_settings(SEARCH_ENGINE=production(core=False)):
+            self.assertEqual(schedules.tiers_without_schedules(), {"free", "core"})
+        with override_settings(SEARCH_ENGINE=production(core="yes")):  # not a bool: the default
+            self.assertEqual(schedules.tiers_without_schedules(), {"free"})
+
+
 class TestOverRest(GateBase):
     URL = "/api/v2/schedules/"
 

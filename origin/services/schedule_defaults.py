@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
@@ -206,12 +206,27 @@ def pending_members(*, now: datetime | None = None, limit: int = SEED_BATCH) -> 
         attendee_id=OuterRef("pk"), is_deleted=False, team__isnull=False, team__is_deleted=False
     )
     seeded = MemberScheduleSeed.objects.filter(user_id=OuterRef("pk"))
-    return list(
+    members = (
         CustomUser.objects.filter(is_active=True, is_deleted=False, is_demo=False)
         .filter(Exists(recent), Exists(in_a_team))
         .exclude(Exists(seeded))
-        .order_by("pk")[:limit]
     )
+    # MIP-1226: leave out the members who certainly cannot have schedules, in SQL, so they never
+    # take a place in the scan. The effective tier is the best of the member's own tier and their
+    # teams' plans, so a member is out only when their own tier AND every live team's plan are
+    # tiers with the capability off. A superset of "cannot pass the gate": `plan_allows` still
+    # decides each member the query lets through (an unknown or NULL tier stays in).
+    off = schedules.tiers_without_schedules()
+    if off:
+        plans = off | ({""} if "free" in off else set())
+        own_off = Q(tier__in=plans)
+        if "free" in off:
+            own_off |= Q(tier__isnull=True)
+        better_team = TeamMembers.objects.filter(
+            attendee_id=OuterRef("pk"), is_deleted=False, team__is_deleted=False
+        ).exclude(team__plan__in=plans)
+        members = members.exclude(own_off & ~Exists(better_team))
+    return list(members.order_by("pk")[:limit])
 
 
 def seed_pending(

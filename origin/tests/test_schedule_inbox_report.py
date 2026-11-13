@@ -309,8 +309,16 @@ class EmptyReportTests(ScheduleBase):
 class PushTests(ScheduleBase):
     REPORT = {"title": "Overdue", "summary": "Two tasks.", "sections": []}
 
-    def test_no_push_unless_the_schedule_asked(self):
+    def test_a_new_schedule_pushes_by_default(self):
+        # MIP-1374: a report nobody is told about goes unread.
         sched = self.make()
+        self.assertTrue(sched.deliver_push)
+        with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
+            item = schedule_delivery.deliver(sched, self.REPORT)
+        push.assert_called_once_with(item, title="Overdue", body="Two tasks.")
+
+    def test_no_push_when_the_member_switched_it_off(self):
+        sched = self.make(deliver_push=False)
         self.assertFalse(sched.deliver_push)
         with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=True):
             schedule_delivery.deliver(sched, self.REPORT)

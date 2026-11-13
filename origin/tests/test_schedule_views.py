@@ -114,6 +114,34 @@ class TestListAndCreate(ScheduleViewBase):
         self.assertEqual(jobs["fake_day"]["title"], "Fake day")
         self.assertEqual(jobs["fake_day"]["params"]["day"]["enum"], ["today", "yesterday"])
 
+    def test_a_required_parameter_is_marked_required_in_the_catalog(self):
+        # MIP-1216: `required` used to be dropped, so the form kept its own copy of the list.
+        job = Job(
+            "needs_milestone",
+            "Needs a milestone",
+            "d",
+            fake_job,
+            {
+                "properties": {
+                    "milestone_id": {"type": "integer", "minimum": 1},
+                    "hours": {"type": "integer"},
+                },
+                "required": ["milestone_id"],
+            },
+        )
+        with mock.patch.dict(JOBS, {"needs_milestone": job}):
+            res = self.client.get(LIST + self.q)
+        self.assertEqual(res.status_code, 200)
+        params = {j["job"]: j for j in res.data["jobs"]}["needs_milestone"]["params"]
+        self.assertIs(params["milestone_id"]["required"], True)
+        self.assertNotIn("required", params["hours"])  # optional ones stay unmarked
+        self.assertEqual(params["milestone_id"]["minimum"], 1)  # the rest of the spec is intact
+        # The job's own schema was not edited in place.
+        self.assertNotIn("required", job.params_schema["properties"]["milestone_id"])
+        # A job with no required list marks nothing.
+        jobs = {j["job"]: j for j in res.data["jobs"]}
+        self.assertNotIn("required", jobs["fake_day"]["params"]["day"])
+
     def test_two_suggested_schedules_are_offered_and_accepting_one_makes_it_disappear(self):
         # The test registry has no real jobs, so register the two a suggestion names.
         with mock.patch.dict(
@@ -168,7 +196,7 @@ class TestListAndCreate(ScheduleViewBase):
         )
         self.assertEqual(row["weekdays"], [0, 2])
         self.assertTrue(row["enabled"])
-        self.assertFalse(row["deliverPush"])
+        self.assertTrue(row["deliverPush"])
         self.assertTrue(row["nextRun"].endswith("+09:00"), row["nextRun"])
         self.assertIsNone(row["lastRun"])
         stored = MemberSchedule.objects.get(pk=row["id"])
@@ -249,9 +277,10 @@ class TestListAndCreate(ScheduleViewBase):
             offered_now = [x["key"] for x in self.client.get(LIST + self.q).data["suggestions"]]
             self.assertNotIn("morning_plan", offered_now)
 
-    def test_push_is_off_unless_asked_for(self):
-        self.assertTrue(self.create(deliverPush=True)["deliverPush"])
-        self.assertFalse(self.create()["deliverPush"])
+    def test_push_is_on_unless_switched_off(self):
+        # MIP-1374: a report that nobody is told about goes unread.
+        self.assertTrue(self.create()["deliverPush"])
+        self.assertFalse(self.create(deliverPush=False)["deliverPush"])
 
     def test_what_the_service_refuses_is_one_sentence_in_error(self):
         for over, needle in (

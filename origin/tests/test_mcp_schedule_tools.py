@@ -137,7 +137,7 @@ class TestCreateAndList(ScheduleToolBase):
         self.assertEqual(row["when"], "every Monday and Wednesday at 09:00")
         self.assertEqual(row["job_title"], "Fake day")
         self.assertTrue(row["enabled"])
-        self.assertFalse(row["deliver_push"])
+        self.assertTrue(row["deliver_push"])
         stored = MemberSchedule.objects.get(pk=row["schedule_id"])
         self.assertEqual(
             (stored.user_id, str(stored.team_id)), (self.user.id, str(self.team.team_id))
@@ -259,9 +259,10 @@ class TestCreateAndList(ScheduleToolBase):
         self.assertIn("You already have 'Morning plan'", edit)
         self.assertEqual(MemberSchedule.objects.count(), 2)
 
-    def test_push_is_off_unless_asked_for(self):
-        self.assertFalse(self.create()["deliver_push"])
-        self.assertTrue(self.create(name="p", deliver_push=True)["deliver_push"])
+    def test_push_is_on_unless_switched_off(self):
+        # MIP-1374: a report that nobody is told about goes unread.
+        self.assertTrue(self.create()["deliver_push"])
+        self.assertFalse(self.create(name="q", deliver_push=False)["deliver_push"])
 
     def test_a_read_only_key_cannot_create(self):
         self._key(scope=SCOPE_READ)
