@@ -97,7 +97,7 @@ from origin.views.utils.note_role import readable_note_ids
 # The contract's constants                                                     #
 # --------------------------------------------------------------------------- #
 
-ANCHOR_TYPES = ("task", "thread", "chat")
+ANCHOR_TYPES = ("task", "thread", "chat", "note")
 KINDS = (
     "created",
     "status",
@@ -145,6 +145,7 @@ _NOT_FOUND = {
     "task": "That task was not found.",
     "thread": "That thread was not found.",
     "chat": "That chat was not found.",
+    "note": "That note was not found.",
 }
 _CURSOR_BAD = "That cursor is not valid for this call; start again without it."
 
@@ -351,6 +352,10 @@ class Anchor:
     task: TaskMaster | None = None
     channel: Channel | None = None
     root: Message | None = None
+    # A note: the row, its family (`personal`, `task`, `chat`) and the code the permission tables use.
+    note: Any = None
+    family: str = ""
+    code: int = 0
 
     @property
     def name(self) -> str:
@@ -410,6 +415,46 @@ def _open_chat(ctx: ToolContext, ref: Any) -> Anchor:
     return Anchor("chat", str(channel.id), channel.title or "", channel=channel)
 
 
+_NOTE_FAMILIES = {
+    "personal": "personal",
+    "team": "personal",
+    "shared": "personal",
+    "task": "task",
+    "chat": "chat",
+}
+
+
+def _open_note(ctx: ToolContext, ref: Any) -> Anchor:
+    """A note is named `<family>:<id>` (`task:111`, `personal:42`): the three note tables number
+    their notes apart, so an id alone names nothing. It must be in the member's team and one they
+    can open by `get_note`'s rule (`readable_notes`)."""
+    family = note_id = None
+    if isinstance(ref, str) and len(ref) <= 64 and ref.count(":") == 1:
+        word, _sep, digits = ref.strip().partition(":")
+        family = _NOTE_FAMILIES.get(word.strip().lower())
+        if digits.strip().isascii() and digits.strip().isdigit() and len(digits.strip()) < 19:
+            note_id = int(digits.strip())
+    note = None
+    if family and note_id:
+        code = _NOTE_CODE[family]
+        note = _NOTE_MODELS[code].objects.filter(note_id=note_id).first()
+    if (
+        note is None
+        or str(note.team_id or "") != str(ctx.team_id)
+        or (code, note.note_id) not in readable_notes(ctx, [(code, note.note_id)])
+    ):
+        raise _refuse("note", note is not None)
+    return Anchor(
+        "note",
+        f"{family}:{note.note_id}",
+        note.title or "",
+        start=note.ts_created_at,
+        note=note,
+        family=family,
+        code=code,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The window and the cursor                                                    #
 # --------------------------------------------------------------------------- #
@@ -418,8 +463,8 @@ def _open_chat(ctx: ToolContext, ref: Any) -> Anchor:
 def _window(
     anchor: Anchor, since: Any, until: Any, now: datetime, user_id: str
 ) -> tuple[datetime | None, datetime | None]:
-    """`[since, until)`. A task or a thread is told from its whole life: both ends are optional
-    there. A chat is a window: `until` defaults to now, `since` to a week before it, and one call
+    """`[since, until)`. A task, a thread and a note are told from their whole life: both ends are
+    optional there. A chat is a window: `until` defaults to now, `since` to a week before it, and one call
     spans at most 31 days."""
     end = (
         None if until in (None, "") else min(item_lines._moment(until, "until", user_id, now), now)
@@ -1222,6 +1267,8 @@ def _sources(sc: Scope, kinds: frozenset[str]) -> list[Source]:
                     lambda s, k, c: _claim_events(s, k, c, claim),
                 )
             )
+    elif anchor.type == "note":
+        out.append(Source("versions", frozenset({"note_edit"}), _note_versions))
     elif anchor.type == "chat":
         said = _said(sc).filter(channel_id=anchor.channel.id)
         in_chat = str(anchor.channel.id)
@@ -1232,6 +1279,56 @@ def _sources(sc: Scope, kinds: frozenset[str]) -> list[Source]:
                 lambda s, k, c: _messages(s, k, c, said, via=None, in_chat=in_chat),
             )
         )
+    return out
+
+
+def _blocks_text(body: Any) -> list[str]:
+    blocks = body if isinstance(body, list) else []
+    return [t for b in blocks if (t := " ".join(_body_text([b]).split()))]
+
+
+def _added_text(body: Any, previous: Any) -> str:
+    """What a version says that the one before it did not: its blocks of text that are new. The
+    first version adds everything. Read now, never stored."""
+    before = set(_blocks_text(previous))
+    return " ".join(t for t in _blocks_text(body) if t not in before)
+
+
+def _note_versions(sc: Scope, kinds: frozenset[str], count: bool) -> Any:
+    """The versions WITH an editor of the anchor note (see `_versions_of` for the rows with none).
+    The time of a version is its last save: a burst of edits is one row (`snapshot_note_version`
+    coalesces five minutes), so this is the last save of the burst. The text is a short snippet of
+    what that version ADDED."""
+    anchor = sc.anchor
+    qs = NoteVersionMaster.objects.filter(
+        team_id=sc.team, note_type=anchor.code, note_id=anchor.note.note_id, editor__isnull=False
+    )
+    if count:
+        return _count_rows(sc, qs, time="ts_updated_at")
+    rows = _page_rows(sc, qs, time="ts_updated_at", tie=("pk",), rank=RANK_NOTE)
+    before = {
+        v.version_no: v.body
+        for v in NoteVersionMaster.objects.filter(
+            note_type=anchor.code,
+            note_id=anchor.note.note_id,
+            version_no__in={r.version_no - 1 for r in rows},
+        )
+    }
+    out = []
+    for v in rows:
+        ev = TEv(
+            at=v.ts_updated_at,
+            rank=RANK_NOTE,
+            tie=(v.pk,),
+            kind="note_edit",
+            key=f"n{v.pk}",
+            actor=str(v.editor_id),
+            text=sc.snippet(_added_text(v.body, before.get(v.version_no - 1))),
+            ident=f"v:{v.pk}",
+        )
+        if v.restored_from_version_no:
+            ev.extra["restored_from"] = v.restored_from_version_no
+        out.append(ev)
     return out
 
 
@@ -1335,6 +1432,38 @@ def _links(sc: Scope) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
                         "from": anchor.name,
                         "to": {"anchor_type": "thread", "anchor_id": str(root.id)},
                         "why": "task.thread_id",
+                        "at": _z(root.ts_sent_at),
+                    }
+                )
+    elif anchor.type == "note":
+        note = anchor.note
+        if anchor.family == "task" and note.task_id:
+            if sc.access.tasks([note.task_id]):
+                links.append(
+                    {
+                        "from": anchor.name,
+                        "to": {"anchor_type": "task", "anchor_id": str(note.task_id)},
+                        "why": "note.task",
+                    }
+                )
+        elif anchor.family == "chat" and note.thread_root_id and note.channel_id:
+            root = (
+                Message.objects.select_related("channel")
+                .filter(id=note.thread_root_id, deleted_at__isnull=True, is_thread_reply=False)
+                .first()
+            )
+            if (
+                root is not None
+                and root.channel_id == note.channel_id
+                and root.channel.kind != ChannelKind.PM
+                and not root.channel.is_deleted
+                and can_read_chat(root.channel, sc.team, sc.me)
+            ):
+                links.append(
+                    {
+                        "from": anchor.name,
+                        "to": {"anchor_type": "thread", "anchor_id": str(root.id)},
+                        "why": "note.thread",
                         "at": _z(root.ts_sent_at),
                     }
                 )
@@ -1477,6 +1606,8 @@ def timeline(
         anchor = _open_task(ctx, access, anchor_id)
     elif anchor_type == "thread":
         anchor = _open_thread(ctx, anchor_id)
+    elif anchor_type == "note":
+        anchor = _open_note(ctx, anchor_id)
     else:
         anchor = _open_chat(ctx, anchor_id)
     limit = _whole(limit, "limit", 1, MAX_LIMIT, DEFAULT_LIMIT)
