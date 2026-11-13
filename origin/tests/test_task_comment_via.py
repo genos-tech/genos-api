@@ -20,8 +20,8 @@ from origin.tests.test_base import BaseAPITestCase
 
 URL = "/api/v2/task/comment/"
 KEY = {"kind": "api_key", "key_id": "k-1", "key_name": "Alice's phone", "key_prefix": "gk_alice"}
-APP = {"kind": "oauth", "connection_id": "c-9", "client_name": "Alice's Claude"}
-SECRETS = ("Alice's phone", "k-1", "gk_alice", "c-9", "Alice's Claude")
+APP = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
+SECRETS = ("Alice's phone", "k-1", "gk_alice", "conn-9", "Alice's Claude")
 BODY = [{"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]
 
 
