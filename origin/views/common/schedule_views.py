@@ -211,7 +211,7 @@ class ScheduleListView(_Base):
                 weekdays=fields.get("weekdays"),
                 month_day=fields.get("month_day"),
                 run_date=fields.get("run_date"),
-                deliver_push=bool(fields.get("deliver_push", False)),
+                deliver_push=bool(fields.get("deliver_push", True)),
                 ai_effort=fields.get("ai_effort"),
             )
         )
