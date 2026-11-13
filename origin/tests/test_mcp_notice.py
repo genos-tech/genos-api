@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from unittest import mock
 
+import requests
+
 from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.models.common.notification_models import NotificationPreference
@@ -337,3 +339,70 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         )
         self.assertEqual(rules & self.SILENT, set())
         self.assertEqual(self.SILENT - writes, set(), "SILENT names a tool that is gone")
+
+
+class LiveDeliveryTests(NoticeBase):
+    """The notice reaches the member's open app now, through genos-sockets (best effort)."""
+
+    SETTINGS = {"SOCKETS_INTERNAL_URL": "http://sockets.test", "SOCKETS_INTERNAL_SECRET": "s"}
+
+    def test_a_notice_is_posted_to_sockets_after_commit(self):
+        with (
+            self.settings(**self.SETTINGS),
+            mock.patch("origin.services.realtime_push._post", return_value=True) as post,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.call("create_task", project_id=self.project.project_id, title="Live")
+        row = self.only()
+        (payload, path, what), _ = post.call_args
+        self.assertEqual((path, what), ("/internal/broadcast/activity", "activity"))
+        self.assertEqual(payload["userId"], str(self.user.id))
+        sent = payload["activity"]
+        self.assertEqual(sent["id"], str(row.id))
+        self.assertEqual(sent["activityType"], 6)
+        self.assertEqual(sent["recipientUserId"], str(self.user.id))
+        self.assertEqual(sent["surfaceType"], 10)
+        self.assertEqual(sent["meta"]["verb"], "created")
+        self.assertIsNone(sent["channelId"])
+        self.assertIsNone(sent["message"])
+
+    def test_nothing_is_sent_before_the_commit(self):
+        with (
+            self.settings(**self.SETTINGS),
+            mock.patch("origin.services.realtime_push._post", return_value=True) as post,
+        ):
+            self.call("create_task", project_id=self.project.project_id, title="Early")
+            post.assert_not_called()
+
+    def test_without_a_sockets_url_nothing_is_sent_and_the_row_still_exists(self):
+        with (
+            self.settings(SOCKETS_INTERNAL_URL="", SOCKETS_INTERNAL_SECRET="s"),
+            mock.patch("origin.services.realtime_push._post") as post,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.call("create_task", project_id=self.project.project_id, title="Offline")
+        post.assert_not_called()
+        self.assertEqual(len(notices(self.user)), 1)
+
+    def test_a_sockets_outage_costs_the_live_update_only(self):
+        with (
+            self.settings(**self.SETTINGS),
+            mock.patch(
+                "origin.services.realtime_push.requests.post",
+                side_effect=requests.ConnectionError("down"),
+            ),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.call("create_task", project_id=self.project.project_id, title="Down")
+        self.assertTrue(TaskMaster.objects.filter(title="Down").exists())
+        self.assertEqual(len(notices(self.user)), 1)
+
+    def test_a_switched_off_notice_is_not_announced_either(self):
+        NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
+        with (
+            self.settings(**self.SETTINGS),
+            mock.patch("origin.services.realtime_push._post", return_value=True) as post,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.call("create_task", project_id=self.project.project_id, title="Muted")
+        post.assert_not_called()

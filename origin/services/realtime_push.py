@@ -39,6 +39,7 @@ from origin.models.task.task_models import TaskMaster
 logger = logging.getLogger(__name__)
 
 BROADCAST_PATH = "/internal/broadcast/task-comment"
+ACTIVITY_PATH = "/internal/broadcast/activity"
 MEMBERSHIP_PATH = "/internal/membership/removed"
 # Must match genos-sockets `utils/internal_auth`.
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
@@ -144,6 +145,37 @@ def push_task_comment(
         transaction.on_commit(lambda: _post(payload), robust=True)
     except Exception:  # noqa: BLE001 — the comment is saved; an observer must not break it
         logger.warning("sockets task-comment push could not be scheduled", exc_info=True)
+
+
+def push_activity(activity) -> None:
+    """Announce an `Activity` this API made with no socket handler to relay it, so the
+    recipient's open app shows the row (and its toast) now instead of at the next refetch
+    (MIP-1432: what a member's AI app did over MCP).
+
+    genos-sockets sends `activity.created` to the recipient's `/v3` user room with the
+    activity exactly as `ActivitySerializer` writes it. Sends once the current transaction
+    commits, or at once when there is none. A no-op when `SOCKETS_INTERNAL_URL` is unset.
+    Never raises: the activity is saved, and the Web Push and the next refetch still find it.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets activity push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        from rest_framework.renderers import JSONRenderer  # noqa: PLC0415
+
+        from origin.serializers.chat.unified_serializers import (  # noqa: PLC0415
+            ActivitySerializer,
+        )
+
+        payload: dict[str, Any] = {
+            "userId": str(activity.recipient_id),
+            "activity": json.loads(JSONRenderer().render(ActivitySerializer(activity).data)),
+        }
+        transaction.on_commit(lambda: _post(payload, ACTIVITY_PATH, "activity"), robust=True)
+    except Exception:  # noqa: BLE001 — the activity is saved; an observer must not break it
+        logger.warning("sockets activity push could not be scheduled", exc_info=True)
 
 
 # Sockets takes at most this many of each (genos-sockets `MAX_ROOMS`); a person in more than that

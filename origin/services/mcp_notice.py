@@ -396,6 +396,11 @@ def notify_owner(
         from origin.services.webpush_dispatch import schedule_push_for_activities  # noqa: PLC0415
 
         schedule_push_for_activities([activity])
+        # And tell the member's open app now (best effort; the push and the next refetch
+        # still find the row if sockets is down).
+        from origin.services.realtime_push import push_activity  # noqa: PLC0415
+
+        push_activity(activity)
         return [activity]
     except Exception:  # noqa: BLE001 - a notice never fails the write it follows
         log.warning("MCP notice failed for %s", tool_name, exc_info=True)
