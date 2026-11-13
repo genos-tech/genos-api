@@ -1960,6 +1960,18 @@ SEARCH_ENGINE["AGENT_INBOX_REPORT_LABEL"] = (
     os.environ.get("AGENT_INBOX_REPORT_LABEL", "false").lower() == "true"
 )
 
+# MIP-1090 (a) (model-visible, dark-shipped OFF, grouped eval arm `t1090-team`): `get_current_user`
+# (in-app; MCP `get_current_user` is the same function) says which workspace the conversation is
+# in. ON = the result gains `team` ({team_id, team_name}; the name is fenced as workspace
+# content), only when the user belongs to `ctx.team_id` (its owner, or a member not removed); the
+# in-app declaration gains one sentence. OFF = no `team` key and the declaration is byte-identical.
+# Read at call time. Flip criterion: the `t1090-team` arm answers "which team am I in" without
+# guessing or an extra tool, and a question that does not need the team does not call the tool
+# more often.
+SEARCH_ENGINE["AGENT_TEAM_IN_CURRENT_USER"] = (
+    os.environ.get("AGENT_TEAM_IN_CURRENT_USER", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

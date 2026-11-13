@@ -16,6 +16,7 @@ from __future__ import annotations
 from django.conf import settings
 
 from origin.search_engine.agent.tools.base import Tool
+from origin.search_engine.agent.tools.get_current_user import DESCRIPTION_ADDITION as _TEAM
 from origin.search_engine.agent.tools.inbox_report import DESCRIPTION_ADDITION as _INBOX_REPORT
 from origin.search_engine.agent.tools.task_anchors import DESCRIPTION_ADDITION as _ANCHORS
 
@@ -23,6 +24,7 @@ from origin.search_engine.agent.tools.task_anchors import DESCRIPTION_ADDITION a
 ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("fetch_task", "AGENT_FETCH_TASK_ANCHORS", _ANCHORS),
     ("list_my_inbox", "AGENT_INBOX_REPORT_LABEL", _INBOX_REPORT),
+    ("get_current_user", "AGENT_TEAM_IN_CURRENT_USER", _TEAM),
 )
 
 
