@@ -29,8 +29,12 @@ reporter).
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
+from django.conf import settings
+
+from origin.models.common.api_key_models import ApiKey
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
@@ -109,9 +113,80 @@ def _shown_via(via: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "unknown"}
 
 
-def _via(row: TaskActivity) -> dict[str, Any]:
+#: MIP-1090 (default off): which client made a change, and nothing else about the credential.
+CLIENT_FLAG = "AGENT_CLIENT_IN_TASK_HISTORY"
+
+#: The sentence the flag adds to the tool's description (`tool_flag_text`).
+DESCRIPTION_ADDITION = (
+    " With `via.kind` `api_key` or `connected_app`, `via.client` names the app that made the "
+    "change: always for a connected app (`via.kind` `connected_app`, such as an AI assistant "
+    "the member signed in to), and for an API key only when the key is the caller's own "
+    "(another member's key is shown as `api_key` with no name)."
+)
+
+
+def client_enabled() -> bool:
+    """Read at call time, so an eval arm or `override_settings` can flip it."""
+    return bool(settings.SEARCH_ENGINE.get(CLIENT_FLAG))
+
+
+def _key_uuid(raw: Any) -> str | None:
+    try:
+        return str(uuid.UUID(str(raw)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _own_key_ids(rows: list[TaskActivity], ctx: ToolContext) -> set[str]:
+    """The ids, among the keys these rows name, of API keys the CALLER owns: the only keys
+    whose name is shown. One query for the page."""
+    wanted = {
+        k
+        for r in rows
+        for via in [(r.metadata or {}).get("via")]
+        if isinstance(via, dict) and via.get("kind") == "api_key"
+        for k in [_key_uuid(via.get("key_id"))]
+        if k
+    }
+    if not wanted:
+        return set()
+    return {
+        str(i)
+        for i in ApiKey.objects.filter(id__in=wanted, user_id=ctx.user_id).values_list(
+            "id", flat=True
+        )
+    }
+
+
+def _client_via(via: dict[str, Any], own_keys: set[str]) -> dict[str, Any]:
+    """`via` as the flag shows it: the kind and, where it is safe, the client's name; never a
+    key id, a key prefix, a connection id or an undo's run id.
+
+    * `app` / `agent`: the kind alone (the `undo_of` an app row may carry is left out).
+    * `api_key`: the kind; the key's NAME, which its owner typed, only when the caller owns it.
+    * `oauth` (a connected app): `connected_app` with the name the app registered under, short
+      and fenced like any text a stranger wrote.
+    * every other kind: as it was shown before the flag."""
+    kind = via.get("kind")
+    if kind in ("app", "agent"):
+        return {"kind": kind}
+    if kind == "api_key":
+        out: dict[str, Any] = {"kind": "api_key"}
+        name = via.get("key_name")
+        if _key_uuid(via.get("key_id")) in own_keys and isinstance(name, str) and name:
+            out["client"] = wrap_workspace_content(name[:60])
+        return out
+    if kind == "oauth":
+        name = str(via.get("client_name") or "connected app")[:60]
+        return {"kind": "connected_app", "client": wrap_workspace_content(name)}
+    return _shown_via(via)
+
+
+def _via(row: TaskActivity, own_keys: set[str] | None = None) -> dict[str, Any]:
     """How the change arrived. `metadata.via` is stamped by `_record`;
-    rows written before it existed, and system writes, have none."""
+    rows written before it existed, and system writes, have none.
+
+    `own_keys` is None with the flag off: `via` is then shown exactly as it always was."""
     meta = row.metadata or {}
     if meta.get("closedByPrMerge"):
         return {"kind": "pr_merge", "pr_url": meta.get("prUrl")}
@@ -124,7 +199,7 @@ def _via(row: TaskActivity) -> dict[str, Any]:
         return {"kind": "github", "github_user": meta.get("github_username")}
     via = meta.get("via")
     if isinstance(via, dict) and via.get("kind"):
-        return _shown_via(via)
+        return _shown_via(via) if own_keys is None else _client_via(via, own_keys)
     return {"kind": "unknown"}
 
 
@@ -198,7 +273,9 @@ def _field(row: TaskActivity) -> Any:
     return row.field_name
 
 
-def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
+def _entry(
+    row: TaskActivity, usernames: dict[str, str], own_keys: set[str] | None = None
+) -> dict[str, Any]:
     actor = row.actor
     entry: dict[str, Any] = {
         "at": row.ts_created_at.isoformat() if row.ts_created_at else None,
@@ -209,7 +286,7 @@ def _entry(row: TaskActivity, usernames: dict[str, str]) -> dict[str, Any]:
         "actor": (
             {"user_id": str(actor.id), "username": actor.username} if actor is not None else None
         ),
-        "via": _via(row),
+        "via": _via(row, own_keys),
     }
     if row.action_type in (
         TaskActivityActionType.COMMENT_ADDED,
@@ -300,7 +377,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if user_ids
         else {}
     )
-    history = [_entry(r, usernames) for r in rows]
+    own_keys = _own_key_ids(rows, ctx) if client_enabled() else None
+    history = [_entry(r, usernames, own_keys) for r in rows]
 
     return {
         "task_id": task.task_id,

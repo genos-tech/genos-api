@@ -1972,6 +1972,20 @@ SEARCH_ENGINE["AGENT_TEAM_IN_CURRENT_USER"] = (
     os.environ.get("AGENT_TEAM_IN_CURRENT_USER", "false").lower() == "true"
 )
 
+# MIP-1090 (b) (model-visible, dark-shipped OFF, grouped eval arm `t1090-client`): which client made
+# a change in `get_task_history` (in-app; MCP `get_task_history` is the same function). ON = `via`
+# is {"kind": ...} plus `client` where it is safe: a connected app (`kind: connected_app`) is named
+# (the name it registered under, short and fenced), an API key (`kind: api_key`) only when it is
+# the caller's OWN key (another member's, a deleted key: no name); never a key id, a key prefix, a
+# connection id or an undo's run id; an app row's `undo_of` is left out. One sentence is added to the
+# declaration. OFF = `via` exactly as before (including what it shows today for a key row and an
+# app row, filed separately) and the declaration is byte-identical. Read at call time.
+# Flip criterion: the `t1090-client` arm says which app made a change (never inventing one for a
+# key it cannot name) and regresses no other history question.
+SEARCH_ENGINE["AGENT_CLIENT_IN_TASK_HISTORY"] = (
+    os.environ.get("AGENT_CLIENT_IN_TASK_HISTORY", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

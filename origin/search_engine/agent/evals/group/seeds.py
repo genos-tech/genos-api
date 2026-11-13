@@ -137,8 +137,125 @@ def seed_inbox_report(info: dict[str, Any]) -> None:
     )
 
 
+# --------------------------------------------------------------------------- #
+# t1090-client: a closed task whose changes came from different clients        #
+# --------------------------------------------------------------------------- #
+
+#: The seeded task's title per language (also its idempotency marker).
+CLIENT_TASK_TITLE = {
+    "en": "Refresh the onboarding checklist",
+    "ja": "オンボーディングのチェックリストを更新する",
+}
+#: The names the cases ask about. The viewer owns LAPTOP_KEY; the developer owns CI_KEY.
+LAPTOP_KEY = "Laptop script"
+CI_KEY = "Chris CI"
+CONNECTED_APP = "Claude"
+
+
+def seed_task_history_clients(info: dict[str, Any]) -> None:
+    """A CLOSED task (so it is on nobody's open list) in the viewer's project, whose history
+    has one change from each kind of client:
+
+      1. created                    via the web app
+      2. Open -> WIP                via a connected app ("Claude")
+      3. priority Normal -> High    via the VIEWER's own API key ("Laptop script")
+      4. due date                   via ANOTHER member's API key ("Chris CI", the developer's)
+      5. WIP -> Closed              via the web app
+
+    Rows are written directly (a connected app and a key cannot be exercised here without a
+    live OAuth flow), with the `via` shape `middleware.current_user.get_current_source` stamps."""
+    from datetime import datetime, timedelta  # noqa: PLC0415
+
+    from django.db.models import Max  # noqa: PLC0415
+
+    from origin.models.common.api_key_models import (  # noqa: PLC0415
+        SCOPE_WRITE,
+        ApiKey,
+        generate_key,
+        hash_key,
+    )
+    from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+    from origin.models.task.task_activity_models import (  # noqa: PLC0415
+        TaskActivity,
+        TaskActivityActionType,
+    )
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+    from origin.search_engine.agent.evals.group import sequence  # noqa: PLC0415
+
+    lang = "ja" if info["team"] == "ja" else "en"
+    title = CLIENT_TASK_TITLE[lang]
+    team_id = info["team_id"]
+    if TaskMaster.objects.filter(team_id=team_id, title=title, is_deleted=False).exists():
+        return
+    project = ProjectMaster.objects.filter(team_id=team_id).order_by("project_id").first()
+    if project is None:
+        raise SeedError("the sequence team has no project")
+    me = info["user_id"]
+    # (`dev_user_id` in `info` is for a test whose people have random ids)
+    dev = str(info.get("dev_user_id") or sequence.user_id(info["team"], "c"))
+    number = (
+        TaskMaster.objects.filter(project=project).aggregate(m=Max("project_task_number"))["m"] or 0
+    ) + 1
+    task = TaskMaster.objects.create(
+        team_id=team_id,
+        project=project,
+        reporter_id=me,
+        assignee_id=me,
+        title=title,
+        status="Closed",
+        priority="High",
+        project_task_number=number,
+    )
+    TaskActivity.objects.filter(task=task).delete()  # what the signals wrote: not a client's
+
+    def key(owner: str, name: str) -> ApiKey:
+        return ApiKey.objects.create(
+            user_id=owner,
+            name=name,
+            key_hash=hash_key(generate_key()),
+            prefix="gk_evalseed",
+            scope=SCOPE_WRITE,
+        )
+
+    mine, theirs = key(me, LAPTOP_KEY), key(dev, CI_KEY)
+    app = {"kind": "app"}
+    connected = {
+        "kind": "oauth",
+        "connection_id": "00000000-0000-4000-8000-00000000c0c0",
+        "client_name": CONNECTED_APP,
+    }
+
+    def api_key(k: ApiKey) -> dict[str, Any]:
+        return {"kind": "api_key", "key_id": str(k.id), "key_name": k.name, "key_prefix": k.prefix}
+
+    steps = (
+        (TaskActivityActionType.CREATED, "created", None, {"title": title}, me, app),
+        (TaskActivityActionType.STATUS, "status", "Open", "WIP", me, connected),
+        (TaskActivityActionType.PRIORITY, "priority", "Normal", "High", me, api_key(mine)),
+        (TaskActivityActionType.DUE_DATE, "due_date", None, "2026-11-20", dev, api_key(theirs)),
+        (TaskActivityActionType.STATUS, "status", "WIP", "Closed", me, app),
+    )
+    day = datetime.combine(sequence.SCENARIO_DAY, datetime.min.time(), tzinfo=sequence._jst())
+    for n, (action, field, old, new, actor, via) in enumerate(steps):
+        row = TaskActivity.objects.create(
+            task=task,
+            team_id=team_id,
+            project=project,
+            actor_id=actor,
+            action_type=action,
+            field_name=field,
+            old_value=old,
+            new_value=new,
+            metadata={"via": via, SEED_KEY: "t1090-client"},
+        )
+        TaskActivity.objects.filter(pk=row.pk).update(
+            ts_created_at=day + timedelta(hours=18, minutes=n)
+        )
+
+
 SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "inbox_report": seed_inbox_report,
+    "task_history_clients": seed_task_history_clients,
 }
 
 

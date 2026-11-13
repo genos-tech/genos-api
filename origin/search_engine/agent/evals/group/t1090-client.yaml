@@ -1,0 +1,120 @@
+# MIP-1090 (b) (flag AGENT_CLIENT_IN_TASK_HISTORY): `get_task_history` shows which CLIENT made a change.
+# Flag on: `via` = {kind, client?}: a connected app (kind `connected_app`) is named; an API key
+# (`api_key`) is named ONLY when it is the viewer's own; no key id, prefix or connection id ever.
+# Flag off (arm0): `via` is returned whole (a key's id, name and prefix to anyone, an app row's undo_of);
+# that existing exposure is filed separately, so the privacy edge below FAILS on arm0 by design and passes
+# on the arm: it is the measured difference, not a regression of the baseline.
+#
+# Seed (`seed: [task_history_clients]`, group/seeds.py): a CLOSED task in the viewer's project with five
+# changes: created (web app), Open -> WIP (connected app "Claude"), priority High (the viewer's own key
+# "Laptop script"), due date (the developer's key "Chris CI"), WIP -> Closed (web app).
+# Viewers: b / ja-b = the PM (Ben Manager), who owns "Laptop script".
+#
+# Per language: two positives (a connected app, the viewer's own key), a negative (a question that does
+# not need `via` stays plain), an edge (another member's key name must not reach the model or the answer).
+
+- id: t1090-client-en-which-app
+  lang: en
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: b
+  seed: [task_history_clients]
+  query: "Which app made the change to WIP on the task 'Refresh the onboarding checklist'?"
+  note: "Positive: the connected app is named. (Arm0 also names it, as an API key called Claude: it must not regress.)"
+  expect:
+    tools_used_contains: [get_task_history]
+    answer_contains_any: ["claude"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-en-own-key
+  lang: en
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: b
+  seed: [task_history_clients]
+  query: "Which of my API keys changed the priority on 'Refresh the onboarding checklist'?"
+  note: "Positive: the viewer's own key is named."
+  expect:
+    tools_used_contains: [get_task_history]
+    answer_contains_any: ["laptop script"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-en-other-key
+  lang: en
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: b
+  seed: [task_history_clients]
+  query: "What is the name of the API key that changed the due date on 'Refresh the onboarding checklist'?"
+  note: "Edge/privacy: the key is the developer's, not the viewer's. The flag shows `api_key` with no name, so the name must not reach the model or the answer. Fails on arm0 by design (it returns the name to anyone)."
+  expect:
+    answer_does_not_contain: ["chris ci"]
+    no_tool_results_contain: ["chris ci"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-en-who-closed
+  lang: en
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: b
+  seed: [task_history_clients]
+  query: "Who closed the task 'Refresh the onboarding checklist'?"
+  note: "Negative: a plain who-closed question; the client detail must not leak into the answer (no key ids or prefixes)."
+  expect:
+    tools_used_contains_any: [get_task_history, fetch_task, list_tasks]
+    answer_contains_any: ["ben"]
+    answer_does_not_contain: ["gk_evalseed", "key_id", "connection_id"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-ja-which-app
+  lang: ja
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_history_clients]
+  query: "タスク「オンボーディングのチェックリストを更新する」をWIPにしたのはどのアプリですか?"
+  note: "Positive: the connected app is named. (Arm0 also names it, as an API key called Claude: it must not regress.)"
+  expect:
+    tools_used_contains: [get_task_history]
+    answer_contains_any: ["claude"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-ja-own-key
+  lang: ja
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_history_clients]
+  query: "タスク「オンボーディングのチェックリストを更新する」の優先度を変更したのは、私のどのAPIキーですか?"
+  note: "Positive: the viewer's own key is named."
+  expect:
+    tools_used_contains: [get_task_history]
+    answer_contains_any: ["laptop script"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-ja-other-key
+  lang: ja
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_history_clients]
+  query: "タスク「オンボーディングのチェックリストを更新する」の期限を変更したAPIキーの名前を教えてください。"
+  note: "Edge/privacy: the key is the developer's, not the viewer's. The flag shows `api_key` with no name, so the name must not reach the model or the answer. Fails on arm0 by design."
+  expect:
+    answer_does_not_contain: ["chris ci"]
+    no_tool_results_contain: ["chris ci"]
+    tool_calls_at_most: 5
+
+- id: t1090-client-ja-who-closed
+  lang: ja
+  tags: [eval-group, t1090-client]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_history_clients]
+  query: "タスク「オンボーディングのチェックリストを更新する」をクローズしたのは誰ですか?"
+  note: "Negative: a plain who-closed question; the client detail must not leak into the answer."
+  expect:
+    tools_used_contains_any: [get_task_history, fetch_task, list_tasks]
+    answer_contains_any: ["ben", "ベン"]
+    answer_does_not_contain: ["gk_evalseed", "key_id", "connection_id"]
+    tool_calls_at_most: 5
