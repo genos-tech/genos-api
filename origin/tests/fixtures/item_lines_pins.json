@@ -92,6 +92,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32400s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -99,8 +108,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "2f53cf568e490bff8058fe99a842ddd901683d4ac76117726d0357cbf30c4887",
-      "queries": 53,
+      "line_for_item_sha": "8a52dec778792863c3d91c729f2f98c915926f53d4f39292f395417b7df74930",
+      "queries": 54,
       "read_events": {
         "capped": false,
         "events": [
@@ -122,7 +131,7 @@
           "{\"actor\":\"A\",\"ai_app\":true,\"at\":\"+61200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"opened in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_read\"}"
         ]
       },
-      "related_lines_sha": "6d3e22dac17135822719d26552c9cdffc5da54ed8d2fa96b3d8493ca5a6733cf"
+      "related_lines_sha": "d1d938b959f5f10b9645bb5cd684469aca3abf60042de88c1d988195c745886b"
     },
     "b": {
       "item_lines": {
@@ -219,6 +228,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32700s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -226,8 +244,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "d484f1ec1e3000d1185094907c9dfb6abea06b4ca886da9deb6fd19e1bc81c36",
-      "queries": 53,
+      "line_for_item_sha": "5677e35fdcad0c7cc82a3dd76bf86b094edfc89ecf111e075bcdfbdc3b0e25b2",
+      "queries": 54,
       "read_events": {
         "capped": false,
         "events": [
@@ -253,7 +271,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "62ec81dbda801e4148b155f58968a739e5bfecb8415c1f425378cfcdbd380848"
+      "related_lines_sha": "38d64ccada55fb4ef95582a942b251ffc9de1494f925f293205bb3a236cd30bf"
     },
     "c": {
       "item_lines": {
@@ -350,6 +368,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -357,7 +376,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "d64199920f2425257a99c13271d5c63a0dc4aac749a674476c993eed9cfc9740",
+      "line_for_item_sha": "c6b05a6cc2ff9906e8ec66fc9fcc8948ce80557655a3e954f6db3929c1914c60",
       "queries": 60,
       "read_events": {
         "capped": false,
@@ -383,7 +402,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "484a76a429f054dde40f2120a2e729a97313ea19c5c56a41349bce8652bd583a"
+      "related_lines_sha": "f53e6c732731ca623929ab90b8002bd75adb00237dfd18d27403cf9b09c6a4a3"
     }
   },
   "rich_no_related_b": {
@@ -443,6 +462,15 @@
     "unattached": {
       "app_markers": 0,
       "chat_messages": 1,
+      "chats": [
+        {
+          "chat_id": "CHAT",
+          "chat_type": "gm",
+          "latest_at": "+32700s",
+          "messages": 1,
+          "title": "<workspace_content>\nClient chat\n</workspace_content>"
+        }
+      ],
       "total": 1
     },
     "window": {
@@ -506,6 +534,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32400s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -513,8 +550,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "038f100ada8348381de842e1d6051a1e126229a1695619e2889ac424b0160fe5",
-      "queries": 37,
+      "line_for_item_sha": "3dfb1e8b4a773611eb886fbb0e16ab3eb306b1d6a484fefd9f80ea4f4e1287b5",
+      "queries": 38,
       "read_events": {
         "capped": false,
         "events": [
@@ -532,7 +569,7 @@
           "{\"actor\":\"A\",\"ai_app\":true,\"at\":\"+61200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"opened in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_read\"}"
         ]
       },
-      "related_lines_sha": "0a9f9154230d420c91cfe756b7c8f9a80592147a876806a79242ba893e4200e8"
+      "related_lines_sha": "f1e10b4c85ceaf4bce4058d275a629a113824f4edea478216db210d9fee78048"
     },
     "b": {
       "item_lines": {
@@ -591,6 +628,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32700s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -598,8 +644,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "74ff81000a32854165e5cc0c7c253f6cd9ccfbb87eb6854c6ae96dbda92dc787",
-      "queries": 36,
+      "line_for_item_sha": "49b5b8c9844a776d33adf6f2a29f4f2080ec3766dc03803901f782dc4b9949e8",
+      "queries": 37,
       "read_events": {
         "capped": false,
         "events": [
@@ -619,7 +665,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "fbf566baf00abcca89096804abe8c6e3413a29125cbd1b03eff895b4be35c8bf"
+      "related_lines_sha": "d2d9c46a85747633c9b211801a3408d0485dfdb841be18cb8d9371e4dfd2de50"
     },
     "c": {
       "item_lines": {
@@ -672,6 +718,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -679,7 +726,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "6615f56affd2c46536a248b202754ac66ccdff97558908e29c1b0e9c188c0518",
+      "line_for_item_sha": "2f161ed31a405dbe923ab0294ce9a325672a988f34400ece21fda90cd764cf62",
       "queries": 39,
       "read_events": {
         "capped": false,
@@ -698,7 +745,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "7bb2a95d9e1b4a4980ed0ba499cbf47fe507b99102563fc9a81b8f6e9ebd17ae"
+      "related_lines_sha": "67fc944300b46bb2e98404271b8bd32bc17e6ae3e063a70212b4355cb271be69"
     }
   },
   "v1_flat_c_in_gm": {
@@ -757,6 +804,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32400s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -764,8 +820,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "038f100ada8348381de842e1d6051a1e126229a1695619e2889ac424b0160fe5",
-      "queries": 37,
+      "line_for_item_sha": "3dfb1e8b4a773611eb886fbb0e16ab3eb306b1d6a484fefd9f80ea4f4e1287b5",
+      "queries": 38,
       "read_events": {
         "capped": false,
         "events": [
@@ -783,7 +839,7 @@
           "{\"actor\":\"A\",\"ai_app\":true,\"at\":\"+61200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"opened in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_read\"}"
         ]
       },
-      "related_lines_sha": "0a9f9154230d420c91cfe756b7c8f9a80592147a876806a79242ba893e4200e8"
+      "related_lines_sha": "f1e10b4c85ceaf4bce4058d275a629a113824f4edea478216db210d9fee78048"
     },
     "b": {
       "item_lines": {
@@ -842,6 +898,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32700s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -849,8 +914,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "74ff81000a32854165e5cc0c7c253f6cd9ccfbb87eb6854c6ae96dbda92dc787",
-      "queries": 36,
+      "line_for_item_sha": "49b5b8c9844a776d33adf6f2a29f4f2080ec3766dc03803901f782dc4b9949e8",
+      "queries": 37,
       "read_events": {
         "capped": false,
         "events": [
@@ -870,7 +935,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "fbf566baf00abcca89096804abe8c6e3413a29125cbd1b03eff895b4be35c8bf"
+      "related_lines_sha": "d2d9c46a85747633c9b211801a3408d0485dfdb841be18cb8d9371e4dfd2de50"
     },
     "c": {
       "item_lines": {
@@ -929,6 +994,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -936,7 +1002,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "6018847a963107e76856ab3bd7348a75b7c8026a6e97f508ec12ae70b64136d2",
+      "line_for_item_sha": "32aeeb84ecb252fa9fe288c9e98301b2d51ea77dc0ae9af2bd29c0c2a59f19dc",
       "queries": 41,
       "read_events": {
         "capped": false,
@@ -957,7 +1023,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "547b8573d473cc9c6c8287f86cb6e01f9cb8583cf8797b1316f78fac7fecae38"
+      "related_lines_sha": "d9fd6722ead8152337e05f3c8fa6f21a1f407b00b03e18a0b5641928f2771663"
     }
   },
   "v1_threaded": {
@@ -1018,6 +1084,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1025,7 +1092,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "fdf1cbf2b4f8d159f457b91407aa6a9311733ae06ed4708028fb32e725b77581",
+      "line_for_item_sha": "b38c40217c4e09dadff3719ff0bc9b5c5682099c43e16c52ba948e2e119cc9e2",
       "queries": 36,
       "read_events": {
         "capped": false,
@@ -1046,7 +1113,7 @@
           "{\"actor\":\"A\",\"ai_app\":true,\"at\":\"+61200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"opened in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_read\"}"
         ]
       },
-      "related_lines_sha": "849df15c0d9d9c9ddc953ceabbdfdf266ae7b369eaff714a119366b96c93172c"
+      "related_lines_sha": "bec3cd9f5d34148f577f204ce594cc1e2683c2b6c1c6c3b51e9b181b5dfeac11"
     },
     "b": {
       "item_lines": {
@@ -1107,6 +1174,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1114,7 +1182,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "5761d2726f2f457e29e65ca4f6d478682e3dfadbed02268edeea3ea5873c4d7c",
+      "line_for_item_sha": "8861dfe1a4b0209d9d52cfd9e99fd3b68d0c56eaa71d993c6961446ce0bc9d9d",
       "queries": 35,
       "read_events": {
         "capped": false,
@@ -1137,7 +1205,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "a72945c6c01981cb3a668616ba74aa5459ff836413e5aed1ac64ce69b4827ac3"
+      "related_lines_sha": "c15b2e91fc04bf8c94fd5e99e8028206e528525fecdbaadfc9986811b2a5fff3"
     },
     "c": {
       "item_lines": {
@@ -1190,6 +1258,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1197,7 +1266,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "6615f56affd2c46536a248b202754ac66ccdff97558908e29c1b0e9c188c0518",
+      "line_for_item_sha": "2f161ed31a405dbe923ab0294ce9a325672a988f34400ece21fda90cd764cf62",
       "queries": 39,
       "read_events": {
         "capped": false,
@@ -1216,7 +1285,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "7bb2a95d9e1b4a4980ed0ba499cbf47fe507b99102563fc9a81b8f6e9ebd17ae"
+      "related_lines_sha": "67fc944300b46bb2e98404271b8bd32bc17e6ae3e063a70212b4355cb271be69"
     }
   },
   "v1_threaded_announce_c_in_gm": {
@@ -1278,6 +1347,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1285,7 +1355,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "67a2af6304a67709e7b9fa10f93e37cb928c6d7fabd69545d52fe75c3dd286b1",
+      "line_for_item_sha": "68a7bff1304d4fb56c13c97914fa14f23ce9a4f45b7b1e2aafc45953ff968336",
       "queries": 36,
       "read_events": {
         "capped": false,
@@ -1307,7 +1377,7 @@
           "{\"actor\":\"A\",\"ai_app\":true,\"at\":\"+61200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"opened in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_read\"}"
         ]
       },
-      "related_lines_sha": "059d1f6ff87ca46a3989eb7b0b55e66c4cab383867181951dce700b976b303c4"
+      "related_lines_sha": "29161f624d7f830982b9cf5c0202be8503973b457a0cb6715b0bbaac0b2bc412"
     },
     "b": {
       "item_lines": {
@@ -1369,6 +1439,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1376,7 +1447,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "dd4b6274ada0e70fe9e584579ccfdde2ef32bec095df3f93eafb8e6758868799",
+      "line_for_item_sha": "672364fc9fcdf9f4eafb85815ca682600caf3ef7f3855b815430b6e1ee789e4e",
       "queries": 35,
       "read_events": {
         "capped": false,
@@ -1400,7 +1471,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "69ce9920e37e56c20c915be7843418bdc2ee8a3ffb1f5480baefac4fec9bc972"
+      "related_lines_sha": "bea102d64c50863836e73e161b0bb3be9bf256e75dc5e53a22d7b0aff0744e92"
     },
     "c": {
       "item_lines": {
@@ -1462,6 +1533,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1469,7 +1541,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "fbcb15c5042a42b99ef3f7022af5d8c83af53f911b2f15e173af242b2a318d48",
+      "line_for_item_sha": "0f9efd267f9937c75c75aa925cd23f69753b4ab536f2c08d6a80d9ff6d1c6f85",
       "queries": 41,
       "read_events": {
         "capped": false,
@@ -1493,7 +1565,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "f9bf03ce269b2e1aebff25b95c00991a51e01d6d07cf31ba4341c6356d23ffee"
+      "related_lines_sha": "3ecc60f305e5e138d2056d0fb8a6ea98e51ba2b6f2271db9912eae75eefb035d"
     }
   },
   "v2_flat": {
@@ -1564,6 +1636,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32700s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -1571,8 +1652,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "74ff81000a32854165e5cc0c7c253f6cd9ccfbb87eb6854c6ae96dbda92dc787",
-      "queries": 36,
+      "line_for_item_sha": "49b5b8c9844a776d33adf6f2a29f4f2080ec3766dc03803901f782dc4b9949e8",
+      "queries": 37,
       "read_events": {
         "capped": false,
         "events": [
@@ -1592,7 +1673,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "fbf566baf00abcca89096804abe8c6e3413a29125cbd1b03eff895b4be35c8bf"
+      "related_lines_sha": "d2d9c46a85747633c9b211801a3408d0485dfdb841be18cb8d9371e4dfd2de50"
     },
     "c": {
       "item_lines": {
@@ -1645,6 +1726,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1652,7 +1734,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "6615f56affd2c46536a248b202754ac66ccdff97558908e29c1b0e9c188c0518",
+      "line_for_item_sha": "2f161ed31a405dbe923ab0294ce9a325672a988f34400ece21fda90cd764cf62",
       "queries": 39,
       "read_events": {
         "capped": false,
@@ -1671,7 +1753,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "7bb2a95d9e1b4a4980ed0ba499cbf47fe507b99102563fc9a81b8f6e9ebd17ae"
+      "related_lines_sha": "67fc944300b46bb2e98404271b8bd32bc17e6ae3e063a70212b4355cb271be69"
     }
   },
   "v2_flat_announce": {
@@ -1743,6 +1825,15 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 1,
+          "chats": [
+            {
+              "chat_id": "CHAT",
+              "chat_type": "gm",
+              "latest_at": "+32700s",
+              "messages": 1,
+              "title": "<workspace_content>\nClient chat\n</workspace_content>"
+            }
+          ],
           "total": 1
         },
         "window": {
@@ -1750,8 +1841,8 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "83c4c5955d7c9632912f6b85570eae38e0e311115b18a02da83be23dc7dad7eb",
-      "queries": 36,
+      "line_for_item_sha": "10f4168bdff9c269b79e181255c390eb54cc66c483d0a8c7664f202cfcbbfbf9",
+      "queries": 37,
       "read_events": {
         "capped": false,
         "events": [
@@ -1772,7 +1863,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "045af773fc8fd63ba1c2e7f0c9c80a45da6f3d79e2a307835c23771e12637e56"
+      "related_lines_sha": "369eadd17bbe082f28a06e38641b39157890c621496fa196ace944c066eee022"
     },
     "c": {
       "item_lines": {
@@ -1825,6 +1916,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1832,7 +1924,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "6615f56affd2c46536a248b202754ac66ccdff97558908e29c1b0e9c188c0518",
+      "line_for_item_sha": "2f161ed31a405dbe923ab0294ce9a325672a988f34400ece21fda90cd764cf62",
       "queries": 39,
       "read_events": {
         "capped": false,
@@ -1851,7 +1943,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "7bb2a95d9e1b4a4980ed0ba499cbf47fe507b99102563fc9a81b8f6e9ebd17ae"
+      "related_lines_sha": "67fc944300b46bb2e98404271b8bd32bc17e6ae3e063a70212b4355cb271be69"
     }
   },
   "v2_threaded": {
@@ -1924,6 +2016,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -1931,7 +2024,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "5761d2726f2f457e29e65ca4f6d478682e3dfadbed02268edeea3ea5873c4d7c",
+      "line_for_item_sha": "8861dfe1a4b0209d9d52cfd9e99fd3b68d0c56eaa71d993c6961446ce0bc9d9d",
       "queries": 35,
       "read_events": {
         "capped": false,
@@ -1954,7 +2047,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "a72945c6c01981cb3a668616ba74aa5459ff836413e5aed1ac64ce69b4827ac3"
+      "related_lines_sha": "c15b2e91fc04bf8c94fd5e99e8028206e528525fecdbaadfc9986811b2a5fff3"
     },
     "c": {
       "item_lines": {
@@ -2007,6 +2100,7 @@
         "unattached": {
           "app_markers": 0,
           "chat_messages": 0,
+          "chats": [],
           "total": 0
         },
         "window": {
@@ -2014,7 +2108,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "6615f56affd2c46536a248b202754ac66ccdff97558908e29c1b0e9c188c0518",
+      "line_for_item_sha": "2f161ed31a405dbe923ab0294ce9a325672a988f34400ece21fda90cd764cf62",
       "queries": 39,
       "read_events": {
         "capped": false,
@@ -2033,7 +2127,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "7bb2a95d9e1b4a4980ed0ba499cbf47fe507b99102563fc9a81b8f6e9ebd17ae"
+      "related_lines_sha": "67fc944300b46bb2e98404271b8bd32bc17e6ae3e063a70212b4355cb271be69"
     }
   }
 }

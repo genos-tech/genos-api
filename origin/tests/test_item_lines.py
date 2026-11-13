@@ -2249,7 +2249,7 @@ class TestUnattachedSaysWhenItIsAFloor(LineBase):
         self.lost_markers(4)
         with self.pool(3):
             out = item_lines.unattached(self.ctx, self.since, self.until)
-        self.assertEqual(sorted(out), ["app_markers", "chat_messages", "total"])
+        self.assertEqual(sorted(out), ["app_markers", "chat_messages", "chats", "total"])
 
 
 class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
