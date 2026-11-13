@@ -86,6 +86,8 @@ _NOTE_FAMILY = {
 #   "note":      `note_id` with its `note_type`
 #   "chat":      `chat_id` (a UUID) with an optional `thread_id`
 #   "task_rows": the `task_id` of each row of `updates`
+#   "timeline":  `anchor_type` + `anchor_id`: a task or a thread (the tool hands the recorder the
+#                canonical id, see `get_timeline`); a chat window touches no single item
 SUBJECTS: dict[str, tuple[str, str]] = {
     # tasks
     "get_task": ("task", "task_id"),
@@ -93,6 +95,7 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "get_task_history": ("task", "task_id"),
     "get_progress_history": ("task", "task_id"),
     "get_item_line": ("task", "task_id"),
+    "get_timeline": ("timeline", "anchor_id"),
     "update_task": ("task", "task_id"),
     "assign_task": ("task", "task_id"),
     "add_comment": ("task", "task_id"),
@@ -259,6 +262,16 @@ def subjects(tool_name: str, args: dict[str, Any]) -> list[tuple[str, str]]:
         family = _NOTE_FAMILY.get(str(args.get("note_type") or "").lower().strip())
         if ident and family:
             found.append((OBJECT_NOTE, f"{family}:{ident}"))
+    elif how == "timeline":
+        anchor = args.get("anchor_type")
+        if anchor == "task":
+            ident = _int_id(args.get(key))
+            if ident:
+                found.append((OBJECT_TASK, ident))
+        elif anchor == "thread":
+            thread = _uuid_text(args.get(key))
+            if thread:
+                found.append((OBJECT_CHAT_THREAD, thread))
     elif how == "chat":
         chat = _uuid_text(args.get(key))
         if chat:

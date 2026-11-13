@@ -249,13 +249,14 @@ def chip_task_ids(body: Any) -> set[int]:
     return found
 
 
-def _chip_filter(qs, column: str, task_ids) -> Any:
+def _chip_filter(qs, column: str, task_ids, table: str | None = None) -> Any:
     """Narrow `qs` to the rows whose JSON `column` holds a `#` chip for one of `task_ids`.
-    The ids travel as jsonpath variables, never inside the SQL text."""
+    The ids travel as jsonpath variables, never inside the SQL text. `table` names the table of
+    the column when it is reached through a join (a reaction's message), not `qs`'s own."""
     values: list[Any] = []
     for i in sorted(task_ids):
         values += [i, str(i)]
-    table = qs.model._meta.db_table
+    table = table or qs.model._meta.db_table
     return qs.extra(
         where=[f'jsonb_path_exists("{table}"."{column}", %s::jsonpath, %s::jsonb)'],
         params=[_CHIP_PATH, json.dumps({"ids": values})],
