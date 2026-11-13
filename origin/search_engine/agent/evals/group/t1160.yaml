@@ -5,7 +5,7 @@
 #
 # Seed (`seed: [inbox_report]`, group/seeds.py): one unread report, ~133 lines in 12 sections (~14,000
 # characters EN / ~8,300 JA, far over the cap) in the viewer's own inbox in the sequence team. Early
-# section "Overdue" has CLP-9 first; the LAST line of the last section is ZULU-77, in the part the cap cuts.
+# section "Needs attention" has CLP-9 first; the LAST line of the last section is ZULU-77, in the part the cap cuts.
 # The arm's measured effect is mostly tokens (arm report: d tokens); the cases check that the answer holds.
 #
 # Per language: a positive (a fact in the kept part), a negative (a one-line glance must not dump deep
@@ -17,8 +17,8 @@
   fixture: sequence
   viewer: b
   seed: [inbox_report]
-  query: "What does my latest Genos report say is overdue?"
-  note: "Positive: the overdue section is the first of the report, inside the cap in both arms."
+  query: "What does my latest Genos report say needs attention?"
+  note: "Positive: the 'needs attention' section is the first of the report, inside the cap in both arms."
   expect:
     tools_used_contains: [list_my_inbox]
     answer_contains_any: ["clp-9", "export button"]
@@ -57,8 +57,8 @@
   fixture: sequence
   viewer: ja-b
   seed: [inbox_report]
-  query: "最新のGenosレポートで期限切れになっているものは何ですか?"
-  note: "Positive: the overdue section is the first of the report, inside the cap in both arms."
+  query: "最新のGenosレポートで要対応になっているものは何ですか?"
+  note: "Positive: the 'needs attention' section is the first of the report, inside the cap in both arms."
   expect:
     tools_used_contains: [list_my_inbox]
     answer_contains_any: ["clp-9", "エクスポートボタン"]

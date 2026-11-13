@@ -46,9 +46,9 @@ FLAG = "AGENT_NOTE_THREADS_IN_GET_NOTE"
 READER = "origin.services.note_comments.read_note_threads"
 
 GOLDEN: dict[str, str] = {
-    "note/personal": "48614f4109ead080ca6bef3444c0643f4843f678c99cab0d1b0145ac2dbcbe76",
-    "note/task": "b4fbc76aab1bafd3cc47f791d118205f281f9cbaf807c91eb072b2c909a7978f",
-    "note/chat": "b8e409693a7f15a01b486f04e526375f85f300888bd0219d8dbbe38df242d7cb",
+    "note/personal": "aa59ecc86ceeb706c4ac5a6d9db2215a4063e497269daceeebd848212c8926fd",
+    "note/task": "ad6e3e528a723ff873c8697bff048df07118f7dc7429aef14333361b9528697f",
+    "note/chat": "b0f5d9c91710855e966508fcb8c5aca955f595242f72149169a79f4b705002d0",
     "declarations": "ef496d745cfc175a1a0e02e92e254e7f4304bab500d1ffd93d9016da2731832a",
 }
 
@@ -71,6 +71,7 @@ def normalised(result) -> str:
         if key in ("ts_created", "ts_updated"):  # the clock: set when the row is written
             return "<ts>"
         if isinstance(value, str):
+            value = re.sub(r"#\d+", "#<n>", value)  # the summary line names the note id
             return _UUID.sub(lambda m: seen.setdefault(m.group(0), f"<uuid{len(seen)}>"), value)
         return value
 
@@ -362,7 +363,7 @@ class FlagOnTests(NoteBase):
 
 
 class SeedTests(NoteBase):
-    """The eval stub of the t1090-notethreads cases (`group/seeds.py`)."""
+    """The eval stub of the t1090-notethreads cases (`group/seeds.py`): its OWN note, its own project."""
 
     def setUp(self):
         super().setUp()
@@ -379,32 +380,60 @@ class SeedTests(NoteBase):
             "team": "v1",
         }
 
-    def test_the_stub_serves_the_seeded_threads_for_the_teams_task_notes_only(self):
+    def seeded_note(self):
+        self.seeds.apply(["note_threads_stub"], self.info())
+        self.seeds.apply(["note_threads_stub"], self.info())  # idempotent: one note, one wrapper
+        return TaskNoteMaster.objects.get(title=self.seeds.NOTE_TITLES["en"]["note"])
+
+    def test_the_stub_serves_the_seeded_threads_for_the_seeds_own_note_only(self):
         from origin.services import note_comments  # noqa: PLC0415
 
         original = note_comments.read_note_threads
-        self.seeds.apply(["note_threads_stub"], self.info())
-        self.seeds.apply(["note_threads_stub"], self.info())  # idempotent: one wrapper
-        served = note_comments.read_note_threads("task", self.task_note.note_id)
+        note = self.seeded_note()
+        served = note_comments.read_note_threads("task", note.note_id)
         self.assertEqual([t["id"] for t in served], ["thread-open-1", "thread-done-2"])
         self.assertIs(self.seeds._ORIGINAL_READER["reader"], original)
         with mock.patch("origin.services.collab_push.requests.post"):
+            # the story's own note and every other note still go to the real reader
+            self.assertIsNone(note_comments.read_note_threads("task", self.task_note.note_id))
             self.assertIsNone(note_comments.read_note_threads("personal", self.personal.note_id))
 
     def test_with_the_flag_on_the_model_gets_the_open_thread_and_a_count_of_the_resolved_one(self):
-        self.seeds.apply(["note_threads_stub"], self.info())
+        note = self.seeded_note()
         with on():
-            out = self.note("task")
+            out = REGISTRY["fetch_note"].run(
+                {"note_type": "task", "note_id": note.note_id}, self.ctx()
+            )
         (thread,) = out["comment_threads"]
         self.assertIn("staging permission", thread["comments"][0]["markdown"])
         self.assertEqual(out["comment_threads_note"], "1 resolved thread not shown.")
         self.assertNotIn("Typo", json.dumps(out))
 
+    def test_another_note_does_not_get_the_comments_not_even_with_the_stub_installed(self):
+        self.seeded_note()
+        with on(), mock.patch("origin.services.collab_push.requests.post"):
+            out = self.note("task")  # the story's note
+        self.assertIsNone(out["comment_threads"])
+        self.assertNotIn("staging", json.dumps(out))
+
+    def test_the_note_lives_in_a_project_of_its_own_with_only_the_viewer_and_the_developer(self):
+        from origin.models.project.prj_models import ProjectMembers  # noqa: PLC0415
+
+        note = self.seeded_note()
+        self.assertEqual(note.project.code, "ENT")
+        members = set(
+            ProjectMembers.objects.filter(project=note.project).values_list(
+                "attendee_id", flat=True
+            )
+        )
+        self.assertEqual(members, {self.user.id, self.user2.id})
+        self.assertNotEqual(note.project_id, self.project.project_id)
+
     def test_the_stub_is_removed_cleanly(self):
         from origin.services import note_comments  # noqa: PLC0415
 
         original = note_comments.read_note_threads
-        self.seeds.apply(["note_threads_stub"], self.info())
+        self.seeded_note()
         self.assertIsNot(note_comments.read_note_threads, original)
         self.seeds.remove_note_threads_stub()
         self.assertIs(note_comments.read_note_threads, original)

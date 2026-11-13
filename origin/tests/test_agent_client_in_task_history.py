@@ -443,4 +443,20 @@ class SeedTests(HistoryBase):
         task = TaskMaster.objects.get(title=seeds.CLIENT_TASK_TITLE["en"])
         self.assertEqual(task.status, "Closed")
         self.assertEqual(task.assignee_id, self.user.id)
-        self.assertEqual(task.project_id, self.project.project_id)
+        self.assertEqual(task.project.code, "ECH")  # a project of its own
+        self.assertNotEqual(task.project_id, self.project.project_id)
+        self.assertFalse(TaskMaster.objects.filter(project=self.project, title=task.title).exists())
+
+    def test_a_reseed_after_the_people_are_deleted_does_not_trip_on_the_oauth_app(self):
+        """`delete_team` removes the people, and with them their keys and connections, but the OAuth
+        application has no team: the next seed must find it, not create it twice."""
+        from origin.search_engine.agent.evals.group import seeds  # noqa: PLC0415
+
+        self.seeded_history(self.user)
+        McpConnection.objects.all().delete()
+        ApiKey.objects.filter(name__in=[seeds.LAPTOP_KEY, seeds.CI_KEY]).delete()
+        TaskMaster.objects.filter(title=seeds.CLIENT_TASK_TITLE["en"]).delete()
+        self.assertEqual(Application.objects.filter(client_id="eval-seed-v1-claude").count(), 1)
+        rows = self.seeded_history(self.user)  # no IntegrityError
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(Application.objects.filter(client_id="eval-seed-v1-claude").count(), 1)

@@ -41,6 +41,7 @@ from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
+from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
@@ -489,3 +490,8 @@ class SeedTests(AncestryBase):
             self.assertEqual(got[tasks["child_open"].task_id].status, "Closed")
             self.assertEqual(got[tasks["open"].task_id].status, "Open")
             self.assertEqual(tasks["open"].due_date.isoformat(), "2026-10-01")
+            # a project of its own, with the viewer alone: nobody else in the team sees these tasks
+            self.assertEqual(tasks["open"].project.code, "ECT")
+            self.assertNotEqual(tasks["open"].project_id, self.project.project_id)
+            members = ProjectMembers.objects.filter(project=tasks["open"].project)
+            self.assertEqual([m.attendee_id for m in members], [self.user.id])
