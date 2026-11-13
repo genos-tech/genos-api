@@ -1,0 +1,108 @@
+# MIP-889 (flag AGENT_TELL_MODEL_EDIT_UNDO): tell the model what an approval EDIT applied and what
+# an UNDO undid. ON = the replayed result carries `user_edits_applied`; after an undo the next
+# turn's earlier answer ends with a short factual note.
+#
+# The REAL create_task result already echoes the applied title and priority, so the edit case
+# measures whether the explicit note adds anything over that; the undo case is where the model has
+# no other way to know. Per language: a positive (edit), a negative (approve as proposed: no
+# note, nothing changes), an edge (the write is undone, then a follow-up asks about it).
+
+- id: t889-applied.edited.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-applied]
+  fixture: false
+  polarity: pos
+  query: "Create a task called 'Ship it' in the project, then tell me exactly which priority the created task has."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  edited_args: {priority: High}
+  expect:
+    resumed_prompt_contains: ["user_edits_applied"]
+    answer_contains_any: ["High"]
+    answer_excludes: ["Low"]
+
+- id: t889-applied.edited.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-applied]
+  fixture: false
+  polarity: pos
+  query: "プロジェクトに「出荷する」というタスクを作成して、作成されたタスクの優先度を正確に教えてください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  edited_args: {priority: High}
+  expect:
+    resumed_prompt_contains: ["user_edits_applied"]
+    answer_contains_any: ["High", "高"]
+    answer_excludes: ["Low", "低"]
+
+- id: t889-applied.as-proposed.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-applied]
+  fixture: false
+  polarity: neg
+  query: "Create a task called 'Ship it' in the project, then tell me exactly which priority the created task has."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_excludes: ["user_edits_applied"]
+    answer_contains_any: ["Low"]
+    answer_excludes: ["High"]
+
+- id: t889-applied.as-proposed.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-applied]
+  fixture: false
+  polarity: neg
+  query: "プロジェクトに「出荷する」というタスクを作成して、作成されたタスクの優先度を正確に教えてください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_excludes: ["user_edits_applied"]
+    answer_contains_any: ["Low", "低"]
+    answer_excludes: ["High", "高"]
+
+- id: t889-applied.undone.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-applied]
+  fixture: false
+  polarity: pos
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "Is the task you created for me still there? Answer in one sentence."
+  expect:
+    follow_up_prompt_contains: ["undid create_task"]
+    answer_contains_any: ["undone", "undid", "deleted", "removed", "no longer", "not there"]
+
+- id: t889-applied.undone.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-applied]
+  fixture: false
+  polarity: pos
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "さっき作ってもらったタスクはまだ残っていますか?一文で答えてください。"
+  expect:
+    follow_up_prompt_contains: ["undid create_task"]
+    answer_contains_any: ["取り消", "削除", "元に戻", "ありません", "残っていません"]

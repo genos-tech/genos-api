@@ -1,0 +1,125 @@
+# MIP-1283 route (b) (flag AGENT_CLOSING_LINE_IN_ORIGIN_THREAD): when a task closes, a fixed
+# line ("Task <display id> is now Closed.", no sender, no mention, no push) is posted in the chat
+# thread the task was made from. The in-app agent reads threads, so it reads the line.
+#
+# `scenario: closing_line` (resume_runner.py): the task is closed UNDER THE ARM'S OVERRIDES, so the
+# line exists only in the arm that has the flag on (the sequence fixture is seeded once, before any
+# arm, and could not show the difference). The asker is the CLIENT who wrote the first message of
+# the thread; the model under test is the whole run (no scripted leg).
+#
+# Per language: a positive (closed, the client asks), a negative (NOT closed: no line in either
+# arm, and the model must not say it closed), an edge (closed, reopened, closed again).
+
+- id: t1283.client-asks.en
+  kind: resume
+  scenario: closing_line
+  lang: en
+  tags: [eval-group, t1283]
+  fixture: false
+  polarity: pos
+  thread:
+    first_sender: other
+    messages:
+      - "Client: Please fix the export bug, it blocks our month-end report."
+      - "PM: On it."
+  task_title: "Fix the export bug"
+  query: "Did my request in chat {chat_id}, thread {thread_id}, get done? Answer in one sentence."
+  expect:
+    final_prompt_contains: ["is now Closed"]
+    tools_called: [fetch_chat_thread]
+    answer_contains_any: ["closed", "done", "finished", "completed", "resolved"]
+
+- id: t1283.client-asks.ja
+  kind: resume
+  scenario: closing_line
+  lang: ja
+  tags: [eval-group, t1283]
+  fixture: false
+  polarity: pos
+  thread:
+    first_sender: other
+    messages:
+      - "クライアント: エクスポートのバグを直してください。月次レポートが止まっています。"
+      - "PM: 対応します。"
+  task_title: "エクスポートのバグ修正"
+  query: "チャット {chat_id} のスレッド {thread_id} での私の依頼は完了しましたか?一文で答えてください。"
+  expect:
+    final_prompt_contains: ["is now Closed"]
+    tools_called: [fetch_chat_thread]
+    answer_contains_any: ["完了", "クローズ", "Closed", "終了", "対応済"]
+
+- id: t1283.not-closed.en
+  kind: resume
+  scenario: closing_line
+  lang: en
+  tags: [eval-group, t1283]
+  fixture: false
+  polarity: neg
+  close: false
+  thread:
+    first_sender: other
+    messages:
+      - "Client: Please fix the export bug, it blocks our month-end report."
+      - "PM: On it."
+  task_title: "Fix the export bug"
+  query: "Did my request in chat {chat_id}, thread {thread_id}, get done? Answer in one sentence."
+  expect:
+    final_prompt_excludes: ["is now Closed"]
+    answer_excludes: ["is now Closed", "has been closed", "was closed"]
+
+- id: t1283.not-closed.ja
+  kind: resume
+  scenario: closing_line
+  lang: ja
+  tags: [eval-group, t1283]
+  fixture: false
+  polarity: neg
+  close: false
+  thread:
+    first_sender: other
+    messages:
+      - "クライアント: エクスポートのバグを直してください。月次レポートが止まっています。"
+      - "PM: 対応します。"
+  task_title: "エクスポートのバグ修正"
+  query: "チャット {chat_id} のスレッド {thread_id} での私の依頼は完了しましたか?一文で答えてください。"
+  expect:
+    final_prompt_excludes: ["is now Closed"]
+    answer_excludes: ["is now Closed", "クローズされ", "完了しました"]
+
+- id: t1283.reopened-twice.en
+  kind: resume
+  scenario: closing_line
+  lang: en
+  tags: [eval-group, t1283]
+  fixture: false
+  polarity: pos
+  reopen_and_close_again: true
+  thread:
+    first_sender: other
+    messages:
+      - "Client: Please fix the export bug, it blocks our month-end report."
+      - "PM: On it."
+  task_title: "Fix the export bug"
+  query: "What is the latest status of my request in chat {chat_id}, thread {thread_id}? Answer in one sentence."
+  expect:
+    final_prompt_contains: ["is now Closed"]
+    answer_contains_any: ["closed", "done", "finished", "completed", "resolved"]
+
+- id: t1283.reopened-twice.ja
+  kind: resume
+  scenario: closing_line
+  lang: ja
+  tags: [eval-group, t1283]
+  fixture: false
+  polarity: pos
+  reopen_and_close_again: true
+  thread:
+    first_sender: other
+    messages:
+      - "クライアント: エクスポートのバグを直してください。月次レポートが止まっています。"
+      - "PM: 対応します。"
+  task_title: "エクスポートのバグ修正"
+  query: "チャット {chat_id} のスレッド {thread_id} での私の依頼の最新の状況を一文で教えてください。"
+  expect:
+    final_prompt_contains: ["is now Closed"]
+    answer_contains_any: ["完了", "クローズ", "Closed", "終了", "対応済"]

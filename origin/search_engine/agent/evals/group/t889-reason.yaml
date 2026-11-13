@@ -1,0 +1,108 @@
+# MIP-889 (flag AGENT_REJECT_REASON): the optional reason a person gives when rejecting an
+# approval card. With the flag on the model gets {"error": "user_rejected", "reason": "..."} and
+# system-prompt rule 7 says that with a reason it may propose ONE corrected call.
+#
+# Per language: a positive (a corrective reason: the model proposes a corrected call), a negative
+# (no reason: the model must not retry, exactly as before), an edge (a reason that is not a
+# correction, "not now": the model must NOT retry). `pending_*` checks read the second approval
+# card the model proposes, if any.
+
+- id: t889-reason.corrective.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-reason]
+  fixture: false
+  polarity: pos
+  query: "Create a task called 'Fix login' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Fix login", project_id: "{project_id}", priority: Low}
+  decision: reject
+  reason: "Wrong priority: this is a production bug, make it Critical."
+  expect:
+    resumed_prompt_contains: ["production bug"]
+    pending_tool: create_task
+    pending_args_contain: {priority: Critical}
+
+- id: t889-reason.corrective.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-reason]
+  fixture: false
+  polarity: pos
+  query: "プロジェクトに「ログイン修正」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "ログイン修正", project_id: "{project_id}", priority: Low}
+  decision: reject
+  reason: "優先度が違います。本番障害なので Critical にしてください。"
+  expect:
+    resumed_prompt_contains: ["本番障害"]
+    pending_tool: create_task
+    pending_args_contain: {priority: Critical}
+
+- id: t889-reason.no-reason.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-reason]
+  fixture: false
+  polarity: neg
+  query: "Create a task called 'Fix login' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Fix login", project_id: "{project_id}", priority: Low}
+  decision: reject
+  expect:
+    resumed_prompt_excludes: ["user_rejected\", \"reason\""]
+    no_pending: true
+    max_calls: 3
+
+- id: t889-reason.no-reason.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-reason]
+  fixture: false
+  polarity: neg
+  query: "プロジェクトに「ログイン修正」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "ログイン修正", project_id: "{project_id}", priority: Low}
+  decision: reject
+  expect:
+    resumed_prompt_excludes: ["user_rejected\", \"reason\""]
+    no_pending: true
+    max_calls: 3
+
+- id: t889-reason.not-now.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t889-reason]
+  fixture: false
+  polarity: pos
+  query: "Create a task called 'Fix login' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Fix login", project_id: "{project_id}", priority: Low}
+  decision: reject
+  reason: "Not now, I will do this later."
+  expect:
+    resumed_prompt_contains: ["Not now"]
+    no_pending: true
+    max_calls: 3
+
+- id: t889-reason.not-now.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t889-reason]
+  fixture: false
+  polarity: pos
+  query: "プロジェクトに「ログイン修正」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "ログイン修正", project_id: "{project_id}", priority: Low}
+  decision: reject
+  reason: "今は不要です。後で自分でやります。"
+  expect:
+    resumed_prompt_contains: ["今は不要"]
+    no_pending: true
+    max_calls: 3

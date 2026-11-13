@@ -1,0 +1,5 @@
+# 991 only has an effect with the 977 flag on (the turns ride in the same kept context).
+arm: t991
+overrides:
+    AGENT_RESUME_KEEPS_TURNS: true
+requires: [t977]
