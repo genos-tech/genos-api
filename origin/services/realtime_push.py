@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 BROADCAST_PATH = "/internal/broadcast/task-comment"
 ACTIVITY_PATH = "/internal/broadcast/activity"
+MESSAGE_PATH = "/internal/broadcast/message"
 MEMBERSHIP_PATH = "/internal/membership/removed"
 # Must match genos-sockets `utils/internal_auth`.
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
@@ -51,6 +52,8 @@ TIMEOUT_SECONDS = 2
 CREATED = "created"
 EDITED = "edited"
 DELETED = "deleted"
+# A chat message that was rewritten (`push_message`); the comment pushes call that "edited".
+UPDATED = "updated"
 
 
 def _sign(secret: str, timestamp: str, body: bytes) -> str:
@@ -176,6 +179,44 @@ def push_activity(activity) -> None:
         transaction.on_commit(lambda: _post(payload, ACTIVITY_PATH, "activity"), robust=True)
     except Exception:  # noqa: BLE001 — the activity is saved; an observer must not break it
         logger.warning("sockets activity push could not be scheduled", exc_info=True)
+
+
+def push_message(message, event) -> None:
+    """Announce a chat `Message` this API wrote with no socket handler to relay it, so a
+    colleague who has that chat open sees it now instead of at their next sync (MIP-1459:
+    the task card posted for a task made over MCP).
+
+    genos-sockets sends `message.created` (`event=CREATED`) or `message.updated`
+    (`event=UPDATED`) to the message's channel room, the event the chat already listens on,
+    with the message exactly as `MessageSerializer` writes it (the same prefetches the REST
+    send uses, so the shape is the one the app's own sends carry). Sends once the current
+    transaction commits, or at once when there is none. A no-op when `SOCKETS_INTERNAL_URL`
+    is unset. Never raises: the message is saved, and the next sync still finds it.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets message push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        from rest_framework.renderers import JSONRenderer  # noqa: PLC0415
+
+        from origin.models.chat.unified_models import Message  # noqa: PLC0415
+        from origin.serializers.chat.unified_serializers import MessageSerializer  # noqa: PLC0415
+        from origin.views.chat.message_views import _prefetched_messages  # noqa: PLC0415
+
+        fresh = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
+        if fresh is None:
+            return
+        payload: dict[str, Any] = {
+            "event": event,
+            "message": json.loads(JSONRenderer().render(MessageSerializer(fresh).data)),
+            # For the log line only: sockets reads `event` and `message`.
+            "taskId": fresh.task_id,
+        }
+        transaction.on_commit(lambda: _post(payload, MESSAGE_PATH, "message"), robust=True)
+    except Exception:  # noqa: BLE001 — the message is saved; an observer must not break it
+        logger.warning("sockets message push could not be scheduled", exc_info=True)
 
 
 # Sockets takes at most this many of each (genos-sockets `MAX_ROOMS`); a person in more than that

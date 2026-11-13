@@ -200,7 +200,15 @@ def _split_mentions_by_membership(channel, body):
 
 
 def _allocate_seq_and_create_message_with_activities(
-    *, channel, sender, body, body_text, parent_id, metadata, correlation_id=None
+    *,
+    channel,
+    sender,
+    body,
+    body_text,
+    parent_id,
+    metadata,
+    correlation_id=None,
+    self_assign=True,
 ):
     """Wraps `_allocate_seq_and_create_message` and additionally fans out
     `Activity` rows for the recipients who should see a sidebar entry.
@@ -208,6 +216,12 @@ def _allocate_seq_and_create_message_with_activities(
     Returns `(message, activities)` so the caller can include the
     activities in the wire response — the WS proxy layer reads them and
     broadcasts `activity.created` to each recipient's `user:{id}` room.
+
+    `self_assign=False` leaves out the sidebar row for a task card that assigns
+    the task to its own sender. The app keeps it (someone who clicked Create
+    wants a trace); `task_card_post` turns it off, because a plan made over MCP
+    assigns every task to its maker and would add one row per task to a feed
+    that already carries the single "your AI app created N tasks" notice.
     """
 
     from origin.services import v3_activity
@@ -264,7 +278,8 @@ def _allocate_seq_and_create_message_with_activities(
     # (== sender), which the mention fan-out above skips. Surface it so a
     # self-assigned task still pings the sidebar. No-op for non-task
     # messages and for tasks assigned to someone else.
-    activities.extend(v3_activity.create_self_assign_activity(message=msg, actor=sender))
+    if self_assign:
+        activities.extend(v3_activity.create_self_assign_activity(message=msg, actor=sender))
 
     # Web Push: notify away recipients (no visible tab). Deferred to
     # on_commit so a rollback never pushes a message that didn't persist.
@@ -842,6 +857,42 @@ class MessageDetailView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def rewrite_card_message(message, *, body, body_text, metadata=None):
+    """Replace a task card's body (and metadata, when given) and re-sync its mentions.
+
+    The one definition of "rewrite a card": `TaskCardMessageView.patch` (the browser's
+    rewrite after an edit) and `task_card_post.refresh_*_card` (the server's, after an edit
+    that had no browser, MIP-1460) both go through it, so the two cannot drift.
+    """
+    with transaction.atomic():
+        message.body = body
+        message.body_text = body_text
+        message.edited_at = timezone.now()
+        update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
+        if isinstance(metadata, dict):
+            message.metadata = metadata
+            update_fields.append("metadata")
+        message.save(update_fields=update_fields)
+
+        # Re-sync MessageMention rows from the new card body (the card
+        # @-mentions the assignee + reporter). Mirrors
+        # `MessageDetailView.patch` so the `mentions[]` array stays
+        # consistent after an assignee change. No Activity rows are
+        # created here — task-body mention notifications are owned
+        # separately by the task PUT / `task_body_mention` path, and a
+        # reassignment's by `task_assignment_notice` (MIP-1461).
+        new_mentioned_ids = _valid_mention_user_ids(message.channel, body)
+        MessageMention.objects.filter(message=message).delete()
+        if new_mentioned_ids:
+            MessageMention.objects.bulk_create(
+                [
+                    MessageMention(message=message, mentioned_user_id=uid)
+                    for uid in new_mentioned_ids
+                ],
+                ignore_conflicts=True,
+            )
+
+
 class TaskCardMessageView(AuthenticatedAPIView):
     """PATCH /api/v3/tasks/{task_id}/card-message/
 
@@ -912,32 +963,7 @@ class TaskCardMessageView(AuthenticatedAPIView):
             # everywhere else in this view file.
             raise Http404("Task card message not found.")
 
-        with transaction.atomic():
-            message.body = body_json
-            message.body_text = body_text
-            message.edited_at = timezone.now()
-            update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
-            if isinstance(metadata, dict):
-                message.metadata = metadata
-                update_fields.append("metadata")
-            message.save(update_fields=update_fields)
-
-            # Re-sync MessageMention rows from the new card body (the card
-            # @-mentions the assignee + reporter). Mirrors
-            # `MessageDetailView.patch` so the `mentions[]` array stays
-            # consistent after an assignee change. No Activity rows are
-            # created here — task-body mention notifications are owned
-            # separately by the task PUT / `task_body_mention` path.
-            new_mentioned_ids = _valid_mention_user_ids(message.channel, body_json)
-            MessageMention.objects.filter(message=message).delete()
-            if new_mentioned_ids:
-                MessageMention.objects.bulk_create(
-                    [
-                        MessageMention(message=message, mentioned_user_id=uid)
-                        for uid in new_mentioned_ids
-                    ],
-                    ignore_conflicts=True,
-                )
+        rewrite_card_message(message, body=body_json, body_text=body_text, metadata=metadata)
 
         message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
         return Response(MessageSerializer(message).data)

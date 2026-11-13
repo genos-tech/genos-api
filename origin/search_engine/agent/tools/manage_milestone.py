@@ -69,6 +69,7 @@ from origin.services.milestone_manage import (
 )
 from origin.services.milestone_service import create_milestone
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_card_post import post_milestone_created_card
 
 _TITLE_MAX = MilestoneMaster._meta.get_field("title").max_length
 
@@ -362,6 +363,9 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if parsed.get("description") and milestone.task_id:
         backing = TaskMaster.objects.select_related("project").get(task_id=milestone.task_id)
         notify_task_body_mentions(backing, actor_id=ctx.user_id)
+    # The project chat's "milestone created" card, which the app's browser would post
+    # (MIP-1450): it is what tells the assignees.
+    post_milestone_created_card(milestone, actor_id=ctx.user_id)
 
     payload = _milestone_payload(milestone.milestone_id)
     return {

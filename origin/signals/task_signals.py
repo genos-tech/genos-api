@@ -85,6 +85,12 @@ _TRACKED_TASK_FIELDS = (
 )
 
 
+# What a task's chat card shows (`task_card.task_card_body`). A change to any of these, made
+# with no browser to rewrite the card, leaves the chat stale (MIP-1460). A milestone's backing
+# task also carries its sprint, which its card names.
+_CARD_FIELDS = frozenset({"title", "status", "priority", "effort_level", "assignee_id", "due_date"})
+
+
 _FIELD_TO_ACTION = {
     "title": TaskActivityActionType.TITLE,
     "status": TaskActivityActionType.STATUS,
@@ -688,6 +694,7 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             metadata={"previousBodyKept": True} if keep else None,
         )
 
+    card_changed = False
     for field in _TRACKED_TASK_FIELDS:
         old = _tracked_value(field, original.get(field))
         new = _tracked_value(field, getattr(instance, field))
@@ -696,6 +703,8 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
         action = _FIELD_TO_ACTION.get(field)
         if action is None:
             continue
+        if field in _CARD_FIELDS or (field == "sprint_id" and instance.is_milestone):
+            card_changed = True
         metadata = _metadata_for_change(field, old, new)
         # PR-merge auto-close: the GitHub webhook stashes `_pr_merge_close`
         # on the instance before flipping status to Closed. Tag the status
@@ -734,6 +743,20 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
     # and would fan one event out per person notified.
     new_status = instance.status if original.get("status") != instance.status else None
     _schedule_task_webhook(instance, created=False, status_changed_to=new_status)
+
+    if card_changed:
+        _schedule_card_refresh(
+            task_id=instance.task_id,
+            derived=bool(getattr(instance, "_derived_blocked_sync", False)),
+        )
+
+
+def _schedule_card_refresh(*, task_id=None, milestone_id=None, derived: bool = False) -> None:
+    """Bring the chat card up to date once the write commits (MIP-1460); see
+    `task_card_post.schedule_refresh`, which owns the rule for which writes qualify."""
+    from origin.services.task_card_post import schedule_refresh  # noqa: PLC0415
+
+    schedule_refresh(task_id=task_id, milestone_id=milestone_id, derived=derived)
 
 
 def _schedule_task_webhook(instance, *, created: bool, status_changed_to=None) -> None:
@@ -916,6 +939,7 @@ def milestone_assignee_record_add(sender, instance: MilestoneAssignees, created:
             "userName": getattr(instance.user, "username", None),
         },
     )
+    _schedule_card_refresh(milestone_id=instance.milestone_id)
 
 
 @receiver(post_delete, sender=MilestoneAssignees)
@@ -935,6 +959,7 @@ def milestone_assignee_record_remove(sender, instance: MilestoneAssignees, **kwa
             "userName": getattr(instance.user, "username", None),
         },
     )
+    _schedule_card_refresh(milestone_id=instance.milestone_id)
 
 
 # ---------------------------------------------------------------------------

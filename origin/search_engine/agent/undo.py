@@ -177,8 +177,9 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     "update_tasks_bulk": (NOT_YET, "per-row undo of a bulk update is a follow-up"),
     "create_task_plan": (NOT_YET, "undoing a milestone with its tasks as one step is a follow-up"),
     "assign_task": (
-        NOT_YET,
-        "the assignee changes and nobody is told; putting the old assignee back is not built",
+        NOTIFIED_PEOPLE,
+        "the new assignee is told (a mention on the task's card, a push); putting the old "
+        "assignee back is not built",
     ),
     "add_task_delivery": (NOT_YET, "unlinking what it linked is not built"),
     "remove_task_delivery": (NOT_YET, "relinking what it removed is not built"),
