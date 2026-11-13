@@ -409,6 +409,8 @@ def build_unread(
             ts_created_at__gte=since_dt,
             ts_created_at__lte=now,
         )
+        # The member's own AI app's doings (MIP-1432) are not news for an AI app to read back.
+        .exclude(activity_type=ActivityType.AI_APP)
         .order_by("-ts_created_at", "-id")
         .values(*_COLUMNS)[: POOL + 1]
     )

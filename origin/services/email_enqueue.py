@@ -58,6 +58,9 @@ def _email_spec(act) -> dict | None:
     "unify" this into `_push_spec`: that would silently turn on a new
     push category.
     """
+    if act.activity_type == ActivityType.AI_APP:
+        # The member's own AI app's doings are in-app and push only (MIP-1432).
+        return None
     if act.activity_type == ActivityType.TASK_ASSIGN:
         actor_name = getattr(act.actor, "username", None) or "Someone"
         return {

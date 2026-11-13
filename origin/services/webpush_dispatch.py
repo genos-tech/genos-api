@@ -120,6 +120,21 @@ def _push_spec(act) -> dict | None:
     body = _truncate(getattr(act.message, "body_text", "")) if act.message_id else ""
     atype = act.activity_type
 
+    if atype == ActivityType.AI_APP:
+        # What the member's own AI app just did over MCP (MIP-1432). Its own category and its
+        # own switch; the title says which app, the body names the first item.
+        from origin.services.mcp_notice import sentence  # noqa: PLC0415
+
+        meta = act.meta or {}
+        items = meta.get("items") or []
+        app = meta.get("app") or "Your AI app"
+        return {
+            "category": "ai_app",
+            "title": f"{app} {sentence(meta)}",
+            "body": _truncate((items[0].get("title") if items else "") or ""),
+            "url": meta.get("url") or "/workspace",
+        }
+
     if atype == ActivityType.REACTION:
         emoji = (act.meta or {}).get("emoji", "")
         title = f"{actor_name} reacted {emoji}".strip()

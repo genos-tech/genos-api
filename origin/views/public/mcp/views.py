@@ -23,7 +23,7 @@ from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import member_events, security_events
+from origin.services import mcp_notice, member_events, security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.credentials import credential_of
@@ -494,6 +494,17 @@ class McpView(PublicApiView):
                 credential=credential,
             )
 
+        def notify(tool, resolved_args: dict[str, Any], payload: dict[str, Any]) -> None:
+            # What the member's AI app just did, as a notice to the member (MIP-1432).
+            mcp_notice.notify_owner(
+                user=getattr(request, "user", None),
+                team_id=ctx.team_id,
+                credential=credential,
+                tool_name=tool.name,
+                args=resolved_args,
+                payload=payload or {},
+            )
+
         # `search_workspace` embeds its query, which costs money. Bound the
         # spend to a named surface so it lands on this team's ledger
         # instead of `unattributed`.
@@ -515,6 +526,7 @@ class McpView(PublicApiView):
                     credential_kind=credential_kind,
                     audit=audit,
                     record_use=record_use,
+                    notify=notify,
                 )
             except JsonRpcError:
                 raise

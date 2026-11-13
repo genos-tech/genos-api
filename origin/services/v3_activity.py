@@ -74,6 +74,8 @@ SURFACE_TASK_BODY = 5
 SURFACE_PERSONAL_NOTE = 6
 SURFACE_TASK_NOTE = 7
 SURFACE_CHAT_NOTE = 8
+# What the member's own AI app did over MCP (MIP-1432): an `ActivityType.AI_APP` row.
+SURFACE_AI_APP = 10
 
 # Channel kinds whose plain (non-mention / non-thread) top-level messages
 # produce a per-recipient MESSAGE activity. PM (kind=3) is deliberately
