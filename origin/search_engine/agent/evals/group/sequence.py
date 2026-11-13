@@ -32,6 +32,7 @@ never recompute them.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import uuid
 from datetime import date, datetime
@@ -180,9 +181,27 @@ def viewer_info(viewer: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+# The scenario builder lives in the test tree (`origin/tests` is left out of the production image,
+# see .dockerignore and test_dockerignore). Seeding is a DEV-ONLY tool that runs where the tests
+# are (the dev stack bind-mounts the repo), so the modules are loaded by name at call time rather
+# than imported by the app, and a missing tree is reported instead of crashing an import.
+_TESTS_PKG = "origin" + ".tests"
+
+
+def _load_test_module(name: str):
+    try:
+        return importlib.import_module(f"{_TESTS_PKG}.{name}")
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.startswith(_TESTS_PKG):
+            raise RuntimeError(
+                "the sequence scenario is built by origin/tests, which this image does not "
+                "contain: seed it from the dev stack (a checkout with origin/tests)"
+            ) from exc
+        raise
+
+
 def _driver_class():
-    # Imported here: the module pulls the whole MCP test base in.
-    from origin.tests.fixtures.sequence_scenario import SequenceScenario  # noqa: PLC0415
+    SequenceScenario = _load_test_module("fixtures.sequence_scenario").SequenceScenario  # noqa: N806
 
     class Driver(SequenceScenario):
         """`SequenceScenario.build_sequence` without `setUp`, and with fixed-id people."""
@@ -239,7 +258,7 @@ def _jst():
 
 def _build(label: str) -> None:
     """Build one team's story. All or nothing: a failure leaves no partial team behind."""
-    from origin.tests.test_mcp_endpoint import _mcp_enabled_everywhere  # noqa: PLC0415
+    _mcp_enabled_everywhere = _load_test_module("test_mcp_endpoint")._mcp_enabled_everywhere  # noqa: N806
 
     spec = _BUILDS[label]
     driver = _driver_class()(label)
