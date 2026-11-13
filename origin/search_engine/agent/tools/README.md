@@ -77,8 +77,8 @@ Every new-tool PR ships with:
   until you do.
 
 - [ ] **Description says *when*, not just what** — the model chooses among
-  all 61 registered tools by description alone (count enforced honest by
-  the generated TOOL DIRECTORY in `prompts.py`) (see the `Tool.description` docstring in
+  every registered tool by description alone (the generated TOOL DIRECTORY in
+  `prompts.py` states the true count) (see the `Tool.description` docstring in
   [`base.py`](base.py)).
 
 Rollout / rollback: a risky tool can ship dark and be switched off without

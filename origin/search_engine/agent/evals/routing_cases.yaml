@@ -269,6 +269,16 @@
   en: "Any notifications for me?"
   ja: "自分宛の通知はある?"
   ok: [list_my_inbox]
+# list_my_unread (MIP-1424). The inbox case above and `chat_catch_up` below must NOT move to it:
+# the first is about notifications, the second about one named chat.
+- id: unread_while_away
+  en: "What did I miss while I was away?"
+  ja: "留守の間に何があった?"
+  ok: [list_my_unread]
+- id: unread_summary
+  en: "Summarize my unread messages and comments."
+  ja: "自分の未読のメッセージとコメントをまとめて"
+  ok: [list_my_unread]
 - id: comment_edit
   en: "Fix the typo in my last comment on WRD-5"
   ja: "WRD-5 に書いた自分の最後のコメントの誤字を直して"

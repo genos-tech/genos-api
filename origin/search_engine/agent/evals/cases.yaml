@@ -638,6 +638,16 @@
     tools_used_contains: ["list_my_chats"]
     no_errors: true
 
+- id: unread_while_away
+  # MIP-1424: "what did I miss" is the unread digest, not the inbox, a search or
+  # a made-up answer. The fixture user may have nothing unread; the case checks
+  # the route (list_my_unread) and that the run is clean, not the contents.
+  query: "What did I miss while I was away?"
+  fixture: true
+  expect:
+    tools_used_contains: ["list_my_unread"]
+    no_errors: true
+
 # --------------------------------------------------------------------- #
 # B (expand). Specific-entity fetch                                     #
 # --------------------------------------------------------------------- #
