@@ -552,7 +552,7 @@ def create(
     weekdays: Any = None,
     month_day: Any = None,
     run_date: Any = None,
-    deliver_push: bool = False,
+    deliver_push: bool = True,
     ai_effort: Any = None,
     now: datetime | None = None,
 ) -> MemberSchedule:

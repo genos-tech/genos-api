@@ -28,7 +28,7 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             weekdays=args.get("weekdays"),
             month_day=args.get("month_day"),
             run_date=args.get("run_date"),
-            deliver_push=bool(args.get("deliver_push", False)),
+            deliver_push=bool(args.get("deliver_push", True)),
             ai_effort=args.get("ai_effort"),
         )
     )
@@ -55,7 +55,7 @@ CREATE_MY_SCHEDULE = Tool(
             **RECURRENCE_PROPERTIES,
             "deliver_push": {
                 "type": "BOOLEAN",
-                "description": "Also send a push notification with the report. Default false.",
+                "description": "Also send a push notification with the report. Default true; pass false for a quiet schedule.",
             },
             "ai_effort": AI_EFFORT_PROPERTY,
         },
