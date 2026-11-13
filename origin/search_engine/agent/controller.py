@@ -3189,7 +3189,25 @@ def _drive_loop(
                     model_override=planning_model,
                     emit_deltas=False,
                 )
-                if accumulated_function_calls:
+                if accumulated_function_calls and (
+                    settings.SEARCH_ENGINE.get("AGENT_BODY_ON_USER_MODEL")
+                    and any(
+                        content_length.carries_body(c.name, c.args)
+                        for c in accumulated_function_calls
+                    )
+                ):
+                    # MIP-905 (AGENT_BODY_ON_USER_MODEL, default off): the cheap planning
+                    # model proposed a write that carries a body (a task, note, milestone
+                    # or plan). The body is what the member reads and approves, so it is
+                    # written by THEIR model: DISCARD this proposal (and its buffered text)
+                    # and run the step again with no override, streaming live, exactly as
+                    # the final answer is. What that call returns (a write, another tool,
+                    # or text) flows on as the step's result. Costs one more call per such
+                    # write; recorded as its own row so the cost is visible.
+                    accumulated_text_parts, accumulated_function_calls = _collect_and_record(
+                        step, "write_rerun"
+                    )
+                elif accumulated_function_calls:
                     # Planning step confirmed — flush the buffered
                     # thinking-out-loud text now (same events, batched).
                     for chunk in accumulated_text_parts:

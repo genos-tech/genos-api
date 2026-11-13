@@ -1948,6 +1948,19 @@ SEARCH_ENGINE["AGENT_CONTENT_LENGTH"] = (
     os.environ.get("AGENT_CONTENT_LENGTH", "false").lower() == "true"
 )
 
+# MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905-a2`): on the Medium two-tier
+# loop (needs AGENT_EFFORT_LEVELS and AGENT_TWO_TIER_LOOP, else there is no planning model and
+# this does nothing), when the cheap planning model proposes a write that carries a body
+# (create_task, update_task, create_note, update_note, create_task_plan, a milestone description)
+# that one step is run again on the member's chosen model and ITS call is the one that goes to
+# approval, as the final text answer already is. Costs one more call per such write. OFF = the
+# planning model's version is executed as it came back. Flip criterion: bodies from the member's
+# model are judged better (or the member-visible length levels hold only with it) for the extra
+# calls' cost.
+SEARCH_ENGINE["AGENT_BODY_ON_USER_MODEL"] = (
+    os.environ.get("AGENT_BODY_ON_USER_MODEL", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
