@@ -1,16 +1,22 @@
-"""The note rule of `get_timeline` (MIP-1281, design check (b)).
+"""The note rule of `get_timeline` (MIP-1281, design check (b)), now ONE rule (MIP-1474).
 
-Three ways to answer "may this member open this note now?" exist in the code:
+Four ways to answer "may this member open this note now?" exist in the code:
 
-  * `load_readable_note` (what `get_note` applies): the note is in the team, and the member owns it
-    or holds a role on it (`may_read_note` -> `get_effective_role`);
-  * `briefing._may_read_note` (the briefing and `get_item_line`): the owner-or-ACL SET rule of the
-    search index (`task_note_acl_user_ids`, `chat_note_acl_user_ids`);
+  * `load_readable_note` (what `get_note_history`, `update_note`... apply): the note is in the
+    team, and the member owns it or holds a role on it (`may_read_note` -> `get_effective_role`);
+  * `fetch_note` (`get_note` over MCP and in the app): the owner-or-ACL SET rule of the search
+    index (`task_note_acl_user_ids`, `chat_note_acl_user_ids`);
+  * `briefing._may_read_note` (the briefing and `get_item_line`);
   * `timeline.readable_notes`: one batch of queries for many notes.
 
-A timeline follows `get_note`'s rule. These tests generate every way a note can be readable or not,
-across the three note families, and pin that (1) the batch equals the per-note rule of `get_note`
-for each, and (2) the exact set of cases where the briefing's rule disagrees with it.
+They used to disagree on four chat-note cases (a stray channel row on a project chat, a project
+member with no mirror row, a deleted channel, a `chat_type` that differs from the channel's kind):
+`get_effective_role` read the channel-member row alone, the index and the briefing read the
+channel's own rule (`channel_scope.chat_member_q`). MIP-1474 made the per-note resolver, its
+batch, the sidebar list and the briefing one rule (`channel_scope.chat_note_member_q`), equal to
+the index's. These tests generate every way a note can be readable or not, across the three note
+families, and pin that (1) the batch equals the per-note rule for each, (2) ALL answers agree on
+every case, and (3) the four cases that used to differ now have the answer below.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.base import ToolError
+from origin.search_engine.agent.tools.fetch_note import _run as fetch_note_run
 from origin.search_engine.agent.tools.note_access import load_readable_note
 from origin.services import briefing, timeline
 from origin.tests.test_item_lines import LineBase
@@ -225,6 +232,16 @@ class NoteRuleMatrix(LineBase):
     def briefing_rule(self, note_type, note) -> bool:
         return briefing._may_read_note(self.viewer_ctx(), note_type, note)
 
+    def fetch_note_rule(self, note_type, note) -> bool:
+        """`get_note` over MCP and in the app: the search index's set rule."""
+        try:
+            fetch_note_run(
+                {"note_type": FAMILY[note_type], "note_id": note.note_id}, self.viewer_ctx()
+            )
+        except ToolError:
+            return False
+        return True
+
     # -- the tests ---------------------------------------------------------------------------- #
 
     def test_the_batch_equals_get_notes_rule_for_every_case(self):
@@ -254,27 +271,53 @@ class NoteRuleMatrix(LineBase):
         self.assertLessEqual(len(few), len(many))
         print("[MIP-1281 note batch queries] 41 notes:", len(many), "6 notes:", len(few))
 
-    def test_where_the_briefings_rule_and_get_notes_rule_disagree(self):
-        """Pinned, so a change to either rule shows here. `timeline` follows `get_note`: a note
-        the member can open there is told, whatever the briefing's narrower set rule says."""
+    def test_every_way_of_asking_gives_the_same_answer_for_every_case(self):
+        """One rule: `get_note`'s per-note resolver, `get_note` over MCP (the index's set rule),
+        the briefing and the timeline's batch agree on all cases of all three families."""
         self.build()
+        keys = [(t, n.note_id) for t, n in self.cases.values()]
+        batch = timeline.readable_notes(self.viewer_ctx(), keys)
         differ = {
-            name: (self.get_note_rule(t, n), self.briefing_rule(t, n))
+            name: {
+                "load_readable_note": self.get_note_rule(t, n),
+                "fetch_note": self.fetch_note_rule(t, n),
+                "briefing": self.briefing_rule(t, n),
+                "timeline batch": (t, n.note_id) in batch,
+            }
             for name, (t, n) in self.cases.items()
-            if self.get_note_rule(t, n) != self.briefing_rule(t, n)
+            if len(
+                {
+                    self.get_note_rule(t, n),
+                    self.fetch_note_rule(t, n),
+                    self.briefing_rule(t, n),
+                    (t, n.note_id) in batch,
+                }
+            )
+            > 1
         }
-        print("[MIP-1281 note rules disagree]", differ)
-        self.assertEqual(differ, EXPECTED_DISAGREEMENTS)
+        self.assertEqual(differ, {})
+
+    def test_the_four_cases_that_used_to_differ_have_the_one_answer(self):
+        """Flipped by MIP-1474, each with its reason (the old pin was
+        `{name: (get_note's answer, the briefing's answer)}`)."""
+        self.build()
+        answers = {name: self.get_note_rule(t, n) for name, (t, n) in self.cases.items()}
+        for name, expected in FORMERLY_DISAGREEING.items():
+            self.assertEqual(answers[name], expected, name)
 
 
-# `name: (get_note's answer, the briefing's answer)`. Filled in from the first run (see the print above).
-EXPECTED_DISAGREEMENTS: dict[str, tuple[bool, bool]] = {
-    # get_note refuses nothing the member holds a live row on, and the briefing refuses a channel
-    # that is deleted or whose kind differs from the note's `chat_type` (`chat_acl_user_ids`)
-    "C channel deleted, still a member": (True, False),
-    "C chat_type differs from the channel kind": (True, False),
-    # a project chat's members are the project's (`chat_member_q`: "a stray channel row opens
-    # nothing"), but `get_effective_role` reads the channel-member row, which only mirrors it
-    "C project chat, channel row only": (True, False),
-    "C project chat, on the project only": (False, True),
+# `name: the one answer now`.
+FORMERLY_DISAGREEING: dict[str, bool] = {
+    # the channel is deleted: the member row outlives it, but nobody reads a deleted chat.
+    # Was (get_note True, briefing False).
+    "C channel deleted, still a member": False,
+    # the note was filed under another kind than its channel's: the channel is looked up BY that
+    # kind, found nothing, so it opens through its owner and grants only. Was (True, False).
+    "C chat_type differs from the channel kind": False,
+    # a project chat's readers are the project's (`chat_member_q`: "a stray channel row opens
+    # nothing"): a channel-member row for someone NOT on the project, which `get_effective_role`
+    # used to honour (the security hole of MIP-1474). Was (True, False).
+    "C project chat, channel row only": False,
+    # ...and a project member whose mirror row is missing still reads. Was (False, True).
+    "C project chat, on the project only": True,
 }

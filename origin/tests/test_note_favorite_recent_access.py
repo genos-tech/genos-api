@@ -78,7 +78,7 @@ class NoteRefAccessBase(BaseAPITestCase):
             owner=self.user,
             title="Board minutes",
             body=[],
-            chat_type=1,
+            chat_type=ChannelKind.GM,
             channel=self.channel,
             is_thread=False,
         )
@@ -416,7 +416,7 @@ class ReadableNoteIdsTests(NoteRefAccessBase):
             owner=self.user,
             title="Same number",
             body=[],
-            chat_type=1,
+            chat_type=ChannelKind.GM,
             channel=self.channel,
             is_thread=False,
         )
