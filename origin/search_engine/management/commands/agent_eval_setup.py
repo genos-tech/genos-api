@@ -32,9 +32,23 @@ class Command(BaseCommand):
                 "already exists. Use when seeder content changed."
             ),
         )
+        parser.add_argument(
+            "--scenario",
+            choices=["sequence"],
+            help=(
+                "Provision a scenario fixture in its OWN teams instead of the v1 eval fixture "
+                "(which is left untouched). `sequence`: the 12-step client/PM/dev story of "
+                "MIP-1269, in three teams (v1, v2, ja). Idempotent; with --reseed it rebuilds "
+                "those teams only. Needs Postgres only: no OpenSearch, no model call."
+            ),
+        )
 
     def handle(self, *args, **options):
         force_reseed = options.get("reseed") or False
+
+        if options.get("scenario") == "sequence":
+            self._handle_sequence(force_reseed)
+            return
 
         if force_reseed:
             self.stdout.write("Reseeding eval fixture from scratch…")
@@ -53,4 +67,26 @@ class Command(BaseCommand):
                 f'  team_id: "{summary["team_id"]}"\n'
                 f'  user_id: "{FIXTURE_USER_ID}"\n'
             )
+        )
+
+    def _handle_sequence(self, force_reseed: bool) -> None:
+        from origin.search_engine.agent.evals.group import sequence  # noqa: PLC0415
+
+        self.stdout.write(
+            "Reseeding the sequence scenario…"
+            if force_reseed
+            else "Ensuring the sequence scenario…"
+        )
+        summary = sequence.ensure_sequence(reseed=force_reseed)
+        built = ", ".join(summary["built"]) or "none (already present)"
+        self.stdout.write(
+            self.style.SUCCESS(f"\nSequence scenario ready. Teams built now: {built}.\n")
+        )
+        for key, info in summary["viewers"].items():
+            self.stdout.write(
+                f"  viewer {key:<5} team_id {info['team_id']}  user_id {info['user_id']}  "
+                f"task {info['display_id']} (id {info['task_id']})"
+            )
+        self.stdout.write(
+            "\nCases use `fixture: sequence` with `viewer: v1|v2|b|c|ja|ja-b`; the ids are resolved at run time.\n"
         )
