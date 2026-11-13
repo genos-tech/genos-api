@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import timedelta
+from unittest import mock
 
 from origin.models.chat.unified_models import ChannelKind, Message, MessageReaction
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -1287,3 +1288,39 @@ class TestTheCostDoesNotGrowWithTheHistory(TimelineBase):
             "chat",
             self.queries("chat", str(self.gm.id), since=self.since, until=self.until),
         )
+
+
+class TestTheChipNoteCap(TimelineBase):
+    """Notes elsewhere that point at a task with a chip are looked at through a cap; the member's
+    note rule runs BEFORE it, so a note they cannot open neither takes a place nor tips `capped`."""
+
+    def chipped_note(self, task, owner, minutes, *, readable=True):
+        other = self.make_task(f"Other {minutes}")
+        note = self.task_note(other, owner=owner, title=f"n{minutes}")
+        self.version(2, note, owner, minutes, body=body_with(chip(task.task_id)))
+        return note
+
+    def test_more_readable_chipped_notes_than_the_cap_say_so_and_tell_the_newest(self):
+        task = self.make_task("Export")
+        for minutes in (10, 11, 12, 13, 14):
+            self.chipped_note(task, self.user, minutes)
+        with mock.patch.object(timeline, "CHIP_NOTE_CANDIDATES", 3):
+            out = self.tl("task", task.task_id)
+        self.assertEqual(out["capped"], {"notes": True})
+        self.assertEqual(len(out["events"]), 3)
+        self.assertEqual([e["text"].count("#") for e in out["events"]], [1, 1, 1])
+
+    def test_notes_the_member_cannot_open_never_tip_the_flag_or_take_a_place(self):
+        task = self.make_task("Export")
+        hidden = self.hidden_task()
+        for minutes in (10, 11, 12, 13, 14):
+            other = self.task_note(
+                hidden, owner=self.user2, project=hidden.project, title=f"h{minutes}"
+            )
+            self.version(2, other, self.user2, minutes, body=body_with(chip(task.task_id)))
+        for minutes in (20, 21):
+            self.chipped_note(task, self.user, minutes)
+        with mock.patch.object(timeline, "CHIP_NOTE_CANDIDATES", 3):
+            out = self.tl("task", task.task_id)
+        self.assertEqual(out["capped"], {})
+        self.assertEqual(len(out["events"]), 2)

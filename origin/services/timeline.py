@@ -131,6 +131,7 @@ WINDOW_DAYS = 31
 DEFAULT_WINDOW_DAYS = 7
 # Notes that point at a task with a chip are looked at through this many candidates.
 CHIP_NOTE_CANDIDATES = 200
+CHIP_NOTE_SCAN = 1000
 
 # A message with NO sender and one of these words in `metadata.systemNotice` is a system notice.
 # A person cannot forge one: a person's message has a sender. (An account deleted afterwards
@@ -807,8 +808,10 @@ def _task_notes(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMast
         for n in TaskNoteMaster.objects.filter(team_id=sc.team, task_id=task.task_id)
     }
     own_keys = set(keys)
-    # Notes anywhere that point at the task with a chip: candidates are the notes that have a
-    # version with such a chip, newest first, at most `CHIP_NOTE_CANDIDATES` of them.
+    # Notes anywhere that point at the task with a chip. Candidates are the notes with a version that
+    # has such a chip, newest first (at most `CHIP_NOTE_SCAN` looked at). The member's note rule is
+    # applied BEFORE the cap, so a note they cannot open can neither take one of the
+    # `CHIP_NOTE_CANDIDATES` places nor tip `capped.notes`.
     chipped = item_lines._chip_filter(
         NoteVersionMaster.objects.filter(team_id=sc.team, editor__isnull=False),
         "body",
@@ -817,17 +820,28 @@ def _task_notes(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMast
     listed = list(
         chipped.values("note_type", "note_id")
         .annotate(last=Max("ts_updated_at"))
-        .order_by("-last")[: CHIP_NOTE_CANDIDATES + 1]
+        .order_by("-last")[:CHIP_NOTE_SCAN]
     )
-    if len(listed) > CHIP_NOTE_CANDIDATES:
+    found = [
+        (row["note_type"], row["note_id"])
+        for row in listed
+        if (row["note_type"], row["note_id"]) not in keys and row["note_type"] in _NOTE_MODELS
+    ]
+    allowed = readable_notes(sc.ctx, found)
+    readable = [key for key in found if key in allowed]
+    if len(readable) > CHIP_NOTE_CANDIDATES:
         sc.capped.add("notes")
-        listed = listed[:CHIP_NOTE_CANDIDATES]
-    for row in listed:
-        key = (row["note_type"], row["note_id"])
-        if key in keys or key[0] not in _NOTE_MODELS:
-            continue
-        note = _NOTE_MODELS[key[0]].objects.filter(note_id=key[1]).values("title").first()
-        keys[key] = ((note or {}).get("title") or "", _NOTE_FAMILY[key[0]])
+        readable = readable[:CHIP_NOTE_CANDIDATES]
+    titles: dict[tuple[int, int], str] = {}
+    for note_type in {t for t, _i in readable}:
+        for note_id, title in (
+            _NOTE_MODELS[note_type]
+            .objects.filter(note_id__in=[i for t, i in readable if t == note_type])
+            .values_list("note_id", "title")
+        ):
+            titles[(note_type, note_id)] = title or ""
+    for key in readable:
+        keys[key] = (titles.get(key, ""), _NOTE_FAMILY[key[0]])
     return _versions_of(sc, kinds, count, keys, lambda v: (v.note_type, v.note_id) in own_keys)
 
 
