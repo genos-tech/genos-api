@@ -87,17 +87,44 @@ def find_inconsistent_tasks(*, team_id=None, project_id=None) -> list[Fix]:
     # which is also what its children inherit.
     expected: dict[int, tuple] = {}
 
+    # Soft-deleted ancestors are not judged rows, but `resolve_root_task_id` (the writers'
+    # rule) walks THROUGH them, so the walk below must too, or a task under one would be
+    # "repaired" to a root its own parent does not have (MIP-1225). Hard-deleted ones (a row
+    # nothing can load) still end the walk at the last row that exists.
+    hidden: dict[int, int | None] = {}
+    asked: set[int] = set()
+    frontier = {
+        r["parent_task_id"]
+        for r in rows.values()
+        if r["parent_task_id"] is not None and r["parent_task_id"] not in rows
+    }
+    for _ in range(_MAX_DEPTH):
+        frontier -= asked
+        if not frontier:
+            break
+        asked |= frontier
+        found = dict(
+            TaskMaster.objects.filter(task_id__in=frontier, is_deleted=True).values_list(
+                "task_id", "parent_task_id"
+            )
+        )
+        hidden.update(found)
+        frontier = {p for p in found.values() if p is not None and p not in rows}
+
+    def parent_of(task_id):
+        row = rows.get(task_id)
+        return row["parent_task_id"] if row is not None else hidden.get(task_id)
+
     def top_of_chain(task_id):
         current, seen = task_id, set()
         for _ in range(_MAX_DEPTH):
-            row = rows.get(current)
-            if row is None or row["parent_task_id"] is None or current in seen:
+            parent_id = parent_of(current)
+            if parent_id is None or current in seen:
                 return current
             seen.add(current)
-            parent = rows.get(row["parent_task_id"])
-            if parent is None:
+            if parent_id not in rows and parent_id not in hidden:
                 return current
-            current = row["parent_task_id"]
+            current = parent_id
         return current
 
     def judge(task_id, depth=0):
