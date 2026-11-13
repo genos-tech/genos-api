@@ -1242,3 +1242,48 @@ class TestTheTwelveSteps(SequenceScenario):
         self.assertGreater(min(sizes.values()), 500, sizes)
         line = self.line_as(seq.b, seq)[1]
         self.assertLess(sizes["task"], len(line), (sizes, len(line)))
+
+
+# --------------------------------------------------------------------------- #
+# Cost                                                                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestTheCostDoesNotGrowWithTheHistory(TimelineBase):
+    """A page is the same number of queries however long the history is (keyset, no pool)."""
+
+    def queries(self, anchor_type, anchor_id, **kw):
+        from django.db import connection  # noqa: PLC0415
+        from django.test.utils import CaptureQueriesContext  # noqa: PLC0415
+
+        with CaptureQueriesContext(connection) as captured:
+            self.tl(anchor_type, anchor_id, **kw)
+        return len(captured)
+
+    def fill(self, n):
+        root = self.message(self.gm, self.user2, 1, text="root")
+        task = self.make_task(f"Busy {n}")
+        self.link_thread(task, root)
+        for i in range(n):
+            self.message(self.gm, self.user, 2 + i, text=f"m{i}", root=root)
+            self.comment(task, self.user2, 2 + i, text=f"c{i}")
+            self.activity(task, self.user2, 2 + i, "priority_changed", "Low", "High")
+        return root, task
+
+    def test_a_task_and_a_thread_cost_the_same_with_5_or_150_events_per_source(self):
+        small_root, small_task = self.fill(5)
+        big_root, big_task = self.fill(150)
+        self.assertEqual(
+            self.queries("task", small_task.task_id), self.queries("task", big_task.task_id)
+        )
+        self.assertEqual(
+            self.queries("thread", str(small_root.id)), self.queries("thread", str(big_root.id))
+        )
+        print(
+            "[MIP-1281 queries] task",
+            self.queries("task", big_task.task_id),
+            "thread",
+            self.queries("thread", str(big_root.id)),
+            "chat",
+            self.queries("chat", str(self.gm.id), since=self.since, until=self.until),
+        )

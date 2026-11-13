@@ -145,6 +145,9 @@ from origin.views.public.mcp.resolve import (
     resolve_note_ref,
     resolve_task_ref,
 )
+from origin.views.public.mcp.secretary.get_timeline import (  # noqa: E402
+    canonical_anchor as _canonical_anchor,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1851,7 +1854,7 @@ CATALOG: tuple[McpTool, ...] = (
             "`next_cursor` has the rest). Everything is the member's own view; a thing that "
             "does not exist and one they may not open get the same answer."
         ),
-        schema_overrides={},
+        augment=_canonical_anchor,
     ),
     McpTool(
         name="list_my_unread",

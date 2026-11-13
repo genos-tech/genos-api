@@ -26,11 +26,19 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         lead_in=args.get("lead_in"),
         text_chars=args.get("text_chars"),
     )
-    # Hand the recorder of "which item did the member's AI app open" the CANONICAL id (the task
-    # id, the thread's root message id), whatever the member's words were (`PRJ-123`, a reply id).
-    # The anchor was opened, so this is an id the member may read. `call` passes this same dict on.
-    args["anchor_id"] = result["anchor"]["anchor_id"]
     return result
+
+
+def canonical_anchor(
+    payload: dict[str, Any], args: dict[str, Any], mcp_args: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any]:
+    """`McpTool.augment` for this tool. It runs after the call succeeded, with the very dict the
+    "which item did the member's AI app open" recorder is about to read, and puts the CANONICAL
+    id in it (the task id, the thread's root message id), whatever the member's words were
+    (`PRJ-123`, a reply id). The anchor was opened, so the id is one the member may read. The
+    result is returned unchanged."""
+    args["anchor_id"] = payload["anchor"]["anchor_id"]
+    return payload
 
 
 GET_TIMELINE = Tool(

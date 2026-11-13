@@ -18,14 +18,14 @@ from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
 from origin.views.public.mcp.tools import CATALOG
 
 # What the doc says. Update both together.
-PUBLISHED = 96
+PUBLISHED = 97
 FROM_REGISTRY = (
     83  # published tools backed by a tool in the agent registry (some under another name)
 )
 FROM_REGISTRY_READS = 47
 FROM_REGISTRY_WRITES = 36
-MCP_ONLY = 13
-MCP_ONLY_READS = 6
+MCP_ONLY = 14
+MCP_ONLY_READS = 7
 MCP_ONLY_WRITES = 7
 REGISTRY_SIZE = 88
 # Registry tools with no MCP tool at all: 4 reads, and `delete_project` (a write that is in the app only).

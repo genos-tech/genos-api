@@ -244,6 +244,43 @@ class TestTheLineAsThePM(Story):
         self.assertIn(2, found)
 
 
+class TestTheTimelineReadsWhatTheLineCannot(Story):
+    """MIP-1281: `get_timeline` is the read side of GAP-1 and GAP-2 (V2). The `expectedFailure`
+    tests above stay: they ask `get_item_line`, which does not change. These ask the new tool."""
+
+    def tokens(self, out):
+        return [
+            m.group(0)
+            for e in out["events"]
+            if (m := re.search(r"S\d\d|S3b|S9b|S12a", e.get("text", "")))
+        ]
+
+    def test_gap_1_the_conversation_before_the_thread_is_one_call_away_for_the_pm(self):
+        seq = self.build_sequence()
+        out, _ = self.timeline_as(seq.b, seq, "thread", lead_in=2)
+        self.assertEqual(self.tokens(out)[:3], ["S01", "S02", "S03"])
+
+    def test_gap_1_and_for_the_client_who_asked(self):
+        seq = self.build_sequence(client_on_project=True)
+        out, _ = self.timeline_as(seq.a, seq, "thread", lead_in=2)
+        self.assertEqual(self.tokens(out)[:3], ["S01", "S02", "S03"])
+
+    def test_gap_2_v2_the_client_off_the_project_reads_that_the_task_closed(self):
+        seq = self.build_sequence(client_on_project=False)
+        out, _ = self.timeline_as(seq.a, seq, "thread")
+        closes = [e for e in out["events"] if e["kind"] == "status" and e["to"] == "Closed"]
+        self.assertEqual(len(closes), 1)
+        self.assertNotIn("S10", json.dumps(out))  # the internal comment is not hers
+
+    def test_the_task_timeline_is_smaller_than_the_line_of_the_same_story(self):
+        seq = self.build_sequence()
+        out, text = self.timeline_as(seq.b, seq, "task")
+        _, line = self.line_as(seq.b, seq)
+        self.assertLess(len(text), len(line))
+        print("[MIP-1281 sizes] task timeline", len(text), "get_item_line", len(line))
+        self.assertEqual(out["origin"]["anchor_id"], str(seq.thread_root.id))
+
+
 class TestTheLineAsTheDev(Story):
     """C does the work, is not in the client's chat, and only sees what the task holds."""
 
