@@ -23,7 +23,9 @@ import requests
 from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.models.common.notification_models import NotificationPreference
+from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.services import ai_app_switches as switches
 from origin.services import mcp_notice
 from origin.services.email_enqueue import _email_spec
 from origin.services.webpush_dispatch import _push_spec
@@ -196,48 +198,58 @@ class WhichCallsNotifyTests(NoticeBase):
 
 
 class TheSwitchAndTheFailureModeTests(NoticeBase):
-    def test_the_kind_switched_off_makes_no_row_and_the_write_still_happens(self):
+    def test_the_action_switched_off_makes_no_row_and_the_write_still_happens(self):
         NotificationPreference.objects.create(
-            user=self.user, category_settings={"ai_app_tasks": False}
+            user=self.user, category_settings={"ai_app_task_created": False}
         )
         self.call("create_task", project_id=self.project.project_id, title="Quiet")
         self.assertTrue(TaskMaster.objects.filter(title="Quiet").exists())
         self.assertEqual(notices(self.user), [])
 
-    def test_the_group_switched_off_makes_no_row_for_any_kind(self):
+    def test_the_group_switched_off_makes_no_row_for_any_action(self):
         NotificationPreference.objects.create(user=self.user, enable_ai_apps=False)
         self.call("create_task", project_id=self.project.project_id, title="Quiet 2")
         self.call("create_note", note_type="personal", title="Quiet note", content_text="x")
         self.call("create_todo_item", title="Quiet todo")
         self.assertEqual(notices(self.user), [])
 
-    def test_each_kind_answers_to_its_own_switch_only(self):
-        # "Task updates only": notes and to-dos off, tasks (and a comment on one) still notify.
+    def test_each_action_answers_to_its_own_switch_only(self):
+        # "Mute task-created, keep the rest of the tasks": created off, status and comment on.
         NotificationPreference.objects.create(
-            user=self.user,
-            category_settings={"ai_app_notes": False, "ai_app_todos": False},
+            user=self.user, category_settings={"ai_app_task_created": False}
         )
-        self.call("create_note", note_type="personal", title="N", content_text="x")
-        self.call("create_todo_item", title="T")
+        self.call("create_task", project_id=self.project.project_id, title="Muted")
         self.assertEqual(notices(self.user), [])
-        self.call("create_task", project_id=self.project.project_id, title="Kept")
         self.call("add_comment", task_id=self.task.task_id, body_text="hello")
-        self.assertEqual(len(notices(self.user)), 2)
+        self.call("update_task", task_id=self.task.task_id, status="WIP")
+        self.assertEqual([a.meta["verb"] for a in notices(self.user)], ["commented", "status"])
 
-    def test_the_other_two_kinds_notify_when_only_tasks_are_off(self):
+    def test_a_note_is_muted_by_action_not_by_kind(self):
+        # "Note created" off must not silence "note deleted".
         NotificationPreference.objects.create(
-            user=self.user, category_settings={"ai_app_tasks": False}
+            user=self.user, category_settings={"ai_app_note_created": False}
         )
-        self.call("create_task", project_id=self.project.project_id, title="Off")
         self.call("create_note", note_type="personal", title="N", content_text="x")
-        self.call("create_todo_item", title="T")
-        self.assertEqual({a.meta["kind"] for a in notices(self.user)}, {"note", "todo"})
+        self.assertEqual(notices(self.user), [])
+        note = PersonalNoteMaster.objects.get(title="N")
+        self.call("delete_note", note_id=note.note_id, note_type="personal")
+        self.assertEqual(
+            [(a.meta["verb"], a.meta["kind"]) for a in notices(self.user)], [("deleted", "note")]
+        )
 
     def test_the_old_single_switch_is_no_longer_read(self):
         # MIP-1432's key. The migration carried it over; a stray copy must not silence anything.
         NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
         self.call("create_task", project_id=self.project.project_id, title="Loud 2")
         self.assertEqual(len(notices(self.user)), 1)
+
+    def test_note_edited_starts_off_and_the_rest_start_on(self):
+        self.assertFalse(switches.DEFAULTS["ai_app_note_edited"])
+        self.assertEqual(
+            [k for k, on in switches.DEFAULTS.items() if not on], ["ai_app_note_edited"]
+        )
+        self.assertEqual(len(switches.KEYS), 12)
+        self.assertEqual(len(set(switches.KEYS)), 12)
 
     def test_on_by_default_and_another_category_does_not_turn_it_off(self):
         NotificationPreference.objects.create(user=self.user, category_settings={"chats": False})
@@ -264,7 +276,7 @@ class TheSwitchAndTheFailureModeTests(NoticeBase):
 
 
 class TheOldSwitchIsCarriedOverTests(NoticeBase):
-    """MIP-1432's one switch becomes three (MIP-1452): `ai_app: false` meant "none of it"."""
+    """MIP-1432's one switch becomes one per action (MIP-1452): `ai_app: false` meant "none"."""
 
     def carry(self):
         import importlib  # noqa: PLC0415
@@ -272,18 +284,16 @@ class TheOldSwitchIsCarriedOverTests(NoticeBase):
         from django.apps import apps  # noqa: PLC0415
 
         module = importlib.import_module("origin.migrations.0241_notification_enable_ai_apps")
+        self.assertEqual(set(module.AI_APP_KEYS), set(switches.KEYS))
         module.carry_the_old_switch(apps, None)
 
-    def test_a_member_who_turned_it_off_starts_with_all_three_off(self):
+    def test_a_member_who_turned_it_off_starts_with_every_switch_off(self):
         NotificationPreference.objects.create(
             user=self.user, category_settings={"ai_app": False, "chats": False}
         )
         self.carry()
         settings = NotificationPreference.objects.get(user=self.user).category_settings
-        self.assertEqual(
-            settings,
-            {"chats": False, "ai_app_tasks": False, "ai_app_notes": False, "ai_app_todos": False},
-        )
+        self.assertEqual(settings, {"chats": False, **dict.fromkeys(switches.KEYS, False)})
 
     def test_a_member_who_left_it_on_is_untouched(self):
         NotificationPreference.objects.create(
@@ -292,6 +302,58 @@ class TheOldSwitchIsCarriedOverTests(NoticeBase):
         self.carry()
         settings = NotificationPreference.objects.get(user=self.user).category_settings
         self.assertEqual(settings, {"chats": False, "ai_app": True})
+
+
+class NoteEditTests(NoticeBase):
+    """ "Note edited" (MIP-1452): new, and off until the member turns it on."""
+
+    def setUp(self):
+        super().setUp()
+        self.call("create_note", note_type="personal", title="Spec", content_text="one")
+        self.note_id = self.only().meta["items"][0]["id"]
+        Activity.objects.all().delete()
+
+    def edit(self, **args):
+        return self.call("update_note", note_id=self.note_id, note_type="personal", **args)
+
+    def test_it_is_off_by_default_so_an_edit_makes_no_notice(self):
+        self.edit(content_text="two")
+        self.assertEqual(notices(self.user), [])
+
+    def test_switched_on_a_title_or_body_edit_is_told(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_note_edited": True}
+        )
+        self.edit(content_text="two")
+        self.edit(title="Renamed")
+        last = notices(self.user)
+        self.assertEqual([(a.meta["verb"], a.meta["kind"]) for a in last], [("edited", "note")] * 2)
+        self.assertIn("/workspace/notes/my/", last[0].meta["url"])
+
+    def test_an_edit_that_changes_nothing_is_silent_even_switched_on(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_note_edited": True}
+        )
+        self.edit(content_text="one")
+        self.assertEqual(notices(self.user), [])
+
+    def test_the_group_master_off_wins_over_note_edited_on(self):
+        NotificationPreference.objects.create(
+            user=self.user,
+            enable_ai_apps=False,
+            category_settings={"ai_app_note_edited": True},
+        )
+        self.edit(content_text="three")
+        self.assertEqual(notices(self.user), [])
+
+    def test_the_push_is_filed_under_the_action(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_note_edited": True}
+        )
+        self.edit(content_text="four")
+        spec = _push_spec(self.only())
+        self.assertEqual(spec["category"], "ai_app_note_edited")
+        self.assertEqual(spec["title"].split(" edited ", 1)[1], "note Spec")
 
 
 class WhatTheNoticeDoesDownstreamTests(NoticeBase):
@@ -306,41 +368,46 @@ class WhatTheNoticeDoesDownstreamTests(NoticeBase):
             self.call("create_task", project_id=self.project.project_id, title="Pushed")
         (activities,), _ = schedule.call_args
         spec = _push_spec(activities[0])
-        self.assertEqual(spec["category"], "ai_app_tasks")
+        self.assertEqual(spec["category"], "ai_app_task_created")
         self.assertTrue(spec["title"].startswith("mcp created task WRD-"), spec["title"])
         self.assertEqual(spec["body"], "Pushed")
         self.assertIn("/task/", spec["url"])
 
-    def test_push_category_follows_what_the_notice_is_about(self):
+    def test_push_category_follows_the_action(self):
         for tool, args, expected in (
             (
                 "create_note",
                 {"note_type": "personal", "title": "N", "content_text": "x"},
-                "ai_app_notes",
+                "ai_app_note_created",
             ),
-            ("create_todo_item", {"title": "T"}, "ai_app_todos"),
-            ("add_comment", {"task_id": self.task.task_id, "body_text": "hi"}, "ai_app_tasks"),
+            ("create_todo_item", {"title": "T"}, "ai_app_todo_created"),
+            (
+                "add_comment",
+                {"task_id": self.task.task_id, "body_text": "hi"},
+                "ai_app_task_commented",
+            ),
+            ("update_task", {"task_id": self.task.task_id, "status": "WIP"}, "ai_app_task_status"),
         ):
             Activity.objects.all().delete()
             self.call(tool, **args)
             self.assertEqual(_push_spec(self.only())["category"], expected, tool)
 
     def test_push_follows_the_same_switches_as_the_row(self):
-        for key in ("ai_app_tasks", "ai_app_notes", "ai_app_todos"):
-            self.assertTrue(should_push(self.user.id, key))
+        for key in switches.KEYS:
+            self.assertEqual(should_push(self.user.id, key), switches.DEFAULTS[key], key)
         NotificationPreference.objects.create(
-            user=self.user, category_settings={"ai_app_notes": False}
+            user=self.user, category_settings={"ai_app_note_deleted": False}
         )
-        self.assertFalse(should_push(self.user.id, "ai_app_notes"))
-        self.assertTrue(should_push(self.user.id, "ai_app_tasks"))
+        self.assertFalse(should_push(self.user.id, "ai_app_note_deleted"))
+        self.assertTrue(should_push(self.user.id, "ai_app_note_created"))
 
     def test_push_follows_the_group_master_and_not_the_inbox_group(self):
         pref = NotificationPreference.objects.create(user=self.user, enable_inbox=False)
-        self.assertTrue(should_push(self.user.id, "ai_app_tasks"))
+        self.assertTrue(should_push(self.user.id, "ai_app_task_created"))
         pref.enable_ai_apps = False
         pref.save()
-        for key in ("ai_app_tasks", "ai_app_notes", "ai_app_todos"):
-            self.assertFalse(should_push(self.user.id, key))
+        for key in switches.KEYS:
+            self.assertFalse(should_push(self.user.id, key), key)
 
     def test_it_is_not_emailed(self):
         self.assertIsNone(_email_spec(self.row()))
@@ -380,6 +447,10 @@ class SentenceTests(NoticeBase):
                 {"verb": "deleted", "kind": "note", "count": 1, "items": [{"title": "Spec"}]},
                 "deleted note Spec",
             ),
+            (
+                {"verb": "edited", "kind": "note", "count": 1, "items": [{"title": "Spec"}]},
+                "edited note Spec",
+            ),
         ]
         for meta, want in cases:
             with self.subTest(want=want):
@@ -395,7 +466,6 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "remove_task_delivery",
         "update_task_dependencies",
         "assign_task",
-        "update_note",
         "update_todo_item",
         "create_calendar_event",
         "update_calendar_event",

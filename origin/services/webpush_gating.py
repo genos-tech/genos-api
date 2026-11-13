@@ -17,6 +17,7 @@ channels can never drift into disagreeing about what "muted" means.
 """
 
 from origin.models.common.notification_models import NotificationPreference
+from origin.services import ai_app_switches
 from origin.services.notification_snooze import is_snoozed
 from origin.services.v3_activity import (
     SURFACE_CHAT_NOTE,
@@ -62,11 +63,10 @@ _PUSH_DEFAULTS = {
     # `message_reminder`, so someone who wants nudges about messages but
     # not about their list has a way to say so.
     "todo_reminder": True,
-    # What the member's own AI apps did over MCP (MIP-1432, MIP-1452): a switch per kind of
-    # work, which also decides whether the feed row is made at all (`services/mcp_notice.py`).
-    "ai_app_tasks": True,
-    "ai_app_notes": True,
-    "ai_app_todos": True,
+    # What the member's own AI apps did over MCP (MIP-1432, MIP-1452): a switch per action
+    # (`ai_app_switches`), which also decides whether the feed row is made at all. Filled in
+    # below from that table; `ai_app` is the fallback for an action no rule names.
+    "ai_app": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
@@ -95,12 +95,12 @@ _COARSE_FIELD = {
     "agent_run_done": "enable_inbox",
     "message_reminder": "enable_inbox",
     "todo_reminder": "enable_inbox",
-    # Their own group (MIP-1452), as in the client's registry (`categories.ts`): the group
-    # switch is a master for the three kinds.
-    "ai_app_tasks": "enable_ai_apps",
-    "ai_app_notes": "enable_ai_apps",
-    "ai_app_todos": "enable_ai_apps",
+    "ai_app": "enable_ai_apps",
 }
+
+# The AI-app switches (MIP-1452): one per action, all under the `enable_ai_apps` group master.
+_PUSH_DEFAULTS.update(ai_app_switches.DEFAULTS)
+_COARSE_FIELD.update(dict.fromkeys(ai_app_switches.KEYS, "enable_ai_apps"))
 
 
 def should_push(user_id, category: str) -> bool:
