@@ -84,9 +84,7 @@ class PromptPins(TestCase):
             self.assertNotIn("reason", off.split("  7. ")[1].split("  8. ")[0])
             # Rule 7's own sentence is untouched and still first.
             rule_7 = on.split("  7. ")[1].split("  8. ")[0]
-            self.assertTrue(
-                rule_7.startswith('If a tool returns {"error": "user_rejected"} or\n')
-            )
+            self.assertTrue(rule_7.startswith('If a tool returns {"error": "user_rejected"} or\n'))
             # Everything before rule 7 and from rule 8 on is the flag-off prompt, byte for byte.
             head, tail = off.split("  7. ")[0], "  8. " + off.split("  8. ", 1)[1]
             self.assertTrue(on.startswith(head))
