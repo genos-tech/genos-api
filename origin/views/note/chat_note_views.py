@@ -22,6 +22,7 @@ from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
     ROLE_VIEWER,
     get_effective_role,
+    readable_note_ids,
     require_read_role,
     require_write_role,
 )
@@ -731,11 +732,19 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # ...and then each CHILD by its own role: a child can sit in another chat than its parent
+        # (the move endpoint leaves `parent_note_id` set), and the parent's role says nothing
+        # about it. One batched query, the same answer `get_effective_role` gives a single note
+        # (MIP-1483); a child the caller may not read is absent, as if it did not exist.
+        children = ChatNoteMaster.objects.filter(team=data["team"], parent_note_id=data["note_id"])
+        readable_ids = readable_note_ids(
+            request_user_id,
+            NOTE_TYPE,
+            children.values_list("note_id", flat=True),
+        )
+
         sub_notes = (
-            ChatNoteMaster.objects.filter(
-                team=data["team"],
-                parent_note_id=data["note_id"],
-            )
+            children.filter(note_id__in=readable_ids)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 teamId=F("team"),
