@@ -1,21 +1,21 @@
-"""MIP-889: tell the model what an edit applied and what an undo undid, behind
-`AGENT_TELL_MODEL_EDIT_UNDO` (default off).
+"""MIP-889: tell the model when the person undid an approved write, behind
+`AGENT_TELL_MODEL_UNDO` (default off).
 
-Two things happen to an approved write that the model's transcript does not show: the person
-edits fields on the card before approving (the replay still holds the model's ORIGINAL call),
-and the person undoes the write afterwards (the next turn still holds the answer that says it
-was done). With the flag on the model gets short factual data (`user_edits_applied` in the
-tool result; `undone_by_user` in a replayed result; one bracketed note at the end of the
-earlier answer in the next ask's conversation). Off, it is sent what `origin/main` sends.
+After an undo the next turn's replay still holds the answer that says the write was done. With the
+flag on the model gets short factual data (`undone_by_user` in a replayed result; one bracketed
+note at the end of the earlier answer in the next ask's conversation). Off, it is sent what
+`origin/main` sends. An approval EDIT is NOT told to the model (an earlier version did; dropped:
+the write tool's result already carries the applied values), and the edit pins below hold with the
+flag ON too.
 
 PINS (off state). The goldens were recorded on PRISTINE `origin/main` (346816f2) with the same
 harness (the MIP-977 flag-pin one; the undo is simulated with `undone_at`, which main has):
 
     git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_tell_model_edit_undo.py origin/tests/test_agent_resume_flag_pins.py \\
+    cp origin/tests/test_agent_tell_model_undo.py origin/tests/test_agent_resume_flag_pins.py \\
        origin/tests/test_agent_resume_system_extra.py origin/tests/test_agent_resume_prior_turns.py \\
        <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_tell_model_edit_undo.FlagOffTests --noinput
+    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_tell_model_undo.FlagOffTests --noinput
     # prints `GOLDEN <key> = "<sha256>"`; paste below
 
 Each hash covers every model call of the whole scenario (system instruction and messages).
@@ -34,7 +34,7 @@ from origin.tests.test_agent_resume_flag_pins import NO_DATE, Recorder
 from origin.tests.test_agent_resume_system_extra import ASK_URL, ResumeBase
 
 EDIT = {"title": "Ship it v2", "priority": "High"}
-ON = {"AGENT_TELL_MODEL_EDIT_UNDO": True}
+ON = {"AGENT_TELL_MODEL_UNDO": True}
 
 GOLDEN: dict[str, str] = {
     "edit/approve": "d207f4cbcea6328a577943e6772b7996fecf82b89a189482691154d1fcbd4661",
@@ -129,54 +129,25 @@ class FlagOffTests(Base):
         self.pin("undo/next-turn", since=start)  # the same bytes as without an outcome
 
 
-class FlagOnEditTests(Base):
+class FlagOnEditsAreMainTests(Base):
+    """The edit note was dropped: with the flag ON an edit changes nothing the model is sent."""
+
     flags = {**NO_DATE, **ON}
 
-    def test_the_result_carries_what_the_person_edited_and_the_call_is_still_the_models(self):
+    def test_an_approval_with_edits_is_main_s_byte_for_byte_with_the_flag_on(self):
         run_id, token = self.ask()
         self.approve_with(run_id, token, EDIT)
-        (response,) = self.responses()[1]
-        edits = response["user_edits_applied"]
-        self.assertEqual(sorted(edits), ["priority", "title"])
-        self.assertEqual(edits["priority"], "High")
-        # `title` is a key the model fence wraps wherever it appears (`fence_for_model`), as it
-        # does the `title` in the tool's own result: the person's text arrives as data.
-        self.assertIn("Ship it v2", edits["title"])
-        self.assertIn("workspace_content", edits["title"])
-        replayed_call = [m for m in self.calls[1][1] if m.function_call][0].function_call
-        self.assertEqual(replayed_call.args["title"], "Ship it")  # the proposal, as before
+        self.pin("edit/approve")
+        for response in self.responses()[1]:
+            self.assertNotIn("user_edits_applied", response)
 
-    def test_no_edit_no_note(self):
-        run_id, token = self.ask()
-        self.approve_with(run_id, token)
-        (response,) = self.responses()[1]
-        self.assertNotIn("user_edits_applied", response)
-
-    def test_a_second_pause_replays_the_same_note_the_first_leg_saw(self):
+    def test_the_replay_of_an_edited_write_is_main_s_with_the_flag_on(self):
         self.model.script[:] = ["write", "write", "answer"]
         run_id, token = self.ask()
         events = self.approve_with(run_id, token, EDIT)
         (again,) = [e for e in events if e["type"] == "tool_call_pending_approval"]
         self.approve_with(run_id, again["approval_token"])
-        first_leg = self.responses()[1][0]
-        replayed = self.responses()[2][0]
-        self.assertEqual(first_leg, replayed)
-        self.assertIn("user_edits_applied", replayed)
-
-    def test_a_rejection_has_no_note(self):
-        run_id, token = self.ask()
-        body = {"run_id": run_id, "approval_token": token, "decision": "reject"}
-        self.read(self.client.post("/api/v2/agent/decide/", body, format="json"))
-        self.assertEqual(self.responses()[1], [{"error": "user_rejected"}])
-
-    def test_the_values_are_cleaned_and_capped(self):
-        from origin.search_engine.agent import approval_notes
-
-        out = approval_notes.edits_applied({"title": "a\x00b\nc" + "x" * 400})
-        self.assertEqual(len(out["title"]), 300)
-        self.assertTrue(out["title"].startswith("ab c"))
-        many = {f"f{i}": i for i in range(50)}
-        self.assertEqual(len(approval_notes.edits_applied(many)), 20)
+        self.pin("edit/twice")
 
 
 class FlagOnUndoTests(Base):
@@ -238,7 +209,7 @@ class FlagOnUndoTests(Base):
         step.undo_outcome_json = UNDO_OUTCOME
         step.save(update_fields=["undone_at", "undo_outcome_json"])
         with override_settings(
-            SEARCH_ENGINE={**settings.SEARCH_ENGINE, **{"AGENT_TELL_MODEL_EDIT_UNDO": False}}
+            SEARCH_ENGINE={**settings.SEARCH_ENGINE, **{"AGENT_TELL_MODEL_UNDO": False}}
         ):
             messages, _ = controller._rebuild_messages(AgentRun.objects.get(run_id=run_id))
         (response,) = [m.function_response for m in messages if m.role == "tool_response"]
@@ -249,9 +220,9 @@ class ApprovalNotesGateTests(Base):
     """Every public function of `approval_notes` is a no-op with the flag off, on its own:
     the callers gate too, so these are the tests that would catch a gate quietly removed."""
 
-    def undone_edited_step(self):
+    def undone_step(self):
         run_id, token = self.ask()
-        self.approve_with(run_id, token, EDIT)
+        self.approve_with(run_id, token)
         step = self.step_of(run_id)
         step.undone_at = timezone.now()
         step.undo_outcome_json = UNDO_OUTCOME
@@ -262,9 +233,8 @@ class ApprovalNotesGateTests(Base):
     def test_off_every_function_returns_its_input_or_nothing(self):
         from origin.search_engine.agent import approval_notes
 
-        step = self.undone_edited_step()
+        step = self.undone_step()
         result = {"task_id": 1}
-        self.assertIs(approval_notes.with_edit_note(result, EDIT), result)
         self.assertIs(approval_notes.with_step_notes(result, step), result)
         self.assertIsNone(approval_notes.undone_marker(step))
         self.assertEqual(approval_notes.undo_note_text([step]), "")
@@ -272,12 +242,11 @@ class ApprovalNotesGateTests(Base):
     def test_on_each_says_its_part(self):
         from origin.search_engine.agent import approval_notes
 
-        step = self.undone_edited_step()
+        step = self.undone_step()
         with override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, **ON}):
             result = {"task_id": 1}
-            self.assertIn("user_edits_applied", approval_notes.with_edit_note(result, EDIT))
-            both = approval_notes.with_step_notes(result, step)
-            self.assertIn("user_edits_applied", both)
-            self.assertIn("undone_by_user", both)
+            self.assertIn("undone_by_user", approval_notes.with_step_notes(result, step))
             self.assertIsNotNone(approval_notes.undone_marker(step))
             self.assertIn("undid create_task", approval_notes.undo_note_text([step]))
+            # An edit leaves nothing of itself in the notes.
+            self.assertNotIn("user_edits_applied", approval_notes.with_step_notes(result, step))

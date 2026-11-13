@@ -41,7 +41,7 @@ from origin.search_engine.llm import spend
 from origin.search_engine.llm.types import CallUsage, FunctionCall
 
 GROUP_DIR = Path(resume_runner.__file__).parent
-MY_TAGS = ("t977", "t991", "t1283", "t889-reason", "t889-applied")
+MY_TAGS = ("t977", "t991", "t1283", "t889-reason", "t889-undo")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -223,7 +223,7 @@ class LocaleTests(RunnerBase):
 
     def test_the_follow_up_ask_and_the_closing_line_ask_carry_it_too(self):
         directive = language_directive("ja")
-        for system in self.systems("t889-applied.undone.ja"):
+        for system in self.systems("t889-undo.still-there.ja"):
             self.assertTrue(system.endswith(directive))
         for system in self.systems("t1283.client-asks.ja"):
             self.assertTrue(system.endswith(directive))
@@ -277,17 +277,9 @@ class PromptDirectionTests(RunnerBase):
         self.assertNotIn('carries a "reason"', off)
         self.assertIn('carries a "reason"', on)
 
-    def test_889_edit_note(self):
-        _, off = self.prompts("t889-applied.edited.en", {})
-        _, on = self.prompts("t889-applied.edited.en", {"AGENT_TELL_MODEL_EDIT_UNDO": True})
-        self.assertNotIn("user_edits_applied", off)
-        self.assertIn("user_edits_applied", on)
-
     def test_889_undo_note_in_the_follow_up(self):
-        off = self.run_case(self.case("t889-applied.undone.en"), {})
-        on = self.run_case(
-            self.case("t889-applied.undone.en"), {"AGENT_TELL_MODEL_EDIT_UNDO": True}
-        )
+        off = self.run_case(self.case("t889-undo.still-there.en"), {})
+        on = self.run_case(self.case("t889-undo.still-there.en"), {"AGENT_TELL_MODEL_UNDO": True})
         undone = {c["name"]: c for c in on["checks"]}["undo_performed"]
         self.assertTrue(undone["ok"], undone["detail"])
         self.assertTrue({c["name"]: c for c in on["checks"]}["follow_up_prompt_contains"]["ok"])
@@ -407,7 +399,8 @@ class EveryCaseFileTests(RunnerBase):
         )
         self.assertEqual(arm_overrides("t1283"), {"AGENT_CLOSING_LINE_IN_ORIGIN_THREAD": True})
         self.assertEqual(arm_overrides("t889-reason"), {"AGENT_REJECT_REASON": True})
-        self.assertEqual(arm_overrides("t889-applied"), {"AGENT_TELL_MODEL_EDIT_UNDO": True})
+        self.assertEqual(arm_overrides("t889-undo"), {"AGENT_TELL_MODEL_UNDO": True})
+        self.assertNotIn("AGENT_TELL_MODEL_EDIT_UNDO", settings.SEARCH_ENGINE)
         for tag in MY_TAGS:
             for key in arm_overrides(tag):
                 self.assertIn(key, settings.SEARCH_ENGINE)  # the harness refuses unknown keys

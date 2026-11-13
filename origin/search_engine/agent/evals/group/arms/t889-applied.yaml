@@ -1,4 +1,0 @@
-arm: t889-applied
-overrides:
-    AGENT_TELL_MODEL_EDIT_UNDO: true
-requires: []

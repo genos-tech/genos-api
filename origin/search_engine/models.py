@@ -430,7 +430,7 @@ class AgentStep(models.Model):
     # What the undo did (MIP-889): `{"action", "restored": [fields], "skipped": [{"field",
     # "reason"}]}`, written in the same transaction as `undone_at`. The undo's answer to the
     # browser carries the same; this keeps it, so what the person was told can be told to the
-    # model too (`agent/approval_notes.py`, behind `AGENT_TELL_MODEL_EDIT_UNDO`). Field names and
+    # model too (`agent/approval_notes.py`, behind `AGENT_TELL_MODEL_UNDO`). Field names and
     # reason codes only, no text of the workspace. Null on an undo made before this existed.
     undo_outcome_json = models.JSONField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

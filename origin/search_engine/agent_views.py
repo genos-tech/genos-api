@@ -416,7 +416,7 @@ def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
     runs = list(runs)
     turns = [(r.query, r.final_answer_text[:max_chars]) for r in runs]
     if approval_notes.enabled() and runs:
-        # `AGENT_TELL_MODEL_EDIT_UNDO`: an earlier answer whose write the person has since
+        # `AGENT_TELL_MODEL_UNDO`: an earlier answer whose write the person has since
         # undone ends with a short factual note saying so (after the cap, so it is not cut).
         # One query for the whole window, and none at all with the flag off.
         undone: dict[Any, list[AgentStep]] = {}
