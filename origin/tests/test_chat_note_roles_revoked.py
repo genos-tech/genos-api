@@ -510,3 +510,112 @@ class MovingANote(Base):
         )
         self.assertEqual(res.status_code, 200, res.content)
         timezone.now()
+
+
+class DeletingAProject(Base):
+    """MIP-1500: `delete_project` detaches the project chat (`project=None`, `is_deleted=True`)
+    BEFORE it deletes the project, so by the time the `ProjectMembers` `post_delete` receiver runs
+    the chat can no longer be found from the project, and the explicit Owner/Editor rows on the
+    chat's notes were never revoked: the former members kept Owner on the notes of a chat nobody
+    can open any more."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = self.project_of("DEL", self.reader)
+        self.chat = self.pm_chat(self.project)
+        self.reader_note = self.create_note_via_rest(self.chat, self.reader, "by reader")
+        self.owner_note = self.create_note_via_rest(self.chat, self.owner, "by owner")
+        self.child = self.create_note_via_rest(self.chat, self.reader, "second by reader")
+
+    def delete_via_page(self):
+        """The page's endpoint, by the project's owner."""
+        self.authenticate(self.owner)
+        res = self.client.delete(
+            "/api/v2/project/",
+            {"team_id": str(self.team.team_id), "project_id": self.project.project_id},
+            QUERY_STRING=f"team_id={self.team.team_id}&project_id={self.project.project_id}",
+        )
+        self.assertEqual(res.status_code, 204, res.content)
+
+    def outsider(self):
+        from django.contrib.auth import get_user_model
+
+        user = get_user_model().objects.create_user(
+            username="outsider", email="outsider@example.com", password="x"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=user)
+        return user
+
+    def test_the_rows_exist_before_the_delete(self):
+        self.assertEqual(self.explicit(self.reader, self.reader_note), ROLE_OWNER)
+        self.assertEqual(self.explicit(self.owner, self.owner_note), ROLE_OWNER)
+
+    def test_the_service_revokes_every_former_member(self):
+        from origin.services.project_delete import delete_project
+
+        delete_project(self.project)
+        for user, note in (
+            (self.reader, self.reader_note),
+            (self.reader, self.child),
+            (self.owner, self.owner_note),
+        ):
+            self.assertIsNone(self.explicit(user, note), (user.username, note.title))
+            self.assertIsNone(get_effective_role(user.id, CHAT, note.note_id))
+        self.assertFalse(NotePermissionMaster.objects.filter(note_type=CHAT).exists())
+
+    def test_the_page_endpoint_does_the_same_and_the_rest_readers_say_no(self):
+        self.delete_via_page()
+        for note in (self.reader_note, self.child, self.owner_note):
+            self.assertTrue(ChatNoteMaster.objects.filter(note_id=note.note_id).exists())
+            self.assertIsNone(self.explicit(self.reader, note))
+            self.assertNoAccess(note)
+            self.assertEqual(self.rest_single(note).status_code, 403)
+            self.assertEqual(readable_note_ids(self.reader.id, CHAT, [note.note_id]), set())
+            self.assertNotIn(note.note_id, self.rest_meta_ids())
+
+    def test_a_share_the_owner_made_on_purpose_to_a_non_member_survives(self):
+        stranger = self.outsider()
+        self.share(self.reader_note, stranger, ROLE_VIEWER, granter=self.reader)
+        self.delete_via_page()
+        self.assertEqual(self.explicit(stranger, self.reader_note), ROLE_VIEWER)
+        self.assertEqual(
+            get_effective_role(stranger.id, CHAT, self.reader_note.note_id), ROLE_VIEWER
+        )
+        # ... and the members still lost theirs
+        self.assertIsNone(self.explicit(self.reader, self.reader_note))
+        self.assertIsNone(self.explicit(self.owner, self.owner_note))
+
+    def test_a_share_to_someone_who_joined_the_project_afterwards_is_not_a_member_row(self):
+        """The two-kind rule of MIP-1482: written before the person joined the chat = a share."""
+        stranger = self.outsider()
+        self.share(self.reader_note, stranger, ROLE_EDITOR, granter=self.reader)
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=stranger)
+        self.delete_via_page()
+        self.assertEqual(self.explicit(stranger, self.reader_note), ROLE_EDITOR)
+
+    def test_a_sibling_project_is_untouched(self):
+        other = self.project_of("SIB", self.reader)
+        other_note = self.create_note_via_rest(self.pm_chat(other), self.reader, "sibling")
+        self.delete_via_page()
+        self.assertEqual(self.explicit(self.reader, other_note), ROLE_OWNER)
+        self.assertEveryoneSays(other_note, True)
+
+    def test_the_search_index_is_queued_to_drop_the_notes_for_the_old_members(self):
+        from unittest import mock
+
+        with mock.patch("origin.search_engine.acl_dirty.mark_channels_dirty") as mark:
+            self.delete_via_page()
+        marked = {str(c) for call in mark.call_args_list for c in call.args[0]}
+        self.assertIn(str(self.chat.id), marked)
+
+    def test_a_failed_delete_revokes_nothing(self):
+        """One transaction: if the project delete fails the rows are still there."""
+        from unittest import mock
+
+        from origin.services.project_delete import delete_project
+
+        with mock.patch.object(type(self.project), "delete", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                delete_project(self.project)
+        self.assertEqual(self.explicit(self.reader, self.reader_note), ROLE_OWNER)
+        self.assertFalse(Channel.objects.get(id=self.chat.id).is_deleted)
