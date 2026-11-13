@@ -579,14 +579,27 @@ class TestSwitch(ActivityBase):
         self.switch(False)
         self.assertEqual(self.switch(True).status_code, 200)
         state = MemberItemDayState.objects.get(user=self.user, team=self.team)
-        self.assertEqual(state.built_through, self.d(2))
+        self.assertEqual(state.built_through, self.d(3))  # today (MIP-1229), not yesterday
         self.assertEqual(self.fill(), 0)
         self.assertEqual(self.rows(), {})
-        # The next closed day is built as usual.
-        self.comment(task, self.user2, self.day_minutes(3, 30))
-        later = self.now + timedelta(days=1)
+        # The next closed day after today is built as usual.
+        self.comment(task, self.user2, self.day_minutes(4, 30))
+        later = self.now + timedelta(days=2)
         self.assertEqual(item_activity.fill_forward(self.ctx, later), 1)
-        self.assertEqual(self.counts(task, 3)["others"], 1)
+        self.assertEqual(self.counts(task, 4)["others"], 1)
+
+    def test_what_happened_later_the_same_day_it_was_off_is_not_stored_when_it_is_turned_on(self):
+        # MIP-1229: off, work, on again in the same local day. The day is built from task
+        # history, which exists whatever the switch says, so a watermark of yesterday brought
+        # the time it was off back with the next day's fill.
+        task = self.make_task()
+        self.switch(False)
+        self.comment(task, self.user2, self.day_minutes(3, 60))  # today, while it was off
+        self.switch(True)
+        tomorrow = self.now + timedelta(days=1)  # today is a closed day now
+        self.assertEqual(item_activity.fill_forward(self.ctx, tomorrow), 0)
+        self.assertEqual(self.rows(), {})
+        self.assertEqual(MemberItemDay.objects.filter(user=self.user).count(), 0)
 
     def test_a_repeat_of_on_does_not_reset_anything(self):
         task = self.make_task()

@@ -701,8 +701,14 @@ def _check_project(ctx: ToolContext, project_id: Any) -> int | None:
 
 
 def _my_active_tasks(ctx: ToolContext, project_id: int | None = None):
-    """The caller's open tasks: the scope of `get_my_focus_tasks`, so the briefing and
-    "what should I work on?" talk about the same set."""
+    """The caller's open tasks: the scope of `get_my_focus_tasks`, minus the ones that read as
+    closed because an ancestor is (MIP-1332).
+
+    A person often closes a parent task or a milestone and never its sub-tasks, meaning "all
+    of it is done". `task_ancestry` is the one statement of that rule (the one `get_task` and
+    `list_tasks` already show as `effective_status`), so a briefing or a report never nags about
+    such a task. The in-app `get_my_focus_tasks` still lists them (what the in-app model sees
+    waits for the December eval group)."""
     member_projects = ProjectMembers.objects.filter(
         attendee_id=ctx.user_id, project__team_id=ctx.team_id, project__is_deleted=False
     ).values("project_id")
@@ -717,7 +723,17 @@ def _my_active_tasks(ctx: ToolContext, project_id: int | None = None):
         .exclude(status__in=_ACTIVE_TASK_EXCLUDE)
         .select_related("project")
     )
-    return qs.filter(project_id=project_id) if project_id is not None else qs
+    qs = qs.filter(project_id=project_id) if project_id is not None else qs
+    from origin.services.task_ancestry import effective_statuses  # noqa: PLC0415
+
+    closed_above = [
+        task_id
+        for task_id, found in effective_statuses(
+            list(qs.values_list("task_id", flat=True)), ctx.team_id
+        ).items()
+        if found.closed_by_ancestor_id is not None
+    ]
+    return qs.exclude(task_id__in=closed_above) if closed_above else qs
 
 
 def _task_row(task: TaskMaster, today: date) -> dict[str, Any]:
@@ -751,7 +767,16 @@ def _calendar_today(ctx: ToolContext, now: datetime, zone) -> dict[str, Any]:
         )
     except ToolError as exc:
         return {"events": None, "note": str(exc)}
-    except Exception:  # noqa: BLE001 - Google being down must not cost the member their briefing
+    except Exception as exc:  # noqa: BLE001 - Google being down must not cost the member their briefing
+        # MIP-1333: this used to say nothing, so a deployment that could not refresh the Google
+        # token (a cron service without the OAuth client variables) looked like a calendar that
+        # was merely "down". The type and a short message make the cause findable in the logs.
+        log.warning(
+            "briefing_calendar_unreadable user=%s error=%s detail=%s",
+            ctx.user_id,
+            type(exc).__name__,
+            str(exc)[:160],
+        )
         return {"events": None, "note": "The calendar could not be read right now."}
     return {"events": out.get("events", [])}
 
@@ -1226,6 +1251,27 @@ def _looked_at(
     return out
 
 
+def _chat_name(me: str, row: dict[str, Any]) -> str:
+    """The chat's name as the member sees it (MIP-1333). A DM has no shared title (its "name" is
+    the other person), so an empty title is resolved the way search and the agent's source chips
+    do; anything it cannot resolve stays empty and the report says "a chat"."""
+    title = row["channel__title"] or ""
+    if title:
+        return title
+    from origin.search_engine.friendly_titles import friendly_chat_title  # noqa: PLC0415
+
+    try:
+        return (
+            friendly_chat_title(
+                str(me), CHAT_TYPE_LABEL.get(row["channel__kind"]), row["channel_id"]
+            )
+            or ""
+        )
+    except Exception:  # noqa: BLE001 - a name is a nicety, never a failed briefing
+        log.warning("briefing_chat_name_failed channel=%s", row.get("channel_id"))
+        return ""
+
+
 def _did_in(
     ctx: ToolContext,
     since: datetime,
@@ -1395,7 +1441,7 @@ def _did_in(
         {
             "chat_id": str(row["channel_id"]),
             "chat_type": CHAT_TYPE_LABEL.get(row["channel__kind"]),
-            "title": wrap_workspace_content(row["channel__title"] or ""),
+            "title": wrap_workspace_content(_chat_name(me, row)),
             "messages": row["n"],
         }
         for row in sent[:DID_CHATS]
