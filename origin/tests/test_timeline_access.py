@@ -553,7 +553,7 @@ class TestWhatAClientReceives(TimelineBase):
         self.assertFalse(tool["annotations"].get("destructiveHint", False))
         self.assertEqual(tool["inputSchema"]["required"], ["anchor_type", "anchor_id"])
         self.assertEqual(
-            tool["inputSchema"]["properties"]["anchor_type"]["enum"], ["task", "thread", "chat"]
+            tool["inputSchema"]["properties"]["anchor_type"]["enum"], ["task", "thread", "chat", "note"]
         )
         self.assertEqual(
             tool["inputSchema"]["properties"]["kinds"]["items"]["enum"], list(timeline.KINDS)

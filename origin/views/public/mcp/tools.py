@@ -1824,13 +1824,14 @@ CATALOG: tuple[McpTool, ...] = (
         name="get_timeline",
         registry_name="get_timeline",
         description=(
-            "Read the ORDERED HISTORY of one thing: a task, a chat thread, or a window of a "
-            "chat. Use it for 'what happened here', 'how did this start', 'what was said "
+            "Read the ORDERED HISTORY of one thing: a task, a chat thread, a note, or a window "
+            "of a chat. Use it for 'what happened here', 'how did this start', 'what was said "
             "before the task was made' and 'what led to this'. For one task with its "
             "neighbours use `get_item_line`; for any other anchor, or a plain ordered history "
             "to page through, use `get_timeline`. `anchor_type` is task (id, PRJ-123 or URL), "
-            "thread (the id of its first message; a reply's id works) or chat (a window of "
-            "its messages). `events` run oldest to newest and every one has the same shape: "
+            "thread (the id of its first message; a reply's id works), note (its family and "
+            "id, such as task:111: who edited it and what each version added) or chat (a "
+            "window of its messages). `events` run oldest to newest and every one has the same shape: "
             "`at` (UTC), `kind` (created, status, assignee, change, comment, message, reply, "
             "notice, note_edit, pr_linked, pr_merged, reaction, marker), `by` (a key into "
             "`people`, or github / system), a short `text` (`text_chars`, at most 500) and a "

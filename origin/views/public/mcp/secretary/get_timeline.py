@@ -1,6 +1,6 @@
 """`get_timeline` (MIP-1281): MCP-only, see `secretary/__init__.py`.
 
-One ordered history of whatever the member points at: a task, a chat thread, a chat window.
+One ordered history of whatever the member points at: a task, a chat thread, a chat window, a note.
 The logic, the contract and the access rules are in `origin/services/timeline.py`; this file only
 declares the arguments and hands them over.
 """
@@ -56,7 +56,9 @@ GET_TIMELINE = Tool(
                 "type": "STRING",
                 "description": (
                     "task: its display id (PRJ-123), its Genos URL or its numeric id. thread: the "
-                    "id of the thread's first message (a reply's id works too). chat: the chat's id."
+                    "id of the thread's first message (a reply's id works too). chat: the chat's id. "
+                    "note: its family and id, such as task:111 or personal:42 (ids are only unique "
+                    "inside a family)."
                 ),
             },
             "since": {
