@@ -91,6 +91,14 @@ class PmChatStrayRow(McpBase):
         self.as_user(self.outsider)
         self.assert_404_like_missing(lambda cid: self.client.get(f"/api/v3/channels/{cid}/"))
 
+    def test_channel_detail_roster_lists_the_project_not_the_stray(self):
+        self.as_user(self.insider)
+        res = self.client.get(f"/api/v3/channels/{self.chat.id}/")
+        self.assertEqual(res.status_code, 200, res.content)
+        ids = {m["userId"] for m in res.json()["members"]}
+        self.assertNotIn(str(self.outsider.id), ids)
+        self.assertIn(str(self.insider.id), ids)
+
     def test_roster_is_a_404_like_a_missing_chat(self):
         self.as_user(self.outsider)
         self.assert_404_like_missing(
