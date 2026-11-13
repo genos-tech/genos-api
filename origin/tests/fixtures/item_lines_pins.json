@@ -15,7 +15,7 @@
             "{\"at\":\"+41400s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"mentions\":[\"<workspace_content>\\ntestuser\\n</workspace_content>\"],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"<workspace_content>\\nS07 Progress: reproduced Y, the cause is a missing permission\\n</workspace_content>\",\"via\":\"task\",\"what\":\"comment\"}",
             "{\"at\":\"+42000s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"emoji\":\"<workspace_content>\\n👍\\n</workspace_content>\",\"source\":\"reaction\",\"summary\":\"reacted to a comment\",\"via\":\"task\",\"what\":\"reaction\"}",
             "{\"at\":\"+44100s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"<workspace_content>\\nS08 @dev_c Thanks, please also check the CSV export\\n</workspace_content>\",\"via\":\"task\",\"what\":\"comment\"}",
-            "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #4\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
+            "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #TASK\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
             "{\"at\":\"+50400s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS09 Summary of Y: reproduced, root cause a missing permission, comments reviewed\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
             "{\"at\":\"+51000s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS9b Summary of Y: fixed, CSV export checked, shipped\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
             "{\"at\":\"+55800s\",\"automated\":true,\"by\":\"GitHub\",\"pr_number\":7,\"pr_title\":\"<workspace_content>\\nFix the export\\n</workspace_content>\",\"source\":\"delivery\",\"summary\":\"merged a PR\",\"via\":\"task\",\"what\":\"pr_merged\"}",
@@ -65,7 +65,7 @@
             "project": "Client Portal",
             "relation": "blocked_by",
             "status": "WIP",
-            "task_id": 7,
+            "task_id": "BLOCKER",
             "title": "<workspace_content>\nBlocker\n</workspace_content>",
             "type": "task"
           },
@@ -81,7 +81,7 @@
             "project": "Client Portal",
             "relation": "child",
             "status": "Open",
-            "task_id": 6,
+            "task_id": "CHILD",
             "title": "<workspace_content>\nChild step\n</workspace_content>",
             "type": "task"
           }
@@ -99,7 +99,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "a5439210a082d3281b49c3a9efbc5c82e93b385fc9907a672797cca5e8e74133",
+      "line_for_item_sha": "2f53cf568e490bff8058fe99a842ddd901683d4ac76117726d0357cbf30c4887",
       "queries": 54,
       "read_events": {
         "capped": false,
@@ -111,7 +111,7 @@
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+57600s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S10 Fixed and shipped, Y is solved\",\"via\":\"task\",\"what\":\"comment\"}",
           "{\"actor\":\"B\",\"ai_app\":false,\"at\":\"+44100s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S08 @dev_c Thanks, please also check the CSV export\",\"via\":\"task\",\"what\":\"comment\"}",
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+41400s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[\"B\"],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S07 Progress: reproduced Y, the cause is a missing permission\",\"via\":\"task\",\"what\":\"comment\"}",
-          "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+48600s\",\"automated\":false,\"extra\":{\"from_task\":\"CLP-50\"},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"blocked by #4\",\"via\":\"chip\",\"what\":\"comment\"}",
+          "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+48600s\",\"automated\":false,\"extra\":{\"from_task\":\"CLP-50\"},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"blocked by #TASK\",\"via\":\"chip\",\"what\":\"comment\"}",
           "{\"actor\":\"B\",\"ai_app\":false,\"at\":\"+42000s\",\"automated\":false,\"extra\":{\"emoji\":\"<workspace_content>\\n👍\\n</workspace_content>\"},\"key_kind\":\"task_reaction\",\"label\":null,\"mentions\":[],\"source\":\"reaction\",\"summary\":\"reacted to a comment\",\"text\":\"\",\"via\":\"task\",\"what\":\"reaction\"}",
           "{\"actor\":null,\"ai_app\":false,\"at\":\"+55800s\",\"automated\":true,\"extra\":{\"pr_number\":7,\"pr_title\":\"<workspace_content>\\nFix the export\\n</workspace_content>\"},\"key_kind\":\"delivery\",\"label\":\"GitHub\",\"mentions\":[],\"source\":\"delivery\",\"summary\":\"merged a PR\",\"text\":\"\",\"via\":\"task\",\"what\":\"pr_merged\"}",
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+51000s\",\"automated\":false,\"extra\":{\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\"},\"key_kind\":\"version\",\"label\":null,\"mentions\":[],\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"S9b Summary of Y: fixed, CSV export checked, shipped\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
@@ -122,7 +122,7 @@
           "{\"actor\":\"A\",\"ai_app\":true,\"at\":\"+61200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"opened in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_read\"}"
         ]
       },
-      "related_lines_sha": "8f6a36722a531cc22d7dd26d5176d01a10ebe31ce7bb41838be530fbc9945963"
+      "related_lines_sha": "6d3e22dac17135822719d26552c9cdffc5da54ed8d2fa96b3d8493ca5a6733cf"
     },
     "b": {
       "item_lines": {
@@ -142,7 +142,7 @@
             "{\"at\":\"+44100s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"mine\":true,\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"<workspace_content>\\nS08 @dev_c Thanks, please also check the CSV export\\n</workspace_content>\",\"via\":\"task\",\"what\":\"comment\"}",
             "{\"app\":\"api_key\",\"at\":\"+45600s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"calls\":2,\"first_at\":\"+44100s\",\"mine\":true,\"source\":\"app\",\"summary\":\"changed in your AI app\",\"via\":\"marker\",\"what\":\"app_write\"}",
             "{\"at\":\"+46800s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"chat\":\"<workspace_content>\\nDev room\\n</workspace_content>\",\"source\":\"message\",\"summary\":\"mentioned this task in a message\",\"text\":\"<workspace_content>\\nsee #CLP-1\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"message\"}",
-            "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #4\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
+            "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #TASK\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
             "{\"at\":\"+50400s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS09 Summary of Y: reproduced, root cause a missing permission, comments reviewed\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
             "{\"at\":\"+51000s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS9b Summary of Y: fixed, CSV export checked, shipped\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
             "{\"at\":\"+55800s\",\"automated\":true,\"by\":\"GitHub\",\"pr_number\":7,\"pr_title\":\"<workspace_content>\\nFix the export\\n</workspace_content>\",\"source\":\"delivery\",\"summary\":\"merged a PR\",\"via\":\"task\",\"what\":\"pr_merged\"}",
@@ -192,7 +192,7 @@
             "project": "Client Portal",
             "relation": "blocked_by",
             "status": "WIP",
-            "task_id": 7,
+            "task_id": "BLOCKER",
             "title": "<workspace_content>\nBlocker\n</workspace_content>",
             "type": "task"
           },
@@ -208,7 +208,7 @@
             "project": "Client Portal",
             "relation": "child",
             "status": "Open",
-            "task_id": 6,
+            "task_id": "CHILD",
             "title": "<workspace_content>\nChild step\n</workspace_content>",
             "type": "task"
           }
@@ -226,7 +226,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "c04dcc7fb9f7178450c898f139ceb07a1a43e4289b1e673c686c75512773087c",
+      "line_for_item_sha": "d484f1ec1e3000d1185094907c9dfb6abea06b4ca886da9deb6fd19e1bc81c36",
       "queries": 54,
       "read_events": {
         "capped": false,
@@ -238,7 +238,7 @@
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+57600s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S10 Fixed and shipped, Y is solved\",\"via\":\"task\",\"what\":\"comment\"}",
           "{\"actor\":\"B\",\"ai_app\":false,\"at\":\"+44100s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S08 @dev_c Thanks, please also check the CSV export\",\"via\":\"task\",\"what\":\"comment\"}",
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+41400s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[\"B\"],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S07 Progress: reproduced Y, the cause is a missing permission\",\"via\":\"task\",\"what\":\"comment\"}",
-          "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+48600s\",\"automated\":false,\"extra\":{\"from_task\":\"CLP-50\"},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"blocked by #4\",\"via\":\"chip\",\"what\":\"comment\"}",
+          "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+48600s\",\"automated\":false,\"extra\":{\"from_task\":\"CLP-50\"},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"blocked by #TASK\",\"via\":\"chip\",\"what\":\"comment\"}",
           "{\"actor\":\"B\",\"ai_app\":false,\"at\":\"+42000s\",\"automated\":false,\"extra\":{\"emoji\":\"<workspace_content>\\n👍\\n</workspace_content>\"},\"key_kind\":\"task_reaction\",\"label\":null,\"mentions\":[],\"source\":\"reaction\",\"summary\":\"reacted to a comment\",\"text\":\"\",\"via\":\"task\",\"what\":\"reaction\"}",
           "{\"actor\":null,\"ai_app\":false,\"at\":\"+55800s\",\"automated\":true,\"extra\":{\"pr_number\":7,\"pr_title\":\"<workspace_content>\\nFix the export\\n</workspace_content>\"},\"key_kind\":\"delivery\",\"label\":\"GitHub\",\"mentions\":[],\"source\":\"delivery\",\"summary\":\"merged a PR\",\"text\":\"\",\"via\":\"task\",\"what\":\"pr_merged\"}",
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+51000s\",\"automated\":false,\"extra\":{\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\"},\"key_kind\":\"version\",\"label\":null,\"mentions\":[],\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"S9b Summary of Y: fixed, CSV export checked, shipped\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
@@ -253,7 +253,7 @@
           "{\"actor\":\"B\",\"ai_app\":true,\"at\":\"+34200s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "87522e87f755a22a2a7bf4925517a7d616c5fbd52482c47fcf9feea004b9a986"
+      "related_lines_sha": "62ec81dbda801e4148b155f58968a739e5bfecb8415c1f425378cfcdbd380848"
     },
     "c": {
       "item_lines": {
@@ -272,7 +272,7 @@
             "{\"at\":\"+42000s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"emoji\":\"<workspace_content>\\n👍\\n</workspace_content>\",\"source\":\"reaction\",\"summary\":\"reacted to a comment\",\"via\":\"task\",\"what\":\"reaction\"}",
             "{\"at\":\"+44100s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"<workspace_content>\\nS08 @dev_c Thanks, please also check the CSV export\\n</workspace_content>\",\"via\":\"task\",\"what\":\"comment\"}",
             "{\"at\":\"+46800s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"chat\":\"<workspace_content>\\nDev room\\n</workspace_content>\",\"mine\":true,\"source\":\"message\",\"summary\":\"mentioned this task in a message\",\"text\":\"<workspace_content>\\nsee #CLP-1\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"message\"}",
-            "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"mine\":true,\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #4\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
+            "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"mine\":true,\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #TASK\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
             "{\"at\":\"+50400s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"mine\":true,\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS09 Summary of Y: reproduced, root cause a missing permission, comments reviewed\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
             "{\"at\":\"+51000s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"mine\":true,\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS9b Summary of Y: fixed, CSV export checked, shipped\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
             "{\"app\":\"api_key\",\"at\":\"+51000s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"mine\":true,\"source\":\"app\",\"summary\":\"changed in your AI app\",\"via\":\"marker\",\"what\":\"app_write\"}",
@@ -323,7 +323,7 @@
             "project": "Client Portal",
             "relation": "blocked_by",
             "status": "WIP",
-            "task_id": 7,
+            "task_id": "BLOCKER",
             "title": "<workspace_content>\nBlocker\n</workspace_content>",
             "type": "task"
           },
@@ -339,7 +339,7 @@
             "project": "Client Portal",
             "relation": "child",
             "status": "Open",
-            "task_id": 6,
+            "task_id": "CHILD",
             "title": "<workspace_content>\nChild step\n</workspace_content>",
             "type": "task"
           }
@@ -357,7 +357,7 @@
           "until": "+86400s"
         }
       },
-      "line_for_item_sha": "01243221745c484ac09aff7d390cb33be39aeb7e2d811b6a1cda02a8a8356551",
+      "line_for_item_sha": "d64199920f2425257a99c13271d5c63a0dc4aac749a674476c993eed9cfc9740",
       "queries": 60,
       "read_events": {
         "capped": false,
@@ -369,7 +369,7 @@
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+57600s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S10 Fixed and shipped, Y is solved\",\"via\":\"task\",\"what\":\"comment\"}",
           "{\"actor\":\"B\",\"ai_app\":false,\"at\":\"+44100s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S08 @dev_c Thanks, please also check the CSV export\",\"via\":\"task\",\"what\":\"comment\"}",
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+41400s\",\"automated\":false,\"extra\":{},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[\"B\"],\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"S07 Progress: reproduced Y, the cause is a missing permission\",\"via\":\"task\",\"what\":\"comment\"}",
-          "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+48600s\",\"automated\":false,\"extra\":{\"from_task\":\"CLP-50\"},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"blocked by #4\",\"via\":\"chip\",\"what\":\"comment\"}",
+          "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+48600s\",\"automated\":false,\"extra\":{\"from_task\":\"CLP-50\"},\"key_kind\":\"comment\",\"label\":null,\"mentions\":[],\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"blocked by #TASK\",\"via\":\"chip\",\"what\":\"comment\"}",
           "{\"actor\":\"B\",\"ai_app\":false,\"at\":\"+42000s\",\"automated\":false,\"extra\":{\"emoji\":\"<workspace_content>\\n👍\\n</workspace_content>\"},\"key_kind\":\"task_reaction\",\"label\":null,\"mentions\":[],\"source\":\"reaction\",\"summary\":\"reacted to a comment\",\"text\":\"\",\"via\":\"task\",\"what\":\"reaction\"}",
           "{\"actor\":null,\"ai_app\":false,\"at\":\"+55800s\",\"automated\":true,\"extra\":{\"pr_number\":7,\"pr_title\":\"<workspace_content>\\nFix the export\\n</workspace_content>\"},\"key_kind\":\"delivery\",\"label\":\"GitHub\",\"mentions\":[],\"source\":\"delivery\",\"summary\":\"merged a PR\",\"text\":\"\",\"via\":\"task\",\"what\":\"pr_merged\"}",
           "{\"actor\":\"C\",\"ai_app\":false,\"at\":\"+51000s\",\"automated\":false,\"extra\":{\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\"},\"key_kind\":\"version\",\"label\":null,\"mentions\":[],\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"S9b Summary of Y: fixed, CSV export checked, shipped\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
@@ -383,7 +383,7 @@
           "{\"actor\":\"C\",\"ai_app\":true,\"at\":\"+36000s\",\"automated\":false,\"extra\":{\"app\":\"api_key\"},\"key_kind\":\"marker\",\"label\":null,\"mentions\":[],\"source\":\"app\",\"summary\":\"changed in your AI app\",\"text\":\"\",\"via\":\"marker\",\"what\":\"app_write\"}"
         ]
       },
-      "related_lines_sha": "b9600ac470218e09694f146482722e93a4ebc4156c7606f6fb535398d72a440e"
+      "related_lines_sha": "484a76a429f054dde40f2120a2e729a97313ea19c5c56a41349bce8652bd583a"
     }
   },
   "rich_no_related_b": {
@@ -403,7 +403,7 @@
         "{\"at\":\"+44100s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"mine\":true,\"source\":\"comment\",\"summary\":\"commented\",\"text\":\"<workspace_content>\\nS08 @dev_c Thanks, please also check the CSV export\\n</workspace_content>\",\"via\":\"task\",\"what\":\"comment\"}",
         "{\"app\":\"api_key\",\"at\":\"+45600s\",\"by\":\"<workspace_content>\\ntestuser\\n</workspace_content>\",\"calls\":2,\"first_at\":\"+44100s\",\"mine\":true,\"source\":\"app\",\"summary\":\"changed in your AI app\",\"via\":\"marker\",\"what\":\"app_write\"}",
         "{\"at\":\"+46800s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"chat\":\"<workspace_content>\\nDev room\\n</workspace_content>\",\"source\":\"message\",\"summary\":\"mentioned this task in a message\",\"text\":\"<workspace_content>\\nsee #CLP-1\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"message\"}",
-        "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #9\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
+        "{\"at\":\"+48600s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"from_task\":\"CLP-50\",\"source\":\"comment\",\"summary\":\"commented on another task and pointed at this one\",\"text\":\"<workspace_content>\\nblocked by #TASK\\n</workspace_content>\",\"via\":\"chip\",\"what\":\"comment\"}",
         "{\"at\":\"+50400s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS09 Summary of Y: reproduced, root cause a missing permission, comments reviewed\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
         "{\"at\":\"+51000s\",\"by\":\"<workspace_content>\\ndev_c\\n</workspace_content>\",\"note\":\"<workspace_content>\\nY: progress summary\\n</workspace_content>\",\"note_type\":\"task\",\"source\":\"note\",\"summary\":\"edited the note\",\"text\":\"<workspace_content>\\nS9b Summary of Y: fixed, CSV export checked, shipped\\n</workspace_content>\",\"via\":\"note_task\",\"what\":\"note_edit\"}",
         "{\"at\":\"+55800s\",\"automated\":true,\"by\":\"GitHub\",\"pr_number\":7,\"pr_title\":\"<workspace_content>\\nFix the export\\n</workspace_content>\",\"source\":\"delivery\",\"summary\":\"merged a PR\",\"via\":\"task\",\"what\":\"pr_merged\"}",

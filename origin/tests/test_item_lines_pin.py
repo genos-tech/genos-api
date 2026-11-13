@@ -123,6 +123,7 @@ class Pinned(SequenceScenario):
     def norm(self, value, seq):
         users = {str(u.id): name for name, u in seq.people.items()}
         task_id = seq.task.task_id
+        names = {task_id: "TASK", **getattr(self, "task_names", {})}
 
         def walk(node, key=None):
             if isinstance(node, datetime):
@@ -139,11 +140,15 @@ class Pinned(SequenceScenario):
                         return node
                 for uid, name in users.items():
                     node = node.replace(uid, name)
-                return node.replace(f"Task {task_id} ", "Task TASK ")
+                node = node.replace(f"Task {task_id} ", "Task TASK ")
+                # a `#` chip is told as `#<task id>`
+                return re.sub(
+                    r"#(\d+)", lambda m: "#" + str(names.get(int(m.group(1)), m.group(1))), node
+                )
             if isinstance(node, bool) or node is None:
                 return node
             if isinstance(node, int):
-                return "TASK" if key == "task_id" and node == task_id else node
+                return names.get(node, node) if key == "task_id" else node
             if isinstance(node, dict):
                 return {str(k): walk(v, k) for k, v in node.items()}
             if isinstance(node, (list, tuple)):
@@ -394,6 +399,11 @@ class TestTheRichStory(Pinned):
         with self.frozen(seq.minutes(12 * 60 + 50)):
             self.mcp_tool(seq.b, "get_task", task_id=child.task_id)
         task.refresh_from_db()
+        self.task_names = {
+            elsewhere.task_id: "ELSEWHERE",
+            child.task_id: "CHILD",
+            blocker.task_id: "BLOCKER",
+        }
         return seq
 
     def test_the_rich_story(self):
