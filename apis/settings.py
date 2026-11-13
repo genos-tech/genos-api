@@ -1932,6 +1932,22 @@ SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"] = (
     os.environ.get("AGENT_TELL_MODEL_UNDO", "false").lower() == "true"
 )
 
+# MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905`): how much CONTENT Genos
+# writes (task, milestone and note bodies, plans), a setting of the member's own
+# (`CustomUser.preferred_content_length`: short | standard | long, default standard; stored by
+# `PATCH /api/v2/user/preferences/content-length/` whatever this says). ON = for a member on Short
+# or Long, one delimited guidance block is appended at the tail of the system instruction (it says
+# it is about content writes only, chat answers stay concise) and every model call of the run gets
+# an explicit output cap on every provider (Short 4,096, Long 16,384). A member on Standard, a run
+# with no content-write tool available (digest, read-only agency level) and the flag OFF all send
+# exactly what origin/main sends: no block, no cap, no query. Read at the start of each leg.
+# Flip criterion: the `t905` arm shows Short bodies shorter and Long bodies fuller than Standard
+# (by characters, JA included), structure kept, no plan cut off, chat answers no longer at any
+# level, and Standard identical to arm0.
+SEARCH_ENGINE["AGENT_CONTENT_LENGTH"] = (
+    os.environ.get("AGENT_CONTENT_LENGTH", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
