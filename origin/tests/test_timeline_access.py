@@ -399,6 +399,36 @@ class TestTheCursor(TimelineBase):
         forged = f".{edited}{sep2}{stamp}{sep}{signature}"
         self.assertEqual(self.refused(cursor=forged), timeline._CURSOR_BAD)
 
+    def test_a_chat_cursor_accepts_a_repeated_since_and_refuses_a_different_one(self):
+        for i in range(6):
+            self.message(self.gm, self.user, 60 + i, text=f"later {i}")
+        first = self.tl("chat", str(self.gm.id), since=self.since, until=self.until, limit=2)
+        again = self.tl(
+            "chat", str(self.gm.id), since=self.since, limit=2, cursor=first["next_cursor"]
+        )
+        self.assertEqual(again["window"], first["window"])
+        only_until = self.tl(
+            "chat", str(self.gm.id), until=self.until, limit=2, cursor=first["next_cursor"]
+        )
+        self.assertEqual(only_until["window"], first["window"])
+        with self.assertRaises(ToolError) as caught:
+            self.tl("chat", str(self.gm.id), since=self.at(5), limit=2, cursor=first["next_cursor"])
+        self.assertEqual(str(caught.exception), timeline._CURSOR_BAD)
+
+    def test_a_cursor_made_with_lead_in_is_refused_without_it_and_the_counts_stay_exact(self):
+        before = self.message(self.gm, self.user2, 1, text="before")
+        root = self.message(self.gm, self.user2, 10, text="root2")
+        for i in range(4):
+            self.message(self.gm, self.user, 11 + i, text=f"r{i}", root=root)
+        first = self.tl("thread", str(root.id), limit=2, lead_in=1)
+        self.assertEqual(first["events_total"], 6)
+        with self.assertRaises(ToolError):
+            self.tl("thread", str(root.id), limit=2, cursor=first["next_cursor"])
+        pages = self.walk("thread", str(root.id), limit=2, lead_in=1)
+        self.assertEqual(pages[-1]["older_events"], 0)
+        self.assertEqual(sum(len(p["events"]) for p in pages), 6)
+        del before
+
     def test_a_cursor_from_another_anchor_is_refused(self):
         self.assertEqual(self.refused(anchor_id=str(self.other_root.id)), timeline._CURSOR_BAD)
         task = self.make_task("Export")

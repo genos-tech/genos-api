@@ -459,13 +459,16 @@ def _unsign(token: Any) -> dict[str, Any]:
     return state
 
 
-def _binding(ctx: ToolContext, anchor: Anchor, since, until, kinds: frozenset[str]) -> dict:
+def _binding(
+    ctx: ToolContext, anchor: Anchor, since, until, kinds: frozenset[str], lead: int = 0
+) -> dict:
     return {
         "a": anchor.name,
         "u": str(ctx.user_id),
         "t": str(ctx.team_id),
         "w": [_exact(since) if since else None, _exact(until) if until else None],
         "k": sorted(kinds),
+        "l": lead,
         "d": "older",
     }
 
@@ -495,6 +498,8 @@ class Scope:
     chars: int
     # Set by the readers when a candidate list was cut (told as `capped`).
     capped: set[str] = field(default_factory=set)
+    # The kinds this call asked for (a source may depend on whether another is told).
+    asked: frozenset[str] = frozenset(DEFAULT_KINDS)
     # A thread's `lead_in`: the ids of the messages just before its first one.
     lead_in_ids: list[Any] = field(default_factory=list)
 
@@ -685,7 +690,11 @@ def _comments(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMaster
 
 
 def _comment_reactions(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMaster) -> Any:
-    qs = TaskCommentReactionFact.objects.filter(task_id=task.task_id)
+    qs = TaskCommentReactionFact.objects.filter(task_id=task.task_id).exclude(
+        comment_id__in=TaskComments.objects.filter(task_id=task.task_id, is_deleted=True).values(
+            "comment_id"
+        )
+    )
     if count:
         return _count_rows(sc, qs, time="ts_created_at")
     return [
@@ -1193,7 +1202,7 @@ def _sources(sc: Scope, kinds: frozenset[str]) -> list[Source]:
         in_thread = said.filter(Q(id=root.id, is_thread_reply=False) | Q(thread_root_id=root.id))
         in_chat = str(anchor.channel.id)
         claim = _claiming_task(sc)
-        if claim is not None:
+        if claim is not None and "status" in sc.asked:
             # The closing notice a close also posts here (`correlation_id` task-closed:<task>:<row>)
             # says what the task's own status row says: told once, as the status row.
             in_thread = in_thread.exclude(
@@ -1501,17 +1510,27 @@ def timeline(
     asked = _kinds(kinds)
 
     state: dict[str, Any] | None = _unsign(cursor) if cursor not in (None, "") else None
-    start, end = _window(anchor, since, until, now, str(ctx.user_id))
-    if state is not None:
-        # A cursor carries its own window: a call that says nothing about it keeps it.
+    if state is None:
+        start, end = _window(anchor, since, until, now, str(ctx.user_id))
+    else:
+        # A cursor carries its own window. A call may repeat either bound (it must then be the
+        # same one) or leave it out; the other bound is the cursor's.
         w = state.get("w") or [None, None]
-        if since in (None, "") and until in (None, ""):
-            try:
-                start = datetime.fromisoformat(w[0]) if w[0] else None
-                end = datetime.fromisoformat(w[1]) if w[1] else None
-            except (ValueError, TypeError, IndexError):
+        try:
+            start = datetime.fromisoformat(w[0]) if w[0] else None
+            end = datetime.fromisoformat(w[1]) if w[1] else None
+        except (ValueError, TypeError, IndexError):
+            raise ToolError(_CURSOR_BAD)
+        if since not in (None, ""):
+            given = item_lines._moment(since, "since", str(ctx.user_id), now)
+            if start is None or given != start:
                 raise ToolError(_CURSOR_BAD)
-        bound = _binding(ctx, anchor, start, end, asked)
+        if until not in (None, ""):
+            given = item_lines._moment(until, "until", str(ctx.user_id), now)
+            # an `until` in the future was clamped to the time of the first call
+            if end is None or (given != end and given < end):
+                raise ToolError(_CURSOR_BAD)
+        bound = _binding(ctx, anchor, start, end, asked, lead)
         if any(state.get(k) != v for k, v in bound.items()):
             raise ToolError(_CURSOR_BAD)
     before = _position_of(state) if state is not None else None
@@ -1525,6 +1544,7 @@ def timeline(
         before=before,
         pool=limit + 1,
         chars=chars,
+        asked=asked,
     )
     if lead:
         sc.lead_in_ids = _lead_in_ids(sc, lead)
@@ -1565,7 +1585,7 @@ def timeline(
             sc, anchor, page, links, origin, total, omitted, seen_before, more, capped
         )
         while len(page) > 1 and wire_size(result) > BUDGET_CHARS - CURSOR_RESERVE:
-            page = page[1:]
+            page = page[max(1, len(page) // 10) :]
             result = _assemble(
                 sc, anchor, page, links, origin, total, omitted, seen_before, more, capped
             )
@@ -1577,7 +1597,7 @@ def timeline(
         position = page[0]
         result["next_cursor"] = _sign(
             {
-                **_binding(ctx, anchor, start, end, asked),
+                **_binding(ctx, anchor, start, end, asked, lead),
                 "p": [_exact(position.at), position.rank, list(position.tie)],
                 "total": total,
                 "omitted": omitted,
