@@ -139,6 +139,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
     ancestry,
     progress,
     secretary,
+    via_privacy,
 )
 from origin.views.public.mcp.resolve import (
     resolve_milestone_ref,
@@ -458,7 +459,8 @@ CATALOG: tuple[McpTool, ...] = (
             "One task's change history, newest first: what changed, old and "
             "new value, who, when, and `via` — how it arrived: `app` (the "
             "Genos UI), `agent` (Genos's own assistant), `api_key` (with the "
-            "key's name and prefix, so your own writes are recognisable), "
+            "key's name and prefix on your own writes, so they are recognisable; "
+            "on other people's writes only the kind), "
             "`pr_merge` (closed by a merged PR), `dependencies` (an automatic "
             "Blocked/Open flip), `github` (a linked PR or PR comment), or "
             "`unknown` for older rows. An entry with `cascade` was carried "
@@ -470,6 +472,7 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+        augment=via_privacy.with_via_owner_only,
     ),
     McpTool(
         name="find_task_by_delivery",
