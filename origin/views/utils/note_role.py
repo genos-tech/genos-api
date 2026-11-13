@@ -1,12 +1,12 @@
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import ChannelMember
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
+from origin.services.channel_scope import chat_note_member_q
 
 NOTE_TYPE_PERSONAL = 1
 NOTE_TYPE_TASK = 2
@@ -66,25 +66,20 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
         return None
 
     if note_type == NOTE_TYPE_CHAT:
-        try:
-            note = ChatNoteMaster.objects.only("channel_id").get(note_id=note_id)
-        except ChatNoteMaster.DoesNotExist:
-            return None
-        # Chat notes are keyed on the v3 `Channel` UUID; an active
-        # `ChannelMember` row grants implicit **Editor** (PM members
-        # included via pm_channel_signals).
+        # Chat notes are keyed on the v3 `Channel` UUID. Whoever is in the note's chat gets
+        # implicit **Editor**, by the ONE rule `channel_scope.chat_note_member_q` (MIP-1474): a
+        # project chat is read by the people on the PROJECT (its channel-member row only mirrors
+        # that, so a stray row opens nothing), a live channel of the kind the note was filed
+        # under, an active member row for every other kind.
         #
-        # This used to grant Viewer, on the theory that the chat owner
-        # would promote individual editors. In practice that made every
-        # chat note read-only for everyone except whoever happened to
-        # create it — a note started from a DM couldn't be edited by the
-        # other participant, which is the opposite of what a note
-        # attached to a shared conversation is for. Task notes have
-        # always granted project members Editor for the same reason;
-        # this brings chat notes in line.
-        if ChannelMember.objects.filter(
-            channel_id=note.channel_id, user=user_id, is_deleted=False
-        ).exists():
+        # Editor, not Viewer: Viewer made every chat note read-only for everyone except whoever
+        # happened to create it (a note started from a DM couldn't be edited by the other
+        # participant). Task notes have always granted project members Editor for the same reason.
+        if (
+            ChatNoteMaster.objects.filter(note_id=note_id)
+            .filter(chat_note_member_q(user_id))
+            .exists()
+        ):
             return ROLE_EDITOR
         return None
 
@@ -157,13 +152,10 @@ def readable_note_ids(user_id, note_type, note_ids) -> set:
             )
         )
     elif note_type == NOTE_TYPE_CHAT:
-        member_of = ChannelMember.objects.filter(user=user_id, is_deleted=False).values(
-            "channel_id"
-        )
         readable |= set(
-            ChatNoteMaster.objects.filter(note_id__in=rest, channel__in=member_of).values_list(
-                "note_id", flat=True
-            )
+            ChatNoteMaster.objects.filter(note_id__in=rest)
+            .filter(chat_note_member_q(user_id))
+            .values_list("note_id", flat=True)
         )
     elif note_type == NOTE_TYPE_PERSONAL:
         # Local import, as in `get_effective_role`.

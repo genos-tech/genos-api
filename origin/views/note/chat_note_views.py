@@ -8,6 +8,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
+from origin.services.channel_scope import chat_note_member_q
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.chat_note_target import (
@@ -47,26 +48,15 @@ CHAT_NOTE_SERVER_OWNED_FIELDS = (
 
 
 def _chat_membership_filters(team_id, user_id):
-    """Build a Q expression matching chat notes the user has implicit access to.
+    """A Q matching the chat notes the user has implicit access to in this team.
 
-    Chat notes are keyed on the v3 `Channel` UUID (`channel_id`). A user
-    can see a note implicitly iff they're an active member of its channel,
-    so we match every channel the user belongs to in this team — one query
-    covering all four kinds (DM/GM/PM/MDM). PM channels carry a
-    `ChannelMember` per `ProjectMembers` row via
-    `pm_channel_signals._sync_pm_channel_member`, so they're covered here
-    too; the channel UUID is the single source of truth (no defensive
-    ProjectMembers UNION).
+    The rule is `channel_scope.chat_note_member_q` (MIP-1474), the one `get_effective_role`
+    answers a single note with: a project chat is read by the people on the project (its
+    channel-member row only mirrors that), any other chat by its live members. Narrowed to the
+    channels of this team, as the list always was. The sidebar must not list a note the person
+    is then refused on opening.
     """
-    member_channel_ids = list(
-        ChannelMember.objects.filter(
-            user_id=user_id,
-            is_deleted=False,
-            channel__is_deleted=False,
-            channel__team_id=team_id,
-        ).values_list("channel_id", flat=True)
-    )
-    return Q(channel_id__in=member_channel_ids)
+    return chat_note_member_q(user_id) & Q(channel__team_id=team_id)
 
 
 def _accessible_chat_note_ids(team_id, user_id):

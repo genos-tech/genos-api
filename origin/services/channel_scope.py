@@ -28,7 +28,7 @@ And one rule built from them for the agent's chat tools (MIP-917), because
 
 from __future__ import annotations
 
-from django.db.models import Q
+from django.db.models import F, Q
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import ExternalGrant
@@ -112,6 +112,27 @@ def chat_member_q(user_id) -> Q:
     return (~Q(kind=ChannelKind.PM) & Q(id__in=in_channel)) | (
         Q(kind=ChannelKind.PM) & Q(project_id__in=on_project)
     )
+
+
+def chat_note_member_q(user_id) -> Q:
+    """The chat notes `user_id` may open by being in their chat: a `Q` on `ChatNoteMaster`.
+
+    The ONE rule for "may this person read this chat note through its chat?" (MIP-1474), shared
+    by `note_role.get_effective_role` (REST, the collab gate, every write gate), its batch
+    `readable_note_ids` (favorites, recents, the timeline), the sidebar's note list and the
+    briefing. The search index's `chat_acl_user_ids` (and so `get_note` over MCP and in-app) is
+    the same rule written as a set of user ids; `test_chat_note_one_rule` pins them equal.
+
+    A note opens when its channel is live, the channel's kind is the `chat_type` the note was
+    filed under, and the person is a member of that channel by `chat_member_q` (a project chat is
+    read by whoever is ON THE PROJECT: its channel-member row only mirrors that, and a stray row
+    opens nothing). An explicit grant or the note's owner are the note's own ACL, not the chat's:
+    callers add them.
+
+    Fails closed on no user, as `chat_member_q` does.
+    """
+    live_and_mine = Channel.objects.filter(chat_member_q(user_id), is_deleted=False).values("id")
+    return Q(channel_id__in=live_and_mine) & Q(chat_type=F("channel__kind"))
 
 
 def _readable_chats(user_id, in_team: Q):

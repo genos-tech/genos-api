@@ -45,9 +45,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import (
-    chat_note_acl_user_ids,
     may_read_note,
-    task_note_acl_user_ids,
 )
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import (
@@ -61,7 +59,7 @@ from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
-from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
+from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import member_events
 from origin.services.channel_scope import readable_chats_qs
 from origin.services.user_time import zone_for_user_id
@@ -894,28 +892,19 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _may_read_note(ctx: ToolContext, note_type: int, note: Any) -> bool:
-    """Can the caller open this note now? The rule `get_note` applies, per note family."""
+    """Can the caller open this note now? The rule `get_note` applies, for every note family:
+    the note is in this team and `may_read_note` (the owner, or a role on it: an explicit grant,
+    a task note's project, a chat note's chat by `channel_scope.chat_note_member_q`, a Team Notes
+    folder). One rule for all three families (MIP-1474): the chat branch used to be the index's
+    set of user ids, which disagreed with the per-note resolver in four edge cases."""
     if str(note.team_id or "") != str(ctx.team_id):
         return False
-    if note_type == 1:
-        return may_read_note(
-            user_id=ctx.user_id,
-            note_type_code=NOTE_TYPE_PERSONAL,
-            note_id=note.note_id,
-            owner_id=note.owner_id,
-        )
-    if note_type == 2:
-        allowed = task_note_acl_user_ids(
-            owner_id=note.owner_id, project_id=note.project_id, note_id=note.note_id
-        )
-    else:
-        allowed = chat_note_acl_user_ids(
-            owner_id=note.owner_id,
-            chat_type_code=note.chat_type,
-            channel_id=note.channel_id,
-            note_id=note.note_id,
-        )
-    return str(ctx.user_id) in allowed
+    return may_read_note(
+        user_id=ctx.user_id,
+        note_type_code=note_type,
+        note_id=note.note_id,
+        owner_id=note.owner_id,
+    )
 
 
 def _activity_mentions(
