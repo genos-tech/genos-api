@@ -28,9 +28,9 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
-from origin.search_engine.agent.tools.task_body_edit import body_hash
 from origin.search_engine.agent.tools.task_anchors import enabled as anchors_enabled
 from origin.search_engine.agent.tools.task_anchors import task_anchors
+from origin.search_engine.agent.tools.task_body_edit import body_hash
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,

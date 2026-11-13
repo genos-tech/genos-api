@@ -25,7 +25,6 @@ import hashlib
 import json
 import os
 import re
-import uuid
 from dataclasses import asdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -325,8 +324,8 @@ class AnchorTests(Base):
         self.assertIn(self.thread, self.anchors(self.seq.b))
 
     def test_the_claim_check_is_item_lines_claims_over_every_kind_of_second_row(self):
-        from origin.services.item_lines import _claims  # noqa: PLC0415
         from origin.search_engine.agent.tools.task_anchors import _sole_claimant  # noqa: PLC0415
+        from origin.services.item_lines import _claims  # noqa: PLC0415
 
         thread = str(self.seq.thread_root.id)
         team = str(self.team.team_id)
@@ -451,7 +450,9 @@ class AnchorTests(Base):
         self.assertEqual(
             after["fetch_task"].description, before["fetch_task"].description + DESCRIPTION_ADDITION
         )
-        self.assertEqual(before["fetch_task"].parameters_schema, after["fetch_task"].parameters_schema)
+        self.assertEqual(
+            before["fetch_task"].parameters_schema, after["fetch_task"].parameters_schema
+        )
         for word in ("anchors", "thread", "chat", "note", "task:<note_id>", "fetch_note"):
             self.assertIn(word, DESCRIPTION_ADDITION)
 

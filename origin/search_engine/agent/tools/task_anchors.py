@@ -157,9 +157,9 @@ def task_anchors(task: TaskMaster, ctx: ToolContext) -> list[dict[str, str]]:
 #: The sentence the flag adds to the tool's description (declaration), after the existing text.
 DESCRIPTION_ADDITION = (
     " `anchors` lists where this task's conversation and note are, when you may open them: "
-    "`{anchor_type: \"thread\"}` is the chat thread the task was made from (its `anchor_id` is "
+    '`{anchor_type: "thread"}` is the chat thread the task was made from (its `anchor_id` is '
     "the thread root's message id, the `thread_id` of `fetch_chat_thread`), `chat` is the "
     "chat it was made in (the `chat_id`), and `note` is the task's note (`anchor_id` is "
-    "`task:<note_id>`: call `fetch_note` with `note_type` \"task\" and that `note_id`). An "
+    '`task:<note_id>`: call `fetch_note` with `note_type` "task" and that `note_id`). An '
     "empty list means there is none you can open, not that there is none."
 )
