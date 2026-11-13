@@ -9,6 +9,7 @@ from origin.models.common.user_models import CustomUser
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.services.channel_scope import chat_member_q, chat_note_member_q
+from origin.services.chat_note_access import rederive_on_move
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.chat_note_target import (
@@ -844,6 +845,9 @@ class ChatNoteMoveView(AuthenticatedAPIView):
 
         now = timezone.now()
         with transaction.atomic():
+            # Read BEFORE the notes are re-filed: the roles the old chat's membership wrote on
+            # them are re-derived from the target below (MIP-1482).
+            moves = [(note.note_id, note.channel, note.owner_id)]
             note.channel = target_channel
             # the channel's own kind, never the request's: `chat_type` must equal it for the
             # note to open (`chat_note_member_q`), and creating a note already ignores the
@@ -866,13 +870,15 @@ class ChatNoteMoveView(AuthenticatedAPIView):
             visited = {note.note_id}
             frontier = [note.note_id]
             while frontier:
-                child_ids = list(
+                children = list(
                     ChatNoteMaster.objects.filter(team=data["team_id"], parent_note_id__in=frontier)
                     .exclude(note_id__in=visited)
-                    .values_list("note_id", flat=True)
+                    .select_related("channel")
                 )
+                child_ids = [c.note_id for c in children]
                 if not child_ids:
                     break
+                moves.extend((c.note_id, c.channel, c.owner_id) for c in children)
                 ChatNoteMaster.objects.filter(note_id__in=child_ids).update(
                     channel=target_channel,
                     chat_type=target_channel.kind,
@@ -882,6 +888,8 @@ class ChatNoteMoveView(AuthenticatedAPIView):
                 )
                 visited.update(child_ids)
                 frontier = child_ids
+
+            rederive_on_move(moves=moves, target=target_channel)
 
         return Response(
             {

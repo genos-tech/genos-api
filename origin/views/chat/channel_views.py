@@ -46,6 +46,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageSerializer,
 )
 from origin.services.channel_scope import chat_member_rows, team_scope_q, user_channels_qs
+from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.external_grants import (
     ExternalGrantError,
     active_grants_for_object,
@@ -1347,6 +1348,10 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
 
         member.is_deleted = True
         member.save(update_fields=["is_deleted", "ts_updated_at"])
+        # Leaving ends the roles the chat's membership wrote on its notes (MIP-1482).
+        revoke_membership_roles(
+            user_id=user_id, channel_id=channel.id, joined_at=member.ts_joined_at
+        )
         if manager_may_remove:
             # Their open browser leaves the chat's room now (MIP-1371). Leaving yourself is
             # already handled by your own socket; this is for someone else being removed.
