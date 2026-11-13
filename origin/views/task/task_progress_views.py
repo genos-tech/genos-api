@@ -107,7 +107,7 @@ class TaskProgressListView(AuthenticatedAPIView):
             source = fact.source_task
             entries.append(
                 {
-                    **_serialize_activity(fact.activity),
+                    **_serialize_activity(fact.activity, request.user.id),
                     "factId": fact.fact_id,
                     "depth": fact.depth,
                     "sourceTask": {

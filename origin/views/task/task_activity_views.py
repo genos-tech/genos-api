@@ -9,6 +9,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.public.mcp.via_privacy import via_for_viewer
 from origin.views.utils.scope_guards import can_access_task
 
 # Closed or Deleted: neither is work still to do, which is what a burndown
@@ -49,7 +50,22 @@ def _serialize_actor(user) -> dict | None:
     }
 
 
-def _serialize_activity(row: TaskActivity) -> dict:
+def _metadata_for_viewer(row: TaskActivity, viewer_id) -> dict:
+    """The row's metadata with `via` reduced for anyone but the row's actor (MIP-1485).
+
+    `via` of a key's or a connected app's write holds the key's id, name and prefix or the
+    connection id and client name: the owner's to read (a key writes as its owner, so the
+    owner is the row's actor). Every other reader of the task gets the kind, which is all
+    the "via MCP / via API key" chip needs. The rest of the metadata (PR url, comment id,
+    previousBodyKept ...) is public to the task's readers and is left as it is.
+    """
+    metadata = row.metadata or {}
+    if "via" not in metadata:
+        return metadata
+    return {**metadata, "via": via_for_viewer(metadata["via"], row.actor_id, viewer_id)}
+
+
+def _serialize_activity(row: TaskActivity, viewer_id) -> dict:
     # A description row from an agent or API rewrite keeps the previous BODY in
     # `old_value` so it can be restored (MIP-738). That is a whole document,
     # and the feed has no use for it: it is fetched by the restore flow only.
@@ -63,7 +79,7 @@ def _serialize_activity(row: TaskActivity) -> dict:
         "fieldName": row.field_name,
         "oldValue": None if is_body else row.old_value,
         "newValue": row.new_value,
-        "metadata": row.metadata or {},
+        "metadata": _metadata_for_viewer(row, viewer_id),
         "actor": _serialize_actor(row.actor),
         "tsCreatedAt": row.ts_created_at.isoformat() if row.ts_created_at else None,
     }
@@ -231,7 +247,9 @@ class TaskActivityListView(AuthenticatedAPIView):
         collapsed = _collapse_description_edits(raw_rows)
         page = collapsed[offset : offset + limit]
 
-        return Response([_serialize_activity(r) for r in page], status=status.HTTP_200_OK)
+        return Response(
+            [_serialize_activity(r, request.user.id) for r in page], status=status.HTTP_200_OK
+        )
 
 
 def _parse_iso_day(value: str | None) -> date | None:

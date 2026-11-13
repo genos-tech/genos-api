@@ -16,13 +16,29 @@ flag `AGENT_CLIENT_IN_TASK_HISTORY`).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from origin.search_engine.agent.tools import ToolContext
+if TYPE_CHECKING:  # the REST feed imports `via_for_viewer`; it needs none of the agent tools
+    from origin.search_engine.agent.tools import ToolContext
 
 # The kinds whose `via` carries something only its owner should read: a key's id, name and prefix,
-# an Undo's internal ids. `github` and `pr_merge` carry public facts (a GitHub login, a PR URL).
-OWNER_ONLY_KINDS = frozenset({"api_key", "app"})
+# a connected app's connection id and client name, an Undo's internal ids. `github` and `pr_merge`
+# carry public facts (a GitHub login, a PR URL).
+OWNER_ONLY_KINDS = frozenset({"api_key", "oauth", "app"})
+
+
+def via_for_viewer(via: Any, actor_id: Any, viewer_id: Any) -> Any:
+    """`via` as `viewer_id` may read it: whole for the row's actor (the key's owner), else its kind.
+
+    One rule for every surface that shows a write's `via` (MCP `get_task_history`, the task
+    activity and progress feeds, the comment list). A `via` that is not a dict, or whose kind
+    carries nothing private, is returned as it is. The input is never edited.
+    """
+    if not isinstance(via, dict) or via.get("kind") not in OWNER_ONLY_KINDS:
+        return via
+    if actor_id is not None and viewer_id is not None and str(actor_id) == str(viewer_id):
+        return via
+    return {"kind": via["kind"]}
 
 
 def with_via_owner_only(
@@ -32,14 +48,12 @@ def with_via_owner_only(
     rows = payload.get("history")
     if not isinstance(rows, list):
         return payload
-    me = str(ctx.user_id)
     shown: list[Any] = []
     for row in rows:
         via = row.get("via") if isinstance(row, dict) else None
-        if isinstance(via, dict) and via.get("kind") in OWNER_ONLY_KINDS:
+        if isinstance(via, dict):
             actor = row.get("actor")
-            owner = str(actor.get("user_id")) if isinstance(actor, dict) else ""
-            if owner != me:
-                row = {**row, "via": {"kind": via["kind"]}}
+            owner = actor.get("user_id") if isinstance(actor, dict) else None
+            row = {**row, "via": via_for_viewer(via, owner, ctx.user_id)}
         shown.append(row)
     return {**payload, "history": shown}
