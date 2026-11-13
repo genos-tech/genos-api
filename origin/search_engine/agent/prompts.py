@@ -555,6 +555,24 @@ def _build_registry_prompt() -> str:
 AGENT_SYSTEM_PROMPT_REGISTRY = _build_registry_prompt()
 
 
+# MIP-889: with `AGENT_REJECT_REASON` on, a rejection can carry the person's own reason, and
+# rule 7 says what to do with one. One extra line after the rule, nothing else moves.
+_RULE_7 = (
+    '  7. If a tool returns {"error": "user_rejected"} or\n'
+    '     {"error": "approval_required"}, acknowledge and do not retry.\n'
+)
+_RULE_7_WITH_REASON = _RULE_7 + (
+    '     If a user_rejected result carries a "reason", that is the person\'s own explanation:\n'
+    "     you may propose ONE corrected call that answers it.\n"
+)
+
+
+def _with_reject_reason_rule(prompt: str) -> str:
+    if _RULE_7 not in prompt:
+        raise RuntimeError("system prompt rule 7 moved: update _RULE_7 (MIP-889)")
+    return prompt.replace(_RULE_7, _RULE_7_WITH_REASON, 1)
+
+
 def agent_system_prompt() -> str:
     """The active system prompt — flag-gated, model-visible.
 
@@ -566,9 +584,14 @@ def agent_system_prompt() -> str:
     """
     from django.conf import settings  # noqa: PLC0415 — keep module import Django-free
 
-    if settings.SEARCH_ENGINE.get("AGENT_CHEATSHEET_FROM_REGISTRY"):
-        return AGENT_SYSTEM_PROMPT_REGISTRY
-    return AGENT_SYSTEM_PROMPT
+    prompt = (
+        AGENT_SYSTEM_PROMPT_REGISTRY
+        if settings.SEARCH_ENGINE.get("AGENT_CHEATSHEET_FROM_REGISTRY")
+        else AGENT_SYSTEM_PROMPT
+    )
+    if settings.SEARCH_ENGINE.get("AGENT_REJECT_REASON", False):
+        return _with_reject_reason_rule(prompt)
+    return prompt
 
 
 # --------------------------------------------------------------------------- #

@@ -1906,6 +1906,20 @@ SEARCH_ENGINE["AGENT_CLOSING_LINE_IN_ORIGIN_THREAD"] = (
     os.environ.get("AGENT_CLOSING_LINE_IN_ORIGIN_THREAD", "false").lower() == "true"
 )
 
+# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-reason`): the optional
+# `reason` a person gives when they reject an approval card (`POST /decide/`, stored on the
+# step whatever this says). ON = the model's result for the rejected call is
+# {"error": "user_rejected", "reason": "<their words>"} (the error key stays exact; the text
+# is capped at 500 chars and stripped of control characters, not wrapped as workspace
+# content: it is the person's own) and system-prompt rule 7 gains ONE line saying that with a
+# reason the model may propose one corrected call. OFF = the result is {"error":
+# "user_rejected"} and the prompt is byte-identical to before. Flip criterion: with a reason
+# the model proposes a corrected call at least as often as it asks, never retries unchanged,
+# and a rejection without a reason behaves as before.
+SEARCH_ENGINE["AGENT_REJECT_REASON"] = (
+    os.environ.get("AGENT_REJECT_REASON", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

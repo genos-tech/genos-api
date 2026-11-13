@@ -65,7 +65,7 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
-from origin.search_engine.agent import approval_edits, tool_cache, undo
+from origin.search_engine.agent import approval_edits, approval_reason, tool_cache, undo
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import (
     canonical_citation_token,
@@ -2317,7 +2317,11 @@ def resume_agent(
         except Exception:  # noqa: BLE001
             log.exception("Failed to update pending step %s on reject", pending_step.step_id)
         messages.append(_assistant_function_call_turn(function_call))
-        messages.append(_function_response_turn(call_name, {"error": "user_rejected"}))
+        messages.append(
+            _function_response_turn(
+                call_name, approval_reason.rejection_result(pending_step.decision_reason)
+            )
+        )
     else:
         # APPROVE — actually run the tool now. A pending call whose
         # tool has since been disabled (tier downgrade, toggled-off
@@ -4143,7 +4147,15 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
             thought_signature=_coerce_signature(step.thought_signature),
         )
         messages.append(_assistant_function_call_turn(fc))
-        if step.error:
+        if step.error == "user_rejected":
+            # The same response the model got when it was rejected, reason included
+            # (`AGENT_REJECT_REASON`), so a later leg replays what the earlier one saw.
+            messages.append(
+                _function_response_turn(
+                    step.tool_name, approval_reason.rejection_result(step.decision_reason)
+                )
+            )
+        elif step.error:
             messages.append(_function_response_turn(step.tool_name, {"error": step.error}))
         else:
             messages.append(_function_response_turn(step.tool_name, step.result_json or {}))

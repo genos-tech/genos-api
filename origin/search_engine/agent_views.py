@@ -75,7 +75,7 @@ from apis.request_id import (
 )
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
-from origin.search_engine.agent import approval_edits, undo, undo_apply
+from origin.search_engine.agent import approval_edits, approval_reason, undo, undo_apply
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -1947,7 +1947,7 @@ class AgentDecideView(AuthenticatedAPIView):
         # malformed body, like `edited_args` below, not a crash in `.strip()`.
         # Empty-ish values (null, 0, false, [], {}) still mean "not sent" and
         # reach the "is required" answers.
-        refusal = refuse_non_string_fields(data, "run_id", "approval_token", "decision")
+        refusal = refuse_non_string_fields(data, "run_id", "approval_token", "decision", "reason")
         if refusal is not None:
             return refusal
 
@@ -1972,6 +1972,21 @@ class AgentDecideView(AuthenticatedAPIView):
         if decision not in ("approve", "reject"):
             return Response(
                 {"error": "decision must be 'approve' or 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # An optional reason, with a reject only (MIP-889). Cleaned here (text only, no
+        # control characters, trimmed); over the cap is a 400, not a silent cut, so the card
+        # can say so. Stored always; the model sees it only behind `AGENT_REJECT_REASON`.
+        raw_reason = data.get("reason")
+        reason = approval_reason.clean(raw_reason) if raw_reason else ""
+        if raw_reason and decision != "reject":
+            return Response(
+                {"error": "A reason is only accepted with decision 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if raw_reason and len(raw_reason.strip()) > approval_reason.MAX_CHARS:
+            return Response(
+                {"error": f"reason must be at most {approval_reason.MAX_CHARS} characters."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if edited_args is not None:
@@ -2091,6 +2106,7 @@ class AgentDecideView(AuthenticatedAPIView):
                         decision=decision,
                         decided_at=timezone.now(),
                         edited_arguments_json=edit_patch or None,
+                        decision_reason=reason,
                     )
         except Exception as e:  # noqa: BLE001
             # Nothing was consumed, so nothing may resume: the run is still

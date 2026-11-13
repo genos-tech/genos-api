@@ -411,6 +411,11 @@ class AgentStep(models.Model):
     # anyone else.
     decision = models.CharField(max_length=16, blank=True, default="")
     decided_at = models.DateTimeField(blank=True, null=True)
+    # Why the person rejected (MIP-889): their own optional words from the card, at most
+    # `approval_reason.MAX_CHARS`, stored with the decision and only with a reject. Never in
+    # `result_json` or `error`: those are replayed to the model on every later leg. The model
+    # reads it only through `agent/approval_reason.py`, behind `AGENT_REJECT_REASON`.
+    decision_reason = models.TextField(blank=True, default="")
     # "Undo" for an approved write (`agent/undo.py`): what it takes to put back
     # what the write changed (the pre-image, and a stamp of the state the write
     # left behind). It is NEVER in `result_json`: that is replayed to the model
