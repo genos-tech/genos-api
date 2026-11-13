@@ -46,11 +46,15 @@ from __future__ import annotations
 
 import logging
 
+from django.db import transaction
+
+from origin.middleware.current_user import get_current_source
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.common.user_models import CustomUser
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services import realtime_push, task_card
+from origin.services.activity_suppression import activity_suppressed
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +105,69 @@ def _system_user_id(project) -> str | None:
     return str(project.project_system_user_id) if project.project_system_user_id else None
 
 
+def _task_card_parts(task) -> tuple[list, str, dict]:
+    """`(body, body_text, metadata)` of `task`'s card, built from the row as stored."""
+    body = task_card.task_card_body(
+        title=task.title,
+        status=task.status or "Open",
+        priority=task.priority,
+        assignee=task.assignee,
+        reporter=task.reporter,
+        due_date=task.due_date,
+        team_id=task.team_id,
+        effort=task.effort_level or None,
+    )
+    metadata = {
+        "taskId": task.task_id,
+        "displayId": task.display_id,
+        "taskStatus": task.status,
+        "systemUserId": _system_user_id(task.project),
+    }
+    # The app sends the bare title as the preview text, not the emoji-prefixed heading.
+    return body, task.title, metadata
+
+
+def _milestone_card_parts(milestone) -> tuple[list, str, dict]:
+    """`(body, body_text, metadata)` of a milestone's card, built from the rows as stored."""
+    assignees = [
+        row.user
+        for row in MilestoneAssignees.objects.filter(milestone=milestone)
+        .select_related("user")
+        .order_by("ts_created_at", "pk")
+    ]
+    body = task_card.milestone_card_body(
+        title=milestone.title,
+        status=milestone.status,
+        priority=milestone.priority,
+        sprint_name=milestone.sprint.name if milestone.sprint_id else None,
+        reporter=milestone.reporter,
+        assignees=assignees,
+        due_date=milestone.due_date,
+        team_id=milestone.team_id,
+    )
+    metadata = {
+        "taskId": milestone.task_id,
+        "taskStatus": milestone.status,
+        "systemUserId": _system_user_id(milestone.project),
+    }
+    return body, milestone.title, metadata
+
+
+def _fresh_task(task_id):
+    return (
+        TaskMaster.objects.select_related("project", "assignee", "reporter")
+        .filter(task_id=task_id)
+        .first()
+    )
+
+
+def _fresh_milestone(milestone_id=None, *, task_id=None):
+    qs = MilestoneMaster.objects.select_related("project", "sprint", "reporter")
+    if milestone_id is not None:
+        return qs.filter(milestone_id=milestone_id).first()
+    return qs.filter(task_id=task_id, is_deleted=False).first()
+
+
 def post_task_created_card(task, *, actor_id) -> Message | None:
     """Post `task`'s card into its project's PM channel, as the person who made it.
 
@@ -113,37 +180,17 @@ def post_task_created_card(task, *, actor_id) -> Message | None:
     the row stores.
     """
     try:
-        task = (
-            TaskMaster.objects.select_related("project", "assignee", "reporter")
-            .filter(task_id=task.task_id)
-            .first()
-        )
+        task = _fresh_task(task.task_id)
         if task is None or task.project_id is None:
             return None
-        project = task.project
-        body = task_card.task_card_body(
-            title=task.title,
-            status=task.status or "Open",
-            priority=task.priority,
-            assignee=task.assignee,
-            reporter=task.reporter,
-            due_date=task.due_date,
-            team_id=task.team_id,
-            effort=task.effort_level or None,
-        )
+        body, body_text, metadata = _task_card_parts(task)
         return _post(
-            project=project,
+            project=task.project,
             task_id=task.task_id,
             actor_id=actor_id,
             body=body,
-            # The app sends the bare title as the preview text, not the emoji-prefixed heading.
-            body_text=task.title,
-            metadata={
-                "taskId": task.task_id,
-                "displayId": task.display_id,
-                "taskStatus": task.status,
-                "systemUserId": _system_user_id(project),
-            },
+            body_text=body_text,
+            metadata=metadata,
         )
     except Exception:  # noqa: BLE001 — the task is saved; an observer must not fail the write
         log.warning("task card post failed task=%s", getattr(task, "task_id", None), exc_info=True)
@@ -156,41 +203,17 @@ def post_milestone_created_card(milestone, *, actor_id) -> Message | None:
     The card hangs off the milestone's backing task, as the app's does. Never raises.
     """
     try:
-        milestone = (
-            MilestoneMaster.objects.select_related("project", "sprint", "reporter")
-            .filter(milestone_id=milestone.milestone_id)
-            .first()
-        )
+        milestone = _fresh_milestone(milestone.milestone_id)
         if milestone is None or milestone.task_id is None:
             return None
-        project = milestone.project
-        assignees = [
-            row.user
-            for row in MilestoneAssignees.objects.filter(milestone=milestone)
-            .select_related("user")
-            .order_by("ts_created_at", "pk")
-        ]
-        body = task_card.milestone_card_body(
-            title=milestone.title,
-            status=milestone.status,
-            priority=milestone.priority,
-            sprint_name=milestone.sprint.name if milestone.sprint_id else None,
-            reporter=milestone.reporter,
-            assignees=assignees,
-            due_date=milestone.due_date,
-            team_id=milestone.team_id,
-        )
+        body, body_text, metadata = _milestone_card_parts(milestone)
         return _post(
-            project=project,
+            project=milestone.project,
             task_id=milestone.task_id,
             actor_id=actor_id,
             body=body,
-            body_text=milestone.title,
-            metadata={
-                "taskId": milestone.task_id,
-                "taskStatus": milestone.status,
-                "systemUserId": _system_user_id(project),
-            },
+            body_text=body_text,
+            metadata=metadata,
         )
     except Exception:  # noqa: BLE001 — the milestone is saved; an observer must not fail the write
         log.warning(
@@ -198,4 +221,99 @@ def post_milestone_created_card(milestone, *, actor_id) -> Message | None:
             getattr(milestone, "milestone_id", None),
             exc_info=True,
         )
+        return None
+
+
+# --- keeping the card current (MIP-1460) ------------------------------------------------------
+
+
+def _refresh(project, task_id, parts) -> Message | None:
+    """Rewrite the card of `task_id` to `parts`, when it differs from what is stored.
+
+    No card means nothing to refresh (a task that predates cards, or one nobody posted for):
+    this never makes one. An unchanged card is not written, so a save that touched nothing the
+    card shows costs a read and no broadcast.
+    """
+    from origin.views.chat.message_views import rewrite_card_message  # noqa: PLC0415
+
+    channel = _pm_channel(project.project_id)
+    if channel is None:
+        return None
+    card = (
+        Message.objects.select_related("channel")
+        .filter(channel=channel, task_id=task_id, is_thread_reply=False, deleted_at__isnull=True)
+        .order_by("seq")
+        .first()
+    )
+    if card is None:
+        return None
+    body, body_text, metadata = parts
+    # Merged, not replaced: the browser's card may carry keys this does not know about.
+    merged = {**(card.metadata or {}), **metadata}
+    if card.body == body and card.body_text == body_text and (card.metadata or {}) == merged:
+        return None
+    rewrite_card_message(card, body=body, body_text=body_text, metadata=merged)
+    realtime_push.push_message(card, realtime_push.UPDATED)
+    return card
+
+
+def schedule_refresh(*, task_id=None, milestone_id=None, derived: bool = False) -> None:
+    """After the current write commits, refresh the task's (or milestone's) card (MIP-1460).
+
+    Only for a write the browser did not make. The app rewrites the card itself after every
+    edit (`PATCH card-message`, in the viewer's language), and rewriting it here too would fight
+    that: English labels over its own, and two broadcasts. A dependency-derived Blocked flip is
+    the server's own whoever's request it rode in on (`derived`), so it qualifies. Nothing is
+    scheduled inside `suppress_task_activity()` (bulk seeding and teardown).
+
+    An observer, like the webhook: best effort, never fails the write.
+    """
+    try:
+        if activity_suppressed():
+            return
+        if (get_current_source() or {}).get("kind") == "app" and not derived:
+            return
+
+        def _run() -> None:
+            if milestone_id is not None:
+                refresh_milestone_card(milestone_id)
+            else:
+                refresh_task_card(task_id)
+
+        transaction.on_commit(_run, robust=True)
+    except Exception:  # noqa: BLE001 — never break a write
+        log.warning("card refresh could not be scheduled", exc_info=True)
+
+
+def refresh_task_card(task_id) -> Message | None:
+    """Bring a task's chat card up to date with the row, for an edit that had no browser.
+
+    In the app the browser rewrites the card after every save (`PATCH card-message`); an edit
+    over MCP, by the in-app agent, by the GitHub webhook (a merged PR closing the task) or by
+    the dependency rule (Blocked) had nobody to do that, so the chat kept the values the card
+    was made with. A milestone's backing task refreshes the milestone's card instead.
+    Never raises.
+    """
+    try:
+        task = _fresh_task(task_id)
+        if task is None or task.project_id is None or task.is_init_task:
+            return None
+        if task.is_milestone:
+            milestone = _fresh_milestone(task_id=task_id)
+            return refresh_milestone_card(milestone.milestone_id) if milestone else None
+        return _refresh(task.project, task.task_id, _task_card_parts(task))
+    except Exception:  # noqa: BLE001 — the task is saved; an observer must not fail the write
+        log.warning("task card refresh failed task=%s", task_id, exc_info=True)
+        return None
+
+
+def refresh_milestone_card(milestone_id) -> Message | None:
+    """The same for a milestone's card (its status, sprint, assignees, dates). Never raises."""
+    try:
+        milestone = _fresh_milestone(milestone_id)
+        if milestone is None or milestone.task_id is None:
+            return None
+        return _refresh(milestone.project, milestone.task_id, _milestone_card_parts(milestone))
+    except Exception:  # noqa: BLE001 — the milestone is saved; an observer must not fail the write
+        log.warning("milestone card refresh failed milestone=%s", milestone_id, exc_info=True)
         return None

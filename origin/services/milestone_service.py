@@ -158,9 +158,13 @@ def sync_milestone_assignees(milestone: MilestoneMaster, assignee_ids) -> None:
             ignore_conflicts=True,
         )
     if to_remove:
-        MilestoneAssignees.objects.filter(
-            milestone=milestone, user_id__in=list(to_remove)
-        ).delete()
+        MilestoneAssignees.objects.filter(milestone=milestone, user_id__in=list(to_remove)).delete()
+    if to_add or to_remove:
+        # `bulk_create` fires no `post_save`, so the signal that keeps the chat card current
+        # never sees an added assignee (MIP-1460): say so here.
+        from origin.services.task_card_post import schedule_refresh  # noqa: PLC0415
+
+        schedule_refresh(milestone_id=milestone.milestone_id)
 
 
 def create_milestone(

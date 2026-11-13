@@ -857,6 +857,42 @@ class MessageDetailView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def rewrite_card_message(message, *, body, body_text, metadata=None):
+    """Replace a task card's body (and metadata, when given) and re-sync its mentions.
+
+    The one definition of "rewrite a card": `TaskCardMessageView.patch` (the browser's
+    rewrite after an edit) and `task_card_post.refresh_*_card` (the server's, after an edit
+    that had no browser, MIP-1460) both go through it, so the two cannot drift.
+    """
+    with transaction.atomic():
+        message.body = body
+        message.body_text = body_text
+        message.edited_at = timezone.now()
+        update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
+        if isinstance(metadata, dict):
+            message.metadata = metadata
+            update_fields.append("metadata")
+        message.save(update_fields=update_fields)
+
+        # Re-sync MessageMention rows from the new card body (the card
+        # @-mentions the assignee + reporter). Mirrors
+        # `MessageDetailView.patch` so the `mentions[]` array stays
+        # consistent after an assignee change. No Activity rows are
+        # created here — task-body mention notifications are owned
+        # separately by the task PUT / `task_body_mention` path, and a
+        # reassignment's by `task_assignment_notice` (MIP-1461).
+        new_mentioned_ids = _valid_mention_user_ids(message.channel, body)
+        MessageMention.objects.filter(message=message).delete()
+        if new_mentioned_ids:
+            MessageMention.objects.bulk_create(
+                [
+                    MessageMention(message=message, mentioned_user_id=uid)
+                    for uid in new_mentioned_ids
+                ],
+                ignore_conflicts=True,
+            )
+
+
 class TaskCardMessageView(AuthenticatedAPIView):
     """PATCH /api/v3/tasks/{task_id}/card-message/
 
@@ -927,32 +963,7 @@ class TaskCardMessageView(AuthenticatedAPIView):
             # everywhere else in this view file.
             raise Http404("Task card message not found.")
 
-        with transaction.atomic():
-            message.body = body_json
-            message.body_text = body_text
-            message.edited_at = timezone.now()
-            update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
-            if isinstance(metadata, dict):
-                message.metadata = metadata
-                update_fields.append("metadata")
-            message.save(update_fields=update_fields)
-
-            # Re-sync MessageMention rows from the new card body (the card
-            # @-mentions the assignee + reporter). Mirrors
-            # `MessageDetailView.patch` so the `mentions[]` array stays
-            # consistent after an assignee change. No Activity rows are
-            # created here — task-body mention notifications are owned
-            # separately by the task PUT / `task_body_mention` path.
-            new_mentioned_ids = _valid_mention_user_ids(message.channel, body_json)
-            MessageMention.objects.filter(message=message).delete()
-            if new_mentioned_ids:
-                MessageMention.objects.bulk_create(
-                    [
-                        MessageMention(message=message, mentioned_user_id=uid)
-                        for uid in new_mentioned_ids
-                    ],
-                    ignore_conflicts=True,
-                )
+        rewrite_card_message(message, body=body_json, body_text=body_text, metadata=metadata)
 
         message = _prefetched_messages(Message.objects.filter(pk=message.pk)).first()
         return Response(MessageSerializer(message).data)
