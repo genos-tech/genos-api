@@ -91,7 +91,14 @@ from origin.search_engine.agent.prompts import (
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
 from origin.search_engine.agent.tool_flag_text import declared_description
-from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext, ToolError
+from origin.search_engine.agent.tools import (
+    MCP_ONLY_REGISTRY,
+    REGISTRY,
+    ToolContext,
+    ToolError,
+    flagged_tool,
+    flagged_tools,
+)
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -278,6 +285,14 @@ def _operator_disabled_tools() -> set[str]:
     return known
 
 
+def _app_tool(name: str) -> Any:
+    """The tool the loop runs for the name the MODEL sent: a registered one, or a flag-gated
+    in-app tool whose flag is on (MIP-1289). Looks in this module's `REGISTRY`, as every lookup
+    here did, so a test that patches it keeps working."""
+    tool = REGISTRY.get(name)
+    return tool if tool is not None else flagged_tool(name)
+
+
 def _build_tool_declarations(
     disabled_tools: set[str] | None = None,
 ) -> list[ToolDeclaration]:
@@ -292,13 +307,15 @@ def _build_tool_declarations(
     tool already paused for approval still resumes if the user approves.
     """
     disabled = (disabled_tools or set()) | _operator_disabled_tools()
+    # `flagged_tools()` is empty unless a flag-gated in-app tool's flag is on (MIP-1289): the
+    # list is then exactly what it was, and the flagged tools come after the registered ones.
     return [
         ToolDeclaration(
             name=t.name,
             description=declared_description(t),
             parameters_schema=declared_schema(t.name, t.parameters_schema),
         )
-        for t in REGISTRY.values()
+        for t in (*REGISTRY.values(), *flagged_tools())
         if t.name not in disabled
     ]
 
@@ -2615,7 +2632,7 @@ def _execute_batch_parallel(
         started = time.monotonic()
         try:
             outcome = _run_tool_guarded(
-                REGISTRY.get(call.name), call.name, dict(call.args), ctx, transcript
+                _app_tool(call.name), call.name, dict(call.args), ctx, transcript
             )
             return outcome, int((time.monotonic() - started) * 1000)
         finally:
@@ -3287,7 +3304,7 @@ def _drive_loop(
         tool_durations: dict[int, int] = {}
         if session_id and tool_cache.enabled():
             for i, c in enumerate(accumulated_function_calls):
-                t = REGISTRY.get(c.name)
+                t = _app_tool(c.name)
                 if t is None or getattr(t, "requires_approval", False) or i in ref_errors:
                     continue
                 hit = tool_cache.get_cached(session_id, c.name, dict(resolved_args[i]))
@@ -3312,8 +3329,8 @@ def _drive_loop(
             and len(miss_indices) > 1
             and not ref_errors
             and all(
-                REGISTRY.get(c.name) is not None
-                and not getattr(REGISTRY.get(c.name), "requires_approval", False)
+                _app_tool(c.name) is not None
+                and not getattr(_app_tool(c.name), "requires_approval", False)
                 for c in accumulated_function_calls
             )
         ):
@@ -3343,7 +3360,7 @@ def _drive_loop(
             call_args = dict(resolved_args[call_idx])
             call_name = call.name
 
-            tool = REGISTRY.get(call_name)
+            tool = _app_tool(call_name)
             if tool is None or call_idx in ref_errors:
                 emit(
                     {
