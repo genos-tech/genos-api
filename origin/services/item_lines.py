@@ -59,6 +59,15 @@ that had more rows than its pool (`pool_capped` and `pool_sources`, for the line
 `related_sources` for the neighbours), notes past the cap on how many are told
 (`notes_capped`). A flag is set only by a row the member may open: the pool is cut after the
 access filter (in SQL where the rule is a filter, per note where it is not), never before it.
+
+Three more reads were cut without a word and now say so (MIP-1322). Each asks for ONE row more
+than its pool and a flag is set only when that extra row exists, i.e. a row really was left
+out: the neighbours of a line (milestone work `SIBLING_POOL`, dependency neighbours
+`NEIGHBOUR_POOL`, subtasks `CHILD_POOL`: filtered to what the member may open in the query,
+flag `related_capped`), the member's own markers and chat messages behind `unattached` (`POOL`
+each: `capped.unattached_capped` and `unattached_sources`; the counts are then a floor) and the
+markers on milestones, task notes and chat threads behind `last_seen_at` (`SEEN_POOL`:
+`capped.seen_capped`; the time may be missing or older).
 """
 
 from __future__ import annotations
@@ -72,7 +81,8 @@ from functools import reduce
 from operator import or_
 from typing import Any
 
-from django.db.models import Max, Q
+from django.db.models import CharField, Max, Q
+from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 
 from origin.models.chat.unified_models import (
@@ -1043,11 +1053,25 @@ def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
     no duration can be worked out from it. Nothing is stored for this: it is read from the
     ledger. Only the member's own markers; a web-app open leaves none (see MIP-1084), so a
     member who works only in the web app has no seen time."""
+    return seen_at_checked(ctx, task_ids)[0]
+
+
+def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime], bool]:
+    """`seen_at`, and whether a look of one of these tasks may really be missing.
+
+    Markers on milestones, task notes and chat threads are read newest first, `SEEN_POOL` of
+    them (one more is asked for). The flag is True only when a row was left out AND it could
+    still matter: some task asked about has no time, or an older one than the extra row's
+    (every row left out is no newer than that one, and a look only replaces a strictly older
+    time). A member who works in an AI app all day has more markers than the pool but, for
+    the tasks they are looking at, usually a time already newer than all of them: no flag.
+    Markers on the task itself are read by task, in full, and never cut. Only the member's own
+    markers are read, so the flag says nothing about anyone else."""
     me, team = str(ctx.user_id), str(ctx.team_id)
     wanted = {int(t) for t in task_ids if str(t).isdigit()}
     out: dict[int, datetime] = {}
     if not wanted:
-        return out
+        return out, False
     floor = timezone.now() - member_events.RETENTION
     base = MemberEvent.objects.filter(
         user_id=me, team_id=team, kind__in=member_events.MCP_KINDS, ts__gte=floor
@@ -1061,12 +1085,17 @@ def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
     others = list(
         base.filter(object_type__in=("milestone", "note", "chat_thread")).order_by(
             "-ts", "-event_id"
-        )[:SEEN_POOL]
+        )[: SEEN_POOL + 1]
     )
+    newest_left_out = others[SEEN_POOL].ts if len(others) > SEEN_POOL else None
+    del others[SEEN_POOL:]
     for marker, task_id in _resolve_markers(team, others).items():
         if task_id in wanted and (task_id not in out or marker.ts > out[task_id]):
             out[task_id] = marker.ts
-    return out
+    capped = newest_left_out is not None and any(
+        t not in out or out[t] < newest_left_out for t in wanted
+    )
+    return out, capped
 
 
 # --------------------------------------------------------------------------- #
@@ -1080,10 +1109,42 @@ def unattached(ctx: ToolContext, since: datetime, until: datetime) -> dict[str, 
     carry no task chip. Only the member's own events are counted, so the numbers say nothing
     about anything they cannot open. (Completed to-dos are not here: they are told once in the
     briefing's `what_you_did`, MIP-1295.)"""
+    return _unattached(ctx, since, until)[0]
+
+
+def _unattached(
+    ctx: ToolContext, since: datetime, until: datetime
+) -> tuple[dict[str, Any], list[str]]:
+    """`unattached`, and the reads (`app_markers`, `chat_messages`) that had more rows than
+    `POOL`, in that order: each asks for one row more than its pool, so a read that was merely
+    full is not named, and their counts are a floor. The messages are already in chats the
+    member may read (the query), so a row left out is one they could open.
+
+    Each read is narrowed in the query to rows that CAN be unattached: a marker on a live task
+    and a message in a thread a live task claims are claimed by rule 1 and 4 whatever else is
+    true, so they are left out of the read. A member who works in an AI app all day has
+    hundreds of them, and they must neither use up the pool nor tip the flag; what is counted
+    is the same (`_resolve_markers` and `_claims` still decide each row that is read)."""
     me, team = str(ctx.user_id), str(ctx.team_id)
-    markers = member_events.recent(me, team, since, until, POOL, kinds=None)
+    cut: list[str] = []
+    live = TaskMaster.objects.filter(team_id=team, is_deleted=False, is_init_task=False)
+    live_ids = live.annotate(text_id=Cast("task_id", CharField())).values("text_id")
+    markers = list(
+        MemberEvent.objects.filter(
+            user_id=me,
+            team_id=team,
+            ts__gte=max(since, timezone.now() - member_events.RETENTION),
+            ts__lt=until,
+        )
+        .exclude(object_type="task", object_id__in=live_ids)
+        .order_by("-ts", "-event_id")[: POOL + 1]
+    )
+    if len(markers) > POOL:
+        cut.append("app_markers")
+        del markers[POOL:]
     lost_markers = sum(1 for t in _resolve_markers(team, markers).values() if t is None)
 
+    claimed_threads = live.filter(thread_id__isnull=False).values("thread_id")
     own = list(
         Message.objects.filter(
             sender_id=me,
@@ -1094,19 +1155,25 @@ def unattached(ctx: ToolContext, since: datetime, until: datetime) -> dict[str, 
             ts_sent_at__lt=until,
         )
         .exclude(metadata__has_key="taskCommentId")
+        .annotate(root_text=Coalesce(Cast("thread_root_id", CharField()), Cast("id", CharField())))
+        .exclude(root_text__in=claimed_threads)
         .only("id", "thread_root_id", "body")
-        .order_by("-ts_sent_at", "-pk")[:POOL]
+        .order_by("-ts_sent_at", "-pk")[: POOL + 1]
     )
+    if len(own) > POOL:
+        cut.append("chat_messages")
+        del own[POOL:]
     roots = {str(m.thread_root_id or m.id) for m in own}
     claimed = set(_claims(team, sorted(roots)))
     lost_messages = sum(
         1 for m in own if str(m.thread_root_id or m.id) not in claimed and not chip_task_ids(m.body)
     )
-    return {
+    counts = {
         "app_markers": lost_markers,
         "chat_messages": lost_messages,
         "total": lost_markers + lost_messages,
     }
+    return counts, cut
 
 
 # --------------------------------------------------------------------------- #
@@ -1211,6 +1278,15 @@ def _open_task(ctx: ToolContext, access: LabelAccess, item_ref: Any) -> TaskMast
     return task
 
 
+def _pool(qs, pool: int) -> tuple[list[int], list[int]]:
+    """`(kept, left_out)` of a read of ids: the first `pool` rows and, from the ONE row more that
+    was asked for, the id of a row that really was left out (empty when the pool was merely
+    full). The caller's query must already be the access filter, so a row here is one the member
+    may open."""
+    rows = list(qs[: pool + 1])
+    return rows[:pool], rows[pool:]
+
+
 def _candidates(
     ctx: ToolContext, access: LabelAccess, root: TaskMaster
 ) -> tuple[list[tuple[str, TaskMaster]], bool]:
@@ -1218,8 +1294,16 @@ def _candidates(
     (parent, milestone, what blocks it, what it blocks, its own subtasks, the milestone's other
     work), at most `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are
     dropped before anything is counted. The subtasks come before the milestone's work: a phase
-    and its steps are the closest lines there are, and the work only fills what is left."""
+    and its steps are the closest lines there are, and the work only fills what is left.
+
+    Three reads are cut to a pool (`SIBLING_POOL`, `NEIGHBOUR_POOL`, `CHILD_POOL`). Each is
+    filtered to what the member may open IN THE QUERY (`readable_task_q`) and asks for one row
+    more than its pool, so a pool is cut only by rows they may open, and the extra row is a
+    neighbour that really was left out. The answer is `True` for such a row, unless the same
+    task is already a candidate through another relation (a subtask that is also milestone
+    work is not lost when the work read drops it)."""
     wanted: list[tuple[str, int]] = []
+    left_out: set[int] = set()
     if root.parent_task_id:
         wanted.append(("parent", root.parent_task_id))
     milestone = access.milestone(root.milestone_id) if root.milestone_id else None
@@ -1227,31 +1311,49 @@ def _candidates(
     if milestone is not None:
         if milestone.task_id and milestone.task_id != root.task_id:
             wanted.append(("milestone", milestone.task_id))
-        sibling_ids = list(
-            TaskMaster.objects.filter(milestone_work_q(milestone), team_id=ctx.team_id)
+        sibling_ids, more = _pool(
+            TaskMaster.objects.filter(
+                readable_task_q(ctx), milestone_work_q(milestone), team_id=ctx.team_id
+            )
             .exclude(task_id=root.task_id)
             .order_by("-ts_updated_at", "-task_id")
-            .values_list("task_id", flat=True)[:SIBLING_POOL]
+            .values_list("task_id", flat=True),
+            SIBLING_POOL,
         )
-    blockers = (
-        TaskDependency.objects.filter(blocked_task_id=root.task_id)
+        left_out.update(more)
+    blockers, more = _pool(
+        TaskDependency.objects.filter(
+            readable_task_q(ctx, "blocker_task__"), blocked_task_id=root.task_id
+        )
         .order_by("-ts_created_at", "-pk")
-        .values_list("blocker_task_id", flat=True)[:NEIGHBOUR_POOL]
+        .values_list("blocker_task_id", flat=True),
+        NEIGHBOUR_POOL,
     )
-    blocked = (
-        TaskDependency.objects.filter(blocker_task_id=root.task_id)
+    left_out.update(more)
+    blocked, more = _pool(
+        TaskDependency.objects.filter(
+            readable_task_q(ctx, "blocked_task__"), blocker_task_id=root.task_id
+        )
         .order_by("-ts_created_at", "-pk")
-        .values_list("blocked_task_id", flat=True)[:NEIGHBOUR_POOL]
+        .values_list("blocked_task_id", flat=True),
+        NEIGHBOUR_POOL,
     )
+    left_out.update(more)
     # Live subtasks, the most recently changed first (the order they are shown in is by the
     # latest event in the window, below). An unsaved create form is not a subtask.
-    children = (
+    children, more = _pool(
         TaskMaster.objects.filter(
-            parent_task_id=root.task_id, team_id=ctx.team_id, is_deleted=False, is_init_task=False
+            readable_task_q(ctx),
+            parent_task_id=root.task_id,
+            team_id=ctx.team_id,
+            is_deleted=False,
+            is_init_task=False,
         )
         .order_by("-ts_updated_at", "-task_id")
-        .values_list("task_id", flat=True)[:CHILD_POOL]
+        .values_list("task_id", flat=True),
+        CHILD_POOL,
     )
+    left_out.update(more)
     wanted += [("blocked_by", t) for t in blockers]
     wanted += [("blocks", t) for t in blocked]
     wanted += [("child", t) for t in children]
@@ -1264,7 +1366,8 @@ def _candidates(
         if task is not None and task_id not in seen:
             seen.add(task_id)
             out.append((relation, task))
-    return out[:CANDIDATE_CAP], len(out) > CANDIDATE_CAP
+    # A row the pools left out is only lost if no other relation already holds it.
+    return out[:CANDIDATE_CAP], len(out) > CANDIDATE_CAP or bool(left_out - seen)
 
 
 _RELATION_RANK = {
@@ -1279,21 +1382,24 @@ _RELATION_RANK = {
 
 def _add_seen(
     ctx: ToolContext, line: dict[str, Any], task_id: int, events: list[Ev], start: datetime, me: str
-) -> None:
+) -> bool:
     """`last_seen_at` (a time, or None) and, when there is one, `since_seen`: how many events
     by other people came after it (automation has no actor, and the member's own markers are
     theirs, so neither counts),
     counted from `max(last look, window start)` (`from`), so a look older than the window is
-    not passed off as a full count. Exact, because it counts real event times, not days."""
-    seen = seen_at(ctx, [task_id]).get(task_id)
+    not passed off as a full count. Exact, because it counts real event times, not days.
+    Returns True when the look may be missing or older (`seen_at_checked`)."""
+    looks, cut = seen_at_checked(ctx, [task_id])
+    seen = looks.get(task_id)
     line["last_seen_at"] = seen.isoformat() if seen else None
     if seen is None:
-        return
+        return cut
     after = max(seen, start)
     line["since_seen"] = {
         "from": after.isoformat(),
         "by_others": sum(1 for e in events if e.at > after and e.actor and str(e.actor) != me),
     }
+    return cut
 
 
 def _whole_number(value: Any, name: str) -> int:
@@ -1340,7 +1446,7 @@ def _build(
         "line": _line(root, root_events, limit, names, me, pending),
         "people": _people(root_events, names, me),
     }
-    _add_seen(ctx, result["line"], root.task_id, root_events, start, me)
+    seen_cut = _add_seen(ctx, result["line"], root.task_id, root_events, start, me)
     if related_limit:
         # A neighbour's events are the real ones: the member's own AI-app opens say nothing
         # about what happened there, and used to fill its few latest slots.
@@ -1357,7 +1463,10 @@ def _build(
             )
         )
         shown = with_events[:related_limit]
-        opened = seen_at(ctx, [task.task_id for _r, task in shown]) if shown else {}
+        opened, opened_cut = (
+            seen_at_checked(ctx, [task.task_id for _r, task in shown]) if shown else ({}, False)
+        )
+        seen_cut = seen_cut or opened_cut
         result["related"] = [
             {
                 "relation": relation,
@@ -1371,7 +1480,7 @@ def _build(
         result["related_total"] = len(with_events)
         result["related_quiet"] = len(candidates) - len(with_events)
         result["related_capped"] = len(with_events) > related_limit or fanout_capped
-    result["unattached"] = unattached(ctx, start, end)
+    result["unattached"], unattached_cut = _unattached(ctx, start, end)
     capped: dict[str, Any] = {}
     if line_read.pool_capped:
         capped["pool_capped"] = True
@@ -1382,6 +1491,11 @@ def _build(
         capped["related_sources"] = sorted(
             near_read.cut | ({"notes"} if near_read.notes_capped else set())
         )
+    if unattached_cut:
+        capped["unattached_capped"] = True
+        capped["unattached_sources"] = unattached_cut
+    if seen_cut:
+        capped["seen_capped"] = True
     result["capped"] = capped
     names.fill()
     for event, holders in pending:
