@@ -116,6 +116,11 @@ def prepare_case(case: GroupCase) -> dict[str, Any]:
         raw["fixture"] = True
     elif case.fixture == "sequence":
         info = resolve_sequence(viewer)
+        if case.raw.get("seed"):
+            from origin.search_engine.agent.evals.group import seeds  # noqa: PLC0415
+
+            with _seed_lock:
+                seeds.apply(case.raw["seed"], info)
         raw["team_id"] = info["team_id"]
         raw["user_id"] = info["user_id"]
         _substitute(raw, {"{display_id}": info["display_id"], "{task_id}": str(info["task_id"])})

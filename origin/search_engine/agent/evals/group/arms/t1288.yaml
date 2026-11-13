@@ -1,0 +1,4 @@
+arm: t1288
+overrides:
+    AGENT_FETCH_TASK_ANCHORS: true
+requires: []

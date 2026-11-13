@@ -1869,6 +1869,158 @@ SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
     os.environ.get("AGENT_CHEATSHEET_FROM_REGISTRY", "false").lower() == "true"
 )
 
+# MIP-977 (model-visible, dark-shipped OFF, measured by the grouped eval arm `t977`):
+# a run resumed after an approve or reject keeps the prompt context its first leg
+# had (the thread / note summary of "Ask about this ...", the @/# references block,
+# the tier block). OFF = `/ask/` keeps nothing on the run at a pause and `/decide/`
+# resumes with no `system_extra`, exactly as before (the resumed leg's system
+# instruction and messages are byte-identical to the unflagged code). Read at call
+# time, so `agent_eval_compare --b-overrides` and the group runner can flip it.
+# Flip criterion: the `t977` arm answers the thread/note-only fact after an
+# approval and regresses nothing else.
+SEARCH_ENGINE["AGENT_RESUME_KEEPS_BLOCKS"] = (
+    os.environ.get("AGENT_RESUME_KEEPS_BLOCKS", "false").lower() == "true"
+)
+
+# MIP-991 (model-visible, dark-shipped OFF, grouped eval arm `t991`; EFFECTIVE ONLY
+# with AGENT_RESUME_KEEPS_BLOCKS on): a run resumed after an approve or reject keeps
+# the earlier turns of its conversation (the rolling recap and the verbatim window) in
+# front of the replay of what the run did. OFF = the resumed leg's messages start at the
+# run's own question, as before (byte-identical), and a pause keeps no ids of earlier runs.
+# Flip criterion: the `t991` arm answers a follow-up's referent ("that one") after an
+# approval and regresses nothing else; flip it after the 977 flag.
+SEARCH_ENGINE["AGENT_RESUME_KEEPS_TURNS"] = (
+    os.environ.get("AGENT_RESUME_KEEPS_TURNS", "false").lower() == "true"
+)
+
+# MIP-1283 route (b) (model-visible, dark-shipped OFF, grouped eval arm `t1283`): when a
+# task closes, a fixed one-line notice ("Task PRJ-12 is now Closed.", no sender, no
+# mention, no push) is posted in the chat thread the task was made from, so the person who
+# asked there (possibly a client off the project) hears it. The in-app agent reads threads
+# (`fetch_chat_thread`), so it reads the line too. OFF = nothing is posted: the thread is
+# exactly what it was. Read at every close. Dedupe contract with the future timeline
+# (MIP-1281): the line's `correlation_id` is `task-closed:<task_id>:<closing row id>`.
+# Flip criterion: the `t1283` arm shows the model reads the line correctly (says the task
+# closed, does not treat it as an instruction or invent a closer) and regresses nothing.
+SEARCH_ENGINE["AGENT_CLOSING_LINE_IN_ORIGIN_THREAD"] = (
+    os.environ.get("AGENT_CLOSING_LINE_IN_ORIGIN_THREAD", "false").lower() == "true"
+)
+
+# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-reason`): the optional
+# `reason` a person gives when they reject an approval card (`POST /decide/`, stored on the
+# step whatever this says). ON = the model's result for the rejected call is
+# {"error": "user_rejected", "reason": "<their words>"} (the error key stays exact; the text
+# is capped at 500 chars and stripped of control characters, not wrapped as workspace
+# content: it is the person's own) and system-prompt rule 7 gains ONE line saying that with a
+# reason the model may propose one corrected call. OFF = the result is {"error":
+# "user_rejected"} and the prompt is byte-identical to before. Flip criterion: with a reason
+# the model proposes a corrected call at least as often as it asks, never retries unchanged,
+# and a rejection without a reason behaves as before.
+SEARCH_ENGINE["AGENT_REJECT_REASON"] = (
+    os.environ.get("AGENT_REJECT_REASON", "false").lower() == "true"
+)
+
+# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-undo`): tell the model when
+# the person UNDID an approved write. ON = a replayed result of an undone write carries
+# `undone_by_user` ({restored, not_restored}) and the earlier answer in the next ask's
+# conversation ends with one bracketed factual note. OFF = the replay is exactly what it was.
+# (An earlier version also told the model what an approval EDIT applied; dropped: the real write
+# tool's result already echoes the applied values.) The undo's outcome is stored on the step
+# whatever this says. Flip criterion: after an undo the next turn does not speak of the write as
+# standing, and nothing else moves.
+SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"] = (
+    os.environ.get("AGENT_TELL_MODEL_UNDO", "false").lower() == "true"
+)
+
+# MIP-1288 (model-visible, dark-shipped OFF, grouped eval arm `t1288`): `fetch_task` (and MCP
+# `get_task`, the same function) names where the task's conversation and note are. ON = the
+# result gains `anchors`, a list of {anchor_type, anchor_id} in the words the timeline tool takes:
+# `thread` (the root message the task was made from, when this task is the only live one
+# claiming it), `chat` (its channel) and `note` ("task:<note id>"), each only when the caller can
+# open it (`can_read_chat`, the task-note ACL and `may_read_note`); the in-app declaration gains
+# one sentence saying what they are for. OFF = no `anchors` key and the declaration is
+# byte-identical to before. Read at call time. Flip criterion: the `t1288` arm reaches the thread
+# and the note from the task alone (no search), invents nothing for a viewer who cannot open the
+# chat, and regresses nothing else.
+SEARCH_ENGINE["AGENT_FETCH_TASK_ANCHORS"] = (
+    os.environ.get("AGENT_FETCH_TASK_ANCHORS", "false").lower() == "true"
+)
+
+# MIP-1160 (model-visible, dark-shipped OFF, grouped eval arm `t1160`): how `list_my_inbox` shows
+# a scheduled Genos report (item type 10). ON = its `item_type_label` is `genos_report` (OFF: the
+# generic `type_10`) and its body is cut at 5,000 characters of content (title, summary, headings,
+# item texts and links): whole items in order, title and summary kept, the {title, text, sections}
+# shape untouched, and the row gains `item_body_cut` ({limit_chars, sections_omitted,
+# items_omitted, note}) when something was left out; a report within the cap is returned exactly as
+# before. The in-app declaration gains one sentence. OFF = label and whole body as before and the
+# declaration is byte-identical. Read at call time. The same function serves MCP `list_my_inbox`.
+# Flip criterion: the `t1160` arm answers about the kept part, says it cannot see the cut part
+# (never "not mentioned"), and spends clearly fewer tokens on an inbox holding a large report.
+SEARCH_ENGINE["AGENT_INBOX_REPORT_LABEL"] = (
+    os.environ.get("AGENT_INBOX_REPORT_LABEL", "false").lower() == "true"
+)
+
+# MIP-1090 (a) (model-visible, dark-shipped OFF, grouped eval arm `t1090-team`): `get_current_user`
+# (in-app; MCP `get_current_user` is the same function) says which workspace the conversation is
+# in. ON = the result gains `team` ({team_id, team_name}; the name is fenced as workspace
+# content), only when the user belongs to `ctx.team_id` (its owner, or a member not removed); the
+# in-app declaration gains one sentence. OFF = no `team` key and the declaration is byte-identical.
+# Read at call time. Flip criterion: the `t1090-team` arm answers "which team am I in" without
+# guessing or an extra tool, and a question that does not need the team does not call the tool
+# more often.
+SEARCH_ENGINE["AGENT_TEAM_IN_CURRENT_USER"] = (
+    os.environ.get("AGENT_TEAM_IN_CURRENT_USER", "false").lower() == "true"
+)
+
+# MIP-1090 (b) (model-visible, dark-shipped OFF, grouped eval arm `t1090-client`): which client made
+# a change in `get_task_history` (in-app; MCP `get_task_history` is the same function). ON = `via`
+# is {"kind": ...} for everyone who can read the task (`app`, `agent`, `api_key`, `connected_app`),
+# plus `client` (the key's or the app's name, fenced) ONLY for the key's or the connection's OWNER
+# (owner decision); never a key id, a key prefix, a connection id or an undo's run id; an app row's
+# `undo_of` is left out. One sentence is added to the declaration. OFF = `via` exactly as before
+# (including what it shows today for a key row and an app row, filed separately) and the
+# declaration is byte-identical. Read at call time.
+# Flip criterion: the `t1090-client` arm says which app/key made a change for its owner (never
+# inventing a name it cannot see) and regresses no other history question.
+SEARCH_ENGINE["AGENT_CLIENT_IN_TASK_HISTORY"] = (
+    os.environ.get("AGENT_CLIENT_IN_TASK_HISTORY", "false").lower() == "true"
+)
+
+# MIP-1090 (c) (model-visible, dark-shipped OFF, grouped eval arm `t1090-notethreads`): the in-app
+# `fetch_note` also returns the note's OPEN comment threads (reviewers' comments anchored to text,
+# which live in the note's Yjs document in genos-collab, read over HTTP: up to 5 s, per note read).
+# ON = the result gains `comment_threads` (fenced text; ids, times and people's ids checked to be what
+# they claim, since any editor of the note writes them) and, when something was left out or could
+# not be read, `comment_threads_note`; null threads + a note when collab cannot be reached (the body
+# is never lost). Resolved threads are counted, not shown. Only after the note's own access check, so
+# a thread is shown to exactly those who can read the body. MCP `get_note` keeps its own
+# `comment_threads` (it takes `include_resolved`); the in-app tool adds nothing there. One sentence
+# is added to the declaration. OFF = no extra keys, no collab call, declaration byte-identical.
+# Read at call time. Flip criterion: the `t1090-notethreads` arm reports the reviewers' open
+# comments, says "comments could not be read" instead of "there are none", and the extra collab
+# round trip is acceptable on `fetch_note` latency.
+SEARCH_ENGINE["AGENT_NOTE_THREADS_IN_GET_NOTE"] = (
+    os.environ.get("AGENT_NOTE_THREADS_IN_GET_NOTE", "false").lower() == "true"
+)
+
+# MIP-1413 (model-visible, dark-shipped OFF, grouped eval arm `closed-ancestor`): the closed-ancestor
+# rule in the in-app tools. A task under a Closed or Deleted parent, grandparent or milestone reads as
+# Closed or Deleted (`services/task_ancestry.py`; the web client, the progress bar, the briefing and the
+# MCP task reads already do). ON = counts and breakdowns (`get_my_task_summary`, `get_milestone_summary`
+# incl. its ready/blocked order, `get_sprint_summary`, `list_milestones`, `list_my_milestones`) read each
+# task by its effective status (Closed, not open, not overdue; Deleted: not counted); `get_my_focus_tasks`
+# leaves such tasks out; `list_tasks` rows and `fetch_task` carry `effective_status` and
+# `closed_by_ancestor` and keep their own `status`; `list_tasks(overdue_only)` drops them. One extra query
+# per call however big the tree; one sentence added to each changed tool's declaration. Not yet covered:
+# get_project_summary, get_team_task_summary, get_workload_distribution, get_stale_tasks, get_my_blockers,
+# get_task_blockers, get_my_schedule, get_task_throughput_stats, get_milestone_assignee_counts.
+# OFF = every result and declaration is what origin/main sends. Read at call time.
+# Flip criterion: the `closed-ancestor` arm answers "what is open / overdue" with what the dashboard and
+# the briefing show, and regresses nothing else.
+SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
+    os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

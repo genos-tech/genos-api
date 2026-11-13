@@ -30,6 +30,7 @@ from origin.models.common.inbox_models import (
     ITEM_TYPE_GENOS_REPORT,
     InboxItems,
 )
+from origin.search_engine.agent.tools import inbox_report
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 _MAX_LIMIT = 50
@@ -135,22 +136,31 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     qs = qs.order_by("-ts_created_at")[:limit]
 
+    # MIP-1160, flag off = nothing below changes: a report's label and whole body as before.
+    report_view = inbox_report.enabled()
     items: list[dict[str, Any]] = []
     for row in qs:
         sender = row.sender
+        body, cut = _model_body(row), None
+        label = _ITEM_TYPE_LABELS.get(row.item_type, f"type_{row.item_type}")
+        if report_view and row.item_type == ITEM_TYPE_GENOS_REPORT:
+            label = inbox_report.REPORT_LABEL
+            body, cut = inbox_report.cap_report_body(body)
         items.append(
             {
                 "item_id": row.item_id,
                 "item_type": row.item_type,
-                "item_type_label": _ITEM_TYPE_LABELS.get(row.item_type, f"type_{row.item_type}"),
+                "item_type_label": label,
                 "sender_id": str(sender.id) if sender else None,
                 "sender_username": sender.username if sender else None,
                 "is_read": row.is_read,
                 "request_status": (row.request_status if _is_request(row.item_type) else None),
-                "item_body": _model_body(row),
+                "item_body": body,
                 "ts_created_at": row.ts_created_at.isoformat(),
             }
         )
+        if cut:
+            items[-1]["item_body_cut"] = cut
         if target := _target(row):
             items[-1]["target"] = target
 

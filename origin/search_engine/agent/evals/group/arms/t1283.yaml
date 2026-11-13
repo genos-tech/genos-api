@@ -1,0 +1,4 @@
+arm: t1283
+overrides:
+    AGENT_CLOSING_LINE_IN_ORIGIN_THREAD: true
+requires: []

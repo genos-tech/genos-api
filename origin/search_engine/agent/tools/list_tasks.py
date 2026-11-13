@@ -39,6 +39,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.task_tags import tag_names
@@ -306,6 +307,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs = qs.exclude(status__in=["Closed", "Deleted"]).filter(
             due_date__isnull=False, due_date__lt=today
         )
+        if ancestor_rule.enabled():  # MIP-1413: under a Closed ancestor it is not overdue
+            rule = ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
+            qs = qs.exclude(task_id__in=sorted(rule.not_open))
 
     try:
         limit = int(args.get("limit", 20))
@@ -354,6 +358,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "is_milestone": bool(t.is_milestone),
             }
         )
+
+    if ancestor_rule.enabled():
+        # MIP-1413: the rows keep their own `status`; each says what it READS as (the MCP's fields).
+        fields = ancestor_rule.row_fields([t["task_id"] for t in tasks], ctx)
+        tasks = [{**t, **fields.get(t["task_id"], {})} for t in tasks]
 
     result: dict[str, Any] = {"tasks": tasks, "has_more": has_more}
     summary = f"Found {len(tasks)} task(s)"

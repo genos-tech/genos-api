@@ -65,7 +65,13 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
-from origin.search_engine.agent import approval_edits, tool_cache, undo
+from origin.search_engine.agent import (
+    approval_edits,
+    approval_notes,
+    approval_reason,
+    tool_cache,
+    undo,
+)
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import (
     canonical_citation_token,
@@ -84,6 +90,7 @@ from origin.search_engine.agent.prompts import (
     agent_system_prompt,
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
+from origin.search_engine.agent.tool_flag_text import declared_description
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
@@ -288,7 +295,7 @@ def _build_tool_declarations(
     return [
         ToolDeclaration(
             name=t.name,
-            description=t.description,
+            description=declared_description(t),
             parameters_schema=declared_schema(t.name, t.parameters_schema),
         )
         for t in REGISTRY.values()
@@ -1057,6 +1064,40 @@ def _coerce_signature(raw: Any) -> bytes | None:
 
 def _user_turn(query: str) -> AgentMessage:
     return AgentMessage(role="user", text=query)
+
+
+def _prior_messages(
+    prior_summary: str | None, prior_turns: list[tuple[str, str]] | None
+) -> list[AgentMessage]:
+    """The earlier turns of a conversation as the messages that go in front of its
+    next question: the rolling recap, then each earlier (question, answer) pair.
+
+    The recap (Phase 3.5, `multi_turn.py`) is an assistant "note to self" so the
+    model can refer to topics that have fallen out of the verbatim window. It goes
+    first, then the verbatim turns oldest to newest.
+
+    ONE function for both legs of a run: `run_agent` puts these in front of the
+    question, and `resume_agent` puts the same ones in front of the replay of what
+    the run did since (MIP-991). They are two callers of one construction because
+    the whole point of the second is that its messages START WITH the first's,
+    exactly: a copy of these lines in `resume_agent` would be one edit away from
+    sending the model a different conversation after an approval, and from losing
+    the shared prefix a provider's cache keys on.
+
+    Empty for a first turn (no recap, no turns).
+    """
+    messages: list[AgentMessage] = []
+    if prior_summary:
+        messages.append(
+            AgentMessage(
+                role="assistant",
+                text=f"[Context recap from earlier in this conversation: {prior_summary}]",
+            )
+        )
+    for prior_query, prior_answer in prior_turns or []:
+        messages.append(_user_turn(prior_query))
+        messages.append(AgentMessage(role="assistant", text=prior_answer))
+    return messages
 
 
 def _assistant_function_call_turn(function_call: FunctionCall) -> AgentMessage:
@@ -2085,21 +2126,9 @@ def run_agent(
         if seeded_map:
             emit({"type": "sources", "sources": list(seeded_map.values())})
 
-    messages: list[AgentMessage] = []
-    # Phase 3.5 — rolling summary of earlier turns prepended as an
-    # assistant "note to self" so the model can reference topics that
-    # have fallen out of the verbatim prior_turns window. Cheap, opt-in
-    # context recovery for long sessions. See `multi_turn.py`.
-    if prior_summary:
-        messages.append(
-            AgentMessage(
-                role="assistant",
-                text=f"[Context recap from earlier in this conversation: {prior_summary}]",
-            )
-        )
-    for prior_query, prior_answer in prior_turns or []:
-        messages.append(_user_turn(prior_query))
-        messages.append(AgentMessage(role="assistant", text=prior_answer))
+    # The recap and the earlier turns, then this question. `resume_agent` builds
+    # the same start (`_prior_messages`) for the leg that follows an approval.
+    messages = _prior_messages(prior_summary, prior_turns)
     messages.append(_user_turn(query))
 
     # Phase 3.2 — optional self-critique pass. Dispatched here so the
@@ -2159,6 +2188,9 @@ def resume_agent(
     emit: Callable[[dict[str, Any]], None],
     *,
     disabled_tools: set[str] | None = None,
+    system_extra: str | None = None,
+    prior_turns: list[tuple[str, str]] | None = None,
+    prior_summary: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any] | None:
     """Resume a paused agent run after the user has approved or rejected.
@@ -2175,6 +2207,27 @@ def resume_agent(
     itself: an approval issued before a downgrade (or before an ops
     kill-switch flipped) must not execute a tool the user no longer
     has.
+
+    `system_extra` is the prompt context the run's first leg had: the thread or
+    note summary of "Ask about this ...", the @/# references, the tier block
+    (MIP-977). `_rebuild_messages` replays the conversation from the run's rows
+    and none of that is in them, so the view hands it back (`/decide/` keeps it
+    on the run, `_resumed_system_extra`). Without it, every approve and every
+    reject answered the rest of the run as if the person had never opened it from
+    that thread or note, and with a different system prompt from the leg before
+    (so a provider's prompt cache could not carry over either). None (a plain
+    ask, a run paused before it was kept) is what this always received.
+
+    `prior_turns` and `prior_summary` are the earlier turns of the run's
+    conversation exactly as `run_agent` was given them (MIP-991): the verbatim
+    (question, answer) pairs and the rolling recap. Same reason as above: the
+    rebuild below starts from `run.query` alone, so without them every approve and
+    every reject finished a follow-up ask as if it were the first question of the
+    conversation. They go in front of the rebuilt messages through the same
+    `_prior_messages` the ask used, so this leg's messages START WITH its first
+    leg's, in the same order, and a provider's prompt cache can carry the prefix
+    over. The view hands them back from the run (`_resumed_prior_context`); empty
+    (a first turn, a run paused before they were kept) is what this always got.
     """
     if decision not in (DECISION_APPROVE, DECISION_REJECT):
         emit(
@@ -2194,6 +2247,9 @@ def resume_agent(
             }
         )
         return None
+    # The conversation the ask leg had before the question (`_rebuild_messages`
+    # starts at the question, which is where `run.query` is).
+    messages = [*_prior_messages(prior_summary, prior_turns), *messages]
 
     step_index = pending_step.step_index
     call_name = pending_step.tool_name
@@ -2214,11 +2270,10 @@ def resume_agent(
     #   run_args   what `tool.run` receives (typed text escaped so the tool's
     #              unfencing hands it back unchanged);
     #   shown_args the same, as typed, for the events.
-    # KNOWN LIMITATION: the model's replay (`function_call` above, and
-    # `_rebuild_messages` on a later pause) is still its original call beside
-    # the result of what ran, so its final answer can describe the proposal
-    # rather than the edit. Telling it what was edited changes what it sees,
-    # which needs an eval first; it is a follow-up.
+    # The model's replay (`function_call` above, and `_rebuild_messages` on a later
+    # pause) is still its original call beside the result of what ran, so its final answer
+    # can describe the proposal rather than the edit. That is deliberate and stays: the
+    # write tool's own result carries the applied values (an edit note was tried and dropped).
     run_args = call_args
     shown_args = call_args
     edit_patch: dict[str, Any] = {}
@@ -2268,7 +2323,11 @@ def resume_agent(
         except Exception:  # noqa: BLE001
             log.exception("Failed to update pending step %s on reject", pending_step.step_id)
         messages.append(_assistant_function_call_turn(function_call))
-        messages.append(_function_response_turn(call_name, {"error": "user_rejected"}))
+        messages.append(
+            _function_response_turn(
+                call_name, approval_reason.rejection_result(pending_step.decision_reason)
+            )
+        )
     else:
         # APPROVE — actually run the tool now. A pending call whose
         # tool has since been disabled (tier downgrade, toggled-off
@@ -2482,6 +2541,7 @@ def resume_agent(
         starting_step=step_index + 1,
         seen_sources_by_id=resumed_sources,
         disabled_tools=disabled_tools,
+        system_extra=system_extra,
         session_id=str(run.session_id) if run.session_id else None,
         cancel_event=cancel_event,
     )
@@ -4093,9 +4153,23 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
             thought_signature=_coerce_signature(step.thought_signature),
         )
         messages.append(_assistant_function_call_turn(fc))
-        if step.error:
+        if step.error == "user_rejected":
+            # The same response the model got when it was rejected, reason included
+            # (`AGENT_REJECT_REASON`), so a later leg replays what the earlier one saw.
+            messages.append(
+                _function_response_turn(
+                    step.tool_name, approval_reason.rejection_result(step.decision_reason)
+                )
+            )
+        elif step.error:
             messages.append(_function_response_turn(step.tool_name, {"error": step.error}))
         else:
-            messages.append(_function_response_turn(step.tool_name, step.result_json or {}))
+            # A later leg replays what the earlier one saw, so the undo
+            # marker (`AGENT_TELL_MODEL_UNDO`) is added here too; off, the row as it was.
+            messages.append(
+                _function_response_turn(
+                    step.tool_name, approval_notes.with_step_notes(step.result_json or {}, step)
+                )
+            )
 
     return messages, pending

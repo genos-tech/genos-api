@@ -59,7 +59,7 @@ FIXTURES = ("v1", "sequence")
 # Keys of a case file entry that the harness owns. They are removed before the entry
 # reaches `runner.run_behavior_case`, which would not know them.
 GROUP_ONLY_KEYS = frozenset(
-    {"kind", "lang", "tags", "fixture", "viewer", "reps", "requires_arm", "est", "note"}
+    {"kind", "lang", "tags", "fixture", "viewer", "reps", "requires_arm", "est", "note", "seed"}
 )
 # `expect:` keys evaluated by the harness (runner.py does not know them).
 GROUP_EXPECT_KEYS = frozenset(

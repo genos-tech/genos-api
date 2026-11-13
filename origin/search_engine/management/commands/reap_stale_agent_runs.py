@@ -104,10 +104,15 @@ class Command(CronCommand):
 
         # A single UPDATE, re-filtered on status so a run that closed
         # itself between the SELECT above and now is left alone.
+        #
+        # `resume_context` goes with it: a resumed run whose worker died is
+        # `running`, and a queryset UPDATE never passes the stream close-out
+        # that clears the private summary kept for its decision (MIP-977).
         closed = stale.update(
             status="error",
             error_message=_STALE_MESSAGE,
             finished_at=timezone.now(),
+            resume_context=None,
         )
         # WARNING, not ERROR: stale rows are an expected consequence of
         # deploys and scale-in, and reaping them is this job succeeding.
