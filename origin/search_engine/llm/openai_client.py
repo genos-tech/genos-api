@@ -208,6 +208,7 @@ class OpenAIClient:
         max_tokens = (params.max_output_tokens if params else None) or int(
             settings.SEARCH_ENGINE.get("OPENAI_MAX_TOKENS", 4096)
         )
+        sink.output_cap = max_tokens
 
         create_kwargs: dict[str, Any] = {
             "model": model,
@@ -267,6 +268,13 @@ class OpenAIClient:
                 choices = getattr(chunk, "choices", None) or []
                 if not choices:
                     continue
+                finish = getattr(choices[0], "finish_reason", None)
+                if isinstance(finish, str) and finish:
+                    sink.stop_reason = finish
+                    if finish == "length":
+                        # Cut off at the output cap: a tool call's arguments below are
+                        # incomplete JSON (`_parse_args` turns them into `{}`).
+                        sink.truncated = True
                 delta = getattr(choices[0], "delta", None)
                 if delta is None:
                     continue

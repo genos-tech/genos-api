@@ -165,6 +165,34 @@ MODEL_REFUSAL_MESSAGE = (
     "Try rephrasing it or asking about something more specific."
 )
 
+# Emitted when the model's reply was cut off at the OUTPUT cap while it was writing a tool call
+# that needs approval (any content write: a task, note, milestone, plan or comment body), and no
+# retry with more room could fit either (MIP-905). Showing the half-written body on an approval
+# card would let the person approve a truncated note, so nothing is proposed. A module constant
+# for the same reason as the messages above: `agent_views` classifies the run's outcome from it
+# (we spent the money, they got nothing).
+OUTPUT_TRUNCATED_MESSAGE = (
+    "That was too long to write in one go, so nothing was proposed. "
+    "Ask for it in smaller parts (for example a few tasks at a time, or one section at a time), "
+    "or ask for a shorter version."
+)
+
+# Appended to a TEXT reply the provider cut off at the output cap (MIP-905), so the person is not
+# left reading a sentence that stops for no reason. Worded for both cases the loop cannot tell
+# apart on every provider (Gemini may drop a half-written function call and return only the text
+# before it): a cut-off answer, or a cut-off request to write something.
+ANSWER_CUT_OFF_NOTICE = (
+    "\n\n*(This reply was cut off because it reached the length limit. Ask me to continue, "
+    "or, if you asked me to write something, ask for it in smaller parts.)*"
+)
+
+#: A cut-off write is retried once with more room: twice the cap the call ran under (or twice what
+#: it produced, thinking included, if that is more), at least FLOOR and at most CEILING tokens. No
+#: retry when that would not exceed the cap the first call ran under, and none when the call ran
+#: with no cap at all (the provider's own model maximum already applied).
+TRUNCATION_RETRY_FLOOR = 16384
+TRUNCATION_RETRY_CEILING = 32768
+
 # Appended as a final user turn when the loop exhausts its step budget
 # without ever writing a final answer (AGENT_STEP_CAP_WRAPUP). By that
 # point the transcript holds every tool result the run gathered, so the
@@ -3053,6 +3081,10 @@ def _drive_loop(
     if content_block:
         system_instruction = f"{system_instruction}\n\n{content_block}"
 
+    # The latest model call's end state (MIP-905: was it cut off at the output cap?), filled by
+    # `_collect_and_record`. Read by the step logic right after the call.
+    last_call: dict[str, Any] = {"truncated": False}
+
     def _collect_and_record(
         step_index: int,
         purpose: str,
@@ -3060,6 +3092,7 @@ def _drive_loop(
         model_override: str | None = None,
         emit_deltas: bool = True,
         tools_override: list[ToolDeclaration] | None = None,
+        params_override: GenerationParams | None = None,
     ) -> tuple[list[str], list[FunctionCall]]:
         """Run one model turn AND record its per-call telemetry.
 
@@ -3090,8 +3123,20 @@ def _drive_loop(
                 model_override=model_override,
                 emit_deltas=emit_deltas,
                 usage_sink=sink,
-                params=gen_params,
+                params=gen_params if params_override is None else params_override,
             )
+        # What the step logic below needs to know about the call that just ended.
+        last_call.update(
+            truncated=bool(getattr(sink, "truncated", False)),
+            # Thinking shares the output cap on every provider, and Gemini reports it apart.
+            produced=int(getattr(sink, "output_tokens", 0) or 0)
+            + int(getattr(sink, "thought_tokens", 0) or 0),
+            output_cap=int(getattr(sink, "output_cap", 0) or 0),
+            purpose=purpose,
+            model_override=model_override,
+            emit_deltas=emit_deltas,
+            tools_override=tools_override,
+        )
         latency_ms = int((time.monotonic() - started) * 1000)
         _persist_llm_call(
             run_id,
@@ -3103,19 +3148,80 @@ def _drive_loop(
         )
         return parts, fcalls
 
-    # Per-invocation loop-guard state (AGENT_DYNAMIC_STEPS only). Maps a
-    # step's batch signature → how many times it has occurred, so the
-    # loop can (a) stop when one signature repeats past the limit and
-    # (b) decide whether a step did NEW work worth extending the budget
-    # for. Fresh per invocation, so a resume starts clean.
-    batch_sig_counts: dict[tuple[tuple[str, str], ...], int] = {}
+    def _report_model_error(exc: Exception, step_index: int) -> None:
+        """A model call raised: tell the client and record the run's error. Shared by the step's
+        own call and the retry of a cut-off write, so a failure reads the same either way."""
+        if isinstance(exc, ModelRefusal):
+            # The provider answered, by declining. Not a crash (no
+            # traceback) and not a generic failure: a specific message
+            # the user can act on, and a distinct run error so refusals
+            # count separately from outages. Text already streamed this
+            # step stays on screen.
+            log.info("Agent run %s step %d declined by the provider: %s", run_id, step_index, exc)
+            emit({"type": "error", "message": MODEL_REFUSAL_MESSAGE})
+            _persist_step(run_id, step_index=step_index, error="model_refusal")
+            return
+        log.error("Agent step %d LLM call failed", step_index, exc_info=exc)
+        # The type and status only: the client sees this, the run row
+        # keeps it, and the evals read the status (MIP-622).
+        failure = f"LLM call failed: {describe_exception(exc)}"
+        emit({"type": "error", "message": failure})
+        _persist_step(run_id, step_index=step_index, error=failure)
 
-    # `while` rather than `for range(...)` so the ceiling can move: under
-    # AGENT_DYNAMIC_STEPS a productive step pushes `max_steps` out (up to
-    # `hard_cap`) at the bottom of the body. With the flag off `max_steps`
-    # never changes, so this is exactly `for step in range(...)`.
-    step = starting_step
-    while step < max_steps:
+    def _retry_cut_off_write(step_index: int) -> tuple[list[FunctionCall] | None, str]:
+        """Run the step that was cut off at the output cap ONCE more with more room.
+
+        Same model, same messages, same tools: only the cap differs, so what the model is shown
+        does not change. Returns `(calls, outcome)`:
+
+          "ok"       the retry ended normally; `calls` are its function calls
+          "too_long" no retry was possible (the call ran with no cap, or a larger cap would not
+                     exceed the one it ran under) or it was cut off again / returned no call:
+                     the caller says the content was too long
+          "ended"    the run is over and already told the client: the retry was refused by the
+                     between-steps guards (cancelled, cost ceiling, credits) or the provider
+                     failed or declined; the caller returns without another message
+
+        The retry's text is dropped: the first attempt's text (what came before the cut-off
+        call) was already shown, streamed or flushed, and is what the step keeps.
+        """
+        ran_under = int(last_call.get("output_cap") or 0)
+        produced = int(last_call.get("produced") or 0)
+        if ran_under <= 0:
+            # No cap was sent, so the provider's own maximum applied: nothing larger to ask for.
+            return None, "too_long"
+        cap = min(
+            max(2 * ran_under, 2 * produced, TRUNCATION_RETRY_FLOOR), TRUNCATION_RETRY_CEILING
+        )
+        if cap <= ran_under:
+            return None, "too_long"
+        # The same guards the loop runs before every model call (a retry is one).
+        if _stop_before_call(step_index):
+            return None, "ended"
+        base = gen_params
+        params = GenerationParams(
+            max_output_tokens=cap,
+            thinking_budget=base.thinking_budget if base is not None else None,
+        )
+        try:
+            _parts, calls = _collect_and_record(
+                step_index,
+                f"{last_call['purpose']}_retry",
+                model_override=last_call.get("model_override"),
+                emit_deltas=False,
+                tools_override=last_call.get("tools_override"),
+                params_override=params,
+            )
+        except Exception as exc:  # noqa: BLE001 — surfaced exactly as the step's own failure is
+            _report_model_error(exc, step_index)
+            return None, "ended"
+        if last_call["truncated"] or not calls:
+            return None, "too_long"
+        return calls, "ok"
+
+    def _stop_before_call(step_index: int) -> bool:
+        """The checks that run before EVERY model call: cancelled, per-request cost ceiling, the
+        member's credit balance. True = stop (the client was already told, where it needs to be)."""
         # Cooperative cancellation. A Python thread cannot be killed, so
         # the only way to stop burning tokens after the client is gone is
         # to ask between steps. Checked HERE (before the LLM call) rather
@@ -3131,9 +3237,9 @@ def _drive_loop(
                 "Agent run %s cancelled at step %s — client disconnected; "
                 "stopping before the next model call",
                 run_id,
-                step,
+                step_index,
             )
-            return None
+            return True
 
         # Per-request cost ceiling — the one safety control that BLOCKS.
         # Same placement and the same bound as cancellation: checked
@@ -3152,7 +3258,7 @@ def _drive_loop(
                 "Agent run %s hit the per-request cost ceiling at step %s "
                 "(%s of %s milli-yen); stopping before the next model call",
                 run_id,
-                step,
+                step_index,
                 spend.request_cost_jpy_milli(),
                 ceiling,
             )
@@ -3160,8 +3266,8 @@ def _drive_loop(
             # choose a budget and cannot act on a yen figure; what they
             # CAN act on is asking something narrower.
             emit({"type": "error", "message": COST_CEILING_MESSAGE})
-            _persist_step(run_id, step_index=step, error="cost_ceiling_reached")
-            return None
+            _persist_step(run_id, step_index=step_index, error="cost_ceiling_reached")
+            return True
 
         # The user's credit balance, enforced where it can actually be
         # enforced. A cost-denominated limit cannot be checked up front —
@@ -3185,11 +3291,28 @@ def _drive_loop(
                 "mid-request (%s milli-yen spent). This run IS charged: the work "
                 "was performed.",
                 run_id,
-                step,
+                step_index,
                 spend.request_cost_jpy_milli(),
             )
             emit({"type": "error", "message": CREDITS_EXHAUSTED_MESSAGE})
-            _persist_step(run_id, step_index=step, error="credits_exhausted")
+            _persist_step(run_id, step_index=step_index, error="credits_exhausted")
+            return True
+        return False
+
+    # Per-invocation loop-guard state (AGENT_DYNAMIC_STEPS only). Maps a
+    # step's batch signature → how many times it has occurred, so the
+    # loop can (a) stop when one signature repeats past the limit and
+    # (b) decide whether a step did NEW work worth extending the budget
+    # for. Fresh per invocation, so a resume starts clean.
+    batch_sig_counts: dict[tuple[tuple[str, str], ...], int] = {}
+
+    # `while` rather than `for range(...)` so the ceiling can move: under
+    # AGENT_DYNAMIC_STEPS a productive step pushes `max_steps` out (up to
+    # `hard_cap`) at the bottom of the body. With the flag off `max_steps`
+    # never changes, so this is exactly `for step in range(...)`.
+    step = starting_step
+    while step < max_steps:
+        if _stop_before_call(step):
             return None
         try:
             if planning_model is None:
@@ -3246,24 +3369,39 @@ def _drive_loop(
                     accumulated_text_parts, accumulated_function_calls = _collect_and_record(
                         step, "synthesis"
                     )
-        except ModelRefusal as e:
-            # The provider answered, by declining. Not a crash (no
-            # traceback) and not a generic failure: a specific message
-            # the user can act on, and a distinct run error so refusals
-            # count separately from outages. Text already streamed this
-            # step stays on screen.
-            log.info("Agent run %s step %d declined by the provider: %s", run_id, step, e)
-            emit({"type": "error", "message": MODEL_REFUSAL_MESSAGE})
-            _persist_step(run_id, step_index=step, error="model_refusal")
+        except Exception as e:  # noqa: BLE001 — surface as stream error (a refusal too)
+            _report_model_error(e, step)
             return None
-        except Exception as e:  # noqa: BLE001 — surface as stream error
-            log.exception("Agent step %d LLM call failed", step)
-            # The type and status only: the client sees this, the run row
-            # keeps it, and the evals read the status (MIP-622).
-            failure = f"LLM call failed: {describe_exception(e)}"
-            emit({"type": "error", "message": failure})
-            _persist_step(run_id, step_index=step, error=failure)
-            return None
+
+        # ---- Output cut off at the cap (MIP-905) ----
+        # A call the provider ended at its output cap has half-written whatever it was writing. A
+        # write tool's arguments (a task, note or plan body) must never reach an approval card in
+        # that state: try the step once more with more room, else say so and propose nothing. A
+        # cut-off TEXT answer gets a notice at its end. Nothing here runs for a call that ended
+        # normally (`truncated` is False), so a normal run is unchanged.
+        if last_call["truncated"]:
+            cut_write = bool(accumulated_function_calls) and getattr(
+                REGISTRY.get(accumulated_function_calls[-1].name), "requires_approval", False
+            )
+            if cut_write:
+                retried, outcome = _retry_cut_off_write(step)
+                if outcome == "ended":
+                    return None
+                if retried is None:
+                    log.warning(
+                        "Agent run %s step %d: %s was cut off at the output cap and the retry "
+                        "did not fit either; proposing nothing",
+                        run_id,
+                        step,
+                        accumulated_function_calls[-1].name,
+                    )
+                    emit({"type": "error", "message": OUTPUT_TRUNCATED_MESSAGE})
+                    _persist_step(run_id, step_index=step, error="output_truncated")
+                    return None
+                accumulated_function_calls = retried
+            elif not accumulated_function_calls and accumulated_text_parts:
+                accumulated_text_parts = [*accumulated_text_parts, ANSWER_CUT_OFF_NOTICE]
+                emit({"type": "answer_delta", "text": ANSWER_CUT_OFF_NOTICE})
 
         any_text_emitted = bool(accumulated_text_parts)
 
@@ -3662,6 +3800,9 @@ def _drive_loop(
             wrapup_parts, _wrapup_calls = _collect_and_record(
                 max_steps, "step_cap_wrapup", tools_override=[]
             )
+            if last_call["truncated"] and wrapup_parts:
+                wrapup_parts = [*wrapup_parts, ANSWER_CUT_OFF_NOTICE]
+                emit({"type": "answer_delta", "text": ANSWER_CUT_OFF_NOTICE})
             wrapup_answer = "".join(wrapup_parts).strip()
         except Exception:  # noqa: BLE001 — degrade to the historical error
             log.exception("Step-cap wrap-up call failed for run %s", run_id)

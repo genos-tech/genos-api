@@ -86,6 +86,7 @@ from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
     MODEL_REFUSAL_MESSAGE,
+    OUTPUT_TRUNCATED_MESSAGE,
     _chat_source,
     _note_source,
     pending_step_of,
@@ -2504,7 +2505,10 @@ def _stream_ndjson(
                 # our failure, and NOT billable (it is absent from
                 # `billable_results`): the user received nothing.
                 result = AiRequestCost.RESULT_SAFETY_REFUSAL
-            elif final_status == "step_cap" or final_error == COST_CEILING_MESSAGE:
+            elif final_status == "step_cap" or final_error in (
+                COST_CEILING_MESSAGE,
+                OUTPUT_TRUNCATED_MESSAGE,
+            ):
                 # Reached the step cap without answering. We spent the
                 # money and the user got nothing usable, so this is not
                 # a success — it is our cost to absorb.

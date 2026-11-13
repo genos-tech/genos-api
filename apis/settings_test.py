@@ -11,8 +11,41 @@ Run with: manage.py test --settings=apis.settings_test
 """
 
 import os
+import sys
+
+from django.core.exceptions import ImproperlyConfigured
 
 from .settings import *  # noqa: F401,F403,E402
+
+# MIP-1466: `manage.py test` must never run with live model/billing credentials in the process.
+# A test that forgets to stub a model call would make a BILLED call (the dev stack's compose env
+# carries the real keys; a test container built from it inherits them). The evals are not tests:
+# they run `manage.py agent_eval*` with real credentials on purpose and are not affected. Opt out,
+# knowingly, with ALLOW_LIVE_LLM_IN_TESTS=1. The key-free runner is `docker/dt.sh` in genos-platform.
+_LIVE_CREDENTIALS = (
+    "CLAUDE_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "COHERE_API_KEY",
+    "TAVILY_API_KEY",
+)
+_REAL_KEY_PLACEHOLDERS = ("", "test", "dummy", "none", "no-key", "fake")
+_live = [
+    name
+    for name in _LIVE_CREDENTIALS
+    if (os.environ.get(name) or "").strip().lower() not in _REAL_KEY_PLACEHOLDERS
+    and not (os.environ.get(name) or "").strip().lower().startswith(("no-key", "test-", "fake-"))
+]
+# A Stripe key is billing only when it is a LIVE-mode key (a test-mode key moves no money).
+if (os.environ.get("STRIPE_SECRET_KEY") or "").strip().startswith(("sk_live_", "rk_live_")):
+    _live.append("STRIPE_SECRET_KEY")
+if _live and sys.argv[1:2] == ["test"] and os.environ.get("ALLOW_LIVE_LLM_IN_TESTS") != "1":
+    raise ImproperlyConfigured(
+        "The test suite refuses to run with live credentials in the environment ("
+        + ", ".join(_live)
+        + "): a test that forgets to stub a model call would be billed. Run it without them "
+        "(genos-platform/docker/dt.sh does), or set ALLOW_LIVE_LLM_IN_TESTS=1 if you mean to."
+    )
 
 CACHES = {
     "default": {
