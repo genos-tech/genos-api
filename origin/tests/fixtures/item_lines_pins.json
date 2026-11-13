@@ -100,7 +100,7 @@
         }
       },
       "line_for_item_sha": "2f53cf568e490bff8058fe99a842ddd901683d4ac76117726d0357cbf30c4887",
-      "queries": 54,
+      "queries": 53,
       "read_events": {
         "capped": false,
         "events": [
@@ -227,7 +227,7 @@
         }
       },
       "line_for_item_sha": "d484f1ec1e3000d1185094907c9dfb6abea06b4ca886da9deb6fd19e1bc81c36",
-      "queries": 54,
+      "queries": 53,
       "read_events": {
         "capped": false,
         "events": [
@@ -514,7 +514,7 @@
         }
       },
       "line_for_item_sha": "038f100ada8348381de842e1d6051a1e126229a1695619e2889ac424b0160fe5",
-      "queries": 38,
+      "queries": 37,
       "read_events": {
         "capped": false,
         "events": [
@@ -599,7 +599,7 @@
         }
       },
       "line_for_item_sha": "74ff81000a32854165e5cc0c7c253f6cd9ccfbb87eb6854c6ae96dbda92dc787",
-      "queries": 37,
+      "queries": 36,
       "read_events": {
         "capped": false,
         "events": [
@@ -765,7 +765,7 @@
         }
       },
       "line_for_item_sha": "038f100ada8348381de842e1d6051a1e126229a1695619e2889ac424b0160fe5",
-      "queries": 38,
+      "queries": 37,
       "read_events": {
         "capped": false,
         "events": [
@@ -850,7 +850,7 @@
         }
       },
       "line_for_item_sha": "74ff81000a32854165e5cc0c7c253f6cd9ccfbb87eb6854c6ae96dbda92dc787",
-      "queries": 37,
+      "queries": 36,
       "read_events": {
         "capped": false,
         "events": [
@@ -1026,7 +1026,7 @@
         }
       },
       "line_for_item_sha": "fdf1cbf2b4f8d159f457b91407aa6a9311733ae06ed4708028fb32e725b77581",
-      "queries": 38,
+      "queries": 36,
       "read_events": {
         "capped": false,
         "events": [
@@ -1115,7 +1115,7 @@
         }
       },
       "line_for_item_sha": "5761d2726f2f457e29e65ca4f6d478682e3dfadbed02268edeea3ea5873c4d7c",
-      "queries": 37,
+      "queries": 35,
       "read_events": {
         "capped": false,
         "events": [
@@ -1286,7 +1286,7 @@
         }
       },
       "line_for_item_sha": "67a2af6304a67709e7b9fa10f93e37cb928c6d7fabd69545d52fe75c3dd286b1",
-      "queries": 38,
+      "queries": 36,
       "read_events": {
         "capped": false,
         "events": [
@@ -1377,7 +1377,7 @@
         }
       },
       "line_for_item_sha": "dd4b6274ada0e70fe9e584579ccfdde2ef32bec095df3f93eafb8e6758868799",
-      "queries": 37,
+      "queries": 35,
       "read_events": {
         "capped": false,
         "events": [
@@ -1572,7 +1572,7 @@
         }
       },
       "line_for_item_sha": "74ff81000a32854165e5cc0c7c253f6cd9ccfbb87eb6854c6ae96dbda92dc787",
-      "queries": 37,
+      "queries": 36,
       "read_events": {
         "capped": false,
         "events": [
@@ -1751,7 +1751,7 @@
         }
       },
       "line_for_item_sha": "83c4c5955d7c9632912f6b85570eae38e0e311115b18a02da83be23dc7dad7eb",
-      "queries": 37,
+      "queries": 36,
       "read_events": {
         "capped": false,
         "events": [
@@ -1932,7 +1932,7 @@
         }
       },
       "line_for_item_sha": "5761d2726f2f457e29e65ca4f6d478682e3dfadbed02268edeea3ea5873c4d7c",
-      "queries": 37,
+      "queries": 35,
       "read_events": {
         "capped": false,
         "events": [
