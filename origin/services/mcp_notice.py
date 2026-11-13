@@ -15,9 +15,11 @@ stay silent. `RULES` is the whole list; a tool not in it never notifies.
 **One notice per CALL**, not per row: a plan that makes 15 tasks is one notice counting 15, with
 up to `MAX_ITEMS` of them named.
 
-**One switch.** `NotificationPreference.category_settings["ai_app"]`, on unless the member turned
-it off, gates BOTH the feed row and the Web Push (a row that is never made cannot be pushed). The
-in-app agent is not covered: it pauses for the member's approval on every write, so they know.
+**Switches** (MIP-1452). Their own group: `NotificationPreference.enable_ai_apps` is the master, and
+`category_settings` has one key per ACTION ("task created", "note deleted", ...; the table is
+`ai_app_switches.ACTIONS`). All are on unless the member turned them off, except "note edited"
+(an app can edit one note dozens of times in a row). The master and the action's key both gate
+the feed row AND the Web Push (a row that is never made cannot be pushed). The in-app agent is not covered: it pauses for the member's approval on every write, so they know.
 Plain REST API-key calls are not covered either: there is no app to name.
 
 **Never raises, never slows the call.** It runs after the write has succeeded and swallows its own
@@ -39,11 +41,11 @@ from typing import Any
 from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.task.task_models import TaskMaster
+from origin.services import ai_app_switches as switches
 from origin.services.v3_activity import SURFACE_AI_APP
 
 log = logging.getLogger(__name__)
 
-CATEGORY = "ai_app"
 MAX_ITEMS = 5
 TITLE_CHARS = 120
 APP_CHARS = 100
@@ -52,6 +54,7 @@ VERB_CREATED = "created"
 VERB_STATUS = "status"
 VERB_COMMENTED = "commented"
 VERB_DELETED = "deleted"
+VERB_EDITED = "edited"
 
 
 @dataclass
@@ -248,6 +251,15 @@ def _created_note(args, payload) -> Notice | None:
     return Notice(VERB_CREATED, "note", 1, [_note_item(payload, args)])
 
 
+def _edited_note(args, payload) -> Notice | None:
+    # A title or body change is an edit; moving a note between folders is not.
+    if not ({"title", "body"} & set(payload.get("changed_fields") or [])):
+        return None
+    task_id = payload.get("task_id") or (payload.get("parent_context") or {}).get("task_id")
+    item = _note_item({**payload, "task_id": task_id}, args)
+    return Notice(VERB_EDITED, "note", 1, [item])
+
+
 def _created_todo(args, payload) -> Notice | None:
     if not payload.get("item_id"):
         return None
@@ -284,6 +296,7 @@ RULES: dict[str, Callable[[dict, dict], Notice | None]] = {
     "manage_milestone": _milestone,
     "add_comment": _comment,
     "create_note": _created_note,
+    "update_note": _edited_note,
     "create_todo_item": _created_todo,
     "delete_comment": _deleted("comment", _deleted_comment_item),
     "delete_note": _deleted("note", lambda a, p: {**_note_item(p, a), "url": ""}),
@@ -322,6 +335,8 @@ def sentence(meta: dict[str, Any]) -> str:
         return f"created {noun}" + (f" {label}" if count == 1 and label else "")
     if verb == VERB_COMMENTED:
         return f"commented on {first.get('displayId') or 'a task'}"
+    if verb == VERB_EDITED:
+        return f"edited {noun}" + (f" {label}" if count == 1 and label else "")
     if verb == VERB_DELETED:
         return f"deleted {noun}" + (f" {label}" if count == 1 and label else "")
     if verb == VERB_STATUS:
@@ -339,13 +354,18 @@ def _app_name(credential) -> str:
     return str(name or getattr(credential, "label", "") or "AI app")[:APP_CHARS]
 
 
-def _enabled(user_id) -> bool:
-    settings = (
+def _enabled(user_id, notice: Notice) -> bool:
+    """The group's master and the action's own switch. No preference row means the defaults."""
+    row = (
         NotificationPreference.objects.filter(user_id=user_id)
-        .values_list("category_settings", flat=True)
+        .values_list("enable_ai_apps", "category_settings")
         .first()
     )
-    return bool((settings or {}).get(CATEGORY, True))
+    key = switches.key_for(notice.verb, notice.kind)
+    if row is None:
+        return switches.is_on({}, key)
+    master, settings = row
+    return bool(master) and switches.is_on(settings, key)
 
 
 def notify_owner(
@@ -362,7 +382,7 @@ def notify_owner(
         if user is None or not getattr(user, "is_authenticated", False):
             return []
         notice = build_notice(tool_name, args, payload)
-        if notice is None or not _enabled(user.id):
+        if notice is None or not _enabled(user.id, notice):
             return []
         meta: dict[str, Any] = {
             "aiApp": True,

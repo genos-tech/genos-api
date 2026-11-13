@@ -202,6 +202,7 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
                 "enable_mentions",
                 "enable_task_comments",
                 "enable_inbox",
+                "enable_ai_apps",
                 "push_enabled",
                 "email_enabled",
                 "category_settings",
@@ -213,6 +214,7 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
             },
         )
         self.assertTrue(data["master_enabled"])
+        self.assertTrue(data["enable_ai_apps"])
         self.assertEqual(data["muted_chats"], [])
         self.assertEqual(data["category_settings"], {})
         self.assertEqual(data["muted_targets"], [])

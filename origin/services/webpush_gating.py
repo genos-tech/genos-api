@@ -17,6 +17,7 @@ channels can never drift into disagreeing about what "muted" means.
 """
 
 from origin.models.common.notification_models import NotificationPreference
+from origin.services import ai_app_switches
 from origin.services.notification_snooze import is_snoozed
 from origin.services.v3_activity import (
     SURFACE_CHAT_NOTE,
@@ -62,9 +63,9 @@ _PUSH_DEFAULTS = {
     # `message_reminder`, so someone who wants nudges about messages but
     # not about their list has a way to say so.
     "todo_reminder": True,
-    # What the member's own AI app did over MCP (MIP-1432). One switch, which also decides
-    # whether the feed row is made at all (`services/mcp_notice.py`). No coarse group: it is
-    # news about the member's own app, not about other people.
+    # What the member's own AI apps did over MCP (MIP-1432, MIP-1452): a switch per action
+    # (`ai_app_switches`), which also decides whether the feed row is made at all. Filled in
+    # below from that table; `ai_app` is the fallback for an action no rule names.
     "ai_app": True,
 }
 
@@ -94,10 +95,12 @@ _COARSE_FIELD = {
     "agent_run_done": "enable_inbox",
     "message_reminder": "enable_inbox",
     "todo_reminder": "enable_inbox",
-    # Same group as the client's registry puts it in (`categories.ts`), so turning the Inbox
-    # group off silences the push exactly where it silences the in-app toast (MIP-1432).
-    "ai_app": "enable_inbox",
+    "ai_app": "enable_ai_apps",
 }
+
+# The AI-app switches (MIP-1452): one per action, all under the `enable_ai_apps` group master.
+_PUSH_DEFAULTS.update(ai_app_switches.DEFAULTS)
+_COARSE_FIELD.update(dict.fromkeys(ai_app_switches.KEYS, "enable_ai_apps"))
 
 
 def should_push(user_id, category: str) -> bool:

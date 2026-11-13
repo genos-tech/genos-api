@@ -21,6 +21,7 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
             "enable_mentions",
             "enable_task_comments",
             "enable_inbox",
+            "enable_ai_apps",
             "push_enabled",
             "email_enabled",
             "category_settings",
@@ -106,7 +107,7 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
 
             if target_type not in _MUTED_TARGET_TYPES:
                 raise serializers.ValidationError(
-                    "muted_targets[].target_type must be one of " f"{sorted(_MUTED_TARGET_TYPES)}."
+                    f"muted_targets[].target_type must be one of {sorted(_MUTED_TARGET_TYPES)}."
                 )
             if not isinstance(target_id, str) or not target_id:
                 raise serializers.ValidationError(

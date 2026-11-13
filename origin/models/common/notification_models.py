@@ -42,6 +42,10 @@ class NotificationPreference(models.Model):
     enable_mentions = models.BooleanField(default=True)
     enable_task_comments = models.BooleanField(default=True)
     enable_inbox = models.BooleanField(default=True)
+    # What the member's own AI apps did over MCP (MIP-1452): its own group, with a switch per
+    # kind of work in `category_settings` (`ai_app_tasks`, `ai_app_notes`, `ai_app_todos`).
+    # Off here makes no notice at all, whatever the three say.
+    enable_ai_apps = models.BooleanField(default=True)
 
     # Independent master for OS/Web Push (vs. the in-app toasts/Notification
     # path, which `master_enabled` governs). Lets a user keep in-app
