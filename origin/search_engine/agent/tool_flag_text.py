@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from django.conf import settings
 
+from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools.base import Tool
 from origin.search_engine.agent.tools.fetch_note import DESCRIPTION_ADDITION as _NOTE_THREADS
 from origin.search_engine.agent.tools.get_current_user import DESCRIPTION_ADDITION as _TEAM
@@ -29,6 +30,14 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("get_current_user", "AGENT_TEAM_IN_CURRENT_USER", _TEAM),
     ("get_task_history", "AGENT_CLIENT_IN_TASK_HISTORY", _CLIENT),
     ("fetch_note", "AGENT_NOTE_THREADS_IN_GET_NOTE", _NOTE_THREADS),
+    ("get_my_focus_tasks", "AGENT_CLOSED_ANCESTOR_RULE", _rule.FOCUS_ADDITION),
+    ("get_my_task_summary", "AGENT_CLOSED_ANCESTOR_RULE", _rule.COUNTS_ADDITION),
+    ("get_milestone_summary", "AGENT_CLOSED_ANCESTOR_RULE", _rule.COUNTS_ADDITION),
+    ("get_sprint_summary", "AGENT_CLOSED_ANCESTOR_RULE", _rule.COUNTS_ADDITION),
+    ("list_milestones", "AGENT_CLOSED_ANCESTOR_RULE", _rule.COUNTS_ADDITION),
+    ("list_my_milestones", "AGENT_CLOSED_ANCESTOR_RULE", _rule.COUNTS_ADDITION),
+    ("list_tasks", "AGENT_CLOSED_ANCESTOR_RULE", _rule.ROWS_ADDITION),
+    ("fetch_task", "AGENT_CLOSED_ANCESTOR_RULE", _rule.ROWS_ADDITION),
 )
 
 

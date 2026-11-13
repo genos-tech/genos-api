@@ -389,10 +389,82 @@ def remove_note_threads_stub() -> None:
     _NOTE_THREADS.clear()
 
 
+# --------------------------------------------------------------------------- #
+# closed-ancestor: open tasks under a Closed parent, and one really open task  #
+# --------------------------------------------------------------------------- #
+
+#: Titles per language. The Closed parent is also the idempotency marker. Assigned to the VIEWER, who is
+#: the story's client (`v1` / `ja`): the cases of the other items ask as the PM or the developer, so
+#: these tasks stay out of their answers.
+CLOSED_TREE_TITLES = {
+    "en": {
+        "parent": "Plan the autumn webinar",
+        "child_wip": "Draft the webinar invite",
+        "child_open": "Book the webinar room",
+        "open": "Renew the domain name",
+    },
+    "ja": {
+        "parent": "秋のウェビナーを企画する",
+        "child_wip": "ウェビナーの招待状を書く",
+        "child_open": "ウェビナーの会場を予約する",
+        "open": "ドメイン名を更新する",
+    },
+}
+
+
+def seed_closed_ancestor_tree(info: dict[str, Any]) -> None:
+    """A Closed parent with two children whose own status is still open (WIP, Open), and one
+    task that is open on its own and overdue. All assigned to the viewer, in the story's project.
+    Their own statuses are never changed: what the rule reads is what the cases ask about."""
+    from datetime import date  # noqa: PLC0415
+
+    from django.db.models import Max  # noqa: PLC0415
+
+    from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    lang = "ja" if info["team"] == "ja" else "en"
+    titles = CLOSED_TREE_TITLES[lang]
+    team_id = info["team_id"]
+    if TaskMaster.objects.filter(
+        team_id=team_id, title=titles["parent"], is_deleted=False
+    ).exists():
+        return
+    project = ProjectMaster.objects.filter(team_id=team_id).order_by("project_id").first()
+    if project is None:
+        raise SeedError("the sequence team has no project")
+    me = info["user_id"]
+    number = (
+        TaskMaster.objects.filter(project=project).aggregate(m=Max("project_task_number"))["m"] or 0
+    )
+
+    def make(key: str, status: str, parent=None, due=None) -> TaskMaster:
+        nonlocal number
+        number += 1
+        return TaskMaster.objects.create(
+            team_id=team_id,
+            project=project,
+            reporter_id=me,
+            assignee_id=me,
+            title=titles[key],
+            status=status,
+            priority="Normal",
+            project_task_number=number,
+            parent_task_id=parent.task_id if parent else None,
+            due_date=due,
+        )
+
+    parent = make("parent", "Closed")
+    make("child_wip", "WIP", parent)
+    make("child_open", "Open", parent)
+    make("open", "Open", due=date(2026, 10, 1))
+
+
 SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "inbox_report": seed_inbox_report,
     "task_history_clients": seed_task_history_clients,
     "note_threads_stub": seed_note_threads_stub,
+    "closed_ancestor_tree": seed_closed_ancestor_tree,
 }
 
 

@@ -21,6 +21,7 @@ from django.db.models import Count, Prefetch, Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.template_prompts import has_written_body
@@ -146,20 +147,30 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # `due_date IS NULL` sorts last via Django's `nulls_last` (Postgres).
     qs = qs.order_by("status", "due_date", "-ts_updated_at")[:limit]
 
+    rule = None
+    if ancestor_rule.enabled():  # MIP-1413: read the tasks by their effective status
+        qs = list(qs)
+        rule = ancestor_rule.rule_for_projects({m.project_id for m in qs}, ctx.team_id)
     today = today_for_user_id(ctx.user_id)
     milestones: list[dict[str, Any]] = []
     for m in qs:
-        task_qs = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
+        task_qs, sf = ancestor_rule.read_by_rule(
+            TaskMaster.objects.filter(milestone_work_q(m)).distinct(), rule
+        )
         agg = task_qs.aggregate(
             tasks_total=Count("task_id", distinct=True),
-            tasks_closed=Count("task_id", distinct=True, filter=Q(status="Closed")),
+            tasks_closed=Count("task_id", distinct=True, filter=Q(**{sf: "Closed"})),
             overdue=Count(
                 "task_id",
                 distinct=True,
                 filter=Q(due_date__isnull=False, due_date__lt=today)
-                & ~Q(status__in=_CLOSED_STATUSES),
+                & ~Q(**{f"{sf}__in": _CLOSED_STATUSES}),
             ),
         )
+        if rule is not None and m.status == "Closed":
+            agg["tasks_closed"] = agg[
+                "tasks_total"
+            ]  # a Closed milestone reads N/N (the progress bar)
         # Prefetched above; `.count()` would be one query per row.
         assignee_ids = [str(a.user_id) for a in m.milestone_assignees.all()]
         milestones.append(

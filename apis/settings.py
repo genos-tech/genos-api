@@ -2003,6 +2003,24 @@ SEARCH_ENGINE["AGENT_NOTE_THREADS_IN_GET_NOTE"] = (
     os.environ.get("AGENT_NOTE_THREADS_IN_GET_NOTE", "false").lower() == "true"
 )
 
+# MIP-1413 (model-visible, dark-shipped OFF, grouped eval arm `closed-ancestor`): the closed-ancestor
+# rule in the in-app tools. A task under a Closed or Deleted parent, grandparent or milestone reads as
+# Closed or Deleted (`services/task_ancestry.py`; the web client, the progress bar, the briefing and the
+# MCP task reads already do). ON = counts and breakdowns (`get_my_task_summary`, `get_milestone_summary`
+# incl. its ready/blocked order, `get_sprint_summary`, `list_milestones`, `list_my_milestones`) read each
+# task by its effective status (Closed, not open, not overdue; Deleted: not counted); `get_my_focus_tasks`
+# leaves such tasks out; `list_tasks` rows and `fetch_task` carry `effective_status` and
+# `closed_by_ancestor` and keep their own `status`; `list_tasks(overdue_only)` drops them. One extra query
+# per call however big the tree; one sentence added to each changed tool's declaration. Not yet covered:
+# get_project_summary, get_team_task_summary, get_workload_distribution, get_stale_tasks, get_my_blockers,
+# get_task_blockers, get_my_schedule, get_task_throughput_stats, get_milestone_assignee_counts.
+# OFF = every result and declaration is what origin/main sends. Read at call time.
+# Flip criterion: the `closed-ancestor` arm answers "what is open / overdue" with what the dashboard and
+# the briefing show, and regresses nothing else.
+SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
+    os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

@@ -20,6 +20,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -260,6 +261,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Where the task's thread, chat and note are, when the caller may open them (MIP-1288).
     # Flag off: no key at all, the result is what it always was.
     anchors = {"anchors": task_anchors(task, ctx)} if anchors_enabled() else {}
+    # What the task READS as when an ancestor is Closed or Deleted (MIP-1413); flag off: nothing.
+    effective = (
+        ancestor_rule.row_fields([task_id], ctx).get(task_id, {}) if ancestor_rule.enabled() else {}
+    )
 
     return {
         "task_id": task_id,
@@ -281,6 +286,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         **body_fields,
         "comments": comments,
         "deliveries": deliveries,
+        **effective,
         **anchors,
         "__summary__": (
             f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")

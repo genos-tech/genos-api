@@ -1,0 +1,124 @@
+# MIP-1413 (flag AGENT_CLOSED_ANCESTOR_RULE): a task under a Closed parent reads as Closed in the in-app
+# tools' counts and lists (and `fetch_task` / `list_tasks` carry `effective_status`), as the dashboard, the
+# progress bar and the briefing already read it. The question the arm answers: does "what is open / what
+# next / is this still needed" match what the person sees in the app?
+#
+# Seed (`seed: [closed_ancestor_tree]`, group/seeds.py), all assigned to the viewer (the story's client:
+# `v1` / `ja`): a CLOSED parent ("Plan the autumn webinar") with two children whose own status is still
+# open ("Draft the webinar invite" WIP, "Book the webinar room" Open), and one task open on its own and
+# overdue ("Renew the domain name"). JA titles in the JA team.
+# Arm0 lists the two children as work to do; the arm must not.
+#
+# Per language: a positive (what next: only the really open task), a negative (an independent task must
+# not be read as closed), an edge (is a child of a closed parent still needed), a regression (the
+# overdue count still counts the one real overdue task).
+
+- id: closed-ancestor-en-what-next
+  lang: en
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: v1
+  seed: [closed_ancestor_tree]
+  query: "What should I work on next?"
+  note: "Positive: the focus list drops the tasks under the closed parent; arm0 lists them."
+  expect:
+    tools_used_contains_any: [get_my_focus_tasks, list_tasks, get_my_task_summary]
+    answer_contains_any: ["domain"]
+    answer_does_not_contain: ["webinar invite", "webinar room"]
+    tool_calls_at_most: 4
+
+- id: closed-ancestor-en-still-needed
+  lang: en
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: v1
+  seed: [closed_ancestor_tree]
+  query: "The task 'Plan the autumn webinar' is closed. Do I still need to do 'Draft the webinar invite'?"
+  note: "Edge: the child's own status is WIP but it reads as Closed under the closed parent. The answer should say it is covered by the closed parent, not that it still needs doing."
+  expect:
+    tools_used_contains_any: [fetch_task, list_tasks, get_task_history]
+    answer_contains_any: ["closed", "no longer", "not needed", "don't need", "do not need", "no need", "covered"]
+    answer_does_not_contain: ["yes, you still", "you still need to", "still needs to be done"]
+    tool_calls_at_most: 5
+
+- id: closed-ancestor-en-independent-task
+  lang: en
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: v1
+  seed: [closed_ancestor_tree]
+  query: "What is the status of 'Renew the domain name'?"
+  note: "Negative: a task with no closed ancestor must not be read as closed."
+  expect:
+    tools_used_contains_any: [fetch_task, list_tasks]
+    answer_contains_any: ["open"]
+    answer_does_not_contain: ["closed", "is done", "completed"]
+    tool_calls_at_most: 4
+
+- id: closed-ancestor-en-overdue-count
+  lang: en
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: v1
+  seed: [closed_ancestor_tree]
+  query: "How many of my tasks are overdue?"
+  note: "Regression: the one really overdue task still counts (1), with or without the flag."
+  expect:
+    tools_used_contains_any: [get_my_task_summary, list_tasks, get_my_focus_tasks]
+    answer_contains_any: ["1 ", "one", "a single", "1."]
+    tool_calls_at_most: 4
+
+- id: closed-ancestor-ja-what-next
+  lang: ja
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: ja
+  seed: [closed_ancestor_tree]
+  query: "次に取り組むべきタスクは何ですか?"
+  note: "Positive: the focus list drops the tasks under the closed parent; arm0 lists them."
+  expect:
+    tools_used_contains_any: [get_my_focus_tasks, list_tasks, get_my_task_summary]
+    answer_contains_any: ["ドメイン"]
+    answer_does_not_contain: ["招待状", "会場"]
+    tool_calls_at_most: 4
+
+- id: closed-ancestor-ja-still-needed
+  lang: ja
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: ja
+  seed: [closed_ancestor_tree]
+  query: "「秋のウェビナーを企画する」はクローズ済みです。「ウェビナーの招待状を書く」はまだやる必要がありますか?"
+  note: "Edge: the child's own status is WIP but it reads as Closed under the closed parent. The answer should say it is covered by the closed parent."
+  expect:
+    tools_used_contains_any: [fetch_task, list_tasks, get_task_history]
+    answer_contains_any: ["クローズ", "不要", "必要ありません", "必要はありません", "対応済", "完了"]
+    answer_does_not_contain: ["まだやる必要があります", "まだ対応が必要です"]
+    tool_calls_at_most: 5
+
+- id: closed-ancestor-ja-independent-task
+  lang: ja
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: ja
+  seed: [closed_ancestor_tree]
+  query: "「ドメイン名を更新する」の状況を教えてください。"
+  note: "Negative: a task with no closed ancestor must not be read as closed."
+  expect:
+    tools_used_contains_any: [fetch_task, list_tasks]
+    answer_contains_any: ["オープン", "未着手", "Open", "open"]
+    answer_does_not_contain: ["クローズ済み", "完了済み", "終了しています"]
+    tool_calls_at_most: 4
+
+- id: closed-ancestor-ja-overdue-count
+  lang: ja
+  tags: [eval-group, closed-ancestor]
+  fixture: sequence
+  viewer: ja
+  seed: [closed_ancestor_tree]
+  query: "期限切れのタスクは何件ありますか?"
+  note: "Regression: the one really overdue task still counts (1), with or without the flag."
+  expect:
+    tools_used_contains_any: [get_my_task_summary, list_tasks, get_my_focus_tasks]
+    answer_contains_any: ["1件", "1つ", "一つ", "1 件", "1."]
+    tool_calls_at_most: 4
