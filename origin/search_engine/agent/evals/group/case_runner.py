@@ -24,6 +24,9 @@ import copy
 import importlib
 import json
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -39,6 +42,62 @@ from origin.search_engine.agent.evals.group.harness import (
 from origin.search_engine.agent.evals.group.usage import CaseResult
 
 _seed_lock = threading.Lock()
+
+# --- the case's language, as production passes it ---------------------------------------- #
+# Production: the ask view takes the caller's UI locale (request body, else `User.language`),
+# normalises it (`languages.normalize_locale`) and builds `ToolContext(..., locale=locale)`; the
+# controller then appends `language_directive(ctx.locale)` to the system instruction. The
+# behaviour runner (`runner.run_behavior_case`) builds `ToolContext(team_id, user_id)` with no
+# locale, so a Japanese case would run WITHOUT the directive a `ja` member always gets.
+#
+# The legacy runner must not change (agent_eval / agent_eval_compare keep their behaviour), so the
+# group layer injects the locale from outside: while a group case runs, the name `ToolContext` in
+# `runner.py` resolves to a factory that adds `locale=<the case's lang>`. The language rides a
+# ContextVar (cases run in pool threads) and the patch is reference-counted, so it is installed
+# once however many cases run at the same time and removed when the last one finishes.
+_locale_var: ContextVar[str] = ContextVar("group_case_locale", default="")
+_patch_lock = threading.Lock()
+_patch_state: dict[str, Any] = {"count": 0, "original": None}
+
+
+def _install_locale_patch() -> None:
+    from origin.search_engine.agent.evals import runner  # noqa: PLC0415
+
+    with _patch_lock:
+        if _patch_state["count"] == 0:
+            original = runner.ToolContext
+            _patch_state["original"] = original
+
+            def tool_context(*args: Any, **kwargs: Any) -> Any:
+                locale = _locale_var.get()
+                if locale and "locale" not in kwargs:
+                    kwargs["locale"] = locale
+                return original(*args, **kwargs)
+
+            runner.ToolContext = tool_context
+        _patch_state["count"] += 1
+
+
+def _remove_locale_patch() -> None:
+    from origin.search_engine.agent.evals import runner  # noqa: PLC0415
+
+    with _patch_lock:
+        _patch_state["count"] -= 1
+        if _patch_state["count"] == 0:
+            runner.ToolContext = _patch_state["original"]
+            _patch_state["original"] = None
+
+
+@contextmanager
+def case_locale(locale: str) -> Iterator[None]:
+    """Inside the block, `run_behavior_case` builds its ToolContext with this locale."""
+    token = _locale_var.set(locale or "")
+    _install_locale_patch()
+    try:
+        yield
+    finally:
+        _remove_locale_patch()
+        _locale_var.reset(token)
 
 
 def prepare_case(case: GroupCase) -> dict[str, Any]:
@@ -89,8 +148,11 @@ def _substitute(raw: dict[str, Any], mapping: dict[str, str]) -> None:
 
 
 class DefaultCaseRunner:
-    def __init__(self, *, judge: bool = False, routing_model: str = ROUTING_MODEL):
+    def __init__(
+        self, *, judge: bool = False, routing_model: str = ROUTING_MODEL, apply_locale: bool = True
+    ):
         self.judge = judge
+        self.apply_locale = apply_locale
         self.routing_model = routing_model
 
     def __call__(self, case: GroupCase, arm_name: str, overrides: dict[str, Any]) -> CaseResult:
@@ -99,6 +161,10 @@ class DefaultCaseRunner:
         if case.kind == "routing":
             return self._routing(case, arm_name)
         return self._behaviour(case, arm_name)
+
+    def _locale(self, case: GroupCase) -> str:
+        """The locale production would pass for a member of this case's language ("" = none)."""
+        return case.lang if self.apply_locale else ""
 
     # -- behaviour -------------------------------------------------------------- #
 
@@ -111,7 +177,7 @@ class DefaultCaseRunner:
             own = {k: expect.pop(k) for k in list(expect) if k in GROUP_EXPECT_KEYS}
         else:
             own = {}
-        with group_usage.capture_usage() as inner:
+        with group_usage.capture_usage() as inner, case_locale(self._locale(case)):
             native = runner.run_behavior_case(raw)
             judged = self._judge(native) if self.judge and native.answer else None
         tools = [str(t.get("tool_name")) for t in native.tool_results]
@@ -171,7 +237,7 @@ class DefaultCaseRunner:
             rcase,
             arm=arm_name,
             declarations=_build_tool_declarations(),
-            system_instruction=routing.system_instruction_for(case.lang, today_line=today),
+            system_instruction=routing.system_instruction_for(self._locale(case), today_line=today),
             model=self.routing_model,
             client=get_model_client(),
         )
@@ -203,7 +269,11 @@ class DefaultCaseRunner:
                 result["skipped"] = "resume_runner missing"
                 return result
             raise
-        returned = mod.run_resume_case(copy.deepcopy(case.raw), dict(overrides))
+        raw = copy.deepcopy(case.raw)
+        # The production resume leg keeps the run's locale (`run.locale`); say which one this
+        # case runs as. `locale` is "" when --no-locale was given.
+        raw["locale"] = self._locale(case)
+        returned = mod.run_resume_case(raw, dict(overrides))
         result = group_usage.new_result(case.id, arm_name, case.lang)
         result.update(returned or {})  # type: ignore[typeddict-item]
         result["case_id"], result["arm"], result["lang"] = case.id, arm_name, case.lang

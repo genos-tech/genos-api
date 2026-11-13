@@ -118,6 +118,14 @@ class Command(BaseCommand):
         )
         parser.add_argument("--effort", default=None)
         parser.add_argument(
+            "--no-locale",
+            action="store_true",
+            help=(
+                "Do NOT pass a case's `lang` as the member's locale. Production does, so use this "
+                "only to reproduce an older run."
+            ),
+        )
+        parser.add_argument(
             "--stop-file",
             default="",
             help="If this file exists, stop cleanly before the next case.",
@@ -155,6 +163,8 @@ class Command(BaseCommand):
             options["cost_cap_usd"], since=timezone.now(), estimate_case=avg_estimate
         )
         runner = self.runner_factory(judge)
+        if isinstance(runner, DefaultCaseRunner):
+            runner.apply_locale = not options["no_locale"]
 
         if options["measure_one"]:
             self._measure_one(plan, runner, guard, model, judge, choice, options)
@@ -262,6 +272,9 @@ class Command(BaseCommand):
                 else ""
             )
         )
+        warning = self._locale_warning(plan, options)
+        if warning:
+            w(warning)
         w("")
         w("| arm | overrides | runs | model calls | projected cost |")
         w("|---|---|---|---|---|")
@@ -305,6 +318,24 @@ class Command(BaseCommand):
                 + (f" (skipped on {','.join(skipped_on)})" if skipped_on else "")
                 + " |"
             )
+
+    def _locale_warning(self, plan: harness.Plan, options: dict[str, Any]) -> str:
+        """One line when a selected `lang: ja` case would run without the language directive."""
+        ja = [c for c in plan.cases if c.lang == "ja"]
+        if not ja:
+            return ""
+        if options.get("no_locale"):
+            return (
+                f"WARNING: {len(ja)} selected case(s) have lang: ja but --no-locale is set: they run "
+                "without the Japanese language directive production gives a ja member."
+            )
+        unaware = [c.id for c in ja if c.kind == "resume" and not _resume_runner_reads_locale()]
+        if unaware:
+            return (
+                f"WARNING: {len(unaware)} selected resume case(s) have lang: ja but resume_runner does not "
+                "read `locale`: they run without the Japanese language directive."
+            )
+        return ""
 
     def _measure_one(self, plan, runner, guard, model, judge, choice, options) -> None:
         candidates = [i for i in plan.for_arm(harness.ARM0) if not i.skip]
@@ -409,3 +440,19 @@ class Command(BaseCommand):
         base.with_suffix(".summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
         )
+
+
+def _resume_runner_reads_locale() -> bool:
+    """Whether `resume_runner` (another agent's module) mentions `locale` at all."""
+    import importlib.util  # noqa: PLC0415
+
+    try:
+        spec = importlib.util.find_spec("origin.search_engine.agent.evals.group.resume_runner")
+    except (ImportError, ValueError):
+        return False
+    if spec is None or not spec.origin:
+        return False
+    try:
+        return "locale" in Path(spec.origin).read_text(encoding="utf-8")
+    except OSError:
+        return False

@@ -137,7 +137,10 @@ the model.
   only (must not see the task), `ja`/`ja-b` the Japanese team.
 * A `t1281` case needs `AGENT_INAPP_TIMELINE_TOOL` (arm `t1289`); until that arm file exists it is
   skipped everywhere, and the plan says so.
-* The behaviour runner does not pass the UI locale, so a Japanese case does not get the Japanese
-  language directive production adds for a `ja` user; the model answers from the language of the query.
+* Language: a case's `lang` is passed as the member's locale, the way the ask view does
+  (`ToolContext(locale=...)`, then the controller appends the language directive), for behaviour,
+  routing and resume cases (a resume runner receives it as `case["locale"]`). `en` adds no directive,
+  as for an English member. The legacy `agent_eval` / `agent_eval_compare` are unchanged. `--no-locale`
+  turns it off (to reproduce an older run); the dry-run warns when a `ja` case would run without it.
 * Cost figures come from the model catalog (`apis/llm_models.yaml`); a model missing from it is
   counted as 0 and flagged `unpriced`.

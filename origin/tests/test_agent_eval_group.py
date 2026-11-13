@@ -874,3 +874,152 @@ class RealRunnerWiringTests(BaseAPITestCase):
         self.assertEqual(cap.as_dict()["input_tokens"], 2000)
         self.assertGreater(guard.spent, 0)
         self.assertAlmostEqual(guard.spent, cap.as_dict()["cost_usd"], places=6)
+
+
+class RecordingAdapter(StubAdapter):
+    """Records the system instruction of every call; answers in text, no tools."""
+
+    def __init__(self):
+        super().__init__()
+        self.systems: list[str] = []
+
+    def generate_step(self, messages, tools, system_instruction, **kw):
+        self.systems.append(system_instruction)
+        return super().generate_step(messages, tools, system_instruction, **kw)
+
+
+class LocaleParityTests(BaseAPITestCase):
+    """A `lang: ja` group case runs with the directive production gives a ja member (MIP-1271)."""
+
+    def run_case(self, lang, *, kind="behaviour", **runner_kw):
+        adapter = RecordingAdapter()
+        raw = {"id": f"loc-{lang}", "query": "what is open?" if lang == "en" else "未完了は?"}
+        if kind == "behaviour":
+            raw.update(team_id=str(self.team.team_id), user_id=str(self.user.id), expect={})
+        else:
+            raw.update(ok=["list_tasks"])
+        gcase = harness.GroupCase(
+            id=raw["id"],
+            kind=kind,
+            lang=lang,
+            tags=frozenset({"eval-group"}),
+            fixture="",
+            raw=raw,
+            source="t.yaml",
+        )
+        with mock.patch.object(llm, "_build_adapter", lambda provider: adapter):
+            case_runner.DefaultCaseRunner(**runner_kw)(gcase, ARM0, {})
+        return adapter.systems
+
+    def test_what_production_does_for_a_ja_member(self):
+        from origin.search_engine.agent.languages import language_directive
+        from origin.search_engine.agent.tools import ToolContext
+
+        # the view builds ToolContext(locale=<ja>) and the controller appends this line
+        self.assertEqual(ToolContext(team_id="t", user_id="u", locale="ja").locale, "ja")
+        self.assertIn("Write your reply to the user in Japanese", language_directive("ja"))
+        self.assertEqual(language_directive("en"), "")
+
+    def test_a_ja_behaviour_case_gets_the_production_directive_and_an_en_case_does_not(self):
+        from origin.search_engine.agent.languages import language_directive
+
+        directive = language_directive("ja")
+        ja = self.run_case("ja")
+        en = self.run_case("en")
+        self.assertTrue(ja and all(directive in s for s in ja))
+        self.assertTrue(en and all("Write your reply to the user in" not in s for s in en))
+        # byte-for-byte what production appends: the base prompt, then the directive last
+        self.assertTrue(ja[0].endswith(directive))
+
+    def test_a_ja_routing_case_gets_it_and_no_locale_switches_it_off(self):
+        from origin.search_engine.agent.languages import language_directive
+
+        directive = language_directive("ja")
+        self.assertIn(directive, self.run_case("ja", kind="routing")[0])
+        self.assertNotIn(directive, self.run_case("ja", kind="routing", apply_locale=False)[0])
+        self.assertNotIn(directive, self.run_case("ja", apply_locale=False)[0])
+
+    def test_a_resume_case_is_told_its_locale(self):
+        seen = {}
+        fake = types.SimpleNamespace(
+            run_resume_case=lambda case, overrides: seen.update(case=case) or {"passed": True}
+        )
+        gcase = harness.GroupCase(
+            id="r",
+            kind="resume",
+            lang="ja",
+            tags=frozenset(),
+            fixture="v1",
+            raw={"id": "r", "kind": "resume"},
+            source="t.yaml",
+        )
+        with mock.patch("importlib.import_module", return_value=fake):
+            case_runner.DefaultCaseRunner()(gcase, ARM0, {})
+            self.assertEqual(seen["case"]["locale"], "ja")
+            case_runner.DefaultCaseRunner(apply_locale=False)(gcase, ARM0, {})
+            self.assertEqual(seen["case"]["locale"], "")
+
+    def test_the_legacy_runner_is_untouched_by_the_group_layer(self):
+        """agent_eval / agent_eval_compare call run_behavior_case directly: no locale, ever."""
+        from origin.search_engine.agent.evals import runner
+        from origin.search_engine.agent.languages import language_directive
+
+        original = runner.ToolContext
+        self.run_case("ja")
+        self.assertIs(runner.ToolContext, original)  # patch removed after the case
+        adapter = RecordingAdapter()
+        with mock.patch.object(llm, "_build_adapter", lambda provider: adapter):
+            runner.run_behavior_case(
+                {
+                    "id": "legacy",
+                    "query": "未完了は?",
+                    "team_id": str(self.team.team_id),
+                    "user_id": str(self.user.id),
+                    "expect": {},
+                }
+            )
+        self.assertTrue(adapter.systems)
+        self.assertNotIn(language_directive("ja"), adapter.systems[0])
+        with case_runner.case_locale("ja"):
+            self.assertIsNot(runner.ToolContext, original)
+        self.assertIs(runner.ToolContext, original)
+
+    def test_the_patch_survives_concurrent_cases_of_both_languages(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from origin.search_engine.agent.evals import runner
+
+        original = runner.ToolContext
+
+        def build(lang):
+            with case_runner.case_locale(lang):
+                import time
+
+                time.sleep(0.02)
+                return runner.ToolContext(team_id="t", user_id="u").locale
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            got = list(pool.map(build, ["ja", "en", "ja", "en", "ja", "en"]))
+        self.assertEqual(got, ["ja", "en", "ja", "en", "ja", "en"])
+        self.assertIs(runner.ToolContext, original)
+
+
+class LocaleWarningTests(Workspace):
+    def test_dry_run_warns_only_when_a_ja_case_would_run_without_the_locale(self):
+        self.cases("x", [case("j1", "t1", lang="ja"), case("e1", "t1")])
+        out, _ = self.run_command("--dry-run", "--tag", "t1")
+        self.assertNotIn("WARNING: ", out)
+        out, _ = self.run_command("--dry-run", "--tag", "t1", "--no-locale")
+        self.assertIn("1 selected case(s) have lang: ja but --no-locale is set", out)
+
+    def test_dry_run_warns_when_resume_runner_ignores_the_locale(self):
+        self.cases("x", [case("r1", "t1", lang="ja", kind="resume")])
+        with mock.patch.object(agent_eval_group, "_resume_runner_reads_locale", return_value=False):
+            out, _ = self.run_command("--dry-run", "--tag", "t1")
+        self.assertIn("resume_runner does not read `locale`", out)
+
+    def test_an_en_only_selection_never_warns(self):
+        self.cases("x", [case("e1", "t1")])
+        out, _ = self.run_command("--dry-run", "--tag", "t1", "--no-locale")
+        self.assertNotIn("WARNING: ", out)
+
