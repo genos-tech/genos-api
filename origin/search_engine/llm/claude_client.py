@@ -200,6 +200,7 @@ class ClaudeClient:
         max_tokens = (params.max_output_tokens if params else None) or int(
             settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096)
         )
+        sink.output_cap = max_tokens
 
         # Extended-thinking models reject `temperature` outright (400
         # invalid_request_error); the rest honour the 0.2
@@ -301,7 +302,12 @@ class ClaudeClient:
                     raise ModelRefusal(
                         "claude", model, category if isinstance(category, str) else None
                     )
+                if isinstance(stop_reason, str):
+                    sink.stop_reason = stop_reason
                 if stop_reason == "max_tokens":
+                    # The reply (a tool call's arguments included: the SDK hands back
+                    # whatever JSON had arrived) ends mid-way; the controller reads this.
+                    sink.truncated = True
                     # Adaptive thinking spends from the same budget as the
                     # answer, so a small cap can end a turn before any text.
                     log.warning(

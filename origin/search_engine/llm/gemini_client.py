@@ -227,6 +227,8 @@ class GeminiClient:
         # any invoice.
         sink.provider = "gemini"
         sink.model = model
+        # 0 = no cap sent: the model's own maximum applies (and thinking shares it).
+        sink.output_cap = (params.max_output_tokens if params else None) or 0
         last_usage_metadata: Any = None
         started = time.monotonic()
         call_error = ""
@@ -270,6 +272,11 @@ class GeminiClient:
                 # same interleaving the model emitted.
                 candidates = getattr(chunk, "candidates", None) or []
                 for cand in candidates:
+                    finish = _finish_reason(cand)
+                    if finish:
+                        sink.stop_reason = finish
+                        if finish == "MAX_TOKENS":
+                            sink.truncated = True
                     content = getattr(cand, "content", None)
                     if content is None:
                         continue
@@ -324,6 +331,20 @@ class GeminiClient:
 # --------------------------------------------------------------------------- #
 # Implicit-cache observability                                                #
 # --------------------------------------------------------------------------- #
+
+
+def _finish_reason(candidate: Any) -> str:
+    """The candidate's finish reason as its bare name ("STOP", "MAX_TOKENS", ...), "" if none.
+
+    The SDK gives an enum (`FinishReason.MAX_TOKENS`); a stub or an older SDK may give the string
+    or a dotted `str()` of the enum, so normalise all three to the last dotted part."""
+    raw = getattr(candidate, "finish_reason", None)
+    if raw is None:
+        return ""
+    name = getattr(raw, "name", None) or raw
+    if not isinstance(name, str):
+        return ""
+    return name.rsplit(".", 1)[-1].strip().upper()
 
 
 def _log_usage(usage: Any, model: str) -> None:
