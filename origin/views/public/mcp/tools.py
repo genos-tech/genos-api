@@ -856,7 +856,7 @@ CATALOG: tuple[McpTool, ...] = (
             "that changed (`task_id`, `display_id`, `title`), how far below the one "
             "asked about (`depth`: 0 is its own change, 1 a direct child's), the kind "
             "of change (`action_type`, with `field`), who, when and `via`, how it "
-            "arrived. Pass a milestone's own task row to see a milestone. Use it for "
+            "arrived (on other people's writes only the kind). Pass a milestone's own task row to see a milestone. Use it for "
             "'is this milestone moving?' or 'what happened under this since Monday?'. "
             "`since` is an ISO date or datetime; `limit` caps the list (default 30, "
             "max 100) and `has_more` says whether older changes remain. Bulk moves "
@@ -865,6 +865,7 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+        augment=via_privacy.with_via_owner_only,
     ),
     McpTool(
         name="get_team_task_summary",
