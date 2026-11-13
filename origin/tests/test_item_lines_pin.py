@@ -131,6 +131,8 @@ class Pinned(SequenceScenario):
             if isinstance(node, uuid.UUID):
                 node = str(node)
             if isinstance(node, str):
+                if key == "chat_id":
+                    return "CHAT"  # a random UUID per run (`unattached.chats`, MIP-1282)
                 if node in users:
                     return users[node]
                 if _ISO.match(node):

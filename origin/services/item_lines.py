@@ -33,7 +33,9 @@ stays UNATTACHED, it is never guessed):
      task note, the thread linked to a task. Only the member's own;
   8. anything else stays out and is counted in `unattached`: the member's own markers that
      name no live task (a project, a chat, a personal note, an unknown type) and the member's
-     own chat messages that are in no linked thread and carry no task chip. (Completed
+     own chat messages that are in no linked thread and carry no task chip; those messages
+     name the chats they were written in (`unattached.chats`, MIP-1282), so a reader can open
+     the conversation with `get_chat_thread`, but the task is never guessed. (Completed
      to-dos belong to no item by design and are told once in the briefing's `what_you_did`,
      not under every line.)
 
@@ -86,6 +88,7 @@ from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 
 from origin.models.chat.unified_models import (
+    Channel,
     Message,
     MessageMention,
     MessageReaction,
@@ -113,6 +116,8 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.list_my_chats import _titles as chat_titles
+from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
 from origin.services import briefing, member_events
 from origin.services.channel_scope import readable_chats_qs
@@ -133,6 +138,8 @@ SIBLING_POOL = 150
 CHILD_POOL = 150
 NEIGHBOUR_POOL = 20
 RELATED_EVENTS = 5
+# `unattached` names at most this many chats, the most recently written to first.
+UNATTACHED_CHATS_MAX = 10
 # Note access is one role lookup per note. At most this many notes the member may open are
 # told in one call (past it `notes_capped` is set, and only by a note they may open), and at
 # most `MAX_NOTES_SCANNED` notes are looked up to find them.
@@ -1157,7 +1164,7 @@ def _unattached(
         .exclude(metadata__has_key="taskCommentId")
         .annotate(root_text=Coalesce(Cast("thread_root_id", CharField()), Cast("id", CharField())))
         .exclude(root_text__in=claimed_threads)
-        .only("id", "thread_root_id", "body")
+        .only("id", "thread_root_id", "body", "channel_id", "ts_sent_at")
         .order_by("-ts_sent_at", "-pk")[: POOL + 1]
     )
     if len(own) > POOL:
@@ -1165,15 +1172,56 @@ def _unattached(
         del own[POOL:]
     roots = {str(m.thread_root_id or m.id) for m in own}
     claimed = set(_claims(team, sorted(roots)))
-    lost_messages = sum(
-        1 for m in own if str(m.thread_root_id or m.id) not in claimed and not chip_task_ids(m.body)
-    )
+    lost = [
+        m for m in own if str(m.thread_root_id or m.id) not in claimed and not chip_task_ids(m.body)
+    ]
     counts = {
         "app_markers": lost_markers,
-        "chat_messages": lost_messages,
-        "total": lost_markers + lost_messages,
+        "chat_messages": len(lost),
+        "total": lost_markers + len(lost),
+        **_name_chats(lost, me),
     }
     return counts, cut
+
+
+def _name_chats(lost: list[Message], me: str) -> dict[str, Any]:
+    """`{"chats": [...]}`: the chats the unattached messages were written in, the most recently
+    written to first, each `chat_type`, `chat_id` and `title` (what `get_chat_thread` and
+    `get_timeline` take), `messages` (how many of the unattached ones are there) and `latest_at`
+    (when the newest was sent). `chats_more` says how many chats past `UNATTACHED_CHATS_MAX`
+    are not named. A chat is named only because the member's own message in it was read, and
+    that read is limited to the chats they may read now (`readable_chats_qs`): no chat is looked
+    up by an id from anywhere else, so naming one can say nothing about a chat they cannot open.
+    The task is never guessed: these chats are named, not attached."""
+    seen: dict[Any, list[Any]] = {}
+    for m in lost:
+        row = seen.setdefault(m.channel_id, [0, m.ts_sent_at])
+        row[0] += 1
+        row[1] = max(row[1], m.ts_sent_at)
+    ranked = sorted(seen.items(), key=lambda kv: (kv[1][1], str(kv[0])), reverse=True)
+    named = ranked[:UNATTACHED_CHATS_MAX]
+    channels = list(Channel.objects.filter(id__in=[cid for cid, _row in named]))
+    titles = chat_titles(channels, me) if channels else {}
+    by_id = {c.id: c for c in channels}
+    chats = []
+    for cid, (count, latest) in named:
+        channel = by_id.get(cid)
+        if channel is None:
+            continue
+        title = titles.get(cid, "")
+        chats.append(
+            {
+                "chat_type": CHAT_TYPE_LABEL.get(channel.kind),
+                "chat_id": str(cid),
+                "title": wrap_workspace_content(title) if title else "",
+                "messages": count,
+                "latest_at": latest.isoformat(),
+            }
+        )
+    out: dict[str, Any] = {"chats": chats}
+    if len(ranked) > len(named):
+        out["chats_more"] = len(ranked) - len(named)
+    return out
 
 
 # --------------------------------------------------------------------------- #
