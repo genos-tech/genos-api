@@ -645,6 +645,42 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
         )
 
 
+CONTENT_LENGTHS = ("short", "standard", "long")
+
+
+class ContentLengthPreferenceView(AuthenticatedAPIView):
+    """GET / PATCH /api/v2/user/preferences/content-length/
+
+    How much CONTENT Genos writes for the caller (MIP-905): the bodies of the tasks,
+    milestones and notes it creates or edits, and the plans it proposes. Chat answers stay
+    concise at every level. `short`, `standard` (today's behaviour, the default) or `long`.
+    Scoped to `request.user`, like the other preference views.
+
+    Body (PATCH): `{"content_length": "short" | "standard" | "long"}`, exactly one of those
+    strings (anything else is a 400; unlike `effort`, an empty string is not a way to reset it,
+    send "standard"). The value is stored whatever `AGENT_CONTENT_LENGTH` says: the in-app agent
+    only acts on it while that flag is on, so saving it can never change a run by itself.
+    """
+
+    def get(self, request):
+        return Response(
+            {"content_length": request.user.preferred_content_length or "standard"},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request):
+        value = request.data.get("content_length")
+        if not isinstance(value, str) or value.strip().lower() not in CONTENT_LENGTHS:
+            return Response(
+                {"error": "content_length must be 'short', 'standard' or 'long'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        value = value.strip().lower()
+        request.user.preferred_content_length = value
+        request.user.save(update_fields=["preferred_content_length"])
+        return Response({"content_length": value}, status=status.HTTP_200_OK)
+
+
 class ShareAnswersPreferenceView(AuthenticatedAPIView):
     """GET / PATCH /api/v2/user/preferences/share-answers/
 
