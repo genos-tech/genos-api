@@ -17,6 +17,7 @@ from django.urls import reverse
 from rest_framework import status
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.services.member_roles import EDITOR, OWNER, VIEWER, resolve_gm_role
 from origin.tests.test_base import BaseAPITestCase
 
@@ -111,11 +112,13 @@ class GMMemberRoleTests(BaseAPITestCase):
     def test_pm_channel_roles_are_rejected(self):
         """PM membership mirrors ProjectMembers — the project is the one
         place a PM role is set, or there would be two sources of truth."""
-        pm = Channel.objects.create(
-            team=self.team, kind=ChannelKind.PM, title="PM", owner=self.user
+        # A real project chat: its people are the project's (MIP-1480), the channel rows mirror them.
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="PM", owner=self.user, project_system_user=self.user
         )
-        ChannelMember.objects.create(channel=pm, user=self.user, role="owner")
-        ChannelMember.objects.create(channel=pm, user=self.user2, role="member")
+        for member in (self.user, self.user2):
+            ProjectMembers.objects.create(team=self.team, project=project, attendee=member)
+        pm = Channel.objects.get(project=project, kind=ChannelKind.PM)
         self.authenticate()
         res = self.client.patch(
             f"/api/v3/channels/{pm.id}/members/{self.user2.id}/",

@@ -15,7 +15,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import ChannelMember, Message
+from origin.models.chat.unified_models import Channel, Message
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
@@ -23,6 +23,7 @@ from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
 from origin.services import realtime_push, unified_writer
+from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
@@ -2655,12 +2656,12 @@ class TaskCommentsView(AuthenticatedAPIView):
                     "id", "channel_id"
                 )
             )
+            # The one rule (`chat_member_q`), the one the flag and reminder endpoints answer by:
+            # a stray channel-member row on a project chat is not a member (MIP-1480).
             member_of = set(
-                ChannelMember.objects.filter(
-                    channel_id__in=set(mirror_channels.values()),
-                    user_id=request.user.id,
-                    is_deleted=False,
-                ).values_list("channel_id", flat=True)
+                Channel.objects.filter(
+                    chat_member_q(request.user.id), id__in=set(mirror_channels.values())
+                ).values_list("id", flat=True)
             )
             mirrored = {m for m, channel_id in mirror_channels.items() if channel_id in member_of}
 
