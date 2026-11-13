@@ -1022,4 +1022,3 @@ class LocaleWarningTests(Workspace):
         self.cases("x", [case("e1", "t1")])
         out, _ = self.run_command("--dry-run", "--tag", "t1", "--no-locale")
         self.assertNotIn("WARNING: ", out)
-
