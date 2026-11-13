@@ -70,14 +70,21 @@ class MapCompletenessTests(SimpleTestCase):
         """`notified_people` is a claim that a person is told, and what the card says
         before the person approves goes by it. A tool joins this set only when running it
         shows the notice: an inbox item and a push, for `approve_join_request` and
-        `decline_join_request` (`test_agent_undo_reasons`). `create_calendar_event` is the
+        `decline_join_request`, a mention on the task's card and a push for `assign_task`
+        (MIP-1461), all in `test_agent_undo_reasons`. `create_calendar_event` is the
         one exception: its guest is handed to Google as an invitee, and what Google does
         with them is not visible from here, so its test pins the handoff, not a notice."""
         told = {
             name for name, (code, _) in undo.UNDO_REASONS.items() if code == undo.NOTIFIED_PEOPLE
         }
         self.assertEqual(
-            told, {"approve_join_request", "decline_join_request", "create_calendar_event"}
+            told,
+            {
+                "approve_join_request",
+                "decline_join_request",
+                "create_calendar_event",
+                "assign_task",
+            },
         )
 
     def test_the_tools_v1_covers_are_the_reviewed_ones(self):
@@ -187,7 +194,8 @@ class ProposalTests(SimpleTestCase):
         self.assertEqual(
             undo.proposal("approve_join_request", {}), undo.Proposal(False, "notified_people")
         )
-        for name in ("manage_project_members", "assign_task", "manage_note_sharing"):
+        self.assertEqual(undo.proposal("assign_task", {}), undo.Proposal(False, "notified_people"))
+        for name in ("manage_project_members", "manage_note_sharing"):
             self.assertEqual(undo.proposal(name, {}), undo.Proposal(False, "not_yet"), name)
         self.assertEqual(undo.proposal("update_comment", {}), undo.Proposal(False, "no_snapshot"))
         self.assertEqual(undo.proposal("update_tasks_bulk", {}), undo.Proposal(False, "not_yet"))

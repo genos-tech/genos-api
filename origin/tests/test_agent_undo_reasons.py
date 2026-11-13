@@ -5,15 +5,15 @@ and `notified_people` is the one that is about other people being told. A tool f
 it has to tell someone. So the tools are run here, through `watching_notices`, and what they
 send is compared with how they are filed:
 
-  * `manage_note_sharing`, `manage_project_members` and `assign_task` give access or change
-    an assignee and send nothing, so they are `not_yet`: restorable in principle (the same
-    tool, or the page's own remove, puts it back), the restore is not built. (A task's own
-    history row, `TaskActivity`, and a security-audit row are records, not notices, and are
-    not watched.)
+  * `manage_note_sharing` and `manage_project_members` give access and send nothing, so they
+    are `not_yet`: restorable in principle (the same tool, or the page's own remove, puts it
+    back), the restore is not built. (A task's own history row, `TaskActivity`, and a
+    security-audit row are records, not notices, and are not watched.)
   * the tools that DO tell somebody are filed that way, with the notice they send:
     `approve_join_request` and `decline_join_request` write the person an inbox item and
     push it; `create_calendar_event` hands its guests to Google as attendees (it sends no
-    email of its own: `sendUpdates=none`).
+    email of its own: `sendUpdates=none`); `assign_task` tells the new assignee (a mention on
+    the task's card and a push, MIP-1461) and tells nobody when it unassigns.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.manage_project_members import MANAGE_PROJECT_MEMBERS
+from origin.services.task_card_post import post_task_created_card
 
 from .notice_watch import watching_notices
 from .test_agent_tool_join_requests import JoinToolBase
@@ -99,7 +100,9 @@ class ProjectMembersTellNobody(ProjectToolsBase):
         self.assertIn("nobody is told", line)
 
 
-class AssigningATaskTellsNobody(ProjectToolsBase):
+class AssigningATaskTellsTheNewAssignee(ProjectToolsBase):
+    """Handing someone an existing task tells them (MIP-1461); taking it off anyone tells nobody."""
+
     def setUp(self):
         super().setUp()
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
@@ -107,21 +110,38 @@ class AssigningATaskTellsNobody(ProjectToolsBase):
             team=self.team, project=self.project, reporter=self.user, title="T", status="Open"
         )
 
-    def test_assigning_and_unassigning_send_nothing_to_anyone(self):
+    def _assign(self, assignee_id=None):
+        args = {"task_id": self.task.task_id}
+        if assignee_id:
+            args["assignee_id"] = str(assignee_id)
+        return ASSIGN_TASK.run(args, self.ctx)
+
+    def test_assigning_tells_the_new_assignee_once_on_the_tasks_card(self):
+        post_task_created_card(self.task, actor_id=self.user.id)  # the usual state: it has a card
         with watching_notices() as seen:
-            out = ASSIGN_TASK.run(
-                {"task_id": self.task.task_id, "assignee_id": str(self.user2.id)}, self.ctx
-            )
+            out = self._assign(self.user2.id)
         self.assertEqual(out["assignee_id"], str(self.user2.id))
-        self.assertEqual(seen, NOBODY)
+        self.assertEqual(seen["rows"], {"Activity": 1})
+        self.assertEqual(seen["pushes"], {"schedule_push_for_activities": 1})
+        self.assertEqual(seen["emails"], 0)
+
+    def test_a_task_with_no_card_is_given_one_whose_mention_is_the_notice(self):
         with watching_notices() as seen:
-            ASSIGN_TASK.run({"task_id": self.task.task_id}, self.ctx)
+            self._assign(self.user2.id)
+        self.assertEqual(seen["rows"], {"Activity": 1, "Message": 1, "MessageMention": 2})
+        self.assertEqual(seen["pushes"], {"schedule_push_for_activities": 1})
+
+    def test_unassigning_sends_nothing_to_anyone(self):
+        post_task_created_card(self.task, actor_id=self.user.id)
+        self._assign(self.user2.id)
+        with watching_notices() as seen:
+            self._assign()
         self.assertEqual(seen, NOBODY)
 
-    def test_so_it_is_filed_as_not_yet(self):
+    def test_so_it_is_filed_as_telling_people(self):
         code, line = undo.UNDO_REASONS["assign_task"]
-        self.assertEqual(code, undo.NOT_YET)
-        self.assertIn("nobody is told", line)
+        self.assertEqual(code, undo.NOTIFIED_PEOPLE)
+        self.assertIn("is told", line)
 
 
 class AnsweringAJoinRequestTellsThePerson(JoinToolBase):

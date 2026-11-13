@@ -72,7 +72,7 @@ class AssignTaskNoticeTests(AssignmentNoticeBase):
     def test_the_new_assignees_open_app_and_phone_are_told_at_once(self):
         with (
             mock.patch.object(task_assignment_notice.realtime_push, "push_activity") as live,
-            mock.patch.object(task_assignment_notice, "schedule_push_for_activities") as push,
+            mock.patch.object(webpush_dispatch, "schedule_push_for_activities") as push,
         ):
             self._assign(str(self.user2.id))
 
