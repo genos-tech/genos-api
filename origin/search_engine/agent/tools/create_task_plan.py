@@ -65,6 +65,7 @@ from origin.search_engine.quota import (
 )
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.task_card_post import post_milestone_created_card, post_task_created_card
 from origin.views.utils.scope_guards import is_team_member
 
 # Hard cap on tasks per plan. Keeps the single function-call emission
@@ -514,8 +515,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
         if backing is not None:
             notify_task_body_mentions(backing, actor_id=ctx.user_id)
+    # The project chat's "created" cards, which the app's browser would post: the milestone's
+    # first, then each task in plan order (MIP-1450).
+    if milestone_spec is not None and milestone is not None:
+        post_milestone_created_card(milestone, actor_id=ctx.user_id)
     for task in created:
         notify_task_body_mentions(task, actor_id=ctx.user_id)
+        post_task_created_card(task, actor_id=ctx.user_id)
 
     milestone_out = None
     if milestone is not None:

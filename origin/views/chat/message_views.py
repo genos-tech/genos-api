@@ -200,7 +200,15 @@ def _split_mentions_by_membership(channel, body):
 
 
 def _allocate_seq_and_create_message_with_activities(
-    *, channel, sender, body, body_text, parent_id, metadata, correlation_id=None
+    *,
+    channel,
+    sender,
+    body,
+    body_text,
+    parent_id,
+    metadata,
+    correlation_id=None,
+    self_assign=True,
 ):
     """Wraps `_allocate_seq_and_create_message` and additionally fans out
     `Activity` rows for the recipients who should see a sidebar entry.
@@ -208,6 +216,12 @@ def _allocate_seq_and_create_message_with_activities(
     Returns `(message, activities)` so the caller can include the
     activities in the wire response — the WS proxy layer reads them and
     broadcasts `activity.created` to each recipient's `user:{id}` room.
+
+    `self_assign=False` leaves out the sidebar row for a task card that assigns
+    the task to its own sender. The app keeps it (someone who clicked Create
+    wants a trace); `task_card_post` turns it off, because a plan made over MCP
+    assigns every task to its maker and would add one row per task to a feed
+    that already carries the single "your AI app created N tasks" notice.
     """
 
     from origin.services import v3_activity
@@ -264,7 +278,8 @@ def _allocate_seq_and_create_message_with_activities(
     # (== sender), which the mention fan-out above skips. Surface it so a
     # self-assigned task still pings the sidebar. No-op for non-task
     # messages and for tasks assigned to someone else.
-    activities.extend(v3_activity.create_self_assign_activity(message=msg, actor=sender))
+    if self_assign:
+        activities.extend(v3_activity.create_self_assign_activity(message=msg, actor=sender))
 
     # Web Push: notify away recipients (no visible tab). Deferred to
     # on_commit so a rollback never pushes a message that didn't persist.

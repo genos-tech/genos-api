@@ -74,7 +74,7 @@ from origin.models.task.sprint_models import Sprint, SprintConfig
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 from origin.search_engine.models import AgentRun, AgentSession, RagChunk
-from origin.services import demo_v2, member_events
+from origin.services import demo_v2, member_events, task_card
 from origin.services.activity_suppression import suppress_task_activity
 
 # BlockNote body builders live in `demo_blocks` so the per-language
@@ -158,151 +158,11 @@ def _demo_lang(value: object) -> str:
 # `isToggleable`) so seeded cards are indistinguishable from real ones.
 # ---------------------------------------------------------------------------
 
-# BlockNote ships a fixed `textColor` palette; map taskMeta hex codes to
-# the closest named slot, same table as the frontend template.
-_TASK_STATUS_COLOR = {
-    "Open": "blue",
-    "WIP": "orange",
-    "Pending": "purple",
-    "Closed": "green",
-    "Deleted": "red",
-}
-_TASK_PRIORITY_COLOR = {
-    "Minimal": "gray",
-    "Low": "green",
-    "Normal": "blue",
-    "High": "orange",
-    "Critical": "red",
-}
-# Card blocks match the frontend template exactly: a level-3 heading
-# WITHOUT `isToggleable` (the seeded note headings carry it; the card
-# headings do not) and no per-block `id`.
-_CARD_HEADING_PROPS = {
-    "level": 3,
-    "textColor": "default",
-    "textAlignment": "left",
-    "backgroundColor": "default",
-}
-
-
-def _card_label(text: str) -> dict:
-    return {"text": text, "type": "text", "styles": {"bold": True}}
-
-
-def _card_chip(text: str, color: str | None) -> dict:
-    return {"text": text, "type": "text", "styles": {"bold": True, "textColor": color or "gray"}}
-
-
-def _neutral_chip() -> dict:
-    return {"text": "—", "type": "text", "styles": {"bold": True, "textColor": "gray"}}
-
-
-def _card_mention(user: CustomUser, team_id) -> dict:
-    """Inline `mention` node matching the frontend `mentionNode` shape so
-    the card's assignee / reporter rows render as click-through mentions."""
-    return {
-        "type": "mention",
-        "props": {
-            "avatarImgPath": [""],
-            "customStatus": "N/A",
-            "teamId": str(team_id),
-            "teamName": "N/A",
-            "userEmail": user.email,
-            "userId": str(user.id),
-            "userName": user.username,
-        },
-    }
-
-
-def _task_card_body(
-    *,
-    title: str,
-    status: str,
-    priority: str,
-    assignee: CustomUser | None,
-    reporter: CustomUser,
-    due_date,
-    team_id,
-    is_milestone: bool = False,
-    labels: dict[str, str] | None = None,
-) -> list:
-    """Build the PM task-card header body. Effort isn't seeded, so the
-    Effort row shows the neutral em-dash chip (matching an unset value).
-
-    `labels` supplies the field names (`CARD_LABELS` from a content
-    table). It is optional, and defaults to English, because
-    `starter_seeder` reaches these builders too — real customer
-    workspaces are not part of the bilingual demo, and their behaviour
-    must not change. The *values* beside the labels stay as they are:
-    `status` and `priority` are DB enum strings, so a chip reading
-    `Open` is correct in either language.
-    """
-    labels = labels if labels is not None else _content("en").CARD_LABELS
-    title_prefix = "🚩" if is_milestone else "🧾"
-    due_str = due_date.isoformat() if due_date else "—"
-    assignee_node = (
-        _card_mention(assignee, team_id)
-        if assignee is not None
-        else {
-            "text": labels["unassigned"],
-            "type": "text",
-            "styles": {"italic": True, "textColor": "gray"},
-        }
-    )
-    return [
-        {
-            "type": "heading",
-            "props": _CARD_HEADING_PROPS,
-            "content": [{"text": f"{title_prefix} {title}", "type": "text", "styles": {}}],
-            "children": [],
-        },
-        {
-            "type": "paragraph",
-            "props": _PARA_PROPS,
-            "content": [
-                _card_label(labels["status"]),
-                _card_chip(status, _TASK_STATUS_COLOR.get(status)),
-            ],
-            "children": [],
-        },
-        {
-            "type": "paragraph",
-            "props": _PARA_PROPS,
-            "content": [
-                _card_label(labels["priority"]),
-                _card_chip(priority, _TASK_PRIORITY_COLOR.get(priority)),
-            ],
-            "children": [],
-        },
-        {
-            "type": "paragraph",
-            "props": _PARA_PROPS,
-            "content": [_card_label(labels["effort"]), _neutral_chip()],
-            "children": [],
-        },
-        {
-            "type": "paragraph",
-            "props": _PARA_PROPS,
-            "content": [_card_label(labels["assignee"]), assignee_node],
-            "children": [],
-        },
-        {
-            "type": "paragraph",
-            "props": _PARA_PROPS,
-            "content": [_card_label(labels["reporter"]), _card_mention(reporter, team_id)],
-            "children": [],
-        },
-        {
-            "type": "paragraph",
-            "props": _PARA_PROPS,
-            "content": [
-                _card_label(labels["due"]),
-                {"text": f"📅 {due_str}", "type": "text", "styles": {}},
-            ],
-            "children": [],
-        },
-        {"type": "paragraph", "props": _PARA_PROPS, "content": [], "children": []},
-    ]
+# The builders live in `task_card`, shared with the live create paths
+# (`task_card_post`), so a seeded card and a real one cannot drift apart.
+_TASK_STATUS_COLOR = task_card.STATUS_COLOR
+_TASK_PRIORITY_COLOR = task_card.PRIORITY_COLOR
+_task_card_body = task_card.task_card_body
 
 
 # ---------------------------------------------------------------------------

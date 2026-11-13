@@ -71,6 +71,7 @@ from origin.search_engine.quota import (
     increment_usage,
 )
 from origin.services.milestone_service import ensure_backing_task
+from origin.services.task_card_post import post_task_created_card
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_reparent import find_parent, milestone_for_parent
 from origin.views.utils.scope_guards import is_team_member
@@ -286,6 +287,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     increment_usage(ctx.user_id, TASK_CREATE_KEY)
     # An `@` chip in the body pings the person, as a typed one does.
     notify_task_body_mentions(task, actor_id=ctx.user_id)
+    # No browser is here to post the "task created" card, so its assignee is told and the
+    # task reaches the project chat from the server (MIP-1450).
+    post_task_created_card(task, actor_id=ctx.user_id)
 
     summary = f"Created task {task.display_id}: {task.title}"
     if milestone is not None:
