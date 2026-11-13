@@ -432,6 +432,10 @@ def seed_note_threads_stub(info: dict[str, Any]) -> None:
             title=titles["note"],
             body=_blocks(NOTE_BODY[lang]),
         )
+    # The model has no route to this note's id: `fetch_task` carries no anchors with the 1288 flag off, the
+    # sequence teams are not indexed (no `search_knowledge_base` chip) and `list_*` do not list task notes.
+    # A member who asks about "this note" names it (a link, an id), so a case writes `{note_id}`.
+    info["note_id"] = note.note_id
     _NOTE_THREADS[note.note_id] = note_threads_for(lang, dev, me)
     if "reader" in _ORIGINAL_READER:
         return

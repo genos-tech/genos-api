@@ -124,7 +124,11 @@ def prepare_case(case: GroupCase) -> dict[str, Any]:
                 seeds.apply(case.raw["seed"], info)
         raw["team_id"] = info["team_id"]
         raw["user_id"] = info["user_id"]
-        _substitute(raw, {"{display_id}": info["display_id"], "{task_id}": str(info["task_id"])})
+        mapping = {"{display_id}": info["display_id"], "{task_id}": str(info["task_id"])}
+        if "note_id" in info:  # set by a seed that makes a note (`note_threads_stub`)
+            mapping["{note_id}"] = str(info["note_id"])
+        _substitute(raw, mapping)
+        _reject_placeholders(raw, case.id)
     return raw
 
 
@@ -151,6 +155,15 @@ def _substitute(raw: dict[str, Any], mapping: dict[str, str]) -> None:
     for turn in raw.get("turns") or []:
         if isinstance(turn.get("query"), str):
             turn["query"] = sub(turn["query"])
+
+
+def _reject_placeholders(raw: dict[str, Any], case_id: str) -> None:
+    """A `{note_id}` nobody filled in would reach the model as literal text and fail the case for a
+    reason that has nothing to do with the arm: stop the run instead."""
+    queries = [raw.get("query"), *[t.get("query") for t in raw.get("turns") or []]]
+    for query in queries:
+        if isinstance(query, str) and "{note_id}" in query:
+            raise HarnessError(f"case {case_id}: {{note_id}} needs a seed that makes a note")
 
 
 class DefaultCaseRunner:
