@@ -455,19 +455,27 @@ export default defineRailway(() => {
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     replicas: { "asia-southeast1-eqsg3a": 1 },
     env: {
+      // MIP-1293: the AI sentences of a scheduled report: the operator switch, the cost meter and the model
+      // credentials (the key file is written from GEMINI_SA_BASE64 by railway-schedule-tick-entrypoint.sh).
+      AI_COST_METER: preserve(),
       ALLOWED_HOSTS: preserve(),
       BLIND_INDEX_KEYS: preserve(),
       DATABASE_URL: preserve(),
       DJANGO_DEBUG: preserve(),
       DJANGO_SECRET_KEY: preserve(),
       FIELD_ENCRYPTION_KEYS: preserve(),
-      // MIP-1333: "On your calendar" in a scheduled report reads the member's Google calendar, which
-      // refreshes their token with the OAuth client. Without these two the tick cannot, and the
-      // report says the calendar could not be read.
+      GEMINI_LOCATION: preserve(),
+      GEMINI_MODEL: preserve(),
+      GEMINI_PROJECT: preserve(),
+      GEMINI_SA_BASE64: preserve(),
+      GEMINI_SERVICE_ACCOUNT_FILE: preserve(),
+      GEMINI_USE_VERTEX: preserve(),
+      // MIP-1333: "On your calendar" in a scheduled report refreshes the member's Google token with the OAuth client.
       GOOGLE_OAUTH_CLIENT_ID: preserve(),
       GOOGLE_OAUTH_CLIENT_SECRET: preserve(),
       JWT_SECRET_KEY: preserve(),
       LOG_FORMAT: preserve(),
+      REPORT_AI_SENTENCES: preserve(),
     },
     deploy: {
       cronSchedule: "*/5 * * * *",
