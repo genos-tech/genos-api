@@ -357,15 +357,25 @@ class LoopTruncationTests(LoopBase):
         self.assertTrue(texts and texts[0].endswith(controller.ANSWER_CUT_OFF_NOTICE), texts)
 
     def test_a_cut_off_step_cap_wrapup_answer_gets_the_notice_too(self):
-        client = self.go(
-            [
-                Step([(None, FunctionCall(name="not_a_real_tool", args={}))]),
-                Step([("Here is what I found, and the", None)], truncated=True),
-            ],
-            flags={"AGENT_MAX_STEPS": 1},
-        )
+        persisted = []
+        real = controller._persist_step
+
+        def spy(run_id, **kwargs):
+            persisted.append(kwargs)
+            return real(run_id, **kwargs)
+
+        with mock.patch.object(controller, "_persist_step", side_effect=spy):
+            client = self.go(
+                [
+                    Step([(None, FunctionCall(name="not_a_real_tool", args={}))]),
+                    Step([("Here is what I found, and the", None)], truncated=True),
+                ],
+                flags={"AGENT_MAX_STEPS": 1},
+            )
         self.assertEqual(len(client.calls), 2)
         self.assertTrue(self.answer().endswith(controller.ANSWER_CUT_OFF_NOTICE), self.answer())
+        wrapup = [p for p in persisted if p.get("error") == "step_cap_reached"]
+        self.assertTrue(wrapup[0]["answer_text"].endswith(controller.ANSWER_CUT_OFF_NOTICE.strip()))
 
     def test_a_cut_off_read_tool_call_is_left_alone(self):
         # Only a write that needs approval is intercepted; a read call runs as it always did.
