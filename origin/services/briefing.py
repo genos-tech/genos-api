@@ -701,8 +701,14 @@ def _check_project(ctx: ToolContext, project_id: Any) -> int | None:
 
 
 def _my_active_tasks(ctx: ToolContext, project_id: int | None = None):
-    """The caller's open tasks: the scope of `get_my_focus_tasks`, so the briefing and
-    "what should I work on?" talk about the same set."""
+    """The caller's open tasks: the scope of `get_my_focus_tasks`, minus the ones that read as
+    closed because an ancestor is (MIP-1332).
+
+    A person often closes a parent task or a milestone and never its sub-tasks, meaning "all
+    of it is done". `task_ancestry` is the one statement of that rule (the one `get_task` and
+    `list_tasks` already show as `effective_status`), so a briefing or a report never nags about
+    such a task. The in-app `get_my_focus_tasks` still lists them (what the in-app model sees
+    waits for the December eval group)."""
     member_projects = ProjectMembers.objects.filter(
         attendee_id=ctx.user_id, project__team_id=ctx.team_id, project__is_deleted=False
     ).values("project_id")
@@ -717,7 +723,17 @@ def _my_active_tasks(ctx: ToolContext, project_id: int | None = None):
         .exclude(status__in=_ACTIVE_TASK_EXCLUDE)
         .select_related("project")
     )
-    return qs.filter(project_id=project_id) if project_id is not None else qs
+    qs = qs.filter(project_id=project_id) if project_id is not None else qs
+    from origin.services.task_ancestry import effective_statuses  # noqa: PLC0415
+
+    closed_above = [
+        task_id
+        for task_id, found in effective_statuses(
+            list(qs.values_list("task_id", flat=True)), ctx.team_id
+        ).items()
+        if found.closed_by_ancestor_id is not None
+    ]
+    return qs.exclude(task_id__in=closed_above) if closed_above else qs
 
 
 def _task_row(task: TaskMaster, today: date) -> dict[str, Any]:
