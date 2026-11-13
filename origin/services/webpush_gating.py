@@ -94,6 +94,9 @@ _COARSE_FIELD = {
     "agent_run_done": "enable_inbox",
     "message_reminder": "enable_inbox",
     "todo_reminder": "enable_inbox",
+    # Same group as the client's registry puts it in (`categories.ts`), so turning the Inbox
+    # group off silences the push exactly where it silences the in-app toast (MIP-1432).
+    "ai_app": "enable_inbox",
 }
 
 

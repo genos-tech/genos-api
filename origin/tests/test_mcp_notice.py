@@ -248,6 +248,10 @@ class WhatTheNoticeDoesDownstreamTests(NoticeBase):
         NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
         self.assertFalse(should_push(self.user.id, "ai_app"))
 
+    def test_push_also_follows_the_inbox_group_the_client_files_it_under(self):
+        NotificationPreference.objects.create(user=self.user, enable_inbox=False)
+        self.assertFalse(should_push(self.user.id, "ai_app"))
+
     def test_it_is_not_emailed(self):
         self.assertIsNone(_email_spec(self.row()))
 
