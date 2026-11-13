@@ -1043,6 +1043,79 @@ class TestStale(BriefingBase):
         self.assertNotIn(fresh.task_id, [t["task_id"] for t in stale])
 
 
+class TestATaskUnderAClosedAncestorIsNotNagged(BriefingBase):
+    """MIP-1332: closing a parent or a milestone means its sub-tasks are done."""
+
+    def local_today(self):
+        return self.now.astimezone(zone_for_user_id(self.user.id)).date()
+
+    def tree(self, parent_status="Closed", **child):
+        parent = self.make_task("Parent", assignee=self.user2, status=parent_status)
+        mid = self.make_task("Middle", parent_task_id=parent.task_id, **child)
+        leaf = self.make_task("Leaf", parent_task_id=mid.task_id, **child)
+        return parent, mid, leaf
+
+    def test_overdue_due_today_and_their_counts_skip_tasks_under_a_closed_ancestor(self):
+        today = self.local_today()
+        _p, mid, leaf = self.tree(due_date=today - timedelta(days=2))
+        _p2, open_mid, open_leaf = self.tree(
+            parent_status="WIP", due_date=today - timedelta(days=2)
+        )
+        due_today = self.make_task("Due", parent_task_id=_p.task_id, due_date=today)
+        agenda = self.brief()["agenda"]
+        listed = [t["task_id"] for t in agenda["overdue"]]
+        self.assertEqual(sorted(listed), sorted([open_mid.task_id, open_leaf.task_id]))
+        self.assertEqual(
+            agenda["overdue_count"], 2, "the count follows the rule, not just the rows"
+        )
+        self.assertEqual((agenda["due_today"], agenda["due_today_count"]), ([], 0))
+        self.assertNotIn(due_today.task_id, listed)
+        self.assertNotIn(leaf.task_id, listed)
+
+    def test_a_deleted_ancestor_counts_too_and_a_reopened_one_does_not(self):
+        today = self.local_today()
+        parent, mid, _leaf = self.tree(parent_status="Deleted", due_date=today - timedelta(days=1))
+        self.assertEqual(self.brief()["agenda"]["overdue_count"], 0)
+        TaskMaster.objects.filter(pk=parent.pk).update(status="WIP")  # reopened: its tasks are back
+        self.assertEqual(self.brief()["agenda"]["overdue_count"], 2)
+
+    def test_the_stale_list_and_the_suggestions_skip_them_too(self):
+        _p, mid, leaf = self.tree()
+        for task in (mid, leaf):
+            TaskMaster.objects.filter(pk=task.pk).update(
+                ts_updated_at=self.now - timedelta(days=12)
+            )
+        brief = self.brief()
+        self.assertEqual(brief["stale_mine"], [])
+        suggested = {t["task_id"] for t in brief["suggested_next"]}
+        self.assertFalse(suggested & {mid.task_id, leaf.task_id})
+
+    def test_a_task_in_a_closed_milestone_is_skipped(self):
+        from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+
+        backing = self.make_task(
+            "Milestone", assignee=self.user2, status="Closed", is_milestone=True
+        )
+        MilestoneMaster.objects.create(
+            team=self.team, project=self.project, task=backing, title="M", reporter=self.user2
+        )
+        child = self.make_task(
+            "Under the milestone",
+            parent_task_id=backing.task_id,
+            due_date=self.local_today() - timedelta(days=1),
+        )
+        agenda = self.brief()["agenda"]
+        self.assertNotIn(child.task_id, [t["task_id"] for t in agenda["overdue"]])
+        self.assertEqual(agenda["overdue_count"], 0)
+
+    def test_the_in_app_focus_tool_is_not_changed_by_it(self):
+        # What the in-app model sees waits for the December eval group (MIP-1089).
+        today = self.local_today()
+        _p, mid, leaf = self.tree(due_date=today - timedelta(days=2))
+        up_next = GET_MY_FOCUS_TASKS.run({"limit": 20}, self.ctx)["tasks"]
+        self.assertTrue({mid.task_id, leaf.task_id} <= {t["task_id"] for t in up_next})
+
+
 class TestSuggestions(BriefingBase):
     def local_today(self):
         return self.now.astimezone(zone_for_user_id(self.user.id)).date()
@@ -1400,6 +1473,40 @@ class TestWhatYouDid(BriefingBase):
         self.assertEqual(today["chats"][0]["chat_type"], "gm")
         self.assertEqual(today["totals"]["messages"], 3)
         self.assertNotIn("secret plan", json.dumps(self.brief()["what_you_did"]))
+
+    def test_a_dm_is_named_after_the_other_person_not_left_blank(self):
+        # MIP-1333: a DM has no title of its own, so the report said "a chat: 2 messages".
+        dm = self.channel([self.user, self.user2], kind=ChannelKind.DM, title="")
+        for n in range(2):
+            self.message(dm, self.user, f"hello {n}", at=self.recent(minutes=n + 1))
+        today = self.did()["today"]
+        self.assertEqual(today["chats"][0]["chat_type"], "dm")
+        self.assertIn(self.user2.username, today["chats"][0]["title"])
+        self.assertNotIn("hello", json.dumps(self.brief()["what_you_did"]))
+
+    def test_a_chat_whose_name_cannot_be_found_stays_blank_and_the_briefing_still_works(self):
+        dm = self.channel([self.user, self.user2], kind=ChannelKind.DM, title="")
+        self.message(dm, self.user, "x", at=self.recent(minutes=1))
+        with mock.patch(
+            "origin.search_engine.friendly_titles.friendly_chat_title",
+            side_effect=RuntimeError("db"),
+        ):
+            with self.assertLogs("origin.services.briefing", level="WARNING"):
+                today = self.did()["today"]
+        self.assertEqual(today["chats"][0]["messages"], 1)
+        self.assertNotIn(self.user2.username, today["chats"][0]["title"])
+
+    def test_a_calendar_that_fails_says_so_in_the_log_and_not_only_in_the_note(self):
+        with mock.patch.object(briefing, "LIST_CALENDAR_EVENTS") as tool:
+            tool.run.side_effect = RuntimeError("invalid_client: the OAuth client was not found")
+            with self.assertLogs("origin.services.briefing", level="WARNING") as logs:
+                calendar = self.brief()["agenda"]["calendar"]
+        self.assertEqual(calendar["events"], None)
+        self.assertEqual(calendar["note"], "The calendar could not be read right now.")
+        text = "\n".join(logs.output)
+        self.assertIn("briefing_calendar_unreadable", text)
+        self.assertIn("RuntimeError", text)
+        self.assertIn("invalid_client", text)
 
     def test_a_task_comment_is_one_thing_done_not_also_a_chat_message(self):
         """A comment is mirrored into the project chat as a message; counting both would say
