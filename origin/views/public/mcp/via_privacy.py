@@ -1,17 +1,19 @@
-"""Who made a change, as a connected client may read it (MIP-1470): the key's name is the owner's.
+"""Who made a change, as another member may read it: the key's name is the owner's (MIP-1470, MIP-1485).
 
-`get_task_history` carries `via`: how a change arrived. For a change made with an API key or a
-connected app it holds the key's id, name and prefix (so a person can recognise their own writes),
-and an Undo click carries internal ids (`undo_of`). Every member who can read the task could read
-those, including the NAME another member gave their key ("my-laptop-claude"), which can be personal.
+A write's `via` says how a change arrived. For a change made with an API key it holds the key's id,
+name and prefix; for a connected app, the connection id and the client's name; an Undo click carries
+internal ids (`undo_of`). Every member who can read the task could read those, including the NAME
+another member gave their key ("my-laptop-claude"), which can be personal.
 
 Rule (Ken, 2026-11-13): the name belongs to the owner only. A key writes as its owner, so a row's
 actor is the key's owner: on a row the viewer made, `via` is left whole; on anyone else's row it is
-reduced to its kind (`api_key`, `app`). Nothing else about the row changes.
+reduced to its kind (`api_key`, `oauth`, `app`). Nothing else about the row changes.
 
-This runs AFTER the registry tool, like the closed-ancestor fields, so it changes what a connected
-client reads and nothing the in-app agent sees (what that model sees waits for the grouped eval,
-flag `AGENT_CLIENT_IN_TASK_HISTORY`).
+`via_for_viewer` is that rule, for every surface: MCP `get_task_history` (`with_via_owner_only`,
+below), the web client's task activity and progress feeds (`task_activity_views`), and the comment
+list. The MCP hook runs AFTER the registry tool, like the closed-ancestor fields, so it changes what
+a connected client reads and nothing the in-app agent sees (what that model sees waits for the
+grouped eval, flag `AGENT_CLIENT_IN_TASK_HISTORY`).
 """
 
 from __future__ import annotations
