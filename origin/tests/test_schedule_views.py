@@ -168,7 +168,7 @@ class TestListAndCreate(ScheduleViewBase):
         )
         self.assertEqual(row["weekdays"], [0, 2])
         self.assertTrue(row["enabled"])
-        self.assertFalse(row["deliverPush"])
+        self.assertTrue(row["deliverPush"])
         self.assertTrue(row["nextRun"].endswith("+09:00"), row["nextRun"])
         self.assertIsNone(row["lastRun"])
         stored = MemberSchedule.objects.get(pk=row["id"])
@@ -249,9 +249,10 @@ class TestListAndCreate(ScheduleViewBase):
             offered_now = [x["key"] for x in self.client.get(LIST + self.q).data["suggestions"]]
             self.assertNotIn("morning_plan", offered_now)
 
-    def test_push_is_off_unless_asked_for(self):
-        self.assertTrue(self.create(deliverPush=True)["deliverPush"])
-        self.assertFalse(self.create()["deliverPush"])
+    def test_push_is_on_unless_switched_off(self):
+        # MIP-1374: a report that nobody is told about goes unread.
+        self.assertTrue(self.create()["deliverPush"])
+        self.assertFalse(self.create(deliverPush=False)["deliverPush"])
 
     def test_what_the_service_refuses_is_one_sentence_in_error(self):
         for over, needle in (
