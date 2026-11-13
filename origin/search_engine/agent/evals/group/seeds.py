@@ -157,7 +157,7 @@ def seed_task_history_clients(info: dict[str, Any]) -> None:
     has one change from each kind of client:
 
       1. created                    via the web app
-      2. Open -> WIP                via a connected app ("Claude")
+      2. Open -> WIP                via the VIEWER's own connected app ("Claude")
       3. priority Normal -> High    via the VIEWER's own API key ("Laptop script")
       4. due date                   via ANOTHER member's API key ("Chris CI", the developer's)
       5. WIP -> Closed              via the web app
@@ -167,6 +167,7 @@ def seed_task_history_clients(info: dict[str, Any]) -> None:
     from datetime import datetime, timedelta  # noqa: PLC0415
 
     from django.db.models import Max  # noqa: PLC0415
+    from oauth2_provider.models import Application  # noqa: PLC0415
 
     from origin.models.common.api_key_models import (  # noqa: PLC0415
         SCOPE_WRITE,
@@ -174,6 +175,7 @@ def seed_task_history_clients(info: dict[str, Any]) -> None:
         generate_key,
         hash_key,
     )
+    from origin.models.common.mcp_connection_models import McpConnection  # noqa: PLC0415
     from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
     from origin.models.task.task_activity_models import (  # noqa: PLC0415
         TaskActivity,
@@ -218,10 +220,24 @@ def seed_task_history_clients(info: dict[str, Any]) -> None:
         )
 
     mine, theirs = key(me, LAPTOP_KEY), key(dev, CI_KEY)
+    application = Application.objects.create(
+        client_id=f"eval-seed-{info['team']}-claude",
+        client_type=Application.CLIENT_PUBLIC,
+        authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        redirect_uris="https://claude.ai/cb",
+        name=CONNECTED_APP,
+    )
+    connection = McpConnection.objects.create(
+        user_id=me,
+        application=application,
+        default_team_id=team_id,
+        team_ids=[str(team_id)],
+        scope="write",
+    )
     app = {"kind": "app"}
     connected = {
         "kind": "oauth",
-        "connection_id": "00000000-0000-4000-8000-00000000c0c0",
+        "connection_id": str(connection.id),
         "client_name": CONNECTED_APP,
     }
 

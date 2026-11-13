@@ -7,8 +7,12 @@ filed separately and is NOT changed here). On, `via` is `{"kind": ...}` plus, wh
     app / agent    {"kind": "app" | "agent"}                       (an app row's `undo_of` is left out)
     api_key        {"kind": "api_key"}, plus `client` (the key's name, fenced) ONLY when the key is
                    the CALLER's own; another member's key, a deleted key, a malformed id: no name
-    oauth          {"kind": "connected_app", "client": "<app name>"}   (fenced, 60 characters)
+    oauth          {"kind": "connected_app"}, plus `client` (the app's name, fenced, 60 characters)
+                   ONLY when the connection is the CALLER's own
     others         as before (pr_merge, dependencies, github, unknown)
+
+The owner decided this projection (MIP-1090): the NAME goes to the owner only, everyone else who can
+read the task gets the kind.
 
 Never a key id, a key prefix, a connection id or an undo's run id.
 
@@ -39,8 +43,10 @@ from django.conf import settings
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from oauth2_provider.models import Application
 
 from origin.models.common.api_key_models import ApiKey, generate_key, hash_key
+from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
@@ -52,8 +58,8 @@ from origin.tests.test_base import BaseAPITestCase
 FLAG = "AGENT_CLIENT_IN_TASK_HISTORY"
 
 GOLDEN: dict[str, str] = {
-    "history/owner": "e6d4e2e04dff32f02013d506184ea7a3b886d9e39a311a8783484c056a21fe7f",
-    "history/other": "e6d4e2e04dff32f02013d506184ea7a3b886d9e39a311a8783484c056a21fe7f",
+    "history/owner": "003d4f5f95480fb759070179a10e00d22513c3d978205e229400f12a7566b4f6",
+    "history/other": "003d4f5f95480fb759070179a10e00d22513c3d978205e229400f12a7566b4f6",
     "declarations": "ef496d745cfc175a1a0e02e92e254e7f4304bab500d1ffd93d9016da2731832a",
 }
 
@@ -116,7 +122,16 @@ class HistoryBase(BaseAPITestCase):
         TaskActivity.objects.filter(task=self.task).delete()
         self.own_key = self.key(self.user, "my-laptop", "gk_own00001")
         self.other_key = self.key(self.user2, "bobs-ci", "gk_bob00002")
-        self.connection_id = "00000000-0000-4000-8000-00000000c0c0"
+        self.connections = {
+            name: self.connection(owner, name, label)
+            for name, owner, label in (
+                ("mine", self.user, "Claude"),
+                ("theirs", self.user2, "ChatGPT"),
+                ("hostile", self.user, HOSTILE),
+                ("long", self.user, "A" * 100),
+            )
+        }
+        self.connection_id = str(self.connections["mine"].id)
         self.rows: dict[str, TaskActivity] = {}
         vias = {
             "app": {"kind": "app"},
@@ -131,15 +146,12 @@ class HistoryBase(BaseAPITestCase):
                 "key_prefix": "gk_gone0003",
             },
             "malformed": {"kind": "api_key", "key_id": "not-a-uuid", "key_name": "x"},
-            "oauth": {
-                "kind": "oauth",
-                "connection_id": self.connection_id,
-                "client_name": "Claude",
-            },
-            "hostile_oauth": {"kind": "oauth", "connection_id": "c2", "client_name": HOSTILE},
+            "oauth": self.via_app("mine", "Claude"),
+            "oauth_other": self.via_app("theirs", "ChatGPT"),
+            "hostile_oauth": self.via_app("hostile", HOSTILE),
             "mystery": {"kind": "mystery", "secret": "s"},
             "github_via": {"kind": "github", "github_user": "octocat"},
-            "long_app": {"kind": "oauth", "connection_id": "c3", "client_name": "A" * 100},
+            "long_app": self.via_app("long", "A" * 100),
             "none": None,
         }
         for n, (name, via) in enumerate(vias.items()):
@@ -152,6 +164,29 @@ class HistoryBase(BaseAPITestCase):
         return ApiKey.objects.create(
             user=user, name=name, key_hash=hash_key(raw), prefix=prefix, scope="write"
         )
+
+    def connection(self, owner, client_id, name):
+        app = Application.objects.create(
+            client_id=f"test-{client_id}",
+            client_type=Application.CLIENT_PUBLIC,
+            authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+            redirect_uris="https://claude.ai/cb",
+            name=name[:255],
+        )
+        return McpConnection.objects.create(
+            user=owner,
+            application=app,
+            default_team=self.team,
+            team_ids=[str(self.team.team_id)],
+            scope="write",
+        )
+
+    def via_app(self, which, name):
+        return {
+            "kind": "oauth",
+            "connection_id": str(self.connections[which].id),
+            "client_name": name,
+        }
 
     @staticmethod
     def via_key(key):
@@ -247,11 +282,25 @@ class FlagOnTests(HistoryBase):
             self.assertEqual(self.via_of("gone"), {"kind": "api_key"})
             self.assertEqual(self.via_of("malformed"), {"kind": "api_key"})
 
-    def test_a_connected_app_is_named_for_anyone_and_fenced(self):
+    def test_a_connected_app_is_named_to_its_owner_only(self):
         with on():
-            expected = {"kind": "connected_app", "client": wrap_workspace_content("Claude")}
-            self.assertEqual(self.via_of("oauth"), expected)
-            self.assertEqual(self.via_of("oauth", self.user2), expected)
+            self.assertEqual(
+                self.via_of("oauth"),
+                {"kind": "connected_app", "client": wrap_workspace_content("Claude")},
+            )
+            self.assertEqual(self.via_of("oauth", self.user2), {"kind": "connected_app"})
+            self.assertEqual(self.via_of("oauth_other"), {"kind": "connected_app"})
+            self.assertEqual(
+                self.via_of("oauth_other", self.user2),
+                {"kind": "connected_app", "client": wrap_workspace_content("ChatGPT")},
+            )
+
+    def test_a_connection_id_that_is_not_a_connection_shows_no_name(self):
+        TaskActivity.objects.filter(pk=self.rows["oauth"].pk).update(
+            metadata={"via": {"kind": "oauth", "connection_id": "c9", "client_name": "Claude"}}
+        )
+        with on():
+            self.assertEqual(self.via_of("oauth"), {"kind": "connected_app"})
 
     def test_a_hostile_app_name_cannot_close_the_fence(self):
         with on():
@@ -286,7 +335,7 @@ class FlagOnTests(HistoryBase):
             str(self.other_key.id),
             "gk_own00001",
             "gk_bob00002",
-            self.connection_id,
+            *[str(c.id) for c in self.connections.values()],
             "run-secret-1",
             "undo_of",
             "key_id",
@@ -305,20 +354,23 @@ class FlagOnTests(HistoryBase):
         self.assertEqual(strip(after), strip(before))
         self.assertNotEqual([r["via"] for r in after], [r["via"] for r in before])
 
-    def test_one_extra_query_for_a_page_and_none_without_a_key_row(self):
-        with CaptureQueriesContext(connection) as plain:
-            self.history()
-        with on(), CaptureQueriesContext(connection) as flagged:
-            self.history()
-        self.assertEqual(len(flagged), len(plain) + 1)
+    def test_one_extra_query_per_kind_of_credential_on_the_page_and_none_without_one(self):
+        def extra():
+            with CaptureQueriesContext(connection) as plain:
+                self.history()
+            with on(), CaptureQueriesContext(connection) as flagged:
+                self.history()
+            return len(flagged) - len(plain)
+
+        self.assertEqual(extra(), 2)  # the keys and the connections
         TaskActivity.objects.filter(
             pk__in=[self.rows[n].pk for n in ("own", "other", "gone", "malformed")]
         ).delete()
-        with CaptureQueriesContext(connection) as plain:
-            self.history()
-        with on(), CaptureQueriesContext(connection) as flagged:
-            self.history()
-        self.assertEqual(len(flagged), len(plain))
+        self.assertEqual(extra(), 1)  # connections only
+        TaskActivity.objects.filter(
+            pk__in=[self.rows[n].pk for n in ("oauth", "oauth_other", "hostile_oauth", "long_app")]
+        ).delete()
+        self.assertEqual(extra(), 0)
 
     def test_one_sentence_is_added_to_the_declaration_and_nothing_else_moves(self):
         from origin.search_engine.agent.tools.get_task_history import (  # noqa: PLC0415
