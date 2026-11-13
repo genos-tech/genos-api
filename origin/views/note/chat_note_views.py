@@ -20,7 +20,7 @@ from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
-    ROLE_VIEWER,
+    ROLE_EDITOR,
     get_effective_role,
     require_read_role,
     require_write_role,
@@ -138,7 +138,7 @@ class AllChatNotesView(AuthenticatedAPIView):
         )
 
         for n in notes:
-            n["roleId"] = role_map.get(n["noteId"], ROLE_VIEWER)
+            n["roleId"] = role_map.get(n["noteId"], ROLE_EDITOR)
 
         return Response(notes, status=status.HTTP_200_OK)
 
