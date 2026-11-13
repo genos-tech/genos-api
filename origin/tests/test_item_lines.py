@@ -995,7 +995,9 @@ class TestUnattached(LineBase):
         self.assertEqual(out["line"]["events"], [])
         self.assertNotIn("todos_completed", out["unattached"])
         self.assertEqual(out["unattached"]["total"], 0)
-        self.assertEqual(sorted(out["unattached"]), ["app_markers", "chat_messages", "total"])
+        self.assertEqual(
+            sorted(out["unattached"]), ["app_markers", "chat_messages", "chats", "total"]
+        )
         self.assertTrue(item.pk and other.pk)
 
     def test_unattached_counts_only_the_members_own_events(self):
@@ -1006,6 +1008,135 @@ class TestUnattached(LineBase):
         self.comment(hidden, self.user2, 10)
         self.marker(self.user2, 10, "project", 1)
         self.assertEqual(self.line(task)["unattached"]["total"], 0)
+
+
+class TestUnattachedNamesTheChat(LineBase):
+    """MIP-1282: the unattached messages say where they were written, so a reader can open the
+    conversation. Only the member's own readable chats; the task is never guessed."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self.make_task()
+
+    def chats(self, **kw):
+        return self.line(self.task, **kw)["unattached"]["chats"]
+
+    def test_the_chat_is_named_with_its_id_title_count_and_latest_time(self):
+        chat = self.channel([self.user, self.user2], title="Client chat")
+        self.message(chat, self.user, 10, text="first")
+        self.message(chat, self.user, 30, text="second")
+        (named,) = self.chats()
+        self.assertEqual(named["chat_id"], str(chat.id))
+        self.assertEqual(named["chat_type"], "gm")
+        self.assertEqual(self.plain(named["title"]), "Client chat")
+        self.assertIn("workspace_content", named["title"])
+        self.assertEqual(named["messages"], 2)
+        self.assertAt(named["latest_at"], 30)
+
+    def test_the_most_recently_written_chat_comes_first(self):
+        old = self.channel([self.user, self.user2], title="Old")
+        new = self.channel([self.user, self.user2], title="New")
+        self.message(old, self.user, 50)
+        self.message(new, self.user, 10)
+        self.message(new, self.user, 20)
+        self.assertEqual([c["chat_id"] for c in self.chats()], [str(old.id), str(new.id)])
+
+    def test_a_chat_with_only_attached_messages_is_not_named(self):
+        chat = self.channel([self.user, self.user2], title="Busy")
+        root = self.message(chat, self.user, 10, text="thread root")
+        self.link_thread(self.make_task("Linked"), root)
+        self.message(chat, self.user, 11, root=root, text="reply")
+        self.message(chat, self.user, 12, body=body_with(chip(self.task.task_id)))
+        out = self.line(self.task)["unattached"]
+        self.assertEqual((out["chat_messages"], out["chats"]), (0, []))
+
+    def test_only_the_unattached_messages_are_counted_in_a_named_chat(self):
+        chat = self.channel([self.user, self.user2], title="Mixed")
+        self.message(chat, self.user, 10, text="lunch?")
+        self.message(chat, self.user, 11, body=body_with(chip(self.task.task_id)))
+        (named,) = self.chats()
+        self.assertEqual(named["messages"], 1)
+        self.assertAt(named["latest_at"], 10)
+
+    def test_a_chat_the_member_has_left_is_not_named(self):
+        left = self.channel([self.user, self.user2], title="Secret deal")
+        self.message(left, self.user, 10)
+        ChannelMember.objects.filter(channel=left, user=self.user).update(is_deleted=True)
+        out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chats"], [])
+        self.assertNotIn("Secret deal", self.blob(out))
+        self.assertNotIn(str(left.id), self.blob(out))
+
+    def test_a_chat_the_member_is_not_in_is_not_named_even_with_their_old_message(self):
+        other = self.channel([self.user2, self.outsider], title="Not mine")
+        self.message(other, self.user, 10)  # sent, then removed from the chat: never was a member
+        out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chats"], [])
+        self.assertNotIn("Not mine", self.blob(out))
+
+    def test_other_peoples_messages_name_no_chat(self):
+        chat = self.channel([self.user, self.user2], title="Theirs")
+        self.message(chat, self.user2, 10, text="not mine")
+        self.assertEqual(self.chats(), [])
+
+    def test_a_chat_of_another_team_is_not_named(self):
+        from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
+
+        team = TeamMaster.objects.create(
+            team_name="Else", team_email="else2@example.com", owner=self.user2
+        )
+        chat = Channel.objects.create(team=team, kind=ChannelKind.GM, title="Elsewhere")
+        ChannelMember.objects.create(channel=chat, user=self.user)
+        self.message(chat, self.user, 10)
+        self.assertEqual(self.chats(), [])
+
+    def test_a_direct_message_is_named_after_the_other_person_as_the_app_does(self):
+        chat = self.channel([self.user, self.user2], kind=ChannelKind.DM, title="")
+        self.message(chat, self.user, 10)
+        (named,) = self.chats()
+        self.assertEqual(named["chat_type"], "dm")
+        self.assertEqual(self.plain(named["title"]), self.user2.username)
+
+    def test_the_chats_named_are_capped_and_the_rest_counted(self):
+        made = [self.channel([self.user, self.user2], title=f"c{i}") for i in range(3)]
+        for i, chat in enumerate(made):
+            self.message(chat, self.user, 10 + i)
+        with mock.patch.object(item_lines, "UNATTACHED_CHATS_MAX", 2):
+            out = self.line(self.task)["unattached"]
+        self.assertEqual([c["chat_id"] for c in out["chats"]], [str(made[2].id), str(made[1].id)])
+        self.assertEqual(out["chats_more"], 1)
+        self.assertEqual(out["chat_messages"], 3, "the count is of every message, named or not")
+
+    def test_without_a_cap_hit_there_is_no_chats_more(self):
+        chat = self.channel([self.user, self.user2])
+        self.message(chat, self.user, 10)
+        self.assertNotIn("chats_more", self.line(self.task)["unattached"])
+
+    def test_naming_the_chat_never_attaches_it_to_the_task(self):
+        chat = self.channel([self.user, self.user2], title="Client chat")
+        self.message(chat, self.user, 10, text="please look at this")
+        out = self.line(self.task)
+        self.assertEqual(out["line"]["events"], [])
+        self.assertEqual(out["line"]["events_total"], 0)
+
+    def test_naming_many_chats_costs_a_fixed_number_of_statements(self):
+        def statements():
+            with CaptureQueriesContext(connection) as queries:
+                self.line(self.task)
+            return len(queries)
+
+        one = self.channel([self.user, self.user2], title="one")
+        self.message(one, self.user, 10)
+        few = statements()
+        for i in range(8):
+            self.message(self.channel([self.user, self.user2], title=f"x{i}"), self.user, 20 + i)
+        self.assertEqual(statements(), few)
+
+    def test_the_description_says_what_the_chats_are(self):
+        listed = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        text = listed["get_item_line"]["description"]
+        self.assertIn("unattached.chats", text)
+        self.assertIn("NOT attached to this task", text)
 
 
 # --------------------------------------------------------------------------- #
