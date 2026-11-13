@@ -5,7 +5,16 @@ PM thread shows comments on its Comments tab, which has its own deep link
 (`/thread/<task id>/comment/<comment id>`) that scrolls to and highlights the comment. The generic
 `/thread/<root>/message/<seq>` link opens the right task but cannot say which comment, which is
 most of what a reminder is for.
+
+The card and the push also say "comment", not "message" (MIP-1444): the English fallback title, and
+`item_optionals.subject == "task_comment"` so the client words the card and its button for a
+comment. Every other message keeps its card exactly as it was.
 """
+
+from datetime import timedelta
+from unittest import mock
+
+from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.project.prj_models import ProjectMaster
@@ -98,4 +107,74 @@ class ReminderCommentLinkTests(BaseAPITestCase):
         )
         self.assertEqual(
             message_reminders.chat_href(message), f"/workspace/chat/gm/{gm.id}/message/1"
+        )
+
+    # ---- the card says "comment" (MIP-1444) --------------------------------------------
+
+    def _card(self, message):
+        reminder = type(
+            "R",
+            (),
+            {"id": "r1", "remind_at": message.ts_sent_at, "ts_created_at": message.ts_sent_at},
+        )()
+        return message_reminders._card(message, reminder)
+
+    # What a card carried before MIP-1444, for any message.
+    LEGACY_KEYS = {
+        "kind",
+        "reminder_id",
+        "message_id",
+        "channel_id",
+        "chat_kind",
+        "chat_name",
+        "thread_root_id",
+        "sender_name",
+        "preview",
+        "href",
+        "remind_at",
+        "set_at",
+    }
+
+    def test_a_comment_card_says_comment_and_names_its_subject(self):
+        body, optionals = self._card(self._reply(2, {"taskCommentId": 5}))
+        self.assertEqual(body["title"], f"Reminder about {self.user.username}'s comment")
+        self.assertEqual(optionals["subject"], "task_comment")
+        self.assertEqual(body["text"], "c")  # the preview is unchanged
+
+    def test_another_pm_reply_keeps_the_message_card(self):
+        body, optionals = self._card(self._reply(2, {}))
+        self.assertEqual(body["title"], f"Reminder about {self.user.username}'s message")
+        self.assertEqual(set(optionals), self.LEGACY_KEYS)
+
+    def test_a_comment_id_that_is_not_a_number_keeps_the_message_card(self):
+        for seq, bad in enumerate(("5", True, None), start=20):
+            with self.subTest(bad=bad):
+                body, optionals = self._card(self._reply(seq, {"taskCommentId": bad}))
+                self.assertIn("message", body["title"])
+                self.assertNotIn("subject", optionals)
+
+    def test_a_message_in_another_chat_keeps_the_message_card(self):
+        gm = Channel.objects.create(team=self.team, kind=ChannelKind.GM, title="G", owner=self.user)
+        message = Message.objects.create(
+            channel=gm,
+            sender=self.user,
+            seq=1,
+            body={"text": "x"},
+            body_text="x",
+            metadata={"taskCommentId": 5},
+            task_id=self.task.task_id,
+        )
+        body, optionals = self._card(message)
+        self.assertEqual(body["title"], f"Reminder about {self.user.username}'s message")
+        self.assertEqual(set(optionals), self.LEGACY_KEYS)
+
+    def test_the_push_title_says_comment_too(self):
+        message = self._reply(2, {"taskCommentId": 5})
+        reminder, _ = message_reminders.set_reminder(
+            user=self.user, message=message, remind_at=timezone.now() - timedelta(minutes=1)
+        )
+        with mock.patch.object(message_reminders, "schedule_push_for_reminder") as push:
+            self.assertTrue(message_reminders.fire(reminder))
+        self.assertEqual(
+            push.call_args.kwargs["title"], f"Reminder about {self.user.username}'s comment"
         )

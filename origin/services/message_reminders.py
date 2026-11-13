@@ -129,6 +129,21 @@ def _truncate(text: str) -> str:
     return text if len(text) <= PREVIEW_MAX else text[: PREVIEW_MAX - 1].rstrip() + "…"
 
 
+def task_comment_id(message) -> int | None:
+    """The comment id when `message` is the mirror of a task comment (a PM thread reply under a
+    task, with an integer `metadata.taskCommentId`), else None. A string, bool, null or list in
+    the metadata is not trusted."""
+    comment_id = (message.metadata or {}).get("taskCommentId")
+    if (
+        message.channel.kind == ChannelKind.PM
+        and message.task_id
+        and isinstance(comment_id, int)
+        and not isinstance(comment_id, bool)
+    ):
+        return comment_id
+    return None
+
+
 def chat_href(message) -> str:
     """Deep link to the message, in the shape the frontend router
     understands (`parseInternalUrl` / `parseChatRoute`).
@@ -151,13 +166,8 @@ def chat_href(message) -> str:
     # A task comment's mirror (MIP-1437): the PM thread shows comments on its Comments tab, which
     # has its own deep link and scrolls to and highlights the comment. The generic thread/seq link
     # below opens the right task but cannot say which comment.
-    comment_id = (message.metadata or {}).get("taskCommentId")
-    if (
-        channel.kind == ChannelKind.PM
-        and message.task_id
-        and isinstance(comment_id, int)
-        and not isinstance(comment_id, bool)
-    ):
+    comment_id = task_comment_id(message)
+    if comment_id is not None:
         return f"/workspace/chat/{token}/{channel.id}/thread/{message.task_id}/comment/{comment_id}"
     href = f"/workspace/chat/{token}/{channel.id}"
     root_id = message.thread_root_id or (message.parent_id if message.is_thread_reply else None)
@@ -180,8 +190,11 @@ def _card(message, reminder) -> tuple[dict, dict]:
     preview = _truncate(message.body_text)
     sender_name = getattr(message.sender, "username", None) or ""
     chat_name = getattr(message.channel, "title", "") or ""
+    # A task comment is a message underneath, but people know it as a comment (MIP-1444).
+    is_comment = task_comment_id(message) is not None
+    noun = "comment" if is_comment else "message"
     body = {
-        "title": (f"Reminder about {sender_name}'s message" if sender_name else "Reminder"),
+        "title": (f"Reminder about {sender_name}'s {noun}" if sender_name else "Reminder"),
         "text": preview,
     }
     optionals = {
@@ -198,6 +211,10 @@ def _card(message, reminder) -> tuple[dict, dict]:
         "remind_at": reminder.remind_at.isoformat(),
         "set_at": reminder.ts_created_at.isoformat(),
     }
+    if is_comment:
+        # What the reminder is about, so the client words the card and its button for a
+        # comment. Absent for every other message: their cards are unchanged.
+        optionals["subject"] = "task_comment"
     return body, optionals
 
 
