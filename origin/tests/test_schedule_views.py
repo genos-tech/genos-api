@@ -9,11 +9,14 @@ sentence in `error`, never a stack trace.
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import timedelta
 from unittest import mock
 
+from django.conf import settings
 from django.core.cache import cache
+from django.test import override_settings
 from django.utils import timezone
 
 from origin.models.common.api_key_models import ApiKey, generate_key, hash_key
@@ -113,6 +116,33 @@ class TestListAndCreate(ScheduleViewBase):
         jobs = {j["job"]: j for j in res.data["jobs"]}
         self.assertEqual(jobs["fake_day"]["title"], "Fake day")
         self.assertEqual(jobs["fake_day"]["params"]["day"]["enum"], ["today", "yesterday"])
+
+    def test_the_list_says_whether_ai_reports_can_run_here(self):
+        # MIP-1309: the form hides the AI switch, effort and cost while this is false.
+        from origin.services.report_ai import llm  # noqa: PLC0415
+
+        def available(*, operator=True, meter=True, configured=True):
+            env = {"REPORT_AI_SENTENCES": "true" if operator else "false"}
+            engine = {**settings.SEARCH_ENGINE, "AI_COST_METER": meter}
+            with mock.patch.dict(os.environ, env):
+                with override_settings(SEARCH_ENGINE=engine):
+                    with mock.patch.object(llm, "configured", return_value=configured):
+                        res = self.client.get(LIST + self.q)
+            self.assertEqual(res.status_code, 200)
+            return res.data["aiAvailable"]
+
+        self.assertIs(available(), True)
+        self.assertIs(available(operator=False), False, "the operator switch is off")
+        self.assertIs(available(meter=False), False, "a call that would not be recorded")
+        self.assertIs(available(configured=False), False, "no model credentials here")
+
+    def test_a_failing_lookup_reads_as_not_available_and_does_not_fail_the_list(self):
+        with mock.patch(
+            "origin.services.report_ai.llm.preflight", side_effect=RuntimeError("catalog")
+        ):
+            res = self.client.get(LIST + self.q)
+        self.assertEqual(res.status_code, 200)
+        self.assertIs(res.data["aiAvailable"], False)
 
     def test_a_required_parameter_is_marked_required_in_the_catalog(self):
         # MIP-1216: `required` used to be dropped, so the form kept its own copy of the list.

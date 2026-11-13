@@ -59,6 +59,20 @@ def _changes(body: dict[str, Any]) -> dict[str, Any]:
     return {service: body[wire] for wire, service in _FIELDS.items() if wire in body}
 
 
+def _ai_available(user_id: Any) -> bool:
+    """True when a report's AI part may run in this process: the operator switch is on, the cost
+    meter is on and the model's credentials exist (`report_ai.llm.preflight`, the guard every AI
+    call goes through). A bool and nothing more: which guard failed is the operator's business.
+    Never raises: a lookup that fails reads as "not available"."""
+    try:
+        from origin.services.report_ai import effort, llm  # noqa: PLC0415
+
+        run = effort.resolve(None, effort.FALLBACK_EFFORT, user_id)
+        return llm.preflight(run) == ""
+    except Exception:  # noqa: BLE001 - a form hint never fails the list
+        return False
+
+
 def _row(sched, zone) -> dict[str, Any]:
     """The service's words, with the camelCase keys the rest of Settings uses."""
     p = schedule_text.present(sched, zone)
@@ -175,6 +189,9 @@ class ScheduleListView(_Base):
                 # Core and up (MIP-1213): False shows the upgrade call instead of the form.
                 "planAllowed": allowed,
                 "planMessage": "" if allowed else schedules.PLAN_SENTENCE,
+                # Whether AI reports can run here at all (MIP-1309): the same test a job makes
+                # before it calls a model. False hides the AI switch, the effort and the cost.
+                "aiAvailable": _ai_available(request.user.pk),
                 "timeZone": zone.key,
                 "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
                 "jobs": [_job(j) for j in schedule_text.job_catalog()],
