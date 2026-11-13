@@ -30,9 +30,8 @@ import logging
 from origin.models.chat.unified_models import Activity, Message
 from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
-from origin.services import realtime_push, v3_activity
+from origin.services import realtime_push, v3_activity, webpush_dispatch
 from origin.services.task_card_post import _pm_channel, post_task_created_card
-from origin.services.webpush_dispatch import schedule_push_for_activities
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +73,7 @@ def notify_task_assigned(task, *, actor_id, previous_assignee_id) -> list[Activi
         activities = v3_activity.create_task_assign_activity(
             message=card, recipient_id=new_id, actor=actor
         )
-        schedule_push_for_activities(activities)
+        webpush_dispatch.schedule_push_for_activities(activities)
         for activity in activities:
             realtime_push.push_activity(activity)
         return activities
