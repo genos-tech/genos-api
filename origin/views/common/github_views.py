@@ -326,7 +326,10 @@ class GithubPullDetailView(APIView):
                 # rate limit says nothing about access and is not cached.
                 refusal = {**_DENIED, "upstream_status": pr_resp.status_code}
                 cache.set(key, refusal, _DENIED_CACHE_TTL)
-            return _upstream_error(pr_resp.status_code)
+            # GitHub answers a rate limit with 403 as well as 429; relayed as
+            # 403 the client reads it as a refusal ("private or deleted", no
+            # Retry). Say 429 so it is retryable (MIP-1453).
+            return _upstream_error(429 if _is_rate_limited(pr_resp) else pr_resp.status_code)
         pr = pr_resp.json()
 
         # Combined commit status (legacy) + check-runs (new) together

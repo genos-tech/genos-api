@@ -1,0 +1,10 @@
+# MIP-905 A2: on the Medium two-tier loop, a write that carries a body is written by the member's
+# model, not the cheap planning model. Measures nothing unless the two-tier loop is on, so the
+# environment must have it (`needs:` is checked, never applied; the plan prints a WARNING).
+arm: t905-a2
+overrides:
+    AGENT_BODY_ON_USER_MODEL: true
+requires: []
+needs:
+    AGENT_EFFORT_LEVELS: true
+    AGENT_TWO_TIER_LOOP: true

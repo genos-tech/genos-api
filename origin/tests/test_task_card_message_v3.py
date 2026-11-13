@@ -20,7 +20,7 @@ from origin.models.chat.unified_models import (
     Message,
     MessageMention,
 )
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.tests.test_base import BaseAPITestCase
 
@@ -40,6 +40,9 @@ class TaskCardMessageViewTests(BaseAPITestCase):
         # PM channel is auto-created by the pm_channel signal on project save.
         self.channel = Channel.objects.get(project_id=self.project.project_id, kind=ChannelKind.PM)
         # Ensure the editor is a member of the PM channel (auth gate).
+        ProjectMembers.objects.get_or_create(
+            team=self.team, project=self.project, attendee=self.user
+        )
         ChannelMember.objects.get_or_create(
             channel=self.channel, user=self.user, defaults={"role": "member"}
         )
@@ -104,6 +107,9 @@ class TaskCardMessageViewTests(BaseAPITestCase):
 
     def test_mentions_resynced_from_new_body(self):
         # Add user2 to the PM channel so a mention of them is a valid member.
+        ProjectMembers.objects.get_or_create(
+            team=self.team, project=self.project, attendee=self.user2
+        )
         ChannelMember.objects.get_or_create(
             channel=self.channel, user=self.user2, defaults={"role": "member"}
         )

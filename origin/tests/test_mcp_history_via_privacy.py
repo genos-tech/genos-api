@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.models.task.task_activity_models import TaskActivity
+from origin.models.task.task_progress_models import TaskProgressFact
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.tests.test_mcp_endpoint import McpBase
@@ -108,13 +109,13 @@ class TestTheKeyNameIsTheOwners(McpBase):
         self.assertEqual(merge["via"]["pr_url"], "https://x/pull/1")
 
     def test_a_connected_app_is_treated_like_a_key(self):
-        oauth = {"kind": "oauth", "connection_id": "c-9", "client_name": "Alice's Claude"}
+        oauth = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
         self.row("theirs", self.user2, oauth)
         rows, text = self.history()
         [theirs] = [r for r in rows if r["actor"]["user_id"] == str(self.user2.id)]
         self.assertEqual(theirs["via"], {"kind": "api_key"})
         self.assertNotIn("Alice's Claude", text)
-        self.assertNotIn("c-9", text)
+        self.assertNotIn("conn-9", text)
 
     def test_the_in_app_registry_tool_is_not_changed_by_it(self):
         # What the in-app model sees waits for the grouped eval (flag AGENT_CLIENT_IN_TASK_HISTORY).
@@ -164,3 +165,73 @@ class TestTheHook(McpBase):
         }
         via_privacy.with_via_owner_only(payload, {}, {}, self.ctx())
         self.assertEqual(payload["history"][0]["via"]["key_name"], "Alice's private phone")
+
+
+class TestProgressHistoryKeepsTheSameRule(McpBase):
+    """MIP-1485: `get_progress_history` shares `_via` with `get_task_history` and was missed."""
+
+    OAUTH = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
+    SECRETS = ("Alice's private phone", "k-theirs", "gk_alice", "conn-9", "Alice's Claude")
+
+    def setUp(self):
+        super().setUp()
+        self._key(scope=SCOPE_READ)  # the viewer: self.user
+        TaskActivity.objects.all().delete()
+
+    def fact(self, actor, via):
+        row = TaskActivity.objects.create(
+            team=self.team,
+            project=self.project,
+            task=self.task,
+            actor=actor,
+            action_type="status_changed",
+            field_name="status",
+            old_value="Open",
+            new_value="WIP",
+            metadata={"via": via},
+        )
+        return TaskProgressFact.objects.create(
+            ancestor_task=self.task,
+            source_task=self.task,
+            activity=row,
+            actor=actor,
+            action_type=row.action_type,
+            depth=0,
+            ts=row.ts_created_at,
+        )
+
+    def entries(self):
+        res = self._call("get_progress_history", {"task_id": "WRD-7"})
+        payload = self._result(res)["structuredContent"]
+        text, _ = self._tool_text(res)
+        return payload["entries"], text
+
+    def test_a_colleague_reads_the_kind_only_of_a_key_and_of_a_connected_app(self):
+        self.fact(self.user2, THEIRS)
+        self.fact(self.user2, self.OAUTH)
+        rows, text = self.entries()
+        self.assertEqual([r["via"] for r in rows], [{"kind": "api_key"}, {"kind": "api_key"}])
+        for secret in self.SECRETS:
+            self.assertNotIn(secret, text, "not in the structured content and not in the text")
+
+    def test_the_owner_reads_their_own_key_and_app_whole(self):
+        self.fact(self.user, MINE)
+        self.fact(self.user, self.OAUTH)
+        rows, _ = self.entries()
+        names = [r["via"]["key_name"] for r in rows]
+        self.assertTrue(any("my laptop" in n for n in names), names)
+        self.assertTrue(any("Alice's Claude" in n for n in names), names)
+        self.assertTrue(all(r["via"]["key_id"] for r in rows))
+
+    def test_the_rest_of_the_entry_is_unchanged(self):
+        self.fact(self.user2, THEIRS)
+        rows, _ = self.entries()
+        self.assertEqual(rows[0]["action_type"], "status_changed")
+        self.assertEqual(rows[0]["actor"]["user_id"], str(self.user2.id))
+        self.assertEqual(rows[0]["display_id"], "WRD-7")
+
+    def test_the_description_says_so(self):
+        listed = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        self.assertIn(
+            "on other people's writes only the kind", listed["get_progress_history"]["description"]
+        )

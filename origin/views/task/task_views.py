@@ -11,18 +11,21 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, Count, F, IntegerField, Max, Q, Sum, Value, When
+from django.db.models.fields.json import KeyTextTransform
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import ChannelMember, Message
+from origin.models.chat.unified_models import Channel, Message
 from origin.models.project.prj_models import *
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
 from origin.services import realtime_push, unified_writer
+from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
@@ -60,6 +63,7 @@ from origin.services.thread_link import (
 )
 from origin.services.throttles import BatchReadThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.public.mcp.via_privacy import via_for_viewer
 from origin.views.utils.batch_limits import MAX_MENTIONS_PER_COMMENT, check_batch_size
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.incremental import (
@@ -2401,6 +2405,48 @@ def _comment_broadcast_context(task_id) -> dict:
     }
 
 
+def _comment_via_by_comment_id(task_id: int, viewer_id) -> dict[int, dict | None]:
+    """How each comment's LATEST write arrived (MIP-1486), as `viewer_id` may read it.
+
+    A comment has no `via` of its own: the signal records it on the task's `comment_added` /
+    `comment_edited` rows (`metadata.commentId`). The newest row of a comment decides, so a
+    comment an app wrote and the person then fixed by hand is the person's now (`{"kind": "app"}`,
+    which earns no chip), and one the person wrote and an app later rewrote carries the app. ONE
+    query for the whole task. A comment with no row, or whose newest row has no `via` (a webhook,
+    a command), is `None`: "unknown", not "typed".
+
+    The row's actor is the owner of a key's or app's write, so `via_for_viewer` leaves the whole
+    `via` to the actor and reduces everyone else's to its kind: the same rule as the activity feed.
+    """
+    # `DISTINCT ON (comment id)` with the newest row first: Postgres hands back one row per
+    # comment, the latest write, instead of every edit of every comment.
+    rows = (
+        TaskActivity.objects.filter(
+            task_id=task_id,
+            action_type__in=(
+                TaskActivityActionType.COMMENT_ADDED,
+                TaskActivityActionType.COMMENT_EDITED,
+            ),
+        )
+        .annotate(comment_key=KeyTextTransform("commentId", "metadata"))
+        .exclude(comment_key__isnull=True)
+        .order_by("comment_key", "-activity_id")
+        .distinct("comment_key")
+        .values_list("actor_id", "metadata", "comment_key")
+    )
+    out: dict[int, dict | None] = {}
+    for actor_id, metadata, _ in rows:
+        comment_id = (metadata or {}).get("commentId")
+        # A number only: `int(None)` must not pin a stray row to comment 0.
+        if isinstance(comment_id, bool) or not isinstance(comment_id, int):
+            continue
+        via = (metadata or {}).get("via")
+        out[comment_id] = (
+            via_for_viewer(via, actor_id, viewer_id) if isinstance(via, dict) else None
+        )
+    return out
+
+
 class TaskCommentsView(AuthenticatedAPIView):
     def post(self, request):
         task_id = request.data.get("task_id")
@@ -2655,14 +2701,15 @@ class TaskCommentsView(AuthenticatedAPIView):
                     "id", "channel_id"
                 )
             )
+            # The one rule (`chat_member_q`), the one the flag and reminder endpoints answer by:
+            # a stray channel-member row on a project chat is not a member (MIP-1480).
             member_of = set(
-                ChannelMember.objects.filter(
-                    channel_id__in=set(mirror_channels.values()),
-                    user_id=request.user.id,
-                    is_deleted=False,
-                ).values_list("channel_id", flat=True)
+                Channel.objects.filter(
+                    chat_member_q(request.user.id), id__in=set(mirror_channels.values())
+                ).values_list("id", flat=True)
             )
             mirrored = {m for m, channel_id in mirror_channels.items() if channel_id in member_of}
+            via_by_comment = _comment_via_by_comment_id(task_id, request.user.id)
 
             response_data = []
             for comment in comments:
@@ -2678,6 +2725,10 @@ class TaskCommentsView(AuthenticatedAPIView):
                         "reactions": reactions_by_comment.get(int(comment["comment_id"]), []),
                         "tsSent": str(comment["ts_sent_at"]),
                         "tsUpdated": str(comment["ts_updated_at"]),
+                        # How its latest write arrived (MIP-1486): `{"kind": ...}` for an API key
+                        # (`api_key`), a connected app (`oauth`), the agent, a plain edit (`app`);
+                        # the key's or app's name only to the writer. `null` when unknown.
+                        "via": via_by_comment.get(int(comment["comment_id"])),
                     }
                 )
 

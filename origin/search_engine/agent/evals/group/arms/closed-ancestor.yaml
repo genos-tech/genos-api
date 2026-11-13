@@ -1,0 +1,4 @@
+arm: closed-ancestor
+overrides:
+    AGENT_CLOSED_ANCESTOR_RULE: true
+requires: []

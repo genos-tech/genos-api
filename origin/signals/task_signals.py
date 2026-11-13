@@ -394,7 +394,7 @@ def _record(
     new_value: Any = None,
     metadata: Optional[dict] = None,
     actor: Optional[Any] = None,
-) -> None:
+) -> Optional[TaskActivity]:
     """Single point for inserting an activity row.
 
     `actor` overrides the request's user, for a caller that already
@@ -409,9 +409,9 @@ def _record(
     # being deleted → deferred-FK IntegrityError at COMMIT. See
     # origin.services.activity_suppression.
     if activity_suppressed():
-        return
+        return None
     if task is None or task.pk is None:
-        return
+        return None
     metadata = dict(metadata or {})
     # How the write arrived (app / api_key + which key / agent), so a
     # task's history can tell an unattended API write from a UI edit by
@@ -432,6 +432,7 @@ def _record(
     # Progress (MIP-1351): the task and every ancestor above it learn of the
     # change. Best effort; never raises.
     task_progress.offer(activity, task)
+    return activity
 
 
 def record_activity(
@@ -723,7 +724,7 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             # it reads as that person setting the status by hand.
             if getattr(instance, "_derived_blocked_sync", False):
                 metadata = {**(metadata or {}), "derivedFromDependencies": True}
-        _record(
+        row = _record(
             task=instance,
             action_type=action,
             field_name=field,
@@ -731,6 +732,11 @@ def task_record_changes(sender, instance: TaskMaster, created: bool, **kwargs):
             new_value=new,
             metadata=metadata,
         )
+        if field == "status" and new == "Closed" and row is not None:
+            # The thread the task was made from hears the close (MIP-1283).
+            from origin.services.task_close_notice import post_close_notice
+
+            post_close_notice(instance, row.pk)
 
     for change in _custom_field_changes(
         instance, original.get("custom_field_values"), instance.custom_field_values

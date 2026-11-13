@@ -184,7 +184,7 @@ def _may_read_media(clean: str, user_id) -> bool:
     at URLconf load, and the app registry is not guaranteed ready then.
     `scope_guards.can_access_task` defers its import for the same reason.
     """
-    from origin.models.chat.unified_models import ChannelMember  # noqa: PLC0415
+    from origin.services.channel_scope import is_chat_member  # noqa: PLC0415
     from origin.views.utils.note_role import (  # noqa: PLC0415
         NOTE_TYPE_CHAT,
         NOTE_TYPE_PERSONAL,
@@ -216,12 +216,7 @@ def _may_read_media(clean: str, user_id) -> bool:
     # it is only visible in the production media tree.
     if segments[0] == "chats" and len(segments) >= 4 and segments[2] in ("messages", "inline"):
         channel_id = _uuid_or_none(segments[1])
-        return (
-            channel_id is not None
-            and ChannelMember.objects.filter(
-                channel_id=channel_id, user=user_id, is_deleted=False
-            ).exists()
-        )
+        return channel_id is not None and is_chat_member(channel_id, user_id)
 
     # Notes carry a real ACL of their own (explicit grants, project/chat
     # membership, and Team-Note folder inheritance). Reuse it wholesale —

@@ -995,7 +995,9 @@ class TestUnattached(LineBase):
         self.assertEqual(out["line"]["events"], [])
         self.assertNotIn("todos_completed", out["unattached"])
         self.assertEqual(out["unattached"]["total"], 0)
-        self.assertEqual(sorted(out["unattached"]), ["app_markers", "chat_messages", "total"])
+        self.assertEqual(
+            sorted(out["unattached"]), ["app_markers", "chat_messages", "chats", "total"]
+        )
         self.assertTrue(item.pk and other.pk)
 
     def test_unattached_counts_only_the_members_own_events(self):
@@ -1006,6 +1008,135 @@ class TestUnattached(LineBase):
         self.comment(hidden, self.user2, 10)
         self.marker(self.user2, 10, "project", 1)
         self.assertEqual(self.line(task)["unattached"]["total"], 0)
+
+
+class TestUnattachedNamesTheChat(LineBase):
+    """MIP-1282: the unattached messages say where they were written, so a reader can open the
+    conversation. Only the member's own readable chats; the task is never guessed."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self.make_task()
+
+    def chats(self, **kw):
+        return self.line(self.task, **kw)["unattached"]["chats"]
+
+    def test_the_chat_is_named_with_its_id_title_count_and_latest_time(self):
+        chat = self.channel([self.user, self.user2], title="Client chat")
+        self.message(chat, self.user, 10, text="first")
+        self.message(chat, self.user, 30, text="second")
+        (named,) = self.chats()
+        self.assertEqual(named["chat_id"], str(chat.id))
+        self.assertEqual(named["chat_type"], "gm")
+        self.assertEqual(self.plain(named["title"]), "Client chat")
+        self.assertIn("workspace_content", named["title"])
+        self.assertEqual(named["messages"], 2)
+        self.assertAt(named["latest_at"], 30)
+
+    def test_the_most_recently_written_chat_comes_first(self):
+        old = self.channel([self.user, self.user2], title="Old")
+        new = self.channel([self.user, self.user2], title="New")
+        self.message(old, self.user, 50)
+        self.message(new, self.user, 10)
+        self.message(new, self.user, 20)
+        self.assertEqual([c["chat_id"] for c in self.chats()], [str(old.id), str(new.id)])
+
+    def test_a_chat_with_only_attached_messages_is_not_named(self):
+        chat = self.channel([self.user, self.user2], title="Busy")
+        root = self.message(chat, self.user, 10, text="thread root")
+        self.link_thread(self.make_task("Linked"), root)
+        self.message(chat, self.user, 11, root=root, text="reply")
+        self.message(chat, self.user, 12, body=body_with(chip(self.task.task_id)))
+        out = self.line(self.task)["unattached"]
+        self.assertEqual((out["chat_messages"], out["chats"]), (0, []))
+
+    def test_only_the_unattached_messages_are_counted_in_a_named_chat(self):
+        chat = self.channel([self.user, self.user2], title="Mixed")
+        self.message(chat, self.user, 10, text="lunch?")
+        self.message(chat, self.user, 11, body=body_with(chip(self.task.task_id)))
+        (named,) = self.chats()
+        self.assertEqual(named["messages"], 1)
+        self.assertAt(named["latest_at"], 10)
+
+    def test_a_chat_the_member_has_left_is_not_named(self):
+        left = self.channel([self.user, self.user2], title="Secret deal")
+        self.message(left, self.user, 10)
+        ChannelMember.objects.filter(channel=left, user=self.user).update(is_deleted=True)
+        out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chats"], [])
+        self.assertNotIn("Secret deal", self.blob(out))
+        self.assertNotIn(str(left.id), self.blob(out))
+
+    def test_a_chat_the_member_is_not_in_is_not_named_even_with_their_old_message(self):
+        other = self.channel([self.user2, self.outsider], title="Not mine")
+        self.message(other, self.user, 10)  # sent, then removed from the chat: never was a member
+        out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chats"], [])
+        self.assertNotIn("Not mine", self.blob(out))
+
+    def test_other_peoples_messages_name_no_chat(self):
+        chat = self.channel([self.user, self.user2], title="Theirs")
+        self.message(chat, self.user2, 10, text="not mine")
+        self.assertEqual(self.chats(), [])
+
+    def test_a_chat_of_another_team_is_not_named(self):
+        from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
+
+        team = TeamMaster.objects.create(
+            team_name="Else", team_email="else2@example.com", owner=self.user2
+        )
+        chat = Channel.objects.create(team=team, kind=ChannelKind.GM, title="Elsewhere")
+        ChannelMember.objects.create(channel=chat, user=self.user)
+        self.message(chat, self.user, 10)
+        self.assertEqual(self.chats(), [])
+
+    def test_a_direct_message_is_named_after_the_other_person_as_the_app_does(self):
+        chat = self.channel([self.user, self.user2], kind=ChannelKind.DM, title="")
+        self.message(chat, self.user, 10)
+        (named,) = self.chats()
+        self.assertEqual(named["chat_type"], "dm")
+        self.assertEqual(self.plain(named["title"]), self.user2.username)
+
+    def test_the_chats_named_are_capped_and_the_rest_counted(self):
+        made = [self.channel([self.user, self.user2], title=f"c{i}") for i in range(3)]
+        for i, chat in enumerate(made):
+            self.message(chat, self.user, 10 + i)
+        with mock.patch.object(item_lines, "UNATTACHED_CHATS_MAX", 2):
+            out = self.line(self.task)["unattached"]
+        self.assertEqual([c["chat_id"] for c in out["chats"]], [str(made[2].id), str(made[1].id)])
+        self.assertEqual(out["chats_more"], 1)
+        self.assertEqual(out["chat_messages"], 3, "the count is of every message, named or not")
+
+    def test_without_a_cap_hit_there_is_no_chats_more(self):
+        chat = self.channel([self.user, self.user2])
+        self.message(chat, self.user, 10)
+        self.assertNotIn("chats_more", self.line(self.task)["unattached"])
+
+    def test_naming_the_chat_never_attaches_it_to_the_task(self):
+        chat = self.channel([self.user, self.user2], title="Client chat")
+        self.message(chat, self.user, 10, text="please look at this")
+        out = self.line(self.task)
+        self.assertEqual(out["line"]["events"], [])
+        self.assertEqual(out["line"]["events_total"], 0)
+
+    def test_naming_many_chats_costs_a_fixed_number_of_statements(self):
+        def statements():
+            with CaptureQueriesContext(connection) as queries:
+                self.line(self.task)
+            return len(queries)
+
+        one = self.channel([self.user, self.user2], title="one")
+        self.message(one, self.user, 10)
+        few = statements()
+        for i in range(8):
+            self.message(self.channel([self.user, self.user2], title=f"x{i}"), self.user, 20 + i)
+        self.assertEqual(statements(), few)
+
+    def test_the_description_says_what_the_chats_are(self):
+        listed = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        text = listed["get_item_line"]["description"]
+        self.assertIn("unattached.chats", text)
+        self.assertIn("NOT attached to this task", text)
 
 
 # --------------------------------------------------------------------------- #
@@ -1195,7 +1326,14 @@ class TestPoolFlags(LineBase):
             self.marker(self.user, 40 + i, "project", 1)
         with self.pool(3):
             out = self.line(self.task)
-        self.assertEqual(out["capped"], {})
+        # MIP-1322: this line's own pool is not capped (the point of this test), but the 8
+        # markers on a project really do exceed `unattached`'s pool of 3, and it now says so.
+        self.assertNotIn("pool_capped", out["capped"])
+        self.assertNotIn("pool_sources", out["capped"])
+        self.assertEqual(
+            out["capped"], {"unattached_capped": True, "unattached_sources": ["app_markers"]}
+        )
+        self.assertEqual(out["unattached"]["app_markers"], 3)
         self.assertEqual(out["line"]["events_total"], 1)
 
     def test_this_lines_own_markers_beyond_the_pool_do(self):
@@ -1799,6 +1937,452 @@ class TestQueryBound(LineBase):
 
 
 # --------------------------------------------------------------------------- #
+# MIP-1322: three reads that were cut without a word now say so                #
+# --------------------------------------------------------------------------- #
+
+
+class TestNeighbourPoolsSayWhenTheyCut(LineBase):
+    """`_candidates` reads the milestone's work, the dependency neighbours and the subtasks
+    through a pool each. A pool that is merely full cuts nothing; a neighbour the member may
+    open that really was left out sets `related_capped`; one they may not open never does, and
+    never takes a slot either (the pool is cut after the access filter, in the query)."""
+
+    def setUp(self):
+        super().setUp()
+        self.backing = self.make_task("Beta", is_milestone=True)
+        self.milestone = MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="Beta",
+            reporter=self.user,
+            task=self.backing,
+        )
+        TaskMaster.objects.filter(pk=self.backing.pk).update(milestone=self.milestone)
+        self.task = self.make_task("Root", milestone=self.milestone)
+        self.secret = self.hidden_project()
+
+    def secret_task(self, title, **extra):
+        return self.make_task(
+            title, project=self.secret, assignee=self.user2, reporter=self.user2, **extra
+        )
+
+    def pool(self, name, n):
+        return mock.patch.object(item_lines, name, n)
+
+    def hidden_in_milestone(self, title="Hidden"):
+        hidden = self.secret_task(title)
+        TaskMaster.objects.filter(pk=hidden.pk).update(milestone=self.milestone)
+        return hidden
+
+    def read(self, pool, n):
+        with self.pool(pool, n):
+            return self.full(self.task)
+
+    def related_ids(self, out):
+        return {r["task_id"] for r in out["related"]}
+
+    # -- the milestone's work --
+
+    def test_milestone_work_exactly_filling_the_pool_cut_nothing(self):
+        for i in range(2):
+            self.comment(self.make_task(f"s{i}", milestone=self.milestone), self.user2, 10 + i)
+        out = self.read("SIBLING_POOL", 2)
+        self.assertEqual(len(out["related"]), 2)
+        self.assertFalse(out["related_capped"])
+
+    def test_milestone_work_past_the_pool_says_so(self):
+        for i in range(3):
+            self.comment(self.make_task(f"s{i}", milestone=self.milestone), self.user2, 10 + i)
+        out = self.read("SIBLING_POOL", 2)
+        self.assertEqual(len(out["related"]), 2)
+        self.assertEqual(out["related_total"], 2)
+        self.assertTrue(out["related_capped"])
+
+    def test_milestone_work_the_member_cannot_open_neither_tips_the_flag_nor_takes_a_slot(self):
+        mine = [self.make_task(f"s{i}", milestone=self.milestone) for i in range(2)]
+        for task in mine:
+            self.comment(task, self.user2, 10)
+        for i in range(3):  # newer than theirs, so first in the pool if the pool ignored access
+            self.hidden_in_milestone(f"Hidden {i}")
+        out = self.read("SIBLING_POOL", 2)
+        self.assertEqual(self.related_ids(out), {t.task_id for t in mine})
+        self.assertFalse(out["related_capped"])
+
+    # -- the dependency neighbours --
+
+    def blockers(self, n, hidden=0):
+        made = []
+        for i in range(n):
+            task = self.make_task(f"blocker {i}")
+            TaskDependency.objects.create(blocker_task=task, blocked_task=self.task)
+            self.comment(task, self.user2, 10 + i)
+            made.append(task)
+        for i in range(hidden):
+            TaskDependency.objects.create(
+                blocker_task=self.secret_task(f"hb{i}"), blocked_task=self.task
+            )
+        return made
+
+    def blocked(self, n, hidden=0):
+        made = []
+        for i in range(n):
+            task = self.make_task(f"blocked {i}")
+            TaskDependency.objects.create(blocker_task=self.task, blocked_task=task)
+            self.comment(task, self.user2, 10 + i)
+            made.append(task)
+        for i in range(hidden):
+            TaskDependency.objects.create(
+                blocker_task=self.task, blocked_task=self.secret_task(f"hd{i}")
+            )
+        return made
+
+    def test_blockers_exactly_filling_the_pool_cut_nothing(self):
+        self.blockers(2)
+        self.assertFalse(self.read("NEIGHBOUR_POOL", 2)["related_capped"])
+
+    def test_blockers_past_the_pool_say_so(self):
+        self.blockers(3)
+        out = self.read("NEIGHBOUR_POOL", 2)
+        self.assertEqual(len(out["related"]), 2)
+        self.assertTrue(out["related_capped"])
+
+    def test_blockers_the_member_cannot_open_neither_tip_the_flag_nor_take_a_slot(self):
+        mine = self.blockers(2, hidden=3)
+        out = self.read("NEIGHBOUR_POOL", 2)
+        self.assertEqual(self.related_ids(out), {t.task_id for t in mine})
+        self.assertFalse(out["related_capped"])
+
+    def test_what_it_blocks_exactly_filling_the_pool_cut_nothing(self):
+        self.blocked(2)
+        self.assertFalse(self.read("NEIGHBOUR_POOL", 2)["related_capped"])
+
+    def test_what_it_blocks_past_the_pool_says_so(self):
+        self.blocked(3)
+        out = self.read("NEIGHBOUR_POOL", 2)
+        self.assertEqual(len(out["related"]), 2)
+        self.assertTrue(out["related_capped"])
+
+    def test_tasks_it_blocks_that_the_member_cannot_open_neither_tip_the_flag_nor_take_a_slot(
+        self,
+    ):
+        mine = self.blocked(2, hidden=3)
+        out = self.read("NEIGHBOUR_POOL", 2)
+        self.assertEqual(self.related_ids(out), {t.task_id for t in mine})
+        self.assertFalse(out["related_capped"])
+
+    # -- the subtasks --
+
+    def children(self, n):
+        made = [self.make_task(f"child {i}", parent_task_id=self.task.task_id) for i in range(n)]
+        for i, child in enumerate(made):
+            self.comment(child, self.user2, 10 + i)
+        return made
+
+    def test_subtasks_exactly_filling_the_pool_cut_nothing(self):
+        self.children(2)
+        out = self.read("CHILD_POOL", 2)
+        self.assertEqual(len(out["related"]), 2)
+        self.assertFalse(out["related_capped"])
+
+    def test_subtasks_past_the_pool_say_so(self):
+        self.children(3)
+        out = self.read("CHILD_POOL", 2)
+        self.assertEqual(len(out["related"]), 2)
+        self.assertTrue(out["related_capped"])
+
+    def test_subtasks_the_member_cannot_open_neither_tip_the_flag_nor_take_a_slot(self):
+        mine = self.children(2)
+        for i in range(3):
+            self.secret_task(f"secret {i}", parent_task_id=self.task.task_id)
+        out = self.read("CHILD_POOL", 2)
+        self.assertEqual(self.related_ids(out), {t.task_id for t in mine})
+        self.assertFalse(out["related_capped"])
+
+    def test_deleted_subtasks_and_unsaved_forms_do_not_tip_the_flag(self):
+        self.children(2)
+        self.make_task("gone", parent_task_id=self.task.task_id, is_deleted=True)
+        self.make_task("draft", parent_task_id=self.task.task_id, is_init_task=True)
+        self.assertFalse(self.read("CHILD_POOL", 2)["related_capped"])
+
+    # -- the same task reached by two relations --
+
+    def test_a_task_the_work_read_drops_but_the_subtask_read_holds_is_not_left_out(self):
+        """The extra row of the milestone's work is a subtask of the root: it is a candidate
+        through `child`, so nothing was lost and nothing is flagged."""
+        child = self.make_task("child", parent_task_id=self.task.task_id, milestone=self.milestone)
+        newer = self.make_task("newer work", milestone=self.milestone)
+        self.comment(child, self.user2, 10)
+        self.comment(newer, self.user2, 11)
+        out = self.read("SIBLING_POOL", 1)
+        self.assertEqual(self.related_ids(out), {child.task_id, newer.task_id})
+        self.assertFalse(out["related_capped"])
+
+    def test_a_pool_cut_is_still_reported_beside_the_candidate_cap(self):
+        """The two causes are one flag; either sets it."""
+        for i in range(item_lines.CANDIDATE_CAP + 2):
+            self.make_task(f"s{i}", milestone=self.milestone)
+        self.assertTrue(self.full(self.task)["related_capped"])
+
+    def test_related_lines_alone_carry_the_flag_too(self):
+        self.children(3)
+        with self.pool("CHILD_POOL", 2):
+            out = item_lines.related_lines(self.ctx, self.task.task_id, self.since, self.until)
+        self.assertTrue(out["related_capped"])
+
+
+class TestUnattachedSaysWhenItIsAFloor(LineBase):
+    """`unattached` counts the member's own markers and chat messages through a pool each. A
+    pool that is merely full is exact; one row more than the pool makes the counts a floor and
+    `capped.unattached_sources` names the read."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self.make_task()
+        self.chat = self.channel([self.user, self.user2])
+
+    def pool(self, n):
+        return mock.patch.object(item_lines, "POOL", n)
+
+    def lost_markers(self, n):
+        for i in range(n):
+            self.marker(self.user, 10 + i, "project", 1)
+
+    def lost_messages(self, n, chat=None):
+        for i in range(n):
+            self.message(chat or self.chat, self.user, 10 + i, text=f"hi {i}")
+
+    def test_markers_exactly_filling_the_pool_are_exact(self):
+        self.lost_markers(3)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["app_markers"], 3)
+        self.assertEqual(out["capped"], {})
+
+    def test_markers_past_the_pool_are_a_floor_and_say_so(self):
+        self.lost_markers(4)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["app_markers"], 3)
+        self.assertEqual(
+            out["capped"], {"unattached_capped": True, "unattached_sources": ["app_markers"]}
+        )
+
+    def test_messages_exactly_filling_the_pool_are_exact(self):
+        self.lost_messages(3)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chat_messages"], 3)
+        self.assertEqual(out["capped"], {})
+
+    def test_messages_past_the_pool_are_a_floor_and_say_so(self):
+        self.lost_messages(4)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chat_messages"], 3)
+        self.assertEqual(
+            out["capped"], {"unattached_capped": True, "unattached_sources": ["chat_messages"]}
+        )
+
+    def test_both_reads_are_named_in_a_fixed_order(self):
+        self.lost_markers(4)
+        self.lost_messages(4)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["capped"]["unattached_sources"], ["app_markers", "chat_messages"])
+
+    def test_messages_in_a_chat_the_member_cannot_read_never_tip_the_flag(self):
+        left = self.channel([self.user, self.user2], title="Left")
+        self.lost_messages(5, chat=left)
+        ChannelMember.objects.filter(channel=left, user=self.user).update(is_deleted=True)
+        self.lost_messages(2)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chat_messages"], 2)
+        self.assertEqual(out["capped"], {})
+
+    def test_another_members_markers_and_messages_never_tip_the_flag(self):
+        for i in range(5):
+            self.marker(self.user2, 10 + i, "project", 1)
+            self.message(self.chat, self.user2, 10 + i, text="theirs")
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["total"], 0)
+        self.assertEqual(out["capped"], {})
+
+    def test_markers_on_live_tasks_neither_use_the_pool_nor_tip_the_flag(self):
+        """A member who works in an AI app all day has hundreds of markers on tasks: they are
+        claimed by rule 1, so the read for `unattached` leaves them out."""
+        self.lost_markers(3)
+        for i in range(5):  # newer than the project markers: first in line if they were read
+            self.marker(self.user, 100 + i, "task", self.make_task(f"t{i}").task_id)
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["app_markers"], 3)
+        self.assertEqual(out["capped"], {})
+
+    def test_markers_on_a_deleted_task_or_an_unsaved_form_are_still_unattached(self):
+        gone = self.make_task("gone", is_deleted=True)
+        draft = self.make_task("draft", is_init_task=True)
+        self.marker(self.user, 10, "task", gone.task_id)
+        self.marker(self.user, 11, "task", draft.task_id)
+        self.marker(self.user, 12, "task", 987654321)
+        self.assertEqual(self.line(self.task)["unattached"]["app_markers"], 3)
+
+    def test_messages_in_a_thread_a_live_task_claims_neither_use_the_pool_nor_tip_the_flag(self):
+        self.lost_messages(3)
+        root = self.message(self.chat, self.user, 100, text="claimed root")
+        self.link_thread(self.make_task("Claims it"), root)
+        for i in range(5):
+            self.message(self.chat, self.user, 101 + i, root=root, text=f"reply {i}")
+        with self.pool(3):
+            out = self.line(self.task)
+        self.assertEqual(out["unattached"]["chat_messages"], 3)
+        self.assertEqual(out["capped"], {})
+
+    def test_messages_in_a_thread_only_a_deleted_task_claims_are_still_unattached(self):
+        root = self.message(self.chat, self.user, 10, text="root")
+        self.link_thread(self.make_task("Gone", is_deleted=True), root)
+        self.message(self.chat, self.user, 11, root=root, text="reply")
+        self.assertEqual(self.line(self.task)["unattached"]["chat_messages"], 2)
+
+    def test_the_public_function_keeps_its_shape(self):
+        self.lost_markers(4)
+        with self.pool(3):
+            out = item_lines.unattached(self.ctx, self.since, self.until)
+        self.assertEqual(sorted(out), ["app_markers", "chat_messages", "chats", "total"])
+
+
+class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
+    """`last_seen_at` of a task seen through its milestone, note or chat thread comes from the
+    newest `SEEN_POOL` of those markers. One row more than that sets `capped.seen_capped`."""
+
+    def setUp(self):
+        super().setUp()
+        self.task = self.make_task()
+
+    def pool(self, n):
+        return mock.patch.object(item_lines, "SEEN_POOL", n)
+
+    def others(self, n, user=None):
+        for i in range(n):
+            self.marker(user or self.user, 10 + i, "milestone", 900 + i)
+
+    def test_a_pool_exactly_full_cut_nothing(self):
+        self.others(2)
+        with self.pool(2):
+            seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+            out = self.line(self.task)
+        self.assertFalse(capped)
+        self.assertNotIn("seen_capped", out["capped"])
+        self.assertEqual(seen, {})
+
+    def test_one_row_past_the_pool_says_so_in_the_function_and_on_the_line(self):
+        self.others(3)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+            out = self.line(self.task)
+        self.assertTrue(capped)
+        self.assertEqual(out["capped"], {"seen_capped": True})
+
+    def test_the_row_that_is_left_out_is_not_used(self):
+        """The extra row is only the proof of a cut: the oldest marker must not be resolved."""
+        milestone_task = self.make_task("M", is_milestone=True)
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, title="M", reporter=self.user, task=milestone_task
+        )
+        self.marker(self.user, 10, "milestone", milestone.milestone_id)  # the oldest of three
+        self.others(2)
+        with self.pool(2):
+            seen, capped = item_lines.seen_at_checked(self.ctx, [milestone_task.task_id])
+        self.assertTrue(capped)
+        self.assertEqual(seen, {})
+
+    def test_markers_of_tasks_are_read_by_task_and_never_cut(self):
+        for i in range(5):
+            self.marker(self.user, 10 + i, "task", self.make_task(f"t{i}").task_id)
+        self.marker(self.user, 30, "task", self.task.task_id)
+        with self.pool(2):
+            seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+        self.assertFalse(capped)
+        self.assertAt(seen[self.task.task_id].isoformat(), 30)
+
+    def test_another_members_markers_never_tip_it(self):
+        self.others(5, user=self.user2)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+        self.assertFalse(capped)
+
+    def test_no_task_asked_about_is_no_cut(self):
+        self.others(5)
+        with self.pool(2):
+            self.assertEqual(item_lines.seen_at_checked(self.ctx, []), ({}, False))
+
+    def test_seen_at_keeps_returning_the_plain_mapping(self):
+        self.others(3)
+        self.marker(self.user, 30, "task", self.task.task_id)
+        with self.pool(2):
+            seen = item_lines.seen_at(self.ctx, [self.task.task_id])
+        self.assertEqual(list(seen), [self.task.task_id])
+
+    def test_a_task_with_a_newer_look_than_every_row_left_out_is_not_flagged(self):
+        """A member with more markers than the pool still has an exact `last_seen_at` for a task
+        whose own marker is newer than everything the pool left out."""
+        self.others(3)  # at minutes 10..12; with a pool of 2 the oldest (10) is left out
+        self.marker(self.user, 30, "task", self.task.task_id)
+        with self.pool(2):
+            seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+            out = self.line(self.task)
+        self.assertFalse(capped)
+        self.assertNotIn("seen_capped", out["capped"])
+        self.assertAt(seen[self.task.task_id].isoformat(), 30)
+
+    def test_a_look_older_than_a_row_left_out_may_have_been_replaced_so_it_is_flagged(self):
+        self.others(3)
+        self.marker(self.user, 5, "task", self.task.task_id)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+        self.assertTrue(capped)
+
+    def test_a_look_at_the_very_instant_of_the_row_left_out_cannot_be_replaced(self):
+        self.others(3)
+        self.marker(self.user, 10, "task", self.task.task_id)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+        self.assertFalse(capped)
+
+    def test_one_task_without_a_look_is_enough_to_flag_a_set(self):
+        other = self.make_task("Other")
+        self.others(3)
+        self.marker(self.user, 30, "task", self.task.task_id)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id, other.task_id])
+        self.assertTrue(capped)
+
+    def test_a_neighbours_look_up_is_flagged_by_its_own_check(self):
+        """The line's own look is newer than everything left out; the neighbour has none."""
+        parent = self.make_task("Parent")
+        child = self.make_task("Child", parent_task_id=parent.task_id)
+        self.comment(parent, self.user2, 10)
+        self.others(3)
+        self.marker(self.user, 30, "task", child.task_id)
+        with self.pool(2):
+            out = self.full(child)
+        self.assertEqual(out["related"][0]["task_id"], parent.task_id)
+        self.assertEqual(out["capped"], {"seen_capped": True})
+
+    def test_a_neighbour_with_a_newer_look_adds_no_flag(self):
+        parent = self.make_task("Parent")
+        child = self.make_task("Child", parent_task_id=parent.task_id)
+        self.comment(parent, self.user2, 10)
+        self.others(3)
+        self.marker(self.user, 30, "task", child.task_id)
+        self.marker(self.user, 31, "task", parent.task_id)
+        with self.pool(2):
+            out = self.full(child)
+        self.assertEqual(out["capped"], {})
+
+
+# --------------------------------------------------------------------------- #
 # The MCP tool                                                                 #
 # --------------------------------------------------------------------------- #
 
@@ -1856,6 +2440,12 @@ class TestTool(LineBase):
             ],
         )
         self.assertEqual(out["line"]["events"][0]["text"], "hello")
+
+    def test_the_description_says_what_the_new_cut_flags_mean(self):
+        listed = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        text = listed["get_item_line"]["description"]
+        for word in ("unattached_capped", "unattached_sources", "seen_capped", "related_capped"):
+            self.assertIn(word, text)
 
     def test_include_related_false_reads_the_task_alone(self):
         task = self.make_task()

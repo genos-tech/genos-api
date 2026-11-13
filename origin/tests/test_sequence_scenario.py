@@ -233,6 +233,18 @@ class TestTheLineAsThePM(Story):
         self.assertEqual(out["unattached"]["chat_messages"], 1)
         self.assertEqual(out["unattached"]["total"], 1)
 
+    def test_unattached_names_the_chat_step_2_was_written_in(self):
+        """MIP-1282 part 1: the line still does not carry steps 1 and 2 (the gap below stays), but
+        it now says where B's unattached answer lives, and the timeline opens that chat."""
+        seq = self.build_sequence()
+        out, _ = self.line_as(seq.b, seq)
+        (named,) = out["unattached"]["chats"]
+        self.assertEqual(named["chat_id"], str(seq.gm.id))
+        self.assertEqual(named["messages"], 1)
+        self.assertEqual(datetime.fromisoformat(named["latest_at"]), seq.step_at[2])
+        opened, _ = self.timeline_as(seq.b, seq, "chat", anchor_id=named["chat_id"])
+        self.assertIn("S02", json.dumps(opened))
+
     @unittest.expectedFailure
     def test_gap_1_steps_1_and_2_are_reachable_from_the_line(self):
         """GAP-1: A's question (1) and B's answer (2) came BEFORE the thread the task was made
@@ -305,6 +317,7 @@ class TestTheLineAsTheDev(Story):
         out, _ = self.line_as(seq.c, seq)
         self.assertEqual(out["unattached"]["total"], 0)
         self.assertNotIn("Client chat", json.dumps(out))
+        self.assertEqual(out["unattached"]["chats"], [])
 
     def test_with_c_in_the_chat_c_gets_the_request_and_the_answer_in_the_thread(self):
         seq = self.build_sequence(c_in_gm=True)
@@ -344,6 +357,13 @@ class TestTheLineAsTheClientOnTheProject(Story):
         self.assertEqual(out["unattached"]["chat_messages"], 1)  # A's own step 1
         self.assertNotIn(1, self.events_for(seq, seq.a))
         self.assertNotIn(2, self.events_for(seq, seq.a))
+
+    def test_unattached_names_the_chat_where_as_step_1_was_written(self):
+        seq = self.build_sequence(client_on_project=True)
+        out, _ = self.line_as(seq.a, seq)
+        (named,) = out["unattached"]["chats"]
+        self.assertEqual(named["chat_id"], str(seq.gm.id))
+        self.assertEqual(datetime.fromisoformat(named["latest_at"]), seq.step_at[1])
 
     @unittest.expectedFailure
     def test_gap_1_a_sees_the_conversation_that_led_to_her_request(self):

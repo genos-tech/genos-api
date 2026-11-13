@@ -409,6 +409,11 @@ urlpatterns = [
         name="llm_model_preference",
     ),
     path(
+        "api/v2/user/preferences/content-length/",
+        ContentLengthPreferenceView.as_view(),
+        name="content_length_preference",
+    ),
+    path(
         "api/v2/user/preferences/share-answers/",
         ShareAnswersPreferenceView.as_view(),
         name="share_answers_preference",

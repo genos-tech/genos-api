@@ -467,6 +467,7 @@ REGISTRY = {
     "origin.views.common.user_views.CalendarSyncBackfillView": self_only(
         "syncs the caller's own tasks to their own calendar"
     ),
+    "origin.views.common.user_views.ContentLengthPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.DigestPreferenceView": self_only(_PREF),
     "origin.views.common.user_views.LanguagePreferenceView": self_only(_PREF),
     "origin.views.common.user_views.LlmModelPreferenceView": self_only(_PREF),

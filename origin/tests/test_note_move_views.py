@@ -12,6 +12,8 @@ the incremental OpenSearch reindex window so ACLs refresh), meta
 `folderId` exposure, and thread-anchor clearing on chat moves.
 """
 
+from unittest import mock
+
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
@@ -32,6 +34,14 @@ class PersonalNoteMoveViewTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
         self.authenticate()
+        # A personal move re-indexes its subtree on the spot (`refresh_personal_notes`), which
+        # embeds the notes through the configured provider: with the default one (OpenAI) that
+        # is a real network request, made with the placeholder key (MIP-1484). Nothing here is
+        # about the index, so it is stubbed; `test_the_move_reindexes_the_moved_subtree` pins
+        # that the call is still made.
+        refresh = mock.patch("origin.views.utils.personal_note_move.refresh_personal_notes")
+        self.refresh_personal_notes = refresh.start()
+        self.addCleanup(refresh.stop)
         self.folder = PersonalNoteFolder.objects.create(
             team=self.team, owner=self.user, name="Work"
         )
@@ -65,6 +75,19 @@ class PersonalNoteMoveViewTests(BaseAPITestCase):
         self.assertIsNone(child.parent_note_id)
         # .update() skips auto_now: no sidebar reshuffle, no re-embed.
         self.assertEqual(child.ts_updated_at, ts_before)
+
+    def test_the_move_reindexes_the_moved_subtree(self):
+        parent = self._create_note("parent")
+        child = self._create_note("child", parent_note_id=parent.note_id)
+        res = self.client.put(
+            PERSONAL_MOVE_URL,
+            {**self._params(), "note_id": parent.note_id, "folder_id": self.folder.folder_id},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.refresh_personal_notes.assert_called_once()
+        (ids,) = self.refresh_personal_notes.call_args.args
+        self.assertEqual(set(ids), {parent.note_id, child.note_id})
 
     def test_move_to_root_with_explicit_null(self):
         note = self._create_note("in-folder")

@@ -1,0 +1,558 @@
+# MIP-1281: the t1271 questions again, expecting `get_timeline` once the in-app timeline tool exists
+# (flag AGENT_INAPP_TIMELINE_TOOL, arm t1289). `requires_arm: t1289`: skipped on arm0 (no cost), run on arm t1289
+# and all-on.
+
+- id: t1281-en-what-happened
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: b
+  query: What happened with the task made from the client's request, and where does it stand?
+  note: 'Positive: the story of the task and its present state, from the task''s own discussion and history. Must
+    not invent a confirmation, a QA step, a rollback or a deadline (none exists in the data).'
+  expect:
+    tools_used_contains:
+    - get_timeline
+    answer_contains_any:
+    - closed
+    - shipped
+    - solved
+    - resolved
+    - クローズ
+    - 完了
+    - 解決
+    - リリース
+    facts_in_order:
+    - - chris
+      - クリス
+    answer_does_not_contain:
+    - qa team
+    - client confirmed
+    - customer confirmed
+    - rolled back
+    - rollback
+    - production deploy
+  requires_arm: t1289
+- id: t1281-en-who-waits
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: b
+  query: Who is waiting on whom right now?
+  note: 'Positive: at the end of the story nobody waits on anybody (Ben''s CSV request was answered and the task
+    is closed). The model must not invent a pending wait.'
+  expect:
+    tools_used_contains_any:
+    - get_timeline
+    - list_tasks
+    - get_my_blockers
+    - list_my_inbox
+    - list_my_mentions
+    answer_does_not_contain:
+    - still waiting
+    - awaiting a reply
+    - overdue
+    - まだ待
+    - 返信待ち
+    - 遅延
+    answer_contains_any:
+    - no one
+    - nobody
+    - nothing
+    - not waiting
+    - closed
+    - resolved
+    - all done
+    - 誰も
+    - いません
+    - ありません
+    - クローズ
+    - 解決
+    - 完了
+  requires_arm: t1289
+- id: t1281-en-what-changed
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: b
+  query: What changed on that task since the client first reported the export problem?
+  note: 'Positive: the changes since the client''s first message, in time order: task created, assigned to Chris,
+    WIP, root cause (permission), Ben asks about CSV, closed. Order is of FIRST mentions.'
+  expect:
+    tools_used_contains:
+    - get_timeline
+    facts_in_order:
+    - - created
+      - opened
+      - new task
+      - 作成
+      - 起票
+    - - assign
+      - chris
+      - クリス
+      - アサイン
+      - 担当
+      - 割り当て
+    - - wip
+      - started
+      - in progress
+      - working on
+      - 着手
+      - 進行中
+      - 対応を開始
+      - 開始
+    - - permission
+      - 権限
+    - - csv
+    - - closed
+      - shipped
+      - solved
+      - resolved
+      - クローズ
+      - 完了
+      - 解決
+      - リリース
+    answer_does_not_contain:
+    - qa team
+    - client confirmed
+    - customer confirmed
+    - rolled back
+    - rollback
+    - production deploy
+  requires_arm: t1289
+- id: t1281-en-full-timeline
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: b
+  query: Give me the full timeline of the task 'Fix the export that fails'.
+  note: 'Positive: a chronological timeline requested by title. The in-app agent has NO timeline tool today, so
+    it must stitch task, history and discussion (t1271), or call get_timeline once it exists (t1281).'
+  expect:
+    tools_used_contains:
+    - get_timeline
+    facts_in_order:
+    - - assign
+      - chris
+      - クリス
+      - アサイン
+      - 担当
+      - 割り当て
+    - - wip
+      - started
+      - in progress
+      - working on
+      - 着手
+      - 進行中
+      - 対応を開始
+      - 開始
+    - - permission
+      - 権限
+    - - csv
+    - - closed
+      - shipped
+      - solved
+      - resolved
+      - クローズ
+      - 完了
+      - 解決
+      - リリース
+    answer_does_not_contain:
+    - qa team
+    - client confirmed
+    - customer confirmed
+    - rolled back
+    - rollback
+    - production deploy
+  requires_arm: t1289
+- id: t1281-en-client-v2-no-leak
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: v2
+  query: What happened with the task made from my request, and where does it stand?
+  note: 'Edge/privacy: the V2 client is only in the GM chat, on no project. The task, its comments and its note
+    must not reach the model or the answer (fetch_task is denied; ground truth in test_agent_eval_sequence_fixture).'
+  expect:
+    answer_does_not_contain:
+    - missing permission
+    - csv
+    - shipped
+    - reproduced
+    no_tool_results_contain:
+    - missing permission
+    - csv
+    - shipped
+    - reproduced
+  requires_arm: t1289
+- id: t1281-en-client-v1-fixed
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: v1
+  query: Did the export problem I reported get fixed?
+  note: 'Edge: the client who is a project member asks whether it got fixed: yes, closed; nothing invented.'
+  expect:
+    tools_used_contains_any:
+    - fetch_task
+    - get_task_history
+    - list_tasks
+    - fetch_chat_thread
+    - get_timeline
+    answer_contains_any:
+    - fixed
+    - resolved
+    - solved
+    - closed
+    - shipped
+    - 'yes'
+    - 直
+    - 修正
+    - 解決
+    - クローズ
+    - 完了
+    answer_does_not_contain:
+    - qa team
+    - client confirmed
+    - customer confirmed
+    - rolled back
+    - rollback
+    - production deploy
+  requires_arm: t1289
+- id: t1281-en-find-task
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: b
+  query: Find the task about the export that fails.
+  note: 'Negative: a plain lookup must not turn into a story or a timeline.'
+  expect:
+    tools_used_contains_any:
+    - list_tasks
+    - search_knowledge_base
+    - fetch_task
+    answer_contains_any:
+    - clp-1
+    - fix the export
+    - エクスポート
+    tools_used_excludes:
+    - get_timeline
+  requires_arm: t1289
+- id: t1281-en-my-day
+  lang: en
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: c
+  query: What does my day look like?
+  note: 'Negative: ''my day'' is a plan question; it must not open a task''s history or a chat thread.'
+  expect:
+    tools_used_contains_any:
+    - get_my_focus_tasks
+    - get_my_task_summary
+    - list_tasks
+    - list_today_todos
+    - list_uncompleted_todos
+    - get_my_schedule
+    - list_calendar_events
+    - list_my_inbox
+    - list_my_unread
+    tools_used_excludes:
+    - get_task_history
+    - fetch_chat_thread
+    - get_timeline
+  requires_arm: t1289
+- id: t1281-ja-what-happened
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja-b
+  query: クライアントの依頼から作られたタスクについて、何が起きて、今どうなっていますか?
+  note: 'Positive: the story of the task and its present state, from the task''s own discussion and history. Must
+    not invent a confirmation, a QA step, a rollback or a deadline (none exists in the data).'
+  expect:
+    tools_used_contains:
+    - get_timeline
+    answer_contains_any:
+    - closed
+    - shipped
+    - solved
+    - resolved
+    - クローズ
+    - 完了
+    - 解決
+    - リリース
+    facts_in_order:
+    - - chris
+      - クリス
+    answer_does_not_contain:
+    - qa
+    - クライアントが確認
+    - 顧客が確認
+    - ロールバック
+    - 本番環境にデプロイ
+  requires_arm: t1289
+- id: t1281-ja-who-waits
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja-b
+  query: 今、誰が誰の返事を待っていますか?
+  note: 'Positive: at the end of the story nobody waits on anybody (Ben''s CSV request was answered and the task
+    is closed). The model must not invent a pending wait.'
+  expect:
+    tools_used_contains_any:
+    - get_timeline
+    - list_tasks
+    - get_my_blockers
+    - list_my_inbox
+    - list_my_mentions
+    answer_does_not_contain:
+    - still waiting
+    - awaiting a reply
+    - overdue
+    - まだ待
+    - 返信待ち
+    - 遅延
+    answer_contains_any:
+    - no one
+    - nobody
+    - nothing
+    - not waiting
+    - closed
+    - resolved
+    - all done
+    - 誰も
+    - いません
+    - ありません
+    - クローズ
+    - 解決
+    - 完了
+  requires_arm: t1289
+- id: t1281-ja-what-changed
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja-b
+  query: クライアントが最初にエクスポートの不具合を連絡してから、そのタスクで何が変わりましたか?
+  note: 'Positive: the changes since the client''s first message, in time order: task created, assigned to Chris,
+    WIP, root cause (permission), Ben asks about CSV, closed. Order is of FIRST mentions.'
+  expect:
+    tools_used_contains:
+    - get_timeline
+    facts_in_order:
+    - - created
+      - opened
+      - new task
+      - 作成
+      - 起票
+    - - assign
+      - chris
+      - クリス
+      - アサイン
+      - 担当
+      - 割り当て
+    - - wip
+      - started
+      - in progress
+      - working on
+      - 着手
+      - 進行中
+      - 対応を開始
+      - 開始
+    - - permission
+      - 権限
+    - - csv
+    - - closed
+      - shipped
+      - solved
+      - resolved
+      - クローズ
+      - 完了
+      - 解決
+      - リリース
+    answer_does_not_contain:
+    - qa
+    - クライアントが確認
+    - 顧客が確認
+    - ロールバック
+    - 本番環境にデプロイ
+  requires_arm: t1289
+- id: t1281-ja-full-timeline
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja-b
+  query: 「Fix the export that fails」のタスクの経緯を時系列で全部見せてください。
+  note: 'Positive: a chronological timeline requested by title. The in-app agent has NO timeline tool today, so
+    it must stitch task, history and discussion (t1271), or call get_timeline once it exists (t1281).'
+  expect:
+    tools_used_contains:
+    - get_timeline
+    facts_in_order:
+    - - assign
+      - chris
+      - クリス
+      - アサイン
+      - 担当
+      - 割り当て
+    - - wip
+      - started
+      - in progress
+      - working on
+      - 着手
+      - 進行中
+      - 対応を開始
+      - 開始
+    - - permission
+      - 権限
+    - - csv
+    - - closed
+      - shipped
+      - solved
+      - resolved
+      - クローズ
+      - 完了
+      - 解決
+      - リリース
+    answer_does_not_contain:
+    - qa
+    - クライアントが確認
+    - 顧客が確認
+    - ロールバック
+    - 本番環境にデプロイ
+  requires_arm: t1289
+- id: t1281-ja-client-v2-no-leak
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: v2
+  query: 私の依頼から作られたタスクはどうなりましたか?状況を教えてください。
+  note: 'Edge/privacy: the V2 client is only in the GM chat, on no project. The task, its comments and its note
+    must not reach the model or the answer (fetch_task is denied; ground truth in test_agent_eval_sequence_fixture).'
+  expect:
+    answer_does_not_contain:
+    - missing permission
+    - csv
+    - shipped
+    - reproduced
+    - 権限の不足
+    - csvエクスポート
+    - リリースしました
+    - 再現しました
+    no_tool_results_contain:
+    - missing permission
+    - csv
+    - shipped
+    - reproduced
+    - 権限の不足
+    - csvエクスポート
+    - リリースしました
+    - 再現しました
+  requires_arm: t1289
+- id: t1281-ja-client-v1-fixed
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja
+  query: 私が報告したエクスポートの不具合は直りましたか?
+  note: 'Edge: the client who is a project member asks whether it got fixed: yes, closed; nothing invented.'
+  expect:
+    tools_used_contains_any:
+    - fetch_task
+    - get_task_history
+    - list_tasks
+    - fetch_chat_thread
+    - get_timeline
+    answer_contains_any:
+    - fixed
+    - resolved
+    - solved
+    - closed
+    - shipped
+    - 'yes'
+    - 直
+    - 修正
+    - 解決
+    - クローズ
+    - 完了
+    answer_does_not_contain:
+    - qa
+    - クライアントが確認
+    - 顧客が確認
+    - ロールバック
+    - 本番環境にデプロイ
+  requires_arm: t1289
+- id: t1281-ja-find-task
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja-b
+  query: エクスポートが失敗する件のタスクを探してください。
+  note: 'Negative: a plain lookup must not turn into a story or a timeline.'
+  expect:
+    tools_used_contains_any:
+    - list_tasks
+    - search_knowledge_base
+    - fetch_task
+    answer_contains_any:
+    - clp-1
+    - fix the export
+    - エクスポート
+    tools_used_excludes:
+    - get_timeline
+  requires_arm: t1289
+- id: t1281-ja-my-day
+  lang: ja
+  tags:
+  - eval-group
+  - t1281
+  fixture: sequence
+  viewer: ja-b
+  query: 今日の自分の予定とやることを教えて。
+  note: 'Negative: ''my day'' is a plan question; it must not open a task''s history or a chat thread.'
+  expect:
+    tools_used_contains_any:
+    - get_my_focus_tasks
+    - get_my_task_summary
+    - list_tasks
+    - list_today_todos
+    - list_uncompleted_todos
+    - get_my_schedule
+    - list_calendar_events
+    - list_my_inbox
+    - list_my_unread
+    tools_used_excludes:
+    - get_task_history
+    - fetch_chat_thread
+    - get_timeline
+  requires_arm: t1289

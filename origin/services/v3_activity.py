@@ -347,12 +347,11 @@ def _comment_recipients(surface_type: int, meta: dict) -> set:
       - 5 task body   -> task assignee + collaborators
       - 6 personal    -> note owner + explicit grants
       - 7 task note   -> note owner + its project's members + explicit grants
-      - 8 chat note   -> note owner + its channel's members + explicit grants
-                         (owner-only when the note has outlived its channel)
+      - 8 chat note   -> the people who can read it: explicit grants (the owner
+                         holds one) + its chat's readers (`chat_acl_user_ids`)
     """
     from origin.views.utils.mention_membership import (
         _grantees_of_personal_note,
-        _members_of_channel,
         _members_of_project,
     )
 
@@ -384,16 +383,21 @@ def _comment_recipients(surface_type: int, meta: dict) -> set:
 
     if surface_type == SURFACE_CHAT_NOTE:
         from origin.models.note.chat_note_models import ChatNoteMaster
+        from origin.search_engine.agent.acl import chat_acl_user_ids
 
-        row = ChatNoteMaster.objects.filter(note_id=note_id).values("channel_id", "owner_id").first()
+        row = (
+            ChatNoteMaster.objects.filter(note_id=note_id).values("channel_id", "chat_type").first()
+        )
         if row is None:
             return set()
-        out = set()
-        if row["owner_id"] is not None:
-            out.add(str(row["owner_id"]))
+        # The note's readers: explicit grants (the owner's own row is among them) plus the
+        # people its chat opens it to, by the ONE chat-note rule in its set form (MIP-1484):
+        # a live channel of the kind the note was filed under, a project chat read by the
+        # project's people, any other by its live members. A stray row or a deleted channel
+        # opens nothing, so it notifies no one.
+        out = _note_grant_user_ids(3, note_id)
         if row["channel_id"] is not None:
-            out |= _members_of_channel(row["channel_id"])
-        out |= _note_grant_user_ids(3, note_id)
+            out |= chat_acl_user_ids(row["chat_type"], row["channel_id"])
         return out
 
     return set()

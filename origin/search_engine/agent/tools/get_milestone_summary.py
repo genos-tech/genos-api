@@ -31,6 +31,7 @@ from django.db.models import Count, Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.milestone_order import order_of_work
 from origin.search_engine.agent.tools.task_enums import blank_to_none
@@ -82,20 +83,29 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # The milestone's live work: its own backing row and "Deleted" tasks are
     # not part of its totals or breakdowns (MIP-777). Deleted tasks are still
     # counted, apart, in the `Deleted` row of `status_breakdown`.
-    qs = TaskMaster.objects.filter(milestone_work_q(m)).distinct()
+    # MIP-1413: with the flag, the tasks are read by their effective status (see `ancestor_rule`).
+    rule = (
+        ancestor_rule.rule_for_projects([m.project_id], ctx.team_id)
+        if ancestor_rule.enabled()
+        else None
+    )
+    qs, sf = ancestor_rule.read_by_rule(
+        TaskMaster.objects.filter(milestone_work_q(m)).distinct(), rule
+    )
     annotations: dict[str, Any] = {
         "total_tasks": Count("task_id", distinct=True),
         "overdue_count": Count(
             "task_id",
             distinct=True,
-            filter=Q(due_date__isnull=False, due_date__lt=today) & ~Q(status__in=_CLOSED_STATUSES),
+            filter=Q(due_date__isnull=False, due_date__lt=today)
+            & ~Q(**{f"{sf}__in": _CLOSED_STATUSES}),
         ),
         "unassigned_task_count": Count(
             "task_id", distinct=True, filter=Q(assignee_id__isnull=True)
         ),
     }
     for label in _STATUS_LABELS:
-        annotations[f"_status_{label}"] = Count("task_id", distinct=True, filter=Q(status=label))
+        annotations[f"_status_{label}"] = Count("task_id", distinct=True, filter=Q(**{sf: label}))
     for label in _PRIORITY_LABELS:
         annotations[f"_priority_{label}"] = Count(
             "task_id", distinct=True, filter=Q(priority=label)
@@ -107,8 +117,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     agg = qs.aggregate(**annotations)
 
     status_breakdown = {label: agg.get(f"_status_{label}", 0) or 0 for label in _STATUS_LABELS}
+    deleted_q = Q(status="Deleted")
+    if rule is not None:
+        deleted_q |= Q(task_id__in=sorted(rule.deleted))  # gone under a Deleted ancestor
     status_breakdown["Deleted"] = (
-        TaskMaster.objects.filter(milestone_tasks_q(m, own_row=False), status="Deleted")
+        TaskMaster.objects.filter(milestone_tasks_q(m, own_row=False))
+        .filter(deleted_q)
         .distinct()
         .count()
     )
@@ -140,7 +154,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             attendee_id=ctx.user_id, project__team_id=ctx.team_id
         ).values_list("project_id", flat=True)
     )
-    order = order_of_work(m, member_project_ids)
+    order = order_of_work(
+        m, member_project_ids, skip_ids=rule.not_open if rule is not None else frozenset()
+    )
 
     return {
         "milestone_id": m.milestone_id,

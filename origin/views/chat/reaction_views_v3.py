@@ -16,7 +16,6 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
-    ChannelMember,
     Message,
     MessageReaction,
 )
@@ -25,6 +24,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageReactionSerializer,
 )
 from origin.services import v3_activity
+from origin.services.channel_scope import is_chat_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import body_object
 
@@ -38,10 +38,7 @@ def _verify_message_member(message_id, user):
         message = Message.objects.select_related("channel").get(id=message_id)
     except Message.DoesNotExist:
         raise Http404("Message not found.")
-    is_member = ChannelMember.objects.filter(
-        channel=message.channel, user=user, is_deleted=False
-    ).exists()
-    if not is_member:
+    if not is_chat_member(message.channel_id, user.id):
         raise Http404("Message not found.")
     return message
 

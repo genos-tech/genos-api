@@ -74,7 +74,12 @@ def _thread(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
 
 
 def note_comment_fields(
-    note_type: str, note_id: int, ctx: ToolContext, *, include_resolved: bool = False
+    note_type: str,
+    note_id: int,
+    ctx: ToolContext,
+    *,
+    include_resolved: bool = False,
+    can_include_resolved: bool = True,
 ) -> dict[str, Any]:
     """The keys `get_note` adds on MCP: `comment_threads` and, when there is
     something to say, `comment_threads_note`.
@@ -83,6 +88,10 @@ def note_comment_fields(
     when the comments could not be read: the body is still complete then, and the
     note says so. Resolved threads are left out unless asked for, with a count of
     how many were left so the caller knows they exist.
+
+    `can_include_resolved=False` is for a caller that has no `include_resolved` argument to
+    pass (the in-app `fetch_note`, MIP-1090): the note then says how many resolved threads
+    were left out and does not tell the model to pass an argument it does not have.
     """
     raw_threads = read_note_threads(note_type, note_id)
     if raw_threads is None:
@@ -116,9 +125,10 @@ def note_comment_fields(
     notes = []
     if resolved and not include_resolved:
         s = "s" if len(resolved) != 1 else ""
-        notes.append(
-            f"{len(resolved)} resolved thread{s} not shown; pass `include_resolved: true` to read {'them' if s else 'it'}."
-        )
+        left_out = f"{len(resolved)} resolved thread{s} not shown"
+        if can_include_resolved:
+            left_out += f"; pass `include_resolved: true` to read {'them' if s else 'it'}"
+        notes.append(left_out + ".")
     if truncated:
         notes.append(f"Only the first {MAX_THREADS} threads are shown.")
     if notes:

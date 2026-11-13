@@ -856,7 +856,7 @@ CATALOG: tuple[McpTool, ...] = (
             "that changed (`task_id`, `display_id`, `title`), how far below the one "
             "asked about (`depth`: 0 is its own change, 1 a direct child's), the kind "
             "of change (`action_type`, with `field`), who, when and `via`, how it "
-            "arrived. Pass a milestone's own task row to see a milestone. Use it for "
+            "arrived (on other people's writes only the kind). Pass a milestone's own task row to see a milestone. Use it for "
             "'is this milestone moving?' or 'what happened under this since Monday?'. "
             "`since` is an ISO date or datetime; `limit` caps the list (default 30, "
             "max 100) and `has_more` says whether older changes remain. Bulk moves "
@@ -865,6 +865,7 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+        augment=via_privacy.with_via_owner_only,
     ),
     McpTool(
         name="get_team_task_summary",
@@ -1800,18 +1801,31 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone_work (the milestone's other work, only what the subtasks leave of the "
             "10 slots); each with its latest few events): "
             "`related_total`, `related_capped` and `related_quiet` (neighbours with nothing "
-            "in the window) say what was left out; set `include_related` false to read the "
+            "in the window) say what was left out (`related_capped` is also true when a "
+            "neighbour the member may open fell outside the few most recent that are read); "
+            "set `include_related` false to read the "
             "task alone. A neighbour's events are real ones: the member's AI-app opens never "
             "take its slots, `last_opened_at` says when they last opened or changed it in their "
             "AI app (null if never), and a neighbour that was only opened counts as quiet. "
             "`unattached` counts the member's own events in the window that belong to no item "
             "(markers on a project or chat, chat messages in no linked thread and with no task "
             "chip; completed to-dos are in the briefing's `what_you_did`, not here): it is a "
-            "count, never a guess, and says nothing about anyone else. `capped` is empty unless "
-            "events of this line were really left out: `pool_sources` names the source that had "
+            "count, never a guess, and says nothing about anyone else. `unattached.chats` "
+            "names the chats those messages were written in, most recently written to "
+            "first (`chat_type`, `chat_id`, `title`, `messages` how many are there, "
+            "`latest_at`; `chats_more` if there are more): read one with `get_chat_thread` "
+            "or `get_timeline` (`anchor_type` chat). They are the member's own readable chats "
+            "only, and a chat named there is NOT attached to this task: do not say the "
+            "task came from it. `capped` is empty unless "
+            "something was really left out: `pool_sources` names the source that had "
             "more rows than are read (`pool_capped`), `notes_capped` says a note the member may "
             "open was left out, and `related_sources` says a neighbour's read was cut (its "
-            "counts are then a floor); a row the member cannot open never sets any of them. "
+            "counts are then a floor), `unattached_capped` (with `unattached_sources`: "
+            "`app_markers` and/or `chat_messages`) says the member has more of those than "
+            "were read, so the `unattached` counts are a floor, and `seen_capped` says "
+            "the member has more markers on milestones, notes and chat threads than were "
+            "read, so a `last_seen_at` or `last_opened_at` may be missing or older than it "
+            "was; a row the member cannot open never sets any of them. "
             "Everything is the member's own view: other people's events appear only on items "
             "the member can open now, and a neighbour they cannot open is left out without "
             "a trace. `window` is `since` (included) to `until` (excluded), default the last "

@@ -1,0 +1,4 @@
+arm: t889-undo
+overrides:
+    AGENT_TELL_MODEL_UNDO: true
+requires: []

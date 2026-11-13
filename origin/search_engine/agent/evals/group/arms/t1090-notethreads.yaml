@@ -1,0 +1,4 @@
+arm: t1090-notethreads
+overrides:
+    AGENT_NOTE_THREADS_IN_GET_NOTE: true
+requires: []
