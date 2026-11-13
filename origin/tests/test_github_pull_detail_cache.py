@@ -308,7 +308,11 @@ class TestAFailureIsNeverCached(DetailBase):
             with self.subTest():
                 cache.clear()
                 self.failing("pr", resp)
-                self.assertEqual(self.detail().status_code, 502)
+                first = self.detail()
+                self.assertEqual(first.status_code, 502)
+                # MIP-1453: reads as a rate limit (429, retryable), never as the
+                # refusal (403) the client turns into "private or deleted".
+                self.assertEqual(first.json()["upstream_status"], 429)
                 self.world.calls.clear()
                 self.assertEqual(self.detail().status_code, 502)
                 self.assertEqual(self.world.calls_by(TOK_A, "pr"), 1)
