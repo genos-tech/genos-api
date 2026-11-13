@@ -199,3 +199,14 @@ class TheQueryCount(_Base):
         self.assertEqual(with_via, before + 1, "one query for 11 comments, not one per comment")
         reads = [s for s in sqls if TaskActivity._meta.db_table in s]
         self.assertEqual(len(reads), 1, "and it is on the activity table")
+
+    def test_the_query_hands_back_one_row_per_comment_not_every_edit(self):
+        for comment_id in (1, 2):
+            self.write(comment_id, self.user2, KEY)
+            self.write(comment_id, self.user2, APP)
+            self.write(comment_id, self.user2, KEY)
+        _, sqls = self.count()
+        [read] = [s for s in sqls if TaskActivity._meta.db_table in s]
+        self.assertIn("DISTINCT ON", read)
+        res = self.listing(self.user2)
+        self.assertEqual(res[1]["via"], KEY, "and the row it keeps is the newest")

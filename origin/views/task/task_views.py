@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
 from django.db.models import Case, Count, F, IntegerField, Max, Q, Sum, Value, When
+from django.db.models.fields.json import KeyTextTransform
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -2416,6 +2417,8 @@ def _comment_via_by_comment_id(task_id: int, viewer_id) -> dict[int, dict | None
     The row's actor is the owner of a key's or app's write, so `via_for_viewer` leaves the whole
     `via` to the actor and reduces everyone else's to its kind: the same rule as the activity feed.
     """
+    # `DISTINCT ON (comment id)` with the newest row first: Postgres hands back one row per
+    # comment, the latest write, instead of every edit of every comment.
     rows = (
         TaskActivity.objects.filter(
             task_id=task_id,
@@ -2424,16 +2427,17 @@ def _comment_via_by_comment_id(task_id: int, viewer_id) -> dict[int, dict | None
                 TaskActivityActionType.COMMENT_EDITED,
             ),
         )
-        .order_by("-activity_id")
-        .values_list("actor_id", "metadata")
+        .annotate(comment_key=KeyTextTransform("commentId", "metadata"))
+        .exclude(comment_key__isnull=True)
+        .order_by("comment_key", "-activity_id")
+        .distinct("comment_key")
+        .values_list("actor_id", "metadata", "comment_key")
     )
     out: dict[int, dict | None] = {}
-    for actor_id, metadata in rows:
+    for actor_id, metadata, _ in rows:
         comment_id = (metadata or {}).get("commentId")
         # A number only: `int(None)` must not pin a stray row to comment 0.
         if isinstance(comment_id, bool) or not isinstance(comment_id, int):
-            continue
-        if comment_id in out:  # newest first: the first row seen is the latest write
             continue
         via = (metadata or {}).get("via")
         out[comment_id] = (
