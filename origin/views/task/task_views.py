@@ -15,7 +15,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import Message
+from origin.models.chat.unified_models import ChannelMember, Message
 from origin.models.project.prj_models import *
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
@@ -2627,17 +2627,29 @@ class TaskCommentsView(AuthenticatedAPIView):
             # `unified_writer.write_task_comment_as_thread_reply`). Flags and reminders on a
             # comment ride on that message, so the client needs its id: it has no uuid
             # library and the namespace is a server fact. `None` when the mirror is missing
-            # (the drift cron repairs it), so the client offers nothing it cannot honour.
+            # (`repair_task_comment_mirrors` writes it), so the client offers nothing it cannot
+            # honour. It is also `None` for someone who is not a member of the PM channel the
+            # mirror lives in (MIP-1442): `can_access_task` lets in a task's assignee and
+            # reporter without a project membership, but the flag and reminder endpoints
+            # answer 404 for a non-member, so the menu must not offer what would silently fail.
             comments = list(comments)
             mirror_ids = {
                 c["comment_id"]: unified_writer.task_comment_message_uuid(task_id, c["comment_id"])
                 for c in comments
             }
-            mirrored = set(
+            mirror_channels = dict(
                 Message.objects.filter(id__in=list(mirror_ids.values())).values_list(
-                    "id", flat=True
+                    "id", "channel_id"
                 )
             )
+            member_of = set(
+                ChannelMember.objects.filter(
+                    channel_id__in=set(mirror_channels.values()),
+                    user_id=request.user.id,
+                    is_deleted=False,
+                ).values_list("channel_id", flat=True)
+            )
+            mirrored = {m for m, channel_id in mirror_channels.items() if channel_id in member_of}
 
             response_data = []
             for comment in comments:

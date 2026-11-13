@@ -7,6 +7,9 @@ id over. It is `None` when the mirror row is missing, so the client offers nothi
 """
 
 import uuid
+from datetime import timedelta
+
+from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
 from origin.models.project.prj_models import ProjectMaster
@@ -117,3 +120,100 @@ class TaskCommentMessageIdTests(BaseAPITestCase):
             ),
         )
         uuid.UUID(row["messageId"])  # parses
+
+
+class TaskCommentMessageIdForNonMembersTests(BaseAPITestCase):
+    """MIP-1442. `can_access_task` lets a task's assignee and reporter read it without a project
+    membership, but the flag and reminder endpoints answer 404 for anyone who is not a member of
+    the PM channel the mirror lives in. The list must not hand such a person an id to offer."""
+
+    URL = TaskCommentMessageIdTests.URL
+
+    def setUp(self):
+        super().setUp()
+        # user: a project member (and so a PM channel member). user2: only the task's assignee.
+        self.project = ProjectMaster.objects.create(
+            team=self.team, project_name="Gate", owner=self.user, project_system_user=self.user
+        )
+        self.channel = Channel.objects.get(project_id=self.project.project_id, kind=ChannelKind.PM)
+        ChannelMember.objects.get_or_create(
+            channel=self.channel, user=self.user, defaults={"role": "owner"}
+        )
+        self.task = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="T",
+            status="Open",
+            reporter=self.user,
+            assignee=self.user2,
+        )
+        Message.objects.create(
+            channel=self.channel,
+            sender=self.user,
+            seq=1,
+            body=[],
+            body_text="task",
+            task_id=self.task.task_id,
+        )
+        self.authenticate(self.user)
+        res = self.client.post(
+            self.URL,
+            {
+                "task_id": self.task.task_id,
+                "comment_body": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "hello"}]}
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.comment_id = res.data["comment_id"]
+        self.mirror_id = str(task_comment_message_uuid(self.task.task_id, self.comment_id))
+
+    def _message_id_for(self, user, claims_to_be=None):
+        self.authenticate(user)
+        res = self.client.get(
+            self.URL, {"task_id": self.task.task_id, "user_id": str((claims_to_be or user).id)}
+        )
+        self.assertEqual(res.status_code, 200, getattr(res, "data", None))
+        self.assertEqual(len(res.data), 1)
+        return res.data[0]["messageId"]
+
+    def test_a_channel_member_gets_the_id(self):
+        self.assertEqual(self._message_id_for(self.user), self.mirror_id)
+
+    def test_an_assignee_who_is_not_in_the_channel_gets_none_and_still_reads_the_comment(self):
+        self.assertFalse(
+            ChannelMember.objects.filter(channel=self.channel, user=self.user2).exists()
+        )
+        self.assertIsNone(self._message_id_for(self.user2))
+
+    def test_the_user_id_in_the_query_string_does_not_decide(self):
+        # The token is the caller. A non-member who names a member in `user_id` is still one.
+        self.assertIsNone(self._message_id_for(self.user2, claims_to_be=self.user))
+        self.assertEqual(self._message_id_for(self.user, claims_to_be=self.user2), self.mirror_id)
+
+    def test_someone_who_left_the_channel_gets_none(self):
+        ChannelMember.objects.create(channel=self.channel, user=self.user2, role="member")
+        self.assertEqual(self._message_id_for(self.user2), self.mirror_id)
+        ChannelMember.objects.filter(channel=self.channel, user=self.user2).update(is_deleted=True)
+        self.assertIsNone(self._message_id_for(self.user2))
+
+    def test_none_means_the_server_would_refuse_and_an_id_means_it_accepts(self):
+        # The list and the endpoints must agree, or the menu offers what silently fails.
+        remind_at = (timezone.now() + timedelta(days=1)).isoformat()
+        for user, offered in ((self.user, True), (self.user2, False)):
+            with self.subTest(user=user.username):
+                message_id = self._message_id_for(user)
+                self.assertEqual(message_id is not None, offered)
+                target = message_id or self.mirror_id
+                flag = self.client.post(f"/api/v3/messages/{target}/flag/")
+                remind = self.client.post(
+                    f"/api/v3/messages/{target}/reminder/", {"remindAt": remind_at}, format="json"
+                )
+                if offered:
+                    self.assertIn(flag.status_code, (200, 201))
+                    self.assertEqual(remind.status_code, 201)
+                else:
+                    self.assertEqual(flag.status_code, 404)
+                    self.assertEqual(remind.status_code, 404)
