@@ -1,0 +1,5 @@
+# MIP-1289 / MIP-1281: publish get_timeline to the in-app agent (declared + runnable). Measured by t1289 (routing) and t1281 (behaviour).
+arm: t1289
+overrides:
+    AGENT_INAPP_TIMELINE_TOOL: true
+requires: []

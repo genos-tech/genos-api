@@ -210,6 +210,7 @@
     - get_task_history
     - list_tasks
     - fetch_chat_thread
+    - get_timeline
     answer_contains_any:
     - fixed
     - resolved
@@ -489,6 +490,7 @@
     - get_task_history
     - list_tasks
     - fetch_chat_thread
+    - get_timeline
     answer_contains_any:
     - fixed
     - resolved
