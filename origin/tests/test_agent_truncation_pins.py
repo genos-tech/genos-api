@@ -178,6 +178,7 @@ class LoopBase(TestCase):
         fake_writes=("create_task",),
         query: str = "write the spec",
         client: RecordingClient | None = None,
+        cancel_event=None,
     ) -> RecordingClient:
         client = client or RecordingClient(script)
         events: list[dict] = []
@@ -203,6 +204,7 @@ class LoopBase(TestCase):
                         starting_step=0,
                         seen_sources_by_id={},
                         disabled_tools=disabled_tools,
+                        cancel_event=cancel_event,
                     )
                 finally:
                     for p in reversed(patches):

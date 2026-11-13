@@ -135,6 +135,10 @@ class CallUsage:
     # then ends mid-sentence, and a tool call's arguments end mid-value: the controller
     # reads this to avoid putting a cut-off body on an approval card (MIP-905).
     truncated: bool = False
+    # The output cap the call actually ran under (tokens), as the adapter sent it; 0 when it
+    # sent none and the provider's own model maximum applied (Gemini without a cap). The
+    # controller sizes a retry of a cut-off write from this, never below it.
+    output_cap: int = 0
 
 
 @dataclass(frozen=True)

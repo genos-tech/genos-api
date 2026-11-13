@@ -200,6 +200,7 @@ class ClaudeClient:
         max_tokens = (params.max_output_tokens if params else None) or int(
             settings.SEARCH_ENGINE.get("CLAUDE_MAX_TOKENS", 4096)
         )
+        sink.output_cap = max_tokens
 
         # Extended-thinking models reject `temperature` outright (400
         # invalid_request_error); the rest honour the 0.2

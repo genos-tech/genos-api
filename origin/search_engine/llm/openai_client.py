@@ -208,6 +208,7 @@ class OpenAIClient:
         max_tokens = (params.max_output_tokens if params else None) or int(
             settings.SEARCH_ENGINE.get("OPENAI_MAX_TOKENS", 4096)
         )
+        sink.output_cap = max_tokens
 
         create_kwargs: dict[str, Any] = {
             "model": model,

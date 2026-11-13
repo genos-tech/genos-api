@@ -92,6 +92,7 @@ class ClaudeTruncationTests(SimpleTestCase):
         self.assertTrue(sink.truncated)
         self.assertEqual(sink.stop_reason, "max_tokens")
         self.assertEqual(sink.output_tokens, 4096)
+        self.assertEqual(sink.output_cap, 4096, "the cap the call ran under (the env default)")
         # The SDK hands back whatever JSON had arrived: a call that LOOKS valid. That is why the
         # flag, and not the arguments, is what the controller trusts.
         self.assertEqual(out[0][1].args["content_text"], "### Summary\nThe fi")
@@ -104,7 +105,7 @@ class ClaudeTruncationTests(SimpleTestCase):
 
 
 class GeminiTruncationTests(SimpleTestCase):
-    def _run(self, finish_reason, parts):
+    def _run(self, finish_reason, parts, params=None):
         from origin.search_engine.llm.gemini_client import GeminiClient
 
         chunk = SimpleNamespace(
@@ -120,7 +121,7 @@ class GeminiTruncationTests(SimpleTestCase):
             override_settings(SEARCH_ENGINE=_se(GEMINI_MODEL="gemini-3.6-flash")),
             mock.patch("origin.search_engine.llm.gemini_client._get_client", return_value=client),
         ):
-            out = list(GeminiClient().generate_step([], [], "sys", usage_sink=sink))
+            out = list(GeminiClient().generate_step([], [], "sys", usage_sink=sink, params=params))
         return sink, out
 
     @staticmethod
@@ -146,6 +147,16 @@ class GeminiTruncationTests(SimpleTestCase):
         for raw in (types.FinishReason.STOP, "STOP", None):
             sink, _ = self._run(raw, [self._text("x")])
             self.assertFalse(sink.truncated, raw)
+
+    def test_the_cap_the_call_ran_under_is_recorded_zero_when_none_was_sent(self):
+        from origin.search_engine.llm.types import GenerationParams
+
+        sink, _ = self._run("STOP", [self._text("x")])
+        self.assertEqual(sink.output_cap, 0, "Gemini Medium/High: the model's own maximum")
+        sink, _ = self._run(
+            "STOP", [self._text("x")], params=GenerationParams(max_output_tokens=4096)
+        )
+        self.assertEqual(sink.output_cap, 4096)
 
     def test_a_stub_finish_reason_does_not_break_the_stream(self):
         sink, out = self._run(mock.MagicMock(), [self._text("x")])
@@ -184,6 +195,7 @@ class OpenAITruncationTests(SimpleTestCase):
         sink, out = self._run("length", '{"title": "Plan", "content_text": "### Summary\\nThe fi')
         self.assertTrue(sink.truncated)
         self.assertEqual(sink.stop_reason, "length")
+        self.assertEqual(sink.output_cap, 4096)
         # What the adapter has always done with cut-off arguments; the flag is the new part.
         self.assertEqual(out[0][1].args, {})
 
@@ -202,10 +214,15 @@ class OpenAITruncationTests(SimpleTestCase):
 class Step:
     """One scripted model call: its yields, and how it ended."""
 
-    def __init__(self, events, *, truncated=False, produced=0):
+    def __init__(self, events, *, truncated=False, produced=0, cap=4096, thoughts=0, during=None):
         self.events = events
         self.truncated = truncated
         self.produced = produced
+        #: the output cap the call ran under (0 = none sent: Gemini Medium/High)
+        self.cap = cap
+        self.thoughts = thoughts
+        #: called when the step ends (a test hook: cancel the run, ...)
+        self.during = during
 
 
 class TruncatingClient(RecordingClient):
@@ -223,6 +240,10 @@ class TruncatingClient(RecordingClient):
         if usage_sink is not None:
             usage_sink.truncated = step.truncated
             usage_sink.output_tokens = step.produced
+            usage_sink.thought_tokens = step.thoughts
+            usage_sink.output_cap = step.cap
+        if step.during:
+            step.during()
 
 
 def ask_write(body=PLAN_BODY):
@@ -277,6 +298,40 @@ class LoopTruncationTests(LoopBase):
         )
         self.assertEqual(client.calls[1]["params"]["max_output_tokens"], 24000)
 
+    def test_thinking_tokens_count_towards_what_the_cut_off_call_produced(self):
+        # Gemini reports thoughts apart from the text, and the cap covers both.
+        client = self.go(
+            [
+                Step(ask_write("x"), truncated=True, produced=1000, thoughts=11000),
+                Step(ask_write(PLAN_BODY)),
+            ]
+        )
+        self.assertEqual(client.calls[1]["params"]["max_output_tokens"], 24000)
+
+    def test_the_retry_is_never_below_the_cap_the_first_call_ran_under(self):
+        client = self.go(
+            [
+                Step(ask_write("x"), truncated=True, produced=100, cap=20000),
+                Step(ask_write(PLAN_BODY)),
+            ]
+        )
+        self.assertEqual(client.calls[1]["params"]["max_output_tokens"], 32768)
+
+    def test_a_call_that_ran_with_no_cap_is_not_retried(self):
+        """Gemini Medium/High send no cap (llm_models.yaml), so the model's own maximum already
+        applied and thinking shares it: a retry at 16k to 32k would be cut off again, and paid."""
+        client = self.go(
+            [Step(ask_write("x"), truncated=True, produced=2000, thoughts=60000, cap=0)]
+        )
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.errors(), [controller.OUTPUT_TRUNCATED_MESSAGE])
+
+    def test_a_larger_cap_that_does_not_exceed_the_first_is_not_tried(self):
+        client = self.go([Step(ask_write("x"), truncated=True, produced=100, cap=32768)])
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(self.errors(), [controller.OUTPUT_TRUNCATED_MESSAGE])
+
     def test_a_write_cut_off_twice_proposes_nothing_and_says_so(self):
         client = self.go(
             [
@@ -290,21 +345,81 @@ class LoopTruncationTests(LoopBase):
         self.assertIn("smaller parts", controller.OUTPUT_TRUNCATED_MESSAGE)
 
     def test_no_retry_when_a_larger_cap_cannot_help(self):
-        client = self.go([Step(ask_write("x"), truncated=True, produced=40000)])
+        client = self.go([Step(ask_write("x"), truncated=True, produced=40000, cap=40000)])
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(self.errors(), [controller.OUTPUT_TRUNCATED_MESSAGE])
 
-    def test_a_retry_that_fails_is_the_same_outcome(self):
+    def raising_retry(self, exc):
         class Boom(TruncatingClient):
             def generate_step(self, *a, **kw):
                 if self.calls:
-                    raise RuntimeError("provider down")
+                    raise exc
                 yield from super().generate_step(*a, **kw)
 
         client = Boom([Step(ask_write("x"), truncated=True, produced=4096)])
         self.run_loop([], client=client)
+        return client
+
+    def test_a_retry_that_fails_is_reported_as_the_failure_it_is(self):
+        # Not dressed up as "too long": the same message the step's own failure gets.
+        self.raising_retry(RuntimeError("provider down"))
         self.assertEqual(self.pending(), [])
-        self.assertEqual(self.errors(), [controller.OUTPUT_TRUNCATED_MESSAGE])
+        errors = self.errors()
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("LLM call failed:"), errors)
+        self.assertIn("RuntimeError", errors[0])
+
+    def test_a_retry_the_provider_declines_is_reported_as_a_refusal(self):
+        from origin.search_engine.llm.types import ModelRefusal
+
+        self.raising_retry(ModelRefusal("claude", "m", None))
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.errors(), [controller.MODEL_REFUSAL_MESSAGE])
+
+    # -- the guards that run before every model call apply to the retry --------------------
+
+    def test_a_cancelled_run_is_not_retried(self):
+        import threading
+
+        cancel = threading.Event()
+        client = TruncatingClient(
+            [
+                Step(ask_write("x"), truncated=True, produced=4096, during=cancel.set),
+                Step(ask_write(PLAN_BODY)),
+            ]
+        )
+        self.run_loop([], client=client, cancel_event=cancel)
+        self.assertEqual(len(client.calls), 1, "no second, paid, call for a client that is gone")
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.errors(), [])
+
+    def test_the_cost_ceiling_stops_the_retry(self):
+        costs = iter([0, 10**9, 10**9])
+        with (
+            mock.patch.object(
+                controller.spend, "request_cost_jpy_milli", side_effect=lambda: next(costs)
+            ),
+            mock.patch.object(controller.spend, "mark_ceiling_hit"),
+        ):
+            client = self.go(
+                [Step(ask_write("x"), truncated=True, produced=4096), Step(ask_write(PLAN_BODY))],
+                flags={"AI_REQUEST_MAX_JPY_MILLI": 1000},
+            )
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.errors(), [controller.COST_CEILING_MESSAGE])
+
+    def test_an_empty_credit_balance_stops_the_retry(self):
+        answers = iter([False, True, True])
+        with mock.patch.object(
+            controller.spend, "credit_budget_exhausted", side_effect=lambda: next(answers)
+        ):
+            client = self.go(
+                [Step(ask_write("x"), truncated=True, produced=4096), Step(ask_write(PLAN_BODY))]
+            )
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.errors(), [controller.CREDITS_EXHAUSTED_MESSAGE])
 
     def test_a_retry_that_returns_no_call_is_the_same_outcome(self):
         client = self.go(
@@ -341,6 +456,9 @@ class LoopTruncationTests(LoopBase):
         self.assertTrue(text.startswith("The plan has three phases, the first of"))
         self.assertTrue(text.endswith(controller.ANSWER_CUT_OFF_NOTICE))
         self.assertIn("cut off", controller.ANSWER_CUT_OFF_NOTICE)
+        # Worded for a cut-off request to write something too: Gemini may hand back only the text
+        # before a half-written call, and the loop cannot tell the two apart.
+        self.assertIn("asked me to write something", controller.ANSWER_CUT_OFF_NOTICE)
         self.assertEqual(self.errors(), [])
 
     def test_the_notice_is_part_of_the_persisted_answer(self):
@@ -418,7 +536,47 @@ class LoopTruncationTests(LoopBase):
         self.assertEqual(client.calls[1]["model_override"], planning)
         self.assertEqual(len(self.pending()), 1)
 
-    def test_the_run_is_classified_as_our_failure_not_the_provider_s(self):
+    def test_the_message_does_not_name_a_task_or_a_note_only(self):
+        msg = controller.OUTPUT_TRUNCATED_MESSAGE
+        self.assertNotIn("the note", msg)
+        self.assertIn("smaller parts", msg)
+
+
+class ClassificationTests(SimpleTestCase):
+    """`_stream_ndjson` closes the request's spend with a result: a run that ends on the
+    truncation message is OUR failure (we paid, the member got nothing), not the provider's."""
+
+    def result_for(self, message):
         from origin.search_engine import agent_views
 
-        self.assertIs(agent_views.OUTPUT_TRUNCATED_MESSAGE, controller.OUTPUT_TRUNCATED_MESSAGE)
+        finished = []
+
+        def worker(emit, cancel_event):
+            emit({"type": "error", "message": message})
+
+        with (
+            mock.patch.object(agent_views.spend, "SpendContext"),
+            mock.patch.object(
+                agent_views.spend_recorder,
+                "finish_request",
+                side_effect=lambda ctx, result: finished.append(result),
+            ),
+        ):
+            list(agent_views._stream_ndjson(worker, spend_kwargs={"request_id": "r"}))
+        self.assertEqual(len(finished), 1)
+        return finished[0]
+
+    def test_a_truncated_write_is_an_application_failure(self):
+        from origin.search_engine.models import AiRequestCost
+
+        self.assertEqual(
+            self.result_for(controller.OUTPUT_TRUNCATED_MESSAGE),
+            AiRequestCost.RESULT_APPLICATION_FAILURE,
+        )
+
+    def test_any_other_error_is_still_the_providers(self):
+        from origin.search_engine.models import AiRequestCost
+
+        self.assertEqual(
+            self.result_for("LLM call failed: HTTP 500"), AiRequestCost.RESULT_PROVIDER_FAILURE
+        )

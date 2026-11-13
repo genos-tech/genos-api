@@ -227,6 +227,8 @@ class GeminiClient:
         # any invoice.
         sink.provider = "gemini"
         sink.model = model
+        # 0 = no cap sent: the model's own maximum applies (and thinking shares it).
+        sink.output_cap = (params.max_output_tokens if params else None) or 0
         last_usage_metadata: Any = None
         started = time.monotonic()
         call_error = ""
