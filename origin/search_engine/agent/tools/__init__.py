@@ -111,6 +111,7 @@ from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_my_milestones import LIST_MY_MILESTONES
+from origin.search_engine.agent.tools.list_my_unread import LIST_MY_UNREAD
 from origin.search_engine.agent.tools.list_note_access import LIST_NOTE_ACCESS
 from origin.search_engine.agent.tools.list_note_folders import LIST_NOTE_FOLDERS
 from origin.search_engine.agent.tools.list_pr_comments import LIST_PR_COMMENTS
@@ -251,6 +252,7 @@ for _t in (
     LIST_MY_INBOX,
     LIST_MY_MENTIONS,
     LIST_MY_CHATS,
+    LIST_MY_UNREAD,
     GET_MY_BLOCKERS,
     GET_MY_THROUGHPUT,
     # --- Todo tools ---
@@ -357,6 +359,7 @@ __all__ = [
     "LIST_MILESTONES",
     "LIST_MY_CHATS",
     "LIST_MY_INBOX",
+    "LIST_MY_UNREAD",
     "LIST_MY_MENTIONS",
     "LIST_MY_MILESTONES",
     "LIST_PR_COMMENTS",

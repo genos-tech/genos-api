@@ -203,7 +203,8 @@ class ActivityUnreadView(AuthenticatedAPIView):
     """GET /api/v3/activities/unread/?team_id=UUID[&since=&limit=&kinds=&chat_id=&task_id=]
 
     What the caller has not read yet in one team, as raw data plus counts (MIP-1375): the
-    same answer the `list_my_unread` MCP tool gives, from the same service
+    same answer the `list_my_unread` tool gives (over MCP, and to the in-app agent since
+    MIP-1424), from the same service
     (`services/unread_digest.py`, which documents the rules). Read-only; it marks nothing
     read and summarizes nothing.
 

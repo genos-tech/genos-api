@@ -644,10 +644,31 @@ class McpToolTests(UnreadBase):
         self.assertTrue(is_error)
         self.assertIn("kinds", text)
 
-    def test_the_in_app_agent_does_not_see_it_yet(self):
+    def test_the_in_app_agent_sees_it_since_mip_1424(self):
+        from origin.search_engine.agent.controller import _build_tool_declarations  # noqa: PLC0415
+        from origin.search_engine.agent.tools import (  # noqa: PLC0415
+            MCP_ONLY_REGISTRY,
+            REGISTRY,
+            get_mcp_tool,
+        )
+
+        self.assertIn("list_my_unread", REGISTRY)
+        self.assertNotIn("list_my_unread", MCP_ONLY_REGISTRY)
+        # The MCP catalog and the app run the SAME tool object, so the two cannot drift.
+        self.assertIs(get_mcp_tool("list_my_unread"), REGISTRY["list_my_unread"])
+        # ...and the model is actually told about it.
+        self.assertIn("list_my_unread", {d.name for d in _build_tool_declarations()})
+
+    def test_the_in_app_tool_gives_the_service_answer(self):
         from origin.search_engine.agent.tools import REGISTRY  # noqa: PLC0415
 
-        self.assertNotIn("list_my_unread", REGISTRY)
+        task = self.make_task("In app")
+        self.task_comment(task, "ping")
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        in_app = REGISTRY["list_my_unread"].run({}, ctx)
+        self.assertEqual(in_app["stats"]["unread"], 1)
+        self.assertEqual(in_app["items"][0]["display_id"], task.display_id)
+        self.assertEqual(in_app["stats"], unread_digest.build_unread(ctx)["stats"])
 
 
 class RestTests(UnreadBase):
