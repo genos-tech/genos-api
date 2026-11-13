@@ -11,10 +11,15 @@ from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import readable_note_ids, readable_note_ref
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 
-# Maximum number of recent-note rows kept per (user, team). Older rows are
-# trimmed on every record-open so the table stays small and the meta
-# endpoint never has to consider more than this many candidates.
-RECENT_NOTES_CAP = 10
+# How many recent notes the meta endpoint returns (the sidebar shows 8, and a
+# "More" row reveals the rest, MIP-1435).
+RECENT_NOTES_CAP = 20
+# How many rows are kept per (user, team): older ones are trimmed on every
+# record-open, so the table stays small and the meta endpoint never has to
+# consider more than this many candidates. It is more than the CAP because a
+# row outlives its note (a deleted note, access that ended): those rows must
+# not take slots from notes the user can still open.
+RECENT_NOTES_KEEP = 40
 
 
 class RecordNoteOpenView(AuthenticatedAPIView):
@@ -25,7 +30,7 @@ class RecordNoteOpenView(AuthenticatedAPIView):
     note_id). Because `ts_opened_at` uses `auto_now=True`, save() bumps it
     on every call so subsequent ordering by `-ts_opened_at` reflects the
     real most-recently-opened sequence. After the upsert we trim any
-    rows beyond `RECENT_NOTES_CAP` for that (user, team) so the table
+    rows beyond `RECENT_NOTES_KEEP` for that (user, team) so the table
     stays bounded.
     """
 
@@ -72,7 +77,7 @@ class RecordNoteOpenView(AuthenticatedAPIView):
         ids_to_keep = list(
             NoteRecentMaster.objects.filter(team=data["team"], user=data["user"])
             .order_by("-ts_opened_at")
-            .values_list("id", flat=True)[:RECENT_NOTES_CAP]
+            .values_list("id", flat=True)[:RECENT_NOTES_KEEP]
         )
         NoteRecentMaster.objects.filter(team=data["team"], user=data["user"]).exclude(
             id__in=ids_to_keep
@@ -119,21 +124,28 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
         recents = list(
             NoteRecentMaster.objects.filter(team=data["team_id"], user=data["user_id"])
             .order_by("-ts_opened_at")
-            .values("note_id", "note_type", "ts_opened_at")[:RECENT_NOTES_CAP]
+            .values("note_id", "note_type", "ts_opened_at")[:RECENT_NOTES_KEEP]
         )
 
-        # Map (note_type, note_id) -> ts_opened_at so we can attach the
-        # open-timestamp to each metadata row after we fan out per type.
-        opened_at_by_key = {(r["note_type"], r["note_id"]): r["ts_opened_at"] for r in recents}
-
-        # Only notes the user can still open; access may have gone since.
-        personal_note_ids, task_note_ids, chat_note_ids = (
-            readable_note_ids(
+        # Only notes the user can still open; access may have gone since, and a deleted note
+        # has no access row. The cap counts what is left, so those rows take no slot.
+        readable = {
+            note_type: readable_note_ids(
                 request_user_id,
                 note_type,
                 [r["note_id"] for r in recents if r["note_type"] == note_type],
             )
             for note_type in (1, 2, 3)
+        }
+        shown = [r for r in recents if r["note_id"] in readable.get(r["note_type"], ())][
+            :RECENT_NOTES_CAP
+        ]
+
+        # Map (note_type, note_id) -> ts_opened_at so we can attach the
+        # open-timestamp to each metadata row after we fan out per type.
+        opened_at_by_key = {(r["note_type"], r["note_id"]): r["ts_opened_at"] for r in shown}
+        personal_note_ids, task_note_ids, chat_note_ids = (
+            [r["note_id"] for r in shown if r["note_type"] == note_type] for note_type in (1, 2, 3)
         )
 
         result = {

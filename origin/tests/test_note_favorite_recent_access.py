@@ -271,6 +271,68 @@ class RecentAccessTests(NoteRefAccessBase):
         )
 
 
+class RecentCapTests(NoteRefAccessBase):
+    """The sidebar shows 8 recent notes and a "More" row for the rest, up to 20 (MIP-1435).
+    The cap counts notes the caller can open: the row of a deleted note takes no slot."""
+
+    def _notes(self, count):
+        notes = []
+        for i in range(count):
+            note = PersonalNoteMaster.objects.create(
+                team=self.team, owner=self.user, title=f"Note {i}", body=[]
+            )
+            NotePermissionMaster.objects.create(
+                team=self.team,
+                user=self.user,
+                note_id=note.note_id,
+                note_type=PERSONAL,
+                role_id=ROLE_OWNER,
+            )
+            notes.append(note)
+        return notes
+
+    def _titles(self):
+        res = self._meta(RECENT_META, self.user, self.team)
+        self.assertEqual(res.status_code, 200)
+        return sorted(
+            (n["title"] for n in res.data["personalNotes"]), key=lambda t: int(t.split()[1])
+        )
+
+    def test_the_listing_holds_twenty_not_ten(self):
+        notes = self._notes(30)
+        self.authenticate(self.user)
+        for note in notes:
+            res = self.client.post(
+                RECENT, self._body(self.user, self.team, note.note_id, PERSONAL), format="json"
+            )
+            self.assertEqual(res.status_code, 200)
+        # The newest twenty, not the oldest, and not ten.
+        self.assertEqual(self._titles(), [f"Note {i}" for i in range(10, 30)])
+
+    def test_the_table_stays_bounded(self):
+        notes = self._notes(50)
+        self.authenticate(self.user)
+        for note in notes:
+            self.client.post(
+                RECENT, self._body(self.user, self.team, note.note_id, PERSONAL), format="json"
+            )
+        self.assertEqual(NoteRecentMaster.objects.filter(user=self.user).count(), 40)
+
+    def test_rows_of_deleted_notes_take_no_slot(self):
+        notes = self._notes(25)
+        for note in notes:
+            NoteRecentMaster.objects.create(
+                team=self.team, user=self.user, note_id=note.note_id, note_type=PERSONAL
+            )
+        # The 10 newest rows point at notes that no longer exist (or can no longer be opened).
+        for gone in range(900_001, 900_011):
+            NoteRecentMaster.objects.create(
+                team=self.team, user=self.user, note_id=gone, note_type=PERSONAL
+            )
+        self.authenticate(self.user)
+        self.assertEqual(self._titles(), [f"Note {i}" for i in range(5, 25)])
+
+
 class ReadableNoteIdsTests(NoteRefAccessBase):
     """The batched rule has to agree with `get_effective_role` on every
     path it can grant by, and on the boundaries either side."""
