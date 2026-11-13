@@ -146,6 +146,13 @@ def _remove_pm_channel_member(sender, instance, **kwargs):
         return
 
     ChannelMember.objects.filter(channel=channel, user_id=attendee).update(is_deleted=True)
+    # And the roles the project chat's membership wrote on its notes (MIP-1482): the creator of a
+    # project-chat note holds an explicit Owner row that no membership check would ever end.
+    from origin.services.chat_note_access import revoke_membership_roles
+
+    revoke_membership_roles(
+        user_id=attendee, channel_id=channel.id, joined_at=instance.ts_joined_at
+    )
     # A queryset update fires no `post_save` for the change feed's receiver
     # (MIP-970): the person stops seeing the PM channel's chat notes.
     change_feed.bump_notes(channel.team_id, chat=True)

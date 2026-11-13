@@ -87,6 +87,11 @@ def drop_in_team_access(team_id, attendee_id) -> None:
     )
     mark_channels_dirty(left.values_list("channel_id", flat=True))
     left.update(is_deleted=True)
+    # The roles written on the team's chat notes go too: the person is no longer on the team, so
+    # not even a share the owner made to them is theirs to keep (MIP-1482).
+    from origin.services.chat_note_access import revoke_team_roles
+
+    revoke_team_roles(user_id=attendee_id, team_id=team_id)
     # No receiver sees that queryset update (MIP-970), and the departure
     # changes what the person sees in every collection of the team.
     from origin.services import change_feed

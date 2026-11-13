@@ -1078,11 +1078,23 @@ def _remove_participant(grant: ExternalGrant, user_id) -> int:
     if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
         from origin.models.chat.unified_models import ChannelMember
         from origin.search_engine.acl_dirty import mark_channels_dirty
+        from origin.services.chat_note_access import revoke_membership_roles
 
+        joined_at = (
+            ChannelMember.objects.filter(
+                channel_id=grant.object_id, user_id=user_id, is_deleted=False
+            )
+            .values_list("ts_joined_at", flat=True)
+            .first()
+        )
         removed = ChannelMember.objects.filter(
             channel_id=grant.object_id, user_id=user_id, is_deleted=False
         ).update(is_deleted=True)
         if removed:
+            # The roles the chat's membership wrote on its notes go with it (MIP-1482).
+            revoke_membership_roles(
+                user_id=user_id, channel_id=grant.object_id, joined_at=joined_at
+            )
             # A queryset update fires no receiver; see `acl_dirty`.
             mark_channels_dirty([grant.object_id])
             # Nor does the change feed hear it (MIP-970). The channel belongs to
