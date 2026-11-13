@@ -43,9 +43,9 @@ from datetime import timedelta
 from io import StringIO
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.conf import settings
 from django.db import connections
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
@@ -122,9 +122,7 @@ class ResumeBase(TransactionTestCase):
 
     def setUp(self):
         super().setUp()
-        self.enterContext(
-            override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, **self.flags})
-        )
+        self.enterContext(override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, **self.flags}))
         user_model = get_user_model()
         self.user = user_model.objects.create_user(
             username="asker", email="asker@example.com", password="x"

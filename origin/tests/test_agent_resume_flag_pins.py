@@ -124,7 +124,9 @@ class PinBase(ResumeBase):
             if obj is not None:
                 text = text.replace(str(getattr(obj, "id", None) or obj.pk), f"<{name}>")
         text = text.replace(str(self.team.team_id), "<team>").replace(str(self.user.id), "<user>")
-        return re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "<uuid>", text)
+        return re.sub(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "<uuid>", text
+        )
 
     def transcript(self) -> list[dict]:
         out = []
@@ -216,6 +218,7 @@ class FlagOffTests(PinBase):
         self.decide_to_the_end(run_id, token, "approve")
         self.assertEqual(self.legs[1], None, "the resumed leg must carry no system_extra")
         self.assertNotIn(THREAD_SUMMARY, self.calls[1][0])
+
 
 class FlagOnTests(PinBase):
     """977 on: the resumed leg differs from main, in the one intended way."""
