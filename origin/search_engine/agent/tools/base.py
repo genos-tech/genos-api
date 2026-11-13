@@ -142,6 +142,46 @@ REGISTRY: dict[str, Tool] = {}
 MCP_ONLY_REGISTRY: dict[str, Tool] = {}
 
 
+# In-app tools that exist only while a `SEARCH_ENGINE` flag is on (MIP-1289). They are NOT in
+# `REGISTRY` in either state, for the same reason MCP-only tools are not: every reader of
+# `REGISTRY` (the tier gates, the categories test, the registry-generated prompt, the fingerprint)
+# keeps seeing exactly the tools it saw before the flag existed, and a flag that is off leaves no
+# trace anywhere. The flag is read at CALL time, not import time, because the eval harness
+# switches flags on `settings.SEARCH_ENGINE` between arms inside one process.
+#
+# Name -> (flag, tool). The name MAY equal an `MCP_ONLY_REGISTRY` name: `get_timeline` is one
+# capability on two surfaces, with a description and a schema written for each. Nothing mixes
+# them up: MCP looks tools up through `get_mcp_tool` (`REGISTRY`, then `MCP_ONLY_REGISTRY`, never
+# this), and the app reaches this registry only through `get_app_tool` / `flagged_tools`. A name
+# in `REGISTRY` is refused (see `register_flagged_tool`).
+FLAGGED_REGISTRY: dict[str, tuple[str, Tool]] = {}
+
+
+def _flag_on(flag: str) -> bool:
+    from django.conf import settings  # noqa: PLC0415 — keep this module importable before Django is set up
+
+    return bool(settings.SEARCH_ENGINE.get(flag, False))
+
+
+def flagged_tools() -> list[Tool]:
+    """The flag-gated in-app tools whose flag is on right now, in registration order."""
+    return [tool for flag, tool in FLAGGED_REGISTRY.values() if _flag_on(flag)]
+
+
+def flagged_tool(name: str) -> Tool | None:
+    """The flag-gated in-app tool called `name`, when its flag is on right now; else None."""
+    entry = FLAGGED_REGISTRY.get(name)
+    return entry[1] if entry is not None and _flag_on(entry[0]) else None
+
+
+def get_app_tool(name: str) -> Tool | None:
+    """The tool the in-app agent runs for `name`: a registered one, or a flag-gated one whose
+    flag is on. A lookup by the name the MODEL sent, so a tool that is not declared is not
+    runnable either."""
+    tool = REGISTRY.get(name)
+    return tool if tool is not None else flagged_tool(name)
+
+
 def get_mcp_tool(name: str) -> Tool | None:
     """The tool the MCP surface runs for `name`: a shared one, or an MCP-only one."""
     return REGISTRY.get(name) or MCP_ONLY_REGISTRY.get(name)
