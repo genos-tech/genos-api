@@ -30,6 +30,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
+from origin.search_engine.agent.evals.group import content_checks
 from origin.search_engine.agent.evals.group import usage as group_usage
 from origin.search_engine.agent.evals.group.harness import (
     GROUP_EXPECT_KEYS,
@@ -182,13 +183,21 @@ class DefaultCaseRunner:
             own = {k: expect.pop(k) for k in list(expect) if k in GROUP_EXPECT_KEYS}
         else:
             own = {}
-        with group_usage.capture_usage() as inner, case_locale(self._locale(case)):
+        with (
+            group_usage.capture_usage() as inner,
+            case_locale(self._locale(case)),
+            content_checks.member_prefs(case.raw.get("member_prefs")),
+            content_checks.case_llm_choice(case.raw.get("llm")),
+            content_checks.capture_pending() as pending,
+        ):
             native = runner.run_behavior_case(raw)
             judged = self._judge(native) if self.judge and native.answer else None
         tools = [str(t.get("tool_name")) for t in native.tool_results]
         result = group_usage.new_result(case.id, arm_name, case.lang)
         result["tools"] = tools
-        result["answer"] = native.answer
+        # A write is never run in an eval: when the run ended on a proposal and said nothing,
+        # show what was proposed, so the report and the JSONL carry the text a person would read.
+        result["answer"] = native.answer or content_checks.render_pending(pending)
         result["duration_ms"] = native.duration_ms
         reasons = list(native.failure_reasons)
         result["checks"] = (
@@ -198,7 +207,12 @@ class DefaultCaseRunner:
         )
         tool_text = json.dumps([t.get("result") for t in native.tool_results], default=str)
         extra = group_checks(
-            own, answer=native.answer, tools=tools, tool_text=tool_text, calls=inner.calls
+            own,
+            answer=native.answer,
+            tools=tools,
+            tool_text=tool_text,
+            calls=inner.calls,
+            pending=pending,
         )
         result["checks"] += extra
         result["passed"] = bool(native.passed) and all(c["ok"] for c in extra)

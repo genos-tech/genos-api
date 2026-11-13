@@ -350,6 +350,17 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
         default="",
         help_text="'low', 'medium', 'high', or '' to derive from the legacy model pref.",
     )
+    # How much CONTENT Genos writes for this member (MIP-905): task, milestone and note
+    # bodies and plans. Not part of effort. 'standard' is today's behaviour and the default;
+    # '' is read as 'standard'. The in-app agent only acts on it while
+    # SEARCH_ENGINE["AGENT_CONTENT_LENGTH"] is on (agent/content_length.py); the value is
+    # stored and returned by the preferences API whatever that flag says.
+    preferred_content_length = models.CharField(
+        max_length=16,
+        blank=True,
+        default="standard",
+        help_text="'short', 'standard' or 'long': how much content the in-app agent writes.",
+    )
 
     # "Let my answers help teammates." When True (the default, and what
     # every account did before this existed), a completed Spotlight answer

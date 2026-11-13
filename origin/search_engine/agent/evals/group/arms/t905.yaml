@@ -1,0 +1,6 @@
+# MIP-905: how much content Genos writes (Short / Standard / Long). The level is the member's own
+# (a case's `member_prefs.content_length`); the flag makes the agent act on it.
+arm: t905
+overrides:
+    AGENT_CONTENT_LENGTH: true
+requires: []

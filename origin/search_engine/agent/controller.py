@@ -69,6 +69,7 @@ from origin.search_engine.agent import (
     approval_edits,
     approval_notes,
     approval_reason,
+    content_length,
     tool_cache,
     undo,
 )
@@ -3003,6 +3004,20 @@ def _drive_loop(
     # behavior, byte-identical to the pre-B3 loop.
     planning_model = _resolve_planning_override()
     tools = _build_tool_declarations(disabled_tools)
+    # MIP-905 (AGENT_CONTENT_LENGTH, default off): how much CONTENT this member wants Genos to
+    # write. Resolved ONCE per leg, after the tools are known (a run that cannot write content,
+    # like a digest, has no level). `standard` leaves `gen_params` and the prompt untouched, so
+    # a Standard member and the flag off send the same bytes; Short and Long set an explicit
+    # per-call output cap here (keeping the profile's thinking budget) and add the guidance block
+    # at the tail of the system instruction below.
+    content_level = content_length.DEFAULT_LEVEL
+    if settings.SEARCH_ENGINE.get("AGENT_CONTENT_LENGTH"):
+        content_level = content_length.resolve_level(ctx.user_id, (t.name for t in tools))
+        content_cap = content_length.max_output_tokens(content_level)
+        if content_cap:
+            gen_params = GenerationParams(
+                max_output_tokens=content_cap, thinking_budget=thinking_budget
+            )
     # Flag-gated prompt variant (AGENT_CHEATSHEET_FROM_REGISTRY) —
     # resolved per run, stable within it (and across runs for a given
     # flag state, keeping the cacheable prefix stable).
@@ -3032,6 +3047,11 @@ def _drive_loop(
         language_line = language_directive(ctx.locale)
         if language_line:
             system_instruction = f"{system_instruction}\n\n{language_line}"
+    # Content length (MIP-905): last, after the per-run lines, for the same cache reasons. Empty
+    # for Standard, for a run that cannot write content, and with the flag off.
+    content_block = content_length.guidance_block(content_level)
+    if content_block:
+        system_instruction = f"{system_instruction}\n\n{content_block}"
 
     def _collect_and_record(
         step_index: int,
@@ -3187,7 +3207,25 @@ def _drive_loop(
                     model_override=planning_model,
                     emit_deltas=False,
                 )
-                if accumulated_function_calls:
+                if accumulated_function_calls and (
+                    settings.SEARCH_ENGINE.get("AGENT_BODY_ON_USER_MODEL")
+                    and any(
+                        content_length.carries_body(c.name, c.args)
+                        for c in accumulated_function_calls
+                    )
+                ):
+                    # MIP-905 (AGENT_BODY_ON_USER_MODEL, default off): the cheap planning
+                    # model proposed a write that carries a body (a task, note, milestone
+                    # or plan). The body is what the member reads and approves, so it is
+                    # written by THEIR model: DISCARD this proposal (and its buffered text)
+                    # and run the step again with no override, streaming live, exactly as
+                    # the final answer is. What that call returns (a write, another tool,
+                    # or text) flows on as the step's result. Costs one more call per such
+                    # write; recorded as its own row so the cost is visible.
+                    accumulated_text_parts, accumulated_function_calls = _collect_and_record(
+                        step, "write_rerun"
+                    )
+                elif accumulated_function_calls:
                     # Planning step confirmed — flush the buffered
                     # thinking-out-loud text now (same events, batched).
                     for chunk in accumulated_text_parts:

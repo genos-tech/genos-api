@@ -2039,6 +2039,35 @@ SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
     os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "false").lower() == "true"
 )
 
+# MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905`): how much CONTENT Genos
+# writes (task, milestone and note bodies, plans), a setting of the member's own
+# (`CustomUser.preferred_content_length`: short | standard | long, default standard; stored by
+# `PATCH /api/v2/user/preferences/content-length/` whatever this says). ON = for a member on Short
+# or Long, one delimited guidance block is appended at the tail of the system instruction (it says
+# it is about content writes only, chat answers stay concise) and every model call of the run gets
+# an explicit output cap on every provider (Short 4,096, Long 16,384). A member on Standard, a run
+# with no content-write tool available (digest, read-only agency level) and the flag OFF all send
+# exactly what origin/main sends: no block, no cap, no query. Read at the start of each leg.
+# Flip criterion: the `t905` arm shows Short bodies shorter and Long bodies fuller than Standard
+# (by characters, JA included), structure kept, no plan cut off, chat answers no longer at any
+# level, and Standard identical to arm0.
+SEARCH_ENGINE["AGENT_CONTENT_LENGTH"] = (
+    os.environ.get("AGENT_CONTENT_LENGTH", "false").lower() == "true"
+)
+
+# MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905-a2`): on the Medium two-tier
+# loop (needs AGENT_EFFORT_LEVELS and AGENT_TWO_TIER_LOOP, else there is no planning model and
+# this does nothing), when the cheap planning model proposes a write that carries a body
+# (create_task, update_task, create_note, update_note, create_task_plan, a milestone description)
+# that one step is run again on the member's chosen model and ITS call is the one that goes to
+# approval, as the final text answer already is. Costs one more call per such write. OFF = the
+# planning model's version is executed as it came back. Flip criterion: bodies from the member's
+# model are judged better (or the member-visible length levels hold only with it) for the extra
+# calls' cost.
+SEARCH_ENGINE["AGENT_BODY_ON_USER_MODEL"] = (
+    os.environ.get("AGENT_BODY_ON_USER_MODEL", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
