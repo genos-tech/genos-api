@@ -611,6 +611,55 @@ def create_self_assign_activity(*, message: Message, actor: CustomUser) -> List[
     return [row]
 
 
+def create_task_assign_activity(
+    *, message: Message, recipient_id, actor: CustomUser
+) -> List[Activity]:
+    """Tell `recipient_id` that `actor` assigned them an EXISTING task (MIP-1461).
+
+    The same row `create_self_assign_activity` writes for a task made for yourself: an
+    `ActivityType.MENTION` on the task's card `Message`, flagged `taskAssign` (the legacy
+    feed renders mention rows, and the unread digest already reads this flag as "assigned").
+    At creation the card's own `@`-mention does this; a later reassignment has no new card,
+    so this is that mention.
+
+    Skips, as every mention does:
+      - assigning yourself (you know);
+      - someone who is not a member of the card's channel (they could not open it);
+      - someone reading the card's surface right now, unless a bot posted the card.
+
+    Scoped to the top-level task card (`task_id` set, not a thread reply).
+    """
+    if message.is_thread_reply or message.task_id is None:
+        return []
+    recipient_id = str(recipient_id)
+    if recipient_id == str(actor.id):
+        return []
+    channel = message.channel
+    if not ChannelMember.objects.filter(
+        channel=channel, user_id=recipient_id, is_deleted=False
+    ).exists():
+        return []
+    if not getattr(message.sender, "is_system_user", False):
+        if not _drop_active_viewers([recipient_id], message_surface(message), kind="mention"):
+            return []
+    row = Activity.objects.create(
+        team_id=_team_id_for_channel(channel),
+        recipient_id=recipient_id,
+        actor=actor,
+        activity_type=ActivityType.MENTION,
+        channel=channel,
+        message=message,
+        meta={"taskAssign": True},
+    )
+    logger.info(
+        "[v3_activity] task-assign mention created: id=%s recipient=%s task=%s",
+        row.id,
+        recipient_id,
+        message.task_id,
+    )
+    return [row]
+
+
 def create_thread_reply_activity(
     *,
     reply: Message,

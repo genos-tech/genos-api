@@ -46,6 +46,7 @@ from origin.search_engine.agent.tools.task_enums import (
 )
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.services.milestone_service import sync_backing_task
+from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
 from origin.views.utils.scope_guards import is_team_member
@@ -299,6 +300,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # ---- phase 2: apply all diffs atomically ----
     updated: list[dict[str, Any]] = []
     noops: list[int] = []
+    # (task, who it was assigned to before) for every row whose assignee really changed:
+    # the new assignees are told once the batch has committed (MIP-1461).
+    reassigned: list[tuple[TaskMaster, Any]] = []
     try:
         with transaction.atomic():
             for task, changes, _rationale in planned:
@@ -313,6 +317,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     current = getattr(task, field)
                     if field == _ASSIGNEE_KEY:
                         differs = str(current or "") != str(new_value or "")
+                        if differs:
+                            reassigned.append((task, current))
                     elif field == "tags":
                         # Compared as name sets: the UI keeps no tag order, and
                         # the history signal ignores a reorder too. [] and NULL
@@ -372,6 +378,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # goes to the log with a reference (MIP-622).
         ref = log_failure("update_tasks_bulk tool failed", e)
         raise ToolError(f"Bulk update failed (nothing was applied) (ref {ref}).")
+
+    # Whoever was handed a task is told, as in the app (MIP-1461). After the commit, so a
+    # rolled-back batch tells nobody.
+    for task, previous_assignee_id in reassigned:
+        notify_task_assigned(task, actor_id=ctx.user_id, previous_assignee_id=previous_assignee_id)
 
     # Priorities/statuses feed the project table's ordering — drop each
     # touched project's cached listing after commit.

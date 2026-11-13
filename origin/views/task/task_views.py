@@ -25,6 +25,7 @@ from origin.serializers.task.task_serializers import *
 from origin.services import realtime_push, unified_writer
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
+from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_cache import (
     get_cached_project_tasks,
     invalidate_for_task,
@@ -900,6 +901,13 @@ class TaskMasterView(AuthenticatedAPIView):
                 update_data.pop("sprint", None)
                 settle_from_tree = True
 
+        # Who the task is assigned to BEFORE `serializer.save()` overwrites it, and whether this
+        # PUT is the create form finalising its scaffold row. Handing someone an EXISTING task
+        # tells them (MIP-1461); the scaffold's PUT is the CREATE, which the browser announces
+        # with its own card, so telling them here too would ping them twice and post a second card.
+        previous_assignee_id = task.assignee_id
+        was_scaffold = bool(task.is_init_task)
+
         # Partial=True so callers (e.g. the task-graph diagram) can PUT
         # a subset of fields like `{task_id, start_date}` without being
         # forced to round-trip the full TaskProps object. The full-PUT
@@ -1028,6 +1036,11 @@ class TaskMasterView(AuthenticatedAPIView):
             invalidate_for_task(task)
             if project_changed:
                 invalidate_project_tasks_cache(old_team_id, old_project_id)
+
+            if not was_scaffold:
+                notify_task_assigned(
+                    task, actor_id=request.user.id, previous_assignee_id=previous_assignee_id
+                )
 
             return Response(
                 {

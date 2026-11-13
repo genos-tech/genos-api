@@ -35,6 +35,7 @@ from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.services.task_assignment_notice import notify_task_assigned
 from origin.views.utils.scope_guards import is_team_member
 
 
@@ -96,6 +97,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         new_assignee_username = assignee.username or str(assignee.id)
 
     # --- Apply the change. ---
+    previous_assignee_id = task.assignee_id
     task.assignee_id = new_assignee_id
     try:
         # "ts_updated_at" is required alongside the changed column —
@@ -107,6 +109,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # goes to the log with a reference (MIP-622).
         ref = log_failure("assign_task tool failed", e)
         raise ToolError(f"Failed to assign task (ref {ref}).")
+
+    # The person handed the task is told, as in the app (MIP-1461).
+    notify_task_assigned(task, actor_id=ctx.user_id, previous_assignee_id=previous_assignee_id)
 
     if new_assignee_username:
         summary = f"Assigned task #{task_id} to {new_assignee_username}"
