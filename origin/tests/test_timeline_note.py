@@ -320,6 +320,23 @@ class TestWhoMayOpenANote(NoteBase):
         self.assertEqual(self.tl("note", f"personal:{personal.note_id}")["events"], [])
         self.assertEqual(self.tl("note", f"task:{note.note_id}")["events"], [])
 
+    def test_a_bare_id_names_no_note_even_when_one_exists_under_that_number(self):
+        """Note ids are only unique inside a family: `5` alone names nothing, whichever family has
+        a note 5 the member could open."""
+        personal = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Mine", body=[]
+        )
+        _task, task_note = self.make_note(owner=self.user)
+        for bare in (
+            str(personal.note_id),
+            personal.note_id,
+            str(task_note.note_id),
+            f"#{personal.note_id}",
+        ):
+            self.assertEqual(self.refused_words(bare)[0], NOT_FOUND, bare)
+        self.assertEqual(self.tl("note", f"personal:{personal.note_id}")["events"], [])
+        self.assertEqual(self.tl("note", f"task:{task_note.note_id}")["events"], [])
+
     def test_a_note_of_another_team_is_not_found_even_with_a_grant(self):
         from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
 
