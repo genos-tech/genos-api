@@ -121,7 +121,7 @@ def chat_note_member_q(user_id) -> Q:
     by `note_role.get_effective_role` (REST, the collab gate, every write gate), its batch
     `readable_note_ids` (favorites, recents, the timeline), the sidebar's note list and the
     briefing. The search index's `chat_acl_user_ids` (and so `get_note` over MCP and in-app) is
-    the same rule written as a set of user ids; `test_chat_note_one_rule` pins them equal.
+    the same rule written as a set of user ids; `test_timeline_note_rule` pins them equal over a generated matrix.
 
     A note opens when its channel is live, the channel's kind is the `chat_type` the note was
     filed under, and the person is a member of that channel by `chat_member_q` (a project chat is

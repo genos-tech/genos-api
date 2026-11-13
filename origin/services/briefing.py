@@ -44,9 +44,7 @@ from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskMaster
-from origin.search_engine.agent.acl import (
-    may_read_note,
-)
+from origin.search_engine.agent.acl import may_read_note, task_note_acl_user_ids
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import (
     ToolContext,
@@ -892,19 +890,27 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _may_read_note(ctx: ToolContext, note_type: int, note: Any) -> bool:
-    """Can the caller open this note now? The rule `get_note` applies, for every note family:
-    the note is in this team and `may_read_note` (the owner, or a role on it: an explicit grant,
-    a task note's project, a chat note's chat by `channel_scope.chat_note_member_q`, a Team Notes
-    folder). One rule for all three families (MIP-1474): the chat branch used to be the index's
-    set of user ids, which disagreed with the per-note resolver in four edge cases."""
+    """Can the caller open this note now? The rule `get_note` applies, per note family.
+
+    Personal and chat notes ask `may_read_note` (the owner, or a role on the note: an explicit
+    grant, a Team Notes folder, a chat note's chat by `channel_scope.chat_note_member_q`): one
+    rule with the per-note resolver, where the chat branch used to be the index's set of user
+    ids and disagreed with it in four edge cases (MIP-1474). A task note keeps the set rule
+    (owner, project members, grants), which `test_timeline_note_rule` pins equal to it: asking
+    `may_read_note` would cost a query more per line, and `test_item_lines_pin` counts them."""
     if str(note.team_id or "") != str(ctx.team_id):
         return False
-    return may_read_note(
-        user_id=ctx.user_id,
-        note_type_code=note_type,
-        note_id=note.note_id,
-        owner_id=note.owner_id,
+    if note_type != 2:
+        return may_read_note(
+            user_id=ctx.user_id,
+            note_type_code=note_type,
+            note_id=note.note_id,
+            owner_id=note.owner_id,
+        )
+    allowed = task_note_acl_user_ids(
+        owner_id=note.owner_id, project_id=note.project_id, note_id=note.note_id
     )
+    return str(ctx.user_id) in allowed
 
 
 def _activity_mentions(
