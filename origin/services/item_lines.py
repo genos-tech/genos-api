@@ -340,43 +340,62 @@ def _claims(team_id: str, thread_ids: list[str]) -> dict[str, list[int]]:
     return out
 
 
-def _read_tasks(
-    ctx: ToolContext,
-    access: LabelAccess,
-    tasks: dict[int, TaskMaster],
-    since: datetime,
-    until: datetime,
-) -> _Read:
-    """Every event of every source for `tasks` (all of them already openable by the member),
-    keyed by task. One query per source for the whole set."""
-    me, team = str(ctx.user_id), str(ctx.team_id)
-    ids = list(tasks)
-    read = _Read(events={i: {} for i in ids})
+@dataclass
+class _Reader:
+    """What every source reader shares for one read: who asks, which tasks, which window, and
+    the `_Read` that the events are put into. One reader function per source takes this and adds
+    its events to it (`add`); `_read_tasks` calls them in the fixed order below, which matters:
+    the first rule to claim an event keeps it."""
 
-    def add(task_id: int, ev: Ev) -> None:
+    ctx: ToolContext
+    access: LabelAccess
+    tasks: dict[int, TaskMaster]
+    since: datetime
+    until: datetime
+    read: _Read
+    # The note rule: `(ctx, candidates, exceeded) -> (notes, capped)` (see `_readable_notes`).
+    # The line keeps the briefing's rule; a reader of another surface may pass its own.
+    readable_notes: Any = None
+    # `note_id -> task_id` of the notes that belong to `tasks` (found by `_read_task_notes`,
+    # used by the marker reader to name them).
+    task_notes: dict[int, int] = field(default_factory=dict)
+
+    @property
+    def me(self) -> str:
+        return str(self.ctx.user_id)
+
+    @property
+    def team(self) -> str:
+        return str(self.ctx.team_id)
+
+    @property
+    def ids(self) -> list[int]:
+        return list(self.tasks)
+
+    def add(self, task_id: int, ev: Ev) -> None:
         # The first rule to claim an event keeps it: the same row reached twice (a comment on
         # the task that also chips it) is one event.
-        read.events[task_id].setdefault(ev.key, ev)
+        self.read.events[task_id].setdefault(ev.key, ev)
 
-    def pooled(source: str, qs) -> list:
+    def pooled(self, source: str, qs) -> list:
         """The newest `POOL` rows of `qs` (ordered newest first). One more is asked for: only a
         row that really was left out marks the source as cut, not a pool that is merely full."""
         rows = list(qs[: POOL + 1])
         if len(rows) > POOL:
-            read.cut.add(source)
+            self.read.cut.add(source)
             del rows[POOL:]
         return rows
 
-    window = {"gte": since, "lt": until}
 
-    # 1. the task's own id: history (a comment's rows are told once, from the comment) ...
-    activities = pooled(
+def _read_history(rd: _Reader) -> None:
+    """1. The task's own history rows (a comment's rows are told once, from the comment)."""
+    activities = rd.pooled(
         "history",
         TaskActivity.objects.filter(
-            team_id=team,
-            task_id__in=ids,
-            ts_created_at__gte=window["gte"],
-            ts_created_at__lt=window["lt"],
+            team_id=rd.team,
+            task_id__in=rd.ids,
+            ts_created_at__gte=rd.since,
+            ts_created_at__lt=rd.until,
         )
         .exclude(action_type__in=_COMMENT_ACTIONS)
         # Nobody to credit for "created it": automation and imports, not news.
@@ -384,8 +403,8 @@ def _read_tasks(
         .order_by("-ts_created_at", "-pk"),
     )
     for row in activities:
-        shaped = briefing.activity_event(row, me)
-        add(
+        shaped = briefing.activity_event(row, rd.me)
+        rd.add(
             row.task_id,
             Ev(
                 at=row.ts_created_at,
@@ -400,33 +419,36 @@ def _read_tasks(
             ),
         )
 
-    # ... its comments, and the comments elsewhere that point at it with a `#` chip (5).
-    comment_rows = pooled(
+
+def _read_comments(rd: _Reader) -> None:
+    """1. The task's comments, and (5) the comments elsewhere that point at it with a chip."""
+    ids = rd.ids
+    comment_rows = rd.pooled(
         "comments",
         TaskComments.objects.filter(
             task_id__in=ids,
             is_deleted=False,
-            ts_sent_at__gte=window["gte"],
-            ts_sent_at__lt=window["lt"],
+            ts_sent_at__gte=rd.since,
+            ts_sent_at__lt=rd.until,
         ).order_by("-ts_sent_at", "-pk"),
     )
     # The container of a referencing comment is the task it sits on: the member must open it.
     # That is part of the query, so the pool is cut after it and a comment on a task they
     # cannot open can neither take a slot nor tip the flag (MIP-1195).
-    chip_comments = pooled(
+    chip_comments = rd.pooled(
         "comment_chips",
         _chip_filter(
             TaskComments.objects.filter(
-                readable_task_q(ctx, "task__"),
+                readable_task_q(rd.ctx, "task__"),
                 is_deleted=False,
-                ts_sent_at__gte=window["gte"],
-                ts_sent_at__lt=window["lt"],
+                ts_sent_at__gte=rd.since,
+                ts_sent_at__lt=rd.until,
             ),
             "comment_body",
             ids,
         ).order_by("-ts_sent_at", "-pk"),
     )
-    source_tasks = access.tasks({c.task_id for c in chip_comments})
+    source_tasks = rd.access.tasks({c.task_id for c in chip_comments})
     # The filter above is the rule of `access`; this keeps the two from ever disagreeing in
     # what is shown.
     chip_comments = [c for c in chip_comments if c.task_id in source_tasks]
@@ -441,7 +463,7 @@ def _read_tasks(
                 str(m.mentioned_user_id)
             )
     for c in comment_rows:
-        add(
+        rd.add(
             c.task_id,
             Ev(
                 at=c.ts_sent_at,
@@ -457,7 +479,7 @@ def _read_tasks(
         )
     for c in chip_comments:
         for target in chip_task_ids(c.comment_body) & set(ids):
-            add(
+            rd.add(
                 target,
                 Ev(
                     at=c.ts_sent_at,
@@ -473,16 +495,18 @@ def _read_tasks(
                 ),
             )
 
-    # ... reactions to its comments.
-    for r in pooled(
+
+def _read_comment_reactions(rd: _Reader) -> None:
+    """1. Reactions to the task's comments."""
+    for r in rd.pooled(
         "comment_reactions",
         TaskCommentReactionFact.objects.filter(
-            task_id__in=ids,
-            ts_created_at__gte=window["gte"],
-            ts_created_at__lt=window["lt"],
+            task_id__in=rd.ids,
+            ts_created_at__gte=rd.since,
+            ts_created_at__lt=rd.until,
         ).order_by("-ts_created_at", "-pk"),
     ):
-        add(
+        rd.add(
             r.task_id,
             Ev(
                 at=r.ts_created_at,
@@ -497,17 +521,19 @@ def _read_tasks(
             ),
         )
 
-    # 2. a PR delivery of the task that merged. (Linking and unlinking a PR are history rows.)
-    for d in pooled(
+
+def _read_deliveries(rd: _Reader) -> None:
+    """2. A PR delivery of the task that merged. (Linking and unlinking a PR are history rows.)"""
+    for d in rd.pooled(
         "pr_merges",
         TaskDelivery.objects.filter(
-            task_id__in=ids,
+            task_id__in=rd.ids,
             state=TaskDeliveryState.MERGED,
-            merged_at__gte=window["gte"],
-            merged_at__lt=window["lt"],
+            merged_at__gte=rd.since,
+            merged_at__lt=rd.until,
         ).order_by("-merged_at", "-pk"),
     ):
-        add(
+        rd.add(
             d.task_id,
             Ev(
                 at=d.merged_at,
@@ -526,19 +552,23 @@ def _read_tasks(
             ),
         )
 
-    # 3. task notes: the versions of the notes that belong to these tasks, and (5) of any
-    # note that points at them with a chip. Each note must be one the member can open, and that
-    # is decided BEFORE the versions are read: the notes with a version in the window are
-    # listed newest first, the member's notes among them are kept (at most `MAX_NOTES_CHECKED`),
-    # and only then are their versions read, so no note they cannot open takes a slot or a flag.
+
+def _read_task_notes(rd: _Reader) -> None:
+    """3. Task notes: the versions of the notes that belong to these tasks, and (5) of any note
+    that points at them with a chip. Each note must be one the member can open, and that is
+    decided BEFORE the versions are read: the notes with a version in the window are listed
+    newest first, the member's notes among them are kept (at most `MAX_NOTES_CHECKED`), and only
+    then are their versions read, so no note they cannot open takes a slot or a flag."""
+    ids = rd.ids
     task_notes = {
         n.note_id: n.task_id
-        for n in TaskNoteMaster.objects.filter(team_id=team, task_id__in=ids).only(
+        for n in TaskNoteMaster.objects.filter(team_id=rd.team, task_id__in=ids).only(
             "note_id", "task_id"
         )
     }
+    rd.task_notes = task_notes
     in_window = NoteVersionMaster.objects.filter(
-        team_id=team, ts_updated_at__gte=window["gte"], ts_updated_at__lt=window["lt"]
+        team_id=rd.team, ts_updated_at__gte=rd.since, ts_updated_at__lt=rd.until
     )
     chip_versions = _chip_filter(in_window, "body", ids)
     note_sources = [chip_versions]
@@ -558,19 +588,20 @@ def _read_tasks(
             newest[key] = max(newest.get(key, row["last"]), row["last"])
     exceeded = exceeded or len(newest) > MAX_NOTES_SCANNED
     candidates = sorted(newest, key=lambda k: (newest[k], k), reverse=True)[:MAX_NOTES_SCANNED]
-    notes, read.notes_capped = _readable_notes(ctx, candidates, exceeded)
+    readable_notes = rd.readable_notes or _readable_notes
+    notes, rd.read.notes_capped = readable_notes(rd.ctx, candidates, exceeded)
     versions: list[tuple[NoteVersionMaster, str, set[int]]] = []
     if notes:
         of_those = reduce(or_, (Q(note_type=t, note_id=i) for t, i in notes))
         if task_notes:
-            for v in pooled(
+            for v in rd.pooled(
                 "note_versions",
                 in_window.filter(of_those, note_type=2, note_id__in=list(task_notes)).order_by(
                     "-ts_updated_at", "-pk"
                 ),
             ):
                 versions.append((v, "note_task", {task_notes[v.note_id]}))
-        for v in pooled(
+        for v in rd.pooled(
             "note_chips", chip_versions.filter(of_those).order_by("-ts_updated_at", "-pk")
         ):
             versions.append((v, "chip", chip_task_ids(v.body) & set(ids)))
@@ -581,7 +612,7 @@ def _read_tasks(
         if not targets or note is None:
             continue
         for target in targets:
-            add(
+            rd.add(
                 target,
                 Ev(
                     at=v.ts_updated_at,
@@ -606,23 +637,27 @@ def _read_tasks(
                 ),
             )
 
-    # 4. the chat thread linked to the task, and (5) messages that point at it with a chip.
-    readable_chats = readable_chats_qs(team, me).values("id")
+
+def _read_messages(rd: _Reader) -> None:
+    """4. The chat thread linked to the task, and (5) messages that point at it with a chip; the
+    mentions in those messages and the reactions to them."""
+    ids = rd.ids
+    readable_chats = readable_chats_qs(rd.team, rd.me).values("id")
     message_filter = {
         "channel_id__in": readable_chats,
         "deleted_at__isnull": True,
         "task_id__isnull": True,
-        "ts_sent_at__gte": window["gte"],
-        "ts_sent_at__lt": window["lt"],
+        "ts_sent_at__gte": rd.since,
+        "ts_sent_at__lt": rd.until,
     }
     # A task comment is mirrored into the project chat as a message and is told as the
     # comment; the task's card is not something said.
     said = Message.objects.filter(**message_filter).exclude(metadata__has_key="taskCommentId")
     thread_of: dict[str, int] = {}
-    wanted = {tid: _uuid_text(t.thread_id) for tid, t in tasks.items() if t.thread_id}
+    wanted = {tid: _uuid_text(t.thread_id) for tid, t in rd.tasks.items() if t.thread_id}
     wanted = {tid: th for tid, th in wanted.items() if th}
     if wanted:
-        claims = _claims(team, sorted(set(wanted.values())))
+        claims = _claims(rd.team, sorted(set(wanted.values())))
         for tid, th in wanted.items():
             # One live task per thread. A thread two tasks claim is not told to either.
             if claims.get(th) == [tid]:
@@ -630,7 +665,7 @@ def _read_tasks(
     messages: list[tuple[Message, int, str]] = []
     if thread_of:
         roots = list(thread_of)
-        for m in pooled(
+        for m in rd.pooled(
             "thread_messages",
             said.filter(Q(id__in=roots, is_thread_reply=False) | Q(thread_root_id__in=roots))
             .select_related("channel")
@@ -639,7 +674,7 @@ def _read_tasks(
             root = str(m.thread_root_id or m.id)
             if root in thread_of:
                 messages.append((m, "thread", thread_of[root]))
-    for m in pooled(
+    for m in rd.pooled(
         "message_chips",
         _chip_filter(said, "body", ids).select_related("channel").order_by("-ts_sent_at", "-pk"),
     ):
@@ -653,18 +688,18 @@ def _read_tasks(
             "ts_created_at", "pk"
         ):
             message_mentions.setdefault(mm.message_id, []).append(str(mm.mentioned_user_id))
-        message_reactions = pooled(
+        message_reactions = rd.pooled(
             "message_reactions",
             MessageReaction.objects.filter(
                 message_id__in=message_ids,
-                ts_created_at__gte=window["gte"],
-                ts_created_at__lt=window["lt"],
+                ts_created_at__gte=rd.since,
+                ts_created_at__lt=rd.until,
             ).order_by("-ts_created_at", "-pk"),
         )
     attached_to: dict[Any, set[int]] = {}
     for m, via, target in messages:
         attached_to.setdefault(m.pk, set()).add(target)
-        add(
+        rd.add(
             target,
             Ev(
                 at=m.ts_sent_at,
@@ -689,7 +724,7 @@ def _read_tasks(
         )
     for r in message_reactions:
         for target in attached_to.get(r.message_id, ()):
-            add(
+            rd.add(
                 target,
                 Ev(
                     at=r.ts_created_at,
@@ -703,14 +738,46 @@ def _read_tasks(
                 ),
             )
 
-    # 7. the member's own AI-app markers, and any other kind written to `MemberEvent`.
-    # Read for THESE items (by the ids a marker can name them with), not "the member's newest
-    # 300 of anything": that pool was full of other items' markers and flagged every line.
-    markers = pooled("app_markers", _own_markers_of(me, team, tasks, task_notes, since, until))
-    for marker, task_id in _resolve_markers(team, markers).items():
-        if task_id in read.events:
-            add(task_id, _marker_event(marker, me))
-    return read
+
+def _read_task_markers(rd: _Reader) -> None:
+    """7. The member's own AI-app markers, and any other kind written to `MemberEvent`. Read for
+    THESE items (by the ids a marker can name them with), not "the member's newest 300 of
+    anything": that pool was full of other items' markers and flagged every line."""
+    markers = rd.pooled(
+        "app_markers",
+        _own_markers_of(rd.me, rd.team, rd.tasks, rd.task_notes, rd.since, rd.until),
+    )
+    for marker, task_id in _resolve_markers(rd.team, markers).items():
+        if task_id in rd.read.events:
+            rd.add(task_id, _marker_event(marker, rd.me))
+
+
+def _read_tasks(
+    ctx: ToolContext,
+    access: LabelAccess,
+    tasks: dict[int, TaskMaster],
+    since: datetime,
+    until: datetime,
+) -> _Read:
+    """Every event of every source for `tasks` (all of them already openable by the member),
+    keyed by task. One query per source for the whole set. The sources are read in this order
+    and the first to claim an event keeps it."""
+    rd = _Reader(
+        ctx=ctx,
+        access=access,
+        tasks=tasks,
+        since=since,
+        until=until,
+        read=_Read(events={i: {} for i in tasks}),
+    )
+    _read_history(rd)
+    _read_comments(rd)
+    _read_comment_reactions(rd)
+    _read_deliveries(rd)
+    _read_task_notes(rd)
+    _read_messages(rd)
+    _read_task_markers(rd)
+    return rd.read
 
 
 def read_events(
