@@ -33,9 +33,10 @@ own maker (`self_assign=False`). The app adds one so a person who clicked Create
 trace; here MIP-1432's single notice per call already tells them, and a plan assigns
 every task to its maker.
 
-Not done here: a live `message.created` to the project's chat room. genos-sockets has
-no route for it, so a colleague with that chat already open sees the card at its next
-sync, not at once. The assignee's bell and push are live.
+The card is also announced to the project's chat room (`realtime_push.push_message`, MIP-1459),
+so a colleague with that chat already open sees it at once. That needs genos-sockets'
+`/internal/broadcast/message`; until it is deployed the push is refused and logged, and the card
+shows at the next sync as before.
 
 Best effort, like every other observer of a write: the task is already saved, so a
 failure here is logged and costs the card, never the create. Idempotent per task: a
@@ -88,8 +89,10 @@ def _post(*, project, task_id, actor_id, body, body_text, metadata) -> Message |
         # call; a row per self-assigned task would bury it (a plan assigns every task to its maker).
         self_assign=False,
     )
-    # The socket handler announces these when the app sends a message; here there is no
-    # handler, so tell the recipients' open apps ourselves.
+    # The socket handler announces the message to the chat room and each activity to its
+    # recipient when the app sends a message; here there is no handler, so tell the open apps
+    # ourselves: the card to everyone with the chat open, the activity to the person it is for.
+    realtime_push.push_message(message, realtime_push.CREATED)
     for activity in activities:
         realtime_push.push_activity(activity)
     return message

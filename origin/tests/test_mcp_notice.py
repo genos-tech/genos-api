@@ -518,7 +518,10 @@ class LiveDeliveryTests(NoticeBase):
             with self.captureOnCommitCallbacks(execute=True):
                 self.call("create_task", project_id=self.project.project_id, title="Live")
         row = self.only()
-        (payload, path, what), _ = post.call_args
+        # The task's chat card is announced too (MIP-1459); this is about the notice's own push.
+        (payload, path, what), _ = next(
+            c for c in post.call_args_list if c.args[1] == "/internal/broadcast/activity"
+        )
         self.assertEqual((path, what), ("/internal/broadcast/activity", "activity"))
         self.assertEqual(payload["userId"], str(self.user.id))
         sent = payload["activity"]
@@ -569,4 +572,7 @@ class LiveDeliveryTests(NoticeBase):
         ):
             with self.captureOnCommitCallbacks(execute=True):
                 self.call("create_task", project_id=self.project.project_id, title="Muted")
-        post.assert_not_called()
+        # No activity push: the task's chat card is announced (MIP-1459), the notice is not.
+        self.assertEqual(
+            [c for c in post.call_args_list if c.args[1] == "/internal/broadcast/activity"], []
+        )
