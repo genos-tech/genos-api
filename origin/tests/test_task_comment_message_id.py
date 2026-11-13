@@ -117,6 +117,7 @@ class TaskCommentMessageIdTests(BaseAPITestCase):
                     "reactions",
                     "tsSent",
                     "tsUpdated",
+                    "via",  # MIP-1486
                 ]
             ),
         )
