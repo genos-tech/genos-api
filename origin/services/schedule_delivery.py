@@ -3,7 +3,7 @@
 `deliver` is the one function the runner calls. It files ONE Inbox item (`item_type`
 `ITEM_TYPE_GENOS_REPORT`, 10, in `inbox_models.py`) for the schedule's owner, in the schedule's team, and keeps the
 one-line summary on the schedule (`last_result`). A web push goes out only when the schedule
-asked for it (`deliver_push`, off by default).
+asked for it (`deliver_push`; on by default since MIP-1374, a member can switch it off per schedule).
 
 `deliver` runs inside the run's try block: if it raises, the run FAILED (the member got
 nothing) and counts toward the auto-pause like a failing job. So it raises only when the item

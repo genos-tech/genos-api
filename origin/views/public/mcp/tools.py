@@ -2004,7 +2004,7 @@ CATALOG: tuple[McpTool, ...] = (
             "Create a schedule: run one of Genos's jobs at a time the member chooses, for "
             "example 'every weekday at 09:00, what to do today' or 'every Friday at 17:00, "
             "what I did'. Times are in the member's own time zone. The report goes to their "
-            "Inbox, and a push only if `deliver_push` is true. Check `list_my_schedules` "
+            "Inbox, with a push notification unless `deliver_push` is false. Check `list_my_schedules` "
             "first so you do not add a duplicate, and choose `job` from its `jobs`. A "
             "member can keep a limited number of schedules. Say back what you created, in "
             "words. Requires a write-scoped API key."
