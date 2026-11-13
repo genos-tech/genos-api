@@ -210,15 +210,54 @@ class TheFunction(BaseAPITestCase):
         self.assertEqual(via_privacy.via_for_viewer(APP, None, 5), {"kind": "oauth"})
         self.assertEqual(via_privacy.via_for_viewer(APP, 5, None), {"kind": "oauth"})
 
-    def test_what_is_not_a_private_dict_is_returned_as_it_is(self):
+    def test_the_gate_fails_closed_for_a_kind_nobody_listed(self):
+        future = {"kind": "saml", "session_id": "s-1", "idp_name": "Acme SSO"}
+        self.assertEqual(via_privacy.via_for_viewer(future, 1, 2), {"kind": "saml"})
+        self.assertEqual(via_privacy.via_for_viewer(future, 1, 1), future, "the owner reads it")
+
+    def test_a_dict_with_no_usable_kind_is_reduced_to_nothing(self):
         for odd in (
-            None,
-            "account_deleted",
-            {"kind": "agent"},
+            {"key_name": "x"},
             {},
-            {"kind": "github", "github_user": "a"},
+            {"kind": ""},
+            {"kind": None, "key_id": "k"},
+            {"kind": ["api_key"], "key_name": "x"},
+            {"kind": 7, "key_name": "x"},
         ):
-            self.assertIs(via_privacy.via_for_viewer(odd, 1, 2), odd)
+            self.assertEqual(via_privacy.via_for_viewer(odd, 1, 2), {}, odd)
+            self.assertEqual(via_privacy.via_for_viewer(odd, 1, 1), odd, "the owner reads it")
+
+    def test_a_value_that_is_not_a_dict_is_reduced_for_a_colleague(self):
+        for odd in ("account_deleted", ["api_key"], 5):
+            self.assertEqual(via_privacy.via_for_viewer(odd, 1, 2), {})
+            self.assertEqual(via_privacy.via_for_viewer(odd, 1, 1), odd)
+        self.assertIsNone(via_privacy.via_for_viewer(None, 1, 2))
+
+    def test_the_kinds_nothing_private_hangs_on_keep_only_their_public_fields(self):
+        # (kind, what a writer stored, what a colleague reads)
+        cases = [
+            ({"kind": "agent"}, {"kind": "agent"}),
+            ({"kind": "agent", "run_id": "r-1"}, {"kind": "agent"}),
+            (
+                {"kind": "pr_merge", "pr_url": "https://x/pull/1", "token": "t"},
+                {"kind": "pr_merge", "pr_url": "https://x/pull/1"},
+            ),
+            ({"kind": "dependencies"}, {"kind": "dependencies"}),
+            (
+                {"kind": "github", "github_user": "alice", "token": "t"},
+                {"kind": "github", "github_user": "alice"},
+            ),
+            ({"kind": "unknown"}, {"kind": "unknown"}),
+        ]
+        for stored, shown in cases:
+            self.assertEqual(via_privacy.via_for_viewer(stored, 1, 2), shown)
+            self.assertEqual(via_privacy.via_for_viewer(stored, 1, 1), stored)
+
+    def test_every_kind_a_writer_stores_today_is_reduced_for_a_colleague(self):
+        # The four a request can stamp (`current_user.get_current_source`, `credential.via()`).
+        for stored in (KEY, APP, UNDO, {"kind": "app"}):
+            self.assertEqual(via_privacy.via_for_viewer(stored, 1, 2), {"kind": stored["kind"]})
+            self.assertEqual(via_privacy.via_for_viewer(stored, 1, 1), stored)
 
     def test_it_does_not_edit_its_input(self):
         via = dict(APP)

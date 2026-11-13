@@ -7,7 +7,8 @@ another member gave their key ("my-laptop-claude"), which can be personal.
 
 Rule (Ken, 2026-11-13): the name belongs to the owner only. A key writes as its owner, so a row's
 actor is the key's owner: on a row the viewer made, `via` is left whole; on anyone else's row it is
-reduced to its kind (`api_key`, `oauth`, `app`). Nothing else about the row changes.
+reduced to its kind (`api_key`, `oauth`, `app`, or any kind not known to be public). Nothing else
+about the row changes.
 
 `via_for_viewer` is that rule, for every surface: MCP `get_task_history` (`with_via_owner_only`,
 below), the web client's task activity and progress feeds (`task_activity_views`), and the comment
@@ -23,39 +24,56 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # the REST feed imports `via_for_viewer`; it needs none of the agent tools
     from origin.search_engine.agent.tools import ToolContext
 
-# The kinds whose `via` carries something only its owner should read: a key's id, name and prefix,
-# a connected app's connection id and client name, an Undo's internal ids. `github` and `pr_merge`
-# carry public facts (a GitHub login, a PR URL).
-OWNER_ONLY_KINDS = frozenset({"api_key", "oauth", "app"})
+# The kinds whose `via` carries nothing private, and the only fields of each that anyone may read:
+# `agent` (the in-app AI), `pr_merge` (a PR URL), `dependencies`, `github` (a GitHub login) and
+# `unknown`. Everything else is private to its owner: `api_key` (a key's id, name and prefix),
+# `oauth` (a connected app's connection id and client name), `app` (an Undo's internal ids), and any
+# kind added later. The gate fails closed: a new credential kind is reduced to its kind until it is
+# listed here on purpose (MIP-1507).
+SAFE_VIA_FIELDS: dict[str, tuple[str, ...]] = {
+    "agent": (),
+    "pr_merge": ("pr_url",),
+    "dependencies": (),
+    "github": ("github_user",),
+    "unknown": (),
+}
 
 
 def via_for_viewer(via: Any, actor_id: Any, viewer_id: Any) -> Any:
     """`via` as `viewer_id` may read it: whole for the row's actor (the key's owner), else its kind.
 
-    One rule for every surface that shows a write's `via` (MCP `get_task_history`, the task
-    activity and progress feeds, the comment list). A `via` that is not a dict, or whose kind
-    carries nothing private, is returned as it is. The input is never edited.
+    One rule for every surface that shows a write's `via` (MCP `get_task_history` and
+    `get_progress_history`, the task activity and progress feeds, the comment list). For anyone
+    but the actor, a kind in `SAFE_VIA_FIELDS` keeps its listed public fields; every other `via`
+    is reduced to `{"kind": kind}`, or `{}` when it has no usable kind (a value that is not a dict,
+    a dict without a text kind). `None` stays `None`. The input is never edited.
     """
-    if not isinstance(via, dict) or via.get("kind") not in OWNER_ONLY_KINDS:
-        return via
+    if via is None:
+        return None
     if actor_id is not None and viewer_id is not None and str(actor_id) == str(viewer_id):
         return via
-    return {"kind": via["kind"]}
+    kind = via.get("kind") if isinstance(via, dict) else None
+    if not isinstance(kind, str) or not kind:
+        return {}
+    return {"kind": kind, **{f: via[f] for f in SAFE_VIA_FIELDS.get(kind, ()) if f in via}}
 
 
 def with_via_owner_only(
     payload: dict[str, Any], args: dict[str, Any], mcp_args: dict[str, Any], ctx: ToolContext
 ) -> dict[str, Any]:
-    """`get_task_history`: other people's `via` is its kind only."""
-    rows = payload.get("history")
-    if not isinstance(rows, list):
-        return payload
-    shown: list[Any] = []
-    for row in rows:
-        via = row.get("via") if isinstance(row, dict) else None
-        if isinstance(via, dict):
-            actor = row.get("actor")
-            owner = actor.get("user_id") if isinstance(actor, dict) else None
-            row = {**row, "via": via_for_viewer(via, owner, ctx.user_id)}
-        shown.append(row)
-    return {**payload, "history": shown}
+    """`get_task_history` (`history`) and `get_progress_history` (`entries`): other people's `via`
+    is its kind only."""
+    out = payload
+    for key in ("history", "entries"):
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        shown: list[Any] = []
+        for row in rows:
+            if isinstance(row, dict) and row.get("via") is not None:
+                actor = row.get("actor")
+                owner = actor.get("user_id") if isinstance(actor, dict) else None
+                row = {**row, "via": via_for_viewer(row["via"], owner, ctx.user_id)}
+            shown.append(row)
+        out = {**out, key: shown}
+    return out
