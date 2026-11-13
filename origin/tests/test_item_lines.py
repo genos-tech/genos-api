@@ -1192,12 +1192,16 @@ class TestPoolFlags(LineBase):
         self.comment(self.task, self.user2, 10)
         for i in range(8):
             self.marker(self.user, 20 + i, "task", self.make_task(f"other {i}").task_id)
-            self.marker(self.user, 40 + i, "project", 1) if i < 3 else None
+            self.marker(self.user, 40 + i, "project", 1)
         with self.pool(3):
             out = self.line(self.task)
-        # 8 markers on live tasks are no pool's business, and the 3 on a project exactly fill
-        # `unattached`'s: nothing was left out anywhere.
-        self.assertEqual(out["capped"], {})
+        # MIP-1322: this line's own pool is not capped (the point of this test), but the 8
+        # markers on a project really do exceed `unattached`'s pool of 3, and it now says so.
+        self.assertNotIn("pool_capped", out["capped"])
+        self.assertNotIn("pool_sources", out["capped"])
+        self.assertEqual(
+            out["capped"], {"unattached_capped": True, "unattached_sources": ["app_markers"]}
+        )
         self.assertEqual(out["unattached"]["app_markers"], 3)
         self.assertEqual(out["line"]["events_total"], 1)
 
@@ -2189,15 +2193,62 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
             seen = item_lines.seen_at(self.ctx, [self.task.task_id])
         self.assertEqual(list(seen), [self.task.task_id])
 
-    def test_a_neighbours_look_up_is_covered_by_the_same_flag(self):
+    def test_a_task_with_a_newer_look_than_every_row_left_out_is_not_flagged(self):
+        """A member with more markers than the pool still has an exact `last_seen_at` for a task
+        whose own marker is newer than everything the pool left out."""
+        self.others(3)  # at minutes 10..12; with a pool of 2 the oldest (10) is left out
+        self.marker(self.user, 30, "task", self.task.task_id)
+        with self.pool(2):
+            seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+            out = self.line(self.task)
+        self.assertFalse(capped)
+        self.assertNotIn("seen_capped", out["capped"])
+        self.assertAt(seen[self.task.task_id].isoformat(), 30)
+
+    def test_a_look_older_than_a_row_left_out_may_have_been_replaced_so_it_is_flagged(self):
+        self.others(3)
+        self.marker(self.user, 5, "task", self.task.task_id)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+        self.assertTrue(capped)
+
+    def test_a_look_at_the_very_instant_of_the_row_left_out_cannot_be_replaced(self):
+        self.others(3)
+        self.marker(self.user, 10, "task", self.task.task_id)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+        self.assertFalse(capped)
+
+    def test_one_task_without_a_look_is_enough_to_flag_a_set(self):
+        other = self.make_task("Other")
+        self.others(3)
+        self.marker(self.user, 30, "task", self.task.task_id)
+        with self.pool(2):
+            _seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id, other.task_id])
+        self.assertTrue(capped)
+
+    def test_a_neighbours_look_up_is_flagged_by_its_own_check(self):
+        """The line's own look is newer than everything left out; the neighbour has none."""
         parent = self.make_task("Parent")
         child = self.make_task("Child", parent_task_id=parent.task_id)
         self.comment(parent, self.user2, 10)
         self.others(3)
+        self.marker(self.user, 30, "task", child.task_id)
         with self.pool(2):
             out = self.full(child)
         self.assertEqual(out["related"][0]["task_id"], parent.task_id)
         self.assertEqual(out["capped"], {"seen_capped": True})
+
+    def test_a_neighbour_with_a_newer_look_adds_no_flag(self):
+        parent = self.make_task("Parent")
+        child = self.make_task("Child", parent_task_id=parent.task_id)
+        self.comment(parent, self.user2, 10)
+        self.others(3)
+        self.marker(self.user, 30, "task", child.task_id)
+        self.marker(self.user, 31, "task", parent.task_id)
+        with self.pool(2):
+            out = self.full(child)
+        self.assertEqual(out["capped"], {})
 
 
 # --------------------------------------------------------------------------- #

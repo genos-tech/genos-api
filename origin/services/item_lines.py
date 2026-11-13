@@ -1057,11 +1057,16 @@ def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
 
 
 def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime], bool]:
-    """`seen_at`, and whether it may be missing a look: True when the member has more markers
-    on milestones, task notes and chat threads than `SEEN_POOL` (one more is asked for), so a
-    task seen only through one of those may show an older time, or none. Markers on the task
-    itself are read by task, in full, and never cut. Only the member's own markers are read, so
-    the flag says nothing about anyone else."""
+    """`seen_at`, and whether a look of one of these tasks may really be missing.
+
+    Markers on milestones, task notes and chat threads are read newest first, `SEEN_POOL` of
+    them (one more is asked for). The flag is True only when a row was left out AND it could
+    still matter: some task asked about has no time, or an older one than the extra row's
+    (every row left out is no newer than that one, and a look only replaces a strictly older
+    time). A member who works in an AI app all day has more markers than the pool but, for
+    the tasks they are looking at, usually a time already newer than all of them: no flag.
+    Markers on the task itself are read by task, in full, and never cut. Only the member's own
+    markers are read, so the flag says nothing about anyone else."""
     me, team = str(ctx.user_id), str(ctx.team_id)
     wanted = {int(t) for t in task_ids if str(t).isdigit()}
     out: dict[int, datetime] = {}
@@ -1082,11 +1087,14 @@ def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime
             "-ts", "-event_id"
         )[: SEEN_POOL + 1]
     )
-    capped = len(others) > SEEN_POOL
+    newest_left_out = others[SEEN_POOL].ts if len(others) > SEEN_POOL else None
     del others[SEEN_POOL:]
     for marker, task_id in _resolve_markers(team, others).items():
         if task_id in wanted and (task_id not in out or marker.ts > out[task_id]):
             out[task_id] = marker.ts
+    capped = newest_left_out is not None and any(
+        t not in out or out[t] < newest_left_out for t in wanted
+    )
     return out, capped
 
 
@@ -1455,8 +1463,10 @@ def _build(
             )
         )
         shown = with_events[:related_limit]
-        # The same pool as the line's own look-up above: its flag already covers these.
-        opened = seen_at(ctx, [task.task_id for _r, task in shown]) if shown else {}
+        opened, opened_cut = (
+            seen_at_checked(ctx, [task.task_id for _r, task in shown]) if shown else ({}, False)
+        )
+        seen_cut = seen_cut or opened_cut
         result["related"] = [
             {
                 "relation": relation,
