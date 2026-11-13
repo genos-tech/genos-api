@@ -578,7 +578,9 @@ class DeletingAProject(Base):
         self.share(self.reader_note, stranger, ROLE_VIEWER, granter=self.reader)
         self.delete_via_page()
         self.assertEqual(self.explicit(stranger, self.reader_note), ROLE_VIEWER)
-        self.assertEqual(get_effective_role(stranger.id, CHAT, self.reader_note.note_id), ROLE_VIEWER)
+        self.assertEqual(
+            get_effective_role(stranger.id, CHAT, self.reader_note.note_id), ROLE_VIEWER
+        )
         # ... and the members still lost theirs
         self.assertIsNone(self.explicit(self.reader, self.reader_note))
         self.assertIsNone(self.explicit(self.owner, self.owner_note))

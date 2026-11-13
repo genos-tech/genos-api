@@ -58,9 +58,7 @@ def _revoke_chat_note_roles(project: ProjectMaster) -> None:
     )
     for channel_id in channel_ids:
         for attendee_id, joined_at in members:
-            revoke_membership_roles(
-                user_id=attendee_id, channel_id=channel_id, joined_at=joined_at
-            )
+            revoke_membership_roles(user_id=attendee_id, channel_id=channel_id, joined_at=joined_at)
 
 
 def delete_project(project: ProjectMaster) -> None:
