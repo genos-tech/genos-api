@@ -29,9 +29,14 @@ import logging
 
 from origin.models.chat.unified_models import Activity, Message
 from origin.models.common.user_models import CustomUser
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services import realtime_push, v3_activity, webpush_dispatch
-from origin.services.task_card_post import _pm_channel, post_task_created_card
+from origin.services.task_card_post import (
+    _pm_channel,
+    post_milestone_created_card,
+    post_task_created_card,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,5 +85,69 @@ def notify_task_assigned(task, *, actor_id, previous_assignee_id) -> list[Activi
     except Exception:  # noqa: BLE001 — the assignee is saved; an observer must not fail the write
         log.warning(
             "task assignment notice failed task=%s", getattr(task, "task_id", None), exc_info=True
+        )
+        return []
+
+
+def notify_milestone_assigned(milestone, *, actor_id, added_user_ids) -> list[Activity]:
+    """Tell the people just ADDED to an existing milestone's assignees (MIP-1464).
+
+    The same rule as `notify_task_assigned`, for a milestone, whose people are
+    `MilestoneAssignees` rows and whose card hangs off its backing task. `added_user_ids` is
+    what `sync_milestone_assignees` returned (or the one person the per-person endpoint
+    added): people who were already on it, and anyone removed, are not told. The actor is
+    skipped, as is anyone who cannot open the chat or is reading it.
+
+    A milestone with no card gets one first, as a task does. Its `@`-mentions then tell
+    EVERYONE on the milestone, not only the new person, which is right: with no card nobody
+    was ever told they were on it.
+
+    Called after the write commits, and never from milestone CREATION (its card already
+    mentions everyone). Best effort: never raises.
+    """
+    try:
+        added = [str(u) for u in (added_user_ids or []) if u]
+        if not added:
+            return []
+        milestone = (
+            MilestoneMaster.objects.select_related("project", "sprint", "reporter")
+            .filter(milestone_id=milestone.milestone_id, is_deleted=False)
+            .first()
+        )
+        if milestone is None or milestone.task_id is None:
+            return []
+        channel = _pm_channel(milestone.project_id)
+        if channel is None:
+            return []
+        card = (
+            Message.objects.select_related("channel", "sender")
+            .filter(channel=channel, task_id=milestone.task_id, is_thread_reply=False)
+            .filter(deleted_at__isnull=True)
+            .order_by("seq")
+            .first()
+        )
+        if card is None:
+            if any(u != str(actor_id) for u in added):
+                post_milestone_created_card(milestone, actor_id=actor_id)
+            return []
+        actor = CustomUser.objects.filter(id=actor_id).first()
+        if actor is None:
+            return []
+        activities: list[Activity] = []
+        for user_id in dict.fromkeys(added):
+            activities.extend(
+                v3_activity.create_task_assign_activity(
+                    message=card, recipient_id=user_id, actor=actor
+                )
+            )
+        webpush_dispatch.schedule_push_for_activities(activities)
+        for activity in activities:
+            realtime_push.push_activity(activity)
+        return activities
+    except Exception:  # noqa: BLE001 — the assignees are saved; an observer must not fail the write
+        log.warning(
+            "milestone assignment notice failed milestone=%s",
+            getattr(milestone, "milestone_id", None),
+            exc_info=True,
         )
         return []

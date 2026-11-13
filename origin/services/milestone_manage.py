@@ -74,9 +74,10 @@ def update_milestone(
     folder: Any = UNSET,
     assignee_ids: Any = UNSET,
     after_sync: Callable[[], None] | None = None,
-) -> None:
+) -> list[str]:
     """Apply a milestone PATCH. The caller owns the transaction and the
-    `invalidate_project_tasks_cache` call.
+    `invalidate_project_tasks_cache` call. Returns the ids of the people it ADDED as
+    assignees, for the caller to tell once the transaction commits (MIP-1464).
 
     `fields` holds the plain columns to set (`PATCHABLE_FIELDS`); `sprint` is a
     `Sprint` or None, `folder` a `MilestoneFolder` or None, both already checked
@@ -127,13 +128,15 @@ def update_milestone(
             sprint_id=milestone.sprint_id,
         )
 
+    added: list[str] = []
     if assignee_ids is not UNSET:
-        sync_milestone_assignees(milestone, assignee_ids)
+        added = sync_milestone_assignees(milestone, assignee_ids)
         # The backing task shows the milestone's first assignee (else its
         # reporter), and step 2 ran before the assignees were written, so it
         # still showed the reporter (MIP-916). Mirror once more. Same as the
         # per-person endpoint, and a no-op for every other column.
         sync_backing_task(milestone)
+    return added
 
 
 # How far down the `parent_task_id` chain the re-root follows, and how far up it

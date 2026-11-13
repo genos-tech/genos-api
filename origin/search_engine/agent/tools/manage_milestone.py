@@ -68,6 +68,7 @@ from origin.services.milestone_manage import (
     update_milestone,
 )
 from origin.services.milestone_service import create_milestone
+from origin.services.task_assignment_notice import notify_milestone_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card
 
@@ -436,9 +437,10 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "__summary__": f"No changes applied to {_label(payload)}.",
         }
 
+    added_assignees: list[str] = []
     try:
         with transaction.atomic():
-            update_milestone(
+            added_assignees = update_milestone(
                 milestone,
                 fields=fields,
                 start_date=dates.get("start_date", UNSET),
@@ -456,6 +458,8 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # The backing task mirrors most of these fields and a sprint change reaches
     # every task in the milestone.
     invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+    # Whoever was just added to the milestone is told, as in the app (MIP-1464).
+    notify_milestone_assigned(milestone, actor_id=ctx.user_id, added_user_ids=added_assignees)
 
     if "description" in fields and milestone.task_id:
         # The editor renders the task's Yjs doc, not `content`; without this push
