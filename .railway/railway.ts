@@ -471,7 +471,7 @@ export default defineRailway(() => {
     },
     deploy: {
       cronSchedule: "*/5 * * * *",
-      startCommand: "python /app/manage.py schedule_tick --heartbeat schedule-tick",
+      startCommand: "sh /app/railway-schedule-tick-entrypoint.sh --heartbeat schedule-tick",
       restartPolicyType: "NEVER",
       limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
     },
