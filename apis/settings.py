@@ -1869,6 +1869,19 @@ SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
     os.environ.get("AGENT_CHEATSHEET_FROM_REGISTRY", "false").lower() == "true"
 )
 
+# MIP-977 (model-visible, dark-shipped OFF, measured by the grouped eval arm `t977`):
+# a run resumed after an approve or reject keeps the prompt context its first leg
+# had (the thread / note summary of "Ask about this ...", the @/# references block,
+# the tier block). OFF = `/ask/` keeps nothing on the run at a pause and `/decide/`
+# resumes with no `system_extra`, exactly as before (the resumed leg's system
+# instruction and messages are byte-identical to the unflagged code). Read at call
+# time, so `agent_eval_compare --b-overrides` and the group runner can flip it.
+# Flip criterion: the `t977` arm answers the thread/note-only fact after an
+# approval and regresses nothing else.
+SEARCH_ENGINE["AGENT_RESUME_KEEPS_BLOCKS"] = (
+    os.environ.get("AGENT_RESUME_KEEPS_BLOCKS", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

@@ -45,8 +45,9 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.conf import settings
 from django.db import connections
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -114,9 +115,16 @@ class ScriptedModel:
 
 class ResumeBase(TransactionTestCase):
     script = ("write", "answer")
+    # The flags this fix is behind (default OFF in settings). These tests are about what
+    # the fix does, so they run with it ON; `test_agent_resume_flag_pins` runs the same
+    # harness with it OFF and pins today's bytes.
+    flags: dict = {"AGENT_RESUME_KEEPS_BLOCKS": True}
 
     def setUp(self):
         super().setUp()
+        self.enterContext(
+            override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, **self.flags})
+        )
         user_model = get_user_model()
         self.user = user_model.objects.create_user(
             username="asker", email="asker@example.com", password="x"

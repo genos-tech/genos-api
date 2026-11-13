@@ -1557,11 +1557,17 @@ class AgentAskView(AuthenticatedAPIView):
 
         # What /decide/ will hand a resumed leg if this ask pauses on a write
         # (MIP-977); written by `_stream_ndjson` at the pause, not before.
-        resume_context = _resume_context_for(
-            scope=resume_scope,
-            scoped_extra=scoped_extra,
-            mention_extra=mention_extra,
-            tier_extra=tier_extra,
+        # Flag off (`AGENT_RESUME_KEEPS_BLOCKS`): nothing is kept, so a paused run holds
+        # no copy of a private summary that nothing would read back.
+        resume_context = (
+            _resume_context_for(
+                scope=resume_scope,
+                scoped_extra=scoped_extra,
+                mention_extra=mention_extra,
+                tier_extra=tier_extra,
+            )
+            if _resume_keeps_blocks()
+            else None
         )
 
         # `chosen` is captured in the worker closure so the contextvar
@@ -1679,6 +1685,14 @@ def _lost_the_approval(run_id, approval_token: str) -> Response:
         {"error": "run is not awaiting approval (the approval was already used)."},
         status=status.HTTP_409_CONFLICT,
     )
+
+
+def _resume_keeps_blocks() -> bool:
+    """`AGENT_RESUME_KEEPS_BLOCKS` (MIP-977): does a resumed leg get the prompt context
+    its first leg had? Read at every call, so a per-run override or a settings flip
+    takes effect without a restart. Default off: the resumed leg is then exactly what
+    it was before this existed."""
+    return bool(settings.SEARCH_ENGINE.get("AGENT_RESUME_KEEPS_BLOCKS", False))
 
 
 def _resume_context_for(
@@ -2018,7 +2032,9 @@ class AgentDecideView(AuthenticatedAPIView):
         # ...and the same prompt context its first leg had (MIP-977): the thread
         # or note summary, the references, the tier block. Without it every
         # decision stripped them for the rest of the run.
-        resumed_extra = _resumed_system_extra(run)
+        # Flag off (`AGENT_RESUME_KEEPS_BLOCKS`): None, which is what every resume got
+        # before MIP-977, whatever a row holds.
+        resumed_extra = _resumed_system_extra(run) if _resume_keeps_blocks() else None
 
         def worker(emit, cancel_event):
             token = set_llm_choice(resumed_choice)
