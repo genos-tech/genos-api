@@ -59,11 +59,35 @@ FIXTURES = ("v1", "sequence")
 # Keys of a case file entry that the harness owns. They are removed before the entry
 # reaches `runner.run_behavior_case`, which would not know them.
 GROUP_ONLY_KEYS = frozenset(
-    {"kind", "lang", "tags", "fixture", "viewer", "reps", "requires_arm", "est", "note"}
+    {
+        "kind",
+        "lang",
+        "tags",
+        "fixture",
+        "viewer",
+        "reps",
+        "requires_arm",
+        "est",
+        "note",
+        # MIP-905 (see group/content_checks.py): the member's saved level for the case, the
+        # case's own model choice, and environment the case needs (named in the plan notes).
+        "member_prefs",
+        "llm",
+        "needs_env",
+    }
 )
 # `expect:` keys evaluated by the harness (runner.py does not know them).
 GROUP_EXPECT_KEYS = frozenset(
-    {"facts_in_order", "tools_in_order", "max_calls", "no_tool_results_contain"}
+    {
+        "facts_in_order",
+        "tools_in_order",
+        "max_calls",
+        "no_tool_results_contain",
+        # MIP-905 (group/content_checks.py): what the model proposed, and the answer's length
+        "pending_write",
+        "answer_chars_at_most",
+        "answer_chars_at_least",
+    }
 )
 
 _CJK = re.compile(r"[぀-ヿ㐀-鿿]")
@@ -255,6 +279,9 @@ class Arm:
     #: the arm names whose behaviour this arm switches on (itself and what it requires)
     satisfies: frozenset[str] = frozenset()
     source: str = ""
+    #: environment the arm cannot measure without (`needs:` in its file): `{SEARCH_ENGINE key:
+    #: value}`. Not applied (arm overrides do that); only checked, and named in the plan notes.
+    needs: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_baseline(self) -> bool:
@@ -280,7 +307,12 @@ def load_arms(arms_dir: Path = ARMS_DIR) -> dict[str, Arm]:
         if not isinstance(overrides, dict):
             raise HarnessError(f"{path.name}: `overrides` must be a mapping")
         requires = list(data.get("requires") or [])
-        raw[name] = Arm(name=name, own=dict(overrides), requires=requires, source=path.name)
+        needs = data.get("needs") or {}
+        if not isinstance(needs, dict):
+            raise HarnessError(f"{path.name}: `needs` must be a mapping")
+        raw[name] = Arm(
+            name=name, own=dict(overrides), requires=requires, source=path.name, needs=dict(needs)
+        )
 
     def resolve(name: str, trail: tuple[str, ...]) -> tuple[dict[str, Any], set[str]]:
         if name in trail:
@@ -430,6 +462,22 @@ def build_plan(
                 continue
         chosen.append(arm)
     plan.arms += chosen
+    for arm in chosen:
+        for key, value in _arm_needs(arm, arms).items():
+            current = settings.SEARCH_ENGINE.get(key)
+            if current != value:
+                plan.notes.append(
+                    f"WARNING arm {arm.name}: needs {key}={value!r} in the environment (it is "
+                    f"{current!r}); without it the arm runs the same code as arm0 and measures "
+                    "nothing"
+                )
+    for key, value in _cases_need(cases).items():
+        current = settings.SEARCH_ENGINE.get(key)
+        if current != value:
+            plan.notes.append(
+                f"WARNING cases need {key}={value!r} in the environment (it is {current!r}): "
+                "they would pass or fail for the wrong reason"
+            )
 
     for arm in plan.arms:
         for case in cases:
@@ -445,6 +493,22 @@ def build_plan(
             )
     plan.arms = [a for a in plan.arms if a.is_baseline or any(i.arm is a for i in plan.items)]
     return plan
+
+
+def _arm_needs(arm: Arm, arms: dict[str, Arm]) -> dict[str, Any]:
+    """The environment an arm needs (`needs:` in its file; its required arms' too)."""
+    out: dict[str, Any] = {}
+    for name in arm.satisfies:
+        out.update(arms[name].needs if name in arms else {})
+    return out
+
+
+def _cases_need(cases: list[GroupCase]) -> dict[str, Any]:
+    """The environment the selected cases name (`needs_env:` in a case)."""
+    out: dict[str, Any] = {}
+    for case in cases:
+        out.update(case.raw.get("needs_env") or {})
+    return out
 
 
 def _applies(case: GroupCase, arm: Arm, arms: dict[str, Arm]) -> tuple[bool, str]:
@@ -686,7 +750,13 @@ def _norm(text: str) -> str:
 
 
 def group_checks(
-    expect: dict[str, Any], *, answer: str, tools: list[str], tool_text: str, calls: int
+    expect: dict[str, Any],
+    *,
+    answer: str,
+    tools: list[str],
+    tool_text: str,
+    calls: int,
+    pending: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Checks for the group-only `expect:` keys. Returns `[{"name","ok","detail"}]`.
 
@@ -698,8 +768,24 @@ def group_checks(
     max_calls             model calls <= N
     no_tool_results_contain  strings that must NOT appear in any tool result (a viewer who may
                           not see something must not even be handed it)
+    pending_write         (MIP-905) checks on the write the model PROPOSED, from the
+                          `tool_call_pending_approval` events: tool, task counts, body lengths
+                          in characters, headings, not cut off. See `content_checks`.
+    answer_chars_at_most / answer_chars_at_least   the answer's length in characters
     """
     checks: list[dict[str, Any]] = []
+    if (
+        "pending_write" in expect
+        or "answer_chars_at_most" in expect
+        or "answer_chars_at_least" in expect
+    ):
+        from origin.search_engine.agent.evals.group import content_checks  # noqa: PLC0415
+
+        if "pending_write" in expect:
+            checks += content_checks.check_pending(
+                expect["pending_write"] or {}, pending or [], answer=answer
+            )
+        checks += content_checks.check_answer_length(expect, answer)
     if "facts_in_order" in expect:
         text = _norm(answer)
         last = -1

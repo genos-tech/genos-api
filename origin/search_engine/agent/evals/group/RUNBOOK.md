@@ -144,3 +144,26 @@ the model.
   turns it off (to reproduce an older run); the dry-run warns when a `ja` case would run without it.
 * Cost figures come from the model catalog (`apis/llm_models.yaml`); a model missing from it is
   counted as 0 and flagged `unpriced`.
+* **Content length (MIP-905, tags `t905` and `t905-a2`).** Optional case keys, all group-only (the
+  runner never sees them; `group/content_checks.py`):
+  * `member_prefs: {content_length: short|standard|long}`: the member's level FOR THIS CASE. It is
+    applied through a ContextVar (`content_length.override_level`), never by writing the fixture
+    member's row, so `--concurrency N` cannot race. It only reaches the model on an arm that has
+    `AGENT_CONTENT_LENGTH` on (arm `t905`); on arm0 the level is ignored, as in production.
+  * `llm: {provider: gemini, effort: low}`: the case's own `LlmChoice` (wins over `--provider/--effort`).
+  * `needs_env: {SEARCH_ENGINE_KEY: value}`: environment the case cannot be read without; the plan
+    prints a WARNING when it is not so. An arm file may carry `needs:` the same way (checked, never
+    applied): `t905-a2` needs `AGENT_EFFORT_LEVELS=true` and `AGENT_TWO_TIER_LOOP=true`, or it runs
+    arm0's code. Set them in the environment of the whole session.
+  * `expect: pending_write: {tool, tasks_at_least, tasks_at_most, total_chars_at_least/_at_most,
+    each_body_chars_at_least/_at_most, each_body_headings_at_least/_at_most, not_cut_off}` checks
+    what the model PROPOSED (a write never runs in an eval), in characters; a plan's `each_body_*`
+    judge its task bodies. `answer_chars_at_most/_at_least` bound the answer. A run that ends on a
+    proposal and says nothing shows the proposed bodies as its `answer`, so the report carries the
+    text to read.
+  * For each question the `.standard` case runs on arm0 AND `t905` (same bytes: "Standard unchanged"
+    is those two columns); `.short` / `.long` have `requires_arm: t905`. Cost: the `.long` and
+    `bigplan` cases write 2,000 to 12,000 output tokens (their `est:` says so).
+  * `t905.bigplan.*` pins `llm: gemini/low` (a 4,096-token cap that binds) and needs
+    `AGENT_EFFORT_LEVELS=true`. Standard may come back cut off or with an error TODAY: that is the
+    finding (truncation detection, MIP-905 A1, turns it into a message), not a harness fault.
