@@ -2507,6 +2507,7 @@ def call(
     credential_kind: str = "api_key",
     audit: Callable[[str, str, dict[str, Any], dict[str, Any]], None] | None = None,
     record_use: Callable[["McpTool", dict[str, Any]], None] | None = None,
+    notify: Callable[["McpTool", dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a published tool and shape its output as a `CallToolResult`.
 
@@ -2590,6 +2591,13 @@ def call(
             record_use(tool, args)
         except Exception:  # noqa: BLE001 - recording never fails a call
             log.warning("MCP use marker failed for %s", tool.name, exc_info=True)
+    if notify is not None and tool.write:
+        # Tell the key's owner what their AI app just did (MIP-1432), from the tool's own
+        # result (ids and titles it returned, before the result is shaped for the client).
+        try:
+            notify(tool, args, payload)
+        except Exception:  # noqa: BLE001 - a notice never fails a call
+            log.warning("MCP notice failed for %s", tool.name, exc_info=True)
 
     fenced: list[bool] = []
     payload = _strip_workspace_content(dict(payload or {}), fenced)

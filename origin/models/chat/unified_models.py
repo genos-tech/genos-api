@@ -645,6 +645,12 @@ class ActivityType(models.IntegerChoices):
     # with just the chat-type chip (no action chip); `create_message_activities`
     # is the sole producer and scopes it to DM/GM/MDM, never PM.
     MESSAGE = 5, "message"
+    # What a member's own AI app (an MCP client) did on their behalf: "Claude Code created 15
+    # tasks in QR". The recipient IS the actor, the one case where an activity is for the
+    # person who caused it, because they were not watching (MIP-1432). Channel-less: it
+    # carries `surface_type = SURFACE_AI_APP` and its facts in `meta`
+    # (`services/mcp_notice.py`).
+    AI_APP = 6, "ai_app"
 
 
 class Activity(models.Model):

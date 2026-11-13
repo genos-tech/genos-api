@@ -62,6 +62,10 @@ _PUSH_DEFAULTS = {
     # `message_reminder`, so someone who wants nudges about messages but
     # not about their list has a way to say so.
     "todo_reminder": True,
+    # What the member's own AI app did over MCP (MIP-1432). One switch, which also decides
+    # whether the feed row is made at all (`services/mcp_notice.py`). No coarse group: it is
+    # news about the member's own app, not about other people.
+    "ai_app": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
