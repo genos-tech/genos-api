@@ -577,14 +577,14 @@ def write_task_comment_as_thread_reply(
     `get_or_create`.
 
     `project_id`: when known at the call site, passing it skips a
-    `TaskMaster` lookup. The backfill command always knows the project
-    (it iterates projects); the live dual-write path can pass it from
-    the request or omit it.
+    `TaskMaster` lookup. `repair_task_comment_mirrors` and the demo
+    seeder always know the project; the live dual-write path can pass it
+    from the request or omit it.
 
     `bypass_flag`: the dual-write entry points all gate on the
-    `UNIFIED_MESSAGING_DUAL_WRITE` setting, but the backfill needs to
-    run regardless of that runtime flag (it's a one-shot migration).
-    Set `True` from the management command, omit elsewhere.
+    `UNIFIED_MESSAGING_DUAL_WRITE` setting, but the comment fan-out, the
+    demo seeder and `repair_task_comment_mirrors` run regardless of that
+    runtime flag. They pass `True`.
 
     Returns the created/found Message on success, None on any failure.
     Never raises — the caller's legacy `TaskComments` save is the
