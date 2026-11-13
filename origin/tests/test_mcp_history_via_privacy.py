@@ -109,13 +109,13 @@ class TestTheKeyNameIsTheOwners(McpBase):
         self.assertEqual(merge["via"]["pr_url"], "https://x/pull/1")
 
     def test_a_connected_app_is_treated_like_a_key(self):
-        oauth = {"kind": "oauth", "connection_id": "c-9", "client_name": "Alice's Claude"}
+        oauth = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
         self.row("theirs", self.user2, oauth)
         rows, text = self.history()
         [theirs] = [r for r in rows if r["actor"]["user_id"] == str(self.user2.id)]
         self.assertEqual(theirs["via"], {"kind": "api_key"})
         self.assertNotIn("Alice's Claude", text)
-        self.assertNotIn("c-9", text)
+        self.assertNotIn("conn-9", text)
 
     def test_the_in_app_registry_tool_is_not_changed_by_it(self):
         # What the in-app model sees waits for the grouped eval (flag AGENT_CLIENT_IN_TASK_HISTORY).
@@ -170,8 +170,8 @@ class TestTheHook(McpBase):
 class TestProgressHistoryKeepsTheSameRule(McpBase):
     """MIP-1485: `get_progress_history` shares `_via` with `get_task_history` and was missed."""
 
-    OAUTH = {"kind": "oauth", "connection_id": "c-9", "client_name": "Alice's Claude"}
-    SECRETS = ("Alice's private phone", "k-theirs", "gk_alice", "c-9", "Alice's Claude")
+    OAUTH = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
+    SECRETS = ("Alice's private phone", "k-theirs", "gk_alice", "conn-9", "Alice's Claude")
 
     def setUp(self):
         super().setUp()

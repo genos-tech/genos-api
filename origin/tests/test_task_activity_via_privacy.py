@@ -22,9 +22,9 @@ FEED = "/api/v2/task/activity/"
 PROGRESS = "/api/v2/task/progress/"
 
 KEY = {"kind": "api_key", "key_id": "k-1", "key_name": "Alice's phone", "key_prefix": "gk_alice"}
-APP = {"kind": "oauth", "connection_id": "c-9", "client_name": "Alice's Claude"}
+APP = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
 UNDO = {"kind": "app", "undo_of": {"run_id": "r-1", "step": 3}}
-SECRETS = ("Alice's phone", "k-1", "gk_alice", "c-9", "Alice's Claude", "r-1")
+SECRETS = ("Alice's phone", "k-1", "gk_alice", "conn-9", "Alice's Claude", "r-1")
 
 
 class _Base(BaseAPITestCase):
