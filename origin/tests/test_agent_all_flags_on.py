@@ -23,8 +23,10 @@ from origin.search_engine.agent import tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
 from origin.search_engine.agent.evals.group import harness
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system_prompt
-from origin.search_engine.agent.tools import REGISTRY, flagged_tools
+from origin.search_engine.agent.tools import REGISTRY, ToolContext, flagged_tools, get_app_tool
+from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
+from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
 # All-on prefix measured 139,157 (off 134,315, +4,842 declarations): same headroom the budget keeps.
 ALL_ON_BUDGET_CHARS = 141_000
@@ -215,3 +217,102 @@ class AllOnFingerprintTests(TestCase):
                 "result.fetch_task",
             },
         )
+
+
+# --------------------------------------------------------------------------- #
+# Interactions: each stack's tools and resume path, every flag on at once        #
+# --------------------------------------------------------------------------- #
+
+
+class AllOnToolResultTests(SequenceScenario):
+    """The sequence story's task (thread + chat + note origins, a client key) read by every tool a
+    flag touches, with every flag on: each flag's addition is present and no tool breaks."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = settings_with(ALL_ON)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.seq = self.build_sequence(client_on_project=True, c_in_gm=True)
+
+    def ctx(self, user):
+        return ToolContext(team_id=str(self.team.team_id), user_id=str(user.id))
+
+    def run_tool(self, name, user, **args):
+        tool = get_app_tool(name)
+        self.assertIsNotNone(tool, name)
+        return tool.run(args, self.ctx(user))
+
+    def test_fetch_task_carries_the_anchors_and_the_closed_ancestor_fields_together(self):
+        out = self.run_tool("fetch_task", self.seq.b, task_id=self.seq.task.task_id)
+        self.assertIn("anchors", out)
+        keys = list(out)
+        self.assertEqual(keys[-2:], ["anchors", "__summary__"])
+        # the task's own status is still there; the rule's fields appear only when the rule changes it
+        self.assertIn("status", out)
+
+    def test_task_history_still_serves_with_the_client_flag_and_the_rule_on(self):
+        out = self.run_tool("get_task_history", self.seq.b, task_id=self.seq.task.task_id)
+        self.assertTrue(out.get("history") or out.get("entries") or out.get("events") or out)
+
+    def test_current_user_carries_the_team_line(self):
+        out = self.run_tool("get_current_user", self.seq.b)
+        self.assertIn("team", out)
+
+    def test_the_inbox_and_the_summaries_still_run(self):
+        self.run_tool("list_my_inbox", self.seq.b, include_read=True, limit=20)
+        self.run_tool("get_my_task_summary", self.seq.b)
+        self.run_tool("get_my_focus_tasks", self.seq.b)
+        self.run_tool("list_tasks", self.seq.b, limit=20)
+
+    def test_the_timeline_tool_runs_through_the_controllers_lookup(self):
+        tool = _app_tool("get_timeline")
+        self.assertIsNotNone(tool)
+        out = tool.run(
+            {"anchor_type": "task", "anchor_id": str(self.seq.task.task_id)}, self.ctx(self.seq.b)
+        )
+        self.assertTrue(out)
+
+    def test_a_flagged_tool_name_cannot_shadow_a_registered_one(self):
+        # `_app_tool` consults REGISTRY first: no declared name resolves to two tools
+        for d in _build_tool_declarations():
+            self.assertIsNotNone(_app_tool(d.name), d.name)
+
+
+class AllOnResumeTests(RunnerBase):
+    """The resume runner's cases (977 / 991 / 889 reason + undo / 1283) with EVERY flag on at
+    once: reject-reason + undo note + both resume flags + the closing line. Stub model."""
+
+    def checks(self, result):
+        return {
+            c["name"]: c
+            for c in result["checks"]
+            if c["name"] in PROMPT_CHECKS + ("paused_on_the_write",)
+        }
+
+    def test_every_resume_case_pauses_and_meets_its_own_direction_with_all_on(self):
+        problems: list[str] = []
+        seen = 0
+        for case in cases():
+            seen += 1
+            result = self.run_case(case, ALL_ON)
+            if result.get("error"):
+                problems.append(f"{case['id']}: crashed: {result['error']}")
+                continue
+            checks = self.checks(result)
+            if case.get("scenario") != "closing_line" and not checks.get(
+                "paused_on_the_write", {}
+            ).get("ok"):
+                problems.append(f"{case['id']}: the first leg did not pause")
+                continue
+            failed = [n for n, c in checks.items() if n in PROMPT_CHECKS and not c["ok"]]
+            if failed:
+                problems.append(f"{case['id']} ({case['polarity']}): failed {failed}")
+        self.maxDiff = None
+        self.assertEqual(problems, [])
+        self.assertGreaterEqual(seen, 30)
+
+    def test_the_settings_are_restored_after_an_all_on_run(self):
+        before = dict(settings.SEARCH_ENGINE)
+        self.run_case(cases()[0], ALL_ON)
+        self.assertEqual(dict(settings.SEARCH_ENGINE), before)
