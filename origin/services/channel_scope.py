@@ -37,17 +37,17 @@ from origin.services.external_grants import external_objects_by_type
 
 
 def user_channels_qs(user):
-    """Active channels the given user is a member of, with related fields
-    needed for serialization preloaded."""
-    return (
-        Channel.objects.filter(
-            members__user=user,
-            members__is_deleted=False,
-            is_deleted=False,
-        )
-        .select_related("project", "team", "owner")
-        .distinct()
-    )
+    """Live channels the given user is a member of (`chat_member_q`), with related
+    fields needed for serialization preloaded.
+
+    `user` is a user or a user id. The membership rule is the product's one (MIP-1480): a
+    project chat is the project's people, so a stray channel-member row opens nothing.
+    `chat_member_q` filters with subqueries, so there is no join and no duplicate to
+    `distinct()` away.
+    """
+    return Channel.objects.filter(
+        chat_member_q(getattr(user, "id", user)), is_deleted=False
+    ).select_related("project", "team", "owner")
 
 
 def team_scope_q(team_id, user_id) -> Q:
@@ -133,6 +133,35 @@ def chat_note_member_q(user_id) -> Q:
     """
     live_and_mine = Channel.objects.filter(chat_member_q(user_id), is_deleted=False).values("id")
     return Q(channel_id__in=live_and_mine) & Q(chat_type=F("channel__kind"))
+
+
+def is_chat_member(channel_id, user_id) -> bool:
+    """Whether `user_id` is a member of the chat `channel_id` by `chat_member_q`.
+
+    The membership half of `can_read_chat`, for the REST gates that scope by membership alone
+    (the channel, message, reaction, flag, pin and media endpoints): they answer "not a member"
+    exactly as they answer "no such chat". Does not look at `is_deleted` (the callers that need a
+    live chat already fetched one) or at the team.
+    """
+    return Channel.objects.filter(chat_member_q(user_id), id=channel_id).exists()
+
+
+def chat_member_rows(channel: Channel):
+    """The live `ChannelMember` rows that count as members of `channel`: a roster.
+
+    A direct message, group or multi-person DM: its live rows. A project chat: only the rows of
+    people who are ON THE PROJECT, because a stray row (a person who is not on the project) is
+    not a member by `chat_member_q`, so it must not be listed in the roster, mentioned into the
+    chat, or notified of its messages.
+    """
+    rows = ChannelMember.objects.filter(channel=channel, is_deleted=False)
+    if channel.kind == ChannelKind.PM:
+        rows = rows.filter(
+            user_id__in=ProjectMembers.objects.filter(
+                project_id=channel.project_id, attendee_id__isnull=False
+            ).values("attendee_id")
+        )
+    return rows
 
 
 def _readable_chats(user_id, in_team: Q):

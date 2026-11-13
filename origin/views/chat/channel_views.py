@@ -45,7 +45,7 @@ from origin.serializers.chat.unified_serializers import (
     ChannelSerializer,
     MessageSerializer,
 )
-from origin.services.channel_scope import team_scope_q, user_channels_qs
+from origin.services.channel_scope import chat_member_rows, team_scope_q, user_channels_qs
 from origin.services.external_grants import (
     ExternalGrantError,
     active_grants_for_object,
@@ -757,9 +757,7 @@ class ChannelDetailView(AuthenticatedAPIView):
             channel._latest_message = None
             channel._unread_count = 0
 
-        members = ChannelMember.objects.filter(channel=channel, is_deleted=False).select_related(
-            "user"
-        )
+        members = chat_member_rows(channel).select_related("user")
 
         return Response(
             {
@@ -1020,9 +1018,7 @@ class ChannelMembersView(AuthenticatedAPIView):
     def get(self, request, channel_id):
         # Membership check + 404 leak prevention via _get_channel_for_user.
         channel = _get_channel_for_user(channel_id, request.user)
-        members = ChannelMember.objects.filter(channel=channel, is_deleted=False).select_related(
-            "user"
-        )
+        members = chat_member_rows(channel).select_related("user")
         return Response({"members": ChannelMemberSerializer(members, many=True).data})
 
     def post(self, request, channel_id):

@@ -15,9 +15,9 @@ missing chat (no existence oracle).
 from __future__ import annotations
 
 import uuid
+from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 
 from origin.models.chat.unified_models import (
     Channel,
@@ -93,11 +93,15 @@ class PmChatStrayRow(McpBase):
 
     def test_roster_is_a_404_like_a_missing_chat(self):
         self.as_user(self.outsider)
-        self.assert_404_like_missing(lambda cid: self.client.get(f"/api/v3/channels/{cid}/members/"))
+        self.assert_404_like_missing(
+            lambda cid: self.client.get(f"/api/v3/channels/{cid}/members/")
+        )
 
     def test_message_delta_is_a_404_like_a_missing_chat(self):
         self.as_user(self.outsider)
-        self.assert_404_like_missing(lambda cid: self.client.get(f"/api/v3/channels/{cid}/messages/"))
+        self.assert_404_like_missing(
+            lambda cid: self.client.get(f"/api/v3/channels/{cid}/messages/")
+        )
 
     def test_thread_delta_is_a_404(self):
         self.as_user(self.outsider)
@@ -136,8 +140,45 @@ class PmChatStrayRow(McpBase):
 
     def test_pins_are_a_404(self):
         self.as_user(self.outsider)
-        res = self.client.get(f"/api/v3/channels/{self.chat.id}/pin/")
+        res = self.client.post(f"/api/v3/channels/{self.chat.id}/pin/", {}, format="json")
         self.assertEqual(res.status_code, 404, res.content)
+
+    def test_attachment_upload_is_a_404(self):
+        self.as_user(self.outsider)
+        res = self.client.post(
+            f"/api/v3/messages/{self.message.id}/attachments/", {}, format="multipart"
+        )
+        self.assertEqual(res.status_code, 404, res.content)
+
+    def test_task_card_sync_is_a_404(self):
+        Message.objects.filter(pk=self.message.pk).update(task=self.task)
+        self.as_user(self.outsider)
+        res = self.client.patch(
+            f"/api/v3/tasks/{self.task.pk}/card-message/",
+            {"body": [{"type": "paragraph", "content": []}]},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 404, res.content)
+        self.as_user(self.insider)
+        res = self.client.patch(
+            f"/api/v3/tasks/{self.task.pk}/card-message/",
+            {"body": [{"type": "paragraph", "content": []}]},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+
+    def test_a_message_in_the_chat_pushes_the_project_not_the_stray_row(self):
+        self.as_user(self.insider)
+        with mock.patch("origin.services.webpush_dispatch.schedule_push_for_message") as push:
+            res = self.client.post(
+                f"/api/v3/channels/{self.chat.id}/messages/",
+                {"body": [{"type": "paragraph", "content": []}], "body_text": "hi"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 201, res.content)
+        recipients = set(push.call_args.args[1])
+        self.assertIn(str(self.owner.id), recipients)
+        self.assertNotIn(str(self.outsider.id), recipients)
 
     def test_read_cursor_is_a_404(self):
         self.as_user(self.outsider)

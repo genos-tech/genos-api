@@ -39,7 +39,6 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
     Channel,
-    ChannelMember,
     Message,
     MessageAttachment,
     MessageMention,
@@ -51,6 +50,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageSerializer,
 )
 from origin.services import webhook_enqueue
+from origin.services.channel_scope import chat_member_rows, is_chat_member
 from origin.services.mention_extractor import (
     extract_mention_group_ids,
     extract_mentioned_user_ids,
@@ -134,8 +134,7 @@ def _verify_member_or_404(channel_id, user):
         channel = Channel.objects.get(id=channel_id, is_deleted=False)
     except Channel.DoesNotExist:
         raise Http404("Channel not found.")
-    is_member = ChannelMember.objects.filter(channel=channel, user=user, is_deleted=False).exists()
-    if not is_member:
+    if not is_chat_member(channel.id, user.id):
         raise Http404("Channel not found.")
     return channel
 
@@ -192,9 +191,9 @@ def _split_mentions_by_membership(channel, body):
         return set(), set()
     valid = {
         str(uid)
-        for uid in ChannelMember.objects.filter(
-            channel=channel, user_id__in=mentioned, is_deleted=False
-        ).values_list("user_id", flat=True)
+        for uid in chat_member_rows(channel)
+        .filter(user_id__in=mentioned)
+        .values_list("user_id", flat=True)
     }
     return valid, {str(u) for u in mentioned} - valid
 
@@ -304,9 +303,7 @@ def _allocate_seq_and_create_message_with_activities(
         # also a different push category and so a different mute setting.
         already_notified = {str(a.recipient_id) for a in activities} | mentioned_recipient_ids
         member_ids = (
-            ChannelMember.objects.filter(channel=channel, is_deleted=False)
-            .exclude(user_id=sender.id)
-            .values_list("user_id", flat=True)
+            chat_member_rows(channel).exclude(user_id=sender.id).values_list("user_id", flat=True)
         )
         msg_recipients = [str(m) for m in member_ids if str(m) not in already_notified]
         # Activity-feed rows for the plain message so DM/GM/MDM messages show
@@ -743,10 +740,7 @@ class MessageDetailView(AuthenticatedAPIView):
         except Message.DoesNotExist:
             raise Http404("Message not found.")
 
-        is_member = ChannelMember.objects.filter(
-            channel=message.channel, user=user, is_deleted=False
-        ).exists()
-        if not is_member:
+        if not is_chat_member(message.channel_id, user.id):
             raise Http404("Message not found.")
         return message
 
@@ -955,10 +949,7 @@ class TaskCardMessageView(AuthenticatedAPIView):
             # WS proxy knows to skip the broadcast instead of erroring.
             return Response({"updated": False}, status=status.HTTP_200_OK)
 
-        is_member = ChannelMember.objects.filter(
-            channel=message.channel, user=request.user, is_deleted=False
-        ).exists()
-        if not is_member:
+        if not is_chat_member(message.channel_id, request.user.id):
             # 404-not-403 to match the existence-hiding rule used
             # everywhere else in this view file.
             raise Http404("Task card message not found.")
@@ -1014,10 +1005,7 @@ class MessageAttachmentsView(AuthenticatedAPIView):
 
         # 404-not-403 for non-members to match the existence-hiding
         # rule used everywhere else.
-        is_member = ChannelMember.objects.filter(
-            channel=message.channel, user=request.user, is_deleted=False
-        ).exists()
-        if not is_member:
+        if not is_chat_member(message.channel_id, request.user.id):
             raise Http404("Message not found.")
 
         if message.sender_id != request.user.id:
