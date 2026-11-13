@@ -763,10 +763,13 @@ class MemberEventsPreferenceView(AuthenticatedAPIView):
                 purge_item_activity(request.user.pk)  # the per-day table (MIP-1084)
                 purge_importance(request.user.pk)  # what they marked and tuned (MIP-1087)
             elif not was_enabled:
-                # Back on: the per-day table starts today, it does not rebuild the time it was off.
+                # Back on: the per-day table starts TOMORROW. Today's row would be built from
+                # task history (it exists there whatever the switch says), so it would bring
+                # back what happened while recording was off (MIP-1229). Today's events are
+                # still counted live in the ranking; only today's stored row is skipped.
                 from origin.services import item_activity  # noqa: PLC0415 - heavy, rarely needed
 
-                item_activity.start_fresh(str(request.user.pk))
+                item_activity.start_fresh(str(request.user.pk), through_today=True)
         return Response({"member_events_enabled": value}, status=status.HTTP_200_OK)
 
 

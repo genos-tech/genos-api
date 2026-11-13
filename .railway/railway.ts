@@ -461,6 +461,11 @@ export default defineRailway(() => {
       DJANGO_DEBUG: preserve(),
       DJANGO_SECRET_KEY: preserve(),
       FIELD_ENCRYPTION_KEYS: preserve(),
+      // MIP-1333: "On your calendar" in a scheduled report reads the member's Google calendar, which
+      // refreshes their token with the OAuth client. Without these two the tick cannot, and the
+      // report says the calendar could not be read.
+      GOOGLE_OAUTH_CLIENT_ID: preserve(),
+      GOOGLE_OAUTH_CLIENT_SECRET: preserve(),
       JWT_SECRET_KEY: preserve(),
       LOG_FORMAT: preserve(),
     },

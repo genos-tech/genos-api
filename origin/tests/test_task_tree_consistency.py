@@ -293,6 +293,57 @@ class RepairCommandTests(TreeBase):
         self.assertGreater(page.ts_updated_at, before)
         self.assertEqual(find_inconsistent_tasks(project_id=self.project.project_id), [])
 
+    def _chain_with_a_deleted_middle(self):
+        """A (root) <- B (soft-deleted) <- C <- D, every stored root the writers made (A)."""
+        a = self._task("A")
+        b = self._task("B", parent_task_id=a.task_id)
+        c = self._task("C", parent_task_id=b.task_id)
+        d = self._task("D", parent_task_id=c.task_id)
+        TaskMaster.objects.filter(pk=b.pk).update(is_deleted=True)
+        return a, b, c, d
+
+    def test_a_deleted_ancestor_does_not_make_a_consistent_root_look_wrong(self):
+        # MIP-1225: `top_of_chain` stopped at the first parent missing from the judged rows,
+        # which includes a soft-deleted one, so D was "repaired" to root C while C kept A.
+        from origin.services.task_reparent import resolve_root_task_id  # noqa: PLC0415
+
+        a, _b, c, d = self._chain_with_a_deleted_middle()
+        self.assertEqual(resolve_root_task_id(d.task_id, c.task_id), a.task_id)  # the writers
+        self.assertEqual(
+            list(
+                TaskMaster.objects.filter(pk__in=[c.pk, d.pk]).values_list(
+                    "root_task_id", flat=True
+                )
+            ),
+            [a.task_id, a.task_id],
+        )
+        self.assertEqual(find_inconsistent_tasks(project_id=self.project.project_id), [])
+
+    def test_a_wrong_root_below_a_deleted_ancestor_is_repaired_to_the_writers_answer(self):
+        a, _b, c, d = self._chain_with_a_deleted_middle()
+        TaskMaster.objects.filter(pk=d.pk).update(root_task_id=d.task_id)  # stale
+        fixes = find_inconsistent_tasks(project_id=self.project.project_id)
+        self.assertEqual([f.task_id for f in fixes], [d.task_id])
+        self.assertEqual(fixes[0].changes["root_task_id"], (d.task_id, a.task_id))
+        repair_inconsistent_tasks(fixes)
+        d.refresh_from_db()
+        c.refresh_from_db()
+        self.assertEqual((c.root_task_id, d.root_task_id), (a.task_id, a.task_id))
+        self.assertEqual(find_inconsistent_tasks(project_id=self.project.project_id), [])
+
+    def test_a_hard_deleted_ancestor_still_stops_at_the_last_row_that_exists(self):
+        # Only the soft-deleted case changes: a row nothing can load ends the walk where it did.
+        a = self._task("A")
+        b = self._task("B", parent_task_id=a.task_id)
+        c = self._task("C", parent_task_id=b.task_id)
+        d = self._task("D", parent_task_id=c.task_id)
+        TaskMaster.objects.filter(pk=b.pk).delete()
+        TaskMaster.objects.filter(pk=d.pk).update(root_task_id=d.task_id)
+        fixes = find_inconsistent_tasks(project_id=self.project.project_id)
+        self.assertEqual(
+            [(f.task_id, f.changes["root_task_id"][1]) for f in fixes], [(d.task_id, c.task_id)]
+        )
+
     def test_sprint_follows_the_milestone(self):
         from origin.models.task.sprint_models import Sprint
 

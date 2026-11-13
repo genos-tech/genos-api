@@ -407,6 +407,21 @@ def plan_allows(user_id: Any) -> bool:
     return quota.get_schedules_enabled(str(user_id))
 
 
+def tiers_without_schedules() -> set[str]:
+    """The tiers whose `schedules_enabled` reads off in the live `TIER_QUOTAS`: the table's own
+    value, or the tier default (Free no, every paid tier yes) when it is missing or not a bool,
+    exactly the rule `quota.get_schedules_enabled` applies (MIP-1226). Used to leave members out
+    of a SQL query that certainly cannot pass the gate; the gate itself still decides."""
+    from origin.search_engine import quota  # noqa: PLC0415 - search_engine is heavy
+
+    off: set[str] = set()
+    for tier in quota._TIER_RANK:  # noqa: SLF001 - the table of tier names
+        value = quota._tier_cfg(tier).get("schedules_enabled")  # noqa: SLF001
+        if not (value if isinstance(value, bool) else tier != "free"):
+            off.add(tier)
+    return off
+
+
 def _require_plan(user: CustomUser) -> None:
     if not plan_allows(user.pk):
         raise SchedulePlanRequired(PLAN_SENTENCE)
@@ -537,7 +552,7 @@ def create(
     weekdays: Any = None,
     month_day: Any = None,
     run_date: Any = None,
-    deliver_push: bool = False,
+    deliver_push: bool = True,
     ai_effort: Any = None,
     now: datetime | None = None,
 ) -> MemberSchedule:

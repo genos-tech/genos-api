@@ -130,6 +130,18 @@ def _effort_cost(job) -> dict[str, Any] | None:
     }
 
 
+def _catalog_params(job: Any) -> dict[str, Any]:
+    """The job's parameters for the catalog: each spec as declared, plus `required: true`
+    on the ones its schema lists under `required` (MIP-1216), so a form can mark them
+    without a client-side copy of that list. The schema itself is not changed."""
+    schema = job.params_schema or {}
+    required = set(schema.get("required") or [])
+    return {
+        name: ({**spec, "required": True} if name in required else spec)
+        for name, spec in (schema.get("properties") or {}).items()
+    }
+
+
 def job_catalog() -> list[dict[str, Any]]:
     """What a schedule can run: key, title, what it does and the parameters it takes, and
     (MIP-1212) whether it uses AI, the effort it defaults to and what a run costs at each level."""
@@ -138,7 +150,7 @@ def job_catalog() -> list[dict[str, Any]]:
             "job": job.key,
             "title": job.title,
             "description": job.description,
-            "params": job.params_schema.get("properties", {}),
+            "params": _catalog_params(job),
             "uses_ai": job.uses_ai,
             "effort_default": job.effort_default if job.uses_ai else None,
             "effort_cost": _effort_cost(job),

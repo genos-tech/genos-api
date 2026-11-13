@@ -100,6 +100,28 @@ class TestWhatACallTouches(SimpleTestCase):
             member_events.subjects("get_project_summary", {"project_id": 9}), [("project", "9")]
         )
 
+    def test_a_timeline_marks_a_task_or_a_thread_and_nothing_else(self):
+        thread = "0b8e3f3e-2a0e-4d6c-9d86-1f3a5d8a5a11"
+        self.assertEqual(
+            member_events.subjects("get_timeline", {"anchor_type": "task", "anchor_id": 7}),
+            [("task", "7")],
+        )
+        self.assertEqual(
+            member_events.subjects("get_timeline", {"anchor_type": "thread", "anchor_id": thread}),
+            [("chat_thread", thread)],
+        )
+        # a window of a chat is no single item; an anchor_id that is not the canonical id marks nothing
+        self.assertEqual(
+            member_events.subjects("get_timeline", {"anchor_type": "chat", "anchor_id": thread}), []
+        )
+        self.assertEqual(
+            member_events.subjects("get_timeline", {"anchor_type": "task", "anchor_id": "PRJ-7"}),
+            [],
+        )
+        self.assertEqual(
+            member_events.subjects("get_timeline", {"anchor_type": "thread", "anchor_id": "12"}), []
+        )
+
     def test_a_note_carries_its_family_and_the_three_spellings_of_personal_agree(self):
         for note_type in ("personal", "team", "shared", "PERSONAL "):
             self.assertEqual(

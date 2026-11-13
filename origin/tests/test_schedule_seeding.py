@@ -107,7 +107,7 @@ class TestSeedDefaults(SeedBase):
             self.assertEqual(
                 (sched.frequency, sched.enabled, sched.paused_reason), ("daily", True, "")
             )
-            self.assertFalse(sched.deliver_push, "push stays off")
+            self.assertTrue(sched.deliver_push, "push is on (MIP-1374)")
             self.assertEqual((sched.user_id, str(sched.team_id)), (self.user.id, self.team_id))
             self.assertEqual(sched.tz_used, "Asia/Tokyo")
         # 09:00 JST is 00:00 UTC and has passed (it is 10:00 JST): tomorrow. 17:00 JST is
@@ -296,7 +296,7 @@ class TestLazySeeding(SeedBase):
             [s["name"] for s in res.data["schedules"]], ["Morning plan", "Evening recap"]
         )
         self.assertEqual(res.data["suggestions"], [], "they have them: nothing left to suggest")
-        self.assertFalse(any(s["deliverPush"] for s in res.data["schedules"]))
+        self.assertTrue(all(s["deliverPush"] for s in res.data["schedules"]))
         self.client.get(f"{LIST}?team_id={self.team_id}")
         self.assertEqual(MemberSchedule.objects.filter(user=self.user).count(), 2)
 

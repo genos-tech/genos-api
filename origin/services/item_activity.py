@@ -352,10 +352,11 @@ def start_fresh(user_id: str, now: datetime | None = None, *, through_today: boo
     """Begin recording from here: the watermark of every team the member is in is moved, so
     nothing from before is rebuilt by the next fill (an explicit `rebuild` still can).
 
-    Turning recording back on (the default) sets it to yesterday in the member's zone, so the
-    next fill builds today. A member DELETING their summaries (`through_today`, MIP-1088) sets
-    it to today: the day of the delete is never stored either, because it would be built from
-    task history, this morning's activity included, and "deleted" must stay deleted."""
+    By default it sets the watermark to yesterday in the member's zone, so the next fill builds
+    today. Both ways a member can start over pass `through_today` (MIP-1088 delete, MIP-1229
+    turning recording back on): the watermark is today, so the day itself is never stored,
+    because it would be built from task history, this morning's activity included, and
+    "deleted" / "not recorded while it was off" must stay true."""
     now = now or timezone.now()
     today = now.astimezone(zone_for_user_id(user_id)).date()
     through = today if through_today else today - timedelta(days=1)
