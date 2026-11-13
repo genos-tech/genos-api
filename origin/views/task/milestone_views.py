@@ -30,6 +30,7 @@ from origin.services.milestone_service import (
     parse_iso_date,
     sync_backing_task,
 )
+from origin.services.task_assignment_notice import notify_milestone_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_collaborators import (
     may_name_person,
@@ -564,6 +565,7 @@ class MilestoneView(AuthenticatedAPIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
+        added_assignee_ids: list[str] = []
         with transaction.atomic():
             fields = {f: request.data.get(f) for f in PATCHABLE_FIELDS if f in request.data}
             if project_move is not None:
@@ -606,7 +608,7 @@ class MilestoneView(AuthenticatedAPIView):
                     backing = _ensure_backing_task(milestone)
                     sync_task_collaborators(backing, request.data.get("collaborators"))
 
-            update_milestone(
+            added_assignee_ids = update_milestone(
                 milestone,
                 fields=fields,
                 start_date=request.data.get("start_date")
@@ -639,6 +641,11 @@ class MilestoneView(AuthenticatedAPIView):
                 MilestoneAssignees.objects.filter(milestone=milestone).update(
                     team_id=milestone.team_id
                 )
+
+        # Whoever was just added to an existing milestone is told (MIP-1464). After the commit.
+        notify_milestone_assigned(
+            milestone, actor_id=request.user.id, added_user_ids=added_assignee_ids
+        )
 
         # Re-read with prefetch to render the latest assignee list.
         milestone = (
@@ -738,7 +745,7 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        MilestoneAssignees.objects.get_or_create(
+        _row, created = MilestoneAssignees.objects.get_or_create(
             milestone=milestone,
             user=user,
             defaults={"team": milestone.team},
@@ -747,6 +754,11 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
         # project task table reflects the change without a reload.
         _sync_backing_task(milestone)
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+        if created:
+            # Someone just added to an existing milestone is told (MIP-1464).
+            notify_milestone_assigned(
+                milestone, actor_id=request.user.id, added_user_ids=[str(user.id)]
+            )
         milestone = (
             MilestoneMaster.objects.prefetch_related(
                 "milestone_assignees__user", "task__collaborators"
