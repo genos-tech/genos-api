@@ -1882,6 +1882,17 @@ SEARCH_ENGINE["AGENT_RESUME_KEEPS_BLOCKS"] = (
     os.environ.get("AGENT_RESUME_KEEPS_BLOCKS", "false").lower() == "true"
 )
 
+# MIP-991 (model-visible, dark-shipped OFF, grouped eval arm `t991`; EFFECTIVE ONLY
+# with AGENT_RESUME_KEEPS_BLOCKS on): a run resumed after an approve or reject keeps
+# the earlier turns of its conversation (the rolling recap and the verbatim window) in
+# front of the replay of what the run did. OFF = the resumed leg's messages start at the
+# run's own question, as before (byte-identical), and a pause keeps no ids of earlier runs.
+# Flip criterion: the `t991` arm answers a follow-up's referent ("that one") after an
+# approval and regresses nothing else; flip it after the 977 flag.
+SEARCH_ENGINE["AGENT_RESUME_KEEPS_TURNS"] = (
+    os.environ.get("AGENT_RESUME_KEEPS_TURNS", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

@@ -1582,6 +1582,7 @@ class AgentAskView(AuthenticatedAPIView):
 
         # What /decide/ will hand a resumed leg if this ask pauses on a write
         # (MIP-977); written by `_stream_ndjson` at the pause, not before.
+        keeps_turns = _resume_keeps_turns()
         # Flag off (`AGENT_RESUME_KEEPS_BLOCKS`): nothing is kept, so a paused run holds
         # no copy of a private summary that nothing would read back.
         resume_context = (
@@ -1590,8 +1591,9 @@ class AgentAskView(AuthenticatedAPIView):
                 scoped_extra=scoped_extra,
                 mention_extra=mention_extra,
                 tier_extra=tier_extra,
-                prior_summary=prior_summary,
-                prior_run_ids=prior_run_ids,
+                # The earlier turns ride on the second flag (`AGENT_RESUME_KEEPS_TURNS`).
+                prior_summary=prior_summary if keeps_turns else None,
+                prior_run_ids=prior_run_ids if keeps_turns else (),
             )
             if _resume_keeps_blocks()
             else None
@@ -1720,6 +1722,17 @@ def _resume_keeps_blocks() -> bool:
     takes effect without a restart. Default off: the resumed leg is then exactly what
     it was before this existed."""
     return bool(settings.SEARCH_ENGINE.get("AGENT_RESUME_KEEPS_BLOCKS", False))
+
+
+def _resume_keeps_turns() -> bool:
+    """`AGENT_RESUME_KEEPS_TURNS` (MIP-991): does a resumed leg get the earlier turns of
+    its conversation (the recap and the verbatim window) its first leg had? Effective
+    only with `AGENT_RESUME_KEEPS_BLOCKS` on: the turns are kept in the same column and
+    ride the same pause and the same cleanup, so without the first flag there is nothing
+    to read. Read at every call. Default off."""
+    return _resume_keeps_blocks() and bool(
+        settings.SEARCH_ENGINE.get("AGENT_RESUME_KEEPS_TURNS", False)
+    )
 
 
 def _resume_context_for(
@@ -2159,7 +2172,13 @@ class AgentDecideView(AuthenticatedAPIView):
         # ...and the earlier turns of its conversation, which sit in the messages and
         # not the system prompt (MIP-991). Without them every decision finished a
         # follow-up ask as if it were the first question of the conversation.
-        resumed_prior = _resumed_prior_context(run)
+        # Flag off (`AGENT_RESUME_KEEPS_TURNS`, which needs the 977 flag too): nothing, as
+        # before MIP-991, whatever a row holds.
+        resumed_prior = (
+            _resumed_prior_context(run)
+            if _resume_keeps_turns()
+            else PriorContext(verbatim=[], summary=None)
+        )
 
         def worker(emit, cancel_event):
             token = set_llm_choice(resumed_choice)

@@ -65,11 +65,15 @@ from origin.tests.test_agent_resume_system_extra import (
 RECAP_LINE = "[Context recap from earlier in this conversation: {}]"
 
 
+# The two flags this fix is behind (default OFF in settings): these tests are about what the
+# fix does, so they run with both ON. `test_agent_resume_flag_pins` pins the off states.
+BOTH_FLAGS_ON = {"AGENT_RESUME_KEEPS_BLOCKS": True, "AGENT_RESUME_KEEPS_TURNS": True}
+
+
 def search_engine(**overrides):
     """`SEARCH_ENGINE` with the session window and the recap flag set explicitly,
     so nothing here depends on what the environment's defaults happen to be."""
-    config = dict(settings.SEARCH_ENGINE)
-    config.update(overrides)
+    config = {**settings.SEARCH_ENGINE, **BOTH_FLAGS_ON, **overrides}
     return override_settings(SEARCH_ENGINE=config)
 
 
@@ -135,6 +139,7 @@ class ResumePriorBase(ResumeBase):
     a deterministic recap, and a record of what each leg handed the loop."""
 
     script = ()
+    flags = BOTH_FLAGS_ON
 
     def setUp(self):
         super().setUp()
