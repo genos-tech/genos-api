@@ -340,15 +340,21 @@ class FollowUpFlagOffTests(FollowUpBase):
     # -- the two gates of 991, each on its own -------------------------------------
 
     def test_a_pause_keeps_no_earlier_turns_with_both_flags_off(self):
-        run_id = self.run_follow_up("followup+recap")
-        self.assertIsNone(AgentRun.objects.get(run_id=run_id).resume_context)
+        run_id, _token = self.pause_follow_up("followup+recap")
+        run = AgentRun.objects.get(run_id=run_id)
+        self.assertEqual(
+            run.status, "awaiting_approval"
+        )  # checked at the pause: a finish clears it
+        self.assertIsNone(run.resume_context)
 
     def test_a_pause_keeps_no_earlier_turns_with_only_the_977_flag_on(self):
         # Defeats a removed WRITE gate on the turns: the plain follow-up has no block, so
         # with 977 alone nothing at all is kept.
         with override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, **ON_977}):
-            run_id = self.run_follow_up("followup+recap")
-        self.assertIsNone(AgentRun.objects.get(run_id=run_id).resume_context)
+            run_id, _token = self.pause_follow_up("followup+recap")
+        run = AgentRun.objects.get(run_id=run_id)
+        self.assertEqual(run.status, "awaiting_approval")
+        self.assertIsNone(run.resume_context)
 
     def test_a_row_kept_while_the_turns_flag_was_on_does_not_replay_them_with_it_off(self):
         # Defeats a removed READ gate on the turns: paused with both on, decided with
