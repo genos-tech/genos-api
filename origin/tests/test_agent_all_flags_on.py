@@ -139,7 +139,9 @@ class AllOnDeclarationTests(SimpleTestCase):
         # (the budget is the production number; each flag alone fits). The flip PR that turns several
         # on must raise it with its routing evidence. This pin only stops all-on growing unnoticed.
         self.assertLessEqual(on_total, ALL_ON_BUDGET_CHARS)
-        self.assertGreater(on_total, BUDGET_CHARS, "all-on now fits the production budget: tighten this")
+        self.assertGreater(
+            on_total, BUDGET_CHARS, "all-on now fits the production budget: tighten this"
+        )
 
     def test_only_the_reject_reason_flag_edits_the_system_prompt(self):
         # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; every other
@@ -193,7 +195,12 @@ class AllOnFingerprintTests(TestCase):
         with settings_with(ALL_ON):
             on = self._run()
         moved = {k for k in off if off[k] != on[k]}
-        for line in ("tools.neutral.full", "tools.gemini.full", "tools.claude.full", "tools.openai.full"):
+        for line in (
+            "tools.neutral.full",
+            "tools.gemini.full",
+            "tools.claude.full",
+            "tools.openai.full",
+        ):
             self.assertIn(line, moved)
         # the reject-reason sentence is in every assembled prompt; the templates are not touched
         self.assertNotIn("prompt.thread_ask.template", moved)
@@ -201,5 +208,10 @@ class AllOnFingerprintTests(TestCase):
         # results move only for the tools a flag edits (closed-ancestor rows, the team line, note threads)
         self.assertEqual(
             {k for k in moved if k.startswith("result.")},
-            {"result.list_tasks", "result.get_current_user", "result.fetch_note", "result.fetch_task"},
+            {
+                "result.list_tasks",
+                "result.get_current_user",
+                "result.fetch_note",
+                "result.fetch_task",
+            },
         )
