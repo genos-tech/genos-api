@@ -29,6 +29,8 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.task_body_edit import body_hash
+from origin.search_engine.agent.tools.task_anchors import enabled as anchors_enabled
+from origin.search_engine.agent.tools.task_anchors import task_anchors
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -255,6 +257,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         for d in TaskDelivery.objects.filter(task=task).order_by("delivery_id")
     ]
 
+    # Where the task's thread, chat and note are, when the caller may open them (MIP-1288).
+    # Flag off: no key at all, the result is what it always was.
+    anchors = {"anchors": task_anchors(task, ctx)} if anchors_enabled() else {}
+
     return {
         "task_id": task_id,
         "display_id": task.display_id,
@@ -275,6 +281,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         **body_fields,
         "comments": comments,
         "deliveries": deliveries,
+        **anchors,
         "__summary__": (
             f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")
         ),

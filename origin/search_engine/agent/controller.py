@@ -90,6 +90,7 @@ from origin.search_engine.agent.prompts import (
     agent_system_prompt,
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
+from origin.search_engine.agent.tool_flag_text import declared_description
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
@@ -294,7 +295,7 @@ def _build_tool_declarations(
     return [
         ToolDeclaration(
             name=t.name,
-            description=t.description,
+            description=declared_description(t),
             parameters_schema=declared_schema(t.name, t.parameters_schema),
         )
         for t in REGISTRY.values()

@@ -1932,6 +1932,20 @@ SEARCH_ENGINE["AGENT_TELL_MODEL_EDIT_UNDO"] = (
     os.environ.get("AGENT_TELL_MODEL_EDIT_UNDO", "false").lower() == "true"
 )
 
+# MIP-1288 (model-visible, dark-shipped OFF, grouped eval arm `t1288`): `fetch_task` (and MCP
+# `get_task`, the same function) names where the task's conversation and note are. ON = the
+# result gains `anchors`, a list of {anchor_type, anchor_id} in the words the timeline tool takes:
+# `thread` (the root message the task was made from, when this task is the only live one
+# claiming it), `chat` (its channel) and `note` ("task:<note id>"), each only when the caller can
+# open it (`can_read_chat`, the task-note ACL and `may_read_note`); the in-app declaration gains
+# one sentence saying what they are for. OFF = no `anchors` key and the declaration is
+# byte-identical to before. Read at call time. Flip criterion: the `t1288` arm reaches the thread
+# and the note from the task alone (no search), invents nothing for a viewer who cannot open the
+# chat, and regresses nothing else.
+SEARCH_ENGINE["AGENT_FETCH_TASK_ANCHORS"] = (
+    os.environ.get("AGENT_FETCH_TASK_ANCHORS", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
