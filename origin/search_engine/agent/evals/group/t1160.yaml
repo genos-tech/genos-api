@@ -1,0 +1,92 @@
+# MIP-1160 (flag AGENT_INBOX_REPORT_LABEL): `list_my_inbox` shows a scheduled Genos report (item type 10) as
+# `item_type_label: "type_10"` with its whole body (a report can run to ~90 KB; a call returns up to 50
+# items). With the flag the label is `genos_report` and the body is cut at 5,000 characters of content, with
+# `item_body_cut` saying what was left out.
+#
+# Seed (`seed: [inbox_report]`, group/seeds.py): one unread report, ~133 lines in 12 sections (~14,000
+# characters EN / ~8,300 JA, far over the cap) in the viewer's own inbox in the sequence team. Early
+# section "Overdue" has CLP-9 first; the LAST line of the last section is ZULU-77, in the part the cap cuts.
+# The arm's measured effect is mostly tokens (arm report: d tokens); the cases check that the answer holds.
+#
+# Per language: a positive (a fact in the kept part), a negative (a one-line glance must not dump deep
+# lines), an edge (a fact in the CUT part: the model must say it cannot see it, never "not mentioned").
+
+- id: t1160-en-latest-report
+  lang: en
+  tags: [eval-group, t1160]
+  fixture: sequence
+  viewer: b
+  seed: [inbox_report]
+  query: "What does my latest Genos report say is overdue?"
+  note: "Positive: the overdue section is the first of the report, inside the cap in both arms."
+  expect:
+    tools_used_contains: [list_my_inbox]
+    answer_contains_any: ["clp-9", "export button"]
+    tool_calls_at_most: 3
+
+- id: t1160-en-inbox-glance
+  lang: en
+  tags: [eval-group, t1160]
+  fixture: sequence
+  viewer: b
+  seed: [inbox_report]
+  query: "Is there anything new in my inbox? Answer in one or two lines."
+  note: "Negative: a glance. The answer must not enumerate the report's deep lines (they are past the cap with the flag, and not what was asked without it)."
+  expect:
+    tools_used_contains: [list_my_inbox]
+    answer_does_not_contain: ["wrk-100", "wrk-110", "wrk-120", "wrk-130"]
+    tool_calls_at_most: 3
+
+- id: t1160-en-cut-part
+  lang: en
+  tags: [eval-group, t1160]
+  fixture: sequence
+  viewer: b
+  seed: [inbox_report]
+  query: "Does my latest Genos report mention ZULU-77?"
+  note: "Edge: ZULU-77 is the last line of the report, in the part the cap cuts. With the flag the model must say it cannot see that part (item_body_cut), never that the report does not mention it."
+  expect:
+    tools_used_contains: [list_my_inbox]
+    answer_contains_any: ["zulu-77", "legacy cleanup", "cut", "truncated", "inbox page", "partial", "part of the report", "rest of"]
+    answer_does_not_contain: ["does not mention", "doesn't mention", "not mentioned", "no mention", "isn't mentioned"]
+    tool_calls_at_most: 3
+
+- id: t1160-ja-latest-report
+  lang: ja
+  tags: [eval-group, t1160]
+  fixture: sequence
+  viewer: ja-b
+  seed: [inbox_report]
+  query: "最新のGenosレポートで期限切れになっているものは何ですか?"
+  note: "Positive: the overdue section is the first of the report, inside the cap in both arms."
+  expect:
+    tools_used_contains: [list_my_inbox]
+    answer_contains_any: ["clp-9", "エクスポートボタン"]
+    tool_calls_at_most: 3
+
+- id: t1160-ja-inbox-glance
+  lang: ja
+  tags: [eval-group, t1160]
+  fixture: sequence
+  viewer: ja-b
+  seed: [inbox_report]
+  query: "受信トレイに新着はありますか?一、二行で答えてください。"
+  note: "Negative: a glance. The answer must not enumerate the report's deep lines."
+  expect:
+    tools_used_contains: [list_my_inbox]
+    answer_does_not_contain: ["wrk-100", "wrk-110", "wrk-120", "wrk-130"]
+    tool_calls_at_most: 3
+
+- id: t1160-ja-cut-part
+  lang: ja
+  tags: [eval-group, t1160]
+  fixture: sequence
+  viewer: ja-b
+  seed: [inbox_report]
+  query: "最新のGenosレポートにZULU-77は載っていますか?"
+  note: "Edge: ZULU-77 is the last line of the report, in the part the cap cuts. With the flag the model must say it cannot see that part, never that the report does not contain it."
+  expect:
+    tools_used_contains: [list_my_inbox]
+    answer_contains_any: ["zulu-77", "旧処理", "一部", "省略", "切", "全文", "受信トレイ", "inbox"]
+    answer_does_not_contain: ["言及されていません", "含まれていません", "載っていません"]
+    tool_calls_at_most: 3

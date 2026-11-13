@@ -1946,6 +1946,20 @@ SEARCH_ENGINE["AGENT_FETCH_TASK_ANCHORS"] = (
     os.environ.get("AGENT_FETCH_TASK_ANCHORS", "false").lower() == "true"
 )
 
+# MIP-1160 (model-visible, dark-shipped OFF, grouped eval arm `t1160`): how `list_my_inbox` shows
+# a scheduled Genos report (item type 10). ON = its `item_type_label` is `genos_report` (OFF: the
+# generic `type_10`) and its body is cut at 5,000 characters of content (title, summary, headings,
+# item texts and links): whole items in order, title and summary kept, the {title, text, sections}
+# shape untouched, and the row gains `item_body_cut` ({limit_chars, sections_omitted,
+# items_omitted, note}) when something was left out; a report within the cap is returned exactly as
+# before. The in-app declaration gains one sentence. OFF = label and whole body as before and the
+# declaration is byte-identical. Read at call time. The same function serves MCP `list_my_inbox`.
+# Flip criterion: the `t1160` arm answers about the kept part, says it cannot see the cut part
+# (never "not mentioned"), and spends clearly fewer tokens on an inbox holding a large report.
+SEARCH_ENGINE["AGENT_INBOX_REPORT_LABEL"] = (
+    os.environ.get("AGENT_INBOX_REPORT_LABEL", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )
