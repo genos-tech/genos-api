@@ -52,6 +52,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
+from origin.services.task_card_post import post_task_created_card
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.public.credentials import credential_of, reaches_team, team_for
@@ -341,6 +342,9 @@ class TaskListCreateView(PublicApiView):
             # drop the task out of `can_access_task` for its own author.
             reporter=request.user,
         )
+        # A key has no browser to send the "task created" card the app would, so the task
+        # would be missing from the project chat (MIP-1462). Best effort: the task is saved.
+        post_task_created_card(task, actor_id=request.user.id)
         return Response(_serialize_task(task), status=status.HTTP_201_CREATED)
 
 

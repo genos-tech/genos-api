@@ -14,13 +14,14 @@ This is the missing second step, run after the task exists, by the write paths t
 have no client:
 
   * `create_task`, `create_task_plan` and `manage_milestone` (create): the agent's
-    tools, which MCP serves too.
+    tools, which MCP serves too;
+  * `POST /api/public/v1/tasks/`, the public REST API (MIP-1462).
 
 It must NOT run for a task made in the app: its client still posts its own card, and
 a second would double-post. That is why this is called from the no-client paths by
-name rather than from a model signal that would fire for both. (The public REST API
-makes tasks with no client too; it is left out on purpose, see MIP-1450's follow-up:
-an importer there could post hundreds of cards.)
+name rather than from a model signal that would fire for both. (An importer on the
+public REST API posts one card per task; that is accepted for now and may change with
+the feature.)
 
 It goes through `message_views._allocate_seq_and_create_message_with_activities`, the
 function the REST send uses, so the card is the same row with the same fan-out as the
