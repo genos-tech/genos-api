@@ -1986,6 +1986,23 @@ SEARCH_ENGINE["AGENT_CLIENT_IN_TASK_HISTORY"] = (
     os.environ.get("AGENT_CLIENT_IN_TASK_HISTORY", "false").lower() == "true"
 )
 
+# MIP-1090 (c) (model-visible, dark-shipped OFF, grouped eval arm `t1090-notethreads`): the in-app
+# `fetch_note` also returns the note's OPEN comment threads (reviewers' comments anchored to text,
+# which live in the note's Yjs document in genos-collab, read over HTTP: up to 5 s, per note read).
+# ON = the result gains `comment_threads` (fenced text; ids, times and people's ids checked to be what
+# they claim, since any editor of the note writes them) and, when something was left out or could
+# not be read, `comment_threads_note`; null threads + a note when collab cannot be reached (the body
+# is never lost). Resolved threads are counted, not shown. Only after the note's own access check, so
+# a thread is shown to exactly those who can read the body. MCP `get_note` keeps its own
+# `comment_threads` (it takes `include_resolved`); the in-app tool adds nothing there. One sentence
+# is added to the declaration. OFF = no extra keys, no collab call, declaration byte-identical.
+# Read at call time. Flip criterion: the `t1090-notethreads` arm reports the reviewers' open
+# comments, says "comments could not be read" instead of "there are none", and the extra collab
+# round trip is acceptable on `fetch_note` latency.
+SEARCH_ENGINE["AGENT_NOTE_THREADS_IN_GET_NOTE"] = (
+    os.environ.get("AGENT_NOTE_THREADS_IN_GET_NOTE", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

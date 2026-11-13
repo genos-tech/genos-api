@@ -16,6 +16,7 @@ from __future__ import annotations
 from django.conf import settings
 
 from origin.search_engine.agent.tools.base import Tool
+from origin.search_engine.agent.tools.fetch_note import DESCRIPTION_ADDITION as _NOTE_THREADS
 from origin.search_engine.agent.tools.get_current_user import DESCRIPTION_ADDITION as _TEAM
 from origin.search_engine.agent.tools.get_task_history import DESCRIPTION_ADDITION as _CLIENT
 from origin.search_engine.agent.tools.inbox_report import DESCRIPTION_ADDITION as _INBOX_REPORT
@@ -27,6 +28,7 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("list_my_inbox", "AGENT_INBOX_REPORT_LABEL", _INBOX_REPORT),
     ("get_current_user", "AGENT_TEAM_IN_CURRENT_USER", _TEAM),
     ("get_task_history", "AGENT_CLIENT_IN_TASK_HISTORY", _CLIENT),
+    ("fetch_note", "AGENT_NOTE_THREADS_IN_GET_NOTE", _NOTE_THREADS),
 )
 
 
