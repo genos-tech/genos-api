@@ -150,6 +150,29 @@ MODEL_REFUSAL_MESSAGE = (
     "Try rephrasing it or asking about something more specific."
 )
 
+# Emitted when the model's reply was cut off at the OUTPUT cap while it was writing a tool call
+# that needs approval (a task, note or plan body), and one retry with more room was cut off too
+# (MIP-905). Showing the half-written body on an approval card would let the person approve a
+# truncated note, so nothing is proposed. A module constant for the same reason as the messages
+# above: `agent_views` classifies the run's outcome from it (we spent the money, they got nothing).
+OUTPUT_TRUNCATED_MESSAGE = (
+    "That was too long to write in one go, so nothing was drafted. "
+    "Ask for it in smaller parts (a few tasks at a time, or one section of the note), "
+    "or ask for a shorter version."
+)
+
+# Appended to a TEXT answer the provider cut off at the output cap (MIP-905), so the person is not
+# left reading a sentence that stops for no reason.
+ANSWER_CUT_OFF_NOTICE = (
+    "\n\n*(This answer was cut off because it reached the length limit. Ask me to continue.)*"
+)
+
+#: A cut-off write is retried once with this much room (tokens), or twice what the cut-off call
+#: produced if that is more, up to the ceiling. No retry when the call already produced more than
+#: the ceiling (a larger cap would not help).
+TRUNCATION_RETRY_FLOOR = 16384
+TRUNCATION_RETRY_CEILING = 32768
+
 # Appended as a final user turn when the loop exhausts its step budget
 # without ever writing a final answer (AGENT_STEP_CAP_WRAPUP). By that
 # point the transcript holds every tool result the run gathered, so the
@@ -2956,6 +2979,10 @@ def _drive_loop(
         if language_line:
             system_instruction = f"{system_instruction}\n\n{language_line}"
 
+    # The latest model call's end state (MIP-905: was it cut off at the output cap?), filled by
+    # `_collect_and_record`. Read by the step logic right after the call.
+    last_call: dict[str, Any] = {"truncated": False}
+
     def _collect_and_record(
         step_index: int,
         purpose: str,
@@ -2963,6 +2990,7 @@ def _drive_loop(
         model_override: str | None = None,
         emit_deltas: bool = True,
         tools_override: list[ToolDeclaration] | None = None,
+        params_override: GenerationParams | None = None,
     ) -> tuple[list[str], list[FunctionCall]]:
         """Run one model turn AND record its per-call telemetry.
 
@@ -2993,8 +3021,17 @@ def _drive_loop(
                 model_override=model_override,
                 emit_deltas=emit_deltas,
                 usage_sink=sink,
-                params=gen_params,
+                params=gen_params if params_override is None else params_override,
             )
+        # What the step logic below needs to know about the call that just ended.
+        last_call.update(
+            truncated=bool(getattr(sink, "truncated", False)),
+            produced=int(getattr(sink, "output_tokens", 0) or 0),
+            purpose=purpose,
+            model_override=model_override,
+            emit_deltas=emit_deltas,
+            tools_override=tools_override,
+        )
         latency_ms = int((time.monotonic() - started) * 1000)
         _persist_llm_call(
             run_id,
@@ -3005,6 +3042,40 @@ def _drive_loop(
             usage=sink,
         )
         return parts, fcalls
+
+    def _retry_cut_off_write(step_index: int) -> list[FunctionCall] | None:
+        """Run the step that was cut off at the output cap ONCE more with more room.
+
+        Same model, same messages, same tools: only the cap differs, so what the model is shown
+        does not change. Returns the retry's function calls when it ended normally, else None
+        (cut off again, nothing to gain from a larger cap, or the call failed). The retry's text
+        is dropped: the first attempt's text (what came before the cut-off call) was already
+        shown, streamed or flushed, and is what the step keeps.
+        """
+        produced = int(last_call.get("produced") or 0)
+        cap = min(max(2 * produced, TRUNCATION_RETRY_FLOOR), TRUNCATION_RETRY_CEILING)
+        if produced >= TRUNCATION_RETRY_CEILING or cap <= produced:
+            return None
+        base = gen_params
+        params = GenerationParams(
+            max_output_tokens=cap,
+            thinking_budget=base.thinking_budget if base is not None else None,
+        )
+        try:
+            _parts, calls = _collect_and_record(
+                step_index,
+                f"{last_call['purpose']}_retry",
+                model_override=last_call.get("model_override"),
+                emit_deltas=False,
+                tools_override=last_call.get("tools_override"),
+                params_override=params,
+            )
+        except Exception:  # noqa: BLE001 — a failed retry is the same outcome as a cut-off one
+            log.exception("Agent step %d retry after a cut-off write failed", step_index)
+            return None
+        if last_call["truncated"] or not calls:
+            return None
+        return calls
 
     # Per-invocation loop-guard state (AGENT_DYNAMIC_STEPS only). Maps a
     # step's batch signature → how many times it has occurred, so the
@@ -3149,6 +3220,34 @@ def _drive_loop(
             emit({"type": "error", "message": failure})
             _persist_step(run_id, step_index=step, error=failure)
             return None
+
+        # ---- Output cut off at the cap (MIP-905) ----
+        # A call the provider ended at its output cap has half-written whatever it was writing. A
+        # write tool's arguments (a task, note or plan body) must never reach an approval card in
+        # that state: try the step once more with more room, else say so and propose nothing. A
+        # cut-off TEXT answer gets a notice at its end. Nothing here runs for a call that ended
+        # normally (`truncated` is False), so a normal run is unchanged.
+        if last_call["truncated"]:
+            cut_write = bool(accumulated_function_calls) and getattr(
+                REGISTRY.get(accumulated_function_calls[-1].name), "requires_approval", False
+            )
+            if cut_write:
+                retried = _retry_cut_off_write(step)
+                if retried is None:
+                    log.warning(
+                        "Agent run %s step %d: %s was cut off at the output cap and the retry "
+                        "did not fit either; proposing nothing",
+                        run_id,
+                        step,
+                        accumulated_function_calls[-1].name,
+                    )
+                    emit({"type": "error", "message": OUTPUT_TRUNCATED_MESSAGE})
+                    _persist_step(run_id, step_index=step, error="output_truncated")
+                    return None
+                accumulated_function_calls = retried
+            elif not accumulated_function_calls and accumulated_text_parts:
+                accumulated_text_parts = [*accumulated_text_parts, ANSWER_CUT_OFF_NOTICE]
+                emit({"type": "answer_delta", "text": ANSWER_CUT_OFF_NOTICE})
 
         any_text_emitted = bool(accumulated_text_parts)
 
@@ -3547,6 +3646,9 @@ def _drive_loop(
             wrapup_parts, _wrapup_calls = _collect_and_record(
                 max_steps, "step_cap_wrapup", tools_override=[]
             )
+            if last_call["truncated"] and wrapup_parts:
+                wrapup_parts = [*wrapup_parts, ANSWER_CUT_OFF_NOTICE]
+                emit({"type": "answer_delta", "text": ANSWER_CUT_OFF_NOTICE})
             wrapup_answer = "".join(wrapup_parts).strip()
         except Exception:  # noqa: BLE001 — degrade to the historical error
             log.exception("Step-cap wrap-up call failed for run %s", run_id)

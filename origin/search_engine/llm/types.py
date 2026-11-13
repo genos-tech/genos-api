@@ -127,6 +127,14 @@ class CallUsage:
     # Provider-reported grand total when available (else 0; the
     # aggregator can sum the parts).
     total_tokens: int = 0
+    # Why the call stopped, as the provider named it ("max_tokens" / "length" /
+    # "MAX_TOKENS", ...); "" when the adapter saw none. Observational.
+    stop_reason: str = ""
+    # True when the provider ended the call because it hit the OUTPUT cap (Claude
+    # `max_tokens`, Gemini `MAX_TOKENS`, OpenAI `length`). Whatever the call produced
+    # then ends mid-sentence, and a tool call's arguments end mid-value: the controller
+    # reads this to avoid putting a cut-off body on an approval card (MIP-905).
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
