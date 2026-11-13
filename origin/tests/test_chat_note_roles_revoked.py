@@ -232,6 +232,19 @@ class AShareIsNotRevoked(Base):
         self.leave_group(self.chat, member)
         self.assertIsNone(self.explicit(member, self.note))
 
+    def test_a_share_made_while_they_were_out_is_revoked_by_their_next_leave(self):
+        """KNOWN LIMITATION, pinned so it is a decision and not a surprise. Rejoining un-deletes
+        the member row in place (`ts_joined_at` keeps its first value), so a share the owner made
+        between someone's leave and their return reads as written during the membership, and the
+        next leave takes it back. The owner can share again."""
+        member = self.make_member("member")
+        ChannelMember.objects.create(channel=self.chat, user=member)
+        self.leave_group(self.chat, member)
+        self.share(self.note, member, ROLE_VIEWER)
+        ChannelMember.objects.filter(channel=self.chat, user=member).update(is_deleted=False)
+        self.leave_group(self.chat, member)
+        self.assertIsNone(self.explicit(member, self.note))
+
     def test_leaving_the_team_ends_even_a_share(self):
         remove_team_member(self.team.team_id, self.reader.id)
         self.assertIsNone(self.explicit(self.reader, self.note))
@@ -286,6 +299,16 @@ class LeavingAProject(Base):
         self.assertIn(res.status_code, (200, 204), res.content)
         self.assertIsNone(self.explicit(self.reader, self.note))
         self.assertNoAccess(self.note)
+
+    def test_the_author_still_passes_the_briefing_timeline_and_mcp_after_leaving(self):
+        """NOT FIXED here, pinned so the split is visible (see `assertNoAccess`): `owner_id` on
+        the note is its author's own ACL for the briefing, the timeline and the search ACL behind
+        MCP `get_note`, by MIP-1474's design. Ending the explicit rows ends REST access only.
+        Changing it means editing `origin/search_engine/agent/acl.py` (model-visible)."""
+        ProjectMembers.objects.filter(project=self.project, attendee=self.reader).delete()
+        got = self.answers(self.note)
+        self.assertTrue(got["briefing"] and got["timeline"] and got["mcp get_note"], got)
+        self.assertFalse(got["rest single"] or got["sidebar list"] or got["get_effective_role"])
 
     def test_the_other_members_keep_the_note(self):
         ProjectMembers.objects.filter(project=self.project, attendee=self.reader).delete()
@@ -404,11 +427,24 @@ class MovingANote(Base):
         self.move(note, new)
         self.assertEqual(self.explicit(self.reader, note), ROLE_VIEWER)
 
-    def test_the_owner_row_a_move_keeps_ends_when_the_owner_leaves_the_new_chat(self):
+    def test_a_share_to_someone_who_joined_the_old_chat_afterwards_survives_the_move(self):
+        """The row predates their joining the old chat, so it is a share and not a membership
+        row, even though they were a member of that chat when the note moved."""
         old = self.owned_gm()
-        new = self.owned_gm(self.reader)
-        new_owner_row = ChannelMember.objects.get(channel=new, user=self.owner)
+        new = self.owned_gm()
         note = self.create_note_via_rest(old, self.owner)
+        self.share(note, self.reader, ROLE_VIEWER)
+        ChannelMember.objects.create(channel=old, user=self.reader)
+        self.move(note, new)
+        self.assertEqual(self.explicit(self.reader, note), ROLE_VIEWER)
+
+    def test_the_owner_row_a_move_keeps_ends_when_the_owner_leaves_the_new_chat(self):
+        """The author joined the new chat AFTER the note was written, so the kept row has to be
+        re-dated from the move: left as it was it would read as a share and outlive their leaving."""
+        old = self.owned_gm()
+        note = self.create_note_via_rest(old, self.owner)
+        new = self.owned_gm(self.reader)  # created after the note: the owner joins it later
+        new_owner_row = ChannelMember.objects.get(channel=new, user=self.owner)
         self.move(note, new)
         self.assertEqual(self.explicit(self.owner, note), ROLE_OWNER)
         new_owner_row.is_deleted = True
