@@ -8,7 +8,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
-from origin.services.channel_scope import chat_note_member_q
+from origin.services.channel_scope import chat_member_q, chat_note_member_q
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.chat_note_target import (
@@ -823,9 +823,10 @@ class ChatNoteMoveView(AuthenticatedAPIView):
             )
 
         # The mover must be an active member of the target channel —
-        # mirrors the implicit-access rule in `_chat_membership_filters`.
-        if not ChannelMember.objects.filter(
-            channel_id=target_channel.id, user_id=request_user_id, is_deleted=False
+        # is a member of it by the rule of `_chat_membership_filters` (`chat_member_q`: a
+        # project chat is the project's people, a stray channel-member row is nobody).
+        if not Channel.objects.filter(
+            chat_member_q(request_user_id), id=target_channel.id
         ).exists():
             return Response(
                 {"error": "You are not a member of the target chat."},
@@ -835,7 +836,10 @@ class ChatNoteMoveView(AuthenticatedAPIView):
         now = timezone.now()
         with transaction.atomic():
             note.channel = target_channel
-            note.chat_type = data["chat_type"]
+            # the channel's own kind, never the request's: `chat_type` must equal it for the
+            # note to open (`chat_note_member_q`), and creating a note already ignores the
+            # request's value (MIP-838)
+            note.chat_type = target_channel.kind
             note.is_thread = False
             note.thread_root_id = None
             note.save(
@@ -862,7 +866,7 @@ class ChatNoteMoveView(AuthenticatedAPIView):
                     break
                 ChatNoteMaster.objects.filter(note_id__in=child_ids).update(
                     channel=target_channel,
-                    chat_type=data["chat_type"],
+                    chat_type=target_channel.kind,
                     is_thread=False,
                     thread_root_id=None,
                     ts_updated_at=now,

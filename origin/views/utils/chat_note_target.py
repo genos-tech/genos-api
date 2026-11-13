@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from django.core.exceptions import ValidationError
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
+from origin.services.channel_scope import chat_member_q
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_OWNER
 
 
@@ -34,7 +35,7 @@ class ChatNoteTarget:
 def resolve_chat_note_target(*, user_id, channel_id, thread_root_id=None) -> ChatNoteTarget:
     """The channel a new chat note attaches to, checked for `user_id`.
 
-    Requires a live channel with an active membership row for the caller;
+    Requires a live channel the caller is a member of (`chat_member_q`);
     a guest in a channel shared from another team is a member too, so the
     channel's team isn't compared with the caller's. A thread note's root
     must be a message in that same channel. The note's `chat_type` is the
@@ -44,9 +45,9 @@ def resolve_chat_note_target(*, user_id, channel_id, thread_root_id=None) -> Cha
         channel = Channel.objects.get(id=channel_id, is_deleted=False)
     except (Channel.DoesNotExist, ValidationError, ValueError, TypeError):
         raise ChatNoteTargetNotFound("Chat not found.")
-    if not ChannelMember.objects.filter(
-        channel_id=channel.id, user_id=user_id, is_deleted=False
-    ).exists():
+    # a member by the one rule (`chat_member_q`): a project chat is the project's people, and a
+    # stray channel-member row on it is nobody (MIP-1474)
+    if not Channel.objects.filter(chat_member_q(user_id), id=channel.id).exists():
         raise ChatNoteTargetNotFound("Chat not found.")
 
     root = None

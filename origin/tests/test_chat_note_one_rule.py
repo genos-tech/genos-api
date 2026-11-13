@@ -42,7 +42,9 @@ User = get_user_model()
 CHAT = 3
 
 
-class OneChatNoteRule(McpBase):
+class ChatNoteFixtures(McpBase):
+    """The builders and the seven readers, no tests."""
+
     def setUp(self):
         super().setUp()
         self.reader = User.objects.create_user(
@@ -132,6 +134,8 @@ class OneChatNoteRule(McpBase):
         got = self.answers(note)
         self.assertEqual(got, {k: expected for k in got}, got)
 
+
+class OneChatNoteRule(ChatNoteFixtures):
     # -- the bug: a stray row opens nothing --------------------------------------------------- #
 
     def test_a_stray_channel_row_on_a_project_chat_opens_nothing(self):
@@ -259,3 +263,76 @@ class OneChatNoteRule(McpBase):
             channel=chat, user=self.reader, defaults={"is_deleted": False}
         )
         self.assertEveryoneSays(self.note_on(chat, chat_type=ChannelKind.GM), False)
+
+
+class FilingIntoAChat(ChatNoteFixtures):
+    """The same rule decides who may FILE a note into a chat (create and move): a stray row on
+    a project chat is nobody, and the move stores the channel's own kind, never the request's
+    (a kind that differs from the channel's would make the note open for no one)."""
+
+    def create(self, channel, user):
+        self.authenticate(user)
+        return self.client.post(
+            "/api/v2/note/chat/",
+            {
+                "team_id": self.team.team_id,
+                "user_id": str(user.id),
+                "chat_type": int(channel.kind),
+                "chat_id": str(channel.id),
+                "title": "new",
+                "body": [],
+                "is_thread": False,
+            },
+            format="json",
+        )
+
+    def move(self, note, channel, user, chat_type):
+        self.authenticate(user)
+        return self.client.put(
+            "/api/v2/note/chat/move/",
+            {
+                "team_id": self.team.team_id,
+                "user_id": str(user.id),
+                "note_id": note.note_id,
+                "chat_type": chat_type,
+                "channel_id": str(channel.id),
+            },
+            format="json",
+        )
+
+    def test_a_stray_row_cannot_file_a_note_into_a_project_chat(self):
+        chat = self.pm_chat(self.project_of("FIL"))
+        ChannelMember.objects.update_or_create(
+            channel=chat, user=self.reader, defaults={"is_deleted": False}
+        )
+        self.assertEqual(self.create(chat, self.reader).status_code, 404)
+        self.assertFalse(ChatNoteMaster.objects.filter(channel=chat).exists())
+
+    def test_a_project_member_with_no_mirror_row_can_file_a_note_into_the_project_chat(self):
+        project = self.project_of("FIM", self.reader)
+        chat = self.pm_chat(project)
+        ChannelMember.objects.filter(channel=chat, user=self.reader).delete()
+        self.assertEqual(self.create(chat, self.reader).status_code, 201)
+
+    def test_a_stray_row_cannot_move_a_note_into_a_project_chat(self):
+        chat = self.pm_chat(self.project_of("MOV"))
+        ChannelMember.objects.update_or_create(
+            channel=chat, user=self.reader, defaults={"is_deleted": False}
+        )
+        source = self.gm(self.reader, self.owner)
+        note = self.note_on(source)
+        res = self.move(note, chat, self.reader, int(ChannelKind.PM))
+        self.assertEqual(res.status_code, 403)
+        note.refresh_from_db()
+        self.assertEqual(note.channel_id, source.id)
+
+    def test_a_move_stores_the_channels_kind_not_the_requests(self):
+        source = self.gm(self.reader, self.owner)
+        target = self.gm(self.reader, self.owner)
+        note = self.note_on(source)
+        res = self.move(note, target, self.reader, int(ChannelKind.DM))  # a wrong kind
+        self.assertEqual(res.status_code, 200, res.content)
+        note.refresh_from_db()
+        self.assertEqual(note.channel_id, target.id)
+        self.assertEqual(note.chat_type, ChannelKind.GM)
+        self.assertEveryoneSays(note, True)
