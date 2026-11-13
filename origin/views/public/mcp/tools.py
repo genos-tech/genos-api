@@ -145,6 +145,9 @@ from origin.views.public.mcp.resolve import (
     resolve_note_ref,
     resolve_task_ref,
 )
+from origin.views.public.mcp.secretary.get_timeline import (  # noqa: E402
+    canonical_anchor as _canonical_anchor,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1810,10 +1813,48 @@ CATALOG: tuple[McpTool, ...] = (
             "the member can open now, and a neighbour they cannot open is left out without "
             "a trace. `window` is `since` (included) to `until` (excluded), default the last "
             "seven days, at most 31 days back. Name the task by its display id (PRJ-123), "
-            "its Genos URL, or its numeric id; for a milestone use its backing task."
+            "its Genos URL, or its numeric id; for a milestone use its backing task. For any "
+            "other anchor (a chat thread, a chat window), or a plain ordered history to "
+            "page through, use `get_timeline`."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="get_timeline",
+        registry_name="get_timeline",
+        description=(
+            "Read the ORDERED HISTORY of one thing: a task, a chat thread, or a window of a "
+            "chat. Use it for 'what happened here', 'how did this start', 'what was said "
+            "before the task was made' and 'what led to this'. For one task with its "
+            "neighbours use `get_item_line`; for any other anchor, or a plain ordered history "
+            "to page through, use `get_timeline`. `anchor_type` is task (id, PRJ-123 or URL), "
+            "thread (the id of its first message; a reply's id works) or chat (a window of "
+            "its messages). `events` run oldest to newest and every one has the same shape: "
+            "`at` (UTC), `kind` (created, status, assignee, change, comment, message, reply, "
+            "notice, note_edit, pr_linked, pr_merged, reaction, marker), `by` (a key into "
+            "`people`, or github / system), a short `text` (`text_chars`, at most 500) and a "
+            "`key`; `anchor` names another task or note when an event is about one, `from` / "
+            "`to` give a status change, `via` says how an event reached this timeline (chip: "
+            "something elsewhere points at it with a # chip; lead_in; claim: from the task "
+            "made from this thread). A task's timeline is its whole life, a thread's too; the "
+            "newest `limit` events are told first and `next_cursor` (pass it back as `cursor`, "
+            "with the same other arguments) walks back to older ones; `events_total` and "
+            "`older_events` count them exactly. `kinds` limits the kinds and `omitted` counts "
+            "what that left out; `marker` (the member's own AI-app opens of a task) is told "
+            "only when you ask for it. `lead_in` on a thread adds that many messages from "
+            "just before it began, because a task is often made from a conversation that "
+            "started earlier in the same chat. `origin` on a task and `links` point to the "
+            "thread it was made from, its parent and its dependencies, with the same "
+            "`anchor_type` and `anchor_id` this tool takes: follow one by calling again, "
+            "they are never expanded for you. On a thread, a member who cannot open the task "
+            "made from it still sees that it was created and its status changes (nothing "
+            "else about it): that is deliberate. `capped` is empty unless events were really "
+            "left out of what you can read (`size`: the call was shortened to fit, "
+            "`next_cursor` has the rest). Everything is the member's own view; a thing that "
+            "does not exist and one they may not open get the same answer."
+        ),
+        augment=_canonical_anchor,
     ),
     McpTool(
         name="list_my_unread",

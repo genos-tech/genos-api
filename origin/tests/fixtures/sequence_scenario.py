@@ -468,6 +468,21 @@ class SequenceScenario(McpBase):
             return None, text
         return json.loads(text[text.index("{") :]), text
 
+    def timeline_as(self, user, seq, anchor_type="thread", *, anchor_id=None, **kw):
+        """`get_timeline` (MIP-1281) over MCP as `user`: `(json | None, text)`. The default anchor
+        is the thread the task was made from; `chat` takes the whole story's day as its window.
+        The JSON is None when the tool refused."""
+        self._mcp(user)
+        ids = {"task": seq.task.task_id, "thread": seq.thread_root.id, "chat": seq.gm.id}
+        args = {"anchor_type": anchor_type, "anchor_id": str(anchor_id or ids[anchor_type]), **kw}
+        if anchor_type == "chat":
+            args.setdefault("since", seq.base.isoformat())
+            args.setdefault("until", seq.minutes(24 * 60).isoformat())
+        text, is_error = self._tool_text(self._call("get_timeline", args))
+        if is_error:
+            return None, text
+        return json.loads(text[text.index("{") :]), text
+
     def briefing_as(self, user, seq, at=None):
         """`build_briefing` for `user` over the whole day, as of `at` (default: 30 minutes after
         the last step built)."""
