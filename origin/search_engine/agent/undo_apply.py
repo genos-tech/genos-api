@@ -503,6 +503,13 @@ def perform_undo(*, run: AgentRun, step_id: int, user: Any) -> dict[str, Any]:
             # workspace: say it cannot be undone, and keep the trace.
             log.exception("The undo stored on step %s is malformed", step.step_id)
             raise UndoRefused(NOT_UNDOABLE, "This change can't be undone.")
+        # What it did, kept with the claim (same transaction): the model can be told it later.
+        step.undo_outcome_json = {
+            "action": outcome.action,
+            "restored": list(outcome.restored),
+            "skipped": [dict(s) for s in outcome.skipped],
+        }
+        step.save(update_fields=["undo_outcome_json"])
 
     # After the commit: what cannot be part of the transaction.
     extra = dict(outcome.extra)

@@ -1,0 +1,291 @@
+# MIP-1289: which tool does the in-app agent reach for FIRST, with `get_timeline` published (flag
+# AGENT_INAPP_TIMELINE_TOOL, arm t1289)? One cheap model call per case (kind: routing); no tool runs.
+# Positives `requires_arm: t1289` (they cannot pass without the tool); negatives run on arm0 too, so
+# the baseline shows whether the new tool steals a question the old tools should keep.
+# `ok` lists every right first tool. The legacy routing cases (routing_cases.yaml, 126 intents) are measured
+# with the env var set: `AGENT_INAPP_TIMELINE_TOOL=true python manage.py agent_eval_routing`, against the same without.
+
+- id: t1289-en-task-story
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Walk me through everything that happened on WRD-5, in order, from the start."
+  note: "Positive: the story of ONE task in order. The tool to pick is get_timeline."
+  ok:
+  - get_timeline
+  requires_arm: t1289
+- id: t1289-ja-task-story
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "WRD-5 で起きたことを、最初から順番に全部説明して。"
+  note: "Positive: the story of ONE task in order. The tool to pick is get_timeline."
+  ok:
+  - get_timeline
+  requires_arm: t1289
+- id: t1289-en-task-origin
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "How did WRD-5 get started, and what led up to it?"
+  note: "Positive: how a task started and what led to it (its thread and history in one line)."
+  ok:
+  - get_timeline
+  requires_arm: t1289
+- id: t1289-ja-task-origin
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "WRD-5 はどういう経緯で始まったの?何がきっかけ?"
+  note: "Positive: how a task started and what led to it (its thread and history in one line)."
+  ok:
+  - get_timeline
+  requires_arm: t1289
+- id: t1289-en-thread-order
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Who said what, and in what order, in the thread that starts with message 7d3c1f0e-2a64-4b8e-9c55-0f1a2b3c4d5e?"
+  note: "Positive: who said what, and in which order, in one thread (the id of its first message is given)."
+  ok:
+  - get_timeline
+  requires_arm: t1289
+- id: t1289-ja-thread-order
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "メッセージ 7d3c1f0e-2a64-4b8e-9c55-0f1a2b3c4d5e から始まるスレッドで、誰が何をどの順番で言ったか教えて。"
+  note: "Positive: who said what, and in which order, in one thread (the id of its first message is given)."
+  ok:
+  - get_timeline
+  requires_arm: t1289
+- id: t1289-en-note-edits
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Who edited note task:111 and in what order, and what did each edit add?"
+  note: "Ambiguous on purpose: who edited a note and in what order is told by either tool."
+  ok:
+  - get_timeline
+  - fetch_note_history
+  requires_arm: t1289
+- id: t1289-ja-note-edits
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "ノート task:111 を誰がどの順番で編集して、それぞれ何を加えたか教えて。"
+  note: "Ambiguous on purpose: who edited a note and in what order is told by either tool."
+  ok:
+  - get_timeline
+  - fetch_note_history
+  requires_arm: t1289
+- id: t1289-en-my-day
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "What does my day look like?"
+  note: "Negative: 'my day' is a plan question; it must never open a history."
+  ok:
+  - get_my_focus_tasks
+  - get_my_schedule
+  - get_my_task_summary
+  - list_today_todos
+- id: t1289-ja-my-day
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "今日の自分の予定とやることを教えて。"
+  note: "Negative: 'my day' is a plan question; it must never open a history."
+  ok:
+  - get_my_focus_tasks
+  - get_my_schedule
+  - get_my_task_summary
+  - list_today_todos
+- id: t1289-en-find-task
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Find the task about the export that fails."
+  note: "Negative: a lookup by topic, not a story."
+  ok:
+  - search_knowledge_base
+  - list_tasks
+- id: t1289-ja-find-task
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "エクスポートが失敗する件のタスクを探して。"
+  note: "Negative: a lookup by topic, not a story."
+  ok:
+  - search_knowledge_base
+  - list_tasks
+- id: t1289-en-who-on-project
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Who is on project 3?"
+  note: "Negative: a roster."
+  ok:
+  - list_project_members
+  - list_projects
+- id: t1289-ja-who-on-project
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "プロジェクト3には誰がいる?"
+  note: "Negative: a roster."
+  ok:
+  - list_project_members
+  - list_projects
+- id: t1289-en-who-changed-field
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Who changed the priority of WRD-5, and when?"
+  note: "Negative (the old tool stays right): ONE fact, who changed a field and when."
+  ok:
+  - get_task_history
+- id: t1289-ja-who-changed-field
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "WRD-5 の優先度を誰がいつ変えた?"
+  note: "Negative (the old tool stays right): ONE fact, who changed a field and when."
+  ok:
+  - get_task_history
+- id: t1289-en-read-chat-page
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Read the latest messages in chat 2ea5e352-1530-4172-a645-2f104c7c90d3."
+  note: "Negative (the old tool stays right): the raw messages of a page."
+  ok:
+  - fetch_chat_thread
+- id: t1289-ja-read-chat-page
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "チャット 2ea5e352-1530-4172-a645-2f104c7c90d3 の最新のメッセージを読んで。"
+  note: "Negative (the old tool stays right): the raw messages of a page."
+  ok:
+  - fetch_chat_thread
+- id: t1289-en-note-versions
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "Show me the version history of personal note 42."
+  note: "Negative (the old tool stays right): the version list of a note."
+  ok:
+  - fetch_note_history
+- id: t1289-ja-note-versions
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "個人ノート42のバージョン履歴を見せて。"
+  note: "Negative (the old tool stays right): the version list of a note."
+  ok:
+  - fetch_note_history
+- id: t1289-en-status-owner
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "What's the status of WRD-5 and who owns it?"
+  note: "Negative (the old tool stays right): the present state of one task."
+  ok:
+  - fetch_task
+- id: t1289-ja-status-owner
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "WRD-5 のステータスと担当者は?"
+  note: "Negative (the old tool stays right): the present state of one task."
+  ok:
+  - fetch_task
+- id: t1289-en-note-body
+  kind: routing
+  lang: en
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "What does personal note 42 say?"
+  note: "Negative (the old tool stays right): what a note says now."
+  ok:
+  - fetch_note
+- id: t1289-ja-note-body
+  kind: routing
+  lang: ja
+  tags:
+  - eval-group
+  - t1289
+  fixture: false
+  query: "個人ノート42には何が書いてある?"
+  note: "Negative (the old tool stays right): what a note says now."
+  ok:
+  - fetch_note

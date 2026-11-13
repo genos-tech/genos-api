@@ -40,6 +40,7 @@ from typing import Any
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.user_time import today_for_user_id
@@ -82,17 +83,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # so a project with hundreds of tasks doesn't push the lowest-priority
     # rows out of view before the sort runs.
     pool_cap = min(max(limit * 5, 50), 100)
-    qs = (
-        TaskMaster.objects.filter(
-            team_id=ctx.team_id,
-            assignee_id=ctx.user_id,
-            project_id__in=member_project_ids,
-            is_deleted=False,
-            is_init_task=False,
+    qs = TaskMaster.objects.filter(
+        team_id=ctx.team_id,
+        assignee_id=ctx.user_id,
+        project_id__in=member_project_ids,
+        is_deleted=False,
+        is_init_task=False,
+    ).select_related("project")
+    if ancestor_rule.enabled():
+        # MIP-1413: a task under a Closed or Deleted ancestor reads as Closed: not focus work.
+        rule = ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
+        qs = ancestor_rule.with_effective_status(qs, rule).exclude(
+            eff_status__in=_INACTIVE_STATUSES
         )
-        .exclude(status__in=_INACTIVE_STATUSES)
-        .select_related("project")
-    )
+    else:
+        qs = qs.exclude(status__in=_INACTIVE_STATUSES)
     # Filtered in SQL, before the pool is cut, so a filter never comes
     # back short because its tasks fell outside the newest-100.
     if delivery == "open_pr":

@@ -47,12 +47,16 @@ from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
 from origin.search_engine.agent.tools.approve_join_request import APPROVE_JOIN_REQUEST
 from origin.search_engine.agent.tools.assign_task import ASSIGN_TASK
 from origin.search_engine.agent.tools.base import (
+    FLAGGED_REGISTRY,
     MCP_ONLY_REGISTRY,
     REGISTRY,
     Tool,
     ToolContext,
     ToolError,
     ToolForbidden,
+    flagged_tool,
+    flagged_tools,
+    get_app_tool,
     get_mcp_tool,
 )
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
@@ -99,6 +103,7 @@ from origin.search_engine.agent.tools.get_task_throughput_stats import (
 )
 from origin.search_engine.agent.tools.get_team_members import GET_TEAM_MEMBERS
 from origin.search_engine.agent.tools.get_team_task_summary import GET_TEAM_TASK_SUMMARY
+from origin.search_engine.agent.tools.get_timeline import GET_TIMELINE_INAPP
 from origin.search_engine.agent.tools.get_top_task_closers import GET_TOP_TASK_CLOSERS
 from origin.search_engine.agent.tools.get_workload_distribution import (
     GET_WORKLOAD_DISTRIBUTION,
@@ -171,6 +176,23 @@ def register_tool(tool: Tool) -> None:
     if not hasattr(tool.run, "__wrapped__"):
         object.__setattr__(tool, "run", with_unfenced_arguments(tool.run))
     (MCP_ONLY_REGISTRY if tool.mcp_only else REGISTRY)[tool.name] = tool
+
+
+def register_flagged_tool(tool: Tool, flag: str) -> None:
+    """File an in-app tool that exists only while `SEARCH_ENGINE[flag]` is on (MIP-1289).
+
+    Wrapped like every other tool (`with_unfenced_arguments`, in place). Refused when the name is
+    in `REGISTRY` or filed twice; a name in `MCP_ONLY_REGISTRY` is allowed on purpose (see the
+    note on `FLAGGED_REGISTRY`). Write tools cannot be flag-gated this way: the approval and
+    resume paths look tools up in `REGISTRY` only.
+    """
+    if tool.name in REGISTRY or tool.name in FLAGGED_REGISTRY:
+        raise ValueError(f"tool {tool.name!r} is already registered")
+    if tool.requires_approval or tool.mcp_only:
+        raise ValueError(f"flag-gated tool {tool.name!r} must be a read tool for the app")
+    if not hasattr(tool.run, "__wrapped__"):
+        object.__setattr__(tool, "run", with_unfenced_arguments(tool.run))
+    FLAGGED_REGISTRY[tool.name] = (flag, tool)
 
 
 # Register at import time so REGISTRY is populated by the time the
@@ -295,10 +317,18 @@ for _t in (
 ):
     register_tool(_t)
 
+# Flag-gated in-app tools (default off; NOT in REGISTRY, see `base.FLAGGED_REGISTRY`).
+register_flagged_tool(GET_TIMELINE_INAPP, "AGENT_INAPP_TIMELINE_TOOL")
+
 
 __all__ = [
     "register_tool",
+    "register_flagged_tool",
     "get_mcp_tool",
+    "get_app_tool",
+    "flagged_tool",
+    "flagged_tools",
+    "FLAGGED_REGISTRY",
     "ADD_COMMENT",
     "ADD_TASK_DELIVERY",
     "DELETE_SPRINT",

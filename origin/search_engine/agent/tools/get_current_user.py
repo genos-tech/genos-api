@@ -14,8 +14,55 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.conf import settings
+from django.db.models import Q
+
+from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.base import (
+    Tool,
+    ToolContext,
+    ToolError,
+    wrap_workspace_content,
+)
+
+#: MIP-1090 (default off): the result gains the workspace the conversation is in.
+TEAM_FLAG = "AGENT_TEAM_IN_CURRENT_USER"
+
+#: The sentence the flag adds to the tool's description (`tool_flag_text`).
+DESCRIPTION_ADDITION = (
+    " It also returns `team` ({team_id, team_name}): the workspace this conversation is "
+    "in, for when the user says 'my team' or 'our workspace'."
+)
+
+
+def team_enabled() -> bool:
+    """Read at call time, so an eval arm or `override_settings` can flip it."""
+    return bool(settings.SEARCH_ENGINE.get(TEAM_FLAG))
+
+
+def _team_of(user: CustomUser, ctx: ToolContext) -> dict[str, Any] | None:
+    """The team the run is in (`ctx.team_id`, set by the server, never by the model), when the
+    user belongs to it: its owner, or a member who has not been removed. Anything else (no team
+    in the context, a team the user is not in) says nothing: no key, so nothing is revealed about
+    a team the caller is not in. The name is typed by the team's owner, so it is fenced."""
+    if not ctx.team_id:
+        return None
+    team = (
+        TeamMaster.objects.filter(team_id=ctx.team_id)
+        .filter(
+            Q(owner_id=user.id)
+            | Q(team_members__attendee_id=user.id, team_members__is_deleted=False)
+        )
+        .distinct()
+        .first()
+    )
+    if team is None:
+        return None
+    return {
+        "team_id": str(team.team_id),
+        "team_name": wrap_workspace_content(team.team_name or ""),
+    }
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
@@ -26,10 +73,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         # Surface as ToolError so the model can explain gracefully.
         raise ToolError("Current user record not found.")
 
+    # Flag off: no `team` key, the result is what it always was (MIP-1090).
+    team = _team_of(user, ctx) if team_enabled() else None
     return {
         "user_id": str(user.id),
         "username": user.username or "",
         "email": user.email or "",
+        **({"team": team} if team else {}),
         "__summary__": f"Current user: {user.username} <{user.email}>",
     }
 

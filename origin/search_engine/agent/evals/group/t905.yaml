@@ -1,0 +1,500 @@
+# MIP-905 (flag AGENT_CONTENT_LENGTH, arm `t905`): how much CONTENT Genos writes for a member on
+# Short / Standard / Long. The member's level is per case (`member_prefs: {content_length: ...}`,
+# applied by the harness without touching the fixture member: see RUNBOOK and
+# group/content_checks.py). On arm0 the flag is off, so the level is ignored, as in production.
+#
+# Shape: for each question a `.standard` case runs on arm0 AND on t905 (same prompt, same bytes:
+# "Standard is unchanged" is read off those two columns), and `.short` / `.long` run on t905 only
+# (`requires_arm`). All checks are cheap and in CHARACTERS (Japanese costs 2 to 3 times the tokens
+# of English, so a token bound would be unfair): the length of what the model PROPOSED (the write
+# never runs in an eval), the headings, the task count, not cut off, no error.
+#
+#   spec-note   "write a spec note"            Short brief < Standard < Long full, structure kept
+#   plan        "create a milestone, 5 tasks"  per-task body: Short <= ~60 words, Long ~400 words
+#   chat        a status question              (negative) the ANSWER stays short at every level
+#   bigplan     a 20-task plan, Gemini Low     (edge) the Low profile caps a call at 4,096 tokens:
+#                                              Standard may be cut off TODAY (a finding, A1 fixes
+#                                              the silence); Long (16,384) must come back whole
+#
+# bigplan needs the cap to bind: `needs_env: AGENT_EFFORT_LEVELS=true` (the Low profile's cap is
+# the effort profile's) and the case pins `llm: gemini/low`. Cost: Long cases write 2,000 to
+# 12,000 output tokens; their `est:` says so.
+
+- id: t905.spec-note.standard.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  member_prefs:
+    content_length: standard
+  query: 'Write a spec note for the search-filters feature of the Website Redesign project: goals, scope,
+    functional requirements, edge cases and open questions. Everything you need is in this message, so
+    do not search; save it as a note called "Search filters spec".'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_note
+    pending_write:
+      tool: create_note
+      not_cut_off: true
+      total_chars_at_least: 150
+      total_chars_at_most: 5000
+- id: t905.spec-note.short.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: short
+  query: 'Write a spec note for the search-filters feature of the Website Redesign project: goals, scope,
+    functional requirements, edge cases and open questions. Everything you need is in this message, so
+    do not search; save it as a note called "Search filters spec".'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_note
+    pending_write:
+      tool: create_note
+      not_cut_off: true
+      total_chars_at_least: 150
+      total_chars_at_most: 1400
+      each_body_headings_at_most: 4
+- id: t905.spec-note.long.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  est: &id002
+    calls: 4
+    input_tokens: 14000
+    cached_tokens: 8000
+    output_tokens: 2500
+  query: 'Write a spec note for the search-filters feature of the Website Redesign project: goals, scope,
+    functional requirements, edge cases and open questions. Everything you need is in this message, so
+    do not search; save it as a note called "Search filters spec".'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_note
+    pending_write:
+      tool: create_note
+      not_cut_off: true
+      total_chars_at_least: 2500
+      each_body_headings_at_least: 4
+- id: t905.plan.standard.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  member_prefs:
+    content_length: standard
+  query: 'In the Website Redesign project, create a milestone "Search filters beta" due 2026-12-15 with
+    these five tasks: "Design the filter UI", "Build the filter API", "Wire the UI to the API", "Write
+    the tests", "Roll out to 10% of users". Everything you need is in this message, so do not search.'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      not_cut_off: true
+      each_body_chars_at_most: 1100
+- id: t905.plan.short.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: short
+  query: 'In the Website Redesign project, create a milestone "Search filters beta" due 2026-12-15 with
+    these five tasks: "Design the filter UI", "Build the filter API", "Wire the UI to the API", "Write
+    the tests", "Roll out to 10% of users". Everything you need is in this message, so do not search.'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      not_cut_off: true
+      each_body_chars_at_most: 500
+- id: t905.plan.long.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  est: &id003
+    calls: 4
+    input_tokens: 16000
+    cached_tokens: 9000
+    output_tokens: 6000
+  query: 'In the Website Redesign project, create a milestone "Search filters beta" due 2026-12-15 with
+    these five tasks: "Design the filter UI", "Build the filter API", "Wire the UI to the API", "Write
+    the tests", "Roll out to 10% of users". Everything you need is in this message, so do not search.'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      not_cut_off: true
+      each_body_chars_at_least: 1100
+      each_body_headings_at_least: 3
+- id: t905.chat.standard.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  member_prefs:
+    content_length: standard
+  query: What is the status of the "v1.0 Public Launch" milestone in the Website Redesign project?
+  expect:
+    no_errors: true
+    tools_used_excludes:
+    - create_note
+    - create_task_plan
+    - create_task
+    - update_task
+    answer_chars_at_least: 20
+    answer_chars_at_most: 1500
+- id: t905.chat.short.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: short
+  query: What is the status of the "v1.0 Public Launch" milestone in the Website Redesign project?
+  expect:
+    no_errors: true
+    tools_used_excludes:
+    - create_note
+    - create_task_plan
+    - create_task
+    - update_task
+    answer_chars_at_least: 20
+    answer_chars_at_most: 1500
+- id: t905.chat.long.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  query: What is the status of the "v1.0 Public Launch" milestone in the Website Redesign project?
+  expect:
+    no_errors: true
+    tools_used_excludes:
+    - create_note
+    - create_task_plan
+    - create_task
+    - update_task
+    answer_chars_at_least: 20
+    answer_chars_at_most: 1500
+- id: t905.bigplan.standard.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  note: Gemini Low caps a call at 4,096 tokens. Standard may come back cut off or with an error today
+    (what A1 reports instead of hiding); Long must be whole.
+  member_prefs:
+    content_length: standard
+  llm:
+    provider: gemini
+    effort: low
+  needs_env:
+    AGENT_EFFORT_LEVELS: true
+  est: &id001
+    calls: 4
+    input_tokens: 16000
+    cached_tokens: 9000
+    output_tokens: 11000
+  query: 'In the Website Redesign project, create a milestone "Platform hardening" with twenty tasks,
+    one for each of: auth, sessions, rate limits, logging, metrics, alerts, backups, restores, migrations,
+    caching, queues, search, uploads, emails, billing, permissions, audit trail, feature flags, error
+    pages, docs. Give every task a body with a summary, motivation and acceptance criteria. Do not search;
+    everything you need is in this message.'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 20
+      not_cut_off: true
+- id: t905.bigplan.long.en
+  lang: en
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  note: Gemini Low caps a call at 4,096 tokens. Standard may come back cut off or with an error today
+    (what A1 reports instead of hiding); Long must be whole.
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  llm:
+    provider: gemini
+    effort: low
+  needs_env:
+    AGENT_EFFORT_LEVELS: true
+  est: *id001
+  query: 'In the Website Redesign project, create a milestone "Platform hardening" with twenty tasks,
+    one for each of: auth, sessions, rate limits, logging, metrics, alerts, backups, restores, migrations,
+    caching, queues, search, uploads, emails, billing, permissions, audit trail, feature flags, error
+    pages, docs. Give every task a body with a summary, motivation and acceptance criteria. Do not search;
+    everything you need is in this message.'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 10
+      not_cut_off: true
+- id: t905.spec-note.standard.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  member_prefs:
+    content_length: standard
+  query: Website Redesign プロジェクトの検索フィルター機能について、目的・スコープ・機能要件・エッジケース・未解決の質問をまとめた仕様ノートを書いてください。必要な情報はこのメッセージにすべてあるので検索はせず、「検索フィルター仕様」というタイトルのノートとして保存してください。
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_note
+    pending_write:
+      tool: create_note
+      not_cut_off: true
+      total_chars_at_least: 150
+      total_chars_at_most: 3000
+- id: t905.spec-note.short.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: short
+  query: Website Redesign プロジェクトの検索フィルター機能について、目的・スコープ・機能要件・エッジケース・未解決の質問をまとめた仕様ノートを書いてください。必要な情報はこのメッセージにすべてあるので検索はせず、「検索フィルター仕様」というタイトルのノートとして保存してください。
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_note
+    pending_write:
+      tool: create_note
+      not_cut_off: true
+      total_chars_at_least: 150
+      total_chars_at_most: 800
+      each_body_headings_at_most: 4
+- id: t905.spec-note.long.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  est: *id002
+  query: Website Redesign プロジェクトの検索フィルター機能について、目的・スコープ・機能要件・エッジケース・未解決の質問をまとめた仕様ノートを書いてください。必要な情報はこのメッセージにすべてあるので検索はせず、「検索フィルター仕様」というタイトルのノートとして保存してください。
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_note
+    pending_write:
+      tool: create_note
+      not_cut_off: true
+      total_chars_at_least: 1100
+      each_body_headings_at_least: 4
+- id: t905.plan.standard.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  member_prefs:
+    content_length: standard
+  query: Website Redesign プロジェクトに、期限 2026-12-15 のマイルストーン「検索フィルターベータ」を作り、次の5つのタスクを入れてください:「フィルターUIの設計」「フィルターAPIの実装」「UIとAPIの接続」「テストの作成」「ユーザーの10%への展開」。必要な情報はこのメッセージにすべてあるので、検索はしないでください。
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      not_cut_off: true
+      each_body_chars_at_most: 700
+- id: t905.plan.short.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: short
+  query: Website Redesign プロジェクトに、期限 2026-12-15 のマイルストーン「検索フィルターベータ」を作り、次の5つのタスクを入れてください:「フィルターUIの設計」「フィルターAPIの実装」「UIとAPIの接続」「テストの作成」「ユーザーの10%への展開」。必要な情報はこのメッセージにすべてあるので、検索はしないでください。
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      not_cut_off: true
+      each_body_chars_at_most: 320
+- id: t905.plan.long.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  est: *id003
+  query: Website Redesign プロジェクトに、期限 2026-12-15 のマイルストーン「検索フィルターベータ」を作り、次の5つのタスクを入れてください:「フィルターUIの設計」「フィルターAPIの実装」「UIとAPIの接続」「テストの作成」「ユーザーの10%への展開」。必要な情報はこのメッセージにすべてあるので、検索はしないでください。
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      not_cut_off: true
+      each_body_chars_at_least: 450
+      each_body_headings_at_least: 3
+- id: t905.chat.standard.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  member_prefs:
+    content_length: standard
+  query: Website Redesign プロジェクトの「v1.0 Public Launch」マイルストーンの状況を教えてください。
+  expect:
+    no_errors: true
+    tools_used_excludes:
+    - create_note
+    - create_task_plan
+    - create_task
+    - update_task
+    answer_chars_at_least: 20
+    answer_chars_at_most: 800
+- id: t905.chat.short.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: short
+  query: Website Redesign プロジェクトの「v1.0 Public Launch」マイルストーンの状況を教えてください。
+  expect:
+    no_errors: true
+    tools_used_excludes:
+    - create_note
+    - create_task_plan
+    - create_task
+    - update_task
+    answer_chars_at_least: 20
+    answer_chars_at_most: 800
+- id: t905.chat.long.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  query: Website Redesign プロジェクトの「v1.0 Public Launch」マイルストーンの状況を教えてください。
+  expect:
+    no_errors: true
+    tools_used_excludes:
+    - create_note
+    - create_task_plan
+    - create_task
+    - update_task
+    answer_chars_at_least: 20
+    answer_chars_at_most: 800
+- id: t905.bigplan.standard.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  note: Gemini Low caps a call at 4,096 tokens. Standard may come back cut off or with an error today
+    (what A1 reports instead of hiding); Long must be whole.
+  member_prefs:
+    content_length: standard
+  llm:
+    provider: gemini
+    effort: low
+  needs_env:
+    AGENT_EFFORT_LEVELS: true
+  est: *id001
+  query: 'Website Redesign プロジェクトに、マイルストーン「基盤の強化」を作り、次の20項目に1つずつタスクを作ってください: 認証、セッション、レート制限、ログ、メトリクス、アラート、バックアップ、リストア、マイグレーション、キャッシュ、キュー、検索、アップロード、メール、課金、権限、監査ログ、フィーチャーフラグ、エラーページ、ドキュメント。各タスクの本文には概要・動機・受け入れ条件を書いてください。検索はせず、必要な情報はこのメッセージにすべてあります。'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 20
+      not_cut_off: true
+- id: t905.bigplan.long.ja
+  lang: ja
+  tags:
+  - eval-group
+  - t905
+  fixture: v1
+  note: Gemini Low caps a call at 4,096 tokens. Standard may come back cut off or with an error today
+    (what A1 reports instead of hiding); Long must be whole.
+  requires_arm: t905
+  member_prefs:
+    content_length: long
+  llm:
+    provider: gemini
+    effort: low
+  needs_env:
+    AGENT_EFFORT_LEVELS: true
+  est: *id001
+  query: 'Website Redesign プロジェクトに、マイルストーン「基盤の強化」を作り、次の20項目に1つずつタスクを作ってください: 認証、セッション、レート制限、ログ、メトリクス、アラート、バックアップ、リストア、マイグレーション、キャッシュ、キュー、検索、アップロード、メール、課金、権限、監査ログ、フィーチャーフラグ、エラーページ、ドキュメント。各タスクの本文には概要・動機・受け入れ条件を書いてください。検索はせず、必要な情報はこのメッセージにすべてあります。'
+  expect:
+    no_errors: true
+    pending_tools_contains:
+    - create_task_plan
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 8
+      not_cut_off: true

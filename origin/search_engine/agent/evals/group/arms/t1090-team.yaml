@@ -1,0 +1,4 @@
+arm: t1090-team
+overrides:
+    AGENT_TEAM_IN_CURRENT_USER: true
+requires: []

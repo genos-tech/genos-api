@@ -1,0 +1,112 @@
+# MIP-1288 (flag AGENT_FETCH_TASK_ANCHORS): `fetch_task` names where the task's conversation and note are:
+# `anchors: [{anchor_type: thread|chat|note, anchor_id}]`, each only when the caller can open it.
+# The question the arm answers: does the model reach the thread the task was made from, and the task's
+# note, FROM THE TASK (one hop), where arm0 has to search? And does it stay quiet when it cannot (a dev
+# outside the chat) or when the question needs neither?
+#
+# Fixture: the sequence scenario (group/sequence.py). EN team `v1`: the thread root is the client's step 3
+# ("Can you handle Y, the export that fails, because of X?"), the note says CSV export checked / shipped.
+# JA team `ja`: threaded chat, so the thread root is step 1 ("Xが壊れています。エクスポートボタンが反応しません").
+# Viewers: b / ja-b = the PM (in the chat, on the project); c = the dev (on the project, NOT in the chat).
+# Facts match case-insensitively. No `requires_arm`: arm0 runs these too, to show the gap.
+#
+# Per language: a positive for the thread, a positive for the note, a negative (a plain status question
+# must not turn into a chat or note read), an edge (EN: the viewer who may not read the chat; JA: both).
+
+- id: t1288-en-thread-origin
+  lang: en
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: b
+  query: "Which chat message was the task 'Fix the export that fails' created from? Quote it."
+  note: "Positive: the thread the task was made from, reached from the task (anchors), then read."
+  expect:
+    tools_in_order: [fetch_task, fetch_chat_thread]
+    answer_contains_any: ["handle y", "because of x", "can you handle"]
+    tool_calls_at_most: 6
+
+- id: t1288-en-note
+  lang: en
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: b
+  query: "What does the task note of 'Fix the export that fails' say?"
+  note: "Positive: the task's note, reached from the task (anchors) and read in full."
+  expect:
+    tools_used_contains: [fetch_note]
+    answer_contains_any: ["csv", "shipped", "fixed"]
+    tool_calls_at_most: 6
+
+- id: t1288-en-plain-status
+  lang: en
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: b
+  query: "What is the status of the task 'Fix the export that fails', and who is it assigned to?"
+  note: "Negative: the anchors must not tempt a chat or note read the question does not need."
+  expect:
+    tools_used_excludes: [fetch_chat_thread, fetch_note]
+    answer_contains_any: ["closed", "chris"]
+    tool_calls_at_most: 4
+
+- id: t1288-en-dev-outside-the-chat
+  lang: en
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: c
+  query: "Show me, word for word, the chat message the task 'Fix the export that fails' was created from."
+  note: "Edge/privacy: the dev is on the project but not in the client chat. The task carries no thread or chat anchor
+    for them; the chat text must not reach the model or the answer, and the answer must say it cannot show it."
+  expect:
+    answer_contains_any: ["cannot", "can't", "not able", "unable", "no access", "don't have access", "not a member", "could not", "couldn't", "not available", "not accessible"]
+    answer_does_not_contain: ["export button does nothing", "can you handle y", "because of x", "new export code"]
+    no_tool_results_contain: ["export button does nothing", "can you handle y", "because of x", "new export code"]
+
+- id: t1288-ja-thread-origin
+  lang: ja
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: ja-b
+  query: "「Fix the export that fails (Y)」というタスクは、チャットのどのメッセージから作られましたか?そのメッセージを引用してください。"
+  note: "Positive: the thread the task was made from (threaded chat: the root is the client's first message), reached from the task."
+  expect:
+    tools_in_order: [fetch_task, fetch_chat_thread]
+    answer_contains_any: ["エクスポートボタン", "壊れて"]
+    tool_calls_at_most: 6
+
+- id: t1288-ja-note
+  lang: ja
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: ja-b
+  query: "「Fix the export that fails (Y)」のタスクノートには何が書かれていますか?"
+  note: "Positive: the task's note, reached from the task (anchors) and read in full."
+  expect:
+    tools_used_contains: [fetch_note]
+    answer_contains_any: ["csv", "shipped", "fixed", "リリース", "修正", "解決"]
+    tool_calls_at_most: 6
+
+- id: t1288-ja-plain-status
+  lang: ja
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: ja-b
+  query: "「Fix the export that fails (Y)」の状況と担当者を教えてください。"
+  note: "Negative: the anchors must not tempt a chat or note read the question does not need."
+  expect:
+    tools_used_excludes: [fetch_chat_thread, fetch_note]
+    answer_contains_any: ["クローズ", "closed", "完了", "クリス", "chris"]
+    tool_calls_at_most: 4
+
+- id: t1288-ja-chat-and-note
+  lang: ja
+  tags: [eval-group, t1288]
+  fixture: sequence
+  viewer: ja-b
+  query: "「Fix the export that fails (Y)」の経緯を、元のチャットのやり取りとタスクノートの両方から説明してください。"
+  note: "Edge: the question needs both the thread and the note; both anchors are followed, nothing is invented."
+  expect:
+    tools_used_contains: [fetch_chat_thread, fetch_note]
+    answer_contains_any: ["エクスポート"]
+    answer_does_not_contain: ["qa", "ロールバック", "本番デプロイ"]
+    tool_calls_at_most: 8

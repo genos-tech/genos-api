@@ -1,0 +1,80 @@
+# MIP-1090 (a) (flag AGENT_TEAM_IN_CURRENT_USER): `get_current_user` also returns `team` ({team_id,
+# team_name}), the workspace the conversation is in. The question the arm answers: does the model say
+# which team the member is in WITHOUT guessing, and does it stop over-claiming ("you are only in one
+# team") from a tool that names just the current one?
+#
+# Fixture: the sequence scenario. Team names: "Eval Sequence V1" (viewer b) and "Eval Sequence JA"
+# (viewer ja-b); user ids are fixed (..5e0102 for b, ..5e0302 for ja-b). Facts match case-insensitively.
+#
+# Per language: a positive (which team am I in), a negative (a question about the user id must not drag
+# the team in), an edge (other teams: the tool names only the current one).
+
+- id: t1090-team-en-which-team
+  lang: en
+  tags: [eval-group, t1090-team]
+  fixture: sequence
+  viewer: b
+  query: "Which team (workspace) am I in right now?"
+  note: "Positive: the team name comes from get_current_user (arm on) rather than from a guess."
+  expect:
+    answer_contains_any: ["eval sequence v1"]
+    tool_calls_at_most: 3
+
+- id: t1090-team-en-my-id
+  lang: en
+  tags: [eval-group, t1090-team]
+  fixture: sequence
+  viewer: b
+  query: "What is my user id? Answer with the id only."
+  note: "Negative: a question that does not need the team must not mention it."
+  expect:
+    tools_used_contains: [get_current_user]
+    answer_contains_any: ["0000005e0102"]
+    answer_does_not_contain: ["eval sequence"]
+    tool_calls_at_most: 2
+
+- id: t1090-team-en-other-teams
+  lang: en
+  tags: [eval-group, t1090-team]
+  fixture: sequence
+  viewer: b
+  query: "Am I a member of any other team besides the current one?"
+  note: "Edge: the tool names only the current team. The model must not claim there is no other team; it can say it only sees this one."
+  expect:
+    answer_does_not_contain: ["only one team", "no other team", "not in any other", "only a member of", "only member of"]
+    tool_calls_at_most: 4
+
+- id: t1090-team-ja-which-team
+  lang: ja
+  tags: [eval-group, t1090-team]
+  fixture: sequence
+  viewer: ja-b
+  query: "今、私はどのチーム(ワークスペース)にいますか?"
+  note: "Positive: the team name comes from get_current_user (arm on) rather than from a guess."
+  expect:
+    answer_contains_any: ["eval sequence ja"]
+    tool_calls_at_most: 3
+
+- id: t1090-team-ja-my-id
+  lang: ja
+  tags: [eval-group, t1090-team]
+  fixture: sequence
+  viewer: ja-b
+  query: "私のユーザーIDは何ですか?IDだけ答えてください。"
+  note: "Negative: a question that does not need the team must not mention it."
+  expect:
+    tools_used_contains: [get_current_user]
+    answer_contains_any: ["0000005e0302"]
+    answer_does_not_contain: ["eval sequence"]
+    tool_calls_at_most: 2
+
+- id: t1090-team-ja-other-teams
+  lang: ja
+  tags: [eval-group, t1090-team]
+  fixture: sequence
+  viewer: ja-b
+  query: "今のチーム以外に、私が所属しているチームはありますか?"
+  note: "Edge: the tool names only the current team. The model must not claim there is no other team; it can say it only sees this one."
+  expect:
+    answer_does_not_contain: ["他にチームはありません", "他のチームには所属していません", "このチームだけ", "1つだけ", "一つだけ"]
+    tool_calls_at_most: 4

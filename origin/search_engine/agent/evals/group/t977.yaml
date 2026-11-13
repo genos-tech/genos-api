@@ -1,0 +1,162 @@
+# MIP-977 (flag AGENT_RESUME_KEEPS_BLOCKS): after an approve / reject the resumed leg keeps the
+# thread / note summary, the @/# references block and the tier block its first leg had.
+#
+# All `kind: resume`: the first leg is scripted (it proposes the write), the legs after the
+# decision use the model under test; see evals/group/resume_runner.py for the schema. Each case
+# has its own throwaway team (fixture: false), never the v1 fixture team.
+#
+# Per language: two positives (a thread fact after an approve; a note fact after a reject),
+# a negative (a plain ask: nothing to keep, nothing may change), and an edge (an @/# reference).
+# Prompt checks come first (did the block reach the resumed leg?), then the answer.
+# `polarity` is read by the case-shape test only (pos: arm0 must fail the prompt check, the arm
+# pass it; neg: the same in both arms).
+
+- id: t977.thread-facts.approve.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: pos
+  thread:
+    messages:
+      - "Ann: Can we ship the export fix this month?"
+      - "Priya: Yes. I will own it, and it has to be done by Friday 21 November because of the audit."
+    summary: "Ann asked whether the export fix can ship this month. Priya will own it and it must be finished by Friday 21 November because of the audit."
+  query: "From this thread, create a task to ship the export fix. Once it is created, tell me who owns it and when it is due, according to the thread."
+  proposal:
+    tool: create_task
+    args: {title: "Ship the export fix", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["Priya", "21 November"]
+    answer_contains_all: ["Priya"]
+    answer_contains_any: ["21", "Friday"]
+
+- id: t977.thread-facts.approve.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: pos
+  thread:
+    messages:
+      - "山田: エクスポートの修正は今月中にリリースできますか?"
+      - "佐藤: はい。私が担当します。監査があるので11月21日(金)までに終わらせる必要があります。"
+    summary: "山田さんがエクスポートの修正を今月中にリリースできるか尋ねた。佐藤さんが担当し、監査のため11月21日(金)までに完了させる必要がある。"
+  query: "このスレッドの内容から、エクスポート修正をリリースするタスクを作ってください。作成できたら、スレッドによると担当者と期限は誰・いつか教えてください。"
+  proposal:
+    tool: create_task
+    args: {title: "エクスポート修正のリリース", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["佐藤", "11月21日"]
+    answer_contains_all: ["佐藤"]
+    answer_contains_any: ["21日", "金曜"]
+
+- id: t977.note-fact.reject.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: pos
+  note:
+    title: "Q3 plan"
+    body: "Data migration first, then the redesign. Code freeze: 5 December."
+    summary: "The Q3 plan puts the data migration before the redesign. The code freeze is on 5 December."
+  query: "Draft a task for the data migration from this note. If I decline it, still tell me when the code freeze is, according to the note."
+  proposal:
+    tool: create_task
+    args: {title: "Data migration", project_id: "{project_id}", priority: Low}
+  decision: reject
+  expect:
+    resumed_prompt_contains: ["5 December"]
+    answer_contains_any: ["5 December", "December 5", "Dec 5", "5 Dec"]
+
+- id: t977.note-fact.reject.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: pos
+  note:
+    title: "第3四半期の計画"
+    body: "データ移行が先、その後にリデザイン。コードフリーズは12月5日。"
+    summary: "第3四半期の計画ではデータ移行をリデザインより先に行う。コードフリーズは12月5日。"
+  query: "このノートからデータ移行のタスクを下書きしてください。却下した場合でも、ノートによるとコードフリーズはいつか教えてください。"
+  proposal:
+    tool: create_task
+    args: {title: "データ移行", project_id: "{project_id}", priority: Low}
+  decision: reject
+  expect:
+    resumed_prompt_contains: ["12月5日"]
+    answer_contains_any: ["12月5日"]
+
+- id: t977.plain-ask.approve.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: neg
+  query: "Create a task called 'Update the docs' and confirm when it is done."
+  proposal:
+    tool: create_task
+    args: {title: "Update the docs", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_excludes: ["<thread_summary>", "<note_summary>", "USER-PROVIDED REFERENCES"]
+    answer_contains_any: ["Update the docs", "docs"]
+    max_calls: 4
+
+- id: t977.plain-ask.approve.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: neg
+  query: "「ドキュメントを更新」というタスクを作成して、できたら教えてください。"
+  proposal:
+    tool: create_task
+    args: {title: "ドキュメントを更新", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_excludes: ["<thread_summary>", "<note_summary>", "USER-PROVIDED REFERENCES"]
+    answer_contains_any: ["ドキュメント"]
+    max_calls: 4
+
+- id: t977.reference-lookup.approve.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: pos
+  tasks:
+    - {key: login, title: "Fix login flow", priority: Critical}
+  mentions:
+    - {type: task, task: login}
+  query: "Create a task called 'Follow up' in the project, then tell me the priority of the task I tagged with # in this message."
+  proposal:
+    tool: create_task
+    args: {title: "Follow up", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["USER-PROVIDED REFERENCES", "Fix login flow"]
+    answer_contains_any: ["Critical"]
+
+- id: t977.reference-lookup.approve.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t977]
+  fixture: false
+  polarity: pos
+  tasks:
+    - {key: login, title: "ログイン画面の修正", priority: Critical}
+  mentions:
+    - {type: task, task: login}
+  query: "プロジェクトに「フォローアップ」というタスクを作成して、このメッセージで#を付けたタスクの優先度を教えてください。"
+  proposal:
+    tool: create_task
+    args: {title: "フォローアップ", project_id: "{project_id}", priority: Low}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["USER-PROVIDED REFERENCES", "ログイン画面の修正"]
+    answer_contains_any: ["Critical", "クリティカル", "緊急"]

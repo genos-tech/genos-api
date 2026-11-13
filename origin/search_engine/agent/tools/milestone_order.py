@@ -139,7 +139,11 @@ def _critical_path(
     return chain, has_cycle
 
 
-def order_of_work(milestone: MilestoneMaster, member_project_ids: set[int]) -> dict[str, Any]:
+def order_of_work(
+    milestone: MilestoneMaster,
+    member_project_ids: set[int],
+    skip_ids: frozenset[int] = frozenset(),
+) -> dict[str, Any]:
     tasks = _load_with_ancestors(milestone)
     backing_id = milestone.task_id
     # The work: open tasks of the milestone, not the milestone's own row.
@@ -148,6 +152,7 @@ def order_of_work(milestone: MilestoneMaster, member_project_ids: set[int]) -> d
         for tid, t in tasks.items()
         if tid != backing_id
         and _is_open(t)
+        and tid not in skip_ids  # reads as Closed or Deleted (MIP-1413), empty with the flag off
         and not t.is_init_task
         and (t.milestone_id == milestone.milestone_id or t.parent_task_id == backing_id)
     }
@@ -162,7 +167,7 @@ def order_of_work(milestone: MilestoneMaster, member_project_ids: set[int]) -> d
         .select_related("blocker_task", "blocker_task__project")
         .order_by("id")
     ):
-        if _is_open(dep.blocker_task):
+        if _is_open(dep.blocker_task) and dep.blocker_task_id not in skip_ids:
             open_blockers[dep.blocked_task_id].append(dep)
 
     ready, blocked, in_progress, pending = [], [], [], []
