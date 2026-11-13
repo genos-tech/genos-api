@@ -65,6 +65,7 @@ CASE SCHEMA (`origin/search_engine/agent/evals/group/<tag>.yaml`, `kind: resume`
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import logging
@@ -93,6 +94,10 @@ SESSION_WINDOW_NOTE = "earlier_turns must fit the session window (no recap is bu
 # --------------------------------------------------------------------------- #
 
 
+# The dummy signature Google documents for function calls that were not produced by the model.
+SCRIPTED_CALL_SIGNATURE = base64.urlsafe_b64decode("skip_thought_signature_validator")
+
+
 class ScriptedFirstLeg:
     """The model of the ask leg: proposes the case's write, then (if the loop asks again)
     stops. It is never asked a second time for a case that pauses on its first call."""
@@ -106,7 +111,17 @@ class ScriptedFirstLeg:
 
         self.calls += 1
         if self.calls == 1:
-            yield (None, FunctionCall(name=self.tool, args=dict(self.args)))
+            # Gemini 3 rejects a replayed function call that has no thought signature (400
+            # "missing a thought_signature"). This call is scripted, not the model's, so it
+            # carries Google's documented dummy that skips that validation.
+            yield (
+                None,
+                FunctionCall(
+                    name=self.tool,
+                    args=dict(self.args),
+                    thought_signature=SCRIPTED_CALL_SIGNATURE,
+                ),
+            )
         else:
             yield ("(no further action)", None)
 
