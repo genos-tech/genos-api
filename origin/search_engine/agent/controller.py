@@ -65,7 +65,13 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
-from origin.search_engine.agent import approval_edits, approval_reason, tool_cache, undo
+from origin.search_engine.agent import (
+    approval_edits,
+    approval_notes,
+    approval_reason,
+    tool_cache,
+    undo,
+)
 from origin.search_engine.agent.abstention import ABSTAIN_MESSAGE, is_abstention
 from origin.search_engine.agent.citation_resolver import (
     canonical_citation_token,
@@ -2263,11 +2269,11 @@ def resume_agent(
     #   run_args   what `tool.run` receives (typed text escaped so the tool's
     #              unfencing hands it back unchanged);
     #   shown_args the same, as typed, for the events.
-    # KNOWN LIMITATION: the model's replay (`function_call` above, and
-    # `_rebuild_messages` on a later pause) is still its original call beside
-    # the result of what ran, so its final answer can describe the proposal
-    # rather than the edit. Telling it what was edited changes what it sees,
-    # which needs an eval first; it is a follow-up.
+    # The model's replay (`function_call` above, and `_rebuild_messages` on a later
+    # pause) is still its original call beside the result of what ran, so its final answer
+    # can describe the proposal rather than the edit. `AGENT_TELL_MODEL_EDIT_UNDO` (off by
+    # default, measured by the grouped eval) adds what was edited beside the result
+    # (`approval_notes.with_edit_note`); off, nothing changes.
     run_args = call_args
     shown_args = call_args
     edit_patch: dict[str, Any] = {}
@@ -2520,7 +2526,14 @@ def resume_agent(
                     )
                     emit({"type": "sources", "sources": hydrated})
                 messages.append(_assistant_function_call_turn(function_call))
-                messages.append(_function_response_turn(call_name, result))
+                # With `AGENT_TELL_MODEL_EDIT_UNDO` on, what the person edited on the card is
+                # said beside the result (`approval_notes`); off, `result` as it always was.
+                # (`result` itself, which is persisted and shown, is never changed.)
+                messages.append(
+                    _function_response_turn(
+                        call_name, approval_notes.with_edit_note(result, edit_patch)
+                    )
+                )
 
     # Continue the loop from the next step. The original run wrote
     # steps 0..step_index inclusive, so we resume at step_index + 1.
@@ -4158,6 +4171,12 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
         elif step.error:
             messages.append(_function_response_turn(step.tool_name, {"error": step.error}))
         else:
-            messages.append(_function_response_turn(step.tool_name, step.result_json or {}))
+            # A later leg replays what the earlier one saw, so the edit note and the undo
+            # marker (`AGENT_TELL_MODEL_EDIT_UNDO`) are added here too; off, the row as it was.
+            messages.append(
+                _function_response_turn(
+                    step.tool_name, approval_notes.with_step_notes(step.result_json or {}, step)
+                )
+            )
 
     return messages, pending

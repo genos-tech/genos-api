@@ -75,7 +75,13 @@ from apis.request_id import (
 )
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.search_engine import metered, shared_answers, spend_recorder, stale_runs
-from origin.search_engine.agent import approval_edits, approval_reason, undo, undo_apply
+from origin.search_engine.agent import (
+    approval_edits,
+    approval_notes,
+    approval_reason,
+    undo,
+    undo_apply,
+)
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -407,7 +413,27 @@ def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
             "SESSION_PRIOR_ANSWER_MAX_CHARS", _DEFAULT_PRIOR_ANSWER_MAX_CHARS
         )
     )
-    return [(r.query, r.final_answer_text[:max_chars]) for r in runs]
+    runs = list(runs)
+    turns = [(r.query, r.final_answer_text[:max_chars]) for r in runs]
+    if approval_notes.enabled() and runs:
+        # `AGENT_TELL_MODEL_EDIT_UNDO`: an earlier answer whose write the person has since
+        # undone ends with a short factual note saying so (after the cap, so it is not cut).
+        # One query for the whole window, and none at all with the flag off.
+        undone: dict[Any, list[AgentStep]] = {}
+        for step in AgentStep.objects.filter(
+            run_id__in=[r.run_id for r in runs], undone_at__isnull=False
+        ).order_by("step_index", "step_id"):
+            undone.setdefault(step.run_id, []).append(step)
+        turns = [
+            (
+                query,
+                f"{answer}\n\n{note}"
+                if (note := approval_notes.undo_note_text(undone.get(r.run_id, [])))
+                else answer,
+            )
+            for r, (query, answer) in zip(runs, turns)
+        ]
+    return turns
 
 
 def _load_prior_turns(session: AgentSession, max_turns: int) -> list[tuple[str, str]]:
