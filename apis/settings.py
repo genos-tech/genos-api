@@ -1871,8 +1871,9 @@ SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
 
 # MIP-1289 / MIP-1281 (model-visible, dark-shipped OFF, grouped eval arm `t1289`): publish
 # `get_timeline` to the in-app agent. ON = one more tool declaration (about +1.3k characters, about
-# +300 tokens, on every call: the explicit Gemini context cache and the Claude tool-block cache see
-# a different prefix, so the first call after the flip is a cache write) and a tool that tells ONE
+# +351 tokens at 4.2 characters per token: 1,475 characters of the ~111k of declarations, on every
+# call; the explicit Gemini context cache and the Claude tool-block cache see a different prefix, so
+# the first call after the flip is a cache write) and a tool that tells ONE
 # task, thread or note as a time-ordered line, by the same service the MCP tool uses
 # (`origin/services/timeline.py`; every access rule and the fencing live there). OFF = the tool is
 # neither declared nor runnable (`tools/base.py::FLAGGED_REGISTRY`), and the prompt and the
@@ -1880,7 +1881,8 @@ SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
 # it is chosen and the answers keep the order and the attribution with nothing invented; on the
 # legacy routing cases (`agent_eval_routing` with this env var set) it takes no case from
 # `get_task_history`, `fetch_chat_thread` or `fetch_note_history` that they should keep; the V2
-# client reads no internal comment.
+# client reads no internal comment. `python -m origin.search_engine.agent.evals.group.pair_report`
+# joins t1271 (without) with t1281 (with) for the calls / input-token / per-language numbers.
 SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
     os.environ.get("AGENT_INAPP_TIMELINE_TOOL", "false").lower() == "true"
 )

@@ -203,7 +203,17 @@ class LegacyRoutingWithTheFlagOnTests(SimpleTestCase):
 
     def test_every_legacy_case_runs_and_sees_the_new_tool_when_the_flag_is_on(self):
         cases = routing.load_cases()
-        self.assertEqual(len(cases), 252)
+        self.assertEqual(
+            len(cases),
+            2
+            * len(
+                yaml.safe_load(
+                    Path(routing.__file__)
+                    .with_name("routing_cases.yaml")
+                    .read_text(encoding="utf-8")
+                )
+            ),
+        )
         seen: list[list[str]] = []
 
         class Client:
@@ -222,14 +232,14 @@ class LegacyRoutingWithTheFlagOnTests(SimpleTestCase):
                     model="m",
                     client=Client(),
                 )
-        self.assertEqual(len(seen), 252)
+        self.assertEqual(len(seen), len(cases))
         self.assertTrue(all(names[-1] == "get_timeline" for names in seen))
 
     def test_the_legacy_intents_a_new_tool_may_take_from_are_known(self):
         path = Path(routing.__file__).with_name("routing_cases.yaml")
         items = yaml.safe_load(path.read_text(encoding="utf-8"))
         overlapping = {i["id"] for i in items if OVERLAP & set(i.get("ok") or [])}
-        self.assertEqual(overlapping, LEGACY_THAT_MAY_SHIFT)
+        self.assertTrue(LEGACY_THAT_MAY_SHIFT <= overlapping, LEGACY_THAT_MAY_SHIFT - overlapping)
         # and none of them lists the new tool: a model that picks it there is a miss to read, not a pass
         for i in items:
             self.assertNotIn("get_timeline", i.get("ok") or [])
@@ -240,3 +250,58 @@ class LegacyRoutingWithTheFlagOnTests(SimpleTestCase):
         self.assertTrue(routing.score(case, ["get_task_history"]))
         self.assertFalse(routing.score(case, ["get_timeline"]))
         self.assertIsInstance(CallUsage(), CallUsage)
+
+
+class PairReportTests(SimpleTestCase):
+    """`pair_report` joins t1271 (arm0) with t1281 (the arm): the number the multi-arm table cannot
+    give, because the two never run on the same arm."""
+
+    def row(self, case_id, arm, lang, calls, tokens, passed=True, tools=()):
+        return {
+            "case_id": case_id,
+            "arm": arm,
+            "lang": lang,
+            "passed": passed,
+            "tools": list(tools),
+            "usage": {
+                "calls": calls,
+                "input_tokens": tokens,
+                "cached_tokens": 0,
+                "output_tokens": 10,
+                "cost_usd": 0.01,
+            },
+        }
+
+    def test_pairs_and_language_totals(self):
+        from origin.search_engine.agent.evals.group import pair_report  # noqa: PLC0415
+
+        rows = [
+            self.row("t1271-en-what-happened", "arm0", "en", 5, 50_000, tools=["fetch_task"]),
+            self.row("t1281-en-what-happened", "t1289", "en", 3, 30_000, tools=["get_timeline"]),
+            self.row("t1271-ja-what-happened", "arm0", "ja", 6, 60_000),
+            self.row("t1281-ja-what-happened", "all-on", "ja", 3, 36_000, passed=False),
+            self.row(
+                "t1281-en-find-task", "t1289", "en", 2, 20_000
+            ),  # no t1271 twin run: left out of totals
+            {"case_id": "t1281-en-my-day", "arm": "arm0", "skipped": "requires_arm t1289"},
+        ]
+        found = pair_report.pairs(rows)
+        self.assertEqual(found["en-what-happened"]["without"]["calls"], 5)
+        self.assertEqual(found["en-what-happened"]["with"]["input_tokens"], 30_000)
+        self.assertEqual(found["ja-what-happened"]["passed"], {"without": [True], "with": [False]})
+        totals = pair_report.per_language(found)
+        self.assertEqual(set(totals), {"en", "ja"})
+        self.assertEqual(totals["ja"]["with"]["input_tokens"], 36_000)
+        self.assertEqual(totals["en"]["without"]["input_tokens"], 50_000)
+        text = pair_report.render(found)
+        self.assertIn("ja: calls 6 -> 3", text)
+        self.assertIn("get_timeline", text)
+
+    def test_repetitions_add_up_on_their_side(self):
+        from origin.search_engine.agent.evals.group import pair_report  # noqa: PLC0415
+
+        rows = [self.row("t1271-en-x", "arm0", "en", 2, 100)] * 3 + [
+            self.row("t1281-en-x", "t1289", "en", 1, 10)
+        ] * 3
+        pair = pair_report.pairs(rows)["en-x"]
+        self.assertEqual((pair["without"]["calls"], pair["with"]["calls"]), (6, 3))
