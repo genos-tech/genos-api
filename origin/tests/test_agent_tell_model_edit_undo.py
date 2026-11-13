@@ -243,3 +243,41 @@ class FlagOnUndoTests(Base):
             messages, _ = controller._rebuild_messages(AgentRun.objects.get(run_id=run_id))
         (response,) = [m.function_response for m in messages if m.role == "tool_response"]
         self.assertNotIn("undone_by_user", response)
+
+
+class ApprovalNotesGateTests(Base):
+    """Every public function of `approval_notes` is a no-op with the flag off, on its own:
+    the callers gate too, so these are the tests that would catch a gate quietly removed."""
+
+    def undone_edited_step(self):
+        run_id, token = self.ask()
+        self.approve_with(run_id, token, EDIT)
+        step = self.step_of(run_id)
+        step.undone_at = timezone.now()
+        step.undo_outcome_json = UNDO_OUTCOME
+        step.save(update_fields=["undone_at", "undo_outcome_json"])
+        step.refresh_from_db()
+        return step
+
+    def test_off_every_function_returns_its_input_or_nothing(self):
+        from origin.search_engine.agent import approval_notes
+
+        step = self.undone_edited_step()
+        result = {"task_id": 1}
+        self.assertIs(approval_notes.with_edit_note(result, EDIT), result)
+        self.assertIs(approval_notes.with_step_notes(result, step), result)
+        self.assertIsNone(approval_notes.undone_marker(step))
+        self.assertEqual(approval_notes.undo_note_text([step]), "")
+
+    def test_on_each_says_its_part(self):
+        from origin.search_engine.agent import approval_notes
+
+        step = self.undone_edited_step()
+        with override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, **ON}):
+            result = {"task_id": 1}
+            self.assertIn("user_edits_applied", approval_notes.with_edit_note(result, EDIT))
+            both = approval_notes.with_step_notes(result, step)
+            self.assertIn("user_edits_applied", both)
+            self.assertIn("undone_by_user", both)
+            self.assertIsNotNone(approval_notes.undone_marker(step))
+            self.assertIn("undid create_task", approval_notes.undo_note_text([step]))
