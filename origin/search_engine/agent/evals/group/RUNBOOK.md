@@ -34,6 +34,23 @@ in `SEARCH_ENGINE` on this stack the command REFUSES (a typo'd flag would compar
 itself); `--skip-unavailable` drops such arms and says so. It also refuses an arm whose value already
 equals the current one (check the environment: the flag is already on, so arm0 is not a baseline).
 
+### The all-on arm and the prefix budget
+
+`origin/tests/test_agent_prefix_budget.py` holds the system prompt plus the tool declarations to
+`BUDGET_CHARS` (137,000 characters). Each flag fits alone; the **all-on arm does not**. Measured on
+the merged stack (`origin/tests/test_agent_all_flags_on.py` prints it): all flags off 134,315
+characters; all on 139,303 (+4,842 in tool descriptions and the `get_timeline` declaration, +146 for
+the reject-reason rule in the system prompt; about 1,150 tokens); a Long member adds the MIP-905
+content block on top (1,453 characters, Short 952; appended to the system instruction by the loop,
+so it is not in the budget test's number), 140,758 in all. That is expected for an arm that turns
+every flag on, and the all-on run measures what the extra prefix costs and whether it changes
+answers. It is not a reason to raise the budget now. The flip PR that turns several flags on in
+production must raise `BUDGET_CHARS` in the same PR with this session's routing and behaviour
+evidence (the `agent_eval_routing` rule the test's docstring states). The all-on arm has its own
+ceiling in `test_agent_all_flags_on.py` (`ALL_ON_BUDGET_CHARS`) so it cannot grow unnoticed.
+Note the budget test counts the constant prompt, not `agent_system_prompt()`, so it does not see
+the reject-reason rule either.
+
 ## 1. Measure one case (about a cent)
 
 ```

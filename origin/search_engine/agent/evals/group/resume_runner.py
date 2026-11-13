@@ -75,10 +75,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any
 from unittest import mock
 
-try:  # agent H's module (`MIP-1271-eval-harness-multiarm`); a shim with the same contract until it lands
-    from origin.search_engine.agent.evals.group import usage as group_usage
-except ImportError:  # pragma: no cover - exercised only on a stack without H's branch
-    from origin.search_engine.agent.evals.group import _usage_shim as group_usage
+from origin.search_engine.agent.evals.group import usage as group_usage
 
 log = logging.getLogger(__name__)
 

@@ -19,16 +19,21 @@ from django.conf import settings
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 
+from origin.search_engine.agent import content_length as cl
 from origin.search_engine.agent import tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
 from origin.search_engine.agent.evals.group import harness
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system_prompt
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, flagged_tools, get_app_tool
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
+from origin.tests.test_agent_content_length_pins import SCENARIOS, LoopBase, transcript
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
-# All-on prefix measured 139,157 (off 134,315, +4,842 declarations): same headroom the budget keeps.
+# All-on prefix measured 139,303 (off 134,315: +4,842 declarations, +146 prompt rule): same headroom
+# the budget keeps.
+# A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
+# part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 ALL_ON_BUDGET_CHARS = 141_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # The neighbours that change what is declared and are not flags under test.
@@ -73,6 +78,8 @@ class AllOnArmTests(SimpleTestCase):
             "AGENT_NOTE_THREADS_IN_GET_NOTE",
             "AGENT_CLOSED_ANCESTOR_RULE",
             "AGENT_INAPP_TIMELINE_TOOL",
+            "AGENT_CONTENT_LENGTH",
+            "AGENT_BODY_ON_USER_MODEL",
         }
         self.assertLessEqual(expected, set(ALL_ON))
 
@@ -129,7 +136,11 @@ class AllOnDeclarationTests(SimpleTestCase):
     def test_the_all_on_prefix_is_measured_and_held(self):
         off, on = self._off_and_on()
         off_total = declared_chars(off) + len(AGENT_SYSTEM_PROMPT)
-        on_total = declared_chars(on) + len(AGENT_SYSTEM_PROMPT)
+        # `test_agent_prefix_budget` counts the CONSTANT prompt, so AGENT_REJECT_REASON's extra rule
+        # (+146 chars, in `agent_system_prompt()`) is not in its number; it is in this one.
+        with settings_with(ALL_ON):
+            on_prompt = len(agent_system_prompt())
+        on_total = declared_chars(on) + on_prompt
         delta = declared_chars(on) - declared_chars(off)
         print(
             f"\nALL-ON declarations: off={declared_chars(off)} on={declared_chars(on)} "
@@ -316,3 +327,66 @@ class AllOnResumeTests(RunnerBase):
         before = dict(settings.SEARCH_ENGINE)
         self.run_case(cases()[0], ALL_ON)
         self.assertEqual(dict(settings.SEARCH_ENGINE), before)
+
+
+class AllOnContentLengthTests(SimpleTestCase):
+    """MIP-905 is the one flag whose text is per member: a block at the END of the system
+    instruction for a Short or Long member, nothing for Standard."""
+
+    def test_the_content_block_sizes_and_the_all_on_total_for_each_level(self):
+        with settings_with({k: False for k in ALL_ON}):
+            off_total = declared_chars(_build_tool_declarations()) + len(agent_system_prompt())
+        with settings_with(ALL_ON):
+            on_total = declared_chars(_build_tool_declarations()) + len(agent_system_prompt())
+        sizes = {lv: len(cl.guidance_block(lv)) for lv in cl.LEVELS}
+        print(
+            f"\nALL-ON content block: {sizes}; prompt+declarations off={off_total} "
+            f"all-on standard={on_total} short={on_total + 2 + sizes['short']} "
+            f"long={on_total + 2 + sizes['long']} (~{(on_total + 2 + sizes['long'] - off_total) / 4.2:.0f} "
+            f"tokens over all-off); all-on ceiling {ALL_ON_BUDGET_CHARS}"
+        )
+        self.assertEqual(sizes["standard"], 0)
+        self.assertGreater(sizes["long"], 0)
+        # even a Long member in the all-on arm stays inside the all-on ceiling
+        self.assertLessEqual(on_total + 2 + sizes["long"], ALL_ON_BUDGET_CHARS)
+
+
+class AllOnLoopTests(LoopBase):
+    """`_drive_loop` against a recording client with EVERY flag on: the content block lands at the
+    tail for a Long member, nothing moves for Standard, and the other flags' text is present."""
+
+    def run_all_on(self, key, level):
+        self.user.preferred_content_length = level
+        self.user.save(update_fields=["preferred_content_length"])
+        original = LoopBase.settings_with
+
+        def with_all_on(inner, **flags):
+            return original(inner, **{**flags, **ALL_ON})
+
+        with mock.patch.object(LoopBase, "settings_with", with_all_on):
+            return SCENARIOS[key](self)
+
+    def test_long_and_short_end_with_the_block_standard_does_not(self):
+        for key in ("plain", "plain-ja", "effort-medium/gemini"):
+            standard = transcript(self.run_all_on(key, "standard").calls)
+            for level in ("short", "long"):
+                on = transcript(self.run_all_on(key, level).calls)
+                self.assertEqual(len(on), len(standard), key)
+                block = cl.guidance_block(level)
+                for a, b in zip(standard, on, strict=True):
+                    self.assertEqual(b["system"], f"{a['system']}\n\n{block}", (key, level))
+                    self.assertEqual(b["tools"], a["tools"], (key, level))
+                    self.assertEqual(b["messages"], a["messages"], (key, level))
+
+    def test_the_other_flags_are_in_what_the_model_is_sent(self):
+        calls = transcript(self.run_all_on("plain", "long").calls)
+        system = calls[0]["system"]
+        with settings_with({"AGENT_REJECT_REASON": True}):
+            rule = agent_system_prompt()
+        self.assertTrue(system.startswith(rule), "the all-on prompt is the reject-reason one")
+        names = [t["name"] if isinstance(t, dict) else t for t in calls[0]["tools"]]
+        self.assertIn("get_timeline", str(names))
+
+    def test_the_two_tier_write_runs_with_every_flag_on(self):
+        client = self.run_all_on("two-tier-write", "long")
+        self.assertTrue(client.calls)
