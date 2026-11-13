@@ -6,7 +6,7 @@ Pinned here:
     deletes of those kinds each make ONE `AI_APP` activity for the key's owner, with the facts in
     `meta`; the small edits, the reads and a no-op make none;
   * one notice per CALL, not per row;
-  * the switch (`category_settings["ai_app"]`) decides whether the row exists at all, and a
+  * the switches (`enable_ai_apps` and `category_settings["ai_app_<kind>"]`) decide whether the row exists at all, and a
     failing notice never fails the write;
   * it pushes (its own category), is not emailed, and an AI app does not read it back as news;
   * every write tool is either in `RULES` or in the list of deliberately silent ones, so a new
@@ -196,11 +196,48 @@ class WhichCallsNotifyTests(NoticeBase):
 
 
 class TheSwitchAndTheFailureModeTests(NoticeBase):
-    def test_turned_off_makes_no_row_and_the_write_still_happens(self):
-        NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
+    def test_the_kind_switched_off_makes_no_row_and_the_write_still_happens(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_tasks": False}
+        )
         self.call("create_task", project_id=self.project.project_id, title="Quiet")
         self.assertTrue(TaskMaster.objects.filter(title="Quiet").exists())
         self.assertEqual(notices(self.user), [])
+
+    def test_the_group_switched_off_makes_no_row_for_any_kind(self):
+        NotificationPreference.objects.create(user=self.user, enable_ai_apps=False)
+        self.call("create_task", project_id=self.project.project_id, title="Quiet 2")
+        self.call("create_note", note_type="personal", title="Quiet note", content_text="x")
+        self.call("create_todo_item", title="Quiet todo")
+        self.assertEqual(notices(self.user), [])
+
+    def test_each_kind_answers_to_its_own_switch_only(self):
+        # "Task updates only": notes and to-dos off, tasks (and a comment on one) still notify.
+        NotificationPreference.objects.create(
+            user=self.user,
+            category_settings={"ai_app_notes": False, "ai_app_todos": False},
+        )
+        self.call("create_note", note_type="personal", title="N", content_text="x")
+        self.call("create_todo_item", title="T")
+        self.assertEqual(notices(self.user), [])
+        self.call("create_task", project_id=self.project.project_id, title="Kept")
+        self.call("add_comment", task_id=self.task.task_id, body_text="hello")
+        self.assertEqual(len(notices(self.user)), 2)
+
+    def test_the_other_two_kinds_notify_when_only_tasks_are_off(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_tasks": False}
+        )
+        self.call("create_task", project_id=self.project.project_id, title="Off")
+        self.call("create_note", note_type="personal", title="N", content_text="x")
+        self.call("create_todo_item", title="T")
+        self.assertEqual({a.meta["kind"] for a in notices(self.user)}, {"note", "todo"})
+
+    def test_the_old_single_switch_is_no_longer_read(self):
+        # MIP-1432's key. The migration carried it over; a stray copy must not silence anything.
+        NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
+        self.call("create_task", project_id=self.project.project_id, title="Loud 2")
+        self.assertEqual(len(notices(self.user)), 1)
 
     def test_on_by_default_and_another_category_does_not_turn_it_off(self):
         NotificationPreference.objects.create(user=self.user, category_settings={"chats": False})
@@ -226,6 +263,37 @@ class TheSwitchAndTheFailureModeTests(NoticeBase):
         self.assertEqual(notices(self.user), [])
 
 
+class TheOldSwitchIsCarriedOverTests(NoticeBase):
+    """MIP-1432's one switch becomes three (MIP-1452): `ai_app: false` meant "none of it"."""
+
+    def carry(self):
+        import importlib  # noqa: PLC0415
+
+        from django.apps import apps  # noqa: PLC0415
+
+        module = importlib.import_module("origin.migrations.0241_notification_enable_ai_apps")
+        module.carry_the_old_switch(apps, None)
+
+    def test_a_member_who_turned_it_off_starts_with_all_three_off(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app": False, "chats": False}
+        )
+        self.carry()
+        settings = NotificationPreference.objects.get(user=self.user).category_settings
+        self.assertEqual(
+            settings,
+            {"chats": False, "ai_app_tasks": False, "ai_app_notes": False, "ai_app_todos": False},
+        )
+
+    def test_a_member_who_left_it_on_is_untouched(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"chats": False, "ai_app": True}
+        )
+        self.carry()
+        settings = NotificationPreference.objects.get(user=self.user).category_settings
+        self.assertEqual(settings, {"chats": False, "ai_app": True})
+
+
 class WhatTheNoticeDoesDownstreamTests(NoticeBase):
     def row(self):
         self.call("create_task", project_id=self.project.project_id, title="Pushed")
@@ -238,19 +306,41 @@ class WhatTheNoticeDoesDownstreamTests(NoticeBase):
             self.call("create_task", project_id=self.project.project_id, title="Pushed")
         (activities,), _ = schedule.call_args
         spec = _push_spec(activities[0])
-        self.assertEqual(spec["category"], "ai_app")
+        self.assertEqual(spec["category"], "ai_app_tasks")
         self.assertTrue(spec["title"].startswith("mcp created task WRD-"), spec["title"])
         self.assertEqual(spec["body"], "Pushed")
         self.assertIn("/task/", spec["url"])
 
-    def test_push_follows_the_same_switch_as_the_row(self):
-        self.assertTrue(should_push(self.user.id, "ai_app"))
-        NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
-        self.assertFalse(should_push(self.user.id, "ai_app"))
+    def test_push_category_follows_what_the_notice_is_about(self):
+        for tool, args, expected in (
+            (
+                "create_note",
+                {"note_type": "personal", "title": "N", "content_text": "x"},
+                "ai_app_notes",
+            ),
+            ("create_todo_item", {"title": "T"}, "ai_app_todos"),
+            ("add_comment", {"task_id": self.task.task_id, "body_text": "hi"}, "ai_app_tasks"),
+        ):
+            Activity.objects.all().delete()
+            self.call(tool, **args)
+            self.assertEqual(_push_spec(self.only())["category"], expected, tool)
 
-    def test_push_also_follows_the_inbox_group_the_client_files_it_under(self):
-        NotificationPreference.objects.create(user=self.user, enable_inbox=False)
-        self.assertFalse(should_push(self.user.id, "ai_app"))
+    def test_push_follows_the_same_switches_as_the_row(self):
+        for key in ("ai_app_tasks", "ai_app_notes", "ai_app_todos"):
+            self.assertTrue(should_push(self.user.id, key))
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_notes": False}
+        )
+        self.assertFalse(should_push(self.user.id, "ai_app_notes"))
+        self.assertTrue(should_push(self.user.id, "ai_app_tasks"))
+
+    def test_push_follows_the_group_master_and_not_the_inbox_group(self):
+        pref = NotificationPreference.objects.create(user=self.user, enable_inbox=False)
+        self.assertTrue(should_push(self.user.id, "ai_app_tasks"))
+        pref.enable_ai_apps = False
+        pref.save()
+        for key in ("ai_app_tasks", "ai_app_notes", "ai_app_todos"):
+            self.assertFalse(should_push(self.user.id, key))
 
     def test_it_is_not_emailed(self):
         self.assertIsNone(_email_spec(self.row()))
@@ -402,7 +492,7 @@ class LiveDeliveryTests(NoticeBase):
         self.assertEqual(len(notices(self.user)), 1)
 
     def test_a_switched_off_notice_is_not_announced_either(self):
-        NotificationPreference.objects.create(user=self.user, category_settings={"ai_app": False})
+        NotificationPreference.objects.create(user=self.user, enable_ai_apps=False)
         with (
             self.settings(**self.SETTINGS),
             mock.patch("origin.services.realtime_push._post", return_value=True) as post,

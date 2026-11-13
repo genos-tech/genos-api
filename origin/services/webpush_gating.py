@@ -62,10 +62,11 @@ _PUSH_DEFAULTS = {
     # `message_reminder`, so someone who wants nudges about messages but
     # not about their list has a way to say so.
     "todo_reminder": True,
-    # What the member's own AI app did over MCP (MIP-1432). One switch, which also decides
-    # whether the feed row is made at all (`services/mcp_notice.py`). No coarse group: it is
-    # news about the member's own app, not about other people.
-    "ai_app": True,
+    # What the member's own AI apps did over MCP (MIP-1432, MIP-1452): a switch per kind of
+    # work, which also decides whether the feed row is made at all (`services/mcp_notice.py`).
+    "ai_app_tasks": True,
+    "ai_app_notes": True,
+    "ai_app_todos": True,
 }
 
 # Fine category -> the coarse-group boolean column that hard-gates it
@@ -94,9 +95,11 @@ _COARSE_FIELD = {
     "agent_run_done": "enable_inbox",
     "message_reminder": "enable_inbox",
     "todo_reminder": "enable_inbox",
-    # Same group as the client's registry puts it in (`categories.ts`), so turning the Inbox
-    # group off silences the push exactly where it silences the in-app toast (MIP-1432).
-    "ai_app": "enable_inbox",
+    # Their own group (MIP-1452), as in the client's registry (`categories.ts`): the group
+    # switch is a master for the three kinds.
+    "ai_app_tasks": "enable_ai_apps",
+    "ai_app_notes": "enable_ai_apps",
+    "ai_app_todos": "enable_ai_apps",
 }
 
 

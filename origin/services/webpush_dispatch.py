@@ -121,15 +121,16 @@ def _push_spec(act) -> dict | None:
     atype = act.activity_type
 
     if atype == ActivityType.AI_APP:
-        # What the member's own AI app just did over MCP (MIP-1432). Its own category and its
-        # own switch; the title says which app, the body names the first item.
-        from origin.services.mcp_notice import sentence  # noqa: PLC0415
+        # What the member's own AI app just did over MCP (MIP-1432). Its own group, and one
+        # switch per kind of work (MIP-1452); the title says which app, the body names the
+        # first item.
+        from origin.services.mcp_notice import category_for_kind, sentence  # noqa: PLC0415
 
         meta = act.meta or {}
         items = meta.get("items") or []
         app = meta.get("app") or "Your AI app"
         return {
-            "category": "ai_app",
+            "category": category_for_kind(meta.get("kind")),
             "title": f"{app} {sentence(meta)}",
             "body": _truncate((items[0].get("title") if items else "") or ""),
             "url": meta.get("url") or "/workspace",

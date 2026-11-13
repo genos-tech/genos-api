@@ -15,9 +15,11 @@ stay silent. `RULES` is the whole list; a tool not in it never notifies.
 **One notice per CALL**, not per row: a plan that makes 15 tasks is one notice counting 15, with
 up to `MAX_ITEMS` of them named.
 
-**One switch.** `NotificationPreference.category_settings["ai_app"]`, on unless the member turned
-it off, gates BOTH the feed row and the Web Push (a row that is never made cannot be pushed). The
-in-app agent is not covered: it pauses for the member's approval on every write, so they know.
+**Switches** (MIP-1452). Their own group: `NotificationPreference.enable_ai_apps` is the master, and
+`category_settings` has one key per kind of work, `ai_app_tasks` (task, milestone, task comment),
+`ai_app_notes` and `ai_app_todos`. All are on unless the member turned them off, and the master
+and the kind's key both gate the feed row AND the Web Push (a row that is never made cannot be
+pushed). The in-app agent is not covered: it pauses for the member's approval on every write, so they know.
 Plain REST API-key calls are not covered either: there is no app to name.
 
 **Never raises, never slows the call.** It runs after the write has succeeded and swallows its own
@@ -43,7 +45,18 @@ from origin.services.v3_activity import SURFACE_AI_APP
 
 log = logging.getLogger(__name__)
 
-CATEGORY = "ai_app"
+CATEGORY_TASKS = "ai_app_tasks"
+CATEGORY_NOTES = "ai_app_notes"
+CATEGORY_TODOS = "ai_app_todos"
+# Which switch a notice answers to, by what it is about. An unknown kind answers to the tasks
+# switch (the largest group) rather than to none, so a new kind is never unswitchable.
+_CATEGORY_BY_KIND = {
+    "task": CATEGORY_TASKS,
+    "milestone": CATEGORY_TASKS,
+    "comment": CATEGORY_TASKS,
+    "note": CATEGORY_NOTES,
+    "todo": CATEGORY_TODOS,
+}
 MAX_ITEMS = 5
 TITLE_CHARS = 120
 APP_CHARS = 100
@@ -339,13 +352,21 @@ def _app_name(credential) -> str:
     return str(name or getattr(credential, "label", "") or "AI app")[:APP_CHARS]
 
 
-def _enabled(user_id) -> bool:
-    settings = (
+def category_for_kind(kind: Any) -> str:
+    return _CATEGORY_BY_KIND.get(str(kind or ""), CATEGORY_TASKS)
+
+
+def _enabled(user_id, kind: str) -> bool:
+    """The group's master and the kind's own switch. No preference row means everything on."""
+    row = (
         NotificationPreference.objects.filter(user_id=user_id)
-        .values_list("category_settings", flat=True)
+        .values_list("enable_ai_apps", "category_settings")
         .first()
     )
-    return bool((settings or {}).get(CATEGORY, True))
+    if row is None:
+        return True
+    master, settings = row
+    return bool(master) and bool((settings or {}).get(category_for_kind(kind), True))
 
 
 def notify_owner(
@@ -362,7 +383,7 @@ def notify_owner(
         if user is None or not getattr(user, "is_authenticated", False):
             return []
         notice = build_notice(tool_name, args, payload)
-        if notice is None or not _enabled(user.id):
+        if notice is None or not _enabled(user.id, notice.kind):
             return []
         meta: dict[str, Any] = {
             "aiApp": True,
