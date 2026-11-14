@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import timedelta
 from unittest import mock
 
 from django.apps import apps
@@ -135,8 +136,14 @@ class AttachmentsBase(BaseAPITestCase):
             clear_current_user()
 
     def rest_delete(self, task_id, attachment_id, user=None):
-        self.authenticate(user or self.user)
+        self.sign_in(user or self.user)
         return self.client.delete(f"{URL}?task={task_id}&attachment_id={attachment_id}")
+
+    def sign_in(self, user):
+        """Sign `user` in once: signing in writes a token row, which is not the delete's doing."""
+        if getattr(self, "_signed_in", None) != user.id:
+            self.authenticate(user)
+            self._signed_in = user.id
 
     def read(self, task=None, ctx=None):
         return FETCH_TASK.run({"task_id": (task or self.task).task_id}, ctx or self.ctx)
@@ -254,11 +261,14 @@ class ListTests(AttachmentsBase):
         newest = self.attach(self.task, "old.txt", by=self.user)
         self.rest_delete(self.task.task_id, newest.attachment_id)
         again = self.attach(self.task, "new.txt", by=self.user2)
-        TaskActivity.objects.filter(
+        added = TaskActivity.objects.filter(
             task=self.task,
             action_type=TaskActivityActionType.ATTACHMENT_ADDED,
             metadata__attachmentId=again.attachment_id,
-        ).order_by("-activity_id").first().delete()
+        ).order_by("-activity_id")
+        added.first().delete()  # the new file's own row goes missing
+        # ...and the earlier file's row is from long ago, as it would be in real life
+        added.update(ts_created_at=again.ts_created_at - timedelta(hours=1))
         rows = {r["attachment_id"]: r for r in self.read()["attachments"]}
         self.assertIsNone(rows[again.attachment_id]["uploaded_by"])
 
@@ -638,6 +648,7 @@ class TwinEffectsTests(AttachmentsBase):
         }
 
     def test_the_tool_does_what_the_page_does_and_no_more(self):
+        self.sign_in(self.user)
         page = self.record(lambda: self.rest_delete(self.twin_page.task_id, 2), self.twin_page)
         tool = self.record(lambda: self.run_tool(self.twin_tool, 2), self.twin_tool)
 
@@ -811,18 +822,6 @@ class LoopTests(AttachmentsBase):
         self.assertEqual(errors, ["Unknown tool: delete_task_attachment"])
         self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
 
-    def test_a_member_on_the_read_tier_cannot_reach_it_even_by_name(self):
-        from origin.search_engine.agent import tool_tiers  # noqa: PLC0415
-
-        attachment = self.attach(self.task, "kickoff.pdf")
-        events, _ = self.drive(
-            {"task_id": self.task.task_id, "attachment_id": attachment.attachment_id},
-            disabled=tool_tiers.disabled_tools_for_level("read"),
-            **ON,
-        )
-        self.assertFalse([e for e in events if e["type"] == "tool_call_pending_approval"])
-        self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
-
 
 class ApproveTests(AttachmentsBase):
     """The decision leg: approve runs the tool the paused step names, through the app's lookup."""
@@ -848,14 +847,32 @@ class ApproveTests(AttachmentsBase):
         )
         return run
 
-    def approve(self, run, **flags):
+    def approve(self, run, disabled=None, **flags):
         events = []
         with (
             mock.patch.dict(settings.SEARCH_ENGINE, flags),
             mock.patch.object(controller, "_drive_loop", return_value=None),
         ):
-            controller.resume_agent(run, "approve", self.ctx, events.append)
+            controller.resume_agent(run, "approve", self.ctx, events.append, disabled_tools=disabled)
         return events
+
+    def test_a_member_on_the_read_tier_cannot_get_it_approved_even_by_name(self):
+        # The loop declares only what the tier allows; a call the model makes by name anyway still
+        # pauses, and the decision leg is the gate: it vetoes a tool the member no longer has.
+        from origin.search_engine.agent import tool_tiers  # noqa: PLC0415
+
+        attachment = self.attach(self.task, "n.txt")
+        events = self.approve(
+            self.paused(attachment.attachment_id),
+            disabled=tool_tiers.disabled_tools_for_level("read"),
+            **ON,
+        )
+        self.assertIn(
+            "no longer available",
+            [e["error"] for e in events if e["type"] == "tool_call_error"][0],
+        )
+        self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
+        self.assertTrue(default_storage.exists(attachment.attached_file.name))
 
     def test_approving_deletes_the_file_for_good_and_says_it_could_not_be_undone(self):
         attachment = self.attach(self.task, "n.txt")

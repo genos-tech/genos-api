@@ -45,9 +45,10 @@ LISTED_CAP = 50
 #: What of a name or a type reaches the model.
 NAME_CHARS = 200
 TYPE_CHARS = 100
-#: The history row is written a few milliseconds after the file's own row. A row older than the file
-#: by more than this belongs to an earlier file that had the same id.
-_HISTORY_SLACK = timedelta(seconds=5)
+#: The history row is written a few milliseconds after the file's own row, by the same process. A
+#: row older than the file by more than this (clock skew between two servers) belongs to an earlier
+#: file that had the same id.
+_HISTORY_SLACK = timedelta(seconds=2)
 
 
 def attachment_name(attachment: TaskAttachments) -> str:
