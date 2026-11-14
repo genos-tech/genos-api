@@ -262,9 +262,7 @@ class TheInboxList(_Requests):
         )
         cards = self.get_items(self.user2)
         self.assertEqual(
-            sorted(
-                (c["itemOptionals"] for c in cards), key=lambda v: (v is not None, str(v))
-            ),
+            sorted((c["itemOptionals"] for c in cards), key=lambda v: (v is not None, str(v))),
             [None, {"project_id": 4, "project_name": "Apollo"}],
         )
 
