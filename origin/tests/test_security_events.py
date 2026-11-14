@@ -322,6 +322,7 @@ class TestSignIn(SecurityEventCase):
                 "email": "fresh@example.com",
                 "password": "strongpass123",
                 "invite_token": raw,
+                "accepted_terms": True,
             },
             format="json",
         )
@@ -342,8 +343,16 @@ class TestSignIn(SecurityEventCase):
 
 
 class TestOAuthSignIn(SecurityEventCase):
-    def _login(self, sub, email):
+    def _login(self, sub, email, *, terms=True):
+        # A first sign-in creates an account, which needs the consent the signup
+        # screen carried through the redirect.
+        consent = (
+            {"terms_accepted_at": timezone.now().isoformat(), "terms_version": "2026-11-draft"}
+            if terms
+            else {}
+        )
         return OAuthCallbackView()._handle_login(
+            **consent,
             provider_name="google",
             profile=ProviderProfile(provider_user_id=sub, email=email, display_name="G"),
             token_response=TokenResponse(
@@ -363,6 +372,15 @@ class TestOAuthSignIn(SecurityEventCase):
         row = self.one(SecurityAction.SIGNIN_SUCCEEDED)
         self.assertEqual(row.metadata["method"], "google")
         self.assertEqual(row.actor_label, mask_email("new-google@example.com"))
+
+    @mock.patch("origin.views.common.oauth_views.OAuthCallbackView._issue_jwt")
+    def test_a_new_google_sign_in_without_consent_is_a_failure(self, jwt):
+        res = self._login("new-sub", "new-google@example.com", terms=False)
+        jwt.assert_not_called()
+        self.assertIn("error=terms_required", res["Location"])
+        row = self.one(SecurityAction.SIGNIN_FAILED)
+        self.assertEqual(row.metadata, {"method": "google", "reason": "terms_not_accepted"})
+        self.assertFalse(User.objects.with_email("new-google@example.com").exists())
 
     @mock.patch("origin.views.common.oauth_views.OAuthCallbackView._issue_jwt")
     def test_an_address_already_in_use_is_a_failure(self, jwt):

@@ -245,6 +245,7 @@ class TestInviteSignup(BaseAPITestCase):
                 "email": "fresh@example.com",
                 "password": "strongpass123",
                 "invite_token": raw,
+                "accepted_terms": True,
             },
             format="json",
         )
@@ -259,9 +260,7 @@ class TestInviteSignup(BaseAPITestCase):
         invite.refresh_from_db()
         self.assertEqual(invite.status, "pending")
         self.assertFalse(
-            TeamMembers.objects.filter(
-                team=self.team, attendee=new_user, is_deleted=False
-            ).exists()
+            TeamMembers.objects.filter(team=self.team, attendee=new_user, is_deleted=False).exists()
         )
         # No verification email on the invite path.
         self.assertEqual(len(mail.outbox), 0)
@@ -275,6 +274,7 @@ class TestInviteSignup(BaseAPITestCase):
                 "email": "different@example.com",
                 "password": "strongpass123",
                 "invite_token": raw,
+                "accepted_terms": True,
             },
             format="json",
         )

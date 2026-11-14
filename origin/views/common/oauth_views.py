@@ -35,6 +35,7 @@ from django.core import signing
 from django.db import transaction
 from django.http import HttpResponseRedirect
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import permissions, status
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -43,7 +44,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import MULTI_ACCOUNT_PROVIDERS, ConnectedAccount
-from origin.services import crypto
+from origin.services import crypto, signup_consent
 from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
 from origin.services.oauth.registry import get_provider, supported_provider_names
 from origin.services.security_events import record_security_event
@@ -87,16 +88,27 @@ def _frontend_failure_url(*, reason: str, primary: Optional[str] = None) -> str:
     return f"{settings.FRONTEND_BASE_URL}/oauth/success?{urlencode(params)}"
 
 
-def _sign_state(*, intent: FlowIntent, user_id: Optional[str], next_path: str) -> str:
-    return signing.dumps(
-        {
-            "intent": intent,
-            "user_id": user_id,
-            "next": next_path,
-            "nonce": secrets.token_urlsafe(16),
-        },
-        salt=STATE_SALT,
-    )
+def _sign_state(
+    *,
+    intent: FlowIntent,
+    user_id: Optional[str],
+    next_path: str,
+    terms_accepted: bool = False,
+) -> str:
+    payload = {
+        "intent": intent,
+        "user_id": user_id,
+        "next": next_path,
+        "nonce": secrets.token_urlsafe(16),
+    }
+    if terms_accepted:
+        # The signup screen's checkbox, carried through the provider round trip
+        # inside the signed state so the callback can trust it (a query
+        # parameter on the callback is the provider's, not the person's). The
+        # moment and the version are fixed here, when the person agreed.
+        payload["terms_accepted_at"] = timezone.now().isoformat()
+        payload["terms_version"] = signup_consent.TERMS_VERSION
+    return signing.dumps(payload, salt=STATE_SALT)
 
 
 def _verify_state(state: str) -> dict:
@@ -183,7 +195,12 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
         next_path = request.GET.get("next", "/jointeam")
 
         provider: OAuthProvider = get_provider(provider_name)
-        state = _sign_state(intent="login", user_id=None, next_path=next_path)
+        state = _sign_state(
+            intent="login",
+            user_id=None,
+            next_path=next_path,
+            terms_accepted=signup_consent.is_accepted(request.GET.get("accepted_terms")),
+        )
         url = provider.authorize_url(
             state=state, intent="login", redirect_uri=_redirect_uri(provider_name)
         )
@@ -264,6 +281,8 @@ class OAuthCallbackView(APIView):
                 profile=profile,
                 token_response=token_response,
                 next_path=next_path,
+                terms_accepted_at=state_payload.get("terms_accepted_at"),
+                terms_version=state_payload.get("terms_version"),
             )
         return self._handle_connect(
             provider_name=provider_name,
@@ -283,6 +302,8 @@ class OAuthCallbackView(APIView):
         profile: ProviderProfile,
         token_response: TokenResponse,
         next_path: str,
+        terms_accepted_at: Optional[str] = None,
+        terms_version: Optional[str] = None,
     ) -> HttpResponseRedirect:
         existing = (
             ConnectedAccount.objects.select_for_update()
@@ -338,6 +359,18 @@ class OAuthCallbackView(APIView):
                     )
                 )
 
+            # Creating an account is signing up: it needs the consent the
+            # person gave on the signup screen before the redirect. Sign-in of
+            # an existing account (the branch above) never asks. Refused
+            # before any row is written; the login page's own button carries
+            # no consent, so a brand-new person is sent to the signup screen.
+            accepted_at = parse_datetime(terms_accepted_at) if terms_accepted_at else None
+            if accepted_at is None or not terms_version:
+                _record_oauth_signin_failed(provider_name, profile, "terms_not_accepted", None)
+                return HttpResponseRedirect(
+                    _frontend_failure_url(reason=signup_consent.TERMS_REQUIRED_OAUTH_REASON)
+                )
+
             email = profile.email or f"{provider_name}_{profile.provider_user_id}@noemail.local"
             display_name = profile.display_name or email.split("@")[0]
             user = User(
@@ -347,6 +380,7 @@ class OAuthCallbackView(APIView):
                 # Provider verified the email before issuing the OAuth
                 # token, so the user doesn't need to re-prove ownership.
                 is_email_verified=True,
+                **signup_consent.acceptance_fields(accepted_at, terms_version),
             )
             user.set_unusable_password()
             user.save()

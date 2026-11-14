@@ -293,7 +293,12 @@ class TestUniqueness(_Keys, BaseAPITestCase):
     def test_the_signup_endpoint_refuses_it_with_a_400(self):
         res = self.client.post(
             "/api/v2/user/signup/",
-            {"username": "dup", "email": "TEST@example.com", "password": "longenough1"},
+            {
+                "username": "dup",
+                "email": "TEST@example.com",
+                "password": "longenough1",
+                "accepted_terms": True,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 400)

@@ -277,6 +277,10 @@ def build_export(user) -> dict:
             "auth_provider": user.primary_auth_provider,
             "email_verified": user.is_email_verified,
             "created_at": _iso(user.ts_created_at),
+            # Their own record of agreeing to the Terms and the Privacy
+            # Policy at signup: null for an account made before it was kept.
+            "terms_accepted_at": _iso(user.terms_accepted_at),
+            "terms_version": user.terms_version,
         },
         "notification_preferences": (
             {
