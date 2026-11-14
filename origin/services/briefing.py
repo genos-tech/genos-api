@@ -89,6 +89,9 @@ HOT_ITEMS = 5
 EVENTS_HOT = 6
 EVENTS_REST = 2
 MAX_LIST = 8
+# Tasks the member handed to someone else (MIP-1287): how many open ones are looked at before
+# the closed-ancestor rule and the cap decide what is told.
+DELEGATED_POOL = 200
 MAX_TODOS = 15
 EVENT_POOL = 600
 SNIPPET_CHARS = 140
@@ -1123,7 +1126,58 @@ def waiting_on_me(ctx: ToolContext, now: datetime, names: _Names) -> dict[str, A
     return {"requests": requests, "mentions": _unanswered_mentions(ctx, now, names)}
 
 
+def _delegated(ctx: ToolContext, names: _Names) -> tuple[list[dict[str, Any]], int]:
+    """Open tasks the caller reported and handed to someone ELSE (MIP-1287), longest quiet
+    first, and how many there are. A PM who made a task and assigned it is waiting on it, with
+    no dependency edge to say so.
+
+    Scope is the caller's own, like `_my_active_tasks`: this team, a project the caller is in,
+    not deleted, not an init scaffold, not Closed or Deleted, and not under a Closed or Deleted
+    ancestor (`task_ancestry`, the one statement of that rule). Tasks with nobody assigned, or
+    assigned to the caller, are not "waiting on others". The total counts what is left after
+    those rules, over the newest-bounded pool of `DELEGATED_POOL` rows."""
+    member_projects = ProjectMembers.objects.filter(
+        attendee_id=ctx.user_id, project__team_id=ctx.team_id, project__is_deleted=False
+    ).values("project_id")
+    qs = (
+        TaskMaster.objects.filter(
+            team_id=ctx.team_id,
+            reporter_id=ctx.user_id,
+            assignee_id__isnull=False,
+            project_id__in=member_projects,
+            is_deleted=False,
+            is_init_task=False,
+        )
+        .exclude(assignee_id=ctx.user_id)
+        .exclude(status__in=_ACTIVE_TASK_EXCLUDE)
+        .order_by("ts_updated_at", "task_id")
+    )
+    pool = list(qs[:DELEGATED_POOL])
+    if not pool:
+        return [], 0
+    from origin.services.task_ancestry import effective_statuses  # noqa: PLC0415
+
+    effective = effective_statuses([t.task_id for t in pool], ctx.team_id)
+    open_tasks = [
+        t
+        for t in pool
+        if t.task_id in effective and effective[t.task_id].closed_by_ancestor_id is None
+    ]
+    rows = []
+    for task in open_tasks[:MAX_LIST]:
+        row = {
+            "task_id": task.task_id,
+            "display_id": task.display_id,
+            "title": wrap_workspace_content(task.title or ""),
+            "status": task.status,
+        }
+        names.put(row, "assignee", task.assignee_id)
+        rows.append(row)
+    return rows, len(open_tasks)
+
+
 def waiting_on_others(ctx: ToolContext, names: _Names) -> dict[str, Any]:
+    delegated, delegated_total = _delegated(ctx, names)
     blockers = GET_MY_BLOCKERS.run({}, ctx).get("blocked_on_me", [])
     blocked = []
     for row in blockers[:MAX_LIST]:
@@ -1144,7 +1198,12 @@ def waiting_on_others(ctx: ToolContext, names: _Names) -> dict[str, Any]:
                 "waiting_for": waiting_for,
             }
         )
-    return {"blocked_tasks": blocked}
+    return {
+        "blocked_tasks": blocked,
+        "delegated": delegated,
+        "delegated_total": delegated_total,
+        "delegated_truncated": delegated_total > len(delegated),
+    }
 
 
 def stale_mine(
