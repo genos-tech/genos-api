@@ -203,6 +203,7 @@ class TestAuthEndpoints(TestCase):
                 "username": "newuser",
                 "email": "new@example.com",
                 "password": "newpass123",
+                "accepted_terms": True,
             },
             format="json",
         )
@@ -222,6 +223,7 @@ class TestAuthEndpoints(TestCase):
                 "username": "another",
                 "email": "test@example.com",
                 "password": "pass123",
+                "accepted_terms": True,
             },
             format="json",
         )
@@ -387,7 +389,12 @@ class TestEmailVerificationEndpoints(TestCase):
     def _signup(self, email="user@example.com", username="newuser", password="testpass123"):
         return self.client.post(
             "/api/v2/user/signup/",
-            {"username": username, "email": email, "password": password},
+            {
+                "username": username,
+                "email": email,
+                "password": password,
+                "accepted_terms": True,
+            },
             format="json",
         )
 
@@ -546,6 +553,7 @@ class TestEmailVerificationEndpoints(TestCase):
                 "email": "bot@example.com",
                 "password": "testpass123",
                 "is_system_user": True,
+                "accepted_terms": True,
             },
             format="json",
         )

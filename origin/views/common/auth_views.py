@@ -80,6 +80,7 @@ from origin.serializers.common.user_serializers import (
     UserCreateSerializer,
     UserSerializer,
 )
+from origin.services import signup_consent
 from origin.services.email import send_templated_email
 
 User = get_user_model()
@@ -163,6 +164,22 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
         link instead of issuing JWTs — the user must click the link before
         they can sign in. Non-email paths (none currently use this endpoint
         but kept defensively) still receive immediate tokens."""
+        # Signing up is agreeing to the Terms and the Privacy Policy, and
+        # the person says so on the signup screen. Refuse before anything
+        # is validated or written, so a refusal leaves no account behind.
+        # The record (when, which text) is stored with the account below.
+        body = request.data
+        if not signup_consent.is_accepted(
+            body.get("accepted_terms") if hasattr(body, "get") else None
+        ):
+            return Response(
+                {
+                    "code": signup_consent.TERMS_NOT_ACCEPTED_CODE,
+                    "message": "You must accept the Terms of Service and the Privacy Policy.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -170,7 +187,7 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user = serializer.save()
+        user = serializer.save(**signup_consent.acceptance_fields())
 
         # Invite-signup path. The token was validated in the serializer
         # (live + invited_email matches this signup), so receiving it proves

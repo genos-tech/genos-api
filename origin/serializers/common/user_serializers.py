@@ -170,6 +170,10 @@ class UserCreateSerializer(serializers.ModelSerializer):
             email=validated_data["email"],
             username=validated_data["username"],
             password=validated_data["password"],
+            # The signup view passes the consent record through `save()`, so
+            # it lands in the same INSERT as the account. Never a request field.
+            terms_accepted_at=validated_data.get("terms_accepted_at"),
+            terms_version=validated_data.get("terms_version"),
         )
         return user
 

@@ -248,6 +248,16 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
         blank=True,  # Unique related name
     )
 
+    # Evidence that the person agreed to the Terms of Service and the Privacy
+    # Policy when they created the account: when, and which text (the
+    # server's `TERMS_VERSION` at that moment, never a client value). Set by
+    # the email signup view and by the OAuth first-sign-in; NULL means no
+    # acceptance was recorded, which is every account made before the
+    # consent checkbox shipped and every account made by the server itself
+    # (demo, system users, management commands).
+    terms_accepted_at = models.DateTimeField(null=True, blank=True)
+    terms_version = models.CharField(max_length=32, null=True, blank=True)
+
     is_demo = models.BooleanField(default=False, db_index=True)
 
     # When True, the GitHub PR-merge webhook will auto-close tasks

@@ -50,6 +50,7 @@ class SystemUserSignupRefusedTests(BaseAPITestCase):
             "email": self.email,
             "password": self.password,
             "is_system_user": True,
+            "accepted_terms": True,
         }
         body.update(extra)
         return (client or self.anon).post(SIGNUP, body, format="json")
@@ -74,7 +75,12 @@ class SystemUserSignupRefusedTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 400)
         later = self.anon.post(
             SIGNUP,
-            {"username": "victim", "email": "victim@example.org", "password": "testpass123"},
+            {
+                "username": "victim",
+                "email": "victim@example.org",
+                "password": "testpass123",
+                "accepted_terms": True,
+            },
             format="json",
         )
         self.assertEqual(later.status_code, 201)
@@ -88,7 +94,12 @@ class SystemUserSignupRefusedTests(BaseAPITestCase):
     def test_a_person_signing_up_still_gets_their_password(self):
         res = self.anon.post(
             SIGNUP,
-            {"username": "pat", "email": "pat@example.com", "password": "testpass123"},
+            {
+                "username": "pat",
+                "email": "pat@example.com",
+                "password": "testpass123",
+                "accepted_terms": True,
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 201)
