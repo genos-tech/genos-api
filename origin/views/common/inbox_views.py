@@ -725,11 +725,13 @@ def _note_and_owner(note_type, note_id):
     The owner is the explicit `NotePermissionMaster` ROLE_OWNER row when
     one exists (the canonical "note owner" the role-management UI shows),
     falling back to the master row's `owner` FK for notes created before
-    the permission table was backfilled. A TASK note's FK owner counts only while they are on its
-    project (MIP-1511): one who left is nobody to ask, and cannot approve a request.
+    the permission table was backfilled. The FK owner of a TASK note counts only while they are on
+    its project (MIP-1511), and of a CHAT note only while the one chat-note rule still gives them a
+    role (MIP-1551, `get_effective_role`): one who left is nobody to ask, and cannot approve a
+    request.
     """
     from origin.models.note.common_note_models import NotePermissionMaster
-    from origin.views.utils.note_role import ROLE_OWNER
+    from origin.views.utils.note_role import ROLE_OWNER, get_effective_role
 
     model = _note_master_for_type(note_type)
     if model is None:
@@ -753,6 +755,10 @@ def _note_and_owner(note_type, note_id):
         if not ProjectMembers.objects.filter(
             project_id=note.project_id, attendee_id=fallback
         ).exists():
+            fallback = None
+    elif note_type == 3 and fallback is not None:
+        # The one rule (an explicit row, else `chat_note_member_q`), not `owner_id` alone.
+        if get_effective_role(fallback, note_type, note_id) is None:
             fallback = None
     return note, fallback
 
