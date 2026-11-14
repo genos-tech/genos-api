@@ -21,8 +21,12 @@
 # results in the prompt): about $0.03 to $0.07 per case on gemini-3.6-flash,
 # measured in the 2026-11-14 grouped paid session (MIP-1089), so the full
 # suite costs a few dollars and a judged run more. Both commands print the
-# tokens and cost per run (also with AI_COST_METER off); CI runs only the
-# retrieval suite (no model calls) and one judged smoke case.
+# tokens and cost per run (also with AI_COST_METER off). CI runs NO case
+# from this file (MIP-1527 removed the one judged smoke case): its only eval
+# is the retrieval suite (retrieval_cases.yaml), which has no agent loop but
+# still makes one query-rewrite model call and one query embedding per case,
+# plus an embedding reindex of the seed corpus. These behaviour cases run by
+# hand (`agent_eval`) and in the grouped paid run (`agent_eval_group`).
 
 # --------------------------------------------------------------------- #
 # A. Simple RAG (3)                                                      #
