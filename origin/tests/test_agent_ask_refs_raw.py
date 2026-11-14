@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from origin.search_engine.agent.ask_refs import clean_text
 from origin.search_engine.agent.fence import has_fence_tag
 
 from .ask_ref_fixtures import AskRefWorld
@@ -30,6 +31,10 @@ class RawHostileTextTests(AskRefWorld):
         self.assertEqual(extra.count("</workspace_content>"), blocks, extra)
         for inner in spans:
             self.assertFalse(has_fence_tag(inner), inner)
+        # Nothing in the block is something the cleaning would still change: a name or a text that kept a
+        # zero-width character, a bidirectional mark or a joiner inside a tag name fails here, where the
+        # literal-tag checks above cannot see it.
+        self.assertEqual(clean_text(extra), extra)
 
     def test_a_raw_hostile_selection_stays_in_one_fence(self):
         for text in HOSTILE:
