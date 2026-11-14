@@ -52,6 +52,7 @@ from origin.services.channel_scope import (
     user_channels_qs,
 )
 from origin.services.chat_note_access import revoke_membership_roles
+from origin.services.deleted_account_channel_owners import actor_gm_role
 from origin.services.external_grants import (
     ExternalGrantError,
     active_grants_for_object,
@@ -821,7 +822,8 @@ class ChannelDetailView(AuthenticatedAPIView):
         # Owner OR editor for ordinary metadata (title / image /
         # visibility). Ownership transfer, handled further down, stays
         # owner-only.
-        actor_role = resolve_gm_role(channel, request.user.id)
+        # `actor_gm_role`: a group with no live owner is run by any host-side member (MIP-1550).
+        actor_role = actor_gm_role(channel, request.user.id)
         if not can_manage(actor_role):
             return Response(
                 {"error": "Only the channel owner or an editor can edit metadata."},
@@ -894,7 +896,11 @@ class ChannelDetailView(AuthenticatedAPIView):
                     {"error": "owner_user_id must be a non-empty user id."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if str(new_owner_user_id) == str(request.user.id):
+            # A member running a group with no live owner may take it (MIP-1550); only the real
+            # owner "transfers" to themselves for nothing.
+            if str(new_owner_user_id) == str(request.user.id) and (
+                str(channel.owner_id) == str(request.user.id)
+            ):
                 return Response(
                     {"error": "owner_user_id matches the current owner — no transfer needed."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -1251,7 +1257,7 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not can_manage(resolve_gm_role(channel, request.user.id)):
+        if not can_manage(actor_gm_role(channel, request.user.id)):
             return Response(
                 {"error": "Only the channel owner or an editor can change member roles."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1315,6 +1321,9 @@ class ChannelMemberDetailView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         manager_may_remove = False
+        # Taking out someone else: a group with no live owner is run by any host-side member
+        # (MIP-1550). Leaving, above, keeps the real owner only.
+        actor_role = actor_gm_role(channel, request.user.id)
         if not is_self and can_manage(actor_role):
             # Taking out SOMEONE ELSE follows `can_remove_member` (MIP-1371): the owner removes
             # anyone but themselves, an editor only viewers. This used to let an editor remove
@@ -1424,7 +1433,7 @@ class ChannelProfileImageView(AuthenticatedAPIView):
                 {"error": ("PM channels mirror the project avatar; edit the project instead.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not can_manage(resolve_gm_role(channel, request.user.id)):
+        if not can_manage(actor_gm_role(channel, request.user.id)):
             return Response(
                 {"error": "Only the channel owner or an editor can change the avatar."},
                 status=status.HTTP_403_FORBIDDEN,

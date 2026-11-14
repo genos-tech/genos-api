@@ -385,10 +385,26 @@ def delete_account(user) -> dict:
                 metadata={"via": "account_deleted"},
             )
 
+        # What the guest teams' rosters wrote for this person on OTHER teams' objects (a shared
+        # project, chat or note folder, MIP-1550). Leaving a team through `remove_team_member`
+        # withdraws these; deleting the account is the other way out of a team and used to leave
+        # them. Nothing re-checks a grant at read time, so a row left here is access nobody sees.
+        from origin.services.external_grants import drop_team_member_participation
+
+        withdrawn = sum(
+            drop_team_member_participation(team_id, user.pk)
+            for team_id in {*solo_team_ids, *left_team_ids}
+        )
+
         _delete_personal_data(user)
         _purge_search_engine_rows(user_id)
         # Both read the identity that is overwritten just below, so they run first.
         invites_removed = _delete_invites_to(original_email)
+        # A group or project chat the person owned gets a live owner (MIP-1550). The row below
+        # is still not marked deleted, so the helper is told which account to leave out.
+        from origin.services.deleted_account_channel_owners import reassign_owned_channels
+
+        reassign_owned_channels(user.pk)
 
         # Identity erasure. The email must stay unique and unroutable.
         user.email = f"deleted-{uuid.uuid4().hex[:16]}@{DELETED_EMAIL_DOMAIN}"
@@ -432,4 +448,5 @@ def delete_account(user) -> dict:
         "user_id": user_id,
         "solo_teams_closed": len(solo_team_ids),
         "invites_removed": invites_removed,
+        "external_participation_withdrawn": withdrawn,
     }
