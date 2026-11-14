@@ -33,10 +33,10 @@ from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
-    ToolForbidden,
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
+from origin.search_engine.agent.tools.note_access import note_not_found
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
 from origin.search_engine.text_extraction import extract_text
 
@@ -160,17 +160,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return out
 
 
-def _check_team(note_team_id, expected_team_id: str) -> None:
+def _check_team(note_id: int, note_team_id, expected_team_id: str) -> None:
     if str(note_team_id or "") != expected_team_id:
-        raise ToolForbidden("Not authorized: note is in a different team.")
+        raise note_not_found(note_id, exists=True)
 
 
 def _fetch_personal(note_id: int, ctx: ToolContext) -> dict[str, Any]:
     try:
         note = PersonalNoteMaster.objects.get(note_id=note_id)
     except PersonalNoteMaster.DoesNotExist:
-        raise ToolError(f"Personal note {note_id} not found.")
-    _check_team(note.team_id, ctx.team_id)
+        raise note_not_found(note_id)
+    _check_team(note_id, note.team_id, ctx.team_id)
 
     # NOT `ctx.user_id in personal_note_acl_user_ids(...)`: for a note in a
     # public Team Notes folder that set holds a `team:<id>` sentinel, never
@@ -181,7 +181,7 @@ def _fetch_personal(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         note_id=note_id,
         owner_id=getattr(note, "owner_id", None),
     ):
-        raise ToolForbidden(f"Not authorized to read personal note {note_id}.")
+        raise note_not_found(note_id, exists=True)
 
     return _shape_note(
         surface=ctx.surface,
@@ -200,8 +200,8 @@ def _fetch_task_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
     try:
         note = TaskNoteMaster.objects.get(note_id=note_id)
     except TaskNoteMaster.DoesNotExist:
-        raise ToolError(f"Task note {note_id} not found.")
-    _check_team(note.team_id, ctx.team_id)
+        raise note_not_found(note_id)
+    _check_team(note_id, note.team_id, ctx.team_id)
 
     allowed = task_note_acl_user_ids(
         owner_id=getattr(note, "owner_id", None),
@@ -209,7 +209,7 @@ def _fetch_task_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         note_id=note_id,
     )
     if ctx.user_id not in allowed:
-        raise ToolForbidden(f"Not authorized to read task note {note_id}.")
+        raise note_not_found(note_id, exists=True)
 
     return _shape_note(
         surface=ctx.surface,
@@ -232,8 +232,8 @@ def _fetch_chat_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
     try:
         note = ChatNoteMaster.objects.get(note_id=note_id)
     except ChatNoteMaster.DoesNotExist:
-        raise ToolError(f"Chat note {note_id} not found.")
-    _check_team(note.team_id, ctx.team_id)
+        raise note_not_found(note_id)
+    _check_team(note_id, note.team_id, ctx.team_id)
 
     chat_type_code = note.chat_type
     channel_id = note.channel_id
@@ -244,7 +244,7 @@ def _fetch_chat_note(note_id: int, ctx: ToolContext) -> dict[str, Any]:
         note_id=note_id,
     )
     if ctx.user_id not in allowed:
-        raise ToolForbidden(f"Not authorized to read chat note {note_id}.")
+        raise note_not_found(note_id, exists=True)
 
     # parent_context KEY names chat_id / thread_id are opaque deep-link
     # feed-through; the source values are now the v3 channel / thread-root
