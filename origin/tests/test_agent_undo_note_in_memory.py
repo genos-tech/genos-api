@@ -267,6 +267,10 @@ class Ingest(TestCase):
             self.assertEqual(texts[0].count("(the person undid this: added a comment)"), 1)
             self.assertEqual(self.ingest().call_count, 0)
 
+    def test_flag_off_the_run_is_not_even_asked_for_its_steps(self):
+        with override_settings_engine(**OFF), self.assertNumQueries(0):
+            self.assertIsNone(chunker.undone_steps_for_run(object()))
+
     def test_flag_off_an_undone_step_changes_nothing_stored(self):
         with override_settings_engine(**OFF):
             self.ingest()

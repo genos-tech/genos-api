@@ -52,7 +52,7 @@ from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.conversation_chunker import (
     conversation_chunks_for_run,
     iter_conversation_chunks,
-    undone_steps_by_run,
+    undone_steps_for_run,
 )
 from origin.search_engine.chunkers.milestone_chunker import iter_milestone_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
@@ -256,7 +256,7 @@ def ingest_conversation_run(run) -> bool:
     """
     # MIP-1530: with `AGENT_UNDO_NOTE_IN_MEMORY` on, the run's undone writes are noted in its
     # chunk (one query for this run; none with the flag off).
-    entity = conversation_chunks_for_run(run, undone_steps_by_run([run.run_id]).get(run.run_id))
+    entity = conversation_chunks_for_run(run, undone_steps_for_run(run))
     if entity is None:
         return False
     stats = IngestionStats()

@@ -113,6 +113,14 @@ def undone_steps_by_run(run_ids: Optional[Sequence[Any]] = None) -> dict[Any, li
     return out
 
 
+def undone_steps_for_run(run: AgentRun) -> Optional[list[AgentStep]]:
+    """This one run's undone steps for `conversation_chunks_for_run`; None (and the run is not
+    even read) with the flag off."""
+    if not memory_note_enabled():
+        return None
+    return undone_steps_by_run([run.run_id]).get(run.run_id)
+
+
 def conversation_chunks_for_run(
     run: AgentRun, undone_steps: Optional[Sequence[AgentStep]] = None
 ) -> Optional[EntityChunks]:
