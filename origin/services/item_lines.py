@@ -122,8 +122,13 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
-from origin.services import briefing, description_edit_runs, member_events
+from origin.services import briefing, member_events
 from origin.services.channel_scope import channel_titles, readable_chats_qs
+from origin.services.description_edit_runs import (
+    fold_description_runs,
+    keeps_previous_body,
+    via_identity,
+)
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import zone_for_user_id
 
@@ -443,8 +448,8 @@ def _read_history(rd: _Reader) -> None:
                 automated=shaped["automated"],
                 via="task",
                 action=row.action_type,
-                write_via=description_edit_runs.via_identity(row.metadata),
-                keeps_body=description_edit_runs.keeps_previous_body(row.metadata),
+                write_via=via_identity(row.metadata),
+                keeps_body=keeps_previous_body(row.metadata),
             ),
         )
 
@@ -1078,7 +1083,7 @@ def _fold_description_runs(events: list[Ev]) -> list[Ev]:
     Called by `_build` on a line and on its neighbours, not by `read_events`: the briefing's
     activity reads the same events and counts every edit."""
     newest_first = sorted(events, key=Ev.sort_key, reverse=True)
-    runs = description_edit_runs.fold_description_runs(
+    runs = fold_description_runs(
         [e for e in newest_first if not e.ai_app],
         is_description=lambda e: e.action == TaskActivityActionType.DESCRIPTION,
         actor=lambda e: e.actor,

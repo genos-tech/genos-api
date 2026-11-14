@@ -12,6 +12,7 @@ from origin.models.task.task_activity_models import TaskActivity
 # The controller first: importing the services alone trips a circular import (as in test_item_lines).
 from origin.search_engine.agent.controller import _build_tool_declarations  # noqa: F401
 from origin.services import item_lines
+from origin.services.description_edit_runs import DESCRIPTION_EDIT_GROUP_WINDOW
 from origin.tests.test_item_lines import LineBase
 from origin.views.task.task_activity_views import _collapse_description_edits
 
@@ -55,7 +56,7 @@ class TestDescriptionBursts(LineBase):
         self.assertNotIn("first_at", entry)
 
     def test_a_gap_longer_than_the_window_starts_a_new_entry(self):
-        gap = item_lines.description_edit_runs.DESCRIPTION_EDIT_GROUP_WINDOW.total_seconds() / 60
+        gap = DESCRIPTION_EDIT_GROUP_WINDOW.total_seconds() / 60
         self.edit(0)
         self.edit(1)
         self.edit(1 + gap + 1)
