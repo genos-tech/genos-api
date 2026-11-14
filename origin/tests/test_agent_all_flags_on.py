@@ -37,7 +37,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 ALL_ON_BUDGET_CHARS = 141_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
-# Turned on by default by MIP-1089 (grouped eval 2026-11-14). Everything else in ALL_ON is held.
+# Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
+# Japanese cases were re-read). Everything else in ALL_ON is held.
 SHIPPED_ON = frozenset(
     {
         "AGENT_RESUME_KEEPS_BLOCKS",
@@ -50,6 +51,7 @@ SHIPPED_ON = frozenset(
         "AGENT_TEAM_IN_CURRENT_USER",
         "AGENT_NOTE_THREADS_IN_GET_NOTE",
         "AGENT_CLOSED_ANCESTOR_RULE",
+        "AGENT_INAPP_TIMELINE_TOOL",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
