@@ -44,6 +44,10 @@ run of them by one app with nothing else between, each within `APP_BURST_GAP` of
 before, is one entry (`calls`, `first_at`). On a neighbour they take no slot at all: its
 latest events are real ones, and `last_opened_at` says when the member last opened it.
 
+The body editor auto-saves every few seconds, so a run of description edits would fill the line
+too (MIP-1529): on the line and on a neighbour a run is ONE entry (`edits`, `first_at`), by the
+rule of the task's Activity feed (`description_edit_runs`).
+
 **Access.** An event is shown only when the member can open BOTH the item and the event's own
 container, now: the task (`LabelAccess`), the chat the message is in (`readable_chats_qs`),
 the task a referencing comment sits on, the note a version belongs to (`briefing._may_read_note`).
@@ -77,7 +81,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import reduce
 from operator import or_
@@ -119,6 +123,11 @@ from origin.search_engine.agent.tools.base import (
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import briefing, member_events
 from origin.services.channel_scope import channel_titles, readable_chats_qs
+from origin.services.description_edit_runs import (
+    fold_description_runs,
+    keeps_previous_body,
+    via_identity,
+)
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.plain_text import body_text, chip_task_ids, message_text
 from origin.services.user_time import zone_for_user_id
@@ -234,6 +243,11 @@ class Ev:
     # The member's own AI-app open or change (a `read` / `write` marker of the MCP source): the
     # events a line folds and a neighbour leaves out. Other ledger kinds are real changes.
     ai_app: bool = False
+    # What a run of description edits is folded by (MIP-1529): the audit row's action, how the
+    # write arrived and whether it kept the previous body. Read from the row, never rendered.
+    action: str = ""
+    write_via: tuple = (None, None, None)
+    keeps_body: bool = False
 
     def sort_key(self) -> tuple:
         return (self.at, _RANK.get(self.source, 9), str(self.key))
@@ -411,6 +425,9 @@ def _read_history(rd: _Reader) -> None:
                 label=shaped["_label"],
                 automated=shaped["automated"],
                 via="task",
+                action=row.action_type,
+                write_via=via_identity(row.metadata),
+                keeps_body=keeps_previous_body(row.metadata),
             ),
         )
 
@@ -1036,6 +1053,40 @@ def _fold_app_runs(events: list[Ev]) -> list[Ev]:
     return folded
 
 
+def _fold_description_runs(events: list[Ev]) -> list[Ev]:
+    """`events` with each run of description edits folded into one entry (MIP-1529).
+
+    The body editor auto-saves every few seconds, so one edit session is dozens of audit rows
+    and used to fill the line (and push the older events out of its window). A run is told
+    ONCE, by the rule of the task's Activity feed (`description_edit_runs`): the same actor, the
+    same way of writing (api #787: a connected app's rewrite is not an autosave), no more than
+    `DESCRIPTION_EDIT_GROUP_WINDOW` between neighbours, nothing else between them, and a rewrite
+    that kept the previous body stands alone. It is told at its NEWEST edit, with `edits` (how
+    many) and `first_at` (the oldest), the convention of a folded app run. The member's own
+    AI-app opens between two edits are context, not news: they do not close a run.
+
+    Called by `_build` on a line and on its neighbours, not by `read_events`: the briefing's
+    activity reads the same events and counts every edit."""
+    newest_first = sorted(events, key=Ev.sort_key, reverse=True)
+    runs = fold_description_runs(
+        [e for e in newest_first if not e.ai_app],
+        is_description=lambda e: e.action == TaskActivityActionType.DESCRIPTION,
+        actor=lambda e: e.actor,
+        via=lambda e: e.write_via,
+        keeps_body=lambda e: e.keeps_body,
+        ts=lambda e: e.at,
+    )
+    folded = [e for e in newest_first if e.ai_app]
+    for run in runs:
+        ev = run.row
+        if run.count > 1:
+            ev = replace(
+                ev, extra={**ev.extra, "edits": run.count, "first_at": run.first_ts.isoformat()}
+            )
+        folded.append(ev)
+    return folded
+
+
 # --------------------------------------------------------------------------- #
 # Seen markers (MIP-1084)                                                      #
 # --------------------------------------------------------------------------- #
@@ -1503,7 +1554,9 @@ def _build(
 
     names = briefing._Names(ctx)
     pending: list = []
-    root_events = _fold_app_runs(list(line_read.events[root.task_id].values()))
+    root_events = _fold_app_runs(
+        _fold_description_runs(list(line_read.events[root.task_id].values()))
+    )
     result: dict[str, Any] = {
         "window": {"since": start.isoformat(), "until": end.isoformat()},
         "line": _line(root, root_events, limit, names, me, pending),
@@ -1514,7 +1567,7 @@ def _build(
         # A neighbour's events are the real ones: the member's own AI-app opens say nothing
         # about what happened there, and used to fill its few latest slots.
         real: dict[int, list[Ev]] = {
-            task_id: [e for e in found.values() if not e.ai_app]
+            task_id: _fold_description_runs([e for e in found.values() if not e.ai_app])
             for task_id, found in (near_read.events if near_read else {}).items()
         }
         with_events = [(relation, task) for relation, task in candidates if real[task.task_id]]
