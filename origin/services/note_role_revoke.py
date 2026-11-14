@@ -52,10 +52,14 @@ def _search_narrowed(label: str, note_ids) -> None:
     if not note_ids:
         return
     try:
-        from origin.search_engine.purge import purge_note
+        from origin.search_engine.purge import purge_entities
 
-        for note_id in note_ids:
-            purge_note(label, note_id)
+        # One bulk call for every note, the entities `purge_note` names for each.
+        code = NOTE_TYPE_TASK if label == "task" else NOTE_TYPE_PERSONAL
+        purge_entities(
+            [("note", f"note:{label}:{n}") for n in note_ids]
+            + [("note_summary", f"note_summary:{code}:{n}") for n in note_ids]
+        )
         model = TaskNoteMaster if label == "task" else PersonalNoteMaster
         model.objects.filter(note_id__in=note_ids).update(ts_updated_at=timezone.now())
     except Exception:  # noqa: BLE001 - a role change must commit even when search is down

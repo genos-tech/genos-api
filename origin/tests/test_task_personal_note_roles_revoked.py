@@ -53,7 +53,7 @@ class Base(BaseAPITestCase):
         )
         TeamMembers.objects.create(team=self.team, attendee=self.stranger)
         # The search side is not under test (and a refresh would embed through a provider).
-        purge = mock.patch("origin.search_engine.purge.purge_note")
+        purge = mock.patch("origin.search_engine.purge.purge_entities")
         self.purge = purge.start()
         self.addCleanup(purge.stop)
 
@@ -216,7 +216,8 @@ class LeavingAProject(TaskNoteBase):
 
     def test_the_search_index_is_told(self):
         ProjectMembers.objects.filter(attendee=self.author).delete()
-        self.purge.assert_any_call("task", self.note.note_id)
+        pairs = self.purge.call_args.args[0]
+        self.assertIn(("note", f"note:task:{self.note.note_id}"), pairs)
 
 
 class LeavingTheTeam(TaskNoteBase):
