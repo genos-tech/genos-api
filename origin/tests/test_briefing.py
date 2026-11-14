@@ -1058,7 +1058,9 @@ class TestDelegated(BriefingBase):
         self.handed("Done", status="Closed")
         self.handed("Gone", status="Deleted")
         self.handed("Soft deleted", is_deleted=True)
-        self.assertEqual(self.delegated(), {**self.delegated(), "delegated": [], "delegated_total": 0})
+        self.assertEqual(
+            self.delegated(), {**self.delegated(), "delegated": [], "delegated_total": 0}
+        )
 
     def test_a_task_nobody_holds_yet_is_not_waiting_on_anyone(self):
         TaskMaster.objects.create(
