@@ -2062,8 +2062,8 @@ SEARCH_ENGINE["AGENT_BODY_ON_USER_MODEL"] = (
 # window showed the model a stale story. ON = the run's memory chunk (`search_text` and snippet)
 # gets one line per undone write, `(the person undid this: created task WEB-3)` (a phrase per tool
 # and the task's display id, never a title or a body), the undo re-ingests THAT run (one re-embed;
-# a repeat embeds nothing), and the earlier-turns window ends the answer with the same line in
-# place of MIP-889's bracketed note (so it needs no AGENT_TELL_MODEL_UNDO; a replayed result still
+# a repeat embeds nothing), and the earlier-turns window ends the answer with the same line
+# after MIP-889's bracketed note (it needs no AGENT_TELL_MODEL_UNDO; a replayed result still
 # carries `undone_by_user` under that flag). The note is derived from the run's undone steps, so
 # the 10-minute cron and a full reindex keep it. OFF = the chunk, the window and every query are
 # exactly what they were. No tool declaration or system prompt moves. Flip criterion: after an undo

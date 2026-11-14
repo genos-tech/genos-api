@@ -1,8 +1,9 @@
 # MIP-1530 (flag AGENT_UNDO_NOTE_IN_MEMORY): after the person UNDOES a write, what the model reads
 # from its conversation memory says so. ON = the run's memory chunk (what `search_past_conversations`
 # returns) gets one line per undone write, "(the person undid this: created task WEB-3)", and the
-# earlier-turns window ends the answer with the SAME line (it replaces MIP-889's bracketed note
-# "[Note: after this answer the person undid create_task ...]", which arm0 still shows).
+# earlier-turns window ends the answer with the SAME line (after MIP-889's bracketed note
+# "[Note: after this answer the person undid create_task ...]", which arm0 already shows, so the
+# new line is what tells arm t1530 from arm0).
 #
 # What these cases reach: the WINDOW half (a follow-up in the same session). The runner switches
 # conversation ingestion off and follows up in the same session, so the `search_past_conversations`
@@ -32,7 +33,6 @@
   follow_up: "Is the task you created for me still there? Answer in one sentence."
   expect:
     follow_up_prompt_contains: ["(the person undid this: created task"]
-    follow_up_prompt_excludes: ["[Note: after this answer"]
     answer_contains_any: ["undone", "undid", "deleted", "removed", "no longer", "not there", "reverted"]
 
 - id: t1530.still-there.ja
@@ -51,7 +51,6 @@
   follow_up: "さっき作ってもらったタスクはまだ残っていますか?一文で答えてください。"
   expect:
     follow_up_prompt_contains: ["(the person undid this: created task"]
-    follow_up_prompt_excludes: ["[Note: after this answer"]
     answer_contains_any: ["取り消", "削除", "元に戻", "ありません", "残っていません", "取消"]
 
 - id: t1530.kept-and-undone.en

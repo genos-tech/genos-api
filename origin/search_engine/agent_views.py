@@ -422,8 +422,9 @@ def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
     )
     runs = list(runs)
     turns = [(r.query, r.final_answer_text[:max_chars]) for r in runs]
-    # MIP-1530 `AGENT_UNDO_NOTE_IN_MEMORY`: the SAME line the memory chunk carries, in place of
-    # MIP-889's bracketed note (one note, not two). Needs no other flag.
+    # MIP-1530 `AGENT_UNDO_NOTE_IN_MEMORY`: the SAME line the memory chunk carries, after MIP-889's
+    # bracketed note when that flag is on too (the line is short; the note says what was put back).
+    # It needs no other flag.
     memory_note = conversation_chunker.memory_note_enabled()
     if (memory_note or approval_notes.enabled()) and runs:
         # `AGENT_TELL_MODEL_UNDO`: an earlier answer whose write the person has since
@@ -436,9 +437,10 @@ def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
             undone.setdefault(step.run_id, []).append(step)
 
         def note_of(steps: list[AgentStep]) -> str:
+            parts = [approval_notes.undo_note_text(steps)]
             if memory_note:
-                return "\n".join(conversation_chunker.undo_note_lines(steps))
-            return approval_notes.undo_note_text(steps)
+                parts += conversation_chunker.undo_note_lines(steps)
+            return "\n".join(p for p in parts if p)
 
         turns = [
             (

@@ -11,8 +11,8 @@ the earlier-turns window of the next ask showed the model a stale story. With th
     stored text, so nothing can be added twice);
   * the undo re-ingests that ONE run (a re-embed because the text changed; a second ingest with
     nothing new embeds nothing);
-  * the earlier-turns window ends the answer with the same line(s) instead of MIP-889's bracketed
-    note (one note, not two).
+  * the earlier-turns window ends the answer with the same line(s), after MIP-889's bracketed note
+    when `AGENT_TELL_MODEL_UNDO` is on too (the all-on arm keeps both flags' checks true).
 
 The line is system data only: a phrase per tool and the task's display id, never a title or a
 body (the window is not fenced; the chunk is, but the rule is the same as `approval_notes`).
@@ -288,7 +288,7 @@ class override_settings_engine:  # noqa: N801 — a context manager, named like 
 
 
 class TheWindow(TestCase):
-    """The earlier-turns window: the same line, in place of MIP-889's bracketed note."""
+    """The earlier-turns window: the same line, after MIP-889's bracketed note when that is on."""
 
     def setUp(self):
         self.session = AgentSession.objects.create(team_id=_TEAM, user_id=_USER)
@@ -306,10 +306,16 @@ class TheWindow(TestCase):
             ((_q, answer),) = agent_views._turns_of([self.run])
         return answer
 
-    def test_flag_on_the_answer_ends_with_the_line_and_not_the_bracket_note(self):
+    BRACKET = (
+        "[Note: after this answer the person undid create_task (step 1): "
+        "what it created was deleted.]"
+    )
+
+    def test_flag_on_the_answer_ends_with_the_line_after_mip_889_s_note(self):
         got = self.answer(AGENT_UNDO_NOTE_IN_MEMORY=True, AGENT_TELL_MODEL_UNDO=True)
-        self.assertEqual(got, f"{ANSWER}\n\n(the person undid this: created task WEB-3)")
-        self.assertNotIn("[Note", got)
+        self.assertEqual(
+            got, f"{ANSWER}\n\n{self.BRACKET}\n(the person undid this: created task WEB-3)"
+        )
 
     def test_the_line_does_not_need_the_tell_the_model_flag(self):
         got = self.answer(AGENT_UNDO_NOTE_IN_MEMORY=True, AGENT_TELL_MODEL_UNDO=False)
@@ -317,11 +323,7 @@ class TheWindow(TestCase):
 
     def test_flag_off_keeps_mip_889_s_note_byte_for_byte(self):
         got = self.answer(AGENT_UNDO_NOTE_IN_MEMORY=False, AGENT_TELL_MODEL_UNDO=True)
-        self.assertEqual(
-            got,
-            f"{ANSWER}\n\n[Note: after this answer the person undid create_task (step 1): "
-            "what it created was deleted.]",
-        )
+        self.assertEqual(got, f"{ANSWER}\n\n{self.BRACKET}")
 
     def test_both_off_is_the_plain_answer_with_no_extra_query(self):
         with override_settings_engine(AGENT_UNDO_NOTE_IN_MEMORY=False, AGENT_TELL_MODEL_UNDO=False):
