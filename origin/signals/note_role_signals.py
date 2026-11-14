@@ -21,6 +21,15 @@ def _end_author_roles_on_project_leave(sender, instance, **kwargs):
     revoke_task_author_roles(user_id=instance.attendee_id, project_id=instance.project_id)
 
 
+@receiver(post_delete, sender=ProjectMembers)
+def _end_collaborations_on_project_leave(sender, instance, **kwargs):
+    """The person can no longer open the project's tasks, so they stop being told about them as
+    a collaborator (MIP-1567). Same hook, same reach as the note roles above."""
+    from origin.services.task_collaborator_revoke import drop_collaborator_on_project_leave
+
+    drop_collaborator_on_project_leave(user_id=instance.attendee_id, project_id=instance.project_id)
+
+
 @receiver(post_save, sender=ProjectMembers)
 def _restore_author_roles_on_project_join(sender, instance, created, **kwargs):
     """A (re)joiner gets their Owner row back on the task notes that name them as author, so they

@@ -30,6 +30,7 @@ from origin.services import (
     v3_activity,
     webhook_enqueue,
 )
+from origin.services.task_collaborators import notifiable_collaborator_ids
 from origin.services.webpush_dispatch import schedule_push_for_activities
 from origin.views.utils.mention_handler import resolve_mentions
 
@@ -102,14 +103,9 @@ def _participant_ids(task_id: int, mentioned: set[str]) -> set[str]:
         participants.add(str(assignee_id))
 
     # Collaborators are notified on task activity exactly like the
-    # assignee — add them to the participant set.
-    for collab_id in (
-        TaskMaster.objects.filter(task_id=task_id)
-        .values_list("collaborators__id", flat=True)
-        .distinct()
-    ):
-        if collab_id is not None:
-            participants.add(str(collab_id))
+    # assignee — add them to the participant set, those who can open the task
+    # (MIP-1567: a collaborator who is not on the project is told of nothing).
+    participants |= notifiable_collaborator_ids(task_id)
 
     for sender_id in (
         TaskComments.objects.filter(task=task_id, is_deleted=False)

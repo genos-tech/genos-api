@@ -36,6 +36,7 @@ from origin.services.milestone_service import ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_project_move import collect_descendant_task_ids
 from origin.signals.task_signals import update_tasks_recorded
+from origin.views.utils.scope_guards import task_reader_ids
 
 
 class ConversionRefused(Exception):
@@ -168,7 +169,12 @@ def convert_milestone_to_task(milestone_id: int) -> tuple[TaskMaster, MilestoneM
         if assignee_ids:
             row.assignee_id = assignee_ids[0]
             others = [uid for uid in assignee_ids[1:] if uid != row.assignee_id]
-            # Added to whoever collaborates already; never replaced.
+            # Added to whoever collaborates already; never replaced. Only those who can open
+            # the task they now collaborate on (a milestone's assignee may be a teammate who
+            # is not on the project, MIP-915): the others stay off, as a collaborator who
+            # cannot read the task is told about it for nothing (MIP-1567).
+            readers = task_reader_ids(row.project_id, row.assignee_id, row.reporter_id, others)
+            others = [uid for uid in others if str(uid) in readers]
             if others:
                 row.collaborators.add(*others)
             # Someone can't be both the assignee and a collaborator.

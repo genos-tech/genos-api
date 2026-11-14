@@ -85,10 +85,25 @@ class TaskPutPeopleTests(BaseAPITestCase):
         self.task.refresh_from_db()
         self.assertEqual(self.task.title, "Task")
 
-    def test_teammates_and_project_members_can_be_added(self):
-        res = self.put(collaborators=[self.teammate.id, self.guest.id])
+    def test_a_project_member_can_be_added_but_not_a_teammate_who_cannot_open_the_task(self):
+        # MIP-1567: a collaborator is told about the task, so they have to be able to open it.
+        res = self.put(collaborators=[self.teammate.id])
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST, res.data)
+        self.assertIn("could not open the task", res.data["error"])
+        self.assertEqual(self.collaborator_ids(), set())
+
+        res = self.put(collaborators=[self.guest.id])
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
-        self.assertEqual(self.collaborator_ids(), {self.teammate.id, self.guest.id})
+        self.assertEqual(self.collaborator_ids(), {self.guest.id})
+
+    def test_a_teammate_who_is_made_assignee_in_the_same_save_may_collaborate(self):
+        res = self.put(assignee=self.teammate.id, collaborators=[self.teammate.id])
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(self.collaborator_ids(), {self.teammate.id})
+
+    def test_a_teammate_can_still_be_the_assignee_with_no_collaborator_check(self):
+        res = self.put(assignee=self.teammate.id)
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
 
     def test_a_malformed_or_unknown_id_is_refused_not_dropped(self):
         for bad in ("not-a-uuid", str(uuid.uuid4())):
@@ -181,8 +196,11 @@ class TaskPutPeopleTests(BaseAPITestCase):
         self.task.refresh_from_db()
         self.assertEqual(self.task.project_id, self.project.project_id)
 
-        # The destination team's own member is fine there, though nobody to
-        # the source.
+        # A member of the destination PROJECT is fine there, though nobody to the source. (Its
+        # team's other members would be refused: they could not open the task, MIP-1567.)
+        ProjectMembers.objects.create(
+            team=self.other_team, project=destination, attendee=self.outsider
+        )
         allowed = self.put(project=destination.project_id, collaborators=[self.outsider.id])
         self.assertEqual(allowed.status_code, status.HTTP_200_OK, allowed.data)
         self.task.refresh_from_db()
