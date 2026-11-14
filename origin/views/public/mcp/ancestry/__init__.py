@@ -9,45 +9,18 @@ sees waits for the December eval, so the registry tools are left as they are. Th
 `origin/services/task_ancestry.py`.
 
 `closed_by_ancestor` names the ancestor by `task_id`, and by `display_id` only when the caller
-may read that task (`LabelAccess`): a task's assignee who is not in its project can read the
-task, but not necessarily its grandparent.
+may read that task (`task_ancestry.effective_fields`, which the in-app tools share).
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable
-
-from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools import ToolContext
-from origin.services.task_ancestry import effective_statuses
-
-
-def _fields(task_ids: Iterable[Any], ctx: ToolContext) -> dict[int, dict[str, Any]]:
-    ids = []
-    for raw in task_ids:
-        try:
-            ids.append(int(raw))
-        except (TypeError, ValueError):
-            continue
-    found = effective_statuses(ids, ctx.team_id)
-    ancestors = {e.closed_by_ancestor_id for e in found.values() if e.closed_by_ancestor_id}
-    readable = LabelAccess(ctx).tasks(ancestors) if ancestors else {}
-    out: dict[int, dict[str, Any]] = {}
-    for task_id, e in found.items():
-        fields: dict[str, Any] = {"effective_status": e.status}
-        if e.closed_by_ancestor_id is not None:
-            ancestor = readable.get(e.closed_by_ancestor_id)
-            fields["closed_by_ancestor"] = {
-                "task_id": e.closed_by_ancestor_id,
-                "display_id": ancestor.display_id if ancestor else None,
-            }
-        out[task_id] = fields
-    return out
+from origin.services.task_ancestry import effective_fields
 
 
 def with_task_ancestry(payload: dict, args: dict, mcp_args: dict, ctx: ToolContext) -> dict:
     """`get_task`: the task's `effective_status`."""
-    fields = _fields([payload.get("task_id")], ctx)
+    fields = effective_fields([payload.get("task_id")], ctx)
     try:
         mine = fields.get(int(payload.get("task_id")))
     except (TypeError, ValueError):
@@ -60,7 +33,7 @@ def with_rows_ancestry(payload: dict, args: dict, mcp_args: dict, ctx: ToolConte
     rows = payload.get("tasks")
     if not isinstance(rows, list):
         return payload
-    fields = _fields((r.get("task_id") for r in rows if isinstance(r, dict)), ctx)
+    fields = effective_fields((r.get("task_id") for r in rows if isinstance(r, dict)), ctx)
 
     def add(row):
         if not isinstance(row, dict):
