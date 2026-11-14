@@ -160,6 +160,33 @@ class CaseFileTests(SimpleTestCase):
         self.assertEqual(seeds.VISIBLE_TO["calendar_one_account"], frozenset({"a", "c"}))
 
 
+class WhatTheRunIsDeclaredTests(SimpleTestCase):
+    """The behaviour runner applies NO tier or reach gate (only a case's own `agent_tool_level`, which none of
+    these sets), so a case on the `parity` arm is declared the calendar tools whatever tier the sequence viewer
+    has. Without this the positives could fail on a gate, not on the model."""
+
+    CALENDAR = {
+        "list_calendars",
+        "list_calendar_events",
+        "get_calendar_event",
+        "create_calendar_event",
+        "update_calendar_event",
+        "delete_calendar_event",
+    }
+
+    def test_no_case_sets_an_agency_level(self):
+        for c in cases():
+            self.assertNotIn("agent_tool_level", c.raw, c.id)
+
+    def test_the_arm_is_declared_every_calendar_tool_and_arm0_is_not_the_new_one(self):
+        with mock.patch.dict(settings.SEARCH_ENGINE, {FLAG: True}):
+            on = {d.name for d in controller._build_tool_declarations(None)}
+        with mock.patch.dict(settings.SEARCH_ENGINE, {FLAG: False}):
+            off = {d.name for d in controller._build_tool_declarations(None)}
+        self.assertLessEqual(self.CALENDAR, on)
+        self.assertEqual(self.CALENDAR - off, {"get_calendar_event"})
+
+
 def _stream(*, answer: str, proposed: tuple[str, ...] = (), used: tuple[str, ...] = ()):
     events = [{"type": "tool_call_start", "tool_name": name, "step": 0} for name in used]
     events += [

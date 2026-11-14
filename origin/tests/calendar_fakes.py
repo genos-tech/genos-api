@@ -116,7 +116,14 @@ class FakeGoogle:
         )
         self.calls.append(call)
         if token in self.failing:
-            return response({}, self.failing[token])
+            # Google quotes the request back in an error body, and the response knows its url: both carry
+            # the calendar id, which is usually an address (MIP-622). Nothing may log either.
+            failure = response(
+                {"error": {"status": "BACKEND_ERROR", "message": f"Not found: {unquote(url)}"}},
+                self.failing[token],
+            )
+            failure.url = url
+            return failure
         if path == "/users/me/calendarList":
             return response({"items": self.calendars.get(token, [])})
         parts = path.strip("/").split("/")

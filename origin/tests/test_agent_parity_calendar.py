@@ -220,6 +220,25 @@ class AccountGuardTests(CalendarBase):
         self.assertEqual(str(raised.exception), ACCOUNT_REFUSAL)
         self.assertEqual(self.google.calls, [])
 
+    def test_a_failing_google_logs_the_status_and_never_the_calendar_or_the_body(self):
+        # The calendar is an address; the fake's error body and url quote it back, as Google's do.
+        self.google.failing[token_for(self.home)] = 500
+        address = "me@home.example"
+        with self.assertLogs("origin.search_engine.agent.calendar", level="WARNING") as logged:
+            with self.assertRaisesRegex(ToolError, "HTTP 500"):
+                LIST_CALENDAR_EVENTS.run(
+                    {"account": str(self.home.id), "calendar_id": address}, self.ctx
+                )
+        text = " ".join(logged.output)
+        self.assertIn("status=500", text)
+        for leak in (address, "me%40home.example", "Not found"):
+            self.assertNotIn(leak, text)
+        # list_calendars reports a failing account by its id and a status, never its address.
+        self.google.add_calendar(self.work, "me@work.example", primary=True)
+        listed = LIST_CALENDARS.run({}, self.ctx)
+        self.assertEqual([f["account_id"] for f in listed["failed_accounts"]], [str(self.home.id)])
+        self.assertNotIn(address, str(listed["failed_accounts"]))
+
     def test_no_account_value_ever_reaches_a_url_or_a_log_line(self):
         with self.assertNoLogs(level="WARNING"):
             with self.assertRaises(ToolError):

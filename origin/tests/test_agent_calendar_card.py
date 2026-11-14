@@ -213,9 +213,11 @@ class WhatTheCardNeverDoesTests(CardBase):
     def test_a_failed_read_logs_no_address(self):
         self.google.failing[token_for(self.home)] = 500
         with self.assertLogs(calendar_card.log, level="WARNING") as logged:
-            self.card("update_calendar_event", args_for(self.home))
+            self.card("update_calendar_event", args_for(self.home, calendar_id="me@home.example"))
         text = " ".join(logged.output)
-        for address in ("me@home.example", "me@work.example", "dr@clinic.example"):
+        # The fake's error body and the response's url both quote the calendar id (an address).
+        self.assertIn("status=500", text)
+        for address in ("me@home.example", "me%40home.example", "me@work.example"):
             self.assertNotIn(address, text)
 
     def test_no_event_id_means_no_read(self):

@@ -1861,7 +1861,9 @@ def _calendar_event_source(
     s["event_id"] = str(event_id)
     s["event_start"] = row.get("start")
     s["event_end"] = row.get("end")
-    s["event_all_day"] = bool(row.get("all_day"))
+    # Unknown (a delete) is null, not false: the client folds a later copy of a source into the one it
+    # holds and ignores a blank, so a false here would erase an all-day event's true.
+    s["event_all_day"] = bool(row.get("all_day")) if "all_day" in row else None
     return s
 
 

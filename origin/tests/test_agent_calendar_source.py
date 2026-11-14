@@ -142,7 +142,7 @@ class ChipFromResultTests(SimpleTestCase):
         )
         self.assertEqual(chip["title"], "")
         self.assertIsNone(chip["event_start"])
-        self.assertFalse(chip["event_all_day"])
+        self.assertIsNone(chip["event_all_day"])  # unknown, not false: a client skips a blank
 
     def test_no_chip_without_a_resolved_account(self):
         # The flag off: results carry no `account_id`, so nothing changes for anyone, and a history run

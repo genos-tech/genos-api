@@ -151,6 +151,7 @@ NO_SINGLE_ITEM = frozenset(
         "list_uncompleted_todos",
         "list_today_todos",
         "list_calendar_events",
+        "get_calendar_event",  # MIP-1059, offered only while `AGENT_PARITY_TOOLS` is on
         "list_calendars",
         "get_my_blockers",
         "list_my_inbox",
