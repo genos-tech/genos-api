@@ -247,9 +247,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except MilestoneMaster.DoesNotExist:
             raise ToolError(f"Milestone {existing_id} not found.")
         if str(getattr(existing_milestone, "team_id", "") or "") != ctx.team_id:
-            raise ToolForbidden(
-                f"Milestone {existing_id} not found."
-            )  # as a missing one (MIP-1531)
+            # The words of a missing one (MIP-1531).
+            raise ToolForbidden(f"Milestone {existing_id} not found.")
         if existing_milestone.project_id != project_id:
             raise ToolError(
                 f"Milestone {existing_id} belongs to project "
