@@ -60,8 +60,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("create_todo_item", PARITY_FLAG, _todo_source.DESCRIPTION_ADDITION),
     # MIP-1563: a task's files, as metadata, in the result of the task read.
     ("fetch_task", PARITY_FLAG, _task_attachments.DESCRIPTION_ADDITION),
-    # MIP-1564: convert a root task to a milestone and back; move a milestone to another project.
-    ("manage_milestone", PARITY_FLAG, _milestone_convert.DESCRIPTION_ADDITION),
+    # MIP-1564 has no row here: `manage_milestone`'s sentence REPLACES the one that said a move is not
+    # supported (`REPLACEMENTS` below), so it sits where that one was.
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`

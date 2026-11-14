@@ -24,7 +24,6 @@ from django.conf import settings
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
-from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools import ToolContext, ToolError, ToolForbidden
@@ -295,7 +294,10 @@ class MilestoneToTaskToolTests(ToolBase):
         m = self.roadmap_milestone()
         out = self.to_task_tool(m)
         self.assertNotIn("milestone_id", out)
-        self.assertIn("converted to the task", out["__summary__"].replace("into the task", "converted to the task"))
+        self.assertIn(
+            "converted to the task",
+            out["__summary__"].replace("into the task", "converted to the task"),
+        )
 
     def test_an_already_converted_milestone_says_where_it_went(self):
         m = self.milestone("Once")
@@ -397,7 +399,9 @@ class MoveToolTests(ToolBase):
     def test_the_assignees_stay(self):
         m = self.roadmap_milestone()
         out = self.move_tool(m)
-        self.assertEqual(sorted(out["assignee_ids"]), sorted([str(self.alice.id), str(self.bob.id)]))
+        self.assertEqual(
+            sorted(out["assignee_ids"]), sorted([str(self.alice.id), str(self.bob.id)])
+        )
         self.assertEqual(
             MilestoneAssignees.objects.filter(milestone=m, team=self.dest.team).count(), 2
         )
@@ -409,9 +413,7 @@ class MoveToolTests(ToolBase):
         self.assertEqual((m.title, m.status, m.due_date), ("Launch v2", "WIP", date(2026, 12, 24)))
         self.assertEqual(m.project_id, self.dest.project_id)
         self.assertEqual(out["changed_fields"][0], "project")
-        self.assertEqual(
-            set(out["changed_fields"]) - {"project"}, {"title", "status", "due_date"}
-        )
+        self.assertEqual(set(out["changed_fields"]) - {"project"}, {"title", "status", "due_date"})
         self.assertIn("also changed", out["__summary__"])
 
     def test_people_are_judged_as_the_patch_judges_them_a_team_member_or_a_project_member(self):
@@ -423,7 +425,9 @@ class MoveToolTests(ToolBase):
         m.refresh_from_db()
         self.assertEqual(m.project_id, self.project.project_id)
         out = self.move_tool(m, assignee_ids=[str(self.alice.id), str(self.bob.id)])
-        self.assertEqual(sorted(out["assignee_ids"]), sorted([str(self.alice.id), str(self.bob.id)]))
+        self.assertEqual(
+            sorted(out["assignee_ids"]), sorted([str(self.alice.id), str(self.bob.id)])
+        )
         self.assertEqual(out["project_id"], self.dest.project_id)
 
     def test_a_sprint_a_folder_or_tags_in_the_same_call_are_refused_and_nothing_moves(self):
@@ -439,7 +443,9 @@ class MoveToolTests(ToolBase):
             with self.subTest(extra=extra):
                 with self.assertRaises(ToolError) as caught:
                     self.move_tool(m, title="Changed", **extra)
-                self.assertIn("can't be set in the same call as a project move", str(caught.exception))
+                self.assertIn(
+                    "can't be set in the same call as a project move", str(caught.exception)
+                )
                 self.assertIn("a second `update` in Destination", str(caught.exception))
                 m.refresh_from_db()
                 self.assertEqual(m.project_id, self.project.project_id)
@@ -483,13 +489,9 @@ class MoveToolTests(ToolBase):
         with self.assertRaisesRegex(ToolError, "not found"):
             self.move_tool(m)
         with self.assertRaisesRegex(ToolError, "not found"):
-            self.call(
-                {"action": "update", "milestone_id": m.milestone_id, "project_id": 987654}
-            )
+            self.call({"action": "update", "milestone_id": m.milestone_id, "project_id": 987654})
         with self.assertRaisesRegex(ToolError, "must be an integer"):
-            self.call(
-                {"action": "update", "milestone_id": m.milestone_id, "project_id": "abc"}
-            )
+            self.call({"action": "update", "milestone_id": m.milestone_id, "project_id": "abc"})
         self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
 
     def test_a_milestone_of_a_project_the_caller_is_not_on_is_not_found(self):
@@ -513,3 +515,429 @@ class MoveToolTests(ToolBase):
         self.assertEqual(out["project_id"], self.project.project_id)
         self.assertTrue(out["display_id"].startswith("CNV-"))
         self.assertIsNone(out["sprint_id"])  # not back: the sprint was cleared by the first move
+
+
+# --------------------------------------------------------------------------------------------
+# the gate: off is what it was, word for word; on publishes what this task adds
+# --------------------------------------------------------------------------------------------
+
+FLAG_OFF_ACTION_REFUSAL = (
+    "`action` must be one of ['create', 'update', 'create_folder', 'rename_folder', "
+    "'delete_folder'] (got 'convert')."
+)
+FLAG_OFF_MOVE_REFUSAL = (
+    "A milestone can't be moved to another project with this tool, and `project_id` isn't an "
+    "argument of `update`. Nothing was changed."
+)
+FLAG_OFF_TASK_ID_REFUSAL = (
+    "`task_id` does not apply to `update`; it takes `assignee_ids`, `description_markdown`, "
+    "`due_date`, `effort_level`, `milestone_folder_id`, `milestone_id`, `priority`, `sprint_id`, "
+    "`start_date`, `status`, `tags`, `title`. Nothing was changed."
+)
+
+
+def declared(**flags):
+    from origin.search_engine.agent.controller import _build_tool_declarations  # noqa: PLC0415
+
+    with mock.patch.dict(settings.SEARCH_ENGINE, flags):
+        return {d.name: d for d in _build_tool_declarations()}
+
+
+class GateOffTests(ToolBase):
+    """With the flag off the tool does what it did before this task, and says it in the same words."""
+
+    flag = False
+
+    def test_convert_is_no_action_at_all(self):
+        t = self.task("T")
+        with self.assertRaises(ToolError) as caught:
+            self.call({"action": "convert", "task_id": t.task_id})
+        self.assertEqual(str(caught.exception), FLAG_OFF_ACTION_REFUSAL)
+        self.assertFalse(self.fresh(t).is_milestone)
+
+    def test_a_project_id_on_update_is_refused_as_it_always_was(self):
+        m = self.milestone("Stay")
+        with self.assertRaises(ToolError) as caught:
+            self.move_tool(m)
+        self.assertEqual(str(caught.exception), FLAG_OFF_MOVE_REFUSAL)
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
+
+    def test_a_task_id_on_update_is_an_argument_that_does_not_apply(self):
+        m = self.milestone("Stay")
+        with self.assertRaises(ToolError) as caught:
+            self.call({"action": "update", "milestone_id": m.milestone_id, "task_id": 5})
+        self.assertEqual(str(caught.exception), FLAG_OFF_TASK_ID_REFUSAL)
+
+    def test_a_task_id_that_names_nothing_is_still_the_same_refusal_not_a_lookup(self):
+        # With the flag off the catalog does not resolve `task_id`, so a value that names no task
+        # does not turn into "No task X in this team".
+        from origin.views.public.mcp import tools as mcp  # noqa: PLC0415
+
+        tool = next(t for t in mcp.CATALOG if t.name == "manage_milestone")
+        args = mcp.resolve_references(tool, {"task_id": "NOPE-9"}, str(self.team.team_id))
+        self.assertEqual(args, {"task_id": "NOPE-9"})
+
+    def test_the_other_actions_are_unchanged(self):
+        out = self.call(
+            {"action": "create", "project_id": self.project.project_id, "title": "Plain create"}
+        )
+        self.assertEqual(out["action"], "create")
+        m = MilestoneMaster.objects.get(milestone_id=out["milestone_id"])
+        out = self.call({"action": "update", "milestone_id": m.milestone_id, "title": "Renamed"})
+        self.assertEqual(out["changed_fields"], ["title"])
+
+    def test_the_declaration_is_the_registrys_own_text_and_schema(self):
+        from origin.search_engine.agent.tools import REGISTRY  # noqa: PLC0415
+
+        tool = REGISTRY["manage_milestone"]
+        off = declared(**OFF)["manage_milestone"]
+        self.assertEqual(off.description, tool.description)
+        props = off.parameters_schema["properties"]
+        self.assertEqual(props["action"]["enum"], list(ACTIONS))
+        self.assertNotIn("task_id", props)
+        self.assertEqual(
+            props["project_id"]["description"],
+            "Project (from list_projects). For create and create_folder.",
+        )
+        self.assertIn("Moving a milestone to another project is not supported.", off.description)
+
+    def test_the_registry_itself_never_carries_the_flags_additions(self):
+        from origin.search_engine.agent.tools import REGISTRY  # noqa: PLC0415
+
+        with mock.patch.dict(settings.SEARCH_ENGINE, ON):
+            from origin.search_engine.agent import tool_flag_params  # noqa: PLC0415
+
+            tool_flag_params.with_flagged_params(
+                "manage_milestone", REGISTRY["manage_milestone"].parameters_schema
+            )
+        schema = REGISTRY["manage_milestone"].parameters_schema
+        self.assertEqual(schema["properties"]["action"]["enum"], list(ACTIONS))
+        self.assertNotIn("task_id", schema["properties"])
+        self.assertEqual(
+            schema["properties"]["project_id"]["description"],
+            "Project (from list_projects). For create and create_folder.",
+        )
+
+    def test_over_mcp_the_catalog_is_what_it_was(self):
+        from origin.views.public.mcp import tools as mcp  # noqa: PLC0415
+
+        tool = next(t for t in mcp.CATALOG if t.name == "manage_milestone")
+        schema = mcp.input_schema(tool)
+        self.assertEqual(schema["properties"]["action"]["enum"], list(ACTIONS))
+        self.assertNotIn("task_id", schema["properties"])
+        text = mcp.description_for(tool)
+        self.assertEqual(text, mcp._replaced(tool))
+        self.assertIn("A milestone can't be moved to another project", text)
+        self.assertNotIn("convert", text)
+
+
+class GateOnTests(ToolBase):
+    def test_the_declaration_publishes_the_action_the_parameter_and_one_sentence(self):
+        from origin.search_engine.agent.tools import REGISTRY  # noqa: PLC0415
+        from origin.search_engine.agent.tools import milestone_convert as texts  # noqa: PLC0415
+
+        base = REGISTRY["manage_milestone"].description
+        on = declared(**ON)["manage_milestone"]
+        props = on.parameters_schema["properties"]
+        self.assertEqual(props["action"]["enum"], list(ACTIONS_ON))
+        self.assertEqual(props["action"]["enum"][-1], "convert")
+        self.assertEqual(props["task_id"]["type"], "STRING")
+        self.assertIn("ROOT task", props["task_id"]["description"])
+        self.assertEqual(
+            props["project_id"]["description"], texts.PARITY_DESCRIPTIONS["project_id"]
+        )
+        # the sentence that said a move is not supported is gone, and what replaces it sits where it was
+        self.assertIn(texts.MOVE_SENTENCE, base)
+        self.assertNotIn("not supported", on.description)
+        self.assertEqual(on.description, base.replace(texts.MOVE_SENTENCE, texts.MOVE_SENTENCE_ON))
+        self.assertEqual(on.description.count(texts.GUIDANCE), 1)
+        self.assertLess(
+            on.description.index(texts.GUIDANCE), on.description.index("Deleting a milestone")
+        )
+        # every property it had is kept
+        off_props = declared(**OFF)["manage_milestone"].parameters_schema["properties"]
+        for name, prop in off_props.items():
+            if name not in ("action", "project_id"):
+                self.assertEqual(props[name], prop, name)
+        self.assertEqual(
+            declared(**ON)["manage_milestone"].parameters_schema["required"], ["action"]
+        )
+
+    def test_the_additions_are_terse(self):
+        off, on = declared(**OFF)["manage_milestone"], declared(**ON)["manage_milestone"]
+        grown = len(on.description) + len(str(on.parameters_schema)) - len(off.description)
+        grown -= len(str(off.parameters_schema))
+        self.assertLess(grown, 1000)
+
+    def test_over_mcp_the_catalog_says_the_same(self):
+        from origin.views.public.mcp import tools as mcp  # noqa: PLC0415
+
+        tool = next(t for t in mcp.CATALOG if t.name == "manage_milestone")
+        schema = mcp.input_schema(tool)
+        self.assertEqual(schema["properties"]["action"]["enum"][-1], "convert")
+        self.assertEqual(schema["properties"]["task_id"]["type"], "string")
+        text = mcp.description_for(tool)
+        self.assertNotIn("A milestone can't be moved", text)
+        self.assertNotIn("not supported", text)
+        self.assertIn("A milestone's status can't be 'Deleted': use `delete_milestone`.", text)
+        self.assertEqual(text.count("'convert'"), 1)
+        self.assertEqual(text.count("MOVES the milestone"), 1)
+        # in the catalog's own place, before "Everything is checked ..."
+        self.assertLess(text.index("'convert'"), text.index("Everything is checked"))
+
+    def test_the_milestone_id_argument_keeps_its_hint_in_both_dialects(self):
+        # `milestone_id` is also a reference (the milestone's display id): untouched by the flag.
+        on = declared(**ON)["manage_milestone"].parameters_schema["properties"]["milestone_id"]
+        off = declared(**OFF)["manage_milestone"].parameters_schema["properties"]["milestone_id"]
+        self.assertEqual(on, off)
+
+
+# --------------------------------------------------------------------------------------------
+# the approval card's facts
+# --------------------------------------------------------------------------------------------
+
+
+class CardTests(ToolBase):
+    def card(self, args, ctx=None):
+        from origin.search_engine.agent import controller  # noqa: PLC0415
+
+        return controller._friendly_arguments(args, "manage_milestone", ctx=ctx or self.ctx())
+
+    def test_a_task_to_milestone_card_names_the_task_its_sub_tasks_and_assignee(self):
+        t = self.task("Plan the launch")
+        c1 = self.task("A", parent_task_id=t.task_id, root_task_id=t.task_id)
+        self.task("B", parent_task_id=c1.task_id, root_task_id=t.task_id)
+        out = self.card({"action": "convert", "task_id": t.task_id})
+        self.assertEqual(out["task_id"], t.display_id)
+        self.assertEqual(
+            out["current"],
+            {
+                "direction": "task_to_milestone",
+                "title": "Plan the launch",
+                "display_id": t.display_id,
+                "sub_tasks": 2,
+                "assignee": "alice",
+            },
+        )
+
+    def test_a_milestone_to_task_card_says_what_stays_and_what_is_dropped(self):
+        m = self.roadmap_milestone()
+        out = self.card({"action": "convert", "milestone_id": m.milestone_id})
+        self.assertEqual(
+            out["current"],
+            {
+                "direction": "milestone_to_task",
+                "title": "Launch",
+                "display_id": m.task.display_id,
+                "tasks": 3,
+                "assignee": "alice",
+                "collaborators": ["bob"],
+                "folder": "Roadmap",
+                "sprint": "S1",
+            },
+        )
+
+    def test_the_task_count_is_the_live_ones(self):
+        m = self.roadmap_milestone()
+        TaskMaster.objects.filter(title="Second").update(is_deleted=True, status="Deleted")
+        out = self.card({"action": "convert", "milestone_id": m.milestone_id})
+        self.assertEqual(out["current"]["tasks"], 2)
+
+    def test_a_milestone_with_nobody_on_it_has_no_assignee_and_no_collaborators(self):
+        m = self.milestone("Empty")
+        cur = self.card({"action": "convert", "milestone_id": m.milestone_id})["current"]
+        self.assertEqual(
+            (cur["assignee"], cur["collaborators"], cur["folder"], cur["sprint"]),
+            (None, [], None, None),
+        )
+
+    def test_a_move_card_names_the_project_it_leaves_the_tasks_that_go_and_what_is_cleared(self):
+        tag = [{"tagName": "Feature"}]
+        m = self.roadmap_milestone(tags=tag)
+        out = self.card(
+            {"action": "update", "milestone_id": m.milestone_id, "project_id": self.dest.project_id}
+        )
+        self.assertEqual(out["project_id"], "Destination")
+        self.assertEqual(out["current"]["project_id"], "Conv")
+        self.assertEqual(
+            out["current"]["move"],
+            {"tasks": 3, "sprint": "S1", "folder": "Roadmap", "tags": ["Feature"]},
+        )
+
+    def test_no_move_facts_when_the_project_is_the_same_or_the_flag_is_off_or_no_project(self):
+        m = self.roadmap_milestone()
+        same = self.card(
+            {
+                "action": "update",
+                "milestone_id": m.milestone_id,
+                "project_id": self.project.project_id,
+                "title": "X",
+            }
+        )
+        self.assertNotIn("move", same["current"])
+        plain = self.card({"action": "update", "milestone_id": m.milestone_id, "title": "X"})
+        self.assertNotIn("move", plain["current"])
+        with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
+            off = self.card(
+                {
+                    "action": "update",
+                    "milestone_id": m.milestone_id,
+                    "project_id": self.dest.project_id,
+                    "title": "X",
+                }
+            )
+        self.assertNotIn("move", off["current"])
+        self.assertNotIn("project_id", off["current"])
+
+    def test_a_destination_the_person_is_not_on_shows_no_move_facts(self):
+        m = self.roadmap_milestone()
+        hidden = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Hidden",
+            code="HID",
+            owner=self.bob,
+            project_system_user=self.bob,
+        )
+        out = self.card(
+            {"action": "update", "milestone_id": m.milestone_id, "project_id": hidden.project_id}
+        )
+        self.assertNotIn("move", out.get("current", {}))
+        self.assertEqual(out["project_id"], hidden.project_id)  # raw: the name is not for them
+
+    def test_an_item_the_person_cannot_read_shows_nothing(self):
+        # a task and a milestone of a project bob is not on, shown to bob
+        hidden = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Hidden",
+            code="HID",
+            owner=self.owner,
+            project_system_user=self.owner,
+        )
+        t = self.task("Theirs", project=hidden, assignee=self.owner)
+        bob = self.ctx(self.bob)
+        self.assertNotIn("current", self.card({"action": "convert", "task_id": t.task_id}, ctx=bob))
+        from origin.services.milestone_service import create_milestone  # noqa: PLC0415
+
+        m = create_milestone(hidden, reporter_id=self.owner.id, title="Theirs too")
+        self.assertNotIn(
+            "current", self.card({"action": "convert", "milestone_id": m.milestone_id}, ctx=bob)
+        )
+
+    def test_both_ids_or_neither_shows_nothing_and_does_not_break_the_card(self):
+        t = self.task("T")
+        m = self.milestone("M")
+        for args in (
+            {"action": "convert"},
+            {"action": "convert", "task_id": t.task_id, "milestone_id": m.milestone_id},
+            {"action": "convert", "task_id": "x", "milestone_id": ""},
+            {"action": "convert", "task_id": True},
+        ):
+            with self.subTest(args=args):
+                self.assertNotIn("current", self.card(args))
+
+    def test_the_card_changes_no_row(self):
+        m = self.roadmap_milestone()
+        before = list(
+            TaskMaster.objects.order_by("pk").values_list("pk", "ts_updated_at", "project_id")
+        )
+        self.card({"action": "convert", "milestone_id": m.milestone_id})
+        self.card(
+            {"action": "update", "milestone_id": m.milestone_id, "project_id": self.dest.project_id}
+        )
+        after = list(
+            TaskMaster.objects.order_by("pk").values_list("pk", "ts_updated_at", "project_id")
+        )
+        self.assertEqual(before, after)
+
+
+class ChipsTests(ToolBase):
+    def sources(self, result):
+        from origin.search_engine.agent import controller  # noqa: PLC0415
+
+        return controller._ui_sources_from_tool_result("manage_milestone", dict(result))
+
+    def test_a_milestone_turned_into_a_task_chips_the_task_not_a_dead_milestone(self):
+        m = self.roadmap_milestone()
+        out = self.to_task_tool(m)
+        (src,) = self.sources(out)
+        self.assertEqual(src["entity_type"], "task")
+        self.assertEqual(src["entity_id"], f"task:{out['task_id']}")
+
+    def test_a_task_turned_into_a_milestone_and_a_moved_milestone_chip_the_milestone(self):
+        t = self.task("T")
+        out = self.to_milestone_tool(t)
+        (src,) = self.sources(out)
+        self.assertEqual(src["entity_type"], "milestone")
+        self.assertEqual(src["entity_id"], f"milestone:{out['milestone_id']}")
+        moved = self.move_tool(MilestoneMaster.objects.get(milestone_id=out["milestone_id"]))
+        (src,) = self.sources(moved)
+        self.assertEqual(
+            (src["entity_type"], src["entity_id"]),
+            ("milestone", f"milestone:{out['milestone_id']}"),
+        )
+
+
+# --------------------------------------------------------------------------------------------
+# the undo map, the notices, the use markers
+# --------------------------------------------------------------------------------------------
+
+
+class UndoTests(ToolBase):
+    def test_the_tool_is_not_undoable_and_says_why_for_every_action(self):
+        from origin.search_engine.agent import undo  # noqa: PLC0415
+
+        self.assertEqual(undo.UNDO_SUPPORT["manage_milestone"], undo.NONE)
+        code, line = undo.UNDO_REASONS["manage_milestone"]
+        self.assertEqual(code, undo.NO_SNAPSHOT)
+        self.assertIn("convert drops its folder and sprint", line)
+        self.assertIn("move to another project clears", line)
+
+    def test_a_proposal_for_a_convert_or_a_move_is_not_undoable(self):
+        from origin.search_engine.agent import undo  # noqa: PLC0415
+
+        for args in (
+            {"action": "convert", "task_id": 1},
+            {"action": "convert", "milestone_id": 1},
+            {"action": "update", "milestone_id": 1, "project_id": 2},
+        ):
+            proposal = undo.proposal("manage_milestone", args)
+            self.assertFalse(proposal.undoable, args)
+            self.assertEqual(proposal.reason, undo.NO_SNAPSHOT)
+
+
+class NoticeAndMarkerTests(ToolBase):
+    def test_a_convert_or_a_move_sends_no_ai_app_notice(self):
+        # MIP-1432 keeps small edits silent; a convert and a move are edits (decision for the
+        # maintainer: no new verb, no new switch).
+        from origin.services import mcp_notice  # noqa: PLC0415
+
+        t = self.task("T")
+        for args, payload in (
+            ({"action": "convert", "task_id": t.task_id}, self.to_milestone_tool(t)),
+            (
+                {"action": "update", "milestone_id": 1, "project_id": self.dest.project_id},
+                self.move_tool(self.milestone("M")),
+            ),
+        ):
+            self.assertIsNone(mcp_notice.build_notice("manage_milestone", args, payload))
+
+    def test_the_use_marker_names_the_converted_task_or_milestone(self):
+        from origin.services import member_events  # noqa: PLC0415
+
+        self.assertEqual(
+            member_events.subjects("manage_milestone", {"action": "convert", "task_id": 7}),
+            [("task", "7")],
+        )
+        self.assertEqual(
+            member_events.subjects("manage_milestone", {"action": "convert", "milestone_id": 9}),
+            [("milestone", "9")],
+        )
+        self.assertEqual(
+            member_events.subjects(
+                "manage_milestone", {"action": "update", "milestone_id": 9, "project_id": 2}
+            ),
+            [("milestone", "9")],
+        )
+        self.assertEqual(
+            member_events.subjects("manage_milestone", {"action": "create", "project_id": 2}), []
+        )

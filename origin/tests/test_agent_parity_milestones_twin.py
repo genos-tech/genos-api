@@ -158,7 +158,9 @@ class TwinBase(ToolBase):
                 "sprint": t.sprint.name if t.sprint_id else None,
                 "assignee": t.assignee.username if t.assignee_id else None,
                 "collaborators": sorted(c.username for c in t.collaborators.all()),
-                "parent": role(by_id[t.parent_task_id].title) if t.parent_task_id in by_id else None,
+                "parent": role(by_id[t.parent_task_id].title)
+                if t.parent_task_id in by_id
+                else None,
                 "root": role(by_id[t.root_task_id].title) if t.root_task_id in by_id else None,
                 "tags": t.tags,
                 "status": t.status,
@@ -208,7 +210,9 @@ class TwinBase(ToolBase):
         }
         started = {name: p.start() for name, p in patches.items()}
         before_history = set(
-            TaskActivity.objects.filter(task__title__endswith=f" {tag}").values_list("pk", flat=True)
+            TaskActivity.objects.filter(task__title__endswith=f" {tag}").values_list(
+                "pk", flat=True
+            )
         )
         try:
             change_feed.reset_pending()
@@ -461,7 +465,9 @@ class RoleMatrixTests(TwinBase):
     project of another team) is its own test and is asserted."""
 
     def person(self, name, *, team=True, project=None):
-        user = User.objects.create_user(username=name, email=f"{name}@test.com", password="pw123456")
+        user = User.objects.create_user(
+            username=name, email=f"{name}@test.com", password="pw123456"
+        )
         if team:
             TeamMembers.objects.create(team=self.team, attendee=user)
         if project is not None:
@@ -487,8 +493,20 @@ class RoleMatrixTests(TwinBase):
         return [
             ("project member", member, self.team, {}, True),
             ("project owner", self.owner, self.team, {}, True),
-            ("assignee who is not on the project", assignee, self.team, {"assignee": assignee}, False),
-            ("reporter who is not on the project", reporter, self.team, {"reporter": reporter}, False),
+            (
+                "assignee who is not on the project",
+                assignee,
+                self.team,
+                {"assignee": assignee},
+                False,
+            ),
+            (
+                "reporter who is not on the project",
+                reporter,
+                self.team,
+                {"reporter": reporter},
+                False,
+            ),
             ("team member on no project", bystander, self.team, {}, False),
             ("a member who was removed", removed, self.team, {}, False),
             ("a user of another team", outsider, other_team, {}, False),
@@ -594,9 +612,7 @@ class RoleMatrixTests(TwinBase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], "task_deleted")
         with self.assertRaisesRegex(ToolError, "has been deleted"):
-            self.tool_as(
-                self.owner, self.team, {"action": "convert", "task_id": gone_tool.task_id}
-            )
+            self.tool_as(self.owner, self.team, {"action": "convert", "task_id": gone_tool.task_id})
         for row in (gone_rest, gone_tool):
             self.assertFalse(self.fresh(row).is_milestone)
 

@@ -10,8 +10,8 @@ Two things the app's milestone page does that the agent and MCP could not:
 * MOVE a milestone to another project (`update` with `project_id`), through the PATCH's own code
   (`services/milestone_manage.update_milestone(project_move=...)`).
 
-This module holds only the TEXT: what the declaration says (the parameters, the one added sentence,
-the two replaced ones) and the sentence a model reads for each refusal code of the conversion service.
+This module holds only the TEXT: what the declaration says (the parameters, the sentence that takes the
+place of "moving is not supported") and the sentence a model reads for each refusal code of the conversion service.
 The tool, `manage_milestone`, applies them only while the flag is on (`parity.parity_on`); with it off
 the declaration is its own text, byte for byte, and `convert` / `task_id` / a `project_id` on update
 are refused with the words they always were.
@@ -49,9 +49,12 @@ PARITY_DESCRIPTIONS: dict[str, str] = {
     ),
 }
 
-#: Added to the description while the flag is on (`tool_flag_text`), in-app and over MCP.
-DESCRIPTION_ADDITION = (
-    " 'convert' (exactly one of `task_id`, `milestone_id`) turns a ROOT task (no parent, not in a "
+#: What the description says about the two while the flag is on. It takes the place of the sentence that
+#: said a move is not supported (`MOVE_SENTENCE`), so it sits where a model already looks for what a
+#: milestone call cannot do, in-app and over MCP (`tool_flag_text.REPLACEMENTS` / `MCP_REPLACEMENTS`),
+#: and nothing contradicts it.
+GUIDANCE = (
+    "'convert' (exactly one of `task_id`, `milestone_id`) turns a ROOT task (no parent, not in a "
     "milestone) into a milestone, or a milestone into a task, on the SAME row: display id, body, "
     "comments and history stay; a milestone's tasks stay under it as sub-tasks; its first assignee "
     "becomes the task's assignee and the others collaborators; its folder and sprint are dropped. "
@@ -60,17 +63,18 @@ DESCRIPTION_ADDITION = (
     "sprint, folder and tags are cleared. Neither can be undone."
 )
 
-#: The base sentence the flag stops the description from saying, and what replaces it (the app's
-#: wording, `tool_flag_text.REPLACEMENTS`): an appended sentence would sit after "not supported"
-#: and the model would keep obeying the first.
+#: The base sentence the flag stops the description from saying, and what replaces it. A test holds
+#: `MOVE_SENTENCE` to the registry's description, so an edit to it cannot turn the swap into a no-op.
 MOVE_SENTENCE = "Moving a milestone to another project is not supported. "
-MOVE_SENTENCE_ON = ""
+MOVE_SENTENCE_ON = GUIDANCE + " "
 #: The same, in the MCP catalog's wording (`tool_flag_text.MCP_REPLACEMENTS`).
 MCP_MOVE_SENTENCE = (
     "A milestone can't be moved to another project, and its status can't be 'Deleted': use "
     "`delete_milestone`."
 )
-MCP_MOVE_SENTENCE_ON = "A milestone's status can't be 'Deleted': use `delete_milestone`."
+MCP_MOVE_SENTENCE_ON = (
+    GUIDANCE + " A milestone's status can't be 'Deleted': use `delete_milestone`."
+)
 
 # --------------------------------------------------------------------------------------------- #
 # The refusals                                                                                   #
