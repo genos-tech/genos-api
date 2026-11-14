@@ -12,7 +12,8 @@ fails when a new place appears that is not listed, so the question is asked of e
 
   * the Genos digest (item type 6, `agent_digest`): AI. Source: the member's `digest_enabled`;
   * a scheduled report (item type 10, `schedule_delivery`): AI only when its job says
-    `uses_ai` (none of the built-in jobs does today; a job that will must also report the
+    `uses_ai` (of the built-in jobs only "What to do today", the Morning plan, does, and only while
+    its `ai_sentences` parameter is not false; a job that uses AI must also report the
     request that paid for it). Source: that schedule, AI or not (MIP-1234);
   * everything else (requests to join or approve, ownership claims, project and cross-team
     notices, to-do and message reminders): no AI, nothing to attach.
@@ -49,9 +50,9 @@ the member's own items work. `turn_off` pauses/disables it and says what it did 
 **Every digest and every scheduled report has a switch, AI or not (MIP-1234).** The source comes
 from the item's TYPE: a digest (6) is the member's digest, a report (10) is the schedule its own
 `item_optionals["schedule_id"]` names (a UUID, looked up for the caller only). A report whose job
-used no AI, like all four built-in jobs today, is switched off the same way, so a member can stop
-"Morning plan" from the item itself. The `ai` block decides nothing about WHICH source it is, so
-a forged block on an item of another type switches nothing; it only says whether AI was used:
+used no AI (the Evening recap, and the Morning plan with its AI sentences off) is switched off the
+same way, so a member can stop a report from the item itself. The `ai` block decides nothing
+about WHICH source it is, so a forged block on an item of another type switches nothing; it only says whether AI was used:
 `Source.used_ai` is what the card reads to say "No AI used" (false) or show the cost (true).
 """
 
