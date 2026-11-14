@@ -1,0 +1,112 @@
+# MIP-1562 (flag AGENT_PARITY_TOOLS, arm `parity`): a reaction on a task comment, as the comment bubble's
+# emoji row does. `fetch_task` already shows each comment's id and author; nothing reacted. Judged on what
+# the model PROPOSES (`pending_write.args_*`, group/content_checks.py). The positives `requires_arm: parity`
+# (the parameters are not declared without it); the negatives run on arm0 too, as the baseline for "fixing
+# my own comment, or replying to someone's, does not become a reaction".
+#
+# Fixture: the sequence scenario (group/sequence.py), seeded by `agent_eval_setup --scenario sequence`. The
+# task "Fix the export that fails (Y)" has three comments: Chris's progress (step 7), Ben's reply (step 8,
+# "Thanks, please also check the CSV export") and Chris's "Fixed and shipped, Y is solved" (step 10). The
+# viewer is Ben (b / ja-b), so Chris's comments are a colleague's and the reply is his own.
+
+- id: t1562.reaction-add.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: react with an emoji to a colleague's comment through update_comment.reaction."
+  query: 'On the task "Fix the export that fails (Y)", give a 👍 reaction to Chris''s comment "Fixed and shipped, Y is solved".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_present: [reaction]
+      args_match:
+        reaction: "👍"
+      args_absent: [body_text, flag]
+
+- id: t1562.reaction-add.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: react with an emoji to a colleague's comment through update_comment.reaction."
+  query: 'タスク「Fix the export that fails (Y)」のクリスのコメント「修正してリリースしました。Yは解決済みです」に 👍 でリアクションしてください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_present: [reaction]
+      args_match:
+        reaction: "👍"
+      args_absent: [body_text, flag]
+
+- id: t1562.reaction-remove.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: take a reaction back through update_comment.reaction + remove_reaction."
+  query: 'I reacted with 🎉 to Chris''s comment "Progress: reproduced Y, the cause is a missing permission" on the task "Fix the export that fails (Y)" by mistake. Take my reaction back.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        reaction: "🎉"
+        remove_reaction: "^true$"
+      args_absent: [body_text, flag]
+
+- id: t1562.reaction-remove.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: take a reaction back through update_comment.reaction + remove_reaction."
+  query: 'タスク「Fix the export that fails (Y)」のクリスのコメント「進捗: Yを再現しました。原因は権限の不足です」に間違えて 🎉 でリアクションしてしまいました。そのリアクションを取り消してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        reaction: "🎉"
+        remove_reaction: "^true$"
+      args_absent: [body_text, flag]
+
+- id: t1562.edit-own.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  note: "Negative (arm0 and parity): fixing the user's OWN comment stays an edit (body_text), not a reaction or a flag."
+  query: 'On the task "Fix the export that fails (Y)", change my comment "Thanks, please also check the CSV export" to "Thanks, please also check the CSV export and the PDF export".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_present: [body_text]
+      args_absent: [reaction, remove_reaction, flag]
+
+- id: t1562.edit-own.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  note: "Negative (arm0 and parity): fixing the user's OWN comment stays an edit (body_text), not a reaction or a flag."
+  query: 'タスク「Fix the export that fails (Y)」の私のコメント「ありがとうございます。CSVエクスポートも確認してください」を「ありがとうございます。CSVエクスポートとPDFエクスポートも確認してください」に直してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_present: [body_text]
+      args_absent: [reaction, remove_reaction, flag]

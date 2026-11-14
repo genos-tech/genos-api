@@ -65,6 +65,7 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
+from origin.models.task.task_models import TaskComments
 from origin.search_engine.agent import (
     approval_edits,
     approval_notes,
@@ -102,6 +103,7 @@ from origin.search_engine.agent.tools import (
     flagged_tool,
     flagged_tools,
 )
+from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.plan_task_bodies import (
     fill_plan_task_bodies_for_caller,
     new_task_body_for_caller,
@@ -916,6 +918,43 @@ def _friendly_create_todo_arguments(
         out["time_zone"] = zone_for_user_id(access.user_id).key
 
 
+def _friendly_update_comment_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """ADDS `comment` (who wrote it, and its first line) to a `reaction` or `flag` call (MIP-1562),
+    so the card says WHAT is being reacted to or flagged: unlike an edit, it is usually a colleague's
+    comment, and a bare comment number tells the approver nothing. Only for a comment on a task the
+    caller may read, and only while the parity flag publishes the two parameters."""
+    # A blank value is a model filling a slot (`update_comment` reads it as an edit), not a request.
+    if not parity_on() or (args.get("reaction") in (None, "") and args.get("flag") in (None, "")):
+        return
+    task = access.task(args.get("task_id"))
+    try:
+        comment_id = int(args.get("comment_id"))
+    except (TypeError, ValueError):
+        return
+    if task is None:
+        return
+    comment = TaskComments.objects.filter(
+        task=task.task_id, comment_id=comment_id, is_deleted=False
+    ).first()
+    if comment is None:
+        return
+    author = access.username(comment.sender_id) if comment.sender_id else None
+    first_line = next(
+        (
+            line.strip()
+            for line in blocks_to_markdown(comment.comment_body).splitlines()
+            if line.strip()
+        ),
+        "",
+    )
+    out["comment"] = {
+        "author": author,
+        "excerpt": first_line if len(first_line) <= 160 else first_line[:159].rstrip() + "…",
+    }
+
+
 def _friendly_delete_todo_arguments(
     out: dict[str, Any], args: dict[str, Any], access: LabelAccess
 ) -> None:
@@ -1142,6 +1181,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "delete_milestone": _friendly_delete_milestone_arguments,
     "update_todo_item": _friendly_update_todo_arguments,
     "create_todo_item": _friendly_create_todo_arguments,
+    "update_comment": _friendly_update_comment_arguments,
     # The note it stars, named; a folder takes the flat `folder_id` label.
     "favorite_note": _friendly_update_note_arguments,
     "delete_note": _friendly_update_note_arguments,

@@ -2079,8 +2079,11 @@ SEARCH_ENGINE["AGENT_UNDO_NOTE_IN_MEMORY"] = (
 # on tools they already have: `create_task` takes `status`, `template`, `links` and
 # `reporter_id` (and fills the project's default body template when it gets no body),
 # `update_task` takes `links` and `reporter_id`, and each `create_task_plan` task takes `status`
-# and `template`. The declarations grow by the parameters and one sentence per tool, on every
-# call (`origin/search_engine/agent/tool_flag_params.py`). OFF = the registry, the declarations
+# and `template`. MIP-1562 adds two tools to it: `update_comment` takes `reaction` (+ `remove_reaction`)
+# and `flag` (react to, or flag, mark done and unflag, ANY comment of a task the caller can open, as the
+# comment bubble does; `body_text` stops being required) and `create_todo_item` takes `task_id` and
+# `comment_id` (the to-do links back as the app's Add to To-Do does). The declarations grow by the
+# parameters and one sentence per tool, on every call (`origin/search_engine/agent/tool_flag_params.py`). OFF = the registry, the declarations
 # (in-app and MCP) and the tools' own behaviour are what they were: the parameters are not
 # declared, and a call that sends one anyway has it ignored. Rollback: `AGENT_PARITY_TOOLS=false`.
 # Flip criterion: the `parity` arm shows a plain "create a task" still sends none of them

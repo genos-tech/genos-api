@@ -26,6 +26,8 @@ from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
+from origin.search_engine.agent.tools import todo_source as _todo_source
+from origin.search_engine.agent.tools import update_comment as _update_comment
 from origin.search_engine.agent.tools import update_task as _update_task
 from origin.search_engine.agent.tools.base import Tool
 from origin.search_engine.agent.tools.fetch_note import DESCRIPTION_ADDITION as _NOTE_THREADS
@@ -51,11 +53,33 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("create_task", PARITY_FLAG, _create_task.DESCRIPTION_ADDITION),
     ("update_task", PARITY_FLAG, _update_task.DESCRIPTION_ADDITION),
     ("create_task_plan", PARITY_FLAG, _create_task_plan.DESCRIPTION_ADDITION),
+    # MIP-1562: reaction / flag on a comment, and a to-do that says where it came from.
+    ("update_comment", PARITY_FLAG, _update_comment.DESCRIPTION_ADDITION),
+    ("create_todo_item", PARITY_FLAG, _todo_source.DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`
 REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
     ("create_task", PARITY_FLAG, _create_task.STATUS_SENTENCE, _create_task.STATUS_SENTENCE_ON),
+    (
+        "update_comment",
+        PARITY_FLAG,
+        _update_comment.REQUIRED_SENTENCE,
+        _update_comment.REQUIRED_SENTENCE_ON,
+    ),
+    ("update_comment", PARITY_FLAG, _update_comment.OWN_SENTENCE, _update_comment.OWN_SENTENCE_ON),
+)
+
+#: `REPLACEMENTS` for the MCP catalog, whose descriptions are worded for MCP: the same swap, for a
+#: sentence that says the tool only edits.
+MCP_REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
+    ("update_comment", PARITY_FLAG, _update_comment.MCP_OPENING, _update_comment.MCP_OPENING_ON),
+    (
+        "update_comment",
+        PARITY_FLAG,
+        _update_comment.MCP_OWN_SENTENCE,
+        _update_comment.MCP_OWN_SENTENCE_ON,
+    ),
 )
 
 
