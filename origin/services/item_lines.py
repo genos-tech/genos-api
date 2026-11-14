@@ -4,7 +4,9 @@ A LINE is one item's events from every source, in time order. One comment is a d
 comment, a reply in the linked chat thread, a note edit and a merged PR on the same task
 are a line that says what is going on. `related_lines` joins a line to the lines of the
 items around it: the parent task, the milestone, the dependency neighbours, the task's own
-subtasks, and last the milestone's other work.
+subtasks, and last the milestone's other work that something connects to it (a `#` chip either
+way round, a longer parent / child chain: `_connected_work`, MIP-1529; being in the same
+milestone is not a connection, except when the milestone's own row is asked about).
 
 **Computed on read, nothing copied.** Every event is read live from the table that already
 holds it (task history, task comments and their reactions and mentions, chat messages and
@@ -1416,12 +1418,100 @@ def _pool(qs, pool: int) -> tuple[list[int], list[int]]:
     return rows[:pool], rows[pool:]
 
 
+# A parent / child chain longer than this is a bad link, not a task tree.
+MAX_KIN_DEPTH = 12
+
+
+def _kin(root: TaskMaster, ids: set[int]) -> set[int]:
+    """The `ids` that are an ancestor or a descendant of `root` (the parent chain, any depth).
+
+    The direct parent and children have their own relations; what this adds is the longer chain
+    (a grandchild, a grandparent). One read of the parent of every id, then one per level above
+    them that is not known yet. A cycle in the links is survived."""
+    parent_of: dict[int, int | None] = {root.task_id: root.parent_task_id}
+
+    def learn(task_ids: set[int]) -> None:
+        rows = TaskMaster.objects.filter(team_id=root.team_id, task_id__in=task_ids).values_list(
+            "task_id", "parent_task_id"
+        )
+        parent_of.update(rows)
+        for task_id in task_ids:
+            parent_of.setdefault(task_id, None)
+
+    learn(ids)
+    for _depth in range(MAX_KIN_DEPTH):
+        unknown = {p for p in parent_of.values() if p is not None and p not in parent_of}
+        if not unknown:
+            break
+        learn(unknown)
+
+    def above(task_id: int) -> set[int]:
+        chain: set[int] = set()
+        parent = parent_of.get(task_id)
+        while parent is not None and parent not in chain and len(chain) < MAX_KIN_DEPTH * 2:
+            chain.add(parent)
+            parent = parent_of.get(parent)
+        return chain
+
+    ancestors = above(root.task_id)
+    return {t for t in ids if t in ancestors or root.task_id in above(t)}
+
+
+def _connected_work(root: TaskMaster, sibling_ids: list[int]) -> set[int]:
+    """Which of the milestone's other tasks something other than the milestone connects to
+    `root` (MIP-1529): they are the `milestone_work` neighbours, the rest are only in the same
+    milestone (MIP-1333 listed MIP-1270, 1290, 1287 and 1527 with no link to it).
+
+    Connected is a fact about the two tasks, with no window and no access rule of its own (the
+    caller's ids are already tasks the member may open):
+
+      * a `#` task chip, either way round, in a description or in a comment that is not
+        deleted (the containers of rule 5 that belong to a task; a chip with only a display id
+        is not followed, as everywhere);
+      * a parent / child chain longer than the direct ones (`_kin`).
+
+    A direct parent, child or dependency has its own relation and is not asked here. A shared
+    thread is no connection: a thread two tasks claim is told to neither (rule 4). A task note
+    belongs to one task. Two tasks that only share a parent are not connected by it. A fixed
+    number of reads, however many tasks are asked about."""
+    ids = set(sibling_ids)
+    if not ids:
+        return set()
+    found = chip_task_ids(root.content) & ids
+    found.update(
+        _chip_filter(
+            TaskMaster.objects.filter(team_id=root.team_id, task_id__in=ids),
+            "content",
+            [root.task_id],
+        ).values_list("task_id", flat=True)
+    )
+    said_by_root = (
+        _chip_filter(
+            TaskComments.objects.filter(task_id=root.task_id, is_deleted=False),
+            "comment_body",
+            ids,
+        )
+        .order_by("-ts_sent_at", "-pk")
+        .values_list("comment_body", flat=True)[:POOL]
+    )
+    for body in said_by_root:
+        found |= chip_task_ids(body) & ids
+    found.update(
+        _chip_filter(
+            TaskComments.objects.filter(task_id__in=ids, is_deleted=False),
+            "comment_body",
+            [root.task_id],
+        ).values_list("task_id", flat=True)
+    )
+    return found | _kin(root, ids - found)
+
+
 def _candidates(
     ctx: ToolContext, access: LabelAccess, root: TaskMaster
 ) -> tuple[list[tuple[str, TaskMaster]], bool]:
     """The items around `root` the member may open, `[(relation, task)]` in priority order
     (parent, milestone, what blocks it, what it blocks, its own subtasks, the milestone's other
-    work), at most `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are
+    work that something connects to it, `_connected_work`), at most `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are
     dropped before anything is counted. The subtasks come before the milestone's work: a phase
     and its steps are the closest lines there are, and the work only fills what is left.
 
@@ -1450,6 +1540,11 @@ def _candidates(
             SIBLING_POOL,
         )
         left_out.update(more)
+        if milestone.task_id != root.task_id:
+            # Asked about a task of the milestone, not about the milestone's own row: only the
+            # work that something connects to it (MIP-1529).
+            connected = _connected_work(root, sibling_ids)
+            sibling_ids = [t for t in sibling_ids if t in connected]
     blockers, more = _pool(
         TaskDependency.objects.filter(
             readable_task_q(ctx, "blocker_task__"), blocked_task_id=root.task_id

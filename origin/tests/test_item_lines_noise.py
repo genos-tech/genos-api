@@ -1,19 +1,26 @@
 """`get_item_line` noise (MIP-1529): found by the MIP-1270 test B run.
 
 1. A description autosave burst is ONE entry with a count, by the rule of the Activity feed.
+2. `milestone_work` is only the work something connects to the asked task.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from unittest import mock
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity
+from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
 
 # The controller first: importing the services alone trips a circular import (as in test_item_lines).
 from origin.search_engine.agent.controller import _build_tool_declarations  # noqa: F401
 from origin.services import item_lines
 from origin.services.description_edit_runs import DESCRIPTION_EDIT_GROUP_WINDOW
-from origin.tests.test_item_lines import LineBase
+from origin.tests.test_item_lines import LineBase, body_with, chip, text_inline
 from origin.views.task.task_activity_views import _collapse_description_edits
 
 DESC = "description_edited"
@@ -214,3 +221,187 @@ class TestDescriptionBursts(LineBase):
         self.assertEqual(line, feed)
         # Newest first: 40+41, 6-8, the kept-body rewrite, the app's pair, the other actor, 0+1.
         self.assertEqual([n for _t, n in line], [2, 3, 1, 2, 1, 2])
+
+
+# --------------------------------------------------------------------------- #
+# `milestone_work`: only the work that something connects to the asked task    #
+# --------------------------------------------------------------------------- #
+
+
+class TestMilestoneWorkIsRelated(LineBase):
+    """MIP-1529 (2): the other tasks of the asked task's milestone were neighbours just for being
+    in it (MIP-1333's related list had MIP-1270, 1290, 1287, 1527 with no link to it). A task of
+    the milestone is a `milestone_work` neighbour only when something other than the milestone
+    connects it: a `#` chip in the description or a comment, either way round, or a parent /
+    child chain longer than the direct parent and children, which have relations of their own
+    (as dependencies do). The milestone's own backing row is asked about its whole work."""
+
+    def setUp(self):
+        super().setUp()
+        self.backing = self.make_task("Beta", is_milestone=True)
+        self.milestone = MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="Beta",
+            reporter=self.user,
+            task=self.backing,
+        )
+        TaskMaster.objects.filter(pk=self.backing.pk).update(milestone=self.milestone)
+        self.root = self.make_task("Root", milestone=self.milestone)
+
+    def work(self, title="Other", **extra):
+        """A task of the milestone with one comment in the window, so it would be listed."""
+        task = self.make_task(title, milestone=self.milestone, **extra)
+        self.comment(task, self.user2, 10, text=f"on {title}")
+        return task
+
+    def relations(self, out=None):
+        out = out or self.full(self.root)
+        return {r["task_id"]: r["relation"] for r in out["related"]}
+
+    def pointing(self, task_id):
+        return body_with(text_inline("see "), chip(task_id))
+
+    # -- unrelated --
+
+    def test_a_task_of_the_milestone_with_no_link_is_not_a_neighbour(self):
+        self.work()
+        out = self.full(self.root)
+        self.assertEqual(out["related"], [])
+        # Only the milestone's own row (relation `milestone`) is a candidate, and it is quiet.
+        self.assertEqual((out["related_total"], out["related_quiet"]), (0, 1))
+        self.assertFalse(out["related_capped"])
+
+    def test_it_neither_takes_a_candidate_slot_nor_counts_as_quiet(self):
+        for i in range(item_lines.CANDIDATE_CAP + 5):
+            self.make_task(f"Other {i}", milestone=self.milestone)
+        linked = self.work("Linked")
+        TaskMaster.objects.filter(pk=self.root.pk).update(content=self.pointing(linked.task_id))
+        out = self.full(self.root)
+        self.assertEqual(list(self.relations(out)), [linked.task_id])
+        self.assertEqual(out["related_quiet"], 1)  # the milestone's own row, nothing else
+        self.assertFalse(out["related_capped"])
+
+    def test_a_task_that_shares_only_the_parent_is_not_connected(self):
+        parent = self.make_task("Phase", milestone=self.milestone)
+        TaskMaster.objects.filter(pk=self.root.pk).update(parent_task_id=parent.task_id)
+        self.work("Step", parent_task_id=parent.task_id)
+        self.assertEqual(self.relations(), {})
+
+    def test_a_chip_that_names_only_a_display_id_connects_nothing(self):
+        other = self.work()
+        TaskMaster.objects.filter(pk=self.root.pk).update(
+            content=body_with(chip(other.task_id, taskId=None, displayId=other.display_id))
+        )
+        self.assertEqual(self.relations(), {})
+
+    def test_a_deleted_comment_connects_nothing(self):
+        other = self.work()
+        self.comment(other, self.user2, 11, body=self.pointing(self.root.task_id), deleted=True)
+        self.assertEqual(self.relations(), {})
+
+    # -- connected by a pointer, either way --
+
+    def test_its_comment_that_chips_the_asked_task_connects_it(self):
+        other = self.work()
+        self.comment(other, self.user2, 11, body=self.pointing(self.root.task_id))
+        self.assertEqual(self.relations(), {other.task_id: "milestone_work"})
+
+    def test_the_asked_tasks_comment_that_chips_it_connects_it(self):
+        other = self.work()
+        self.comment(self.root, self.user2, 11, body=self.pointing(other.task_id))
+        self.assertEqual(self.relations(), {other.task_id: "milestone_work"})
+
+    def test_the_asked_tasks_description_that_chips_it_connects_it(self):
+        other = self.work()
+        TaskMaster.objects.filter(pk=self.root.pk).update(content=self.pointing(other.task_id))
+        self.assertEqual(self.relations(), {other.task_id: "milestone_work"})
+
+    def test_its_description_that_chips_the_asked_task_connects_it(self):
+        other = self.work()
+        TaskMaster.objects.filter(pk=other.pk).update(content=self.pointing(self.root.task_id))
+        self.assertEqual(self.relations(), {other.task_id: "milestone_work"})
+
+    def test_a_chip_for_another_task_connects_nothing(self):
+        other, third = self.work("A"), self.work("B")
+        self.comment(other, self.user2, 11, body=self.pointing(third.task_id))
+        self.assertEqual(self.relations(), {})
+
+    def test_the_pointer_has_no_window(self):
+        """It is a fact about the two tasks, not about when the chip was written."""
+        other = self.work()
+        old = self.comment(other, self.user2, 11, body=self.pointing(self.root.task_id))
+        TaskComments.objects.filter(pk=old.pk).update(ts_sent_at=self.at(-60 * 24 * 20))
+        self.assertEqual(self.relations(), {other.task_id: "milestone_work"})
+
+    # -- connected by the hierarchy beyond the direct parent and children --
+
+    def test_a_grandchild_is_connected_and_a_direct_child_is_still_a_child(self):
+        child = self.make_task("Child", parent_task_id=self.root.task_id)
+        grandchild = self.work("Grandchild", parent_task_id=child.task_id)
+        self.comment(child, self.user2, 12)
+        self.assertEqual(
+            self.relations(),
+            {child.task_id: "child", grandchild.task_id: "milestone_work"},
+        )
+
+    def test_a_grandparent_is_connected_through_a_parent_outside_the_milestone(self):
+        grandparent = self.work("Grandparent")
+        parent = self.make_task("Parent", parent_task_id=grandparent.task_id)
+        TaskMaster.objects.filter(pk=self.root.pk).update(parent_task_id=parent.task_id)
+        self.comment(parent, self.user2, 12)
+        self.assertEqual(
+            self.relations(),
+            {parent.task_id: "parent", grandparent.task_id: "milestone_work"},
+        )
+
+    def test_a_parent_cycle_does_not_loop(self):
+        a, b = self.work("A"), self.work("B")
+        TaskMaster.objects.filter(pk=a.pk).update(parent_task_id=b.task_id)
+        TaskMaster.objects.filter(pk=b.pk).update(parent_task_id=a.task_id)
+        self.assertEqual(self.relations(), {})
+
+    # -- unchanged --
+
+    def test_a_dependency_neighbour_stays_blocked_by(self):
+        other = self.work()
+        TaskDependency.objects.create(blocker_task=other, blocked_task=self.root)
+        self.assertEqual(self.relations(), {other.task_id: "blocked_by"})
+
+    def test_the_milestones_own_row_is_asked_about_its_whole_work(self):
+        one, two = self.work("One"), self.work("Two")
+        out = self.full(self.backing)
+        self.assertEqual(
+            {r["task_id"]: r["relation"] for r in out["related"]},
+            {one.task_id: "milestone_work", two.task_id: "milestone_work"},
+        )
+
+    def test_a_linked_task_the_member_cannot_open_is_left_out_without_a_trace(self):
+        hidden = self.hidden_task("Merger plans")
+        TaskMaster.objects.filter(pk=hidden.pk).update(milestone=self.milestone)
+        self.comment(hidden, self.user2, 10, body=self.pointing(self.root.task_id))
+        out = self.full(self.root)
+        self.assertEqual(out["related"], [])
+        self.assertNotIn("Merger", self.blob(out))
+        self.assertFalse(out["related_capped"])
+
+    def test_a_connected_task_past_the_pool_still_says_the_read_was_cut(self):
+        """The pool cannot tell a linked task from an unlinked one it did not read."""
+        for i in range(3):
+            self.make_task(f"s{i}", milestone=self.milestone)
+        with mock.patch.object(item_lines, "SIBLING_POOL", 2):
+            out = self.full(self.root)
+        self.assertTrue(out["related_capped"])
+
+    def test_the_probe_costs_the_same_for_two_tasks_and_for_twenty(self):
+        def queries():
+            with CaptureQueriesContext(connection) as ctx:
+                self.full(self.root)
+            return len(ctx)
+
+        self.work("A")
+        self.work("B")
+        small = queries()
+        for i in range(18):
+            self.work(f"C{i}")
+        self.assertEqual(queries(), small)

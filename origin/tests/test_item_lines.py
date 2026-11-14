@@ -148,6 +148,20 @@ class LineBase(McpBase):
             title, project=self.hidden_project(), assignee=self.user2, reporter=self.user2
         )
 
+    def point_at(self, root, *tasks):
+        """`root`'s description gets a `#` chip for each of `tasks` (MIP-1529: the work of a
+        milestone is a neighbour only when something connects it to the asked task)."""
+        root.refresh_from_db(fields=["content"])
+        inlines = [x for block in (root.content or []) for x in block.get("content", [])]
+        inlines += [chip(t.task_id) for t in tasks]
+        TaskMaster.objects.filter(pk=root.pk).update(content=body_with(*inlines))
+
+    def linked(self, title, root=None, **extra):
+        """A task of `self.milestone` that `root` (default `self.task`) points at."""
+        task = self.make_task(title, milestone=self.milestone, **extra)
+        self.point_at(root or self.task, task)
+        return task
+
     def activity(self, task, actor, minutes, action="status_changed", old="Open", new="WIP", **m):
         row = TaskActivity.objects.create(
             team=self.team,
@@ -1661,6 +1675,7 @@ class TestRelated(LineBase):
             "Child", parent_task_id=self.parent.task_id, milestone=self.milestone
         )
         self.sibling = self.make_task("Sibling", milestone=self.milestone)
+        self.point_at(self.task, self.sibling)
         self.blocker = self.make_task("Blocker")
         self.blocked = self.make_task("Blocked")
         TaskDependency.objects.create(blocker_task=self.blocker, blocked_task=self.task)
@@ -1724,6 +1739,7 @@ class TestRelated(LineBase):
         sibling = self.make_task(
             "Sib", project=project, assignee=self.user, reporter=self.user2, milestone=milestone
         )
+        self.point_at(mine, sibling)
         self.comment(sibling, self.user2, 10)
         self.assertEqual(self.full(mine)["related"], [])
         # Once they are an assignee of the milestone, it opens.
@@ -1734,7 +1750,7 @@ class TestRelated(LineBase):
 
     def test_more_neighbours_than_the_cap_say_so(self):
         for i in range(item_lines.RELATED_MAX + 3):
-            self.comment(self.make_task(f"s{i}", milestone=self.milestone), self.user2, 10 + i)
+            self.comment(self.linked(f"s{i}"), self.user2, 10 + i)
         out = self.full(self.task)
         self.assertEqual(len(out["related"]), item_lines.RELATED_MAX)
         self.assertTrue(out["related_capped"])
@@ -1750,7 +1766,7 @@ class TestRelated(LineBase):
 
     def test_the_busiest_group_does_not_push_out_the_closest(self):
         for i in range(item_lines.RELATED_MAX):
-            self.comment(self.make_task(f"s{i}", milestone=self.milestone), self.user2, 100 + i)
+            self.comment(self.linked(f"s{i}"), self.user2, 100 + i)
         self.comment(self.parent, self.user2, 1)
         out = self.full(self.task)
         self.assertEqual(out["related"][0]["relation"], "parent")
@@ -1788,9 +1804,7 @@ class TestRelated(LineBase):
         for i, kid in enumerate(kids):
             self.comment(kid, self.user2, 10 + i, text=f"step {i}")
         for i in range(15):
-            self.comment(
-                self.make_task(f"Other {i}", milestone=self.milestone), self.user2, 300 + i
-            )
+            self.comment(self.linked(f"Other {i}", root=parent), self.user2, 300 + i)
         out = self.full(parent)
         self.assertEqual({r["relation"] for r in out["related"]}, {"child"})
         self.assertEqual(len(out["related"]), item_lines.RELATED_MAX)
@@ -1807,9 +1821,7 @@ class TestRelated(LineBase):
         for i, kid in enumerate(kids):
             self.comment(kid, self.user2, 10 + i)
         for i in range(4):
-            self.comment(
-                self.make_task(f"Other {i}", milestone=self.milestone), self.user2, 300 + i
-            )
+            self.comment(self.linked(f"Other {i}", root=parent), self.user2, 300 + i)
         out = self.full(parent)
         self.assertEqual(
             [r["relation"] for r in out["related"]], ["child"] * 3 + ["milestone_work"] * 4
@@ -1821,7 +1833,7 @@ class TestRelated(LineBase):
         than the cap must not leave the children out of the candidates."""
         parent, kids = self.phase(2)
         for i in range(item_lines.CANDIDATE_CAP + 5):
-            self.make_task(f"Other {i}", milestone=self.milestone)
+            self.linked(f"Other {i}", root=parent)
         self.comment(kids[0], self.user2, 10)
         self.comment(kids[1], self.user2, 11)
         out = self.full(parent)
@@ -1928,6 +1940,8 @@ class TestQueryBound(LineBase):
                     self.message(chat, self.user2, minutes, body=body_with(chip(task.task_id)))
                 else:
                     self.marker(self.user, minutes, "task", task.task_id)
+        # The milestone's other work is a neighbour once something connects it (MIP-1529).
+        self.point_at(root, *group[1:])
         return root
 
     def count(self, root, **kw):
@@ -1952,8 +1966,10 @@ class TestQueryBound(LineBase):
         # neither an event nor an item adds one.
         self.assertEqual(n_big, n_small)
         # 33 after MIP-1294 (the subtasks query), 51 after MIP-1295 (neighbours read apart),
-        # 53 after MIP-1499 (one read of the asked tasks' thread ids per look-up, two look-ups).
-        self.assertLessEqual(n_big, 53, n_big)
+        # 53 after MIP-1499 (one read of the asked tasks' thread ids per look-up, two look-ups),
+        # 56 after MIP-1529 (three reads of the chips that connect the milestone's work to the
+        # asked task, a fourth for the parent chain when a chip did not already connect it).
+        self.assertLessEqual(n_big, 57, n_big)
         print(f"\n[MIP-1083 queries] 5 events/1 item={n_small}; 50 events/11 items={n_big}")
 
     def test_a_lone_line_is_a_fixed_small_number_of_queries(self):
@@ -2013,21 +2029,21 @@ class TestNeighbourPoolsSayWhenTheyCut(LineBase):
 
     def test_milestone_work_exactly_filling_the_pool_cut_nothing(self):
         for i in range(2):
-            self.comment(self.make_task(f"s{i}", milestone=self.milestone), self.user2, 10 + i)
+            self.comment(self.linked(f"s{i}"), self.user2, 10 + i)
         out = self.read("SIBLING_POOL", 2)
         self.assertEqual(len(out["related"]), 2)
         self.assertFalse(out["related_capped"])
 
     def test_milestone_work_past_the_pool_says_so(self):
         for i in range(3):
-            self.comment(self.make_task(f"s{i}", milestone=self.milestone), self.user2, 10 + i)
+            self.comment(self.linked(f"s{i}"), self.user2, 10 + i)
         out = self.read("SIBLING_POOL", 2)
         self.assertEqual(len(out["related"]), 2)
         self.assertEqual(out["related_total"], 2)
         self.assertTrue(out["related_capped"])
 
     def test_milestone_work_the_member_cannot_open_neither_tips_the_flag_nor_takes_a_slot(self):
-        mine = [self.make_task(f"s{i}", milestone=self.milestone) for i in range(2)]
+        mine = [self.linked(f"s{i}") for i in range(2)]
         for task in mine:
             self.comment(task, self.user2, 10)
         for i in range(3):  # newer than theirs, so first in the pool if the pool ignored access
@@ -2138,7 +2154,7 @@ class TestNeighbourPoolsSayWhenTheyCut(LineBase):
         """The extra row of the milestone's work is a subtask of the root: it is a candidate
         through `child`, so nothing was lost and nothing is flagged."""
         child = self.make_task("child", parent_task_id=self.task.task_id, milestone=self.milestone)
-        newer = self.make_task("newer work", milestone=self.milestone)
+        newer = self.linked("newer work")
         self.comment(child, self.user2, 10)
         self.comment(newer, self.user2, 11)
         out = self.read("SIBLING_POOL", 1)
@@ -2148,7 +2164,7 @@ class TestNeighbourPoolsSayWhenTheyCut(LineBase):
     def test_a_pool_cut_is_still_reported_beside_the_candidate_cap(self):
         """The two causes are one flag; either sets it."""
         for i in range(item_lines.CANDIDATE_CAP + 2):
-            self.make_task(f"s{i}", milestone=self.milestone)
+            self.linked(f"s{i}")
         self.assertTrue(self.full(self.task)["related_capped"])
 
     def test_related_lines_alone_carry_the_flag_too(self):
