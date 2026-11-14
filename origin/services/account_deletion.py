@@ -53,6 +53,7 @@ from oauth2_provider.models import (
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
+from origin.models.chat.unified_models import ReadCursor
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
@@ -163,6 +164,9 @@ def _delete_personal_data(user) -> None:
     ConnectedAccount.objects.filter(user=user).delete()
     ToDoGroup.objects.filter(user=user).delete()  # items cascade
     ToDoCategory.objects.filter(user=user).delete()
+    # What the person has read, and when (MIP-1550): theirs alone, nothing shows it to anyone
+    # else. The FK cascade never fires for a soft delete, so the rows have to go by hand.
+    ReadCursor.objects.filter(user=user).delete()
     MemberBriefingState.objects.filter(user=user).delete()
     # The member's schedules (MIP-1147) are theirs alone; the account is soft-deleted, so no
     # FK cascade fires and the tick would keep running them.
