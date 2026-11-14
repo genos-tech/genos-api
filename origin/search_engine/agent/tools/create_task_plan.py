@@ -51,6 +51,7 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_sizes
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
+from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -193,6 +194,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create tasks in project {project_id}.")
+
+    # A task proposed without a body gets the project's template (MIP-1510): the same text the
+    # approval card showed. After the size check and the ACL gate, on a copy.
+    args = fill_plan_task_bodies(args, project)
 
     # ---- attach-mode resolution (new milestone XOR existing milestone
     # XOR sub-tasks of an existing task XOR standalone) ----
@@ -657,7 +662,8 @@ CREATE_TASK_PLAN = Tool(
         "milestone with tasks, break a discussion/chat/task into tasks, or "
         "add MULTIPLE related tasks — NEVER a series of create_task calls. "
         "(create_task remains correct for one single ad-hoc task; for a "
-        "plan as a DOCUMENT/note rather than tasks, use create_note.) Max "
+        "plan as a DOCUMENT/note rather than tasks, use create_note.) Give "
+        "every task a short content_markdown body. Max "
         f"{_MAX_PLAN_TASKS} tasks; reference other tasks in the batch by "
         "array index (parent_index, blocked_by_indexes)."
     ),
