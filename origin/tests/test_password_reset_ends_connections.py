@@ -420,3 +420,19 @@ class TestTeamsAreNotInvolved(ResetBase):
         other_team_key.refresh_from_db()
         self.assertIsNone(other_team_key.revoked_at)
         self.assertTrue(TeamMaster.objects.filter(pk=self.team.pk).exists())
+
+
+class TestRevokeApiKeyIsIdempotent(ResetBase):
+    """The shared helper (also behind the key views) writes nothing for a key already ended."""
+
+    def test_revoking_an_ended_key_changes_and_records_nothing(self):
+        from origin.services.api_keys import revoke_api_key
+
+        self.assertFalse(revoke_api_key(self.old_key, by="self"))
+        self.old_key.refresh_from_db()
+        self.assertEqual(self.old_key.revoked_at, self.old_revoked_at)
+        self.assertEqual(self.events(SecurityAction.API_KEY_REVOKED).count(), 0)
+
+        self.assertTrue(revoke_api_key(self.personal_key, by="self"))
+        self.assertFalse(revoke_api_key(self.personal_key, by="self"))
+        self.assertEqual(self.events(SecurityAction.API_KEY_REVOKED).count(), 1)
