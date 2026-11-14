@@ -580,15 +580,17 @@ def _calendar_accounts(info: dict[str, Any], kinds: tuple[str, ...]) -> None:
 
     from origin.models.common.user_models import ConnectedAccount  # noqa: PLC0415
     from origin.search_engine.agent.evals.group import calendar_stub  # noqa: PLC0415
-    from origin.services.oauth.accounts import accounts_for  # noqa: PLC0415
     from origin.services import crypto  # noqa: PLC0415
+    from origin.services.oauth.accounts import accounts_for  # noqa: PLC0415
 
     user_id = info["user_id"]
     has_identity = ConnectedAccount.objects.filter(user_id=user_id, is_login_identity=True).exists()
     for index, kind in enumerate(kinds):
         token = calendar_stub.token_for(info["team"], info["person"], kind)
         provider_id = f"evalcal-{info['team']}-{info['person']}-{kind}"
-        if ConnectedAccount.objects.filter(provider="google", provider_user_id=provider_id).exists():
+        if ConnectedAccount.objects.filter(
+            provider="google", provider_user_id=provider_id
+        ).exists():
             continue
         ConnectedAccount.objects.create(
             user_id=user_id,

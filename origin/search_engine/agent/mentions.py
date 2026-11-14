@@ -823,7 +823,10 @@ def mention_audit_sources(mentions_json: Any, *, team_id: str) -> list[dict[str,
     # A calendar event (MIP-1059) is never shareable, so a run that carries one is never collected: the
     # same answer `source_visibility` gives an event a tool read.
     sources.extend(
-        {"entity_type": "calendar_event", "entity_id": f"calendar_event:{m.event_account_id}:{m.event_id}"}
+        {
+            "entity_type": "calendar_event",
+            "entity_id": f"calendar_event:{m.event_account_id}:{m.event_id}",
+        }
         for m in resolved
         if m.kind == "calendar_event"
     )
