@@ -465,8 +465,11 @@ class AiAppNoticeErasureTests(BaseAPITestCase):
         delete_account(self.user2)
         self.assertTrue(Activity.objects.filter(pk=theirs.pk).exists())
 
-    def test_it_does_not_reach_other_activity_of_the_member(self):
-        # Only the AI-app kind is in scope of this task; a mention of the member stays.
+    def test_the_members_other_feed_rows_go_too_but_not_other_members(self):
+        # MIP-1542 supersedes the MIP-1541 pin "nothing else changes": the whole feed
+        # addressed to the member (`recipient`) goes with the account, whatever the kind.
+        # Rows addressed to someone else stay, even when the deleted member is their actor
+        # (`test_deleted_account_activity` covers every kind, batches and the export).
         mention = Activity.objects.create(
             team=self.team,
             recipient=self.user2,
@@ -475,5 +478,14 @@ class AiAppNoticeErasureTests(BaseAPITestCase):
             surface_type=5,
             meta={},
         )
+        about = Activity.objects.create(
+            team=self.team,
+            recipient=self.user,
+            actor=self.user2,
+            activity_type=ActivityType.MENTION,
+            surface_type=5,
+            meta={},
+        )
         delete_account(self.user2)
-        self.assertTrue(Activity.objects.filter(pk=mention.pk).exists())
+        self.assertFalse(Activity.objects.filter(pk=mention.pk).exists())
+        self.assertTrue(Activity.objects.filter(pk=about.pk).exists())

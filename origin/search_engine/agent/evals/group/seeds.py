@@ -310,10 +310,10 @@ def seed_note_threads_stub(info: dict[str, Any]) -> None:
     original = note_comments.read_note_threads
     _ORIGINAL_READER["reader"] = original
 
-    def stubbed(note_type: str, note_id: int):
+    def stubbed(note_type: str, note_id: int, **kwargs: Any):
         if note_type == "task" and note_id in _NOTE_THREADS:
             return copy.deepcopy(_NOTE_THREADS[note_id])
-        return original(note_type, note_id)
+        return original(note_type, note_id, **kwargs)
 
     note_comments.read_note_threads = stubbed
 

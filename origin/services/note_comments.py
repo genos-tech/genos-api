@@ -105,6 +105,7 @@ def note_comment_fields(
     *,
     include_resolved: bool = False,
     can_include_resolved: bool = True,
+    read_timeout: float | None = None,
 ) -> dict[str, Any]:
     """The keys `get_note` adds on MCP: `comment_threads` and, when there is
     something to say, `comment_threads_note`.
@@ -117,8 +118,15 @@ def note_comment_fields(
     `can_include_resolved=False` is for a caller that has no `include_resolved` argument to
     pass (the in-app `fetch_note`, MIP-1090): the note then says how many resolved threads
     were left out and does not tell the model to pass an argument it does not have.
+
+    `read_timeout` is how long to wait for collab, in seconds; None keeps the reader's own wait
+    (MCP). A read that runs out of time is a read that failed: null threads and the same note
+    (MIP-1545).
     """
-    raw_threads = read_note_threads(note_type, note_id)
+    if read_timeout is None:
+        raw_threads = read_note_threads(note_type, note_id)
+    else:
+        raw_threads = read_note_threads(note_type, note_id, timeout=read_timeout)
     if raw_threads is None:
         return {
             "comment_threads": None,
