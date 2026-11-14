@@ -144,12 +144,16 @@ change to them is checked by the free tests and, for behaviour, by the grouped p
   `apis/settings.py`, a model behaving differently);
 - by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`.
 
-There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `surface`
-job (no secrets, no Vertex) still hashes what the model sees (`scripts/agent_surface_hash.py`) and
-`scripts/agent_eval_gate.py` combines the hash, the changed files and the labels; any failure in it
-fails open (the evals run). Scheduled and manual runs need the repo variable `RUN_AGENT_EVALS` (or
-`DEPLOY_TO_GCP`) to be `true`.
+There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `gate` job
+(no secrets, no Vertex, no Python dependencies) lists the PR's changed files and runs
+`scripts/agent_eval_gate.py`: a changed retrieval file, the `run-evals` label, a dispatch or the weekly
+run start the billed steps; a PR that only edits the workflow does not (that is how the workflow is
+tested for free). Any failure in the gate fails open (the evals run). Scheduled and manual runs need the
+repo variable `RUN_AGENT_EVALS` (or `DEPLOY_TO_GCP`) to be `true`.
 
-The pass / mrr / recall floors (58 of 75, 0.75, 0.80) live only in `scripts/retrieval_gate.py`.
-Tests: `origin.tests.test_agent_surface_hash`, `origin.tests.test_retrieval_gate`. To see what the hash
-covers locally: `python scripts/agent_surface_hash.py`.
+What the model reads (prompts, tool declarations, tool results) is guarded by a free test in the normal
+CI run instead: `origin.tests.test_agent_fingerprint_golden` fails when any of it changes (re-record
+with `manage.py agent_fingerprint --write-golden`).
+
+The pass / mrr / recall floors live only in `scripts/retrieval_gate.py`.
+Tests: `origin.tests.test_agent_eval_gate`, `origin.tests.test_retrieval_gate`.
