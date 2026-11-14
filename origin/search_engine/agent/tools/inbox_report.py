@@ -12,6 +12,8 @@ Behind `SEARCH_ENGINE["AGENT_INBOX_REPORT_LABEL"]` (default off):
     headings, item texts and links; the JSON punctuation is not counted). A report within the cap
     is returned exactly as before. A longer one keeps its title and summary and then whole sections
     and whole items in order, until the next item would not fit; nothing is shortened mid-sentence.
+    A section that had no items to begin with is kept while its heading fits (nothing was cut from
+    it) and is not counted in `sections_omitted`.
     The row then carries `item_body_cut`: `{limit_chars, sections_omitted, items_omitted}` and a
     `note` saying where the rest is. Absent when nothing was cut.
 
@@ -109,6 +111,11 @@ def cap_report_body(body: Any, limit: int = REPORT_BODY_CHARS) -> tuple[Any, dic
         if kept:
             budget = left
             sections_out.append({**section, "items": kept})
+        elif not items and not full and left >= 0:
+            # A section that had no items to begin with: nothing was cut from it, so it is kept
+            # (its heading charged) while it fits, and never counted as omitted (MIP-1478).
+            budget = left
+            sections_out.append({**section, "items": []})
         else:
             # Nothing of this section was shown: its heading is not charged either.
             sections_omitted += 1
