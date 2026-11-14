@@ -71,7 +71,7 @@ import os
 import re
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -797,9 +797,28 @@ def _build_fixture_b() -> None:
     TaskMaster.objects.filter(pk__in=[grandchild.pk, child.pk, in_milestone.pk, plain.pk]).update(
         sprint=sprint
     )
+    # Every row gets its own times, in the order of its id: all of them were made under the frozen
+    # clock, so `order_by("-ts_updated_at")` (the focus list, `list_tasks`) would otherwise tie and
+    # come back in whatever order the database fancies, and the golden must be the same in every
+    # database (a sequence is not rolled back, so ids themselves never reach a line).
+    stamp = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
+    for minute, pk in enumerate(
+        TaskMaster.objects.filter(team=team).order_by("task_id").values_list("pk", flat=True)
+    ):
+        at = stamp + timedelta(minutes=minute)
+        TaskMaster.objects.filter(pk=pk).update(ts_created_at=at, ts_updated_at=at)
+    for minute, pk in enumerate(
+        MilestoneMaster.objects.filter(team=team).order_by("pk").values_list("pk", flat=True)
+    ):
+        at = stamp + timedelta(minutes=minute)
+        MilestoneMaster.objects.filter(pk=pk).update(ts_created_at=at, ts_updated_at=at)
     # stale: untouched for weeks, one of them under the Closed parent
-    TaskMaster.objects.filter(pk__in=[child.pk, grandchild.pk]).update(
+    # (two different days: the list is ordered by it, and a tie would be ordered by the database)
+    TaskMaster.objects.filter(pk=child.pk).update(
         ts_updated_at=datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
+    )
+    TaskMaster.objects.filter(pk=grandchild.pk).update(
+        ts_updated_at=datetime(2026, 9, 2, 0, 0, 0, tzinfo=UTC)
     )
     # a dependency: the plain task waits on the child under the Closed parent
     TaskDependency.objects.create(blocker_task=child, blocked_task=plain, team=team, created_by=c)

@@ -2,7 +2,7 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py agent_fingerprint --write-golden` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "eb864502978b84acedfb794693d22d899679d8a2c195b470255a7b2827bf1365",
+      "all": "69a9359a41b6cc8f0b5e40f3ca8e79771b80d26e420d7779727d5ec91323f0d2",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27254,
@@ -77,8 +77,8 @@
           "sha256": "50186d4bd7f510c7bd7629765f0ec5395b4e35d64cda80d84aa56784c37f7e4a"
         },
         "result.b.get_stale_tasks": {
-          "bytes": 834,
-          "sha256": "425262038685b4cb288c5063e3e2ebdbe644ad496aac76bcfdebe42711175eb1"
+          "bytes": 2903,
+          "sha256": "8421e0d9ad1c3908c4f091a3941bfc4fb5a9ea396cf8c2afcfa70af9aec061f8"
         },
         "result.b.get_task_blockers": {
           "bytes": 497,
@@ -98,7 +98,7 @@
         },
         "result.b.list_milestones": {
           "bytes": 1101,
-          "sha256": "601810865623780d3f7286076004069f97cc49473039e199895ff12989c64cde"
+          "sha256": "4854f5c76501dab7b46ec34870f76d2a298cf87a550537eb90b89ae666a5225d"
         },
         "result.b.list_my_inbox": {
           "bytes": 13670,
@@ -106,11 +106,11 @@
         },
         "result.b.list_my_milestones": {
           "bytes": 697,
-          "sha256": "7d8884356a17df70d5c0ff015c2b28ef0280a17b2c51214449c8026dea5b732c"
+          "sha256": "4a17610e0fe9b28d8206ed84f1ca74aad2ae983f8dea42c85366932b95aac4c5"
         },
         "result.b.list_tasks": {
           "bytes": 4430,
-          "sha256": "7bf1c4d46971c8b2de85ba027a0263101344cc3b7a266df1029970de22419fe2"
+          "sha256": "ee7a0cd5cd482559e99b7c5f843db1cf5834dbfd94dd943bffdd4d7b6b4d4689"
         },
         "result.fetch_chat_thread": {
           "bytes": 610,
@@ -187,7 +187,7 @@
       }
     },
     "production": {
-      "all": "045df57baf515a1ef1a17a82930c6ffe28dd7ebdb29251aa3ab6b424b26dc809",
+      "all": "cf6023553f7191d5ebf2b92a3fd31c08b051cd7eaafc6317e01f592f3e897a70",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27482,
@@ -262,8 +262,8 @@
           "sha256": "ab12e49c3a433ff362cec47b228d4087c9895429358357eb3117a3e8db7028d4"
         },
         "result.b.get_stale_tasks": {
-          "bytes": 834,
-          "sha256": "425262038685b4cb288c5063e3e2ebdbe644ad496aac76bcfdebe42711175eb1"
+          "bytes": 2903,
+          "sha256": "8421e0d9ad1c3908c4f091a3941bfc4fb5a9ea396cf8c2afcfa70af9aec061f8"
         },
         "result.b.get_task_blockers": {
           "bytes": 497,
@@ -283,7 +283,7 @@
         },
         "result.b.list_milestones": {
           "bytes": 1101,
-          "sha256": "b23bb655344f1449a195d14d35f5c3208a5441e6a743782b6184bca5d3a8a7bb"
+          "sha256": "5fbf1b27f7a5ba34c8faabc2455ebffb40bca61feaf828b9e305a07b0041c981"
         },
         "result.b.list_my_inbox": {
           "bytes": 8814,
@@ -291,11 +291,11 @@
         },
         "result.b.list_my_milestones": {
           "bytes": 697,
-          "sha256": "7b8f74742fd4b0c2321efa82eea71d70fa5304716337b870614d271b40b7d156"
+          "sha256": "f0257ba0fa5870cf9f981f55cb2002b401053ce05b3bf4f25f41956565f12a56"
         },
         "result.b.list_tasks": {
           "bytes": 5211,
-          "sha256": "4097d5d5d16255bdfc884948da17fe471ac2ba559d4e267ecb50f8008a4757b4"
+          "sha256": "5b0b0b63bb238be5f682b7d0becadd62cc51fd123fad842fb636cab0496daa28"
         },
         "result.fetch_chat_thread": {
           "bytes": 610,
