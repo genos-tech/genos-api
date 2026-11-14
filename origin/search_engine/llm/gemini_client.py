@@ -31,6 +31,7 @@ from google import genai
 
 from origin.search_engine.llm import gemini_cache, spend
 from origin.search_engine.llm.types import (
+    GEMINI_REFUSAL_FINISHES,
     AgentMessage,
     CallUsage,
     FunctionCall,
@@ -269,6 +270,14 @@ class GeminiClient:
                 usage = getattr(chunk, "usage_metadata", None)
                 if usage is not None:
                     last_usage_metadata = usage
+                # A blocked PROMPT comes back as a chunk with no candidates and a block
+                # reason (MIP-1525): nothing is generated, so without noting it here the loop
+                # would call the empty call an "empty response".
+                block = _enum_name(
+                    getattr(getattr(chunk, "prompt_feedback", None), "block_reason", None)
+                )
+                if block and block != "BLOCKED_REASON_UNSPECIFIED":
+                    sink.block_reason = block
                 # A streaming chunk's candidates carry content.parts —
                 # each part is either a text fragment or a function
                 # call. Yield them in order so the controller sees the
@@ -350,18 +359,18 @@ class GeminiClient:
 # --------------------------------------------------------------------------- #
 
 
-#: Finish reasons by which Gemini's safety layer ends a call (as opposed to the model finishing).
-_REFUSAL_FINISHES = frozenset(
-    {
-        "SAFETY",
-        "RECITATION",
-        "BLOCKLIST",
-        "PROHIBITED_CONTENT",
-        "SPII",
-        "IMAGE_SAFETY",
-        "IMAGE_PROHIBITED_CONTENT",
-    }
-)
+_REFUSAL_FINISHES = GEMINI_REFUSAL_FINISHES
+
+
+def _enum_name(raw: Any) -> str:
+    """An SDK enum (or a stub's string, or a dotted `str()` of the enum) as its bare upper-case
+    name ("MAX_TOKENS", "SAFETY", ...), "" if there is none."""
+    if raw is None:
+        return ""
+    name = getattr(raw, "name", None) or raw
+    if not isinstance(name, str):
+        return ""
+    return name.rsplit(".", 1)[-1].strip().upper()
 
 
 def _finish_reason(candidate: Any) -> str:
@@ -369,13 +378,7 @@ def _finish_reason(candidate: Any) -> str:
 
     The SDK gives an enum (`FinishReason.MAX_TOKENS`); a stub or an older SDK may give the string
     or a dotted `str()` of the enum, so normalise all three to the last dotted part."""
-    raw = getattr(candidate, "finish_reason", None)
-    if raw is None:
-        return ""
-    name = getattr(raw, "name", None) or raw
-    if not isinstance(name, str):
-        return ""
-    return name.rsplit(".", 1)[-1].strip().upper()
+    return _enum_name(getattr(candidate, "finish_reason", None))
 
 
 def _log_usage(usage: Any, model: str) -> None:
