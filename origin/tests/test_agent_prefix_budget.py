@@ -32,8 +32,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # tools (129,821 measured with the tag and label tools, 130,993 with the join-request
 # ones), and to 137,000 for MIP-1424's `list_my_unread` (134,315 measured: the tool is 1,339
 # characters, about the size of `list_my_inbox`, 1,230, and `list_my_chats`, 1,470), each time
-# with the routing cases for them in both languages, as the rule above asks.
-BUDGET_CHARS = 137_000
+# with the routing cases for them in both languages, as the rule above asks. To 138,500 for the
+# ten flags MIP-1089 turned on by default (137,391 measured: +3,076 over the 134,315 of the same
+# tree with every flag off, all of it in tool descriptions and one prompt rule; the grouped eval of
+# 2026-11-14 measured each flag and the all-on arm, see the hub comment on MIP-1089).
+BUDGET_CHARS = 138_500
 
 
 def _declared_chars() -> int:
