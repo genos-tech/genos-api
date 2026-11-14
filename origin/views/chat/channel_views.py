@@ -164,7 +164,9 @@ def _users_in_team(user_ids, team_id, channel=None):
         # treat as a malformed request rather than silently deduplicating.
         return None
 
-    users = list(User.objects.filter(id__in=valid))
+    # A deleted account is "unknown" here, like an id that never existed (MIP-1546): it cannot
+    # be put into a chat, whatever rows of its are left.
+    users = list(User.objects.filter(id__in=valid, is_deleted=False))
     if len(users) != len(valid):
         return None
     if not all(_channel_admissible(u.id, team_id, channel) for u in users):
@@ -550,7 +552,7 @@ class ChannelListView(AuthenticatedAPIView):
         # single-member channel.
         is_self_dm = str(other_user_id) == str(request.user.id)
         try:
-            other = User.objects.get(id=other_user_id)
+            other = User.objects.get(id=other_user_id, is_deleted=False)
         except (User.DoesNotExist, DjangoValidationError):
             # ValidationError, not ValueError: `id` is a UUIDField, and a
             # malformed one raises out of `to_python` — uncaught, that is

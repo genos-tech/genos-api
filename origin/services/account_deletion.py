@@ -70,6 +70,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
 from origin.services import blind_index, change_feed
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
+from origin.services.deleted_account_memberships import end_group_memberships
 from origin.services.security_events import record_security_event
 
 log = logging.getLogger(__name__)
@@ -343,6 +344,10 @@ def delete_account(user) -> dict:
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
         )
+        # The person is no longer a participant of a group or a project chat (MIP-1546). A DM
+        # or multi-person DM row stays: the others keep the conversation.
+        end_group_memberships(user.pk)
+
         # Two queryset updates no receiver hears (MIP-970): the person's teams
         # (and any team that died with them) change what members see.
         for team_id in {*solo_team_ids, *left_team_ids}:
