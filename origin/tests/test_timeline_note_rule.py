@@ -312,7 +312,7 @@ FORMERLY_DISAGREEING: dict[str, bool] = {
     # Was (get_note True, briefing False).
     "C channel deleted, still a member": False,
     # the note was filed under another kind than its channel's: the channel is looked up BY that
-    # kind, found nothing, so it opens through its owner and grants only. Was (True, False).
+    # kind, found nothing, so it opens through grants only (the owner is no exception, MIP-1492). Was (True, False).
     "C chat_type differs from the channel kind": False,
     # a project chat's readers are the project's (`chat_member_q`: "a stray channel row opens
     # nothing"): a channel-member row for someone NOT on the project, which `get_effective_role`

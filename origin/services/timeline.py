@@ -91,7 +91,7 @@ from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
 from origin.search_engine.text_extraction import extract_text
 from origin.services import briefing, item_lines, member_events
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
-from origin.views.utils.note_role import readable_note_ids
+from origin.views.utils.note_role import NOTE_TYPE_CHAT, readable_note_ids
 
 # --------------------------------------------------------------------------- #
 # The contract's constants                                                     #
@@ -809,7 +809,12 @@ def readable_notes(ctx: ToolContext, keys) -> set[tuple[int, int]]:
             .objects.filter(note_id__in=ids, team_id=ctx.team_id)
             .values_list("note_id", "owner_id")
         )
-        owned = {nid for nid, owner in rows if owner and str(owner) == me}
+        # A chat note has no author exception (MIP-1492): its author who left is a stranger.
+        owned = (
+            set()
+            if note_type == NOTE_TYPE_CHAT
+            else {nid for nid, owner in rows if owner and str(owner) == me}
+        )
         others = {nid for nid, _o in rows} - owned
         out |= {(note_type, n) for n in owned}
         out |= {(note_type, n) for n in readable_note_ids(me, note_type, others)}

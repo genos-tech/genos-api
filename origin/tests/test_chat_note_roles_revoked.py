@@ -72,14 +72,9 @@ class Base(ChatNoteFixtures):
         return channel
 
     def assertNoAccess(self, note):
-        """Every REST reader says no. The briefing, the timeline and MCP `get_note` (the search
-        ACL, `chat_note_acl_user_ids`) also admit the note's AUTHOR as the note's own ACL, by
-        MIP-1474's design: ending an author's access that way is a separate decision, not part
-        of ending the explicit role rows."""
+        """Every reader says no, the briefing, the timeline and MCP `get_note` included: the
+        note's author is no exception (MIP-1492)."""
         got = self.answers(note)
-        got.pop("briefing")
-        got.pop("mcp get_note")
-        got.pop("timeline")
         self.assertEqual(got, {k: False for k in got}, got)
 
     def explicit(self, user, note):
@@ -300,15 +295,13 @@ class LeavingAProject(Base):
         self.assertIsNone(self.explicit(self.reader, self.note))
         self.assertNoAccess(self.note)
 
-    def test_the_author_still_passes_the_briefing_timeline_and_mcp_after_leaving(self):
-        """NOT FIXED here, pinned so the split is visible (see `assertNoAccess`): `owner_id` on
-        the note is its author's own ACL for the briefing, the timeline and the search ACL behind
-        MCP `get_note`, by MIP-1474's design. Ending the explicit rows ends REST access only.
-        Changing it means editing `origin/search_engine/agent/acl.py` (model-visible)."""
+    def test_the_author_no_longer_passes_the_briefing_timeline_and_mcp_after_leaving(self):
+        """Flipped by MIP-1492 (it pinned the opposite): the note's `owner_id` was its author's
+        own ACL for the briefing, the timeline and the search ACL behind MCP `get_note`; a chat
+        note has no author exception now, so every reader refuses the author who left."""
         ProjectMembers.objects.filter(project=self.project, attendee=self.reader).delete()
         got = self.answers(self.note)
-        self.assertTrue(got["briefing"] and got["timeline"] and got["mcp get_note"], got)
-        self.assertFalse(got["rest single"] or got["sidebar list"] or got["get_effective_role"])
+        self.assertEqual(got, {k: False for k in got}, got)
 
     def test_the_other_members_keep_the_note(self):
         ProjectMembers.objects.filter(project=self.project, attendee=self.reader).delete()
