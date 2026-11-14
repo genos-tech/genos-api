@@ -3,8 +3,13 @@
 Rules (product decision, 2026-07-13):
 
   * A task with at least one OPEN blocker (a `TaskDependency` whose
-    blocker task is not Closed/Deleted and not soft-deleted) is
-    automatically moved to status "Blocked".
+    blocker task is not Closed/Deleted, not soft-deleted, and does not
+    read as Closed/Deleted under a Closed/Deleted parent, grandparent or
+    milestone: the closed-ancestor rule, MIP-1544) is automatically moved
+    to status "Blocked". Closing, deleting or reopening an ancestor re-runs
+    the sync for the dependents of everything under it
+    (`signals/dependency_signals.py`); the blocker's own status is never
+    changed.
   * When the LAST open blocker clears (blocker closed / deleted /
     dependency removed), a task whose status is exactly "Blocked"
     automatically returns to "Open".
@@ -61,15 +66,28 @@ CLOSED_STATUSES = ("Closed", "Deleted")
 AUTO_BLOCKABLE_STATUSES = ("Open", "WIP", "Pending")
 
 
-def _has_open_blocker(task_id: int) -> bool:
+def _has_open_blocker(task_id: int, team_id=None) -> bool:
+    """Whether anything the task depends on still blocks it: a blocker that is not Closed/Deleted,
+    not soft-deleted and does not read as Closed or Deleted under a Closed or Deleted ancestor
+    (`task_ancestry`, MIP-1544: the same rule `get_my_blockers` / `get_task_blockers` apply, so the
+    board and the tools agree). The blocker's own status is never written to."""
     from origin.models.task.task_models import TaskDependency  # noqa: PLC0415
+    from origin.services import task_ancestry  # noqa: PLC0415
 
-    return (
+    candidates = list(
         TaskDependency.objects.filter(blocked_task_id=task_id)
         .exclude(blocker_task__status__in=CLOSED_STATUSES)
         .exclude(blocker_task__is_deleted=True)
-        .exists()
+        .values_list("blocker_task_id", flat=True)
     )
+    if not candidates:
+        return False
+    if team_id is None:
+        return True
+    # Two more queries only when something still looks open; a task with no entry (another team's,
+    # no project) has only its own status, which is open: it blocks.
+    found = task_ancestry.effective_statuses(candidates, team_id)
+    return any((found[c].status if c in found else None) not in CLOSED_STATUSES for c in candidates)
 
 
 def _next_status(current: str | None, blocked: bool) -> str | None:
@@ -101,12 +119,12 @@ def sync_blocked_status(blocked_task_ids: Iterable[int]) -> int:
         try:
             task = (
                 TaskMaster.objects.filter(task_id=task_id)
-                .only("task_id", "status", "is_deleted", "is_init_task", "is_milestone")
+                .only("task_id", "status", "is_deleted", "is_init_task", "is_milestone", "team_id")
                 .first()
             )
             if task is None or task.is_deleted or task.is_init_task:
                 continue
-            blocked = _has_open_blocker(task_id)
+            blocked = _has_open_blocker(task_id, task.team_id)
 
             if task.is_milestone:
                 # Canonical milestone status is MilestoneMaster.status; the

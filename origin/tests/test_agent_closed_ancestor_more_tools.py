@@ -5,9 +5,10 @@ EFFECTIVE status, as `get_my_task_summary` does; `get_workload_distribution`, `g
 `get_my_schedule` leave out a task that reads as Closed or Deleted, as `get_my_focus_tasks` does.
 
 Not covered, on purpose (a question for the maintainer, in the PR): `get_task_throughput_stats` (counts
-close EVENTS: a task closed by an ancestor was never closed at a time), `get_my_blockers` /
-`get_task_blockers` (the dependency auto-Blocked flip does not apply the rule on the server), and
+close EVENTS: a task closed by an ancestor was never closed at a time) and
 `get_milestone_assignee_counts` (a milestone has no parent: the rule never applies to it).
+`get_my_blockers` / `get_task_blockers` and the dependency auto-Blocked flip are MIP-1544
+(`test_blockers_closed_ancestor`).
 
 Flag off every result is what it was: the fingerprint lines `result.b.<tool>` (`agent_fingerprint`) hold
 that, and the first test of each class compares the result with the flag off to the same call made
