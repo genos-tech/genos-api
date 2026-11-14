@@ -100,6 +100,7 @@ from origin.search_engine.agent.tools import (
     flagged_tool,
     flagged_tools,
 )
+from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies_for_caller
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -477,6 +478,14 @@ def _friendly_task_plan_arguments(
     preserved — the frontend's structured preview renders the same shape
     the model proposed.
     """
+    # A task proposed without a body shows (and gets) the project's template body (MIP-1510):
+    # the same text `create_task_plan` fills in when it runs. Read from the model's own `_args`
+    # (`out` has labels where ids were), and before the assignee pass below, which returns early
+    # when no one is named.
+    filled = fill_plan_task_bodies_for_caller(_args, access.team_id, access.user_id)
+    if filled is not _args:
+        out["tasks"] = filled["tasks"]
+
     tasks = out.get("tasks") if isinstance(out.get("tasks"), list) else []
     milestone = out.get("milestone") if isinstance(out.get("milestone"), dict) else None
 
