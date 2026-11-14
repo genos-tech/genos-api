@@ -853,9 +853,10 @@ class ToDoSerializerTests(BaseAPITestCase):
             {
                 "itemId", "groupId", "categoryId", "parentItemId", "title",
                 "notes", "isCompleted", "sortOrder", "tsCreatedAt",
-                "tsUpdatedAt", "tsCompletedAt",
+                "tsUpdatedAt", "tsCompletedAt", "via",
             },
         )
+        self.assertIsNone(data["via"])  # MIP-1488: no write source recorded
         self.assertEqual(data["itemId"], item.item_id)
         self.assertEqual(data["groupId"], group.group_id)
         self.assertEqual(data["title"], "Do the thing")
@@ -948,10 +949,11 @@ class NoteVersionSerializerTests(BaseAPITestCase):
             set(data.keys()),
             {
                 "versionNo", "editor", "title", "restoredFromVersionNo",
-                "tsCreatedAt", "tsUpdatedAt",
+                "tsCreatedAt", "tsUpdatedAt", "via",
             },
         )
         self.assertNotIn("body", data)
+        self.assertIsNone(data["via"])  # MIP-1488: no write source recorded
         self.assertEqual(data["title"], "V1 title")
         # editor payload is the embedded camelCase dict.
         self.assertEqual(data["editor"]["userId"], str(self.user.id))
