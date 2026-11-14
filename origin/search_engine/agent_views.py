@@ -105,6 +105,8 @@ from origin.search_engine.agent.mentions import (
 )
 from origin.search_engine.agent.multi_turn import PriorContext
 from origin.search_engine.agent.note_summary import (
+    NOTE_NOT_FOUND,
+    NoteNotFoundError,
     NoteSummaryError,
     fetch_note_for_agent,
     note_type_label,
@@ -1510,7 +1512,11 @@ class AgentAskView(AuthenticatedAPIView):
                         note_id=n_note_id,
                         user_id=user_id,
                         model_override=summaries_pin,
+                        team_id=str(team_id),
                     )
+            except NoteNotFoundError as e:
+                # missing, in another team, or unreadable: one answer (MIP-1516)
+                return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
             except NoteSummaryError as e:
                 msg = str(e).lower()
                 if "authorized" in msg or "not found" in msg:
@@ -2820,7 +2826,8 @@ class NoteSummaryView(AuthenticatedAPIView):
 
     Errors:
         400  invalid input
-        403  not authorized to read the note (or note not found)
+        404  note not found: missing, in another team than `team_id`, or not readable by the
+             caller (one answer for all three), or the caller is not part of `team_id`
         429  LLM-ask quota exhausted (only fires when a regeneration was needed)
     """
 
@@ -2852,6 +2859,12 @@ class NoteSummaryView(AuthenticatedAPIView):
 
         force = bool(data.get("force_regenerate"))
 
+        # The tenant check: the caller must take part in the team the body names (the gate `/ask/`
+        # has), and the note is looked up only inside it. Anything else is the answer a missing
+        # note gets, so neither a team id nor a note id can be probed (MIP-1516).
+        if not participates_in_team(team_id, user_id):
+            return Response({"error": NOTE_NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
+
         chosen = _resolve_choice_for(request.user)
 
         # 1. Cheap path: peek the cache. ACL is enforced here.
@@ -2865,6 +2878,7 @@ class NoteSummaryView(AuthenticatedAPIView):
                     note_type=note_type,
                     note_id=note_id,
                     user_id=user_id,
+                    team_id=str(team_id),
                 )
                 if not record.body_text.strip() and not record.title.strip():
                     return Response(
@@ -2877,15 +2891,12 @@ class NoteSummaryView(AuthenticatedAPIView):
                     note_type=note_type,
                     note_id=note_id,
                     user_id=user_id,
+                    team_id=str(team_id),
                 )
+        except NoteNotFoundError as e:
+            return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
         except NoteSummaryError as e:
-            msg = str(e)
-            code = (
-                status.HTTP_403_FORBIDDEN
-                if ("authorized" in msg.lower() or "not found" in msg.lower())
-                else status.HTTP_400_BAD_REQUEST
-            )
-            return Response({"error": msg}, status=code)
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         if cached is not None:
             return Response(
