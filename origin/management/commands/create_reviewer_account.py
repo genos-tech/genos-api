@@ -25,8 +25,14 @@ daily `cleanup_demo_users` sweep. The reviewer is therefore a normal user
 (`is_demo=False`) who owns the seeded team, and the seeder leaves that team
 `is_demo=True`. "A non-demo user who owns a demo team" is the reviewer
 marker: only the seeder creates a demo team (the team-create view never
-passes `is_demo` through), a demo team's owner is otherwise always a demo
-visitor, and the cleanup sweep needs BOTH flags, so it never reaches it. No
+passes `is_demo` through) and a demo team's owner is, in practice, a demo
+visitor; the cleanup sweep needs BOTH flags, so it never reaches the
+reviewer. Not a hard guarantee: the code does not stop a demo team's owner
+being changed (`TeamMasterView` ownership transfer to a member, or a real
+user being added to a demo team), so the marker is "shaped like the seeder's
+output", not a cryptographic one. The failure direction that matters is
+safe: a reviewer whose team was handed to a sample teammate is refused, and
+no ordinary user can be made to look like a reviewer by creating a team. No
 migration needed. An address that belongs to any other account (a real
 user, a demo visitor) is refused, and nothing is changed.
 
@@ -110,7 +116,7 @@ def reviewer_team(user) -> TeamMaster | None:
     """The reviewer's seeded team, or None when `user` is not a reviewer.
 
     A reviewer is a NON-demo user who owns a demo team; see the module
-    docstring for why that shape is unforgeable and survives the demo sweep.
+    docstring for what that shape does and does not guarantee, and why it survives the demo sweep.
     A soft-deleted team still marks its owner (so the password can still be
     reset); the summary says it was deleted.
     """
