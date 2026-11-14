@@ -2,7 +2,7 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py agent_fingerprint --write-golden` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "0dd888c1b07173d37177810e0b69773970fdfa00476df6f7b8cd4b3a2175548e",
+      "all": "25c76acda384b5b383fc2428d0caa96c4227f814dded3ae6e01de1ae2a4db77f",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27254,
@@ -153,32 +153,32 @@
           "sha256": "deed7095a5f946277261de9695683e2dda795f9398a1b162bbfd5e89f7d39659"
         },
         "tools.claude.full": {
-          "bytes": 131212,
-          "sha256": "ab937eecc58a9282248db88e3fcc07bdb4dc6e3a5b7043c2e2750e005fcf2fbe"
+          "bytes": 131421,
+          "sha256": "a7ef6c9d0803af8c376ae27b59e8fae4e4e8e3fb61b30f8404691723b35139fb"
         },
         "tools.claude.read": {
           "bytes": 58361,
           "sha256": "dd2bd2a0e9df6814f5308bbb2afa7d28e365a7339f12b89f866dd8e75cc651d9"
         },
         "tools.gemini.full": {
-          "bytes": 139356,
-          "sha256": "a40caaff3fedadbbb955235ffb9f89d43f0b58d0bc48ccd72d4f43732b2505ef"
+          "bytes": 139565,
+          "sha256": "a4b148cb53842cbe4e4184b043450f196b4ee06efaf0b6d05397c79aed04973e"
         },
         "tools.gemini.read": {
           "bytes": 61677,
           "sha256": "4414bed56a77c07f34d9ada9569a8661818389fc013004be441cd055d453def2"
         },
         "tools.neutral.full": {
-          "bytes": 127612,
-          "sha256": "612b5cd1edc96152978a433bd80069686eda36e34a095f377421a3be69d4d8a7"
+          "bytes": 127821,
+          "sha256": "2cc18e0605982ebb8c586c8eaed881a629ce031a8d486c8464ef2290a8f6acc4"
         },
         "tools.neutral.read": {
           "bytes": 56617,
           "sha256": "8acf20fe95f64fe0e86616050958ebf3f0331c42bbc4cb0b1c871d9cbeb79a28"
         },
         "tools.openai.full": {
-          "bytes": 137600,
-          "sha256": "6e59199dedb15e1303481ced88bfc365652b2387532c51ff937a0359edf14c68"
+          "bytes": 137809,
+          "sha256": "1906f8cd4a3e7aa1a77328aad0a8421105a3b616032ad3e9b7339cd2b0152e30"
         },
         "tools.openai.read": {
           "bytes": 61598,
@@ -187,7 +187,7 @@
       }
     },
     "production": {
-      "all": "e8af7eba14ccd4abee2a035b90ebc222b3fd5d6722b37000ff96a5b6832c59ea",
+      "all": "efa6999117cc3eeb3614581196c34012d780715c8017290ec1c6605d1a8155fa",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27482,
@@ -338,32 +338,32 @@
           "sha256": "0f91563de066d29a0bad81904b1a05efe0a8a1637549055ebb210e6b9de27d7c"
         },
         "tools.claude.full": {
-          "bytes": 136051,
-          "sha256": "caeed15c642a663480b266d1c4661cf9470a682e6a2e0e886ef7b0a295f261ff"
+          "bytes": 136260,
+          "sha256": "a3620a5095adeaf24d656cd59a676af957daeb3bf0cd90e2b7892a9e51ff6e38"
         },
         "tools.claude.read": {
           "bytes": 63200,
           "sha256": "dcd7645bd42ab8c7a4204961b1799ef89c39941762fef39db1b8b37cb86bad7f"
         },
         "tools.gemini.full": {
-          "bytes": 144319,
-          "sha256": "6c78c74bdda8a701b6668efd52bc4be8a838906faf7021af4f4905632da77d33"
+          "bytes": 144528,
+          "sha256": "fbdff652196ca9837b4ae4f0e1eccbff7311d2db87858db91bfd77b9c4f2f3f4"
         },
         "tools.gemini.read": {
           "bytes": 66640,
           "sha256": "c660ed5eb1c82a4c3c2bdf71f742dcca830a95eeabff2e0e52cc13f50fa62857"
         },
         "tools.neutral.full": {
-          "bytes": 132403,
-          "sha256": "c61cafd0bd81b19f3c90dca97c1bae70d5d6d26bccedc2feddbc6e998e44c65f"
+          "bytes": 132612,
+          "sha256": "1e5f45e471d2db60c4f3c7e5550c195740b8c4ff21030dfaf40b8deb0cb8d320"
         },
         "tools.neutral.read": {
           "bytes": 61408,
           "sha256": "61a0f66081cc6ec8faed0022ecebf70b9826d336d3f147e59ae7b65a2ff4fee2"
         },
         "tools.openai.full": {
-          "bytes": 142522,
-          "sha256": "4815a3c3d36c9c981f78741a147471ade22b9e5a5a8fc1bb02e53ccea136fe74"
+          "bytes": 142731,
+          "sha256": "0f76c6f7725697eb7d20530b2a62a477597c1f8a5bd4e40cbf6fe29063d23057"
         },
         "tools.openai.read": {
           "bytes": 66520,
