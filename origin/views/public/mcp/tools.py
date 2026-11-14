@@ -126,7 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
-from origin.search_engine.agent.tools import get_mcp_tool
+from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import (
@@ -511,8 +511,19 @@ CATALOG: tuple[McpTool, ...] = (
             "hit carries `milestone_id`, for `get_milestone_summary`) and "
             "`note_folder` (find a folder by name: its hit carries "
             "`folder_id`, for `create_note` / `update_note`; folders are only "
-            "returned when asked for)."
+            "returned when asked for). To ask what changed lately, pass "
+            "`updated_after` and/or `updated_before` (an ISO date or date-time, UTC "
+            "unless it carries an offset): the window is applied inside the search, so "
+            "the limit is filled from it. Each hit's `updated_at` is when its "
+            "best-matching part (task, comment, message or note) last changed. "
+            '`order: "newest"` lists the matches by `updated_at`, most recent first, '
+            "instead of by relevance; it re-orders what was found, so pair it with "
+            '`updated_after`. Example: `{"query": "payment retries", '
+            '"updated_after": "2026-11-07", "order": "newest"}`.'
         ),
+        # Published here and not on the shared tool: its declaration is what the in-app model
+        # reads. `search_kb._run` honours them only for an MCP call (MIP-1379).
+        schema_overrides=dict(search_window.SCHEMA),
     ),
     McpTool(
         name="get_note",
@@ -2466,6 +2477,12 @@ _ARGUMENT_ALIASES = {
     # milestone in it takes `milestone_folder_id`, so it can't be mistaken for a
     # note folder (MIP-879). Ignored by any tool that does not accept it.
     "folder_id": "milestone_folder_id",
+    # `search_workspace`'s window and order (MIP-1379), by the names a person reaches for.
+    "since": "updated_after",
+    "after": "updated_after",
+    "until": "updated_before",
+    "before": "updated_before",
+    "sort": "order",
 }
 
 
