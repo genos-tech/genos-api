@@ -2083,9 +2083,7 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
         calendar_id = result.get("calendar_id")
         if call_name == "list_calendar_events":
             rows = [e for e in result.get("events") or [] if isinstance(e, dict)]
-            built = [
-                _calendar_event_source(account_id, calendar_id, e.get("id"), e) for e in rows
-            ]
+            built = [_calendar_event_source(account_id, calendar_id, e.get("id"), e) for e in rows]
         else:
             # A read or a create/update returns the shaped event (`id`); a delete and an update that
             # changed nothing name it by `event_id`.

@@ -111,7 +111,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "__summary__": f"Created event '{summary}' on `{calendar_id}`.",
     }
     if parity_on():
-        result = {**cite_event(result, account.id, ctx), **account_fields(account, defaulted=not account_ref)}
+        result = {
+            **cite_event(result, account.id, ctx),
+            **account_fields(account, defaulted=not account_ref),
+        }
     return result
 
 

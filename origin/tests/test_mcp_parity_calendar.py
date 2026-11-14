@@ -90,9 +90,7 @@ class FlagOnTests(CalendarMcpBase):
 
     def test_the_result_has_no_citation_token_for_a_client_with_no_grammar_for_one(self):
         self._key(scope=SCOPE_READ)
-        text, _ = self._tool_text(
-            self._call("get_calendar_event", {"event_id": "wk1"})
-        )
+        text, _ = self._tool_text(self._call("get_calendar_event", {"event_id": "wk1"}))
         self.assertNotIn("calendar_event:", text)
         self.assertNotIn('"cite"', text)
         listed, _ = self._tool_text(self._call("list_calendar_events", {}))
@@ -123,9 +121,7 @@ class FlagOnTests(CalendarMcpBase):
             self._call("list_calendar_events", {"account": str(self.stranger.id)})
         )
         made_up, _ = self._tool_text(
-            self._call(
-                "list_calendar_events", {"account": "11111111-1111-4111-8111-111111111111"}
-            )
+            self._call("list_calendar_events", {"account": "11111111-1111-4111-8111-111111111111"})
         )
         self.assertEqual(mine, made_up)
 
@@ -143,7 +139,9 @@ class FlagOnTests(CalendarMcpBase):
         self._key(scope=SCOPE_WRITE)
         text, is_error = self._tool_text(
             self._call(
-                "delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)}, era=MODERN
+                "delete_calendar_event",
+                {"event_id": "hm1", "account": str(self.home.id)},
+                era=MODERN,
             )
         )
         self.assertTrue(is_error)
@@ -169,7 +167,9 @@ class FlagOnTests(CalendarMcpBase):
         self.assertFalse(is_error, text)
         payload = json.loads(text[text.index("{") :])
         self.assertEqual(len(payload["accounts"]), 2)
-        self.assertEqual({c["account_id"] for c in payload["calendars"]}, {str(self.work.id), str(self.home.id)})
+        self.assertEqual(
+            {c["account_id"] for c in payload["calendars"]}, {str(self.work.id), str(self.home.id)}
+        )
 
     def test_the_descriptions_say_the_account_changes(self):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)

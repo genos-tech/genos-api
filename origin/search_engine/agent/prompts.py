@@ -576,9 +576,7 @@ def _with_reject_reason_rule(prompt: str) -> str:
 # MIP-1059: with `AGENT_PARITY_TOOLS` on, a calendar event can be cited. The prompt says "cite ONLY the
 # id shapes shown above", so the new shape has to be listed there and not only in a tool result: one line
 # after the to-do shape, nothing else moves.
-_TODO_SHAPE_END = (
-    "     copy local_date and item_id verbatim from the todo tool results) —\n"
-)
+_TODO_SHAPE_END = "     copy local_date and item_id verbatim from the todo tool results) —\n"
 _TODO_SHAPE_END_WITH_EVENT = (
     "     copy local_date and item_id verbatim from the todo tool results),\n"
     '     "calendar_event:<account_id>:<event_id>" (an event\'s `cite` value, copied verbatim) —\n'

@@ -144,9 +144,7 @@ def account_arg(args: dict[str, Any], *, write: bool) -> str | None:
     return str(raw)
 
 
-def resolve_google_calendar_account(
-    user_id: str, account: str | None = None
-) -> ConnectedAccount:
+def resolve_google_calendar_account(user_id: str, account: str | None = None) -> ConnectedAccount:
     """Resolve the user's Google ConnectedAccount, requiring calendar scope.
 
     `account` (MIP-1059, only ever passed while `AGENT_PARITY_TOOLS` is on) names one of the

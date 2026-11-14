@@ -208,7 +208,12 @@ class UpdateTwinTests(TwinBase):
             "tool",
             lambda: self.tool(
                 UPDATE_CALENDAR_EVENT,
-                {"event_id": TOOL, "account": str(self.home.id), "attendees": [], "add_meet": False},
+                {
+                    "event_id": TOOL,
+                    "account": str(self.home.id),
+                    "attendees": [],
+                    "add_meet": False,
+                },
             ),
         )
         self.assert_twins(app, tool)
@@ -222,7 +227,11 @@ class UpdateTwinTests(TwinBase):
             "app",
             lambda: self.client.patch(
                 f"{EVENTS}{APP}/",
-                {"account_id": str(self.home.id), "calendar_id": HOLIDAY, "summary": "Culture Day!"},
+                {
+                    "account_id": str(self.home.id),
+                    "calendar_id": HOLIDAY,
+                    "summary": "Culture Day!",
+                },
                 format="json",
             ),
         )
@@ -246,10 +255,12 @@ class UpdateTwinTests(TwinBase):
         for event_id in (APP, TOOL):
             self.google.add_event(self.work, "primary", event_id, summary="Standup")
         app = self.record(
-            "app", lambda: self.client.patch(f"{EVENTS}{APP}/", {"summary": "Standup!"}, format="json")
+            "app",
+            lambda: self.client.patch(f"{EVENTS}{APP}/", {"summary": "Standup!"}, format="json"),
         )
         tool = self.record(
-            "tool", lambda: self.tool(UPDATE_CALENDAR_EVENT, {"event_id": TOOL, "summary": "Standup!"})
+            "tool",
+            lambda: self.tool(UPDATE_CALENDAR_EVENT, {"event_id": TOOL, "summary": "Standup!"}),
         )
         self.assert_twins(app, tool)
         self.assertEqual({c.token for c in app["calls"] + tool["calls"]}, {token_for(self.work)})
@@ -309,9 +320,7 @@ class CreateTwinTests(TwinBase):
         )
         self.assertEqual(app["out"].status_code, 201)
         self.assert_twins(app, tool, event_ids=("new1", "new2"))
-        self.assertEqual(
-            {c.token for c in app["calls"] + tool["calls"]}, {token_for(self.home)}
-        )
+        self.assertEqual({c.token for c in app["calls"] + tool["calls"]}, {token_for(self.home)})
 
     def test_an_all_day_event(self):
         app = self.record(
@@ -408,11 +417,15 @@ class DeleteTwinTests(TwinBase):
     def test_a_delete_on_the_second_account(self):
         app = self.record(
             "app",
-            lambda: self.client.delete(f"{EVENTS}{APP}/?account_id={self.home.id}&calendar_id=primary"),
+            lambda: self.client.delete(
+                f"{EVENTS}{APP}/?account_id={self.home.id}&calendar_id=primary"
+            ),
         )
         tool = self.record(
             "tool",
-            lambda: self.tool(DELETE_CALENDAR_EVENT, {"event_id": TOOL, "account": str(self.home.id)}),
+            lambda: self.tool(
+                DELETE_CALENDAR_EVENT, {"event_id": TOOL, "account": str(self.home.id)}
+            ),
         )
         self.assertEqual(app["out"].status_code, 204)
         self.assert_twins(app, tool)
@@ -422,11 +435,15 @@ class DeleteTwinTests(TwinBase):
     def test_deleting_what_is_already_gone_succeeds_for_both(self):
         app = self.record(
             "app",
-            lambda: self.client.delete(f"{EVENTS}nope/?account_id={self.home.id}&calendar_id=primary"),
+            lambda: self.client.delete(
+                f"{EVENTS}nope/?account_id={self.home.id}&calendar_id=primary"
+            ),
         )
         tool = self.record(
             "tool",
-            lambda: self.tool(DELETE_CALENDAR_EVENT, {"event_id": "nope", "account": str(self.home.id)}),
+            lambda: self.tool(
+                DELETE_CALENDAR_EVENT, {"event_id": "nope", "account": str(self.home.id)}
+            ),
         )
         self.assertEqual(app["out"].status_code, 204)
         self.assertTrue(tool["out"]["already_gone"])
@@ -442,11 +459,15 @@ class DeleteTwinTests(TwinBase):
     def test_no_row_in_any_model_is_written_by_either(self):
         app = self.record(
             "app",
-            lambda: self.client.delete(f"{EVENTS}{APP}/?account_id={self.home.id}&calendar_id=primary"),
+            lambda: self.client.delete(
+                f"{EVENTS}{APP}/?account_id={self.home.id}&calendar_id=primary"
+            ),
         )
         tool = self.record(
             "tool",
-            lambda: self.tool(DELETE_CALENDAR_EVENT, {"event_id": TOOL, "account": str(self.home.id)}),
+            lambda: self.tool(
+                DELETE_CALENDAR_EVENT, {"event_id": TOOL, "account": str(self.home.id)}
+            ),
         )
         self.assertEqual(app["rows"], {})
         self.assertEqual(tool["rows"], {})

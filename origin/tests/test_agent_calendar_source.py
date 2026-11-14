@@ -42,7 +42,6 @@ from origin.search_engine.agent.source_visibility import (
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
-from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
 from origin.search_engine.agent.tools.get_calendar_event import GET_CALENDAR_EVENT
 from origin.search_engine.agent.tools.list_calendar_events import LIST_CALENDAR_EVENTS
 from origin.search_engine.agent.tools.update_calendar_event import UPDATE_CALENDAR_EVENT
@@ -111,7 +110,11 @@ class ChipFromResultTests(SimpleTestCase):
 
     def test_every_write_chips_the_event_and_marks_it_operated(self):
         results = {
-            "create_calendar_event": {**event_row(), "calendar_id": "primary", "account_id": ACCOUNT},
+            "create_calendar_event": {
+                **event_row(),
+                "calendar_id": "primary",
+                "account_id": ACCOUNT,
+            },
             "update_calendar_event": {
                 **event_row(),
                 "calendar_id": "primary",
@@ -155,7 +158,12 @@ class ChipFromResultTests(SimpleTestCase):
                 self.assertEqual(
                     _ui_sources_from_tool_result(
                         name,
-                        {**event_row(), "event_id": "evt1", "calendar_id": "primary", "events": [event_row()]},
+                        {
+                            **event_row(),
+                            "event_id": "evt1",
+                            "calendar_id": "primary",
+                            "events": [event_row()],
+                        },
                     ),
                     [],
                 )
@@ -239,7 +247,9 @@ class ReplayTests(SimpleTestCase):
         other = str(uuid.uuid4())
         run = _StubRun(
             [
-                _StubStep("get_calendar_event", {**event_row(), "calendar_id": "primary", "account_id": a})
+                _StubStep(
+                    "get_calendar_event", {**event_row(), "calendar_id": "primary", "account_id": a}
+                )
                 for a in (ACCOUNT, other)
             ]
         )
@@ -279,9 +289,7 @@ class CitationTests(SimpleTestCase):
 
     def test_a_recurring_instance_id_is_one_token(self):
         token = f"calendar_event:{ACCOUNT}:abc_20261201T010000Z"
-        self.assertEqual(
-            citation_resolver.extract_citation_tokens(f"[daily]({token})"), {token}
-        )
+        self.assertEqual(citation_resolver.extract_citation_tokens(f"[daily]({token})"), {token})
 
     def test_prose_that_merely_says_the_word_is_not_a_citation(self):
         for text in (
@@ -295,10 +303,13 @@ class CitationTests(SimpleTestCase):
 
     def test_an_event_in_the_ranking_floats_to_the_front_when_it_is_cited(self):
         events = [
-            {"entity_type": EVENT_SOURCE, "entity_id": f"calendar_event:{ACCOUNT}:{i}"} for i in "ab"
+            {"entity_type": EVENT_SOURCE, "entity_id": f"calendar_event:{ACCOUNT}:{i}"}
+            for i in "ab"
         ]
         ranked = _rank_sources_by_citation(f"Only [b]({events[1]['entity_id']}) matters.", events)
-        self.assertEqual([r["entity_id"] for r in ranked], [events[1]["entity_id"], events[0]["entity_id"]])
+        self.assertEqual(
+            [r["entity_id"] for r in ranked], [events[1]["entity_id"], events[0]["entity_id"]]
+        )
 
     def test_the_resolver_never_back_fills_an_event_and_asks_nothing_of_anyone(self):
         with mock.patch("requests.request", side_effect=AssertionError("no network")):
@@ -360,7 +371,11 @@ class RealResultTests(CalendarBase):
             self.chip_of("list_calendar_events", listed)["entity_id"], listed["events"][0]["cite"]
         )
         for name, tool, args in (
-            ("get_calendar_event", GET_CALENDAR_EVENT, {"event_id": "hm1", "account": str(self.home.id)}),
+            (
+                "get_calendar_event",
+                GET_CALENDAR_EVENT,
+                {"event_id": "hm1", "account": str(self.home.id)},
+            ),
             (
                 "update_calendar_event",
                 UPDATE_CALENDAR_EVENT,

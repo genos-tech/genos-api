@@ -127,9 +127,7 @@ class FakeGoogle:
             return self._member(method, token, calendar_id, "/".join(parts[3:]), call)
         return response({}, 404)
 
-    def _collection(
-        self, method: str, token: str, calendar_id: str, call: Call
-    ) -> mock.MagicMock:
+    def _collection(self, method: str, token: str, calendar_id: str, call: Call) -> mock.MagicMock:
         if method == "GET":
             items = [
                 e

@@ -563,6 +563,71 @@ def seed_milestone_convert(info: dict[str, Any]) -> None:
     milestone(spec["spring"], spec["spring_tasks"])
 
 
+# --------------------------------------------------------------------------- #
+# t1059: a member with two Google accounts, and one with a single account      #
+# --------------------------------------------------------------------------- #
+
+
+def _calendar_accounts(info: dict[str, Any], kinds: tuple[str, ...]) -> None:
+    """The viewer's own Google accounts (MIP-1059), with Calendar access and a token that never needs
+    refreshing, and the in-process Google behind them (`calendar_stub`). Each account is looked for by its
+    own provider id, so a seed that stopped half way is finished by the next run and a finished one writes
+    nothing. The first kind is the default account (the oldest, and the login identity when the member has
+    none yet)."""
+    from datetime import timedelta  # noqa: PLC0415
+
+    from django.utils import timezone  # noqa: PLC0415
+
+    from origin.models.common.user_models import ConnectedAccount  # noqa: PLC0415
+    from origin.search_engine.agent.evals.group import calendar_stub  # noqa: PLC0415
+    from origin.services.oauth.accounts import accounts_for  # noqa: PLC0415
+    from origin.services import crypto  # noqa: PLC0415
+
+    user_id = info["user_id"]
+    has_identity = ConnectedAccount.objects.filter(user_id=user_id, is_login_identity=True).exists()
+    for index, kind in enumerate(kinds):
+        token = calendar_stub.token_for(info["team"], info["person"], kind)
+        provider_id = f"evalcal-{info['team']}-{info['person']}-{kind}"
+        if ConnectedAccount.objects.filter(provider="google", provider_user_id=provider_id).exists():
+            continue
+        ConnectedAccount.objects.create(
+            user_id=user_id,
+            provider="google",
+            provider_user_id=provider_id,
+            provider_email=calendar_stub.LABELS[kind],
+            scopes=[
+                "openid",
+                "email",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
+            ],
+            access_token_encrypted=crypto.encrypt(token),
+            access_token_expires_at=timezone.now() + timedelta(days=3650),
+            is_login_identity=(index == 0 and not has_identity),
+        )
+    # Which account the tools take when none is named is the first one, and the cases rely on it.
+    first = accounts_for(_user(user_id), "google").first()
+    info["default_account_id"] = str(first.id) if first is not None else ""
+    calendar_stub.install()
+
+
+def _user(user_id: Any) -> Any:
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+    return CustomUser.objects.get(id=user_id)
+
+
+def seed_calendar_two_accounts(info: dict[str, Any]) -> None:
+    """A work account (the default: "Sprint planning") and a personal one ("Dentist appointment",
+    "Piano lesson"), the events a member asks about on the SECOND account."""
+    _calendar_accounts(info, ("work", "home"))
+
+
+def seed_calendar_one_account(info: dict[str, Any]) -> None:
+    """One work account only: the member for whom naming an account would be a guess."""
+    _calendar_accounts(info, ("work",))
+
+
 #: The story's people (`a` client, `b` PM, `c` developer) who can read a seed's rows: the guard
 #: `test_agent_eval_group_seeds` checks only their cases against the seed's text.
 VISIBLE_TO: dict[str, frozenset[str]] = {
@@ -571,6 +636,8 @@ VISIBLE_TO: dict[str, frozenset[str]] = {
     "closed_ancestor_tree": frozenset({"a"}),  # project ECT: the viewer alone
     "task_files": frozenset({"b"}),  # project EAF: the viewer alone
     "milestone_convert": frozenset({"b"}),  # projects EMC and EMA: the viewer alone
+    "calendar_two_accounts": frozenset({"b"}),  # the viewer's own Google accounts
+    "calendar_one_account": frozenset({"a", "c"}),  # the viewer's own Google account
 }
 
 
@@ -601,6 +668,14 @@ def seed_texts(name: str, lang: str) -> list[str]:
             spec["spring"],
             *spec["spring_tasks"],
         ]
+    if name in ("calendar_two_accounts", "calendar_one_account"):
+        from origin.search_engine.agent.evals.group import calendar_stub  # noqa: PLC0415
+
+        kinds = ("work", "home") if name == "calendar_two_accounts" else ("work",)
+        return [
+            *[calendar_stub.LABELS[k] for k in kinds],
+            *[spec[1] for k in kinds for spec in calendar_stub.EVENTS[lang][k]],
+        ]
     if name == "note_threads_stub":
         t = NOTE_THREAD_TEXT[lang]
         return [*NOTE_TITLES[lang].values(), NOTE_BODY[lang], *t.values()]
@@ -613,6 +688,8 @@ SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "closed_ancestor_tree": seed_closed_ancestor_tree,
     "task_files": seed_task_files,
     "milestone_convert": seed_milestone_convert,
+    "calendar_two_accounts": seed_calendar_two_accounts,
+    "calendar_one_account": seed_calendar_one_account,
 }
 
 

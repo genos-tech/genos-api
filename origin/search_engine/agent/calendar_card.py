@@ -38,8 +38,8 @@ import requests
 from apis.request_id import describe_upstream
 from origin.models.common.user_models import ConnectedAccount, CustomUser
 from origin.search_engine.agent.calendar import (
-    CALENDAR_EVENTS_SCOPE,
     ACCOUNT_ARG,
+    CALENDAR_EVENTS_SCOPE,
     google_calendar_request,
     named_google_account,
     segment,

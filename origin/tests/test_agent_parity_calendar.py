@@ -80,8 +80,12 @@ class CalendarBase(TestCase):
         patcher = mock.patch.dict(settings.SEARCH_ENGINE, ON if self.flag else OFF)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.user = User.objects.create_user(username="me", email="me@x.example", password="pw12345!")
-        self.other = User.objects.create_user(username="you", email="you@x.example", password="pw12345!")
+        self.user = User.objects.create_user(
+            username="me", email="me@x.example", password="pw12345!"
+        )
+        self.other = User.objects.create_user(
+            username="you", email="you@x.example", password="pw12345!"
+        )
         self.team = TeamMaster.objects.create(
             team_name="T", team_email="t@x.example", owner=self.user
         )
@@ -89,7 +93,9 @@ class CalendarBase(TestCase):
         TeamMembers.objects.create(team=self.team, attendee=self.other)
         self.work = connect_google(self.user, "sub-work", "me@work.example", login=True)
         self.home = connect_google(self.user, "sub-home", "me@home.example")
-        self.stranger = connect_google(self.other, "sub-stranger", "you@elsewhere.example", login=True)
+        self.stranger = connect_google(
+            self.other, "sub-stranger", "you@elsewhere.example", login=True
+        )
         self.google = FakeGoogle()
         patched = self.google.patched()
         patched.__enter__()
@@ -128,7 +134,11 @@ class AccountGuardTests(CalendarBase):
         self.assertEqual(out["account_id"], str(self.home.id))
 
     def test_the_id_is_read_however_it_is_spelled(self):
-        for spelling in (str(self.home.id).upper(), str(self.home.id).replace("-", ""), f" {self.home.id} "):
+        for spelling in (
+            str(self.home.id).upper(),
+            str(self.home.id).replace("-", ""),
+            f" {self.home.id} ",
+        ):
             with self.subTest(spelling=spelling):
                 self.assertEqual(named_google_account(self.user, spelling).id, self.home.id)
 
@@ -269,7 +279,9 @@ class CallTests(CalendarBase):
         self.assertEqual(call.path, "/calendars/primary/events")
         self.assertEqual(call.body["summary"], "Design review")
         self.assertEqual(out["account_id"], str(self.home.id))
-        self.assertEqual([k[0] for k in self.google.events if k[2] == out["id"]], [token_for(self.home)])
+        self.assertEqual(
+            [k[0] for k in self.google.events if k[2] == out["id"]], [token_for(self.home)]
+        )
 
     def test_create_with_no_account_is_the_first(self):
         out = CREATE_CALENDAR_EVENT.run(CREATE_ARGS, self.ctx)
@@ -279,7 +291,8 @@ class CallTests(CalendarBase):
 
     def test_update_and_delete_on_the_second_account(self):
         updated = UPDATE_CALENDAR_EVENT.run(
-            {"event_id": "hm1", "summary": "Dentist (moved)", "account": str(self.home.id)}, self.ctx
+            {"event_id": "hm1", "summary": "Dentist (moved)", "account": str(self.home.id)},
+            self.ctx,
         )
         self.assertEqual(self.google.of("PATCH")[0].token, token_for(self.home))
         self.assertEqual(updated["changed_fields"], ["summary"])
@@ -437,9 +450,7 @@ class ListCalendarsTests(CalendarBase):
     def test_an_account_without_calendar_access_is_reported_not_called(self):
         bare = connect_google(self.user, "sub-bare", "me@bare.example", scopes=["openid"])
         out = LIST_CALENDARS.run({}, self.ctx)
-        self.assertEqual(
-            [f["account_id"] for f in out["failed_accounts"]], [str(bare.id)]
-        )
+        self.assertEqual([f["account_id"] for f in out["failed_accounts"]], [str(bare.id)])
         self.assertNotIn(token_for(bare), {c.token for c in self.google.calls})
 
     def test_every_account_failing_is_an_error(self):
@@ -505,9 +516,7 @@ class FlagOffTests(CalendarBase):
 
     def test_results_carry_none_of_the_new_keys(self):
         listed = LIST_CALENDAR_EVENTS.run({}, self.ctx)
-        self.assertEqual(
-            set(listed), {"calendar_id", "from", "to", "events", "__summary__"}
-        )
+        self.assertEqual(set(listed), {"calendar_id", "from", "to", "events", "__summary__"})
         self.assertNotIn("cite", listed["events"][0])
         created = CREATE_CALENDAR_EVENT.run(CREATE_ARGS, self.ctx)
         self.assertFalse({"account_id", "cite", "account_label", "other_accounts"} & set(created))
@@ -517,9 +526,10 @@ class FlagOffTests(CalendarBase):
         )
         calendars = LIST_CALENDARS.run({}, self.ctx)
         self.assertEqual(set(calendars), {"calendars", "__summary__"})
-        self.assertEqual(set(calendars["calendars"][0]), {
-            "id", "summary", "primary", "background_color", "access_role"
-        })
+        self.assertEqual(
+            set(calendars["calendars"][0]),
+            {"id", "summary", "primary", "background_color", "access_role"},
+        )
         self.assertEqual(len(calendars["calendars"]), 1)  # the first account only
 
     def test_a_not_found_says_what_it_always_said(self):

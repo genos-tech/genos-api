@@ -77,7 +77,10 @@ def _run_accounts(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             continue
         if not resp.ok:
             failed.append(
-                {"account_id": str(account.id), "reason": f"Google answered HTTP {resp.status_code}"}
+                {
+                    "account_id": str(account.id),
+                    "reason": f"Google answered HTTP {resp.status_code}",
+                }
             )
             continue
         for c in (resp.json() or {}).get("items", []):

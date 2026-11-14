@@ -56,7 +56,10 @@ class CardBase(CalendarBase):
             summary="Dentist",
             description=LONG,
             location="Clinic",
-            attendees=[{"email": "dr@clinic.example", "displayName": "Dr"}, {"displayName": "no email"}],
+            attendees=[
+                {"email": "dr@clinic.example", "displayName": "Dr"},
+                {"displayName": "no email"},
+            ],
             start={"dateTime": "2026-12-01T10:00:00+09:00", "timeZone": "Asia/Tokyo"},
             end={"dateTime": "2026-12-01T11:00:00+09:00", "timeZone": "Asia/Tokyo"},
             hangoutLink="https://meet.example/x",
@@ -117,7 +120,12 @@ class FactsTests(CardBase):
 
     def test_an_all_day_event_says_so(self):
         self.google.add_event(
-            self.home, "primary", "ad1", summary="Holiday", start={"date": "2026-12-25"}, end={"date": "2026-12-26"}
+            self.home,
+            "primary",
+            "ad1",
+            summary="Holiday",
+            start={"date": "2026-12-25"},
+            end={"date": "2026-12-26"},
         )
         out = self.card("delete_calendar_event", {"event_id": "ad1", "account": str(self.home.id)})
         self.assertTrue(out["current"]["all_day"])
@@ -147,7 +155,8 @@ class FactsTests(CardBase):
         holiday = "en.japanese#holiday@group.v.calendar.google.com"
         self.google.add_event(self.home, holiday, "h1", summary="Culture Day")
         out = self.card(
-            "delete_calendar_event", {"event_id": "h1", "calendar_id": holiday, "account": str(self.home.id)}
+            "delete_calendar_event",
+            {"event_id": "h1", "calendar_id": holiday, "account": str(self.home.id)},
         )
         self.assertEqual(out["current"]["summary"], "Culture Day")
         self.assertNotIn("#", self.google.calls[0].raw_path)
@@ -277,10 +286,14 @@ class OnlyAtThePauseTests(CardBase):
         # "Can't be undone" is the undo map's, already on the card: a flag does not move it.
         self.assertIs(card["undoable"], False)
         self.assertEqual(card["undo_reason"], undo.UNDO_REASONS["update_calendar_event"][0])
-        self.assertEqual(undo.proposal("update_calendar_event", args_for(self.home)).reason, card["undo_reason"])
+        self.assertEqual(
+            undo.proposal("update_calendar_event", args_for(self.home)).reason, card["undo_reason"]
+        )
 
     def test_a_delete_card_says_it_cannot_be_undone(self):
-        events, _ = self.drive("delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)})
+        events, _ = self.drive(
+            "delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)}
+        )
         (card,) = [e for e in events if e["type"] == "tool_call_pending_approval"]
         self.assertIs(card["undoable"], False)
         self.assertEqual(card["undo_reason"], undo.IRREVERSIBLE_DELETE)
@@ -299,7 +312,11 @@ class AfterTheApprovalTests(CardBase):
             pending_approval_token=uuid.uuid4(),
         )
         AgentStep.objects.create(
-            run=run, step_index=0, tool_name=tool, arguments_json=args, summary=PENDING_APPROVAL_MARKER
+            run=run,
+            step_index=0,
+            tool_name=tool,
+            arguments_json=args,
+            summary=PENDING_APPROVAL_MARKER,
         )
         events = []
         with mock.patch.object(controller, "_drive_loop", return_value=None):
@@ -327,7 +344,9 @@ class AfterTheApprovalTests(CardBase):
         self.assertEqual(self.google.of("PATCH")[0].token, token_for(self.home))
 
     def test_an_approved_create_names_the_new_event(self):
-        events = self.approve("create_calendar_event", {**CREATE_ARGS, "account": str(self.home.id)})
+        events = self.approve(
+            "create_calendar_event", {**CREATE_ARGS, "account": str(self.home.id)}
+        )
         (result,) = self.of(events, "tool_call_result")
         ref = result["calendar_event"]
         self.assertEqual(ref["action"], "create")
@@ -335,7 +354,9 @@ class AfterTheApprovalTests(CardBase):
         self.assertTrue(ref["event_id"].startswith("new"))
 
     def test_an_approved_delete_says_deleted_and_has_no_time_to_name(self):
-        events = self.approve("delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)})
+        events = self.approve(
+            "delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)}
+        )
         (result,) = self.of(events, "tool_call_result")
         self.assertEqual(
             result["calendar_event"],
@@ -349,7 +370,9 @@ class AfterTheApprovalTests(CardBase):
         )
 
     def test_the_chip_arrives_on_a_sources_event_marked_operated(self):
-        events = self.approve("delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)})
+        events = self.approve(
+            "delete_calendar_event", {"event_id": "hm1", "account": str(self.home.id)}
+        )
         (sources,) = self.of(events, "sources")
         (chip,) = sources["sources"]
         self.assertEqual(chip["entity_id"], f"calendar_event:{self.home.id}:hm1")
@@ -362,7 +385,9 @@ class AfterTheApprovalTests(CardBase):
         self.assertEqual(self.of(events, "sources"), [])
 
     def test_a_refused_account_is_an_error_event_and_no_ref(self):
-        events = self.approve("delete_calendar_event", {"event_id": "x", "account": str(self.stranger.id)})
+        events = self.approve(
+            "delete_calendar_event", {"event_id": "x", "account": str(self.stranger.id)}
+        )
         self.assertEqual(self.google.calls, [])
         self.assertEqual(self.of(events, "tool_call_result"), [])
         (error,) = self.of(events, "tool_call_error")
@@ -380,9 +405,13 @@ class AfterTheApprovalTests(CardBase):
         self.assertNotIn("calendar_event", result)
         self.assertEqual(self.of(events, "sources"), [])
 
-    def test_an_approval_paused_naming_an_account_and_approved_after_the_flag_went_off_is_refused(self):
+    def test_an_approval_paused_naming_an_account_and_approved_after_the_flag_went_off_is_refused(
+        self,
+    ):
         with mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: False}):
-            events = self.approve("create_calendar_event", {**CREATE_ARGS, "account": str(self.home.id)})
+            events = self.approve(
+                "create_calendar_event", {**CREATE_ARGS, "account": str(self.home.id)}
+            )
         self.assertEqual(self.google.of("POST"), [])  # not on the work account either
         (error,) = self.of(events, "tool_call_error")
         self.assertIn("not available", error["error"])

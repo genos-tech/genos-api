@@ -107,9 +107,7 @@ def extract_citation_tokens(answer: str) -> set[str]:
     tokens: set[str] = set()
     for m in _CITATION_TOKEN_RE.finditer(answer):
         # A sentence can end on the id ("task:42: blocked", "note:x-").
-        token = (
-            m.group("typed") or m.group("event") or "chat:" + m.group("chat")
-        ).rstrip(":-")
+        token = (m.group("typed") or m.group("event") or "chat:" + m.group("chat")).rstrip(":-")
         tokens.add(token)
     return tokens
 

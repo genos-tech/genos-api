@@ -22,9 +22,6 @@ import uuid
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
-    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
-)
-from origin.search_engine.agent.calendar import (
     NOT_FOUND_ACCOUNT_HINT,
     account_arg,
     account_fields,
@@ -37,6 +34,9 @@ from origin.search_engine.agent.calendar import (
     segment,
     shape_event,
     validate_time_pair,
+)
+from origin.search_engine.agent.calendar import (
+    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
 )
 from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
@@ -136,7 +136,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "__summary__": (f"Updated event {event_id}: {', '.join(body.keys())}."),
     }
     if parity_on():
-        result = {**cite_event(result, account.id, ctx), **account_fields(account, defaulted=not account_ref)}
+        result = {
+            **cite_event(result, account.id, ctx),
+            **account_fields(account, defaulted=not account_ref),
+        }
     return result
 
 
