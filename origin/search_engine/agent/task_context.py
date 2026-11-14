@@ -32,9 +32,10 @@ prompt: the block is built from the row.
 
 **After an approval.** The paused run keeps the ID, never the text (`resume_object`); `/decide/` reads the task
 again as the asker may read it THEN (`rebuild_block`), so a task deleted or lost to them while the card waited is
-not replayed, and the run row holds nothing of the task. The leg after the approved write also sees the task as that
-write left it, which is the point: a replayed first-leg block would say "status: WIP" about a task the approval just
-closed.
+not replayed, a change made to it meanwhile is in the block, and the run row holds nothing of the task. The
+approved write itself runs AFTER the block is read (as it does for every block of the resumed leg), so what it did
+reaches the model through the tool result that follows, not through the block; the next ask of the conversation
+reads the task afresh.
 """
 
 from __future__ import annotations
@@ -254,17 +255,14 @@ def build_block(t: TaskRead) -> str:
         if value:
             lines.append(f"{label}: {value}")
     lines.extend(f"{role}: {name}" for role, name in t.people)
+    # What was left out is said OUTSIDE the fence, in server text the description cannot fake or hide.
     if t.people_more:
-        lines.append(f"(and {t.people_more} more assignees)")
-    if t.body:
-        cut = (
-            f", cut after {MAX_BODY_CHARS} characters [truncated]; the rest is not shown"
-            if t.body_cut
-            else ""
+        facts.append(f"  - assignees: {t.people_more} more are not named here")
+    if t.body_cut:
+        facts.append(
+            f"  - description: cut after {MAX_BODY_CHARS} characters [truncated]; the rest is not shown"
         )
-        lines.append(f"Description (the start of it{cut}):\n{t.body}")
-    else:
-        lines.append("Description: none")
+    lines.append(f"Description:\n{t.body}" if t.body else "Description: none")
     fenced = wrap(WORKSPACE_TAG, "\n".join(lines))
     steer = (
         f"For the work inside it use get_milestone_summary(milestone_id={t.milestone_id}) and "

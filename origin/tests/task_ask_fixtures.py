@@ -62,9 +62,7 @@ class TaskWorld(AskRefWorld):
         kw.setdefault("reporter", self.a_editor)
         kw.setdefault("assignee", self.a_editor)
         project = project or self.project
-        return TaskMaster.objects.create(
-            team=project.team, project=project, title=title, **kw
-        )
+        return TaskMaster.objects.create(team=project.team, project=project, title=title, **kw)
 
     def make_milestone(self, title="Q4 launch", *, project=None, assignees=(), **kw):
         """A milestone: its backing task row (`is_milestone`) and the milestone row on it. `(task, milestone)`."""

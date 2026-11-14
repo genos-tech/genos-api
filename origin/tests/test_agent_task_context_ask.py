@@ -171,7 +171,9 @@ class WhoMayAskTests(TaskWorld):
         self.assertIn(f"milestone_id: {milestone.milestone_id}", extra)
         self.assertIn(f"get_milestone_summary(milestone_id={milestone.milestone_id})", extra)
         session = AgentSession.objects.get()
-        self.assertEqual(session.task_id, backing.task_id)  # the row id: there is no milestone column
+        self.assertEqual(
+            session.task_id, backing.task_id
+        )  # the row id: there is no milestone column
 
     def test_a_milestone_turned_back_into_a_task_keeps_its_conversation(self):
         backing, milestone = self.make_milestone()
@@ -311,7 +313,9 @@ class RestoreTests(TaskWorld):
             {"team_id": team, "task_id": "HOST-1"},
         ):
             with self.subTest(params=params):
-                self.assertEqual(self.client.get("/api/v2/agent/task-session/", params).status_code, 400)
+                self.assertEqual(
+                    self.client.get("/api/v2/agent/task-session/", params).status_code, 400
+                )
 
     def test_it_needs_a_signed_in_caller_and_writes_nothing(self):
         task = self.make_task()
@@ -435,7 +439,9 @@ class SessionScopeTests(TaskWorld):
         stolen = self.ask_about(task, session_id=mine)["kwargs"]["session_id"]
         self.assertEqual(stolen, theirs)
         self.assertEqual(AgentSession.objects.get(session_id=mine).user_id, str(self.a_owner.id))
-        self.assertFalse(AgentRun.objects.filter(session_id=mine, user_id=str(self.a_editor.id)).exists())
+        self.assertFalse(
+            AgentRun.objects.filter(session_id=mine, user_id=str(self.a_editor.id)).exists()
+        )
 
     def test_a_session_of_another_team_is_not_reused(self):
         task = self.make_task()

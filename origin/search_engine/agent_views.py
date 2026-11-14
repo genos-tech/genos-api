@@ -2023,9 +2023,8 @@ def _resume_context_for(
 
     `object_ref` (MIP-1057) is the task or milestone the conversation is about: its ID alone
     (`task_context.resume_object`), never its text. `/decide/` reads the task again as the person may
-    read it by then, so one deleted or lost to them while the card waited is not replayed, the leg
-    after an approved write sees the task as that write left it, and the run row holds nothing of
-    the task. Absent from the row when the ask was not about one, so a row without one is what it was.
+    read it by then, so one deleted or lost to them while the card waited is not replayed, a change
+    made to it meanwhile is in the block, and the run row holds nothing of the task. Absent from the row when the ask was not about one, so a row without one is what it was.
 
     `refs` (MIP-1058) is the third part, for the messages and the selected passage of the ask (`ask_refs`):
     the messages' IDS and the passage as the person sent it, never a message's text. `/decide/` reads each
