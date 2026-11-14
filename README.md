@@ -129,31 +129,27 @@ arrived. Every row above has a numbered section in the runbook:
   `coverage run manage.py test origin.tests` against a Postgres 15 service.
 - **backend-django-lint** (report-only) — `ruff check origin apis`.
 
-### agent-evals: when the billed Vertex run starts
+### agent-evals: the retrieval gate, and when its billed Vertex run starts
 
-`.github/workflows/agent-evals.yml` runs the Spotlight/Genos agent evals (a real Vertex run,
-about 5 minutes) only when what the in-app model sees could have changed, not by directory. A
-cheap `surface` job (no secrets, no Vertex, no database) runs `scripts/agent_surface_hash.py` on
-the PR merged into `main` and on `main`: one sha256 over the tool declarations as each provider
-adapter receives them, the system prompts the agent loop builds (flags as they ship, and with every
-`AGENT_*` flag off), the in-app tool directory and the `SEARCH_ENGINE` knobs that steer the model.
-`scripts/agent_eval_gate.py` then decides:
+`.github/workflows/agent-evals.yml` runs the **retrieval** suite only (`agent_eval --retrieval`: re-index
+the seeded fixture, 75 `search()` cases, one query-rewrite call each; about 5 minutes, a few cents). It
+cannot see the agent's prompts, tool declarations, tool results or loop, so those do not start it (a
+change to them is checked by the free tests and, for behaviour, by the grouped paid run). It starts:
 
-- hashes equal, and no file that shapes retrieval or the loop changed: the Vertex steps are
-  **skipped** (the job still ends green, so the gated deploy is unaffected). An MCP-only tool, a change
-  inside a tool's `run`, an access fix, a log line, a flag that ships off or a middleware edit start no
-  billed step (unless the same PR also touches a `FORCE_PATHS` file).
-- hashes differ, or a `FORCE_PATHS` file changed (search, reranker, chunkers, embeddings, `llm/`, the
-  result fencing / length / history helpers, `search_kb`, `demo_seeder`, `Pipfile*`): the full eval **runs**.
-- the hash could not be computed, or anything in the gate breaks: the eval **runs** (fails open).
+- on a PR that changes a retrieval file (the list is `RETRIEVAL_PATHS` in `scripts/agent_eval_gate.py`,
+  mirrored by the workflow's `paths:`: search, the rewriter, reranker, chunkers, embeddings, ingestion,
+  the model client the rewriter calls, the retrieval cases / fixture / runner, `demo_seeder`, `Pipfile*`)
+  or on the workflow file itself (an edit of the workflow alone skips the Vertex steps);
+- weekly on `main` (Tuesday 02:00 JST), which covers what no path rule does (`origin/models/**`,
+  `apis/settings.py`, a model behaving differently);
+- by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`.
 
-Not in the hash: tool result text (it needs a database; `python manage.py agent_fingerprint` does
-fingerprint it) and `agent/controller.py` (the loop; it is also touched by changes the model never
-sees, which a path rule cannot tell apart). A PR that only changes what a tool returns, or how the loop
-assembles the model's input, is skipped by the gate: label it `run-evals`, or measure it in the grouped
-paid run. A `run-evals` label stays on the PR, so it bills on every later push; remove it when done.
+There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `surface`
+job (no secrets, no Vertex) still hashes what the model sees (`scripts/agent_surface_hash.py`) and
+`scripts/agent_eval_gate.py` combines the hash, the changed files and the labels; any failure in it
+fails open (the evals run). Scheduled and manual runs need the repo variable `RUN_AGENT_EVALS` (or
+`DEPLOY_TO_GCP`) to be `true`.
 
-Escapes: label a PR `run-evals` to force the run (adding the label starts it) or `skip-evals` to force
-the skip; `workflow_dispatch` always runs (`dry_run: true` only prints the decision for that ref
-against `main`). To see what the hash covers locally:
-`python scripts/agent_surface_hash.py` (prints one line per component). Tests: `origin.tests.test_agent_surface_hash`.
+The pass / mrr / recall floors (58 of 75, 0.75, 0.80) live only in `scripts/retrieval_gate.py`.
+Tests: `origin.tests.test_agent_surface_hash`, `origin.tests.test_retrieval_gate`. To see what the hash
+covers locally: `python scripts/agent_surface_hash.py`.
