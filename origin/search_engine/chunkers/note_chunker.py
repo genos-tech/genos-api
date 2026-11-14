@@ -196,9 +196,9 @@ def iter_task_note_chunks(
         if not note.team_id:
             continue
         team_id = str(note.team_id)
+        # Project members plus explicit grants, by `task_note_acl_user_ids`'s rule. The author is
+        # not added: one who left the project is no longer a reader (MIP-1511).
         acl = set(members_by_project.get(note.project_id, []))
-        if note.owner_id:
-            acl.add(str(note.owner_id))
         acl.update(grants_by_note.get(note.note_id, []))
 
         related = []

@@ -346,7 +346,7 @@ def _comment_recipients(surface_type: int, meta: dict) -> set:
 
       - 5 task body   -> task assignee + collaborators
       - 6 personal    -> note owner + explicit grants
-      - 7 task note   -> note owner + its project's members + explicit grants
+      - 7 task note   -> its project's members + explicit grants
       - 8 chat note   -> the people who can read it: explicit grants (the owner
                          holds one) + its chat's readers (`chat_acl_user_ids`)
     """
@@ -371,12 +371,12 @@ def _comment_recipients(surface_type: int, meta: dict) -> set:
     if surface_type == SURFACE_TASK_NOTE:
         from origin.models.note.task_note_models import TaskNoteMaster
 
-        row = TaskNoteMaster.objects.filter(note_id=note_id).values("project_id", "owner_id").first()
+        row = TaskNoteMaster.objects.filter(note_id=note_id).values("project_id").first()
         if row is None:
             return set()
+        # No author exception (MIP-1511): an author who left the project is not told of comments
+        # on a note they can no longer open. One who is still a member is in the project's set.
         out: set = set()
-        if row["owner_id"] is not None:
-            out.add(str(row["owner_id"]))
         out |= _members_of_project(row["project_id"])
         out |= _note_grant_user_ids(2, note_id)
         return out

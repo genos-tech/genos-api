@@ -21,6 +21,13 @@ What goes, and what does not:
   * the author's Owner row on their own note in a personal folder (My Notes) stays: that is not
     shared space, and what happens to a leaver's private notes is a separate decision.
 
+Coming back (MIP-1511): a person re-added to a project gets their Owner row back on the task
+notes whose `owner_id` is them (`restore_task_author_roles`), so they can share and unshare their
+note again. It only fills a gap: a row that exists, an Editor share the person was handed while
+away included, is never touched. A task note's author who is NOT on its project reads and writes
+nothing through `owner_id` any more (the agent, search, briefing and timeline gates ask the same
+role rule the app does); nobody else is made a manager of such an orphan note.
+
 Chat notes are `chat_note_access`, a separate module.
 """
 
@@ -88,6 +95,37 @@ def revoke_task_author_roles(*, user_id, project_id) -> int:
         ),
         "task",
     )
+
+
+def restore_task_author_roles(*, user_id, project_id) -> int:
+    """`user_id` joined `project_id` (again): write their Owner row on the task notes of the
+    project that name them as author and that they hold no row on. Idempotent; returns how many
+    rows it wrote."""
+    if not user_id or not project_id:
+        return 0
+    held = NotePermissionMaster.objects.filter(user_id=user_id, note_type=NOTE_TYPE_TASK)
+    missing = list(
+        TaskNoteMaster.objects.filter(project_id=project_id, owner_id=user_id)
+        .exclude(note_id__in=held.values("note_id"))
+        .values_list("note_id", "team_id")
+    )
+    if not missing:
+        return 0
+    NotePermissionMaster.objects.bulk_create(
+        [
+            NotePermissionMaster(
+                team_id=team_id,
+                user_id=user_id,
+                note_type=NOTE_TYPE_TASK,
+                note_id=note_id,
+                role_id=ROLE_OWNER,
+            )
+            for note_id, team_id in missing
+        ],
+        # a concurrent writer (the note's own create) may have just written it
+        ignore_conflicts=True,
+    )
+    return len(missing)
 
 
 def revoke_task_roles_on_move(*, moves, target_project_id) -> int:
