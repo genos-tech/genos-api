@@ -19,11 +19,14 @@ from __future__ import annotations
 from django.db import transaction
 
 from origin.models.chat.unified_models import Channel, ChannelKind
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.services.chat_note_access import revoke_membership_roles
+from origin.services.note_delete import forget_deleted_notes
+from origin.views.utils.note_role import NOTE_TYPE_TASK
 
 
 def project_contents(project: ProjectMaster) -> dict[str, int]:
@@ -68,4 +71,12 @@ def delete_project(project: ProjectMaster) -> None:
     with transaction.atomic():
         _revoke_chat_note_roles(project)
         Channel.objects.filter(project=project).update(is_deleted=True, project=None)
+        # The project's task notes go with it (by the project and by their task), and so must
+        # what other people hold about them: recents, favorites, mention rows (MIP-1514).
+        note_ids = set(
+            TaskNoteMaster.objects.filter(project=project).values_list("note_id", flat=True)
+        ) | set(
+            TaskNoteMaster.objects.filter(task__project=project).values_list("note_id", flat=True)
+        )
         project.delete()
+        forget_deleted_notes(NOTE_TYPE_TASK, note_ids)
