@@ -27,6 +27,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes
 from origin.views.utils.note_role import NOTE_TYPE_TASK
+from origin.services.note_satellites import batched_note_cleanup
 
 
 def project_contents(project: ProjectMaster) -> dict[str, int]:
@@ -78,5 +79,8 @@ def delete_project(project: ProjectMaster) -> None:
         ) | set(
             TaskNoteMaster.objects.filter(task__project=project).values_list("note_id", flat=True)
         )
-        project.delete()
+        # A big project has many notes: their permission/version/summary rows go in one pass
+        # (MIP-1517), not three statements per note.
+        with batched_note_cleanup():
+            project.delete()
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)

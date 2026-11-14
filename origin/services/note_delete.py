@@ -32,6 +32,7 @@ from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note, purge_note_folders
+from origin.services.note_satellites import batched_note_cleanup
 from origin.views.utils.note_acl_resync import (
     collect_folder_subtree_ids,
     collect_note_ids_in_folders,
@@ -188,7 +189,8 @@ def _owned_personal_folder(team_id, owner_id, folder_id) -> PersonalNoteFolder:
 
 
 def _hard_delete(note_ids: set, folder_ids: set) -> None:
-    PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
+    with batched_note_cleanup():  # the receiver's pass over the satellites, once (MIP-1517)
+        PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
     NotePermissionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
     NoteVersionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
     forget_deleted_notes(NOTE_TYPE_PERSONAL, note_ids)
