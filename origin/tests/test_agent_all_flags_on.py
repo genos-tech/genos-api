@@ -31,7 +31,7 @@ from origin.tests.test_agent_content_length_pins import SCENARIOS, LoopBase, tra
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
-# All-on prefix measured 139,303 (off 134,315: +4,842 declarations, +146 prompt rule): same headroom
+# All-on prefix measured 139,012 (off 134,315: +4,551 declarations, +146 prompt rule): same headroom
 # the budget keeps.
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
@@ -52,6 +52,7 @@ SHIPPED_ON = frozenset(
         "AGENT_NOTE_THREADS_IN_GET_NOTE",
         "AGENT_CLOSED_ANCESTOR_RULE",
         "AGENT_INAPP_TIMELINE_TOOL",
+        "AGENT_CONTENT_LENGTH",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
@@ -80,8 +81,8 @@ class AllOnArmTests(SimpleTestCase):
 
     def test_the_shipped_flags_are_on_by_default_and_the_held_ones_are_off(self):
         # MIP-1089 flipped ten flags on by the 2026-11-14 grouped eval. The others stay dark until
-        # their own decision: the timeline tool (look at 3 JA cases first), the client name in task
-        # history, content length (tune first) and the body on the user model (empty bodies, MIP-1503).
+        # their own decision: content length (tune first) and the body on the user model (empty
+        # bodies, MIP-1503). (The client name in task history was dropped instead, MIP-1089.)
         # The PRODUCTION defaults: `apis.settings` itself. The test settings keep the shipped flags
         # off (see `apis/settings_test.py`), so `django.conf.settings` would not tell.
         from apis import settings as production  # noqa: PLC0415
@@ -107,7 +108,6 @@ class AllOnArmTests(SimpleTestCase):
             "AGENT_FETCH_TASK_ANCHORS",
             "AGENT_INBOX_REPORT_LABEL",
             "AGENT_TEAM_IN_CURRENT_USER",
-            "AGENT_CLIENT_IN_TASK_HISTORY",
             "AGENT_NOTE_THREADS_IN_GET_NOTE",
             "AGENT_CLOSED_ANCESTOR_RULE",
             "AGENT_INAPP_TIMELINE_TOOL",
@@ -258,7 +258,34 @@ class AllOnFingerprintTests(TestCase):
                 "result.get_current_user",
                 "result.fetch_note",
                 "result.fetch_task",
+                # the second fixture (MIP-1478): the inbox report, the focus list, the counts, the
+                # milestone and sprint tools, the rows and the note's threads
+                "result.b.fetch_note_threads",
+                "result.b.fetch_task",
+                "result.b.get_milestone_summary",
+                "result.b.get_my_focus_tasks",
+                "result.b.get_my_schedule",
+                "result.b.get_my_task_summary",
+                "result.b.get_project_summary",
+                "result.b.get_sprint_summary",
+                "result.b.get_stale_tasks",
+                "result.b.get_team_task_summary",
+                "result.b.get_workload_distribution",
+                "result.b.list_milestones",
+                "result.b.list_my_inbox",
+                "result.b.list_my_milestones",
+                "result.b.list_tasks",
             },
+        )
+        # and these do NOT move: the closed-ancestor rule does not reach them (MIP-1478: a decision is open for
+        # each, see the PR). When one is covered its line moves, and moves from here to the set above.
+        self.assertTrue(
+            {
+                "result.b.get_my_blockers",
+                "result.b.get_task_blockers",
+                "result.b.get_task_throughput_stats",
+                "result.b.get_milestone_assignee_counts",
+            }.isdisjoint(moved)
         )
 
 

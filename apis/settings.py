@@ -1990,20 +1990,6 @@ SEARCH_ENGINE["AGENT_TEAM_IN_CURRENT_USER"] = (
     os.environ.get("AGENT_TEAM_IN_CURRENT_USER", "true").lower() == "true"
 )
 
-# MIP-1090 (b) (model-visible, dark-shipped OFF, grouped eval arm `t1090-client`): which client made
-# a change in `get_task_history` (in-app; MCP `get_task_history` is the same function). ON = `via`
-# is {"kind": ...} for everyone who can read the task (`app`, `agent`, `api_key`, `connected_app`),
-# plus `client` (the key's or the app's name, fenced) ONLY for the key's or the connection's OWNER
-# (owner decision); never a key id, a key prefix, a connection id or an undo's run id; an app row's
-# `undo_of` is left out. One sentence is added to the declaration. OFF = `via` exactly as before
-# (including what it shows today for a key row and an app row, filed separately) and the
-# declaration is byte-identical. Read at call time.
-# Flip criterion: the `t1090-client` arm says which app/key made a change for its owner (never
-# inventing a name it cannot see) and regresses no other history question.
-SEARCH_ENGINE["AGENT_CLIENT_IN_TASK_HISTORY"] = (
-    os.environ.get("AGENT_CLIENT_IN_TASK_HISTORY", "false").lower() == "true"
-)
-
 # MIP-1090 (c) (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1090-notethreads`): the in-app
 # `fetch_note` also returns the note's OPEN comment threads (reviewers' comments anchored to text,
 # which live in the note's Yjs document in genos-collab, read over HTTP: up to 5 s, per note read).
@@ -2039,7 +2025,9 @@ SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
     os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "true").lower() == "true"
 )
 
-# MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905`): how much CONTENT Genos
+# MIP-905 (model-visible, dark-shipped OFF, DEFAULT ON since 2026-11-14: eval 16/22, Standard identical to
+# the flag-off baseline, the 6 misses were case thresholds, retuned; env `false` is the rollback; no screen
+# sets the level yet, so every member is on Standard and nothing changes until one ships): how much CONTENT Genos
 # writes (task, milestone and note bodies, plans), a setting of the member's own
 # (`CustomUser.preferred_content_length`: short | standard | long, default standard; stored by
 # `PATCH /api/v2/user/preferences/content-length/` whatever this says). ON = for a member on Short
@@ -2052,7 +2040,7 @@ SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
 # (by characters, JA included), structure kept, no plan cut off, chat answers no longer at any
 # level, and Standard identical to arm0.
 SEARCH_ENGINE["AGENT_CONTENT_LENGTH"] = (
-    os.environ.get("AGENT_CONTENT_LENGTH", "false").lower() == "true"
+    os.environ.get("AGENT_CONTENT_LENGTH", "true").lower() == "true"
 )
 
 # MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905-a2`): on the Medium two-tier

@@ -81,6 +81,55 @@ class TeamConnectionsTests(ConnectionsBase):
         self.assertEqual(self.end(self.conn).status_code, 403)  # the owner's
         self.assertEqual(self.end(self.viewer_conn).status_code, 200)
 
+    def test_the_owner_sees_every_members_email_and_an_editor_sees_none(self):
+        """The address is the owner's alone; the app, the name and the action stay."""
+        self.authenticate(self.user)
+        owner_rows = {r["userName"]: r for r in self.list().json()["connections"]}
+        for name, user in (
+            (self.user.username, self.user),
+            (self.viewer.username, self.viewer),
+            (self.editor.username, self.editor),
+            (self.editor2.username, self.editor2),
+        ):
+            self.assertEqual(owner_rows[name]["userEmail"], user.email)
+
+        self.authenticate(self.editor)
+        res = self.list()
+        self.assertEqual(res.status_code, 200)
+        rows = res.json()["connections"]
+        self.assertEqual(len(rows), 4)
+        for row in rows:
+            # Absent, not null or "": the editor's payload has no such field at all.
+            self.assertNotIn("userEmail", row)
+            self.assertTrue(row["userName"])
+            self.assertEqual(row["client"]["name"], "Claude")
+            self.assertIn("revocable", row)
+        # ...and no address anywhere else in the body (the editor's own included).
+        body = res.content.decode()
+        for user in (self.user, self.viewer, self.editor, self.editor2):
+            self.assertNotIn(user.email, body)
+
+    def test_an_editor_keeps_the_action_without_the_email(self):
+        self.authenticate(self.editor)
+        res = self.end(self.viewer_conn)
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn(self.viewer.email, res.content.decode())
+
+    def test_the_security_log_with_ip_and_agent_stays_the_owners(self):
+        self.authenticate(self.user)
+        self.assertEqual(self.end(self.viewer_conn).status_code, 200)
+        url = "/api/v2/team/security-events/"
+        params = {"team_id": str(self.team.team_id)}
+        owner = self.client.get(url, params, HTTP_USER_AGENT="owner-agent/1")
+        self.assertEqual(owner.status_code, 200)
+        rows = owner.json()["events"]
+        self.assertTrue(any(r["action"] == SecurityAction.MCP_DISCONNECTED for r in rows))
+        self.assertTrue(all("ip" in r and "userAgent" in r for r in rows))
+
+        for who in (self.editor, self.viewer):
+            self.authenticate(who)
+            self.assertEqual(self.client.get(url, params).status_code, 404)
+
     def test_a_viewer_and_a_stranger_get_a_404_and_end_nothing(self):
         self.authenticate(self.viewer)
         self.assertEqual(self.list().status_code, 404)

@@ -19,6 +19,7 @@ from typing import Any
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.services.user_time import today_for_user_id
 
@@ -63,11 +64,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     total = qs.count()
 
-    status_breakdown = {s: qs.filter(status=s).count() for s in _STATUS_LABELS}
+    # MIP-1478: with the flag, each task is read by its effective status (see `ancestor_rule`). One
+    # that reads as Deleted stays in the total and is in no bucket, as a task whose own status is
+    # Deleted already is. Off: `rule is None`, the code path is what it was.
+    rule = (
+        ancestor_rule.rule_for_projects({project_id}, ctx.team_id)
+        if ancestor_rule.enabled()
+        else None
+    )
+    sf = "status"
+    if rule is not None:
+        qs, sf = ancestor_rule.with_effective_status(qs, rule), "eff_status"
+
+    status_breakdown = {s: qs.filter(**{sf: s}).count() for s in _STATUS_LABELS}
 
     today = today_for_user_id(ctx.user_id)
     overdue_count = (
-        qs.exclude(status__in=["Closed", "Deleted"])
+        qs.exclude(**{f"{sf}__in": ["Closed", "Deleted"]})
         .filter(due_date__isnull=False, due_date__lt=today)
         .count()
     )

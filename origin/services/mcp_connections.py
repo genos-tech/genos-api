@@ -30,8 +30,18 @@ def end_tokens(user, application) -> None:
     get_grant_model().objects.filter(user=user, application=application).delete()
 
 
-def revoke_connection(connection: McpConnection) -> None:
-    """End one connection and every token it issued, and leave the trail."""
+def end_all_tokens(user) -> None:
+    """`end_tokens` for every app at once: all of this person's tokens and pending codes."""
+    get_refresh_token_model().objects.filter(user=user).delete()
+    get_access_token_model().objects.filter(user=user).delete()
+    get_grant_model().objects.filter(user=user).delete()
+
+
+def revoke_connection(connection: McpConnection, *, metadata: dict | None = None) -> None:
+    """End one connection and every token it issued, and leave the trail.
+
+    `metadata` adds to the row (a password reset says `{"by": "password_reset"}`); an
+    explicit disconnect passes none, so its row is what it always was."""
     with transaction.atomic():
         connection.revoke()
         end_tokens(connection.user, connection.application)
@@ -42,6 +52,7 @@ def revoke_connection(connection: McpConnection) -> None:
             target_type="mcp_connection",
             target_id=connection.id,
             target_label=connection.application.name or connection.application.client_id,
+            metadata=metadata,
         )
 
 
