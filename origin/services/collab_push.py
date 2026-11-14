@@ -166,7 +166,9 @@ def push_note_body_now(note_type: str, note_id: int, blocks: list[dict[str, Any]
     return _push_now(f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}", blocks)
 
 
-def read_note_threads(note_type: str, note_id: int) -> list[dict[str, Any]] | None:
+def read_note_threads(
+    note_type: str, note_id: int, *, timeout: float = TIMEOUT_SECONDS
+) -> list[dict[str, Any]] | None:
     """The comment threads of one note, read from its Yjs doc (MIP-1064).
 
     A BlockNote comment lives in the collab doc, not in a table this process
@@ -174,8 +176,9 @@ def read_note_threads(note_type: str, note_id: int) -> list[dict[str, Any]] | No
     exactly as collab answers (author ids, ISO times, comment bodies as BlockNote
     blocks, resolved state, anchor text), `[]` for a note nobody has opened, and
     `None` when they could not be read at all: collab is not configured here, is
-    unreachable, or refused. The caller says so; a note with no comments and a
-    note whose comments could not be read must not look alike.
+    unreachable, refused, or slower than `timeout` (MCP waits the default; the in-app
+    agent passes a shorter one, MIP-1545). The caller says so; a note with no comments and
+    a note whose comments could not be read must not look alike.
     """
     if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
         return None
@@ -185,7 +188,7 @@ def read_note_threads(note_type: str, note_id: int) -> list[dict[str, Any]] | No
             f"{settings.COLLAB_INTERNAL_URL}{READ_THREADS_PATH}",
             json={"documentName": document_name},
             headers={"Authorization": f"Bearer {_internal_token()}"},
-            timeout=TIMEOUT_SECONDS,
+            timeout=timeout,
             allow_redirects=False,
         )
         if resp.status_code != 200:

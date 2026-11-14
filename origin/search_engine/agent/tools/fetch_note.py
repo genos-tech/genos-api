@@ -43,6 +43,13 @@ _VALID_TYPES = {"personal", "task", "chat"}
 #: MIP-1090 (default off): the in-app result also carries the note's open comment threads.
 THREADS_FLAG = "AGENT_NOTE_THREADS_IN_GET_NOTE"
 
+#: MIP-1545: how long the IN-APP tool waits for genos-collab's comment-thread read, in seconds. A slow
+#: collab must not slow every `get_note` step of the model's loop; past this the result carries
+#: `comment_threads: null` and the usual "could not be read" note. MCP keeps the reader's own wait
+#: (`collab_push.TIMEOUT_SECONDS`, 5 s): a person waits there. It is a `requests` timeout (connect and
+#: each socket read), so nothing runs on after it: no thread, no greenlet is left behind.
+IN_APP_THREAD_READ_TIMEOUT_S = 2
+
 #: The sentence the flag adds to the tool's description (`tool_flag_text`).
 DESCRIPTION_ADDITION = (
     " It also returns the note's open comment threads (`comment_threads`: reviewers' comments "
@@ -65,7 +72,8 @@ def _with_threads(out: dict[str, Any], note_type: str, note_id: int, ctx: ToolCo
     already passed or raised. The reader is MCP's (`note_comments`): it fences every comment and
     anchor text, checks the ids, times and people's ids an editor can write, caps the thread and
     comment sizes, and answers `comment_threads: null` plus a
-    note when collab cannot be reached (a read of 5 s at most), so the body is never lost."""
+    note when collab cannot be reached (a read of `IN_APP_THREAD_READ_TIMEOUT_S` at most), so the
+    body is never lost."""
     # Imported here: `note_comments` imports `label_acl`, which imports `tools.base`, which runs
     # this package's `__init__`, which imports this module.
     from origin.services.note_comments import note_comment_fields  # noqa: PLC0415
@@ -73,7 +81,12 @@ def _with_threads(out: dict[str, Any], note_type: str, note_id: int, ctx: ToolCo
     summary = out.pop("__summary__", None)
     out.update(
         note_comment_fields(
-            note_type, note_id, ctx, include_resolved=False, can_include_resolved=False
+            note_type,
+            note_id,
+            ctx,
+            include_resolved=False,
+            can_include_resolved=False,
+            read_timeout=IN_APP_THREAD_READ_TIMEOUT_S,
         )
     )
     if summary is not None:
