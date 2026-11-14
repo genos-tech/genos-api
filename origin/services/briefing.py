@@ -86,6 +86,12 @@ MENTION_LOOKBACK = timedelta(days=7)
 # How many mention rows are looked at before access and "answered" are decided. A member
 # is mentioned a handful of times in a week; this bounds a flood, newest first.
 MENTION_POOL = 60
+# Answers in a chat the member wrote in (MIP-1290): at most this many chats, each told as ONE
+# item (a count and the latest few words), from the newest `ANSWER_POOL` chats the member wrote
+# in during `MENTION_LOOKBACK`. A chatty chat adds to its count, never to its length.
+MAX_ANSWER_CHATS = 4
+ANSWER_SNIPPETS = 3
+ANSWER_POOL = 40
 
 # The briefing is read by a model with a budget (about 8k tokens), so it is shaped to fit:
 # the busiest items tell their story in detail, the rest get the latest word, and the
@@ -96,12 +102,6 @@ EVENTS_HOT = 6
 EVENTS_REST = 2
 MAX_LIST = 8
 MAX_TODOS = 15
-# Answers in a chat the member wrote in (MIP-1290): at most this many chats, each told as ONE
-# item (a count and the latest few words), from the newest `ANSWER_POOL` chats the member wrote
-# in during `MENTION_LOOKBACK`. A chatty chat adds to its count, never to its length.
-MAX_ANSWER_CHATS = 4
-ANSWER_SNIPPETS = 3
-ANSWER_POOL = 40
 EVENT_POOL = 600
 SNIPPET_CHARS = 140
 SUGGESTIONS = 3
@@ -587,7 +587,9 @@ def answers_in_chats(
     )
     wrote = {
         row["channel_id"]: row
-        for row in top_level.filter(sender_id=me, ts_sent_at__gte=now - MENTION_LOOKBACK)
+        for row in top_level.filter(
+            sender_id=me, ts_sent_at__gte=now - MENTION_LOOKBACK, ts_sent_at__lte=now
+        )
         .values("channel_id")
         .annotate(last_seq=Max("seq"), last_at=Max("ts_sent_at"))
         .order_by("-last_at")[:ANSWER_POOL]
@@ -1872,9 +1874,14 @@ def build_briefing(
     }
     names.fill()
     asked = waiting_me["requests"], waiting_me["mentions"]
+    # Said only when there is news, so a briefing without it reads as it always did.
+    answered = (
+        f"{chat_answers['total']} chat(s) with new answers, " if chat_answers["total"] else ""
+    )
     payload["__summary__"] = (
         f"Briefing since {win.since.astimezone(zone).strftime('%b %-d %H:%M')}: "
         f"{total_changed} item(s) changed, "
+        f"{answered}"
         f"{len(asked[0]) + len(asked[1])} waiting on you, "
         f"{agenda_section['overdue_count']} overdue."
     )
