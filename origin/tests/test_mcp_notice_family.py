@@ -15,7 +15,8 @@ nothing to decide here and is deliberately not consulted. The in-app model and M
 `AI_APP` row (`list_my_unread` leaves them out), so nothing model-visible changes.
 
 The icon is read from the AI-app surface (10), which only this producer may write: the surface
-endpoints a client can post to refuse it.
+endpoints a client can post to (and the sockets handlers proxy) now take 5-8 only; before, any
+integer, so a team member could file a forged notice in a colleague's feed.
 """
 
 from __future__ import annotations
@@ -257,6 +258,16 @@ class AClientCannotFileOne(McpBase):
             )
             self.assertEqual(res.status_code, 400, (url, res.content))
         self.assertFalse(Activity.objects.filter(surface_type=10).exists())
+
+    def test_so_does_any_surface_a_client_has_no_business_with(self):
+        self.authenticate(self.user)
+        for surface in (0, 1, 3, 4, 9, 11, 99, -1):
+            res = self.client.post(
+                SURFACE,
+                {"surface_type": surface, "team_id": str(self.team.team_id), "entity_key": "x"},
+                format="json",
+            )
+            self.assertEqual(res.status_code, 400, (surface, res.content))
 
     def test_the_real_surfaces_still_work(self):
         self.authenticate(self.user)
