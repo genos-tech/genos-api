@@ -116,6 +116,9 @@ class TestEveryReaderOfViaKeepsTheNameToItsOwner(LineBase):
         self.assertEqual(leaks(text), [])
 
     def test_the_briefing_carries_no_key_or_app_identity(self):
+        # The briefing tells the member's OWN writes ("what you did", `via` = the kind word only)
+        # and a colleague's changes without any `via`: a mutation that adds the key's identity to
+        # the colleague's row is not reachable here, so this pins the shape, not a gate.
         TaskActivity.objects.filter(task=self.task).update(ts_created_at=self.at(0))
         text = self.tool_text("get_my_briefing", window="week")
         self.assertEqual(leaks(text), [])
