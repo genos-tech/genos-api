@@ -126,10 +126,16 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
+from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
-from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.base import (
+    FLAGGED_REGISTRY,
+    ToolContext,
+    ToolError,
+    ToolForbidden,
+)
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import (
     DESTRUCTIVE_DONE,
@@ -216,6 +222,12 @@ class McpTool:
     # person can type has to work everywhere one is accepted, and a
     # batch is exactly where hand-typed ids show up.
     nested_task_ref_args: tuple[tuple[str, str], ...] = ()
+    # A tool that exists only while this `SEARCH_ENGINE` flag is on (MIP-1563: a WRITE tool cannot be
+    # gated by the parameters the flag lays over a schema). Its registry tool is filed with
+    # `register_flagged_tool`. While the flag is off the entry is not listed (`visible_tools`) and a
+    # call is answered as for a name nobody published (`call`), so the catalog a client sees is what
+    # it was. "" = always published.
+    flag: str = ""
     # Applied to the registry schema after dialect conversion.
     schema_overrides: dict[str, Any] = field(default_factory=dict)
     # Applied to a property nested inside an array item's schema, keyed
@@ -1101,6 +1113,23 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
         destructive=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="delete_task_attachment",
+        registry_name="delete_task_attachment",
+        description=(
+            "Delete one file attached to a task. **This is not reversible from here** — the "
+            "file leaves the task and storage, and there is no undo on this surface, so only "
+            "call it when the user asked for that specific file to go. Get `attachment_id` "
+            "from `get_task` (its `attachments`: name, size, type). Anyone who can open the "
+            "task may delete its files, as in the app. Requires a write-scoped API key that its "
+            "owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
+        flag=PARITY_FLAG,
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
     ),
@@ -2157,9 +2186,19 @@ def _registered(tool: McpTool):
     """The registry tool behind a published one: a shared tool, or an MCP-only one
     (MIP-1070). `KeyError` for a name in neither, as `REGISTRY[...]` raised."""
     registered = get_mcp_tool(tool.registry_name)
+    if registered is None and tool.flag:
+        # A flag-gated tool: the registry tool itself, whether or not the flag is on right now
+        # (the catalog's own contract tests read every entry); `published` says if it may run.
+        entry = FLAGGED_REGISTRY.get(tool.registry_name)
+        registered = entry[1] if entry is not None and entry[0] == tool.flag else None
     if registered is None:
         raise KeyError(tool.registry_name)
     return registered
+
+
+def published(tool: McpTool) -> bool:
+    """Is `tool` offered right now? Always, unless it is gated by a flag that is off."""
+    return not tool.flag or flag_on(tool.flag)
 
 
 def input_schema(tool: McpTool) -> dict[str, Any]:
@@ -2303,7 +2342,7 @@ def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpToo
     return [
         t
         for t in CATALOG
-        if t.registry_name not in disabled and _permitted(t, scope, allow_destructive)
+        if t.registry_name not in disabled and published(t) and _permitted(t, scope, allow_destructive)
     ]
 
 
@@ -2665,7 +2704,7 @@ def call(
     becomes a JSON-RPC protocol error instead.
     """
     tool = BY_NAME.get(name)
-    if tool is None or tool.registry_name in _disabled_tools():
+    if tool is None or tool.registry_name in _disabled_tools() or not published(tool):
         raise on_unknown_tool(name)
 
     args = dict(arguments or {})

@@ -26,6 +26,7 @@ from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
+from origin.search_engine.agent.tools import task_attachments as _task_attachments
 from origin.search_engine.agent.tools import todo_source as _todo_source
 from origin.search_engine.agent.tools import update_comment as _update_comment
 from origin.search_engine.agent.tools import update_task as _update_task
@@ -56,6 +57,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # MIP-1562: reaction / flag on a comment, and a to-do that says where it came from.
     ("update_comment", PARITY_FLAG, _update_comment.DESCRIPTION_ADDITION),
     ("create_todo_item", PARITY_FLAG, _todo_source.DESCRIPTION_ADDITION),
+    # MIP-1563: a task's files, as metadata, in the result of the task read.
+    ("fetch_task", PARITY_FLAG, _task_attachments.DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`

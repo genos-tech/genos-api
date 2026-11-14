@@ -174,6 +174,15 @@ def flagged_tool(name: str) -> Tool | None:
     return entry[1] if entry is not None and _flag_on(entry[0]) else None
 
 
+def app_write_tools() -> list[Tool]:
+    """Every in-app tool that asks for approval: the registered ones, and the flag-gated ones whose
+    flag is on right now. The one place that answers "which tools write", for the gates that hide
+    writes (the agency tier, the read-only digest and critique passes): a flag-gated write that
+    they did not see would be declared to a person on the read tier. With every flag off this is
+    exactly the registry's writes."""
+    return [t for t in (*REGISTRY.values(), *flagged_tools()) if t.requires_approval]
+
+
 def get_app_tool(name: str) -> Tool | None:
     """The tool the in-app agent runs for `name`: a registered one, or a flag-gated one whose
     flag is on. A lookup by the name the MODEL sent, so a tool that is not declared is not

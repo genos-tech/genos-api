@@ -156,6 +156,8 @@ UNDO_SUPPORT: dict[str, str] = {
     "approve_join_request": NONE,
     "decline_join_request": NONE,
     "delete_project": NONE,
+    # --- a task's files (MIP-1563; flag-gated in the app, `register_flagged_tool`) ---
+    "delete_task_attachment": NONE,
 }
 
 # tool name -> (reason code, one line) for every tool that is not `full`. The
@@ -228,6 +230,11 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     "approve_join_request": (NOTIFIED_PEOPLE, "the person is let in and told"),
     "decline_join_request": (NOTIFIED_PEOPLE, "the person is told no"),
     "delete_project": (IRREVERSIBLE_DELETE, "it removes the project and everything in it"),
+    "delete_task_attachment": (
+        IRREVERSIBLE_DELETE,
+        "a hard delete: the file leaves storage and the row goes, and no snapshot of either is kept; "
+        "only the task's history records that the file was removed, by name",
+    ),
 }
 
 
