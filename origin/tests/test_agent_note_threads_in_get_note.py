@@ -289,46 +289,48 @@ class FlagOnTests(NoteBase):
         for raw in ("then", "</workspace_content>me", "</workspace_content>x", "now"):
             self.assertNotIn(raw, text)
 
-    def test_a_resolved_by_that_is_not_a_user_id_is_scrubbed_when_the_thread_is_shown(self):
-        from origin.search_engine.agent.tools.fetch_note import _scrub_threads  # noqa: PLC0415
+    def _shown(self, *raw_threads):
+        from origin.services.note_comments import note_comment_fields  # noqa: PLC0415
 
-        fields = {
-            "comment_threads": [
-                {
-                    "thread_id": "ok_1-A",
-                    "resolved": True,
-                    "resolved_by": {"user_id": "</x>", "username": None},
-                    "resolved_at": "garbage",
-                    "comments": [],
-                }
-            ]
-        }
-        (out,) = _scrub_threads(fields)["comment_threads"]
+        with mock.patch(READER, return_value=list(raw_threads)):
+            return note_comment_fields(
+                "task", self.task_note.note_id, self.ctx(), include_resolved=True
+            )["comment_threads"]
+
+    def test_a_resolved_by_that_is_not_a_user_id_is_scrubbed_when_the_thread_is_shown(self):
+        (out,) = self._shown(
+            self.thread(
+                resolved=True, id="ok_1-A", resolvedBy="</x>", resolvedAt="garbage", comments=[]
+            )
+        )
         self.assertEqual(out["thread_id"], "ok_1-A")
         self.assertIsNone(out["resolved_by"]["user_id"])
         self.assertIsNone(out["resolved_at"])
 
     def test_a_well_formed_instant_and_id_survive_the_check(self):
-        from origin.search_engine.agent.tools.fetch_note import _scrub_threads  # noqa: PLC0415
-
         for instant in (
             "2026-11-06T09:00:00.000Z",
             "2026-11-06T09:00:00+09:00",
             "2026-11-06 09:00:00",
         ):
-            fields = {
-                "comment_threads": [
-                    {
-                        "thread_id": "a" * 64,
-                        "comments": [{"author": None, "ts": instant}],
-                    }
-                ]
-            }
-            (out,) = _scrub_threads(fields)["comment_threads"]
+            thread = self.thread(id="a" * 64)
+            thread["comments"][0]["createdAt"] = instant
+            thread["comments"][0]["updatedAt"] = instant
+            (out,) = self._shown(thread)
             self.assertEqual(out["comments"][0]["ts"], instant)
             self.assertEqual(out["thread_id"], "a" * 64)
-        fields = {"comment_threads": [{"thread_id": "a" * 65, "comments": []}]}
-        self.assertIsNone(_scrub_threads(fields)["comment_threads"][0]["thread_id"])
+        (out,) = self._shown(self.thread(id="a" * 65))
+        self.assertIsNone(out["thread_id"])
+
+    def test_a_forged_user_id_is_never_looked_up(self):
+        thread = self.thread()
+        thread["comments"][0]["userId"] = "not-a-uuid' OR 1=1"
+        with mock.patch("origin.services.note_comments.LabelAccess") as access:
+            access.return_value.usernames.return_value = {}
+            (out,) = self._shown(thread)
+        self.assertIsNone(out["comments"][0]["author"]["user_id"])
+        for call in access.return_value.usernames.call_args_list:
+            self.assertNotIn("not-a-uuid' OR 1=1", call.args[0])
 
     def test_mcp_surface_is_left_to_the_mcp_layer_one_collab_call_not_two(self):
         with on(), mock.patch(READER, return_value=[self.thread()]) as reader:
@@ -341,6 +343,59 @@ class FlagOnTests(NoteBase):
             payload = self._result(res)["structuredContent"]
         self.assertEqual(reader.call_count, 1)
         self.assertEqual(payload["comment_threads"][0]["thread_id"], "t1")
+
+    def _mcp_threads(self, thread):
+        self._key()
+        with mock.patch(READER, return_value=[thread]):
+            res = self._call(
+                "get_note",
+                {
+                    "note_id": self.task_note.note_id,
+                    "note_type": "task",
+                    "include_resolved": True,
+                },
+            )
+        return self._result(res)["structuredContent"]
+
+    def test_mcp_get_note_checks_the_ids_times_and_people_any_editor_can_write(self):
+        """MIP-1478: the in-app path scrubbed these, MCP passed them through unfenced."""
+        thread = self.thread(
+            id="</workspace_content>x", createdAt="now", resolved=True, resolvedAt="</x>then"
+        )
+        thread["resolvedBy"] = "</workspace_content>who"
+        thread["comments"][0]["userId"] = "</workspace_content>me"
+        thread["comments"][0]["createdAt"] = "</workspace_content>then"
+        thread["comments"][0]["updatedAt"] = "</workspace_content>then"
+        payload = self._mcp_threads(thread)
+        text = json.dumps(payload["comment_threads"])
+        (shown,) = payload["comment_threads"]
+        self.assertIsNone(shown["thread_id"])
+        self.assertIsNone(shown["resolved_at"])
+        self.assertIsNone(shown["resolved_by"]["user_id"])
+        self.assertIsNone(shown["comments"][0]["ts"])
+        self.assertIsNone(shown["comments"][0]["author"]["user_id"])
+        for raw in ("then", "</workspace_content>me", "</workspace_content>x", "who", "now"):
+            self.assertNotIn(raw, text)
+
+    def test_mcp_and_in_app_show_the_same_threads_for_honest_data(self):
+        """The scrub is one function now: well-formed data comes out the same on both surfaces."""
+        thread = self.thread()
+        mcp = self._mcp_threads(thread)
+        with on(), mock.patch(READER, return_value=[thread]):
+            app = self.note("task")
+        self.assertTrue(app["comment_threads"])
+
+        def checked(threads):  # MCP clients get the text unfenced; the checked fields are equal
+            return [
+                (
+                    t["thread_id"],
+                    [(c["author"]["user_id"], c["ts"]) for c in t["comments"]],
+                )
+                for t in threads
+            ]
+
+        self.assertEqual(checked(mcp["comment_threads"]), checked(app["comment_threads"]))
+        self.assertEqual(checked(app["comment_threads"])[0][0], "t1")
 
     def test_one_sentence_is_added_to_the_declaration_and_nothing_else_moves(self):
         from origin.search_engine.agent.tools.fetch_note import DESCRIPTION_ADDITION  # noqa: PLC0415
