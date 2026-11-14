@@ -206,9 +206,15 @@ class TestTheNoteAnchor(NoteBase):
             hidden, owner=self.user, project=hidden.project, title="Mine in a hidden project"
         )
         self.version(2, hidden_note, self.user, 10, body=blocks("x"))
-        out = self.tl_note(
-            "task", hidden_note.note_id
-        )  # the member owns the note: they may open it
+        # An author who is not on the note's project reads it only through a grant (MIP-1511):
+        # without one the note is refused ...
+        with self.assertRaises(ToolError):
+            self.tl_note("task", hidden_note.note_id)
+        # ... with a share the member may open the note
+        NotePermissionMaster.objects.create(
+            team=self.team, user=self.user, note_type=2, note_id=hidden_note.note_id, role_id=3
+        )
+        out = self.tl_note("task", hidden_note.note_id)
         self.assertEqual(out["links"], [])  # but not the task: no pointer to it
         root = self.thread(replies=1)
         chat_note = ChatNoteMaster.objects.create(

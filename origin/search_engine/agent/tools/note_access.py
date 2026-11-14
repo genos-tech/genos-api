@@ -63,14 +63,15 @@ def has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: To
     """True if ctx.user_id may edit the note.
 
     Check 1: owner, who always has write permission (covers legacy personal notes
-             created before role rows existed). Not for a CHAT note (MIP-1492): its author
-             who left the chat, the project or the team is resolved by Check 2 like anyone.
+             created before role rows existed). Only for a PERSONAL note: a chat note's author
+             (MIP-1492) or a task note's (MIP-1511) who left the chat, the project or the team
+             is resolved by Check 2 like anyone.
     Check 2: effective role is Editor or stronger, the same resolution the REST layer's
              `require_write_role` uses: an explicit NotePermissionMaster row wins;
              otherwise task-note project members and chat members are implicit Editors,
              and a personal note's Team Notes folder grants what it grants.
     """
-    if note_type_code != NOTE_TYPE_CHAT and str(owner_id or "") == ctx.user_id:
+    if note_type_code == NOTE_TYPE_PERSONAL and str(owner_id or "") == ctx.user_id:
         return True
     role = get_effective_role(ctx.user_id, note_type_code, note_id)
     return role is not None and role <= ROLE_EDITOR
