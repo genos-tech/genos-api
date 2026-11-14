@@ -40,6 +40,20 @@ from origin.search_engine.agent.tools.task_attachments import attachment_name, a
 from origin.services.task_attachment_manage import delete_attachment
 
 
+def whole_number(value: Any, name: str) -> int:
+    """`value` as the integer it names, or a `ToolError`. Stricter than `task_access.as_int` on
+    purpose, for a delete: `True` is not 1 and `1.5` is not 1, so a sloppy argument cannot quietly
+    pick a different file. A whole float (`2.0`, as some JSON clients send) and a digit string
+    (`"2"`) are what they say."""
+    if isinstance(value, bool):
+        raise ToolError(f"`{name}` must be an integer (got {value!r}).")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ToolError(f"`{name}` must be an integer (got {value!r}).")
+        value = int(value)
+    return as_int(value, name)
+
+
 def find_attachment(task_id: int, attachment_id: int) -> TaskAttachments | None:
     """The file numbered `attachment_id` ON THIS TASK, or None. Nothing else selects the row, so
     another task's file with the same (or any other) number is never reached."""
@@ -47,8 +61,8 @@ def find_attachment(task_id: int, attachment_id: int) -> TaskAttachments | None:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    task = load_task(args.get("task_id"), ctx, action="delete a file from")
-    attachment_id = as_int(args.get("attachment_id"), "attachment_id")
+    task = load_task(whole_number(args.get("task_id"), "task_id"), ctx, action="delete a file from")
+    attachment_id = whole_number(args.get("attachment_id"), "attachment_id")
     attachment = find_attachment(task.task_id, attachment_id)
     if attachment is None:
         raise ToolError(

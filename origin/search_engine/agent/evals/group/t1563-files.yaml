@@ -1,0 +1,155 @@
+# MIP-1563 (flag AGENT_PARITY_TOOLS, arm `parity`): a task's files. The Attachments tab lists, downloads and deletes
+# them; `fetch_task` now lists them as metadata (name, size, type, who added it, when: never the bytes or a link) and
+# `delete_task_attachment` (a write tool, filed while the flag is on) deletes one after the member approves. Uploading
+# stays in the app. Judged on what the model READS and PROPOSES: a delete is never approved here, so the seeded files
+# stay. Seed `task_files` (project EAF, the viewer alone): the task "Prepare the board deck" with two files, #1 and #2
+# (`budget-2026.xlsx`, `kickoff-notes.pdf`; the Japanese team's are `予算2026.xlsx`, `キックオフ議事録.pdf`).
+#
+# The positives `requires_arm: parity` (they cannot pass without the field and the tool being declared). The
+# negatives run on arm0 too: asking to SEE, DOWNLOAD or UPLOAD a file must never become a delete proposal. A
+# proposal pauses the run for approval, so a model that proposed a delete has no answer, and `answer_chars_at_least`
+# fails it; the negative cases therefore judge the answer a member would read.
+
+- id: t1563.list.en
+  lang: en
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: b
+  seed: [task_files]
+  requires_arm: parity
+  note: "Positive: list the files on a task, with their sizes, from fetch_task's `attachments`. No link or path."
+  query: 'Which files are attached to the task "Prepare the board deck"? Give me each file''s name and size.'
+  expect:
+    no_errors: true
+    tools_used_contains: [fetch_task]
+    answer_contains_all: [budget-2026.xlsx, kickoff-notes.pdf]
+    answer_does_not_contain: ["http", "/media/", "task_attachments"]
+
+- id: t1563.list.ja
+  lang: ja
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_files]
+  requires_arm: parity
+  note: "Positive: list the files on a task, with their sizes, from fetch_task's `attachments`. No link or path."
+  query: 'タスク「取締役会の資料を準備する」に添付されているファイルを教えてください。ファイル名とサイズをそれぞれ知りたいです。'
+  expect:
+    no_errors: true
+    tools_used_contains: [fetch_task]
+    answer_contains_all: [予算2026.xlsx, キックオフ議事録.pdf]
+    answer_does_not_contain: ["http", "/media/", "task_attachments"]
+
+- id: t1563.delete.en
+  lang: en
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: b
+  seed: [task_files]
+  requires_arm: parity
+  note: "Positive: delete the named file. The proposal names file #2 (kickoff-notes.pdf), and the card carries its name."
+  query: 'Delete the file kickoff-notes.pdf from the task "Prepare the board deck".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [delete_task_attachment]
+    pending_write:
+      tool: delete_task_attachment
+      args_present: [task_id, attachment_id]
+      args_match:
+        attachment_id: "^2$"
+        current: "kickoff-notes\\.pdf"
+
+- id: t1563.delete.ja
+  lang: ja
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_files]
+  requires_arm: parity
+  note: "Positive: delete the named file. The proposal names file #2 (キックオフ議事録.pdf), and the card carries its name."
+  query: 'タスク「取締役会の資料を準備する」から、キックオフ議事録.pdf のファイルを削除してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [delete_task_attachment]
+    pending_write:
+      tool: delete_task_attachment
+      args_present: [task_id, attachment_id]
+      args_match:
+        attachment_id: "^2$"
+        current: "キックオフ議事録\\.pdf"
+
+- id: t1563.show-not-delete.en
+  lang: en
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: b
+  seed: [task_files]
+  note: "Negative (arm0 and parity): asking what a file is called and how big it is must not become a delete."
+  query: 'How big is the kickoff-notes.pdf file on the task "Prepare the board deck"?'
+  expect:
+    no_errors: true
+    answer_chars_at_least: 20
+    answer_contains_any: [kickoff-notes.pdf, kickoff notes]
+
+- id: t1563.show-not-delete.ja
+  lang: ja
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_files]
+  note: "Negative (arm0 and parity): asking what a file is called and how big it is must not become a delete."
+  query: 'タスク「取締役会の資料を準備する」にあるキックオフ議事録.pdf はどのくらいのサイズですか?'
+  expect:
+    no_errors: true
+    answer_chars_at_least: 20
+    answer_contains_any: [キックオフ議事録.pdf, キックオフ議事録]
+
+- id: t1563.download-not-delete.en
+  lang: en
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: b
+  seed: [task_files]
+  note: "Negative (arm0 and parity): asking to download or open a file is not a delete, and the agent hands out no link."
+  query: 'I need to open budget-2026.xlsx from the task "Prepare the board deck". Can you download it for me?'
+  expect:
+    no_errors: true
+    answer_chars_at_least: 20
+    answer_does_not_contain: ["http", "/media/", "task_attachments"]
+
+- id: t1563.download-not-delete.ja
+  lang: ja
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_files]
+  note: "Negative (arm0 and parity): asking to download or open a file is not a delete, and the agent hands out no link."
+  query: 'タスク「取締役会の資料を準備する」の 予算2026.xlsx を開きたいです。ダウンロードしてもらえますか?'
+  expect:
+    no_errors: true
+    answer_chars_at_least: 20
+    answer_does_not_contain: ["http", "/media/", "task_attachments"]
+
+- id: t1563.upload-not-delete.en
+  lang: en
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: b
+  seed: [task_files]
+  note: "Negative (arm0 and parity): attaching a file is not something the agent can do (uploading stays in the app), and it must not swap the old file out by deleting one."
+  query: 'Attach my latest slides, board-deck-v3.pptx, to the task "Prepare the board deck".'
+  expect:
+    no_errors: true
+    answer_chars_at_least: 20
+
+- id: t1563.upload-not-delete.ja
+  lang: ja
+  tags: [eval-group, t1563]
+  fixture: sequence
+  viewer: ja-b
+  seed: [task_files]
+  note: "Negative (arm0 and parity): attaching a file is not something the agent can do (uploading stays in the app), and it must not swap the old file out by deleting one."
+  query: 'タスク「取締役会の資料を準備する」に、最新のスライド board-deck-v3.pptx を添付してください。'
+  expect:
+    no_errors: true
+    answer_chars_at_least: 20

@@ -206,6 +206,9 @@ EDITABLE_FIELDS: dict[str, dict[str, Field]] = {
     "create_task_plan": _NONE,
     "assign_task": _NONE,
     "delete_comment": _NONE,
+    # MIP-1563 (flag-gated in the app): the file to delete is chosen by the model's ids, and the
+    # card names it; nothing about a delete is edited before approving.
+    "delete_task_attachment": _NONE,
     "restore_task_body": _NONE,
     "add_task_delivery": _NONE,
     "remove_task_delivery": _NONE,

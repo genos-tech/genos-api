@@ -151,9 +151,12 @@ MCP_ONLY_REGISTRY: dict[str, Tool] = {}
 #
 # Name -> (flag, tool). The name MAY equal an `MCP_ONLY_REGISTRY` name: `get_timeline` is one
 # capability on two surfaces, with a description and a schema written for each. Nothing mixes
-# them up: MCP looks tools up through `get_mcp_tool` (`REGISTRY`, then `MCP_ONLY_REGISTRY`, never
-# this), and the app reaches this registry only through `get_app_tool` / `flagged_tools`. A name
-# in `REGISTRY` is refused (see `register_flagged_tool`).
+# them up: MCP looks tools up through `get_mcp_tool` (`REGISTRY`, then `MCP_ONLY_REGISTRY`, then
+# this one, so the MCP-only twin wins), and the app reaches this registry only through
+# `get_app_tool` / `flagged_tools`. A name in `REGISTRY` is refused (see `register_flagged_tool`).
+#
+# A tool here may be a WRITE tool (MIP-1563). MCP publishes one behind the same flag through a
+# catalog entry with `McpTool.flag`; the flag is checked there (`published`), never by the lookup.
 FLAGGED_REGISTRY: dict[str, tuple[str, Tool]] = {}
 
 
@@ -192,8 +195,16 @@ def get_app_tool(name: str) -> Tool | None:
 
 
 def get_mcp_tool(name: str) -> Tool | None:
-    """The tool the MCP surface runs for `name`: a shared one, or an MCP-only one."""
-    return REGISTRY.get(name) or MCP_ONLY_REGISTRY.get(name)
+    """The tool the MCP surface runs for `name`: a shared one, an MCP-only one, or (MIP-1563) a
+    flag-gated one the catalog publishes behind the same flag.
+
+    The flag is NOT read here. Whether a flag-gated tool is offered at all is the catalog entry's
+    (`McpTool.flag`, `mcp.tools.published`), which `visible_tools` and `call` both ask before they
+    get as far as this lookup; the catalog's own contract tests read every entry's tool, flag on or
+    off, through it. A name in `REGISTRY` or `MCP_ONLY_REGISTRY` wins, so `get_timeline` (an
+    MCP-only tool with an in-app twin) is still the MCP one."""
+    entry = FLAGGED_REGISTRY.get(name)
+    return REGISTRY.get(name) or MCP_ONLY_REGISTRY.get(name) or (entry[1] if entry else None)
 
 
 def wrap_workspace_content(text: str) -> str:

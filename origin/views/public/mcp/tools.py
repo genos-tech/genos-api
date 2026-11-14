@@ -130,12 +130,7 @@ from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
-from origin.search_engine.agent.tools.base import (
-    FLAGGED_REGISTRY,
-    ToolContext,
-    ToolError,
-    ToolForbidden,
-)
+from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import (
     DESTRUCTIVE_DONE,
@@ -2186,11 +2181,6 @@ def _registered(tool: McpTool):
     """The registry tool behind a published one: a shared tool, or an MCP-only one
     (MIP-1070). `KeyError` for a name in neither, as `REGISTRY[...]` raised."""
     registered = get_mcp_tool(tool.registry_name)
-    if registered is None and tool.flag:
-        # A flag-gated tool: the registry tool itself, whether or not the flag is on right now
-        # (the catalog's own contract tests read every entry); `published` says if it may run.
-        entry = FLAGGED_REGISTRY.get(tool.registry_name)
-        registered = entry[1] if entry is not None and entry[0] == tool.flag else None
     if registered is None:
         raise KeyError(tool.registry_name)
     return registered
