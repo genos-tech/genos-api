@@ -1,4 +1,0 @@
-arm: t1090-client
-overrides:
-    AGENT_CLIENT_IN_TASK_HISTORY: true
-requires: []

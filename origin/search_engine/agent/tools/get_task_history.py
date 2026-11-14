@@ -29,13 +29,8 @@ reporter).
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
-from django.conf import settings
-
-from origin.models.common.api_key_models import ApiKey
-from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
@@ -115,89 +110,9 @@ def _shown_via(via: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "unknown"}
 
 
-#: MIP-1090 (default off): which client made a change, and nothing else about the credential.
-CLIENT_FLAG = "AGENT_CLIENT_IN_TASK_HISTORY"
-
-#: The sentence the flag adds to the tool's description (`tool_flag_text`).
-DESCRIPTION_ADDITION = (
-    " `via.kind` says which kind of client made a change: `app` (the Genos UI), `agent`, "
-    "`api_key` or `connected_app` (an AI assistant the member signed in to). `via.client` names "
-    "the key or the app, and is present only when it is the caller's OWN; for anyone else's you "
-    "get the kind and no name."
-)
-
-
-def client_enabled() -> bool:
-    """Read at call time, so an eval arm or `override_settings` can flip it."""
-    return bool(settings.SEARCH_ENGINE.get(CLIENT_FLAG))
-
-
-def _uuid_text(raw: Any) -> str | None:
-    try:
-        return str(uuid.UUID(str(raw)))
-    except (ValueError, AttributeError, TypeError):
-        return None
-
-
-def _own_credentials(rows: list[TaskActivity], ctx: ToolContext) -> set[tuple[str, str]]:
-    """`{("api_key", id), ("oauth", id)}`: among the API keys and connected apps these rows
-    name, the ones the CALLER owns, which are the only ones whose name is shown. One query
-    per kind present on the page, none when the page has neither."""
-    wanted: dict[str, set[str]] = {"api_key": set(), "oauth": set()}
-    for r in rows:
-        via = (r.metadata or {}).get("via")
-        if not isinstance(via, dict) or via.get("kind") not in wanted:
-            continue
-        ident = _uuid_text(via.get("key_id" if via["kind"] == "api_key" else "connection_id"))
-        if ident:
-            wanted[via["kind"]].add(ident)
-    own: set[tuple[str, str]] = set()
-    if wanted["api_key"]:
-        own |= {
-            ("api_key", str(i))
-            for i in ApiKey.objects.filter(
-                id__in=wanted["api_key"], user_id=ctx.user_id
-            ).values_list("id", flat=True)
-        }
-    if wanted["oauth"]:
-        own |= {
-            ("oauth", str(i))
-            for i in McpConnection.objects.filter(
-                id__in=wanted["oauth"], user_id=ctx.user_id
-            ).values_list("id", flat=True)
-        }
-    return own
-
-
-def _client_via(via: dict[str, Any], own: set[tuple[str, str]]) -> dict[str, Any]:
-    """`via` as the flag shows it (owner decision on MIP-1090): the KIND for everyone, and the
-    NAME of the key or the app only to the member who owns it. Never a key id, a key prefix, a
-    connection id or an undo's run id.
-
-    * `app` / `agent`: the kind alone (the `undo_of` an app row may carry is left out).
-    * `api_key`: the kind; `client` (the key's name, typed by its owner, fenced) only when the
-      caller owns the key, checked by id against `ApiKey.user`.
-    * `oauth`: `connected_app`; `client` (the name the app registered under, 60 characters,
-      fenced) only when the caller owns the connection (`McpConnection.user`).
-    * every other kind: as it was shown before the flag."""
-    kind = via.get("kind")
-    if kind in ("app", "agent"):
-        return {"kind": kind}
-    if kind in ("api_key", "oauth"):
-        out: dict[str, Any] = {"kind": "api_key" if kind == "api_key" else "connected_app"}
-        ident = _uuid_text(via.get("key_id" if kind == "api_key" else "connection_id"))
-        name = via.get("key_name" if kind == "api_key" else "client_name")
-        if ident and (kind, ident) in own and isinstance(name, str) and name:
-            out["client"] = wrap_workspace_content(name[:60])
-        return out
-    return _shown_via(via)
-
-
-def _via(row: TaskActivity, own: set[tuple[str, str]] | None = None) -> dict[str, Any]:
+def _via(row: TaskActivity) -> dict[str, Any]:
     """How the change arrived. `metadata.via` is stamped by `_record`;
-    rows written before it existed, and system writes, have none.
-
-    `own` is None with the flag off: `via` is then shown exactly as it always was."""
+    rows written before it existed, and system writes, have none."""
     meta = row.metadata or {}
     if meta.get("closedByPrMerge"):
         return {"kind": "pr_merge", "pr_url": meta.get("prUrl")}
@@ -210,7 +125,7 @@ def _via(row: TaskActivity, own: set[tuple[str, str]] | None = None) -> dict[str
         return {"kind": "github", "github_user": meta.get("github_username")}
     via = meta.get("via")
     if isinstance(via, dict) and via.get("kind"):
-        return _shown_via(via) if own is None else _client_via(via, own)
+        return _shown_via(via)
     return {"kind": "unknown"}
 
 
@@ -287,7 +202,6 @@ def _field(row: TaskActivity) -> Any:
 def _entry(
     row: TaskActivity,
     usernames: dict[str, str],
-    own: set[tuple[str, str]] | None = None,
     viewer_id: Any = None,
 ) -> dict[str, Any]:
     actor = row.actor
@@ -301,8 +215,8 @@ def _entry(
             {"user_id": str(actor.id), "username": actor.username} if actor is not None else None
         ),
         # A key or a connected app writes as its owner, so the row's actor is the owner: anyone
-        # else reads the kind only (MIP-1470). After the flag's shape, so the flag cannot widen it.
-        "via": via_for_viewer(_via(row, own), row.actor_id, viewer_id),
+        # else reads the kind only (MIP-1470).
+        "via": via_for_viewer(_via(row), row.actor_id, viewer_id),
     }
     if row.action_type in (
         TaskActivityActionType.COMMENT_ADDED,
@@ -393,8 +307,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if user_ids
         else {}
     )
-    own = _own_credentials(rows, ctx) if client_enabled() else None
-    history = [_entry(r, usernames, own, ctx.user_id) for r in rows]
+    history = [_entry(r, usernames, ctx.user_id) for r in rows]
 
     return {
         "task_id": task.task_id,

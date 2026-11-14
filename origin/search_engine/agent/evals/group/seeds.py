@@ -15,7 +15,7 @@ SEEDS never write a model-visible FLAG: they put data in the database, the same 
 
 ISOLATION. The seeded rows stay in the shared sequence teams for good, and the t1271 / t1281 cases run
 against those teams too, so a seed must not change what THEIR viewers can see: a seed that needs tasks or a
-note makes its OWN project (`ECT`, `ECH`, `ENT`) with only the people it needs as members, so the story's
+note makes its OWN project (`ECT`, `ENT`) with only the people it needs as members, so the story's
 project, its people's task lists and its note are untouched; the inbox report lands in one member's own
 inbox and avoids the words the story's cases forbid in an answer ("overdue", "waiting", ...). A static test
 (`test_agent_eval_group_seeds`) checks every case that does NOT list a seed against that seed's text.
@@ -174,138 +174,6 @@ def seed_inbox_report(info: dict[str, Any]) -> None:
         request_status="",
     )
     item.save()
-
-
-# --------------------------------------------------------------------------- #
-# t1090-client: a closed task whose changes came from different clients        #
-# --------------------------------------------------------------------------- #
-
-#: The seeded task's title per language (also its idempotency marker).
-CLIENT_TASK_TITLE = {
-    "en": "Refresh the onboarding checklist",
-    "ja": "オンボーディングのチェックリストを更新する",
-}
-#: The names the cases ask about. The viewer owns LAPTOP_KEY; the developer owns CI_KEY.
-LAPTOP_KEY = "Laptop script"
-CI_KEY = "Chris CI"
-CONNECTED_APP = "Claude"
-
-
-def seed_task_history_clients(info: dict[str, Any]) -> None:
-    """A CLOSED task (so it is on nobody's open list) in the viewer's project, whose history
-    has one change from each kind of client:
-
-      1. created                    via the web app
-      2. Open -> WIP                via the VIEWER's own connected app ("Claude")
-      3. priority Normal -> High    via the VIEWER's own API key ("Laptop script")
-      4. due date                   via ANOTHER member's API key ("Chris CI", the developer's)
-      5. WIP -> Closed              via the web app
-
-    Rows are written directly (a connected app and a key cannot be exercised here without a
-    live OAuth flow), with the `via` shape `middleware.current_user.get_current_source` stamps."""
-    from datetime import datetime, timedelta  # noqa: PLC0415
-
-    from django.db.models import Max  # noqa: PLC0415
-    from oauth2_provider.models import Application  # noqa: PLC0415
-
-    from origin.models.common.api_key_models import (  # noqa: PLC0415
-        SCOPE_WRITE,
-        ApiKey,
-        generate_key,
-        hash_key,
-    )
-    from origin.models.common.mcp_connection_models import McpConnection  # noqa: PLC0415
-    from origin.models.task.task_activity_models import (  # noqa: PLC0415
-        TaskActivity,
-        TaskActivityActionType,
-    )
-    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
-    from origin.search_engine.agent.evals.group import sequence  # noqa: PLC0415
-
-    lang = "ja" if info["team"] == "ja" else "en"
-    title = CLIENT_TASK_TITLE[lang]
-    team_id = info["team_id"]
-    if TaskMaster.objects.filter(team_id=team_id, title=title, is_deleted=False).exists():
-        return
-    me = info["user_id"]
-    dev = _dev_id(info)
-    project = _isolated_project(info, "Eval client history", "ECH", [me, dev])
-    number = (
-        TaskMaster.objects.filter(project=project).aggregate(m=Max("project_task_number"))["m"] or 0
-    ) + 1
-    task = TaskMaster.objects.create(
-        team_id=team_id,
-        project=project,
-        reporter_id=me,
-        assignee_id=me,
-        title=title,
-        status="Closed",
-        priority="High",
-        project_task_number=number,
-    )
-    TaskActivity.objects.filter(task=task).delete()  # what the signals wrote: not a client's
-
-    def key(owner: str, name: str) -> ApiKey:
-        return ApiKey.objects.create(
-            user_id=owner,
-            name=name,
-            key_hash=hash_key(generate_key()),
-            prefix="gk_evalseed",
-            scope=SCOPE_WRITE,
-        )
-
-    mine, theirs = key(me, LAPTOP_KEY), key(dev, CI_KEY)
-    # get_or_create: a reseed deletes the people (and their connections) but the OAuth app has no
-    # team to go with them.
-    application, _ = Application.objects.get_or_create(
-        client_id=f"eval-seed-{info['team']}-claude",
-        defaults={
-            "client_type": Application.CLIENT_PUBLIC,
-            "authorization_grant_type": Application.GRANT_AUTHORIZATION_CODE,
-            "redirect_uris": "https://claude.ai/cb",
-            "name": CONNECTED_APP,
-        },
-    )
-    connection = McpConnection.objects.create(
-        user_id=me,
-        application=application,
-        default_team_id=team_id,
-        team_ids=[str(team_id)],
-        scope="write",
-    )
-    app = {"kind": "app"}
-    connected = {
-        "kind": "oauth",
-        "connection_id": str(connection.id),
-        "client_name": CONNECTED_APP,
-    }
-
-    def api_key(k: ApiKey) -> dict[str, Any]:
-        return {"kind": "api_key", "key_id": str(k.id), "key_name": k.name, "key_prefix": k.prefix}
-
-    steps = (
-        (TaskActivityActionType.CREATED, "created", None, {"title": title}, me, app),
-        (TaskActivityActionType.STATUS, "status", "Open", "WIP", me, connected),
-        (TaskActivityActionType.PRIORITY, "priority", "Normal", "High", me, api_key(mine)),
-        (TaskActivityActionType.DUE_DATE, "due_date", None, "2026-11-20", dev, api_key(theirs)),
-        (TaskActivityActionType.STATUS, "status", "WIP", "Closed", me, app),
-    )
-    day = datetime.combine(sequence.SCENARIO_DAY, datetime.min.time(), tzinfo=sequence._jst())
-    for n, (action, field, old, new, actor, via) in enumerate(steps):
-        row = TaskActivity.objects.create(
-            task=task,
-            team_id=team_id,
-            project=project,
-            actor_id=actor,
-            action_type=action,
-            field_name=field,
-            old_value=old,
-            new_value=new,
-            metadata={"via": via, SEED_KEY: "t1090-client"},
-        )
-        TaskActivity.objects.filter(pk=row.pk).update(
-            ts_created_at=day + timedelta(hours=18, minutes=n)
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -530,7 +398,6 @@ def seed_closed_ancestor_tree(info: dict[str, Any]) -> None:
 #: `test_agent_eval_group_seeds` checks only their cases against the seed's text.
 VISIBLE_TO: dict[str, frozenset[str]] = {
     "inbox_report": frozenset({"b"}),  # the viewer's own inbox
-    "task_history_clients": frozenset({"b", "c"}),  # project ECH: the viewer and the developer
     "note_threads_stub": frozenset({"b", "c"}),  # project ENT: the viewer and the developer
     "closed_ancestor_tree": frozenset({"a"}),  # project ECT: the viewer alone
 }
@@ -547,8 +414,6 @@ def seed_texts(name: str, lang: str) -> list[str]:
             *[sec["heading"] for sec in report["sections"]],
             *[e["text"] for sec in report["sections"] for e in sec["items"]],
         ]
-    if name == "task_history_clients":
-        return [CLIENT_TASK_TITLE[lang], LAPTOP_KEY, CI_KEY, CONNECTED_APP]
     if name == "closed_ancestor_tree":
         return list(CLOSED_TREE_TITLES[lang].values())
     if name == "note_threads_stub":
@@ -559,7 +424,6 @@ def seed_texts(name: str, lang: str) -> list[str]:
 
 SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "inbox_report": seed_inbox_report,
-    "task_history_clients": seed_task_history_clients,
     "note_threads_stub": seed_note_threads_stub,
     "closed_ancestor_tree": seed_closed_ancestor_tree,
 }

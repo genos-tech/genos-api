@@ -4,18 +4,14 @@ A change made with an API key or a connected app carries `via` with the key's id
 Before, every member who could read the task read another member's key name ("my-laptop-claude"),
 which can be personal. Now the owner (a key writes as its owner, so the row's actor) sees it whole
 and everyone else sees the kind only. The in-app agent shares the registry tool and gets the same
-rule (MIP-1470, in-app half): it is a privacy fix, so it does not sit behind the held flag
-`AGENT_CLIENT_IN_TASK_HISTORY` (which only picks the shape of the `via` the viewer may read).
+rule (MIP-1470, in-app half), unconditionally: it is a privacy fix.
 """
 
 from __future__ import annotations
 
 import json
 
-from django.conf import settings
-from django.test import override_settings
-
-from origin.models.common.api_key_models import SCOPE_READ, ApiKey, generate_key, hash_key
+from origin.models.common.api_key_models import SCOPE_READ
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_progress_models import TaskProgressFact
 from origin.search_engine.agent.tools import REGISTRY
@@ -130,15 +126,13 @@ class TestTheKeyNameIsTheOwners(McpBase):
         )
 
 
-FLAG = "AGENT_CLIENT_IN_TASK_HISTORY"
 OAUTH = {"kind": "oauth", "connection_id": "conn-9", "client_name": "Alice's Claude"}
 SECRETS = ("Alice's private phone", "k-theirs", "gk_alice", "conn-9", "Alice's Claude")
 
 
 class TestTheInAppToolKeepsTheSameRule(McpBase):
     """MIP-1470 (in-app half): the in-app registry tool shows another member's key or app by its
-    kind only, with the held flag off AND on. The row's actor (a key writes as its owner) reads
-    their own whole."""
+    kind only. The row's actor (a key writes as its owner) reads their own whole."""
 
     def setUp(self):
         super().setUp()
@@ -157,68 +151,47 @@ class TestTheInAppToolKeepsTheSameRule(McpBase):
             metadata={"via": via, **extra},
         )
 
-    def read(self, flag):
-        with override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, FLAG: flag}):
-            out = REGISTRY["get_task_history"].run(
-                {"task_id": self.task.task_id},
-                ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id)),
-            )
+    def read(self):
+        out = REGISTRY["get_task_history"].run(
+            {"task_id": self.task.task_id},
+            ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id)),
+        )
         return out["history"], json.dumps(out)
 
     def of(self, rows, user):
         return [r for r in rows if r["actor"]["user_id"] == str(user.id)]
 
-    def test_another_members_key_is_its_kind_only_flag_off_and_on(self):
+    def test_another_members_key_is_its_kind_only(self):
         self.row(self.user2, THEIRS)
-        for flag in (False, True):
-            with self.subTest(flag=flag):
-                rows, text = self.read(flag)
-                [theirs] = self.of(rows, self.user2)
-                self.assertEqual(theirs["via"], {"kind": "api_key"})
-                for secret in SECRETS:
-                    self.assertNotIn(secret, text)
+        rows, text = self.read()
+        [theirs] = self.of(rows, self.user2)
+        self.assertEqual(theirs["via"], {"kind": "api_key"})
+        for secret in SECRETS:
+            self.assertNotIn(secret, text)
 
-    def test_another_members_connected_app_is_its_kind_only_flag_off_and_on(self):
+    def test_another_members_connected_app_is_its_kind_only(self):
+        # A connected app is shown to the model as the kind it already knows, an API key.
         self.row(self.user2, OAUTH)
-        for flag, kind in ((False, "api_key"), (True, "connected_app")):
-            with self.subTest(flag=flag):
-                rows, text = self.read(flag)
-                [theirs] = self.of(rows, self.user2)
-                self.assertEqual(theirs["via"], {"kind": kind})
-                for secret in SECRETS:
-                    self.assertNotIn(secret, text)
+        rows, text = self.read()
+        [theirs] = self.of(rows, self.user2)
+        self.assertEqual(theirs["via"], {"kind": "api_key"})
+        for secret in SECRETS:
+            self.assertNotIn(secret, text)
 
-    def test_the_owner_reads_their_own_key_and_app_whole_with_the_flag_off(self):
+    def test_the_owner_reads_their_own_key_and_app_whole(self):
         self.row(self.user, MINE)
         self.row(self.user, OAUTH)
-        rows, _ = self.read(False)
+        rows, _ = self.read()
         mine = self.of(rows, self.user)
         self.assertEqual({r["via"]["key_id"] for r in mine}, {"k-mine", "conn-9"})
         self.assertTrue(any("my laptop" in str(r["via"]["key_name"]) for r in mine))
         self.assertTrue(any("Alice's Claude" in str(r["via"]["key_name"]) for r in mine))
 
-    def test_with_the_flag_on_the_owner_still_gets_the_client_name_of_a_credential_they_own(self):
-        key = ApiKey.objects.create(
-            user=self.user,
-            name="my laptop",
-            key_hash=hash_key(generate_key()),
-            prefix="gk_mine",
-            scope=SCOPE_READ,
-        )
-        self.row(self.user, {**MINE, "key_id": str(key.id)})
-        self.row(self.user2, {**MINE, "key_id": str(key.id)})  # not the owner's row
-        rows, _ = self.read(True)
-        [own] = self.of(rows, self.user)
-        self.assertEqual(own["via"]["kind"], "api_key")
-        self.assertIn("my laptop", str(own["via"]["client"]))
-        [other] = self.of(rows, self.user2)
-        self.assertEqual(other["via"], {"kind": "api_key"})
-
     def test_an_undo_click_keeps_its_internal_ids_for_the_person_who_clicked_only(self):
         undo = {"kind": "app", "undo_of": {"run_id": "r-1", "step": 3}}
         self.row(self.user, undo)
         self.row(self.user2, undo)
-        rows, _ = self.read(False)
+        rows, _ = self.read()
         self.assertEqual(self.of(rows, self.user)[0]["via"]["undo_of"], undo["undo_of"])
         self.assertEqual(self.of(rows, self.user2)[0]["via"], {"kind": "app"})
 
@@ -227,7 +200,7 @@ class TestTheInAppToolKeepsTheSameRule(McpBase):
         self.row(self.user2, {"kind": "agent"})
         self.row(None, {"kind": "app"}, derivedFromDependencies=True)
         self.row(None, {"kind": "api_key", "key_name": "ghost", "key_id": "k-ghost"})
-        rows, text = self.read(False)
+        rows, text = self.read()
         vias = [r["via"] for r in rows]
         self.assertIn({"kind": "pr_merge", "pr_url": "https://x/pull/1"}, vias)
         self.assertIn({"kind": "agent"}, vias)
@@ -237,7 +210,7 @@ class TestTheInAppToolKeepsTheSameRule(McpBase):
 
     def test_the_rest_of_the_row_is_unchanged(self):
         self.row(self.user2, THEIRS)
-        rows, _ = self.read(False)
+        rows, _ = self.read()
         [theirs] = self.of(rows, self.user2)
         self.assertEqual((theirs["action"], theirs["old_value"]), ("status_changed", "Open"))
         self.assertEqual(theirs["actor"]["username"], self.user2.username)
