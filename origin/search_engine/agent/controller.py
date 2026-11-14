@@ -1837,7 +1837,12 @@ def _calendar_change_ref(call_name: str, result: dict[str, Any]) -> dict[str, An
 
 
 def _calendar_event_source(
-    account_id: Any, calendar_id: Any, event_id: Any, event: dict[str, Any] | None = None
+    account_id: Any,
+    calendar_id: Any,
+    event_id: Any,
+    event: dict[str, Any] | None = None,
+    *,
+    deleted: bool = False,
 ) -> dict[str, Any] | None:
     """The chip of a Google Calendar event (MIP-1059). None when the event has no token (`event_cite`).
 
@@ -1864,6 +1869,10 @@ def _calendar_event_source(
     # Unknown (a delete) is null, not false: the client folds a later copy of a source into the one it
     # holds and ignores a blank, so a false here would erase an all-day event's true.
     s["event_all_day"] = bool(row.get("all_day")) if "all_day" in row else None
+    if deleted:
+        # Only on the chip of an approved delete Google confirmed (not an "already gone", which may be the
+        # wrong account): a chip whose title and times came from an earlier read can say it was deleted.
+        s["deleted"] = True
     return s
 
 
@@ -2090,7 +2099,14 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
             # A read or a create/update returns the shaped event (`id`); a delete and an update that
             # changed nothing name it by `event_id`.
             event_id = result.get("id") or result.get("event_id")
-            built = [_calendar_event_source(account_id, calendar_id, event_id, result)]
+            removed = (
+                call_name == "delete_calendar_event"
+                and result.get("deleted") is True
+                and result.get("already_gone") is False
+            )
+            built = [
+                _calendar_event_source(account_id, calendar_id, event_id, result, deleted=removed)
+            ]
         return [b for b in built if b is not None]
 
     if call_name in _TASK_WRITE_TOOLS:
@@ -2483,6 +2499,9 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
                 # then update_task): the frontend's always-chip guarantee
                 # rides on the flag.
                 seen_by_id[eid]["operated"] = True
+            if s.get("deleted"):
+                # The same for a delete's mark: an earlier read of the event holds the title and times.
+                seen_by_id[eid]["deleted"] = True
     return list(seen_by_id.values())
 
 

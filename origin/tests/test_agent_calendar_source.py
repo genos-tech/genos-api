@@ -144,6 +144,20 @@ class ChipFromResultTests(SimpleTestCase):
         self.assertIsNone(chip["event_start"])
         self.assertIsNone(chip["event_all_day"])  # unknown, not false: a client skips a blank
 
+    def test_only_a_delete_google_confirmed_marks_its_chip_deleted(self):
+        base = {"event_id": "evt1", "calendar_id": "primary", "account_id": ACCOUNT}
+        confirmed = self.one(
+            "delete_calendar_event", {**base, "deleted": True, "already_gone": False}
+        )
+        self.assertIs(confirmed["deleted"], True)
+        # a 404 may be the wrong account: the event might still exist, so no claim
+        gone = self.one("delete_calendar_event", {**base, "deleted": True, "already_gone": True})
+        self.assertNotIn("deleted", gone)
+        # no other write or read ever carries the mark
+        for name in ("create_calendar_event", "update_calendar_event", "get_calendar_event"):
+            chip = self.one(name, {**event_row(), "calendar_id": "primary", "account_id": ACCOUNT})
+            self.assertNotIn("deleted", chip, name)
+
     def test_no_chip_without_a_resolved_account(self):
         # The flag off: results carry no `account_id`, so nothing changes for anyone, and a history run
         # recorded before the flag was on keeps showing what it showed.
@@ -242,6 +256,31 @@ class ReplayTests(SimpleTestCase):
         # Read first, written later: first-wins keeps the title, and the operated mark survives.
         self.assertTrue(chip["operated"])
         self.assertEqual(chip["title"], "Standup")
+
+    def test_history_keeps_the_title_from_the_read_and_adds_the_deleted_mark(self):
+        run = _StubRun(
+            [
+                _StubStep(
+                    "get_calendar_event",
+                    {**event_row(), "calendar_id": "primary", "account_id": ACCOUNT},
+                ),
+                _StubStep(
+                    "delete_calendar_event",
+                    {
+                        "event_id": "evt1",
+                        "calendar_id": "primary",
+                        "deleted": True,
+                        "already_gone": False,
+                        "account_id": ACCOUNT,
+                    },
+                ),
+            ]
+        )
+        (chip,) = reconstruct_sources_for_run(run)
+        self.assertEqual(chip["title"], "Standup")
+        self.assertEqual(chip["event_start"], "2026-12-01T10:00:00+09:00")
+        self.assertTrue(chip["operated"])
+        self.assertIs(chip["deleted"], True)
 
     def test_two_accounts_with_the_same_event_id_are_two_chips(self):
         other = str(uuid.uuid4())
@@ -405,6 +444,12 @@ class RealResultTests(CalendarBase):
         chip = self.chip_of("delete_calendar_event", out)
         self.assertEqual(chip["entity_id"], f"calendar_event:{self.home.id}:hm1")
         self.assertEqual(chip["account_id"], str(self.home.id))
+        self.assertIs(chip["deleted"], True)
+        # asked again, Google says 404: already gone, which may be the wrong account: no claim
+        again = DELETE_CALENDAR_EVENT.run(
+            {"event_id": "hm1", "account": str(self.home.id)}, self.ctx
+        )
+        self.assertNotIn("deleted", self.chip_of("delete_calendar_event", again))
 
     def test_the_title_is_unfenced_but_the_model_still_reads_it_fenced(self):
         out = GET_CALENDAR_EVENT.run({"event_id": "wk1"}, self.ctx)
