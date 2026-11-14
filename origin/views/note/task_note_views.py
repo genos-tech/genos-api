@@ -10,6 +10,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.services.note_delete import DeleteRefused, delete_note
+from origin.services.note_role_revoke import revoke_task_roles_on_move
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
@@ -694,6 +695,9 @@ class TaskNoteMoveView(AuthenticatedAPIView):
 
         now = timezone.now()
         with transaction.atomic():
+            # Read BEFORE the notes are re-filed: the Owner rows of people who are not on the
+            # target project end below (MIP-1493).
+            moves = [(note.note_id, note.project_id)]
             note.task = target_task
             note.project = target_task.project
             note.save(update_fields=["task", "project", "ts_updated_at"])
@@ -707,13 +711,15 @@ class TaskNoteMoveView(AuthenticatedAPIView):
             visited = {note.note_id}
             frontier = [note.note_id]
             while frontier:
-                child_ids = list(
+                children = list(
                     TaskNoteMaster.objects.filter(team=data["team_id"], parent_note_id__in=frontier)
                     .exclude(note_id__in=visited)
-                    .values_list("note_id", flat=True)
+                    .values_list("note_id", "project_id")
                 )
+                child_ids = [c[0] for c in children]
                 if not child_ids:
                     break
+                moves.extend(children)
                 TaskNoteMaster.objects.filter(note_id__in=child_ids).update(
                     task=target_task,
                     project=target_task.project,
@@ -721,6 +727,8 @@ class TaskNoteMoveView(AuthenticatedAPIView):
                 )
                 visited.update(child_ids)
                 frontier = child_ids
+
+            revoke_task_roles_on_move(moves=moves, target_project_id=target_task.project_id)
 
         res = {
             "noteType": NOTE_TYPE,

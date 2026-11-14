@@ -92,6 +92,10 @@ def drop_in_team_access(team_id, attendee_id) -> None:
     from origin.services.chat_note_access import revoke_team_roles
 
     revoke_team_roles(user_id=attendee_id, team_id=team_id)
+    # Likewise the roles on its task notes and on the notes of its Team Notes folders (MIP-1493).
+    from origin.services.note_role_revoke import revoke_team_roles as revoke_team_note_roles
+
+    revoke_team_note_roles(user_id=attendee_id, team_id=team_id)
     # No receiver sees that queryset update (MIP-970), and the departure
     # changes what the person sees in every collection of the team.
     from origin.services import change_feed
