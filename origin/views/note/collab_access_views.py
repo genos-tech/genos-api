@@ -104,14 +104,15 @@ class CollabAccessCheckView(AuthenticatedAPIView):
 
     @staticmethod
     def _check_note(user_id, note_type, note_id):
-        if not note_exists(note_type, note_id):
-            return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-        role = get_effective_role(user_id, note_type, note_id)
+        # A document the caller cannot open answers as one that does not exist (MIP-1497):
+        # genos-collab refuses 400/403/404 the same way, so only the probe could tell them apart.
+        role = (
+            get_effective_role(user_id, note_type, note_id)
+            if note_exists(note_type, note_id)
+            else None
+        )
         if role is None:
-            return Response(
-                {"error": "You do not have access to this document."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response({"role_id": role}, status=status.HTTP_200_OK)
 
     @staticmethod
@@ -120,12 +121,9 @@ class CollabAccessCheckView(AuthenticatedAPIView):
         — `can_access_task`, which is also what the task REST endpoints
         gate on, so the editor and the API can never disagree about who
         may open a given task."""
-        if not TaskMaster.objects.filter(task_id=task_id, is_deleted=False).exists():
+        if not TaskMaster.objects.filter(
+            task_id=task_id, is_deleted=False
+        ).exists() or not can_access_task(task_id, user_id):
+            # One answer for "no such task" and "not yours" (MIP-1497).
             return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        if not can_access_task(task_id, user_id):
-            return Response(
-                {"error": "You do not have access to this document."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         return Response({"role_id": None}, status=status.HTTP_200_OK)

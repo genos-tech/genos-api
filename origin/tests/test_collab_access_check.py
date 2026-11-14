@@ -63,7 +63,8 @@ class CollabAccessCheckTests(BaseAPITestCase):
     def test_task_body_of_a_foreign_project_is_denied(self):
         """Was unauthenticated allow-all: `task-body:` never reached a check."""
         res = self._check(f"task-body:{self.task.task_id}", user=self.outsider)
-        self.assertEqual(res.status_code, 403)
+        # 404, not 403 (MIP-1497): the same answer as a task that does not exist.
+        self.assertEqual(res.status_code, 404)
 
     def test_unknown_prefix_is_denied(self):
         """The default that turned an unhandled prefix into an open door."""
@@ -95,7 +96,7 @@ class CollabAccessCheckTests(BaseAPITestCase):
 
     def test_team_member_outside_the_project_is_denied(self):
         res = self._check(f"task-body:{self.task.task_id}", user=self.user2)
-        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.status_code, 404)  # MIP-1497: as a missing task
 
     def test_missing_task_is_404(self):
         res = self._check("task-body:99999999")
@@ -121,9 +122,9 @@ class CollabAccessCheckTests(BaseAPITestCase):
         )
         # A project member gets in (task notes grant editor implicitly)...
         self.assertEqual(self._check(f"task-note:{note.note_id}").status_code, 200)
-        # ...and a different tenant does not.
+        # ...and a different tenant does not (404, as a missing note: MIP-1497).
         self.assertEqual(
-            self._check(f"task-note:{note.note_id}", user=self.outsider).status_code, 403
+            self._check(f"task-note:{note.note_id}", user=self.outsider).status_code, 404
         )
 
     # ── grammar ───────────────────────────────────────────────────────
@@ -146,4 +147,4 @@ class CollabAccessCheckTests(BaseAPITestCase):
             {"document_name": f"task-body:{self.task.task_id}", "user_id": str(self.user.id)},
             format="json",
         )
-        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.status_code, 404)
