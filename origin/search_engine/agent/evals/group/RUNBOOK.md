@@ -207,9 +207,15 @@ the model.
     applied): `t905-a2` needs `AGENT_EFFORT_LEVELS=true` and `AGENT_TWO_TIER_LOOP=true`, or it runs
     arm0's code. Set them in the environment of the whole session.
   * `expect: pending_write: {tool, tasks_at_least, tasks_at_most, total_chars_at_least/_at_most,
-    each_body_chars_at_least/_at_most, each_body_headings_at_least/_at_most, not_cut_off}` checks
+    each_body_chars_at_least/_at_most, each_body_headings_at_least/_at_most, not_cut_off, each_body_kind_at_least: skeleton|content, report_body_kinds}` checks
     what the model PROPOSED (a write never runs in an eval), in characters; a plan's `each_body_*`
-    judge its task bodies. `answer_chars_at_most/_at_least` bound the answer. A run that ends on a
+    judge its task bodies. A body is `none` (blank), `skeleton` (only headings, empty list items and the
+    task's own title: what the server fills in since MIP-1510) or `content` (MIP-1532):
+    `each_body_kind_at_least` fails on a body below the floor, and the check `pending_write.body_kinds`
+    reports the split ("none 0, skeleton 5, content 0 of 5 bodies"). `not_cut_off` looks for a body
+    that trails off (an open bracket or fence, a trailing comma, an article or a Japanese particle),
+    not for a missing full stop, and never judges a skeleton. A group-level `facts_ignore_lines`
+    (line regexes) drops summary lines such as `ステータス: Closed` before `facts_in_order` is read. `answer_chars_at_most/_at_least` bound the answer. A run that ends on a
     proposal and says nothing shows the proposed bodies as its `answer`, so the report carries the
     text to read.
   * For each question the `.standard` case runs on arm0 AND `t905` (same bytes: "Standard unchanged"

@@ -84,6 +84,8 @@ GROUP_ONLY_KEYS = frozenset(
 GROUP_EXPECT_KEYS = frozenset(
     {
         "facts_in_order",
+        # MIP-1532: line regexes dropped from the answer before `facts_in_order` is read
+        "facts_ignore_lines",
         "tools_in_order",
         "max_calls",
         "no_tool_results_contain",
@@ -946,6 +948,11 @@ def group_checks(
     facts_in_order        [fact, ...]; a fact is a phrase or a list of alternatives (any one
                           counts). Every fact must appear, and the FIRST appearances must be
                           in this order. Match on distinctive phrases, not on tokens.
+    facts_ignore_lines    (MIP-1532) regexes (case-insensitive, one line at a time); a line that
+                          matches is dropped from the answer before `facts_in_order` is read. For
+                          a SUMMARY line that says a fact without being the event ("ステータス:
+                          Closed" above a timeline): it is not an event, so it must neither count
+                          as the first appearance of the closing fact nor satisfy a missing one.
     tools_in_order        tool names that must be called, in this order (other calls may sit
                           between them)
     max_calls             model calls <= N
@@ -974,7 +981,11 @@ def group_checks(
             )
         checks += content_checks.check_answer_length(expect, answer)
     if "facts_in_order" in expect:
-        text = _norm(answer)
+        ignore = [re.compile(p, re.IGNORECASE) for p in expect.get("facts_ignore_lines") or []]
+        kept = [
+            line for line in (answer or "").splitlines() if not any(p.search(line) for p in ignore)
+        ]
+        text = _norm("\n".join(kept))
         last = -1
         missing: list[str] = []
         misordered: list[str] = []
