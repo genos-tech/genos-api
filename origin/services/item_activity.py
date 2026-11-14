@@ -470,7 +470,7 @@ def shape_week(ctx: ToolContext, data: WeekSeries | None) -> dict[str, Any] | No
         key=lambda t: (-sum(series[t]), -series[t][-1], t),
     )
     shown = ranked[:WEEK_ITEMS]
-    seen = item_lines.seen_at(ctx, shown)
+    seen, seen_cut = item_lines.seen_at_checked(ctx, shown)
     items = []
     for task_id in shown:
         task = readable[task_id]
@@ -491,13 +491,18 @@ def shape_week(ctx: ToolContext, data: WeekSeries | None) -> dict[str, Any] | No
         if task_id in capped:
             entry["capped"] = True
         items.append(entry)
-    return {
+    section = {
         "from": days[0].isoformat(),
         "through": days[-1].isoformat(),
         "items": items,
         "total_items": len(ranked),
         "truncated": len(ranked) > len(items),
     }
+    if seen_cut:
+        # One look-up serves every item, so one flag: a `last_seen_at` above may be missing or
+        # older than it was (the markers behind it were cut, `item_lines.seen_at_checked`).
+        section["seen_capped"] = True
+    return section
 
 
 def export_rows(user_id: str) -> list[dict[str, Any]]:

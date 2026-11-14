@@ -68,8 +68,8 @@ out: the neighbours of a line (milestone work `SIBLING_POOL`, dependency neighbo
 `NEIGHBOUR_POOL`, subtasks `CHILD_POOL`: filtered to what the member may open in the query,
 flag `related_capped`), the member's own markers and chat messages behind `unattached` (`POOL`
 each: `capped.unattached_capped` and `unattached_sources`; the counts are then a floor) and the
-markers on milestones, task notes and chat threads behind `last_seen_at` (`SEEN_POOL`:
-`capped.seen_capped`; the time may be missing or older).
+markers on the asked items' own milestones, task notes and chat threads behind `last_seen_at`
+(`SEEN_POOL`: `capped.seen_capped`; the time may be missing or older).
 """
 
 from __future__ import annotations
@@ -83,8 +83,8 @@ from functools import reduce
 from operator import or_
 from typing import Any
 
-from django.db.models import CharField, Max, Q
-from django.db.models.functions import Cast, Coalesce
+from django.db.models import CharField, Max, Q, Value
+from django.db.models.functions import Cast, Coalesce, Concat
 from django.utils import timezone
 
 from origin.models.chat.unified_models import (
@@ -116,11 +116,10 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
-from origin.search_engine.agent.tools.list_my_chats import _titles as chat_titles
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
 from origin.services import briefing, member_events
-from origin.services.channel_scope import readable_chats_qs
+from origin.services.channel_scope import channel_titles, readable_chats_qs
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import zone_for_user_id
 
@@ -846,17 +845,27 @@ def _own_markers_of(
         task_id__in=ids, team_id=team, is_deleted=False
     ).values_list("milestone_id", flat=True)
     threads = sorted({th for t in tasks.values() if (th := _uuid_text(t.thread_id))})
-    named = Q(object_type="task", object_id__in=[str(i) for i in ids])
-    named |= Q(object_type="milestone", object_id__in=[str(m) for m in milestones])
-    if task_notes:
-        named |= Q(object_type="note", object_id__in=[f"task:{n}" for n in task_notes])
-    if threads:
-        on_thread = reduce(or_, (Q(object_id__endswith=f":{th}") for th in threads))
-        named |= Q(object_type="chat_thread") & (Q(object_id__in=threads) | on_thread)
+    named = Q(object_type="task", object_id__in=[str(i) for i in ids]) | _other_items_q(
+        [str(m) for m in milestones], [f"task:{n}" for n in task_notes], threads
+    )
     floor = timezone.now() - member_events.RETENTION
     return MemberEvent.objects.filter(
         named, user_id=me, team_id=team, ts__gte=max(since, floor), ts__lt=until
     ).order_by("-ts", "-event_id")
+
+
+def _other_items_q(milestone_oids: Any, note_oids: Any, threads: list[str]) -> Q:
+    """The markers that can name an item through its milestone row (`milestone_oids`: the
+    marker's `object_id` of each), its task notes (`note_oids`: `task:<id>`) or its linked
+    thread (`threads`: a UUID text, alone or as `<chat>:<thread>`). Each of the first two is a
+    list or a subquery of texts; an empty list matches nothing. The rule `_own_markers_of`
+    and `seen_at_checked` share, so the two cannot disagree on which markers name an item."""
+    named = Q(object_type="milestone", object_id__in=milestone_oids)
+    named |= Q(object_type="note", object_id__in=note_oids)
+    if threads:
+        on_thread = reduce(or_, (Q(object_id__endswith=f":{th}") for th in threads))
+        named |= Q(object_type="chat_thread") & (Q(object_id__in=threads) | on_thread)
+    return named
 
 
 def _resolve_markers(team: str, markers: list) -> dict[Any, int | None]:
@@ -1047,7 +1056,8 @@ def _fold_app_runs(events: list[Ev]) -> list[Ev]:
 # --------------------------------------------------------------------------- #
 
 # Markers on a milestone, a task note or a chat thread are resolved to their task from the
-# newest of them only.
+# newest of them only, and only of the milestone rows, notes and threads of the tasks asked
+# about (MIP-1499): the member's markers of any other item are never read.
 SEEN_POOL = POOL
 
 
@@ -1066,8 +1076,9 @@ def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
 def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime], bool]:
     """`seen_at`, and whether a look of one of these tasks may really be missing.
 
-    Markers on milestones, task notes and chat threads are read newest first, `SEEN_POOL` of
-    them (one more is asked for). The flag is True only when a row was left out AND it could
+    Markers on the asked tasks' own milestone rows, task notes and chat threads are read
+    newest first, `SEEN_POOL` of them (one more is asked for); markers of any other item are
+    not read, so they can neither fill the pool nor tip the flag. The flag is True only when a row was left out AND it could
     still matter: some task asked about has no time, or an older one than the extra row's
     (every row left out is no newer than that one, and a look only replaces a strictly older
     time). A member who works in an AI app all day has more markers than the pool but, for
@@ -1089,8 +1100,27 @@ def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime
         .annotate(last=Max("ts"))
     ):
         out[int(row["object_id"])] = row["last"]
+    # ONLY the markers that can name one of these tasks, by the id of its milestone row, of
+    # its task notes and of its linked thread (MIP-1499): "the member's newest 300 of any
+    # milestone, note or thread" was full of other items' markers and flagged a task that had
+    # none of its own. The milestone and note ids are subqueries, the thread ids one read.
+    threads = sorted(
+        {
+            text
+            for raw in TaskMaster.objects.filter(team_id=team, task_id__in=wanted)
+            .exclude(thread_id__isnull=True)
+            .values_list("thread_id", flat=True)
+            if (text := _uuid_text(raw))
+        }
+    )
+    milestone_oids = MilestoneMaster.objects.filter(
+        team_id=team, task_id__in=wanted, is_deleted=False
+    ).values(oid=Cast("milestone_id", CharField()))
+    note_oids = TaskNoteMaster.objects.filter(team_id=team, task_id__in=wanted).values(
+        oid=Concat(Value("task:"), Cast("note_id", CharField()))
+    )
     others = list(
-        base.filter(object_type__in=("milestone", "note", "chat_thread")).order_by(
+        base.filter(_other_items_q(milestone_oids, note_oids, threads)).order_by(
             "-ts", "-event_id"
         )[: SEEN_POOL + 1]
     )
@@ -1201,7 +1231,7 @@ def _name_chats(lost: list[Message], me: str) -> dict[str, Any]:
     ranked = sorted(seen.items(), key=lambda kv: (kv[1][1], str(kv[0])), reverse=True)
     named = ranked[:UNATTACHED_CHATS_MAX]
     channels = list(Channel.objects.filter(id__in=[cid for cid, _row in named]))
-    titles = chat_titles(channels, me) if channels else {}
+    titles = channel_titles(channels, me) if channels else {}
     by_id = {c.id: c for c in channels}
     chats = []
     for cid, (count, latest) in named:

@@ -22,6 +22,26 @@ diff fp_main.txt fp_stack.txt && echo IDENTICAL         # must print IDENTICAL; 
 # when it differs, see what changed:  agent_fingerprint --dump dir_main   /   --dump dir_stack   then  diff -r
 ```
 
+### The run environment (checked for you)
+
+* **OpenSearch.** A real run searches an ALIAS (`OPENSEARCH_ALIAS`) whose index maps `embedding` as
+  `knn_vector`. The dev compose alias `knowledge_chunks_current` can be a plain index auto-created
+  by the first write, with no vector mapping: vector search 400s, the agent finds nothing, and the
+  run measures an agent that cannot retrieve (it cost about $0.2 once). So the command REFUSES a real
+  run (and `--measure-one`) whose plan has behaviour or resume cases when the alias is not an alias,
+  its index has no `knn_vector` `embedding`, or OpenSearch cannot be read. There is no override: set
+  `OPENSEARCH_INDEX` and `OPENSEARCH_ALIAS` to names of the run's own (for example
+  `knowledge_chunks_evalpaid` and `knowledge_chunks_evalpaid_current`), then `opensearch_setup` and a
+  reindex. Check it on its own, without a model call: `python manage.py agent_eval_group
+  --preflight-only` (exit status 1 and the reasons on a bad alias). A routing-only selection needs no
+  index and is not checked; a dry run does not call OpenSearch.
+* **`ALLOWED_HOSTS`.** `kind: resume` cases drive the real views through the test client (host
+  `testserver`). The command adds `testserver` to the allowed hosts for the run and restores the list
+  afterwards; `-e ALLOWED_HOSTS=...,testserver` is no longer needed.
+* **The cost meter.** Resume legs are counted whether `AI_COST_METER` is on or off (with it on, the
+  decision rejoins the ask's rollup row; one capture and one binding wrap both legs). Before MIP-1504
+  their rows showed `calls=0`, `$0` and the cap could not see them.
+
 Check what is armed and what it would cost. This makes NO model call and needs no credentials:
 
 ```
@@ -101,8 +121,22 @@ Output, in this order, on screen and in `/tmp/run1.report.md`:
 
 `/tmp/run1.jsonl` has one JSON object per run (`case_id, arm, lang, passed, checks, tools, answer,
 usage{input_tokens, output_tokens, cached_tokens, cost_usd, calls}`, plus `skipped`, `error`, `rep`,
-`unpriced_calls`); `/tmp/run1.summary.json` has the totals. Rows are written as they finish, so a
+`unpriced_calls`, and when they apply `proposed` and `expected`); `/tmp/run1.summary.json` has the totals. Rows are written as they finish, so a
 killed run keeps what it did.
+
+**What the model proposed.** A write never runs in an eval, so a failed write case used to show an
+empty answer. A row now carries `proposed: [{"tool", "args"}]` (the proposal's arguments as JSON, cut
+to 300 characters), for behaviour and resume cases alike. The Detail table's note column prints it for
+a run that failed or said nothing (`proposed create_task_plan({"tasks": [...]})`).
+
+**Expected results (`expect_baseline`).** A case may say what it gives on an arm: `expect_baseline:
+fail` (arm0 fails it BY DESIGN: a positive case that only the flag fixes) or `expect_baseline: {arm0:
+fail, t977: pass}`; a value is `pass` or `fail`. It is shown, never enforced: the matrix cell reads
+`FAIL (expected)` / `PASS (expected)` when the run matches, `PASS (expected FAIL)` when it does not,
+the JSONL row has `expected`, and one line under the matrix counts how many ran as expected and names
+the ones that did not. Pass counts, deltas, regressions and bisect hints ignore it. Every `polarity:
+pos` resume case carries `expect_baseline: fail` (a test pins it); a `FAIL (expected)` on arm0 is the
+control working, not breakage.
 
 ### Session 2 (only for what session 1 left unclear)
 

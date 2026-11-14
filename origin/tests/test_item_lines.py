@@ -17,6 +17,7 @@ of the module's own rules:
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timedelta
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -214,6 +215,32 @@ class LineBase(McpBase):
             bucket=int(when.timestamp() // 600) + self.counter(),
             **extra,
         )
+
+    def crowded_thread_markers(self, task, n, user=None):
+        """`n` AI-app markers (minutes 10..) on `task`'s own chat thread, which a second task
+        claims too: they are markers of the asked item, so `seen_at` reads them, but they name
+        no task, so they never give it a time. (A marker of some OTHER item is not read at
+        all since MIP-1499: see `unrelated`.)"""
+        noisy = self.__dict__.setdefault("_crowded", {})
+        if task.task_id not in noisy:
+            channel = self.channel([self.user, self.user2])
+            root = self.message(channel, self.user2, 1)
+            self.link_thread(task, root)
+            self.link_thread(self.make_task("Claims the same thread"), root)
+            noisy[task.task_id] = str(root.id)
+        for i in range(n):
+            self.marker(user or self.user, 10 + i, "chat_thread", noisy[task.task_id])
+
+    def unrelated(self, n, user=None):
+        """`n` markers on milestones, notes and threads that are none of the asked tasks'."""
+        for i in range(n):
+            kind = i % 3
+            if kind == 0:
+                self.marker(user or self.user, 10 + i, "milestone", 900 + i)
+            elif kind == 1:
+                self.marker(user or self.user, 10 + i, "note", f"task:{900 + i}")
+            else:
+                self.marker(user or self.user, 10 + i, "chat_thread", uuid.uuid4())
 
     def task_note(self, task, owner=None, project=None, title="Notes"):
         return TaskNoteMaster.objects.create(
@@ -1924,8 +1951,9 @@ class TestQueryBound(LineBase):
         # The same number of statements: every source is read once for the whole set, so
         # neither an event nor an item adds one.
         self.assertEqual(n_big, n_small)
-        # 33 after MIP-1294 (the subtasks query), 51 after MIP-1295 (neighbours read apart).
-        self.assertLessEqual(n_big, 52, n_big)
+        # 33 after MIP-1294 (the subtasks query), 51 after MIP-1295 (neighbours read apart),
+        # 53 after MIP-1499 (one read of the asked tasks' thread ids per look-up, two look-ups).
+        self.assertLessEqual(n_big, 53, n_big)
         print(f"\n[MIP-1083 queries] 5 events/1 item={n_small}; 50 events/11 items={n_big}")
 
     def test_a_lone_line_is_a_fixed_small_number_of_queries(self):
@@ -2263,9 +2291,8 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
     def pool(self, n):
         return mock.patch.object(item_lines, "SEEN_POOL", n)
 
-    def others(self, n, user=None):
-        for i in range(n):
-            self.marker(user or self.user, 10 + i, "milestone", 900 + i)
+    def others(self, n, user=None, task=None):
+        return self.crowded_thread_markers(task or self.task, n, user)
 
     def test_a_pool_exactly_full_cut_nothing(self):
         self.others(2)
@@ -2275,6 +2302,60 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
         self.assertFalse(capped)
         self.assertNotIn("seen_capped", out["capped"])
         self.assertEqual(seen, {})
+
+    def test_markers_of_items_nobody_asked_about_cut_nothing(self):
+        """MIP-1499: only the ids of the items asked about are read, so a member with more
+        markers than the pool on OTHER milestones, notes and threads has a never-opened task
+        with no time and no flag, as they would with none of them."""
+        self.unrelated(6)
+        with self.pool(2):
+            seen, capped = item_lines.seen_at_checked(self.ctx, [self.task.task_id])
+            out = self.line(self.task)
+        self.assertEqual((seen, capped), ({}, False))
+        self.assertNotIn("seen_capped", out["capped"])
+        self.assertIsNone(out["line"]["last_seen_at"])
+
+    def test_a_look_through_the_tasks_own_item_is_found_under_more_markers_of_others(self):
+        """The same member's markers on six other items are all NEWER than the one on this
+        task's milestone row, note and thread: they used to fill the pool and hide it."""
+        milestone_task = self.make_task("M", is_milestone=True)
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, title="M", reporter=self.user, task=milestone_task
+        )
+        note_task = self.make_task("N")
+        note = self.task_note(note_task)
+        thread_task = self.make_task("T")
+        channel = self.channel([self.user, self.user2])
+        root = self.message(channel, self.user2, 1)
+        self.link_thread(thread_task, root)
+        self.marker(self.user, 3, "milestone", milestone.milestone_id)
+        self.marker(self.user, 4, "note", f"task:{note.note_id}")
+        self.marker(self.user, 5, "chat_thread", f"{channel.id}:{root.id}")
+        self.unrelated(6)
+        asked = [milestone_task.task_id, note_task.task_id, thread_task.task_id, self.task.task_id]
+        with self.pool(3):  # exactly their own three: the six of other items are not read
+            seen, capped = item_lines.seen_at_checked(self.ctx, asked)
+        self.assertEqual(
+            seen,
+            {
+                milestone_task.task_id: self.at(3),
+                note_task.task_id: self.at(4),
+                thread_task.task_id: self.at(5),
+            },
+        )
+        # `self.task` was never opened and nothing of its own was left out.
+        self.assertFalse(capped)
+
+    def test_the_cost_does_not_grow_with_the_tasks_asked_about(self):
+        tasks = [self.make_task(f"t{i}") for i in range(6)]
+
+        def cost(ids):
+            with CaptureQueriesContext(connection) as ctx:
+                item_lines.seen_at_checked(self.ctx, ids)
+            return len(ctx)
+
+        self.unrelated(4)
+        self.assertEqual(cost([tasks[0].task_id]), cost([t.task_id for t in tasks]))
 
     def test_one_row_past_the_pool_says_so_in_the_function_and_on_the_line(self):
         self.others(3)
@@ -2291,7 +2372,7 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
             team=self.team, project=self.project, title="M", reporter=self.user, task=milestone_task
         )
         self.marker(self.user, 10, "milestone", milestone.milestone_id)  # the oldest of three
-        self.others(2)
+        self.others(2, task=milestone_task)
         with self.pool(2):
             seen, capped = item_lines.seen_at_checked(self.ctx, [milestone_task.task_id])
         self.assertTrue(capped)
@@ -2363,7 +2444,7 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
         parent = self.make_task("Parent")
         child = self.make_task("Child", parent_task_id=parent.task_id)
         self.comment(parent, self.user2, 10)
-        self.others(3)
+        self.others(3, task=parent)
         self.marker(self.user, 30, "task", child.task_id)
         with self.pool(2):
             out = self.full(child)
@@ -2374,7 +2455,7 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
         parent = self.make_task("Parent")
         child = self.make_task("Child", parent_task_id=parent.task_id)
         self.comment(parent, self.user2, 10)
-        self.others(3)
+        self.others(3, task=parent)
         self.marker(self.user, 30, "task", child.task_id)
         self.marker(self.user, 31, "task", parent.task_id)
         with self.pool(2):

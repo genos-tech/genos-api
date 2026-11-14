@@ -370,6 +370,8 @@ class ChannelParticipationTests(CrossTeamTestCase):
             owner=self.a_owner,
             is_private=True,
         )
+        # The offerer must be in the chat they lend out (MIP-1522).
+        ChannelMember.objects.create(channel=self.channel, user=self.a_owner)
 
     def _grant(self):
         self.connect_a_and_b()

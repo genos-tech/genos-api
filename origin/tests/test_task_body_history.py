@@ -26,6 +26,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.get_task_history import GET_TASK_HISTORY
+from origin.services.task_body_restore import restore_task_body
 from origin.tests.test_base import BaseAPITestCase
 
 DESC = TaskActivityActionType.DESCRIPTION
@@ -98,6 +99,18 @@ class WhatIsKeptTests(_Base):
         (row,) = self._body_rows()
 
         self.assertEqual(row.old_value, ORIGINAL)
+
+    def test_a_connected_app_rewrite_keeps_the_previous_body(self):
+        """MCP over OAuth is the same author and the same risk as an API key (MIP-1487)."""
+        self._write(
+            REWRITE,
+            via={"kind": "oauth", "connection_id": "c-1", "client_name": "Claude"},
+        )
+
+        (row,) = self._body_rows()
+
+        self.assertEqual(row.old_value, ORIGINAL)
+        self.assertTrue(row.metadata["previousBodyKept"])
 
     def test_the_editors_autosave_does_not_keep_a_body(self):
         """It fires every few seconds: a full-body row each time would flood the
@@ -243,6 +256,21 @@ class TheFeedKeepsTheRestorableRowTests(_Base):
 
         self.assertEqual(len(self._feed_body_rows()), 1)
 
+    def test_an_autosave_does_not_hide_the_mcp_via_of_a_rewrite_that_kept_no_body(self):
+        """A task with no previous body keeps nothing, so the row is not protected
+        by `previousBodyKept`; its `via` must still survive the autosave (MIP-1487)."""
+        self.task.content = None
+        self.task.save(update_fields=["content"])
+        TaskActivity.objects.filter(task=self.task).delete()
+        oauth = {"kind": "oauth", "connection_id": "c-1", "client_name": "Claude"}
+        self._write(REWRITE, via=oauth)
+        self._write(REWRITE + INJECTED, via={"kind": "app"})
+
+        rows = self._feed_body_rows()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["metadata"]["via"]["kind"] for r in rows}, {"oauth", "app"})
+
     def test_two_rewrites_both_stay_restorable(self):
         self._write(REWRITE, via={"kind": "agent"})
         self._write(INJECTED, via={"kind": "agent"})
@@ -250,6 +278,64 @@ class TheFeedKeepsTheRestorableRowTests(_Base):
         rows = self._feed_body_rows()
 
         self.assertEqual(sum(1 for r in rows if r["metadata"].get("previousBodyKept")), 2)
+
+
+class ConnectedAppRewriteIsRestorableTests(_Base):
+    """The same restore flow as an API-key rewrite, end to end (MIP-1487)."""
+
+    OAUTH = {"kind": "oauth", "connection_id": "c-1", "client_name": "Claude"}
+
+    def setUp(self):
+        super().setUp()
+        self._write(REWRITE, via=self.OAUTH)
+        self.row = self._body_rows()[0]
+        self.authenticate(self.user)
+        for target in (
+            "origin.services.collab_push.push_task_body",
+            "origin.search_engine.agent.tools.body_mentions.notify_task_body_mentions",
+        ):
+            patcher = mock.patch(target)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_the_rest_restore_puts_the_previous_body_back(self):
+        res = self.client.post(
+            RESTORE,
+            {"task_id": self.task.task_id, "activity_id": self.row.activity_id},
+            format="json",
+        )
+
+        self.assertEqual(res.status_code, 200, getattr(res, "data", None))
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.content, ORIGINAL)
+
+    def test_the_service_the_mcp_tool_calls_restores_it(self):
+        out = restore_task_body(
+            task=self.task, activity_id=self.row.activity_id, actor_id=self.user.id
+        )
+
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.content, ORIGINAL)
+        self.assertEqual(out["restoredFrom"], self.row.activity_id)
+
+    def test_get_task_history_says_it_is_restorable(self):
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+
+        out = GET_TASK_HISTORY.run({"task_id": self.task.task_id}, ctx)
+
+        entry = next(e for e in out["history"] if e["action"] == DESC)
+        self.assertIs(entry["restorable"], True)
+
+    def test_the_feed_row_is_restorable_and_says_mcp_without_the_body(self):
+        res = self.client.get(
+            FEED, {"team_id": str(self.team.team_id), "task_id": self.task.task_id}
+        )
+
+        (row,) = [r for r in res.data if r["actionType"] == DESC]
+
+        self.assertTrue(row["metadata"]["previousBodyKept"])
+        self.assertEqual(row["metadata"]["via"], self.OAUTH)
+        self.assertIsNone(row["oldValue"])
 
 
 class RestoreTests(_Base):

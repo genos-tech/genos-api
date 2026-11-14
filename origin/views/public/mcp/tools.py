@@ -1755,8 +1755,10 @@ CATALOG: tuple[McpTool, ...] = (
             "over their last seven complete days, each with `days` (seven daily totals, "
             "oldest first), `week` (counts by kind: mine, others, notes, chat, prs), `trend` "
             "(rising, cooling or steady) and `last_seen_at`, the last time their AI app "
-            "opened or changed it; counts of saved actions, never time spent, so say it as "
-            "how busy an item has been, not how long they worked); and `suggested_next`, the top "
+            "opened or changed it, and `seen_capped: true` on the section when that time may "
+            "be missing or older than it was for some item; counts of saved actions, never "
+            "time spent, so say it as how busy an item has been, not how long they worked); "
+            "and `suggested_next`, the top "
             "three with the reasons. The reasons come from activity and dates, and priority "
             "is only a hint: say them, and let the member disagree. Once a week of activity is "
             "recorded (or the member has tuned or marked something) the top three is ranked by "
@@ -1869,7 +1871,8 @@ CATALOG: tuple[McpTool, ...] = (
             "made from it still sees that it was created and its status changes (nothing "
             "else about it): that is deliberate. `capped` is empty unless events were really "
             "left out of what you can read (`size`: the call was shortened to fit, "
-            "`next_cursor` has the rest). Everything is the member's own view; a thing that "
+            "`next_cursor` has the rest) or, on a task, the markers behind `last_seen_at` were "
+            "cut (`seen_capped`: that time may be missing or older than it was). Everything is the member's own view; a thing that "
             "does not exist and one they may not open get the same answer."
         ),
         augment=_canonical_anchor,

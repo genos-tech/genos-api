@@ -1742,8 +1742,12 @@ def timeline(
             }
         )
     if anchor.type == "task":
-        seen = item_lines.seen_at(ctx, [anchor.task.task_id]).get(anchor.task.task_id)
+        looks, seen_cut = item_lines.seen_at_checked(ctx, [anchor.task.task_id])
+        seen = looks.get(anchor.task.task_id)
         result["last_seen_at"] = _z(seen) if seen else None
+        if seen_cut:
+            # The time may be missing or older: the markers behind it were cut (MIP-1499).
+            result["capped"]["seen_capped"] = True
     return result
 
 

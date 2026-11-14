@@ -1,9 +1,10 @@
 """The sequence scenario as an eval fixture, in its OWN teams (MIP-1269 -> MIP-1271 test C).
 
-`origin/tests/fixtures/sequence_scenario.py` builds Ken's 12-step story (a client asks in a
-chat, the PM opens a task, a developer works and closes it, ...) through the real REST and MCP
-funnels, but as a test case base. This module runs the same builder OUTSIDE the test runner,
-into fixed-id teams, so an eval case can ask the in-app agent about it.
+`origin/services/dev_fixtures/sequence_scenario.py` builds Ken's 12-step story (a client asks in
+a chat, the PM opens a task, a developer works and closes it, ...) through the real REST and MCP
+funnels; the tests wrap it into a case base (`origin/tests/fixtures/sequence_scenario.py`). This
+module runs the same builder OUTSIDE the test runner, into fixed-id teams, so an eval case can
+ask the in-app agent about it.
 
 TEAMS (never the v1 eval team: that corpus is ranking-sensitive, see AGENT_BRIEF.md)
 
@@ -20,9 +21,11 @@ embeds, indexes or calls a model (indexing is the reindex cron's job), so there 
 OpenSearch and no network dependence. A retrieval case WOULD need `opensearch_reindex`; none
 of the sequence cases is one.
 
-SAFETY. The test base class's own `setUp` deletes every task and creates test users; it is
-never called here. The driver below builds fixed-id rows and checks for them first, so the
-seeding is idempotent and cannot touch other data. The MCP tier grant and the test host are
+SAFETY. The builder is production code (`origin/services/dev_fixtures/sequence_scenario.py`,
+`SequenceDriver`): it has no test base class, no `setUp` and deletes nothing in bulk (the test
+base's `setUp`, which clears tasks, refuses to run outside the test database). The driver builds
+fixed-id rows and checks for them first, so the seeding is idempotent and cannot touch other data.
+It writes no security events (they are append-only). The MCP tier grant and the test host are
 applied with `override_settings` for the duration of the build only.
 
 TIME. The story's day is pinned (`SCENARIO_DAY`), not "three days ago", so the stored instants
@@ -32,11 +35,13 @@ never recompute them.
 
 from __future__ import annotations
 
-import importlib
 import logging
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any
+from unittest import mock
 
 from django.db import transaction
 from django.test import override_settings
@@ -181,73 +186,26 @@ def viewer_info(viewer: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-# The scenario builder lives in the test tree (`origin/tests` is left out of the production image,
-# see .dockerignore and test_dockerignore). Seeding is a DEV-ONLY tool that runs where the tests
-# are (the dev stack bind-mounts the repo), so the modules are loaded by name at call time rather
-# than imported by the app, and a missing tree is reported instead of crashing an import.
-_TESTS_PKG = "origin" + ".tests"
+def _driver(label: str):
+    """The story's builder for one team: the production `SequenceDriver` (no test base class),
+    with this team's fixed ids and names (MIP-1469: it used to be loaded by name from
+    `origin/tests`, which the image leaves out)."""
+    from origin.services.dev_fixtures.sequence_scenario import SequenceDriver  # noqa: PLC0415
 
-
-def _load_test_module(name: str):
-    try:
-        return importlib.import_module(f"{_TESTS_PKG}.{name}")
-    except ModuleNotFoundError as exc:
-        if exc.name and exc.name.startswith(_TESTS_PKG):
-            raise RuntimeError(
-                "the sequence scenario is built by origin/tests, which this image does not "
-                "contain: seed it from the dev stack (a checkout with origin/tests)"
-            ) from exc
-        raise
-
-
-def _driver_class():
-    SequenceScenario = _load_test_module("fixtures.sequence_scenario").SequenceScenario  # noqa: N806
-
-    class Driver(SequenceScenario):
-        """`SequenceScenario.build_sequence` without `setUp`, and with fixed-id people."""
-
-        def __init__(self, label: str):
-            super().__init__("runTest")
-            self.label = label
-
-        def runTest(self):  # pragma: no cover - never run as a test
-            raise RuntimeError("the driver is not a test")
-
-        def prepare(self) -> None:
-            from django.contrib.auth import get_user_model  # noqa: PLC0415
-            from rest_framework.test import APIClient  # noqa: PLC0415
-
-            from origin.models.common.team_models import TeamMaster, TeamMembers  # noqa: PLC0415
-            from origin.search_engine import quota  # noqa: PLC0415
-
-            user_model = get_user_model()
-            self.client = APIClient(HTTP_HOST=TEST_HOST)
-            self._raw_keys = {}
-            people = {}
-            for person in _ROLES:
-                people[person] = user_model.objects.create_user(
-                    email=_email(self.label, person),
-                    username=NAMES[person],
-                    password=uuid.uuid4().hex,
-                    id=user_id(self.label, person),
-                    is_demo=True,
-                    timezone="Asia/Tokyo",
-                )
-            self.a, self.b, self.c = people["a"], people["b"], people["c"]
-            self.user = self.b  # the PM owns the team (McpBase's `self.user`)
-            self.team = TeamMaster.objects.create(
-                team_id=_TEAM_IDS[self.label],
-                team_name=f"Eval Sequence {self.label.upper()}",
-                team_email=f"evalseq-{self.label}@genos.app",
-                owner=self.b,
-                is_demo=True,
-            )
-            for member in (self.b, self.a, self.c):
-                TeamMembers.objects.create(team=self.team, attendee=member)
-            quota.invalidate_effective_tier([str(u.id) for u in people.values()])
-            self.base = datetime.combine(SCENARIO_DAY, datetime.min.time(), tzinfo=_jst())
-
-    return Driver
+    return SequenceDriver(
+        team_id=_TEAM_IDS[label],
+        team_name=f"Eval Sequence {label.upper()}",
+        team_email=f"evalseq-{label}@genos.app",
+        people={
+            person: {
+                "email": _email(label, person),
+                "username": NAMES[person],
+                "id": user_id(label, person),
+            }
+            for person in _ROLES
+        },
+        host=TEST_HOST,
+    )
 
 
 def _jst():
@@ -256,22 +214,40 @@ def _jst():
     return ZoneInfo("Asia/Tokyo")
 
 
+@contextmanager
+def _no_security_events() -> Iterator[None]:
+    """The story's MCP steps authenticate with API keys, and the first use of a key writes an
+    `api_key.used` security event. Security events are append-only (`delete()` is refused on
+    purpose), so the seeder cannot clean them up afterwards: it does not write them. Every writer
+    goes through `record_security_event`; the build is a dev fixture, not a person using a key."""
+    from origin.services import security_events  # noqa: PLC0415
+
+    with mock.patch.object(security_events, "record_security_event", return_value=None):
+        yield
+
+
 def _build(label: str) -> None:
     """Build one team's story. All or nothing: a failure leaves no partial team behind."""
-    _mcp_enabled_everywhere = _load_test_module("test_mcp_endpoint")._mcp_enabled_everywhere  # noqa: N806
+    from origin.services.dev_fixtures.sequence_scenario import (  # noqa: PLC0415
+        mcp_enabled_everywhere,
+    )
 
     spec = _BUILDS[label]
-    driver = _driver_class()(label)
+    driver = _driver(label)
+    base = datetime.combine(SCENARIO_DAY, datetime.min.time(), tzinfo=_jst())
     # The test runner adds the test host and the MCP tier grant; outside it, we do.
-    with override_settings(
-        SEARCH_ENGINE=_mcp_enabled_everywhere(),
-        ALLOWED_HOSTS=["*"],
-        SECURE_SSL_REDIRECT=False,
+    with (
+        override_settings(
+            SEARCH_ENGINE=mcp_enabled_everywhere(),
+            ALLOWED_HOSTS=["*"],
+            SECURE_SSL_REDIRECT=False,
+        ),
+        _no_security_events(),
     ):
         with transaction.atomic():
             # Clear any half-built remains of a previous failed attempt (fixed ids only).
             delete_team(label)
-            driver.prepare()
+            driver.prepare(base)
             seq = driver.build_sequence(
                 client_on_project=spec["client_on_project"],
                 chat_shape=spec["chat_shape"],

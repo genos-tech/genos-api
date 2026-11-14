@@ -28,6 +28,8 @@ And one rule built from them for the agent's chat tools (MIP-917), because
 
 from __future__ import annotations
 
+from typing import Any
+
 from django.db.models import F, Q
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
@@ -197,3 +199,46 @@ def can_read_chat(channel: Channel, team_id, user_id) -> bool:
     else:
         in_team = team_scope_q(team_id, user_id)
     return _readable_chats(user_id, in_team).filter(id=channel.id).exists()
+
+
+# How many other people's names a multi-person DM's title lists.
+MDM_NAMES = 5
+
+
+def channel_titles(channels: list, user_id: str) -> dict[Any, str]:
+    """Readable name per channel id, as the app names a chat. A stored title wins; a DM or
+    multi-person DM has none and is named after the other people (a DM with yourself, after
+    you; a multi-person DM lists up to `MDM_NAMES` of them and counts the rest). A group or
+    project chat with no title has no name: "".
+
+    The one rule for "what is this chat called" outside the app's own list: `list_my_chats`
+    and the `unattached` chats of an item line both call it, so a DM is never named two ways.
+    One query for all the unnamed DMs, however many channels are given."""
+    unnamed = [
+        c.id for c in channels if not c.title and c.kind in (ChannelKind.DM, ChannelKind.MDM)
+    ]
+    people: dict[Any, list[tuple[Any, str]]] = {}
+    if unnamed:
+        for m in (
+            ChannelMember.objects.filter(channel_id__in=unnamed, is_deleted=False)
+            .select_related("user")
+            .order_by("ts_joined_at")
+        ):
+            people.setdefault(m.channel_id, []).append((m.user_id, (m.user.username or "")))
+    out: dict[Any, str] = {}
+    for c in channels:
+        if c.title:
+            out[c.id] = c.title
+            continue
+        members = people.get(c.id, [])
+        others = [name for uid, name in members if str(uid) != user_id and name]
+        if c.kind == ChannelKind.DM:
+            # The partner; in a chat with yourself, you.
+            out[c.id] = others[0] if others else (members[0][1] if members else "")
+        elif c.kind == ChannelKind.MDM:
+            shown = ", ".join(others[:MDM_NAMES])
+            more = len(others) - MDM_NAMES
+            out[c.id] = f"{shown} +{more} more" if more > 0 else shown
+        else:
+            out[c.id] = ""
+    return out

@@ -188,6 +188,50 @@ class ShapeTests(RunnerBase):
         self.assertFalse(settings.SEARCH_ENGINE.get("AGENT_RESUME_KEEPS_BLOCKS"))
 
 
+class MeterOnUsageTests(RunnerBase):
+    """MIP-1504: with `AI_COST_METER` on (the dev compose env, so the paid session) the ask leg
+    writes an `AiRequestCost` row linked to the run, and `/decide/` REJOINS that row's request id
+    instead of the one the runner bound. Every call of the resumed leg then landed in
+    `UNATTRIBUTED`: `calls=0`, `$0` in the rows, and the cost cap could not see them. The meter is
+    off in the key-free test container, so the plain usage test above cannot see it."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(settings.SEARCH_ENGINE, {"AI_COST_METER": True})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.config_before = dict(settings.SEARCH_ENGINE)
+
+    def assert_counted(self, result):
+        self.assertTrue(self.model.calls)
+        self.assertEqual(result["usage"]["calls"], len(self.model.calls))
+        self.assertEqual(result["usage"]["input_tokens"], 100 * len(self.model.calls))
+        self.assertEqual(result["usage"]["output_tokens"], 10 * len(self.model.calls))
+
+    def test_the_resumed_leg_is_counted_with_the_meter_on(self):
+        self.assert_counted(self.run_case(self.case("t977.plain-ask.approve.en")))
+
+    def test_a_follow_up_ask_is_counted_too(self):
+        result = self.run_case(self.case("t889-undo.still-there.en"))
+        self.assertGreaterEqual(len(self.model.calls), 2)  # the resumed leg and the follow-up
+        self.assert_counted(result)
+
+    def test_the_closing_line_ask_is_counted(self):
+        self.assert_counted(self.run_case(self.case("t1283.client-asks.en")))
+
+    def test_the_harness_capture_sees_the_calls_too(self):
+        # The harness wraps every case in its own capture; the runner's capture reuses that
+        # request id, so both must agree (the harness overwrites the row's usage with its own).
+        from origin.search_engine.agent.evals.group import usage as group_usage
+
+        before = group_usage.UNATTRIBUTED.calls
+        with group_usage.capture_usage() as outer:
+            result = self.run_case(self.case("t977.plain-ask.approve.en"))
+        self.assert_counted(result)
+        self.assertEqual(outer.calls, len(self.model.calls))
+        self.assertEqual(group_usage.UNATTRIBUTED.calls, before)
+
+
 class LocaleTests(RunnerBase):
     """Production builds `ToolContext(locale=...)` from the request body (else the user's
     language) and the controller appends `language_directive(locale)` as the LAST line of the

@@ -187,6 +187,28 @@ def _channel_shareable_or_raise(channel_id) -> None:
         raise ExternalGrantError("bad_object")
 
 
+def _offerer_in_channel_or_raise(channel_id, actor) -> None:
+    """A manager may lend out only a group chat they are a MEMBER of (MIP-1522).
+
+    `offer_grant` checks that the offerer manages the host team, which says nothing about the
+    chat: a private group chat is private to its members, and a manager who was never invited
+    to it could still hand it, with its whole history, to an outside team. A manager who is not
+    in the chat gets `bad_object`, the answer for a chat that does not exist, so the refusal does
+    not tell them the chat is there. Membership is the live `ChannelMember` row, which is what
+    a group chat's membership is (`channel_scope.chat_member_q`).
+    """
+    from origin.models.chat.unified_models import ChannelMember
+
+    actor_id = getattr(actor, "id", None)
+    if (
+        not actor_id
+        or not ChannelMember.objects.filter(
+            channel_id=channel_id, user_id=actor_id, is_deleted=False
+        ).exists()
+    ):
+        raise ExternalGrantError("bad_object")
+
+
 def _note_folder_shareable_or_raise(folder_id) -> None:
     """A folder may only be lent out if it is explicitly PRIVATE.
 
@@ -276,6 +298,7 @@ def offer_grant(
 
     if object_type == ExternalGrant.ObjectType.CHANNEL:
         _channel_shareable_or_raise(object_id)
+        _offerer_in_channel_or_raise(object_id, actor)
     if object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
         _note_folder_shareable_or_raise(object_id)
 

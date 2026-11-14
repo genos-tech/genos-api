@@ -212,6 +212,10 @@ class DefaultCaseRunner:
         # show what was proposed, so the report and the JSONL carry the text a person would read.
         result["answer"] = native.answer or content_checks.render_pending(pending)
         result["duration_ms"] = native.duration_ms
+        if pending:
+            result["proposed"] = content_checks.summarize_proposals(
+                pending, group_usage.PROPOSED_ARGS_CHARS
+            )
         reasons = list(native.failure_reasons)
         result["checks"] = (
             [{"name": "expect", "ok": False, "detail": r} for r in reasons]

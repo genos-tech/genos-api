@@ -3092,7 +3092,7 @@ def _drive_loop(
 
     # The latest model call's end state (MIP-905: was it cut off at the output cap?), filled by
     # `_collect_and_record`. Read by the step logic right after the call.
-    last_call: dict[str, Any] = {"truncated": False}
+    last_call: dict[str, Any] = {"truncated": False, "partial_call": False}
 
     def _collect_and_record(
         step_index: int,
@@ -3141,6 +3141,9 @@ def _drive_loop(
             produced=int(getattr(sink, "output_tokens", 0) or 0)
             + int(getattr(sink, "thought_tokens", 0) or 0),
             output_cap=int(getattr(sink, "output_cap", 0) or 0),
+            # The last function call may be incomplete (MIP-1479), and why the call ended.
+            partial_call=bool(getattr(sink, "partial_call", False)),
+            stop_reason=str(getattr(sink, "stop_reason", "") or ""),
             purpose=purpose,
             model_override=model_override,
             emit_deltas=emit_deltas,
@@ -3194,6 +3197,10 @@ def _drive_loop(
         The retry's text is dropped: the first attempt's text (what came before the cut-off
         call) was already shown, streamed or flushed, and is what the step keeps.
         """
+        if last_call.get("stop_reason") == "model_context_window_exceeded":
+            # The window is full, not the output: a larger cap cannot fit, and a retry would
+            # resend a nearly full context to be cut off again.
+            return None, "too_long"
         ran_under = int(last_call.get("output_cap") or 0)
         produced = int(last_call.get("produced") or 0)
         if ran_under <= 0:
@@ -3388,9 +3395,16 @@ def _drive_loop(
         # that state: try the step once more with more room, else say so and propose nothing. A
         # cut-off TEXT answer gets a notice at its end. Nothing here runs for a call that ended
         # normally (`truncated` is False), so a normal run is unchanged.
+        # A call the adapter says may be INCOMPLETE (Claude / OpenAI hand back whatever JSON had
+        # arrived) is intercepted whatever its tool is: a read tool must not run with `{}` or
+        # half its arguments either (MIP-1479). A truncated call that is not marked partial
+        # (Gemini's whole function calls) is left alone unless it is a write.
         if last_call["truncated"]:
-            cut_write = bool(accumulated_function_calls) and getattr(
-                REGISTRY.get(accumulated_function_calls[-1].name), "requires_approval", False
+            cut_write = bool(accumulated_function_calls) and (
+                last_call["partial_call"]
+                or getattr(
+                    REGISTRY.get(accumulated_function_calls[-1].name), "requires_approval", False
+                )
             )
             if cut_write:
                 retried, outcome = _retry_cut_off_write(step)
@@ -3399,7 +3413,7 @@ def _drive_loop(
                 if retried is None:
                     log.warning(
                         "Agent run %s step %d: %s was cut off at the output cap and the retry "
-                        "did not fit either; proposing nothing",
+                        "did not fit either; running or proposing nothing",
                         run_id,
                         step,
                         accumulated_function_calls[-1].name,

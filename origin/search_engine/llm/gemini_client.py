@@ -35,6 +35,7 @@ from origin.search_engine.llm.types import (
     CallUsage,
     FunctionCall,
     GenerationParams,
+    ModelRefusal,
     ToolDeclaration,
 )
 
@@ -254,6 +255,8 @@ class GeminiClient:
             # — scope is one `generate_step` call so we never leak a
             # signature from a prior turn.
             last_seen_signature: bytes | None = None
+            yielded_anything = False
+            refused_by = ""
             # Capture the last `usage_metadata` we see in any chunk —
             # only the final chunk carries the meaningful totals, but
             # peeking at every chunk avoids assuming chunk order. Logged
@@ -277,6 +280,8 @@ class GeminiClient:
                         sink.stop_reason = finish
                         if finish == "MAX_TOKENS":
                             sink.truncated = True
+                        if finish in _REFUSAL_FINISHES:
+                            refused_by = finish
                     content = getattr(cand, "content", None)
                     if content is None:
                         continue
@@ -295,13 +300,25 @@ class GeminiClient:
                             # otherwise the most recent one we saw in
                             # this response (covers parallel calls 2+).
                             sig_for_call = part_sig or last_seen_signature
+                            yielded_anything = True
                             yield (None, _sdk_function_call_to_neutral(fcall, sig_for_call))
                             continue
                         text = getattr(part, "text", None)
                         if text:
+                            yielded_anything = True
                             yield (text, None)
 
             _log_usage(last_usage_metadata, model)
+            # The safety layer ended a call that produced nothing: a refusal, as Claude's
+            # `refusal` is, not an "empty response". After a partial answer the text stays.
+            if refused_by and not yielded_anything:
+                raise ModelRefusal("gemini", model, refused_by)
+        except ModelRefusal as exc:
+            # A declined request is an outcome, not a failure: no traceback, and the explicit
+            # cache (if any) is fine, so it is not forgotten.
+            call_error = f"refusal:{exc.category or 'n/a'}"
+            log.info("Gemini declined a request: %s", exc)
+            raise
         except BaseException as exc:
             # BaseException so a client disconnect (GeneratorExit) is
             # recorded too — those calls were billed like any other.
@@ -331,6 +348,20 @@ class GeminiClient:
 # --------------------------------------------------------------------------- #
 # Implicit-cache observability                                                #
 # --------------------------------------------------------------------------- #
+
+
+#: Finish reasons by which Gemini's safety layer ends a call (as opposed to the model finishing).
+_REFUSAL_FINISHES = frozenset(
+    {
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "IMAGE_SAFETY",
+        "IMAGE_PROHIBITED_CONTENT",
+    }
+)
 
 
 def _finish_reason(candidate: Any) -> str:
