@@ -46,6 +46,33 @@ def _mark_search(channel_ids) -> None:
     mark_channels_dirty(channel_ids)
 
 
+def row_is_membership_derived(row_created_at, joined_at) -> bool:
+    """THE two-kind rule: was a role row written while its holder was a member of the chat?
+
+    `joined_at` is when the membership began (`ChannelMember.ts_joined_at` /
+    `ProjectMembers.ts_joined_at`). A row written at or after it came from membership and ends
+    with it; a row written before it (or by someone with no membership on record, `joined_at is
+    None`) is a share and stays. Every Python-side reader of the rule goes through here, and
+    `membership_derived_rows` is the same comparison in SQL (`test_cleanup_stale_chat_note_roles`
+    pins the two equal).
+    """
+    return joined_at is not None and row_created_at >= joined_at
+
+
+def membership_derived_rows(*, user_id, channel_id, joined_at=None):
+    """The `NotePermissionMaster` rows `user_id` holds on the chat notes of `channel_id` that
+    end with their membership: all of them for `joined_at=None` (the team rule, and callers that
+    know the person is out), otherwise those `row_is_membership_derived` says came from it."""
+    rows = NotePermissionMaster.objects.filter(
+        user_id=user_id,
+        note_type=NOTE_TYPE_CHAT,
+        note_id__in=ChatNoteMaster.objects.filter(channel_id=channel_id).values("note_id"),
+    )
+    if joined_at is not None:
+        rows = rows.filter(ts_created_at__gte=joined_at)
+    return rows
+
+
 def revoke_membership_roles(*, user_id, channel_id, joined_at=None) -> int:
     """Delete `user_id`'s membership-derived roles on the chat notes of `channel_id`.
 
@@ -56,14 +83,9 @@ def revoke_membership_roles(*, user_id, channel_id, joined_at=None) -> int:
     """
     if not user_id or not channel_id:
         return 0
-    rows = NotePermissionMaster.objects.filter(
-        user_id=user_id,
-        note_type=NOTE_TYPE_CHAT,
-        note_id__in=ChatNoteMaster.objects.filter(channel_id=channel_id).values("note_id"),
-    )
-    if joined_at is not None:
-        rows = rows.filter(ts_created_at__gte=joined_at)
-    deleted, _ = rows.delete()
+    deleted, _ = membership_derived_rows(
+        user_id=user_id, channel_id=channel_id, joined_at=joined_at
+    ).delete()
     if deleted:
         _mark_search([channel_id])
     return deleted
@@ -137,7 +159,7 @@ def rederive_on_move(*, moves, target) -> int:
                 note_type=NOTE_TYPE_CHAT, note_id=note_id
             ):
                 since = joined.get(str(row.user_id))
-                if since is None or row.ts_created_at < since:
+                if not row_is_membership_derived(row.ts_created_at, since):
                     continue  # not a member of the old chat, or a share: kept
                 if owner_id is not None and str(row.user_id) == str(owner_id):
                     if str(row.user_id) in target_joined:
