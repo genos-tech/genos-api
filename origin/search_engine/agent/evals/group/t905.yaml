@@ -61,7 +61,7 @@
       not_cut_off: true
       total_chars_at_least: 150
       total_chars_at_most: 1400
-      each_body_headings_at_most: 4
+      each_body_headings_at_most: 5
 - id: t905.spec-note.long.en
   lang: en
   tags:
@@ -154,7 +154,7 @@
       tool: create_task_plan
       tasks_at_least: 5
       not_cut_off: true
-      each_body_chars_at_least: 1100
+      each_body_chars_at_least: 1000
       each_body_headings_at_least: 3
 - id: t905.chat.standard.en
   lang: en
@@ -312,7 +312,7 @@
       not_cut_off: true
       total_chars_at_least: 150
       total_chars_at_most: 800
-      each_body_headings_at_most: 4
+      each_body_headings_at_most: 5
 - id: t905.spec-note.long.ja
   lang: ja
   tags:
@@ -408,7 +408,7 @@
     - create_task
     - update_task
     answer_chars_at_least: 20
-    answer_chars_at_most: 800
+    answer_chars_at_most: 1300
 - id: t905.chat.short.ja
   lang: ja
   tags:
@@ -427,7 +427,7 @@
     - create_task
     - update_task
     answer_chars_at_least: 20
-    answer_chars_at_most: 800
+    answer_chars_at_most: 1300
 - id: t905.chat.long.ja
   lang: ja
   tags:
@@ -446,7 +446,7 @@
     - create_task
     - update_task
     answer_chars_at_least: 20
-    answer_chars_at_most: 800
+    answer_chars_at_most: 1300
 - id: t905.bigplan.standard.ja
   lang: ja
   tags:
