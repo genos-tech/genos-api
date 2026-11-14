@@ -38,10 +38,10 @@ approval card shows BEFORE the person approves ("this can't be undone"). A
 sent, outgoing webhooks already delivered, a calendar event already synced, a
 display id (`PRJ-12`) already used.
 
-Telling the model: by default undo does not. After an undo the next turn's replay still
-shows the write as done, so the model may speak as if it stands. With
-`SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"]` on (default off, measured by the grouped eval)
-the next turn's earlier answer ends with a short factual note, and a replayed result carries
+Telling the model: with `SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"]` off, undo does not. After an
+undo the next turn's replay still shows the write as done, so the model may speak as if it
+stands. The flag is on by default (`apis/settings.py`; the env value `false` is the rollback),
+so the next turn's earlier answer ends with a short factual note, and a replayed result carries
 `undone_by_user` (`agent/approval_notes.py`; the outcome is kept on `AgentStep.undo_outcome_json`).
 
 This module is imported by the tools, so it must not import the tool registry.
