@@ -561,7 +561,11 @@ HELD_NOTES_CHECKED = 40
 
 
 def answers_in_chats(
-    ctx: ToolContext, now: datetime, project_id: int | None, names: _Names
+    ctx: ToolContext,
+    now: datetime,
+    project_id: int | None,
+    names: _Names,
+    told_as_mentions: frozenset[str] | set[str] = frozenset(),
 ) -> dict[str, Any]:
     """What other people wrote, at the top level, in chats the caller wrote in and has not
     answered or read since (MIP-1290).
@@ -578,7 +582,11 @@ def answers_in_chats(
     Capped so a chatty chat cannot take the briefing over: one item per chat, the newest
     `MAX_ANSWER_CHATS` of them, each with its count and its latest `ANSWER_SNIPPETS` messages.
     Task cards and the app's own posts are not answers. Chats belong to no project, so a project
-    filter leaves this empty, as it does for threads."""
+    filter leaves this empty, as it does for threads.
+
+    An answer that also @mentions the caller is told ONCE (MIP-1538), in `waiting_on_me.mentions`,
+    the list that waits on a reply: `told_as_mentions` are the message ids that list really
+    carries, left out here (a mention the list cut at its cap is not in it, so it stays here)."""
     empty = {"chats": [], "total": 0, "truncated": False}
     if project_id is not None:
         return empty
@@ -609,6 +617,7 @@ def answers_in_chats(
         top_level.filter(ts_sent_at__lte=now, task_id__isnull=True)
         .exclude(sender_id=me)
         .exclude(sender__is_system_user=True)
+        .exclude(id__in=list(told_as_mentions))
     )
     news = Q()
     for channel_id, above in floor.items():
@@ -1870,11 +1879,17 @@ def build_briefing(
     names = _Names(ctx)
 
     items, total_changed, automated_only = changed_for_me(ctx, win, project, names)
-    chat_answers = answers_in_chats(ctx, now, project, names)
     me = CustomUser.objects.filter(id=ctx.user_id).first()
     team = TeamMaster.objects.filter(team_id=ctx.team_id).first()
     agenda_section = agenda(ctx, now, zone, project)
     waiting_me = waiting_on_me(ctx, now, names)
+    chat_answers = answers_in_chats(
+        ctx,
+        now,
+        project,
+        names,
+        {str(m["message_id"]) for m in waiting_me["mentions"] if m.get("source") == "chat"},
+    )
     waiting_others = waiting_on_others(ctx, names)
     # The per-day table (MIP-1084): brought up to yesterday and read ONCE, before anything is
     # ranked, so the first briefing ranks with the same week the second one does.

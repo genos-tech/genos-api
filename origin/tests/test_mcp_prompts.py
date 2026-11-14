@@ -31,10 +31,13 @@ WRITE_TOOLS = frozenset({"create_todo_item", "update_tasks_bulk", "update_task",
 FIELDS_NAMED = (
     "changed_for_me",
     "waiting_on_me",
+    "waiting_on_others",
     "suggested_next",
     "agenda",
     "window.since",
     "agenda.calendar.events",
+    "changed_for_me.chat_answers",
+    "waiting_on_others.delegated",
 )
 # Backticked words in a prompt that are neither a tool nor a briefing field.
 OTHER_WORDS: set[str] = set()
@@ -296,6 +299,14 @@ class TestEverythingTheTextNamesExists(PromptBase):
                 self.assertIsInstance(node, dict, path)
                 self.assertIn(part, node, f"`{path}` is named in a prompt but not in the briefing")
                 node = node[part]
+
+    def test_both_prompts_name_the_two_keys_added_after_them(self):
+        """MIP-1538: answers in chats the member wrote in (`chat_answers`) and the tasks they
+        handed over (`delegated`) were added to the briefing after the prompts were written; a
+        prompt that does not name them leaves them unsaid."""
+        for name in BOTH:
+            for key in ("`changed_for_me.chat_answers`", "`waiting_on_others.delegated`"):
+                self.assertIn(key, self.text(name), f"{name} does not name {key}")
 
     def test_the_briefing_the_prompts_lean_on_is_published(self):
         self.assertIn("get_my_briefing", self.visible)

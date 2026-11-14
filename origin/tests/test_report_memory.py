@@ -252,6 +252,22 @@ class TestItDoesNotRepeatItself(MemoryBase):
         self.assertNotIn("You are waiting on others", [s["heading"] for s in second["sections"]])
         self.assertGreaterEqual(self.stat(second, "still_same"), 1)
 
+    def test_a_handed_over_task_is_held_back_when_unchanged_and_counted(self):
+        """MIP-1538: the handed-over rows of the Morning plan obey the same no-repeat rule."""
+        handed = self.make_task(
+            "Handed over", reporter=self.user, assignee=self.user2, status="WIP"
+        )
+        first, _ = self.file()
+        self.assertIn(handed.task_id, self.listed_ids(first))
+        second = self.report_now()
+        self.assertNotIn(handed.task_id, self.listed_ids(second))
+        self.assertNotIn("You are waiting on others", [s["heading"] for s in second["sections"]])
+        self.assertGreaterEqual(self.stat(second, "still_same"), 1)
+        handed.status = "Review"
+        handed.save()
+        third = self.report_now()
+        self.assertIn(handed.task_id, self.listed_ids(third))
+
     def test_waiting_on_you_and_changed_are_never_held_back(self):
         task = self.late(days=4)
         self.activity(task, self.user2, new="WIP", old="Open", at=self.ago(hours=2))

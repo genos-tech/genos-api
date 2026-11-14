@@ -200,6 +200,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             *(t["task_id"] for t in agenda["due_today"]),
             *(t["task_id"] for t in data["stale_mine"]),
             *(t["task_id"] for t in others["blocked_tasks"]),
+            *(t["task_id"] for t in others["delegated"]),
             *(c["task_id"] for c in changed["items"] if c["type"] == "task"),
             *(m.get("task_id") for m in waiting["mentions"]),
         ],
@@ -221,6 +222,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             *(t["task_id"] for t in agenda["overdue"]),
             *(t["task_id"] for t in agenda["due_today"]),
             *(t["task_id"] for t in others["blocked_tasks"]),
+            *(t["task_id"] for t in others["delegated"]),
             *(t["task_id"] for t in data["stale_mine"]),
         ],
         links.facts,
@@ -356,24 +358,43 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         changed["total"],
         "changed items",
     )
+    blocked = [
+        links.task_item(
+            f"{t.get('display_id')} · {plain(t.get('title'))}: waiting for "
+            + ", ".join(
+                f"{e['display_id']} ({plain(e.get('assignee')) or 'nobody yet'})"
+                for e in t.get("waiting_for") or []
+            ),
+            t["task_id"],
+            "waiting for "
+            + ", ".join(
+                f"{e['display_id']} ({plain(e.get('assignee')) or 'nobody yet'})"
+                for e in t.get("waiting_for") or []
+            ),
+        )
+        for t in kept(others["blocked_tasks"])
+    ]
+    # Tasks the member made and handed to someone else (MIP-1538): the briefing's `delegated`,
+    # capped at `MAX_LIST` and counted past it. The two never overlap: a blocked task is one the
+    # member holds, a handed-over one is held by somebody else.
+    handed_over = [
+        links.task_item(
+            f"{t.get('display_id')} · {plain(t.get('title'))}: with "
+            f"{plain(t.get('assignee')) or 'someone'}"
+            + (f" ({t['status']})" if t.get("status") else ""),
+            t["task_id"],
+            f"with {plain(t.get('assignee')) or 'someone'}",
+        )
+        for t in kept(others["delegated"])
+    ]
+    # `delegated_total` is the briefing's own count (a floor past its pool); what is not shown is
+    # what it counted beyond the rows it listed, less the ones held back as unchanged.
+    unlisted = max(0, others["delegated_total"] - len(others["delegated"]))
     add(
         "You are waiting on others",
-        [
-            links.task_item(
-                f"{t.get('display_id')} · {plain(t.get('title'))}: waiting for "
-                + ", ".join(
-                    f"{e['display_id']} ({plain(e.get('assignee')) or 'nobody yet'})"
-                    for e in t.get("waiting_for") or []
-                ),
-                t["task_id"],
-                "waiting for "
-                + ", ".join(
-                    f"{e['display_id']} ({plain(e.get('assignee')) or 'nobody yet'})"
-                    for e in t.get("waiting_for") or []
-                ),
-            )
-            for t in kept(others["blocked_tasks"])
-        ],
+        blocked + handed_over,
+        len(blocked) + len(handed_over) + unlisted,
+        "handed-over tasks",
     )
     add(
         "Gone quiet",
@@ -412,7 +433,10 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 ("overdue", agenda["overdue_count"]),
                 ("due_today", agenda["due_today_count"]),
                 ("waiting_on_you", len(waiting["requests"]) + len(waiting["mentions"])),
-                ("waiting_on_others", len(others["blocked_tasks"])),
+                (
+                    "waiting_on_others",
+                    len(others["blocked_tasks"]) + others["delegated_total"],
+                ),
                 ("gone_quiet", len(data["stale_mine"])),
                 (report_memory.STAT_STILL_SAME, verdict.same),
                 (report_memory.STAT_QUIETED, verdict.quieted),

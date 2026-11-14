@@ -623,3 +623,80 @@ class TestTheOutput(MentionBase):
         size = len(json.dumps(self.brief()))
         self.assertLess(size, 32_000, f"the briefing is {size} characters")
         self.assertLessEqual(len(self.mentions()), briefing.MAX_LIST)
+
+
+class TestAChatAnswerThatMentionsMeIsToldOnce(MentionBase):
+    """MIP-1538: an answer in a chat the member wrote in, that also @mentions them, was told in
+    `changed_for_me.chat_answers` AND in `waiting_on_me.mentions`. The mention list tells it (it
+    is the one that waits on a reply); `chat_answers` keeps the other answers."""
+
+    def answers(self):
+        return self.brief()["changed_for_me"]["chat_answers"]
+
+    def asked(self):
+        channel = self.channel([self.user, self.user2])
+        self.message(channel, self.user, "Where is the spec?", at=self.ago(hours=3))
+        return channel
+
+    def test_an_answer_that_mentions_me_is_in_the_mention_list_only(self):
+        channel = self.asked()
+        self.chat_message(channel, [mention(self.user.id)])
+        brief = self.brief()
+        self.assertEqual([m["source"] for m in brief["waiting_on_me"]["mentions"]], ["chat"])
+        self.assertEqual(
+            brief["changed_for_me"]["chat_answers"], {"chats": [], "total": 0, "truncated": False}
+        )
+        summary = briefing.build_briefing(self.ctx, now=self.now)["__summary__"]
+        self.assertNotIn("chat(s) with new answers", summary)
+
+    def test_the_other_answers_of_that_chat_stay_in_chat_answers(self):
+        channel = self.asked()
+        self.message(channel, self.user2, "It is in the wiki", at=self.ago(hours=2))
+        self.chat_message(channel, [mention(self.user.id)])
+        (row,) = self.answers()["chats"]
+        self.assertEqual((row["count"], row["earlier_not_shown"]), (1, 0))
+        self.assertIn("It is in the wiki", json.dumps(row))
+        self.assertEqual(len(self.mentions()), 1)
+
+    def test_a_mention_the_list_cut_is_still_told_as_an_answer(self):
+        """Only what the mention list really tells is left out: past its cap a mention would be
+        in neither."""
+        channel = self.asked()
+        for _ in range(briefing.MAX_LIST + 2):
+            self.chat_message(channel, [mention(self.user.id)])
+        self.assertEqual(len(self.mentions()), briefing.MAX_LIST)
+        (row,) = self.answers()["chats"]
+        self.assertEqual(row["count"], 2)
+
+    def test_a_mention_i_have_answered_is_not_in_the_list_and_not_an_answer_either(self):
+        channel = self.asked()
+        self.chat_message(channel, [mention(self.user.id)])
+        self.chat_message(
+            channel,
+            [{"type": "paragraph", "content": [{"type": "text", "text": "On it"}]}],
+            sender=self.user,
+        )
+        self.assertEqual(self.mentions(), [])
+        self.assertEqual(self.answers()["chats"], [])
+
+    def test_a_reply_in_a_thread_i_never_joined_is_not_news_but_a_mention_in_it_is(self):
+        """Item 3 of MIP-1538, decided: a thread the member never took part in is not theirs
+        to hear about (too noisy), unless it asks them something, and that is a mention."""
+        channel = self.channel([self.user, self.user2])
+        root = self.message(channel, self.user2, "Not for you", at=self.ago(hours=3))
+        self.message(channel, self.user2, "Still not", root=root, at=self.ago(hours=2))
+        brief = self.brief()
+        self.assertEqual([i for i in brief["changed_for_me"]["items"] if i["type"] == "thread"], [])
+        self.assertEqual(brief["waiting_on_me"]["mentions"], [])
+        message_views._allocate_seq_and_create_message_with_activities(
+            channel=channel,
+            sender=self.user2,
+            body=[mention(self.user.id)],
+            body_text="",
+            parent_id=root.id,
+            metadata={},
+        )
+        brief = self.brief()
+        self.assertEqual([i for i in brief["changed_for_me"]["items"] if i["type"] == "thread"], [])
+        (entry,) = brief["waiting_on_me"]["mentions"]
+        self.assertEqual(entry["thread_id"], str(root.id))
