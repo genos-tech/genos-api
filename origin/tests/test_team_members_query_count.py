@@ -128,7 +128,7 @@ class SharingWorld(CrossTeamTestCase):
         )
 
     def new_channel(self, team, owner, title):
-        return Channel.objects.create(
+        channel = Channel.objects.create(
             team=team,
             kind=ChannelKind.GM,
             title=title,
@@ -136,6 +136,9 @@ class SharingWorld(CrossTeamTestCase):
             is_private=True,
             is_external=True,
         )
+        # The offerer must be in the chat they lend out (MIP-1522).
+        ChannelMember.objects.get_or_create(channel=channel, user=owner)
+        return channel
 
     def put_on(self, obj, *users):
         """Hand-written participation rows, as the roster editors write them."""
@@ -599,7 +602,8 @@ class MalformedGrantTests(SharingWorld):
         self.put_on(ch, self.b_editor)
         self.bad_grant(CHANNEL, "not-a-uuid", guest_team=self.team_c)
         seen = external_visible_user_ids(self.team_a.team_id, self.b_owner.id)
-        self.assertEqual({str(self.b_owner.id), str(self.b_editor.id)}, seen)
+        # a_owner is in the chat they offered (MIP-1522), so the guests see them too.
+        self.assertEqual({str(self.a_owner.id), str(self.b_owner.id), str(self.b_editor.id)}, seen)
 
     def test_a_malformed_grant_to_a_team_the_caller_is_in_empties_the_visible_set(self):
         ch = self.new_channel(self.team_a, self.a_owner, "Good chat")
@@ -620,7 +624,8 @@ class MalformedGrantTests(SharingWorld):
         self.put_on(ch, self.b_editor)
         self.bad_grant(FOLDER, "99999999999999999999", guest_team=self.team_b)
         seen = external_visible_user_ids(self.team_a.team_id, self.b_owner.id)
-        self.assertEqual({str(self.b_owner.id), str(self.b_editor.id)}, seen)
+        # a_owner is in the chat they offered (MIP-1522), so the guests see them too.
+        self.assertEqual({str(self.a_owner.id), str(self.b_owner.id), str(self.b_editor.id)}, seen)
 
     def test_a_malformed_project_grant_is_skipped_by_the_visible_set(self):
         """Projects resolve through `guest_visible_user_ids`, never read here."""
@@ -629,7 +634,8 @@ class MalformedGrantTests(SharingWorld):
         self.put_on(ch, self.b_editor)
         self.bad_grant(PROJECT, "abc", guest_team=self.team_b)
         seen = external_visible_user_ids(self.team_a.team_id, self.b_owner.id)
-        self.assertEqual({str(self.b_owner.id), str(self.b_editor.id)}, seen)
+        # a_owner is in the chat they offered (MIP-1522), so the guests see them too.
+        self.assertEqual({str(self.a_owner.id), str(self.b_owner.id), str(self.b_editor.id)}, seen)
 
 
 # Query budgets, counted through the test client the way production `db_n`

@@ -18,8 +18,10 @@ Only a group chat (GM) or a multi-person DM (MDM) can be shared by a channel gra
 
 from __future__ import annotations
 
+import uuid
+
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
-from origin.models.common.team_models import ExternalGrant
+from origin.models.common.team_models import ExternalGrant, ShareStatus
 from origin.services.external_grants import (
     ExternalGrantError,
     add_external_participants,
@@ -97,6 +99,7 @@ class ChannelGrantKinds(CrossTeamTestCase):
         for kind in (ChannelKind.GM, ChannelKind.MDM):
             with self.subTest(kind=kind):
                 chat = Channel.objects.create(team=self.team_a, kind=kind, title="room")
+                ChannelMember.objects.create(channel=chat, user=self.a_owner)
                 grant = self.offer(chat)
                 respond_to_grant(grant, self.b_owner, accept=True)
                 self.assertTrue(
@@ -104,6 +107,44 @@ class ChannelGrantKinds(CrossTeamTestCase):
                         channel=chat, user=self.b_owner, is_deleted=False
                     ).exists()
                 )
+
+    # -- MIP-1522: the offerer must be IN the chat they lend out -------------------------- #
+
+    def test_a_manager_who_is_not_in_the_group_chat_cannot_offer_it(self):
+        for kind in (ChannelKind.GM, ChannelKind.MDM):
+            with self.subTest(kind=kind):
+                chat = Channel.objects.create(team=self.team_a, kind=kind, title="private room")
+                ChannelMember.objects.create(
+                    channel=chat, user=self.a_editor
+                )  # a_owner is not in it
+                with self.assertRaises(ExternalGrantError) as ctx:
+                    self.offer(chat)
+                # Same answer as a chat that does not exist: it does not say the chat is there.
+                self.assertEqual(ctx.exception.code, "bad_object")
+                self.assertFalse(
+                    ExternalGrant.objects.filter(object_id=str(chat.id)).exists(),
+                    "nothing was offered, nothing was notified",
+                )
+
+    def test_a_manager_who_left_the_chat_cannot_offer_it(self):
+        chat = Channel.objects.create(team=self.team_a, kind=ChannelKind.GM, title="room")
+        ChannelMember.objects.create(channel=chat, user=self.a_owner, is_deleted=True)
+        with self.assertRaises(ExternalGrantError) as ctx:
+            self.offer(chat)
+        self.assertEqual(ctx.exception.code, "bad_object")
+
+    def test_a_manager_in_the_chat_can_offer_it(self):
+        chat = Channel.objects.create(team=self.team_a, kind=ChannelKind.GM, title="room")
+        ChannelMember.objects.create(channel=chat, user=self.a_owner)
+        self.assertEqual(self.offer(chat).status, ShareStatus.PENDING)
+
+    def test_over_http_a_manager_outside_the_chat_gets_the_not_found_answer(self):
+        chat = Channel.objects.create(team=self.team_a, kind=ChannelKind.GM, title="private room")
+        ChannelMember.objects.create(channel=chat, user=self.a_editor)
+        outside = self.offer_over_http(chat)
+        missing = self.offer_over_http(Channel(id=uuid.uuid4()))
+        self.assertEqual(outside.status_code, missing.status_code)
+        self.assertEqual(outside.json(), missing.json())
 
     def test_a_project_share_still_admits_the_guest_to_the_project_chat(self):
         grant = self.active_project_grant()
