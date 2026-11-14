@@ -38,7 +38,9 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # ten flags MIP-1089 turned on by default (137,391 measured: +3,076 over the 134,315 of the same
 # tree with every flag off, all of it in tool descriptions and one prompt rule; the grouped eval of
 # 2026-11-14 measured each flag and the all-on arm, see the hub comment on MIP-1089).
-BUDGET_CHARS = 138_500
+# To 140,000 for `get_timeline` published to the in-app agent (138,866 measured: +1,475 characters,
+# one declaration), flipped on by default after the t1281 cases were re-read (2026-11-14).
+BUDGET_CHARS = 140_000
 
 
 def _declared_chars() -> int:

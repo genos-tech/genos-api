@@ -1869,7 +1869,7 @@ SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
     os.environ.get("AGENT_CHEATSHEET_FROM_REGISTRY", "false").lower() == "true"
 )
 
-# MIP-1289 / MIP-1281 (model-visible, dark-shipped OFF, grouped eval arm `t1289`): publish
+# MIP-1289 / MIP-1281 (model-visible, dark-shipped OFF, DEFAULT ON since 2026-11-14 (eval: 13/16 cases, routing fixed, +7% cost; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1289`): publish
 # `get_timeline` to the in-app agent. ON = one more tool declaration (about +1.3k characters, about
 # +351 tokens at 4.2 characters per token: 1,475 characters of the ~111k of declarations, on every
 # call; the explicit Gemini context cache and the Claude tool-block cache see a different prefix, so
@@ -1884,7 +1884,7 @@ SEARCH_ENGINE["AGENT_CHEATSHEET_FROM_REGISTRY"] = (
 # client reads no internal comment. `python -m origin.search_engine.agent.evals.group.pair_report`
 # joins t1271 (without) with t1281 (with) for the calls / input-token / per-language numbers.
 SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
-    os.environ.get("AGENT_INAPP_TIMELINE_TOOL", "false").lower() == "true"
+    os.environ.get("AGENT_INAPP_TIMELINE_TOOL", "true").lower() == "true"
 )
 
 # MIP-977 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), measured by the grouped eval arm `t977`):
