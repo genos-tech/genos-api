@@ -142,6 +142,37 @@ class TestEveryCronReports(TestCase):
         self.assertNotIn(name, _heartbeat_names(s for _l, s in _crons() if _l.endswith(".toml")))
         self.assertEqual(ops_alerts.CRON_SCHEDULES[name], timedelta(hours=3))
 
+    def test_the_ai_app_notice_prune_is_a_daily_cron_that_applies_beats_and_is_watched(self):
+        # MIP-1541: the retention command defaults to a DRY RUN, so the cron
+        # must pass `--apply` or it deletes nothing and still beats green. A
+        # new service cannot have a toml. 04:30 UTC sits between
+        # schedule-report-prune (04:15) and opensearch-maintenance (05:00).
+        name = "ai-app-notice-prune"
+        self.assertIn(name, _ts_blocks())
+        block = _ts_blocks()[name]
+        self.assertIn('cronSchedule: "30 4 * * *"', block)
+        self.assertIn(
+            f'startCommand: "python /app/manage.py prune_ai_app_notices --apply --heartbeat {name}"',
+            block,
+        )
+        self.assertIn('restartPolicyType: "NEVER"', block)
+        self.assertEqual(_HEARTBEAT.findall(_ts_crons()[name]), [name])
+        self.assertFalse((REPO / f"railway-{name}.toml").exists())
+        self.assertEqual(ops_alerts.CRON_SCHEDULES[name], timedelta(hours=26))
+        # The 8 variables a Django cron needs to boot (a service created by
+        # `config apply` has none until they are set; see the PR description).
+        for var in (
+            "ALLOWED_HOSTS",
+            "BLIND_INDEX_KEYS",
+            "DATABASE_URL",
+            "DJANGO_DEBUG",
+            "DJANGO_SECRET_KEY",
+            "FIELD_ENCRYPTION_KEYS",
+            "JWT_SECRET_KEY",
+            "LOG_FORMAT",
+        ):
+            self.assertIn(f"{var}: preserve()", block)
+
     def test_every_railway_ts_service_is_in_the_project(self):
         # A `service(...)` that `project(...)` does not list is never planned:
         # `railway config plan` would show nothing to add and the cron would
