@@ -2056,6 +2056,23 @@ SEARCH_ENGINE["AGENT_BODY_ON_USER_MODEL"] = (
     os.environ.get("AGENT_BODY_ON_USER_MODEL", "false").lower() == "true"
 )
 
+# MIP-1530 (model-visible, dark-shipped OFF, grouped eval arm `t1530`): after the person UNDOES an
+# approved write, the conversation memory still said the write happened (`ingest_conversation_run`
+# stores `Q:/A:` once, when the run ends), so `search_past_conversations` and the earlier-turns
+# window showed the model a stale story. ON = the run's memory chunk (`search_text` and snippet)
+# gets one line per undone write, `(the person undid this: created task WEB-3)` (a phrase per tool
+# and the task's display id, never a title or a body), the undo re-ingests THAT run (one re-embed;
+# a repeat embeds nothing), and the earlier-turns window ends the answer with the same line
+# after MIP-889's bracketed note (it needs no AGENT_TELL_MODEL_UNDO; a replayed result still
+# carries `undone_by_user` under that flag). The note is derived from the run's undone steps, so
+# the 10-minute cron and a full reindex keep it. OFF = the chunk, the window and every query are
+# exactly what they were. No tool declaration or system prompt moves. Flip criterion: after an undo
+# the model, asked about the write in a later session or turn, does not speak of it as standing,
+# and a conversation with no undo is unchanged (arm `t1530` against arm0).
+SEARCH_ENGINE["AGENT_UNDO_NOTE_IN_MEMORY"] = (
+    os.environ.get("AGENT_UNDO_NOTE_IN_MEMORY", "false").lower() == "true"
+)
+
 # MIP-578 parity batch (MIP-1561 first; the other parity tasks add their parameters to this
 # same flag). Model-visible, dark-shipped OFF, measured in the ONE grouped paid run (arm
 # `parity`). ON = the in-app agent and MCP can set what the app's own forms set, as parameters
