@@ -23,6 +23,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         until,
         limit=args.get("limit") or item_lines.DEFAULT_LIMIT,
         related_limit=related,
+        include_unattached=args.get("include_unattached") in (None, True),
     )
 
 
@@ -52,6 +53,14 @@ GET_ITEM_LINE = Tool(
             "include_related": {
                 "type": "BOOLEAN",
                 "description": "Also give the lines of the neighbouring items. Default true.",
+            },
+            "include_unattached": {
+                "type": "BOOLEAN",
+                "description": (
+                    "Also give `unattached`, the member's own events in the window that belong "
+                    "to no item. It is the same for every task, so when you read several tasks "
+                    "of one window, ask for it once and pass false for the rest. Default true."
+                ),
             },
         },
         "required": ["task_id"],
