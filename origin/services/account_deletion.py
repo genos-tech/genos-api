@@ -53,6 +53,7 @@ from oauth2_provider.models import (
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
+from origin.models.chat.unified_models import ReadCursor
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
@@ -164,6 +165,9 @@ def _delete_personal_data(user) -> None:
     ConnectedAccount.objects.filter(user=user).delete()
     ToDoGroup.objects.filter(user=user).delete()  # items cascade
     ToDoCategory.objects.filter(user=user).delete()
+    # What the person has read, and when (MIP-1550): theirs alone, nothing shows it to anyone
+    # else. The FK cascade never fires for a soft delete, so the rows have to go by hand.
+    ReadCursor.objects.filter(user=user).delete()
     MemberBriefingState.objects.filter(user=user).delete()
     # The member's schedules (MIP-1147) are theirs alone; the account is soft-deleted, so no
     # FK cascade fires and the tick would keep running them.
@@ -261,6 +265,38 @@ def _delete_invites_to(email: str) -> int:
     return deleted
 
 
+def _cut_off_open_sockets(user_id, left_team_ids) -> None:
+    """Take the person's open sockets out of every room they were in, after commit.
+
+    One push per team: a team they were a member of leaves the team room as well; a team where
+    they only held a project or a chat (a guest, an external chat) has just those rooms listed.
+    Best-effort and a no-op where genos-sockets is not configured (`push_membership_removed`).
+    """
+    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.project.prj_models import ProjectMembers
+    from origin.services.member_removal import memberships_in_team
+    from origin.services.realtime_push import push_membership_removed
+
+    left = {str(t) for t in left_team_ids}
+    guest_teams = {
+        str(t)
+        for t in (
+            *ProjectMembers.objects.filter(attendee_id=user_id).values_list("team_id", flat=True),
+            *ChannelMember.objects.filter(user_id=user_id, is_deleted=False).values_list(
+                "channel__team_id", flat=True
+            ),
+        )
+        if t is not None
+    } - left
+    for team_id, scope in [(t, "team") for t in sorted(left)] + [
+        (t, "channel") for t in sorted(guest_teams)
+    ]:
+        projects, channels = memberships_in_team(team_id, user_id)
+        push_membership_removed(
+            user_id=user_id, team_id=team_id, scope=scope, project_ids=projects, channels=channels
+        )
+
+
 def delete_account(user) -> dict:
     """Erase the person, keep the workspace consistent.
 
@@ -299,6 +335,12 @@ def delete_account(user) -> dict:
                 "team_id", flat=True
             )
         )
+        # What their open browser is still in, read BEFORE the rows go, and cut off once the
+        # erasure commits (MIP-1550): ending a membership does not end a socket that already
+        # joined a room, so the deleted person's tab kept receiving the team's chats and kept
+        # broadcasting "online" to its roster until it reconnected (it cannot: the token dies).
+        _cut_off_open_sockets(user.pk, left_team_ids)
+
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
         )
