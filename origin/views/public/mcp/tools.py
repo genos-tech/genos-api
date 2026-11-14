@@ -126,6 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
+from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
@@ -2162,7 +2163,11 @@ def _registered(tool: McpTool):
 
 
 def input_schema(tool: McpTool) -> dict[str, Any]:
-    schema = _to_json_schema(_registered(tool).parameters_schema)
+    # The parameters a default-off flag publishes (MIP-1561): none while it is off, so the
+    # catalog is what it was.
+    schema = _to_json_schema(
+        with_flagged_params(tool.registry_name, _registered(tool).parameters_schema)
+    )
     if tool.schema_overrides:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)

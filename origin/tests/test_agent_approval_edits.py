@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import copy
 from datetime import timedelta
+from unittest import mock
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.db import transaction
 from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
@@ -57,6 +59,9 @@ V1_ALLOW_LIST = {
         "effort_level",
         "due_date",
         "start_date",
+        # MIP-1561: published only while AGENT_PARITY_TOOLS is on (a plain choice from the
+        # tool's own enum, as update_task's is). Not template, links or reporter_id.
+        "status",
     },
     "update_task": {
         "title",
@@ -160,7 +165,9 @@ class AllowListCompletenessTests(SimpleTestCase):
                 with self.subTest(tool=name):
                     self.assertEqual(edits.EDITABLE_FIELDS.get(name), {})
 
+    @mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True})
     def test_every_path_is_a_declared_argument_of_the_right_type(self):
+        # With AGENT_PARITY_TOOLS on: `create_task.status` is declared only then.
         types = {
             edits.TEXT: "STRING",
             edits.BODY: "STRING",

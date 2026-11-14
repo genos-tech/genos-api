@@ -23,6 +23,11 @@ does not use them:
       each_body_headings_at_least, each_body_headings_at_most, not_cut_off,
       each_body_kind_at_least (MIP-1532: `skeleton` = no task body is empty, `content` = no task
       body is a bare template), report_body_kinds (MIP-1532: only count none / skeleton / content).
+      MIP-1561 (the parity cases, arm `parity`) judges the ARGUMENTS the model proposed: `args_present`
+      (names that must be sent), `args_absent` (names that must NOT be: a plain "create a task" must
+      not start sending a status, reporter, links or template unasked), `args_match` (name -> regex,
+      case-insensitive, full match on the value as text, a list or object as JSON), and
+      `task_args_match` (the same for the rows of a plan: at least one task must match each).
 
 The pending events are teed out of `run_agent` by wrapping the name `runner.run_agent` for the
 duration of a case, reference-counted and routed by a ContextVar (the same pattern as the locale
@@ -393,6 +398,7 @@ def check_pending(
                 floor in rank and bool(kinds) and not low,
                 f"want each body >= {floor}; below it: {low}; {summary}",
             )
+    _argument_checks(spec, arguments, add)
     if spec.get("not_cut_off"):
         # A skeleton ends where the server ended it, by construction: never "cut off".
         cut = [
@@ -406,6 +412,49 @@ def check_pending(
             f"bodies that look cut off: {cut}" if cut else f"{len(bodies)} bodies end cleanly",
         )
     return checks
+
+
+def _as_text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _sent(arguments: Any, name: str) -> bool:
+    return isinstance(arguments, dict) and arguments.get(name) not in (None, "")
+
+
+def _argument_checks(spec: dict[str, Any], arguments: Any, add: Any) -> None:
+    """`args_present`, `args_absent`, `args_match` and `task_args_match` (see the module docstring),
+    reported through `add` (which names each check)."""
+    if "args_present" in spec:
+        missing = [n for n in spec["args_present"] if not _sent(arguments, n)]
+        add("args_present", not missing, f"missing {missing}" if missing else "all sent")
+    if "args_absent" in spec:
+        sent = [n for n in spec["args_absent"] if _sent(arguments, n)]
+        add("args_absent", not sent, f"sent unasked: {sent}" if sent else "none sent")
+    if "args_match" in spec:
+        wrong = {}
+        for name, pattern in spec["args_match"].items():
+            value = arguments.get(name) if isinstance(arguments, dict) else None
+            text = "" if value is None else _as_text(value)
+            if not re.search(str(pattern), text, re.IGNORECASE):
+                wrong[name] = text[:80]
+        add("args_match", not wrong, f"did not match: {wrong}" if wrong else "all matched")
+    if "task_args_match" in spec:
+        tasks = arguments.get("tasks") if isinstance(arguments, dict) else None
+        rows = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+        wrong = []
+        for name, pattern in spec["task_args_match"].items():
+            if not any(
+                re.search(str(pattern), _as_text(t.get(name)), re.IGNORECASE)
+                for t in rows
+                if t.get(name) is not None
+            ):
+                wrong.append(name)
+        add(
+            "task_args_match",
+            not wrong,
+            f"no task carries {wrong}" if wrong else f"matched over {len(rows)} tasks",
+        )
 
 
 def summarize_proposals(events: list[dict[str, Any]], limit: int = 300) -> list[dict[str, str]]:
