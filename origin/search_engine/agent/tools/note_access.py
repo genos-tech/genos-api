@@ -15,7 +15,7 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import may_read_note
-from origin.search_engine.agent.tools.base import ToolContext, ToolError
+from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.note_targets import PERSONAL_FAMILY, normalize_note_type
 from origin.search_engine.agent.tools.task_access import as_int
 from origin.views.utils.note_role import (
@@ -38,6 +38,15 @@ class NoteRef:
     note: Any
 
 
+def note_not_found(note_id: int, *, exists: bool = False) -> ToolError:
+    """The ONE answer to every kind of "no" on a note: missing, in another team, or here and not
+    readable by the caller (MIP-1512). Only the class differs: a note that exists and is refused
+    is a `ToolForbidden`, which counts toward the MCP refusal alarm; the words the model reads
+    never differ, so a guessed id confirms nothing."""
+    message = f"Note {note_id} not found. Find its id with a search or `list_note_folders`."
+    return ToolForbidden(message) if exists else ToolError(message)
+
+
 def load_readable_note(args: dict[str, Any], ctx: ToolContext) -> NoteRef:
     note_type = normalize_note_type(args.get("note_type"))
     family = "personal" if note_type in PERSONAL_FAMILY else note_type
@@ -53,9 +62,7 @@ def load_readable_note(args: dict[str, Any], ctx: ToolContext) -> NoteRef:
             owner_id=getattr(note, "owner_id", None),
         )
     ):
-        raise ToolError(
-            f"Note {note_id} not found. Find its id with a search or `list_note_folders`."
-        )
+        raise note_not_found(note_id)
     return NoteRef(family=family, code=_CODES[family], note_id=note_id, note=note)
 
 

@@ -37,6 +37,7 @@ from apis.request_id import log_failure
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.search_engine.agent.acl import may_read_note
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
@@ -44,7 +45,7 @@ from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
-from origin.search_engine.agent.tools.note_access import has_write_permission
+from origin.search_engine.agent.tools.note_access import has_write_permission, note_not_found
 from origin.search_engine.agent.tools.note_targets import (
     PERSONAL_FAMILY,
     chat_note_parent_context,
@@ -125,6 +126,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
 
 
+def _refuse_unreadable(note, note_id: int, note_type_code: int, ctx: ToolContext) -> None:
+    """A caller who cannot even READ the note is told what a missing note says (MIP-1512). One who
+    can read it already knows it exists, so they still hear that they may not edit it."""
+    if not may_read_note(
+        user_id=ctx.user_id,
+        note_type_code=note_type_code,
+        note_id=note_id,
+        owner_id=getattr(note, "owner_id", None),
+    ):
+        raise note_not_found(note_id, exists=True)
+
+
 def _update_personal(
     *,
     note_id: int,
@@ -137,11 +150,11 @@ def _update_personal(
     try:
         note = PersonalNoteMaster.objects.get(note_id=note_id)
     except PersonalNoteMaster.DoesNotExist:
-        raise ToolError(f"Personal note {note_id} not found.")
+        raise note_not_found(note_id)
 
     # Tenant guard.
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: note belongs to a different team.")
+        raise note_not_found(note_id, exists=True)
 
     # Write ACL: owner, editor grant, or editor of its Team Notes folder.
     if not has_write_permission(
@@ -150,6 +163,7 @@ def _update_personal(
         note_type_code=note_type_code,
         ctx=ctx,
     ):
+        _refuse_unreadable(note, note_id, note_type_code, ctx)
         raise ToolForbidden(
             f"Not authorized to edit note {note_id}. You must be the owner, have "
             "editor permission on it, or be an editor of its Team Notes folder."
@@ -216,11 +230,11 @@ def _update_shared_surface_note(
     try:
         note = model.objects.get(note_id=note_id)
     except model.DoesNotExist:
-        raise ToolError(f"{note_type.capitalize()} note {note_id} not found.")
+        raise note_not_found(note_id)
 
     # Tenant guard.
     if str(getattr(note, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: note belongs to a different team.")
+        raise note_not_found(note_id, exists=True)
 
     # Write ACL: owner, implicit Editor (project member / chat member), or
     # explicit editor grant — matching the note UI. An explicit Viewer row
@@ -231,6 +245,7 @@ def _update_shared_surface_note(
         note_type_code=note_type_code,
         ctx=ctx,
     ):
+        _refuse_unreadable(note, note_id, note_type_code, ctx)
         member = "a member of the note's project" if note_type == "task" else "in the chat"
         raise ToolForbidden(
             f"Not authorized to edit {note_type} note {note_id}. "
