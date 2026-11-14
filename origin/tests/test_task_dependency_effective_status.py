@@ -138,6 +138,11 @@ class TestDependencyEffectiveStatus(TestCase):
         self._set_parent("Closed")
         single = self._single(self.dependent)
         batch = self._batch(self.dependent)[str(self.dependent.task_id)]
+        # Neither endpoint orders its edges (no ORDER BY), so compare each side by otherTaskId.
+        for side in ("blocking", "blockedBy"):
+            single[side].sort(key=lambda r: r["otherTaskId"])
+            batch[side].sort(key=lambda r: r["otherTaskId"])
+        self.assertEqual(len(single["blockedBy"]), 2)  # not vacuous: both blockers are listed
         self.assertEqual(single, batch)
 
     def test_created_edge_echo_carries_it(self):
