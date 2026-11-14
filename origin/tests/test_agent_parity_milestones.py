@@ -1429,3 +1429,52 @@ class McpFlagOffTests(McpMilestoneBase):
         self.assertEqual(
             MilestoneMaster.objects.get(pk=self.milestone.pk).project_id, self.project.project_id
         )
+
+
+# --------------------------------------------------------------------------------------------
+# update_task points a milestone's own row at the tool that moves it
+# --------------------------------------------------------------------------------------------
+
+OLD_ROW_REFUSAL = "is a milestone; move it from the milestone's own menu in the app."  # the sentence it always was
+
+
+class UpdateTaskRedirectTests(ToolBase):
+    def refusal(self, m):
+        with self.assertRaises(ToolError) as caught:
+            UPDATE_TASK.run({"task_id": m.task_id, "project_id": self.dest.project_id}, self.ctx())
+        return str(caught.exception)
+
+    def test_with_the_flag_on_the_refusal_names_the_tool_and_the_ids_that_move_it(self):
+        m = self.milestone("Moves with its own tool")
+        text = self.refusal(m)
+        self.assertIn("`manage_milestone`", text)
+        self.assertIn(f"`milestone_id` {m.milestone_id}", text)
+        self.assertIn("`project_id`", text)
+        self.assertNotIn("in the app", text)
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
+
+    def test_the_sentence_it_names_really_moves_it(self):
+        m = self.milestone("Follow the sentence")
+        self.refusal(m)
+        out = self.move_tool(m)
+        self.assertEqual(out["project_id"], self.dest.project_id)
+
+    def test_a_plain_task_is_not_redirected(self):
+        t = self.task("Plain")
+        out = UPDATE_TASK.run(
+            {"task_id": t.task_id, "project_id": self.dest.project_id}, self.ctx()
+        )
+        self.assertEqual(out["project_id"], self.dest.project_id)
+
+
+class UpdateTaskRedirectFlagOffTests(ToolBase):
+    flag = False
+
+    def test_with_the_flag_off_it_is_the_sentence_it_always_was(self):
+        m = self.milestone("Old sentence")
+        with self.assertRaises(ToolError) as caught:
+            UPDATE_TASK.run({"task_id": m.task_id, "project_id": self.dest.project_id}, self.ctx())
+        self.assertEqual(
+            str(caught.exception),
+            f"Task {m.task.display_id} {OLD_ROW_REFUSAL}",
+        )
