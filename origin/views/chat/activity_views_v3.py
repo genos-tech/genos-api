@@ -234,7 +234,8 @@ class ActivityListView(AuthenticatedAPIView):
             else min(since, timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS))
         )
         # The task / note rows the caller can no longer open (MIP-1560): `{id: ts_created_at}`.
-        surface_rows = list(
+        # (A tuple, not `list(...)`: a test pins the page query by patching `list` here.)
+        surface_rows = tuple(
             Activity.objects.filter(
                 surface_type__in=COVERED_SURFACES,
                 recipient=request.user,
