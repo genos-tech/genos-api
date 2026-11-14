@@ -17,7 +17,7 @@ from unittest import mock
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
-from origin.models.project.prj_models import ProjectMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.services import message_reminders
 from origin.tests.test_base import BaseAPITestCase
@@ -32,6 +32,9 @@ class ReminderCommentLinkTests(BaseAPITestCase):
             owner=self.user,
             project_system_user=self.user,
         )
+        # The reminder's owner is on the project: a reminder for a chat its owner is no longer in
+        # is retired instead of delivered (MIP-1502).
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
         self.task = TaskMaster.objects.create(
             team=self.team, project=self.project, title="T", status="Open"
         )

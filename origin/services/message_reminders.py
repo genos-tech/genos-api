@@ -36,6 +36,7 @@ from origin.models.common.inbox_models import InboxItems
 # dead-cron canary are shared with `todo_reminders` (see
 # `reminder_window`), and every existing caller of these names imports
 # them from this module.
+from origin.services.channel_scope import is_chat_member
 from origin.services.reminder_window import (  # noqa: F401
     MAX_HORIZON,
     OVERDUE_WARN_AFTER,
@@ -278,8 +279,8 @@ def fire(reminder, *, now=None) -> bool:
 def _retire_if_moot(reminder, *, now) -> bool:
     """Cancel and report True when there is nothing left to remind about.
 
-    Two cases, both of which mean the user already dealt with it:
-    the message was deleted, or the flag is gone / marked done. The flag
+    Three cases: the message was deleted, the user is no longer in its chat, or (they already
+    dealt with it) the flag is gone / marked done. The flag
     check is belt-and-braces — the flag endpoints cancel reminders
     directly — but a reminder that fires for a message the user has since
     filed away is the kind of noise that gets a feature turned off, so it
@@ -289,6 +290,10 @@ def _retire_if_moot(reminder, *, now) -> bool:
     reason = None
     if message.deleted_at is not None:
         reason = "message deleted"
+    elif not is_chat_member(message.channel_id, reminder.user_id):
+        # They left the chat (or the project, or the team) since asking: delivering the
+        # preview now would hand them the text of a chat they can no longer read (MIP-1502).
+        reason = "no longer in the chat"
     elif not Flag.objects.filter(
         user_id=reminder.user_id, message_id=reminder.message_id, completed_at__isnull=True
     ).exists():
