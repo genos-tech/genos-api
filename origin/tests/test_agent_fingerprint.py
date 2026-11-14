@@ -142,3 +142,63 @@ class FingerprintTests(TestCase):
 
 
 original_read = Path.read_text
+
+
+class SecondFixtureTests(TestCase):
+    """MIP-1478: the surfaces the first fixture cannot move (inbox report, focus list, counts, milestone and
+    sprint tools, rollups, stale / blocker / schedule / throughput tools, note threads) are fingerprinted too."""
+
+    def dump(self):
+        with tempfile.TemporaryDirectory() as d:
+            lines = run("--dump", d)
+            texts = {p.stem: p.read_text() for p in Path(d).glob("result.b.*.txt")}
+            # `Path.stem` drops only the last suffix: "result.b.list_tasks.txt" -> "result.b.list_tasks"
+        return lines, texts
+
+    def test_every_extra_tool_has_a_line_and_is_a_real_result_not_an_error(self):
+        lines, texts = self.dump()
+        for name in agent_fingerprint.EXTRA_READ_TOOLS:
+            self.assertIn(f"result.b.{name}", lines)
+            self.assertNotRegex(
+                texts[f"result.b.{name}"],
+                r"^(ToolError|[A-Za-z]+Error|\(tool not registered\))",
+                name,
+            )
+
+    def test_the_fixture_has_what_the_flags_move(self):
+        _, texts = self.dump()
+        # a report over the in-app cap, whole: with the flag on this is where `item_body_cut` appears
+        self.assertIn("Fingerprint item 5.13", texts["result.b.list_my_inbox"])
+        self.assertNotIn("item_body_cut", texts["result.b.list_my_inbox"])
+        # the Closed parent's child and grandchild are still counted open and listed with the flags off
+        self.assertIn("Child under closed", texts["result.b.get_my_focus_tasks"])
+        self.assertIn("Child under closed", texts["result.b.get_stale_tasks"])
+        self.assertIn("Child under closed", texts["result.b.get_task_blockers"])
+        # the note's threads come from the stub: with the flag off they are not in the result
+        self.assertNotIn("comment_threads", texts["result.b.fetch_note_threads"])
+        # a task is shown due this week to the viewer
+        self.assertIn("In the milestone", texts["result.b.get_my_schedule"])
+
+    def test_the_first_fixtures_lines_do_not_depend_on_the_second(self):
+        full = run()
+        only_first = run(
+            "--only", "result.get_", "--only", "result.list_", "--only", "result.fetch_"
+        )
+        for name, sha in only_first.items():
+            if name != "ALL" and not name.startswith("result.b."):
+                self.assertEqual(sha, full[name], name)
+
+    def test_the_second_fixture_leaves_nothing_behind(self):
+        run()
+        self.assertFalse(TeamMaster.objects.filter(team_id=agent_fingerprint.TEAM_B).exists())
+        self.assertFalse(
+            TaskMaster.objects.filter(
+                task_id__gte=agent_fingerprint._TASK_B, task_id__lt=agent_fingerprint._TASK_B + 10
+            ).exists()
+        )
+
+    def test_two_runs_agree_though_the_sequences_moved(self):
+        first, second = run(), run()
+        self.assertEqual(
+            {k for k in first if k.startswith("result.b.") and first[k] != second[k]}, set()
+        )
