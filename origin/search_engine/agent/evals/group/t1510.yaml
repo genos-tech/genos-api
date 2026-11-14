@@ -13,6 +13,17 @@
 # model's own bodies are compared in `answer` ("[proposed create_task_plan] ..."): a body that is
 # only `### Summary` + the title is the server's fill, a longer one is the model's.
 #
+# MIP-1532, what a body check can say now that the server fills the gap. A body is `none` (blank),
+# `skeleton` (only template headings, empty list items and the task's own title echoed: the server's
+# fill, or a model that wrote nothing more) or `content` (anything the model wrote). The cases FAIL
+# only on `none` (`each_body_kind_at_least: skeleton`: the end state MIP-1510 guarantees) and REPORT
+# the split in a `pending_write.body_kinds` check ("none 0, skeleton 5, content 0 of 5 bodies"), so a
+# later prompt change that makes the model write real bodies shows up as skeleton -> content, not as
+# a pass/fail flip. The old `each_body_chars_at_least: 20` is gone: it never measured a body, it
+# measured the title (a 19-character skeleton failed it, a long title passed it), and it was the one
+# check that looked at a skeleton as if it were content. `not_cut_off` no longer judges a skeleton
+# and no longer flags a short deliberate line (see `content_checks.looks_cut_off`).
+#
 # Per language: a positive (new milestone + five tasks, the case that failed), an edge (tasks only,
 # under an EXISTING milestone: the other attach mode), and a negative (ONE ad-hoc task still routes
 # to create_task, not to a one-task plan). The v1 fixture is read, never written.
@@ -42,7 +53,8 @@
     pending_write:
       tool: create_task_plan
       tasks_at_least: 5
-      each_body_chars_at_least: 20
+      each_body_kind_at_least: skeleton
+      report_body_kinds: true
       not_cut_off: true
 
 - id: t1510.plan.ja
@@ -68,7 +80,8 @@
     pending_write:
       tool: create_task_plan
       tasks_at_least: 5
-      each_body_chars_at_least: 20
+      each_body_kind_at_least: skeleton
+      report_body_kinds: true
       not_cut_off: true
 
 - id: t1510.existing-milestone.en
@@ -86,7 +99,8 @@
     pending_write:
       tool: create_task_plan
       tasks_at_least: 2
-      each_body_chars_at_least: 20
+      each_body_kind_at_least: skeleton
+      report_body_kinds: true
 
 - id: t1510.existing-milestone.ja
   lang: ja
@@ -101,7 +115,8 @@
     pending_write:
       tool: create_task_plan
       tasks_at_least: 2
-      each_body_chars_at_least: 20
+      each_body_kind_at_least: skeleton
+      report_body_kinds: true
 
 - id: t1510.single-task.en
   lang: en

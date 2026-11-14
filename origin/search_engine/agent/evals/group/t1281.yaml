@@ -411,7 +411,7 @@
   viewer: ja-b
   query: 「Fix the export that fails」のタスクの経緯を時系列で全部見せてください。
   note: 'Positive: a chronological timeline requested by title. The in-app agent has NO timeline tool today, so
-    it must stitch task, history and discussion (t1271), or call get_timeline once it exists (t1281). MIP-1518: the closed group has no 完了/解決, which the model''s opening line (発生から解決・完了までの全経緯) says before the first event.'
+    it must stitch task, history and discussion (t1271), or call get_timeline once it exists (t1281). MIP-1518: the closed group has no 完了/解決, which the model''s opening line (発生から解決・完了までの全経緯) says before the first event. MIP-1532: a status header line (ステータス: Closed, or a bare 完了 line) is a summary, not an event, so facts_ignore_lines drops it before the order is read; the closing EVENT line still has to come last.'
   expect:
     tools_used_contains:
     - get_timeline
@@ -439,6 +439,9 @@
       - resolved
       - クローズ
       - リリース
+    facts_ignore_lines:
+    - '^[\s>*\-•#]*\**\s*(ステータス|状態|状況|status|state)\s*\**\s*[:：]'
+    - '^[\s>*\-•#]*[`*_\[【(（]*\s*(closed|done|resolved|完了|クローズ|クローズ済み|解決済み|終了)\s*[`*_\]】)）]*\s*$'
     answer_does_not_contain:
     - qa
     - クライアントが確認

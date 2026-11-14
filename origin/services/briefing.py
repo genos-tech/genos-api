@@ -29,11 +29,17 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoItem
-from origin.models.chat.unified_models import Activity, ActivityType, Message
+from origin.models.chat.unified_models import (
+    Activity,
+    ActivityType,
+    Channel,
+    Message,
+    ReadCursor,
+)
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -61,6 +67,7 @@ from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPL
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import member_events
 from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
+from origin.services.plain_text import body_text, message_text
 from origin.services.user_time import zone_for_user_id
 
 log = logging.getLogger(__name__)
@@ -80,6 +87,12 @@ MENTION_LOOKBACK = timedelta(days=7)
 # How many mention rows are looked at before access and "answered" are decided. A member
 # is mentioned a handful of times in a week; this bounds a flood, newest first.
 MENTION_POOL = 60
+# Answers in a chat the member wrote in (MIP-1290): at most this many chats, each told as ONE
+# item (a count and the latest few words), from the newest `ANSWER_POOL` chats the member wrote
+# in during `MENTION_LOOKBACK`. A chatty chat adds to its count, never to its length.
+MAX_ANSWER_CHATS = 4
+ANSWER_SNIPPETS = 3
+ANSWER_POOL = 40
 
 # The briefing is read by a model with a budget (about 8k tokens), so it is shaped to fit:
 # the busiest items tell their story in detail, the rest get the latest word, and the
@@ -89,6 +102,9 @@ HOT_ITEMS = 5
 EVENTS_HOT = 6
 EVENTS_REST = 2
 MAX_LIST = 8
+# Tasks the member handed to someone else (MIP-1287): how many open ones are looked at before
+# the closed-ancestor rule and the cap decide what is told.
+DELEGATED_POOL = 200
 MAX_TODOS = 15
 EVENT_POOL = 600
 SNIPPET_CHARS = 140
@@ -436,8 +452,6 @@ def _changed_tasks(
     candidate_ids = {a.task_id for a in activities} | {c.task_id for c in comments}
     readable = LabelAccess(ctx).tasks(candidate_ids)
 
-    from origin.search_engine.text_extraction import extract_text  # noqa: PLC0415
-
     by_task: dict[int, list[dict[str, Any]]] = {}
     for row in activities:
         if row.task_id in readable:
@@ -450,7 +464,7 @@ def _changed_tasks(
                     "kind": "comment",
                     "_actor": c.sender_id,
                     "summary": "commented",
-                    "_text": _snippet(extract_text(c.comment_body)),
+                    "_text": _snippet(body_text(c.comment_body)),
                 }
             )
     items = []
@@ -530,7 +544,7 @@ def _changed_threads(ctx: ToolContext, win: Window, names: _Names) -> list[dict[
                 "kind": "reply",
                 "_actor": m.sender_id,
                 "summary": "replied",
-                "_text": _snippet(m.body_text),
+                "_text": _snippet(message_text(m)),
             }
         )
     for thread in threads.values():
@@ -544,6 +558,99 @@ _NOTE_KIND = {1: "personal", 2: "task", 3: "chat"}
 # Task notes of tasks the member holds (not their own) are read through the note access rule,
 # one lookup per note, so the notes checked in one briefing are capped.
 HELD_NOTES_CHECKED = 40
+
+
+def answers_in_chats(
+    ctx: ToolContext, now: datetime, project_id: int | None, names: _Names
+) -> dict[str, Any]:
+    """What other people wrote, at the top level, in chats the caller wrote in and has not
+    answered or read since (MIP-1290).
+
+    In a flat chat an answer is an ordinary message: not a thread reply (`_changed_threads`) and
+    not an @mention (`waiting_on_me`), so nothing else in the briefing says it came. Per chat the
+    caller can read (`readable_chats_qs`: live membership by `chat_member_q`, so a chat they left
+    or a project chat they are not on says nothing), the news is the other people's top-level
+    messages beyond the caller's own newest top-level message there, and beyond their main
+    timeline `ReadCursor` (the rule the app's unread count uses: what they have seen is not news).
+    The caller must have written there within `MENTION_LOOKBACK`: a chat they spoke in long ago is
+    not a question they are waiting on.
+
+    Capped so a chatty chat cannot take the briefing over: one item per chat, the newest
+    `MAX_ANSWER_CHATS` of them, each with its count and its latest `ANSWER_SNIPPETS` messages.
+    Task cards and the app's own posts are not answers. Chats belong to no project, so a project
+    filter leaves this empty, as it does for threads."""
+    empty = {"chats": [], "total": 0, "truncated": False}
+    if project_id is not None:
+        return empty
+    me = ctx.user_id
+    readable = readable_chats_qs(ctx.team_id, me).values("id")
+    top_level = Message.objects.filter(
+        is_thread_reply=False, deleted_at__isnull=True, channel_id__in=readable
+    )
+    wrote = {
+        row["channel_id"]: row
+        for row in top_level.filter(
+            sender_id=me, ts_sent_at__gte=now - MENTION_LOOKBACK, ts_sent_at__lte=now
+        )
+        .values("channel_id")
+        .annotate(last_seq=Max("seq"), last_at=Max("ts_sent_at"))
+        .order_by("-last_at")[:ANSWER_POOL]
+    }
+    if not wrote:
+        return empty
+    floor = {c: row["last_seq"] for c, row in wrote.items()}
+    for channel_id, read_seq in ReadCursor.objects.filter(
+        user_id=me, channel_id__in=list(wrote), thread_root__isnull=True
+    ).values_list("channel_id", "last_read_message__seq"):
+        if read_seq is not None and read_seq > floor[channel_id]:
+            floor[channel_id] = read_seq
+
+    others = (
+        top_level.filter(ts_sent_at__lte=now, task_id__isnull=True)
+        .exclude(sender_id=me)
+        .exclude(sender__is_system_user=True)
+    )
+    news = Q()
+    for channel_id, above in floor.items():
+        news |= Q(channel_id=channel_id, seq__gt=above)
+    counted = list(
+        others.filter(news)
+        .values("channel_id")
+        .annotate(n=Count("id"), latest_at=Max("ts_sent_at"))
+        .order_by("-latest_at")
+    )
+    chats = []
+    shown = counted[:MAX_ANSWER_CHATS]
+    channels = Channel.objects.in_bulk([r["channel_id"] for r in shown])
+    for row in shown:
+        channel = channels[row["channel_id"]]
+        latest = list(
+            others.filter(channel_id=channel.id, seq__gt=floor[channel.id]).order_by("-seq")[
+                :ANSWER_SNIPPETS
+            ]
+        )
+        latest.reverse()
+        said = []
+        for m in latest:
+            line = {
+                "at": m.ts_sent_at.isoformat(),
+                "text": wrap_workspace_content(_snippet(m.body_text)),
+            }
+            names.put(line, "from", m.sender_id)
+            said.append(line)
+        chats.append(
+            {
+                "chat_id": str(channel.id),
+                "chat_type": CHAT_TYPE_LABEL.get(channel.kind),
+                "title": wrap_workspace_content(channel.title or ""),
+                "you_wrote_at": wrote[channel.id]["last_at"].isoformat(),
+                "count": row["n"],
+                "latest_at": row["latest_at"].isoformat(),
+                "messages": said,
+                "earlier_not_shown": row["n"] - len(said),
+            }
+        )
+    return {"chats": chats, "total": len(counted), "truncated": len(counted) > len(chats)}
 
 
 def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[str, Any]]:
@@ -1002,8 +1109,6 @@ def _activity_mentions(
             task = readable.get(task_id)
             return task if task is not None and touched.get(task_id, at) <= at else None
 
-        from origin.search_engine.text_extraction import extract_text  # noqa: PLC0415
-
         bodies = {
             (c.task_id, c.comment_id): c
             for c in TaskComments.objects.filter(
@@ -1024,7 +1129,7 @@ def _activity_mentions(
                     "display_id": task.display_id,
                     "title": wrap_workspace_content(task.title or ""),
                     "comment_id": comment_id,
-                    "text": wrap_workspace_content(_snippet(extract_text(comment.comment_body))),
+                    "text": wrap_workspace_content(_snippet(body_text(comment.comment_body))),
                     "_actor": row.actor_id,
                 }
             )
@@ -1123,7 +1228,58 @@ def waiting_on_me(ctx: ToolContext, now: datetime, names: _Names) -> dict[str, A
     return {"requests": requests, "mentions": _unanswered_mentions(ctx, now, names)}
 
 
+def _delegated(ctx: ToolContext, names: _Names) -> tuple[list[dict[str, Any]], int]:
+    """Open tasks the caller reported and handed to someone ELSE (MIP-1287), longest quiet
+    first, and how many there are. A PM who made a task and assigned it is waiting on it, with
+    no dependency edge to say so.
+
+    Scope is the caller's own, like `_my_active_tasks`: this team, a project the caller is in,
+    not deleted, not an init scaffold, not Closed or Deleted, and not under a Closed or Deleted
+    ancestor (`task_ancestry`, the one statement of that rule). Tasks with nobody assigned, or
+    assigned to the caller, are not "waiting on others". The total counts what is left after
+    those rules, over the pool of the `DELEGATED_POOL` longest-quiet rows."""
+    member_projects = ProjectMembers.objects.filter(
+        attendee_id=ctx.user_id, project__team_id=ctx.team_id, project__is_deleted=False
+    ).values("project_id")
+    qs = (
+        TaskMaster.objects.filter(
+            team_id=ctx.team_id,
+            reporter_id=ctx.user_id,
+            assignee_id__isnull=False,
+            project_id__in=member_projects,
+            is_deleted=False,
+            is_init_task=False,
+        )
+        .exclude(assignee_id=ctx.user_id)
+        .exclude(status__in=_ACTIVE_TASK_EXCLUDE)
+        .order_by("ts_updated_at", "task_id")
+    )
+    pool = list(qs[:DELEGATED_POOL])
+    if not pool:
+        return [], 0
+    from origin.services.task_ancestry import effective_statuses  # noqa: PLC0415
+
+    effective = effective_statuses([t.task_id for t in pool], ctx.team_id)
+    open_tasks = [
+        t
+        for t in pool
+        if t.task_id in effective and effective[t.task_id].closed_by_ancestor_id is None
+    ]
+    rows = []
+    for task in open_tasks[:MAX_LIST]:
+        row = {
+            "task_id": task.task_id,
+            "display_id": task.display_id,
+            "title": wrap_workspace_content(task.title or ""),
+            "status": task.status,
+        }
+        names.put(row, "assignee", task.assignee_id)
+        rows.append(row)
+    return rows, len(open_tasks)
+
+
 def waiting_on_others(ctx: ToolContext, names: _Names) -> dict[str, Any]:
+    delegated, delegated_total = _delegated(ctx, names)
     blockers = GET_MY_BLOCKERS.run({}, ctx).get("blocked_on_me", [])
     blocked = []
     for row in blockers[:MAX_LIST]:
@@ -1144,7 +1300,12 @@ def waiting_on_others(ctx: ToolContext, names: _Names) -> dict[str, Any]:
                 "waiting_for": waiting_for,
             }
         )
-    return {"blocked_tasks": blocked}
+    return {
+        "blocked_tasks": blocked,
+        "delegated": delegated,
+        "delegated_total": delegated_total,
+        "delegated_truncated": delegated_total > len(delegated),
+    }
 
 
 def stale_mine(
@@ -1709,6 +1870,7 @@ def build_briefing(
     names = _Names(ctx)
 
     items, total_changed, automated_only = changed_for_me(ctx, win, project, names)
+    chat_answers = answers_in_chats(ctx, now, project, names)
     me = CustomUser.objects.filter(id=ctx.user_id).first()
     team = TeamMaster.objects.filter(team_id=ctx.team_id).first()
     agenda_section = agenda(ctx, now, zone, project)
@@ -1756,6 +1918,7 @@ def build_briefing(
             "truncated": total_changed > len(items),
             "automated_only": automated_only,
             "project_filter": project,
+            "chat_answers": chat_answers,
         },
         "waiting_on_me": waiting_me,
         "waiting_on_others": waiting_others,
@@ -1767,9 +1930,14 @@ def build_briefing(
     }
     names.fill()
     asked = waiting_me["requests"], waiting_me["mentions"]
+    # Said only when there is news, so a briefing without it reads as it always did.
+    answered = (
+        f"{chat_answers['total']} chat(s) with new answers, " if chat_answers["total"] else ""
+    )
     payload["__summary__"] = (
         f"Briefing since {win.since.astimezone(zone).strftime('%b %-d %H:%M')}: "
         f"{total_changed} item(s) changed, "
+        f"{answered}"
         f"{len(asked[0]) + len(asked[1])} waiting on you, "
         f"{agenda_section['overdue_count']} overdue."
     )

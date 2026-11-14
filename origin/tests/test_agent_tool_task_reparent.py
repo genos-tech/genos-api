@@ -402,7 +402,7 @@ class UpdateTaskProjectTests(ReparentBase):
         with self.assertRaises(ToolError) as caught:
             self._set(task, project_id=project_b.project_id)
 
-        self.assertIn("different team", str(caught.exception))
+        self.assertIn("not found", str(caught.exception))
         unchanged()
 
     def test_a_milestone_row_is_refused(self):

@@ -792,9 +792,13 @@ class ReadTierTests(TestCase):
 class NormalAskUnchangedTests(TestCase):
     """What a normal (non-resumed) ask hands the model, byte for byte.
 
-    The hashes were recorded on `origin/main` (a89531c1) BEFORE this change, over
-    inputs this test fixes (ids, summaries, mention). The ask path is only read,
-    never rewritten, by the fix; these fail if that stops being true.
+    The hashes were recorded on `origin/main` (a89531c1, the merge of #572, 2026-11-04)
+    BEFORE this change, over inputs this test fixes (ids, summaries, mention). They have
+    not been re-recorded since (`git log -S` shows the four values unchanged from the
+    first commit) and still hold on main, so a89531c1 is the true recording point. The
+    ask path is only read, never rewritten, by the fix; these fail if that stops being
+    true. If one must move, record again on a pristine main worktree (see
+    `test_agent_resume_flag_pins.py` for the recipe) and say the new commit here.
     """
 
     CHAT = "00000000-0000-0000-0000-00000000c0de"

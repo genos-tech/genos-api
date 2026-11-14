@@ -37,7 +37,8 @@ def load_project(raw_project_id: Any, ctx: ToolContext) -> ProjectMaster:
     except ProjectMaster.DoesNotExist:
         raise ToolError(f"Project {project_id} not found. Get ids from `list_projects`.")
     if str(project.team_id) != ctx.team_id:
-        raise ToolForbidden("Not authorized: project is in a different team.")
+        # The words of a missing one (MIP-1519); the class still counts toward the refusal alarm.
+        raise ToolForbidden(f"Project {project_id} not found. Get ids from `list_projects`.")
     return project
 
 
