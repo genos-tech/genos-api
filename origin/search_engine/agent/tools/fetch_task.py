@@ -188,13 +188,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
 
+    # Tenant guard first — never leak data across teams even if the
+    # within-team ACL check would let the user through. It also comes before the "deleted"
+    # answer, so a task deleted in another team reads like a missing one.
+    if str(getattr(task, "team_id", "") or "") != ctx.team_id:
+        # The words of a missing one, so a guessed id does not say which tasks exist in other
+        # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
+        raise ToolForbidden(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
-
-    # Tenant guard first — never leak data across teams even if the
-    # within-team ACL check would let the user through.
-    if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: task is in a different team.")
 
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),

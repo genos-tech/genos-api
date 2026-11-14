@@ -341,4 +341,4 @@ class McpTests(Tree, McpBase):
         ctx = ToolContext(team_id=str(other.team_id), user_id=str(self.user.id), surface="mcp")
         with self.assertRaises(ToolForbidden) as raised:
             MCP_ONLY_REGISTRY["get_progress_history"].run({"task_id": self.ms.task_id}, ctx)
-        self.assertIn("different team", str(raised.exception))
+        self.assertEqual(str(raised.exception), f"Task {self.ms.task_id} not found.")

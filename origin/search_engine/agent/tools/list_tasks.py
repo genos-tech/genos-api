@@ -236,7 +236,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except MilestoneMaster.DoesNotExist:
             raise ToolError(f"Milestone {milestone_id} not found.")
         if str(getattr(milestone, "team_id", "") or "") != ctx.team_id:
-            raise ToolForbidden("Not authorized: milestone is in a different team.")
+            raise ToolForbidden(
+                f"Milestone {milestone_id} not found."
+            )  # as a missing one (MIP-1531)
         if milestone.project_id not in member_project_ids:
             raise ToolForbidden(
                 f"Not authorized to list tasks in milestone {milestone_id}. "

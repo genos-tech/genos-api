@@ -203,7 +203,7 @@ class UpdateTaskMilestoneMoveTests(MilestoneMoveTestBase):
             ),
             "other team": (
                 self._milestone("Y", project=foreign_project, team=other_team).milestone_id,
-                "different team",
+                "not found",
             ),
             "unknown": (987654, "not found"),
             "deleted": (deleted.milestone_id, "not found"),

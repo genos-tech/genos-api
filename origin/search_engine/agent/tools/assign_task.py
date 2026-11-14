@@ -52,12 +52,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
 
+    if str(getattr(task, "team_id", "") or "") != ctx.team_id:
+        # The words of a missing one, so a guessed id does not say which tasks exist in other
+        # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
+        raise ToolForbidden(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
 
     # Layer 1 — tenant guard.
-    if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: task is in a different team.")
 
     # Layer 2 — editor guard (same set as fetch_task / update_task).
     allowed = task_acl_user_ids(

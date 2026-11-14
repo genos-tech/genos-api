@@ -189,7 +189,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Project {project_id} not found.")
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: project belongs to a different team.")
+        # The words of a missing one (MIP-1531), as `create_task` does.
+        raise ToolForbidden(f"Project {project_id} not found.")
 
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:
@@ -221,10 +222,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             parent_task = TaskMaster.objects.select_related("project").get(task_id=parent_id)
         except TaskMaster.DoesNotExist:
             raise ToolError(f"Task {parent_id} not found.")
+        if str(getattr(parent_task, "team_id", "") or "") != ctx.team_id:
+            # The words of a missing one (MIP-1531), and before the "deleted" answer.
+            raise ToolForbidden(f"Task {parent_id} not found.")
         if parent_task.is_deleted:
             raise ToolError(f"Task {parent_id} has been deleted.")
-        if str(getattr(parent_task, "team_id", "") or "") != ctx.team_id:
-            raise ToolForbidden("Not authorized: parent task is in a different team.")
         if parent_task.project_id != project_id:
             raise ToolError(
                 f"Task {parent_id} belongs to project {parent_task.project_id}, not {project_id}."
@@ -245,7 +247,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except MilestoneMaster.DoesNotExist:
             raise ToolError(f"Milestone {existing_id} not found.")
         if str(getattr(existing_milestone, "team_id", "") or "") != ctx.team_id:
-            raise ToolForbidden("Not authorized: milestone belongs to a different team.")
+            raise ToolForbidden(
+                f"Milestone {existing_id} not found."
+            )  # as a missing one (MIP-1531)
         if existing_milestone.project_id != project_id:
             raise ToolError(
                 f"Milestone {existing_id} belongs to project "

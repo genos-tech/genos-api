@@ -88,11 +88,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         task = TaskMaster.objects.get(task_id=task_id)
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
+    if str(getattr(task, "team_id", "") or "") != ctx.team_id:
+        # The words of a missing one, so a guessed id does not say which tasks exist in other
+        # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
+        raise ToolForbidden(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
 
-    if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: task is in a different team.")
     allowed = task_acl_user_ids(
         getattr(task, "project_id", None),
         getattr(task, "assignee_id", None),

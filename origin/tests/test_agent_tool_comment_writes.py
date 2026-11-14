@@ -252,7 +252,7 @@ class AccessTests(CommentToolBase):
         ctx = ToolContext(team_id=str(self.other_team.team_id), user_id=str(self.user.id))
         with self.assertRaises(ToolForbidden) as caught:
             self.edit(self.cid, "from the wrong team", ctx=ctx)
-        self.assertIn("different team", str(caught.exception))
+        self.assertEqual(str(caught.exception), f"Task {self.task.task_id} not found.")
         with self.assertRaises(ToolForbidden):
             self.remove(self.cid, ctx=ctx)
         self.assertEqual(plain(self.row(self.cid).comment_body), "first draft")
