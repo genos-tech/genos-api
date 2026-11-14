@@ -46,7 +46,7 @@ class _Fixtures:
     def role_of(self, channel, user):
         return ChannelMember.objects.get(channel=channel, user=user).role
 
-    def project(self, owner, members, name="Chat project"):
+    def make_project(self, owner, members, name="Chat project"):
         project = ProjectMaster.objects.create(
             team=self.team_a, project_name=name, owner=owner, project_system_user=owner
         )
@@ -70,6 +70,13 @@ class GroupOwnerFollowsDeletionTests(_Fixtures, CrossTeamTestCase):
         self.assertEqual(self.owner_of(gm), self.a_viewer.id)
         self.assertEqual(self.role_of(gm, self.a_viewer), "owner")
         self.assertEqual(self.role_of(gm, self.a_owner), "member")
+
+    def test_the_account_being_deleted_is_never_its_own_successor(self):
+        """Called on a still-live account (as `delete_account` does, before the flag is saved):
+        the earliest member is the owner themselves and must be skipped."""
+        gm = self.group(self.leaver, [self.leaver, self.a_viewer])
+        service.reassign_owned_channels(self.leaver.pk)
+        self.assertEqual(self.owner_of(gm), self.a_viewer.id)
 
     def test_the_order_is_by_when_they_joined_not_by_row_order(self):
         gm = self.group(self.leaver, [self.leaver, self.a_viewer, self.a_owner])
@@ -155,7 +162,7 @@ class ProjectChatOwnerFollowsDeletionTests(_Fixtures, CrossTeamTestCase):
         return Channel.objects.get(project=project, kind=ChannelKind.PM)
 
     def test_the_team_owner_already_on_the_project_takes_it_and_its_chat(self):
-        project = self.project(self.leaver, [self.leaver, self.a_owner, self.a_viewer])
+        project = self.make_project(self.leaver, [self.leaver, self.a_owner, self.a_viewer])
         self.assertEqual(self._chat(project).owner_id, self.leaver.id)
         delete_account(self.leaver)
         project.refresh_from_db()
@@ -164,7 +171,7 @@ class ProjectChatOwnerFollowsDeletionTests(_Fixtures, CrossTeamTestCase):
         self.assertFalse(self._chat(project).is_deleted)
 
     def test_a_team_owner_who_is_not_on_the_project_is_not_put_on_it(self):
-        project = self.project(self.leaver, [self.leaver, self.a_viewer])
+        project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
         delete_account(self.leaver)
         project.refresh_from_db()
         self.assertEqual(project.owner_id, self.leaver.id)  # unchanged: a product decision
@@ -174,7 +181,7 @@ class ProjectChatOwnerFollowsDeletionTests(_Fixtures, CrossTeamTestCase):
         self.assertFalse(self._chat(project).is_deleted)
 
     def test_a_project_someone_else_owns_is_untouched(self):
-        project = self.project(self.a_viewer, [self.a_viewer, self.leaver, self.a_owner])
+        project = self.make_project(self.a_viewer, [self.a_viewer, self.leaver, self.a_owner])
         delete_account(self.leaver)
         project.refresh_from_db()
         self.assertEqual(project.owner_id, self.a_viewer.id)
