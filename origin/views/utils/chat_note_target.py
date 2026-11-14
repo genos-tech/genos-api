@@ -75,6 +75,9 @@ def chat_note_roles(*, channel: Channel, creator_id) -> dict[str, int]:
     The creator always gets at least an OWNER row, except a GM creator who
     isn't the GM owner, who keeps EDITOR.
     """
+    # The raw rows are right here: they are read only for a DM, MDM or GM, whose membership IS
+    # its `ChannelMember` row. A project chat (PM) falls through to the creator-only OWNER, so a
+    # stray row on one is never read (MIP-1523).
     member_ids = list(
         ChannelMember.objects.filter(channel_id=channel.id, is_deleted=False).values_list(
             "user_id", flat=True

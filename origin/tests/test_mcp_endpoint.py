@@ -913,6 +913,21 @@ class TestTheCatalogContract(McpBase):
                     f"registry schema has not got",
                 )
 
+    def test_a_surface_arg_is_not_on_the_shared_declaration(self):
+        """`surface_args` are published on MCP only. One that the registry schema also has is
+        either redundant or a sign the shared (model-visible) declaration moved."""
+        for tool in tools.CATALOG:
+            registry_properties = (
+                get_mcp_tool(tool.registry_name).parameters_schema.get("properties") or {}
+            )
+            for key in tool.surface_args:
+                self.assertNotIn(
+                    key,
+                    registry_properties,
+                    f"{tool.name} publishes `{key}` as a surface arg, but the registry has it",
+                )
+                self.assertNotIn(key, tool.mcp_only_args)
+
     def test_every_declared_ref_arg_is_a_real_property(self):
         """Same failure mode as the overrides, on the resolution half: a
         `task_ref_args` naming an argument the tool does not take means

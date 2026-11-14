@@ -6,18 +6,26 @@ its base (`scripts/agent_surface_hash.py`) and hands the two hashes, the changed
 labels to this script. It answers `run=true` or `run=false` through `$GITHUB_OUTPUT`.
 
 FAILS OPEN. `run=false` needs positive evidence that nothing the model reads moved: two readable,
-equal hashes AND a readable file list with no file in `FORCE_PATHS`. Anything else (a missing or
+equal hashes AND a readable file list with no retrieval file in it. Anything else (a missing or
 malformed hash, an unreadable list, an exception in here) answers `run=true`, so a bug in the gate
 can only cost a run, never skip a real change. The one way to a skip without that evidence is the
 `skip-evals` label, which a person set on purpose.
 
+Since MIP-1527 the billed run is the RETRIEVAL suite only (the workflow's `paths:` is the retrieval
+list below), so a PR starts it only for a retrieval file, a Pipfile bump or an edit of the workflow
+itself. The hash is kept as the second filter: an edit of the workflow alone (equal hashes, no
+retrieval file) still skips the Vertex steps, which is how that file is tested for free. A hash
+that moved does NOT mean the retrieval suite can see the change (it cannot see prompts or tool
+declarations); that case still runs it, because it is rare once `paths:` is narrow, and the
+model-surface check belongs in a free deterministic test, not in a billed retrieval run.
+
 Order, first match wins:
-  1. a manual dispatch                      -> run   (`dry_run` reports the decision and does not run)
+  1. a manual dispatch or the weekly schedule -> run (`dry_run` on a dispatch reports, does not run)
   2. label `run-evals`                      -> run
   3. label `skip-evals`                     -> skip
   4. a hash is missing or unreadable        -> run
   5. the file list is unreadable            -> run
-  6. a changed file is in FORCE_PATHS       -> run
+  6. a changed file is in RETRIEVAL_PATHS   -> run
   7. the hashes differ                      -> run
   8. otherwise                              -> skip
 
@@ -39,41 +47,86 @@ from pathlib import Path
 RUN_LABEL = "run-evals"
 SKIP_LABEL = "skip-evals"
 
-# Files whose change can move the eval numbers WITHOUT moving the surface hash, so they run the
-# evals whatever the hash says. The hash covers what the model is TOLD (tool declarations, system
-# prompts, the knobs that steer it); these decide what it is HANDED (retrieval, the fencing and
-# trimming of what goes back to it), which a hash with no database cannot see. Every entry is a
-# billed run, so the list is short and each line says why.
+# The files the retrieval suite really exercises (MIP-1527). This is the ONE list: the workflow's
+# `pull_request: paths:` must equal it plus the workflow file itself (a test pins that), and a
+# changed file matching it runs the eval whatever the hash says.
 #
-# Deliberately NOT here, so the cases this gate exists for stay free (MIP-1101): `agent/prompts.py`
-# (the prompt is in the hash), `agent/tools/*.py` implementations, `agent/tools/base.py` and
-# `tools/__init__.py` (MCP-only registration), the ACL helpers, `agent_views.py`, `origin/models/`.
-# And `agent/controller.py`: it is the agent loop (history assembly, step caps, how a result is
-# cut) so an edit CAN move behaviour, but #619 (MCP-only tools) and #449 (a card label) touched it
-# for reasons the model never sees, and a path rule cannot tell the two apart. A loop change that
-# alters what the model receives is therefore a human call: label the PR `run-evals`. To make the
-# loop always run instead, add `controller` to the agent/ alternation below.
-FORCE_PATHS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(p)
-    for p in (
-        # retrieval: what search returns (the HARD gate of the eval is the retrieval suite)
-        r"^origin/search_engine/(search|reranker|query_rewriter|ingestion|note_context"
-        r"|opensearch_client|index_config|text_extraction|milestone_mirrors)\.py$",
-        r"^origin/search_engine/(chunkers|embeddings)/",
-        # the provider adapters, effort router and model choice: what is sent to the model
-        r"^origin/search_engine/llm/",
-        # what is handed back to the model: result fencing, length caps, abstention, the turn
-        # history, summaries and approval text it reads, the reference / citation resolvers
-        r"^origin/search_engine/agent/(model_fence|fence|content_length|abstention|multi_turn"
-        r"|approval_notes|approval_reason|approval_edits|thread_summary|note_summary|references"
-        r"|citation_resolver|tool_cache|egress)\.py$",
-        # the tools that fetch for the model
-        r"^origin/search_engine/agent/tools/(search_kb|search_past_conversations|web_search)\.py$",
-        # the corpus the eval seeds, and the dependencies it runs on
-        r"^origin/services/demo_seeder\.py$",
-        r"^Pipfile(\.lock)?$",
-    )
+# Why this list and not `origin/search_engine/**`. The billed run is `agent_eval --retrieval` on a
+# seeded fixture: it re-indexes the seed corpus (demo_seeder -> ingestion -> chunkers ->
+# embeddings -> OpenSearch), then calls `search()` for 75 cases, and each `search()` makes one
+# query-rewrite call. The agent prompts, the tool declarations, the tool implementations and the loop
+# are not on that path (`search()` and the rewriter import nothing from `agent/`; the reranker, the
+# one importer of `agent/fence.py`, is off in CI), with the three small exceptions listed below
+# (the chunkers read the ACL helper and a template filter; one case type uses the mention helper), so
+# an edit anywhere else in `agent/` cannot move one number: the audit measured the gate passing 66/75 on the PRs that
+# turned ten agent flags on (#772, #782). Those changes are checked by the free tests
+# (the flag pins, the prefix budget, the fingerprint tests) and, for behaviour, by the grouped paid
+# run.
+#
+# Deliberately NOT here: `apis/settings.py` (44 commits in 14 days, nearly all agent flags, billing
+# and OAuth; the retrieval run reads about ten `SEARCH_ENGINE` keys from it that change rarely, and
+# the weekly run catches those; label the PR `run-evals` when you touch one), `agent/**` (prompts,
+# tools, controller, fences, content caps), `llm/claude_client.py` / `openai_client.py` /
+# `gemini_cache.py` (not the rewrite path), `origin/models/**` (the 11 model-only PRs in 14 days are
+# caught by the weekly run), and the harness files other than the retrieval ones below.
+RETRIEVAL_PATHS: tuple[str, ...] = (
+    # what search returns
+    "origin/search_engine/search.py",
+    "origin/search_engine/query_rewriter.py",
+    "origin/search_engine/reranker.py",
+    "origin/search_engine/friendly_titles.py",
+    "origin/search_engine/milestone_mirrors.py",
+    # what is indexed and how
+    "origin/search_engine/ingestion.py",
+    "origin/search_engine/chunkers/**",
+    "origin/search_engine/embeddings/**",
+    "origin/search_engine/index_config.py",
+    "origin/search_engine/mapping_guard.py",
+    "origin/search_engine/opensearch_client.py",
+    "origin/search_engine/acl_dirty.py",
+    "origin/search_engine/note_context.py",
+    "origin/search_engine/text_extraction.py",
+    # the model client the query rewriter calls (the other adapters are not on that path)
+    "origin/search_engine/llm/__init__.py",
+    "origin/search_engine/llm/base.py",
+    "origin/search_engine/llm/types.py",
+    "origin/search_engine/llm/choice.py",
+    "origin/search_engine/llm/effort_router.py",
+    "origin/search_engine/llm/gemini_client.py",
+    # the three `agent/` files the INDEX and the mention cases do read: the ACL user lists stamped
+    # on each chunk, the filter that drops untouched template prompts from indexed text, and the
+    # `@mention` boost parameters
+    "origin/search_engine/agent/acl.py",
+    "origin/search_engine/agent/tools/template_prompts.py",
+    "origin/search_engine/agent/mentions.py",
+    # the suite itself: cases, fixture, runner, the two commands CI invokes, the seeded corpus
+    "origin/search_engine/agent/evals/retrieval_cases.yaml",
+    "origin/search_engine/agent/evals/fixture.py",
+    "origin/search_engine/agent/evals/runner.py",
+    "origin/search_engine/management/commands/agent_eval.py",
+    "origin/search_engine/management/commands/agent_eval_setup.py",
+    "origin/services/demo_seeder.py",
+    # what the job installs: the OpenSearch and Gemini client libraries
+    "Pipfile",
+    "Pipfile.lock",
 )
+
+
+def _glob_to_regex(glob: str) -> re.Pattern[str]:
+    """GitHub `paths:` globs (`**` crosses directories, `*` does not) as an anchored regex."""
+    out, i = "", 0
+    while i < len(glob):
+        if glob.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif glob[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        else:
+            out, i = out + re.escape(glob[i]), i + 1
+    return re.compile(f"^{out}$")
+
+
+# Kept under its old name: the files that run the eval whatever the hash says.
+FORCE_PATHS: tuple[re.Pattern[str], ...] = tuple(_glob_to_regex(g) for g in RETRIEVAL_PATHS)
 
 
 def parse_hash(text: str | None) -> str | None:
@@ -131,6 +184,9 @@ def _decide(
 ) -> tuple[bool, str]:
     if event == "workflow_dispatch":
         return True, "manual dispatch: run the evals"
+    if event == "schedule":
+        # the weekly run on main: its base is the commit before HEAD, which says nothing here
+        return True, "weekly schedule: run the retrieval suite on main"
     if RUN_LABEL in labels:
         return True, f"label `{RUN_LABEL}`: run the evals"
     if SKIP_LABEL in labels:
@@ -148,7 +204,7 @@ def _decide(
         shown = ", ".join(forced[:5]) + (f" (+{len(forced) - 5} more)" if len(forced) > 5 else "")
         return (
             True,
-            f"changed files that can move retrieval or the loop without moving the hash: {shown}",
+            f"changed files the retrieval suite exercises: {shown}",
         )
     if base_hash != head_hash:
         return (
@@ -157,7 +213,7 @@ def _decide(
         )
     return (
         False,
-        f"the model surface is unchanged (hash {head_hash[:12]}) and no retrieval or loop file changed: skip",
+        f"the model surface is unchanged (hash {head_hash[:12]}) and no retrieval file changed: skip",
     )
 
 

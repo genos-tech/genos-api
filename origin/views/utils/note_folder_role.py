@@ -222,3 +222,41 @@ def folder_ancestor_grant_user_ids(folder_id, folders_by_id):
         current = folder.parent_folder_id
 
     return out
+
+
+def team_folder_reader_user_ids(folder_id) -> set[str]:
+    """Everyone who can open a note filed in the TEAM folder `folder_id`: the set form of
+    `get_folder_role` (`is not None`), for the comment fan-out (MIP-1523).
+
+    Built from `folder_ancestor_grant_user_ids`, the rule the search index's `acl_user_ids` is
+    built with: the grants and owner of every folder up to the first one that sets a visibility,
+    and, when that folder is public, every active member of the team (the index's `team:<id>`
+    sentinel, expanded here because a notification needs real ids). Empty for a folder that is
+    not a team folder, so a personal folder or no folder adds nobody.
+    """
+    if folder_id is None:
+        return set()
+    try:
+        folder_id = int(folder_id)
+    except (TypeError, ValueError):
+        return set()
+    team_id = (
+        PersonalNoteFolder.objects.filter(folder_id=folder_id, scope=SCOPE_TEAM)
+        .values_list("team_id", flat=True)
+        .first()
+    )
+    if team_id is None:
+        return set()
+    out = set()
+    for entry in folder_ancestor_grant_user_ids(folder_id, load_team_folder_index(team_id)):
+        if entry == f"team:{team_id}":
+            out.update(
+                str(uid)
+                for uid in TeamMembers.objects.filter(team=team_id, is_deleted=False).values_list(
+                    "attendee_id", flat=True
+                )
+                if uid is not None
+            )
+        else:
+            out.add(entry)
+    return out
