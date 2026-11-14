@@ -101,7 +101,9 @@ class AttachmentsBase(BaseAPITestCase):
             team=self.team, project=self.project, title=title, status="Open", **fields
         )
 
-    def attach(self, task, name="notes.txt", content=b"hello", mime="text/plain", by=None, number=None):
+    def attach(
+        self, task, name="notes.txt", content=b"hello", mime="text/plain", by=None, number=None
+    ):
         """A file on `task` the way the upload endpoint leaves one: a row, the file in media
         storage and the task's `attachment_added` history row naming who did it."""
         if number is None:
@@ -349,7 +351,11 @@ class DeleteToolTests(AttachmentsBase):
         two = self.attach(self.task, "two.txt", b"22")
         out = self.run_tool(self.task, two.attachment_id)
         self.assertEqual(
-            list(TaskAttachments.objects.filter(task=self.task).values_list("attachment_id", flat=True)),
+            list(
+                TaskAttachments.objects.filter(task=self.task).values_list(
+                    "attachment_id", flat=True
+                )
+            ),
             [one.attachment_id],
         )
         self.assertFalse(default_storage.exists(two.attached_file.name))
@@ -507,9 +513,17 @@ class PermissionTwinTests(AttachmentsBase):
     def roles(self):
         member = self.person("member")
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=member)
-        assignee, reporter, bystander = self.person("assignee"), self.person("reporter"), self.person("bystander")
-        stranger = User.objects.create_user(username="stranger", email="st@example.com", password="x")
-        other = TeamMaster.objects.create(team_name="Other", team_email="x@example.com", owner=stranger)
+        assignee, reporter, bystander = (
+            self.person("assignee"),
+            self.person("reporter"),
+            self.person("bystander"),
+        )
+        stranger = User.objects.create_user(
+            username="stranger", email="st@example.com", password="x"
+        )
+        other = TeamMaster.objects.create(
+            team_name="Other", team_email="x@example.com", owner=stranger
+        )
         TeamMembers.objects.create(team=other, attendee=stranger)
         return [
             # (role, user, ctx team, task fields, allowed)
@@ -529,7 +543,9 @@ class PermissionTwinTests(AttachmentsBase):
                 tool_file = self.attach(tool_task, "a.txt")
                 response = self.rest_delete(rest_task.task_id, rest_file.attachment_id, user)
                 try:
-                    self.run_tool(tool_task, tool_file.attachment_id, user=user, ctx=self.ctx_for(user, team))
+                    self.run_tool(
+                        tool_task, tool_file.attachment_id, user=user, ctx=self.ctx_for(user, team)
+                    )
                     tool_allowed = True
                 except ToolError:
                     tool_allowed = False
@@ -546,18 +562,25 @@ class PermissionTwinTests(AttachmentsBase):
         # see the task); the tool is no stricter and no looser.
         rest_file = self.attach(self.task, "a.txt", by=self.user)
         tool_file = self.attach(self.task, "b.txt", by=self.user)
-        self.assertEqual(self.rest_delete(self.task.task_id, rest_file.attachment_id, self.user2).status_code, 204)
+        self.assertEqual(
+            self.rest_delete(self.task.task_id, rest_file.attachment_id, self.user2).status_code,
+            204,
+        )
         self.run_tool(self.task, tool_file.attachment_id, user=self.user2)
         self.assertFalse(TaskAttachments.objects.filter(task=self.task).exists())
 
     def test_the_tool_is_scoped_to_the_runs_team_where_the_page_has_no_team(self):
         # Documented difference (stricter): the same person on the same task, but the run is in
         # another team's workspace. The page has no team in the request, so it would allow.
-        elsewhere = TeamMaster.objects.create(team_name="Else", team_email="e@example.com", owner=self.user)
+        elsewhere = TeamMaster.objects.create(
+            team_name="Else", team_email="e@example.com", owner=self.user
+        )
         TeamMembers.objects.create(team=elsewhere, attendee=self.user)
         attachment = self.attach(self.task, "a.txt")
         with self.assertRaisesRegex(ToolError, "not found"):
-            self.run_tool(self.task, attachment.attachment_id, ctx=self.ctx_for(self.user, elsewhere))
+            self.run_tool(
+                self.task, attachment.attachment_id, ctx=self.ctx_for(self.user, elsewhere)
+            )
         self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
 
     def test_a_deleted_task_refuses_the_tool_where_the_page_does_not_look(self):
@@ -611,7 +634,9 @@ class TwinEffectsTests(AttachmentsBase):
         try:
             change_feed.reset_pending()
             counts_before = row_counts()
-            history_before = set(TaskActivity.objects.filter(task=task).values_list("pk", flat=True))
+            history_before = set(
+                TaskActivity.objects.filter(task=task).values_list("pk", flat=True)
+            )
             stamp_before = TaskMaster.objects.get(pk=task.pk).ts_updated_at
             with watching_notices() as notices:
                 result = act()
@@ -629,15 +654,23 @@ class TwinEffectsTests(AttachmentsBase):
                 str(a.actor_id),
                 (a.metadata or {}).get("via"),
             )
-            for a in TaskActivity.objects.filter(task=task).exclude(pk__in=history_before).order_by("pk")
+            for a in TaskActivity.objects.filter(task=task)
+            .exclude(pk__in=history_before)
+            .order_by("pk")
         ]
         prefix = f"task_attachments/{task.task_id}/"
         return {
             "result": result,
             "attachments": sorted(
-                TaskAttachments.objects.filter(task=task).values_list("attachment_id", "original_filename")
+                TaskAttachments.objects.filter(task=task).values_list(
+                    "attachment_id", "original_filename"
+                )
             ),
-            "files": sorted(f.replace(prefix, "task_attachments/<task>/") for f in self.files_on_disk() if f.startswith(prefix)),
+            "files": sorted(
+                f.replace(prefix, "task_attachments/<task>/")
+                for f in self.files_on_disk()
+                if f.startswith(prefix)
+            ),
             "history": new_history,
             "row_deltas": deltas(counts_before, counts_after),
             "notices": notices,
@@ -750,7 +783,9 @@ class CardTests(AttachmentsBase):
 
     def test_a_task_the_approver_cannot_read_shows_no_file_name(self):
         stranger = User.objects.create_user(username="s", email="s@example.com", password="x")
-        other_team = TeamMaster.objects.create(team_name="O", team_email="o@example.com", owner=stranger)
+        other_team = TeamMaster.objects.create(
+            team_name="O", team_email="o@example.com", owner=stranger
+        )
         TeamMembers.objects.create(team=other_team, attendee=stranger)
         attachment = self.attach(self.task, "private.txt")
         card = self.card(
@@ -761,7 +796,11 @@ class CardTests(AttachmentsBase):
         self.assertNotIn("private.txt", json.dumps(card))
 
     def test_junk_ids_show_no_file_and_do_not_break_the_card(self):
-        for args in ({"task_id": self.task.task_id, "attachment_id": "x"}, {"attachment_id": 1}, {}):
+        for args in (
+            {"task_id": self.task.task_id, "attachment_id": "x"},
+            {"attachment_id": 1},
+            {},
+        ):
             self.assertNotIn("current", self.card(args))
 
 
@@ -773,7 +812,10 @@ class LoopTests(AttachmentsBase):
 
         class Client:
             def __init__(self):
-                self.script = [[(None, FunctionCall(name="delete_task_attachment", args=args))], [("done", None)]]
+                self.script = [
+                    [(None, FunctionCall(name="delete_task_attachment", args=args))],
+                    [("done", None)],
+                ]
 
             def generate_step(self, messages, tools, system_instruction, **kwargs):
                 yield from self.script.pop(0)
@@ -853,7 +895,9 @@ class ApproveTests(AttachmentsBase):
             mock.patch.dict(settings.SEARCH_ENGINE, flags),
             mock.patch.object(controller, "_drive_loop", return_value=None),
         ):
-            controller.resume_agent(run, "approve", self.ctx, events.append, disabled_tools=disabled)
+            controller.resume_agent(
+                run, "approve", self.ctx, events.append, disabled_tools=disabled
+            )
         return events
 
     def test_a_member_on_the_read_tier_cannot_get_it_approved_even_by_name(self):
@@ -919,7 +963,9 @@ class McpFilesBase(McpBase):
         self.files = []
         for name in ("one.txt", "two.txt"):
             attachment = TaskAttachments(
-                task=self.task, attachment_id=len(self.files) + 1, original_filename=name,
+                task=self.task,
+                attachment_id=len(self.files) + 1,
+                original_filename=name,
                 attached_type="text/plain",
             )
             attachment.attached_file.save(name, ContentFile(b"abc"), save=False)
@@ -932,7 +978,9 @@ class McpFilesBase(McpBase):
         return names
 
     def delete_call(self, attachment_id=2):
-        return self._call("delete_task_attachment", {"task_id": "WRD-7", "attachment_id": attachment_id})
+        return self._call(
+            "delete_task_attachment", {"task_id": "WRD-7", "attachment_id": attachment_id}
+        )
 
     def security_events(self):
         return SecurityEvent.objects.filter(action=SecurityAction.MCP_DESTRUCTIVE)
@@ -978,7 +1026,14 @@ class McpFlagOnTests(McpFilesBase):
         text, is_error = self._tool_text(self.delete_call(2))
         self.assertFalse(is_error, text)
         self.assertIn("two.txt", text)
-        self.assertEqual(list(TaskAttachments.objects.filter(task=self.task).values_list("attachment_id", flat=True)), [1])
+        self.assertEqual(
+            list(
+                TaskAttachments.objects.filter(task=self.task).values_list(
+                    "attachment_id", flat=True
+                )
+            ),
+            [1],
+        )
         self.assertFalse(default_storage.exists(self.files[1].attached_file.name))
         event = self.security_events().get()
         self.assertEqual(event.metadata["tool"], "delete_task_attachment")
@@ -1003,8 +1058,13 @@ class McpFlagOnTests(McpFilesBase):
 
     def test_another_tasks_number_is_not_found_over_mcp_too(self):
         other = TaskMaster.objects.create(
-            team=self.team, project=self.project, reporter=self.user, assignee=self.user,
-            title="Other", status="Open", project_task_number=8,
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            assignee=self.user,
+            title="Other",
+            status="Open",
+            project_task_number=8,
         )
         TaskAttachments.objects.create(task=other, attachment_id=5, original_filename="far.txt")
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
@@ -1015,12 +1075,17 @@ class McpFlagOnTests(McpFilesBase):
 
     def test_a_task_of_another_team_reads_like_a_missing_one(self):
         stranger = User.objects.create_user(username="s", email="s@example.com", password="x")
-        other_team = TeamMaster.objects.create(team_name="O", team_email="o@example.com", owner=stranger)
+        other_team = TeamMaster.objects.create(
+            team_name="O", team_email="o@example.com", owner=stranger
+        )
         TeamMembers.objects.create(team=other_team, attendee=stranger)
         self._key(scope=SCOPE_WRITE, allow_destructive=True, user=stranger, team=other_team)
         text, is_error = self._tool_text(
-            self._call("delete_task_attachment", {"task_id": str(self.task.task_id), "attachment_id": 1},
-                       url=f"{MCP}?team_id={other_team.team_id}")
+            self._call(
+                "delete_task_attachment",
+                {"task_id": str(self.task.task_id), "attachment_id": 1},
+                url=f"{MCP}?team_id={other_team.team_id}",
+            )
         )
         self.assertTrue(is_error)
         self.assertTrue(TaskAttachments.objects.filter(task=self.task).count() == 2)
@@ -1039,7 +1104,9 @@ class McpFlagOffTests(McpFilesBase):
         res = self.delete_call()
         self.assertIn("error", res.data)
         self.assertIn("Unknown tool: delete_task_attachment", res.data["error"]["message"])
-        self.assertNotIn("delete_task_attachment", res.data["error"]["message"].split("Available:")[1])
+        self.assertNotIn(
+            "delete_task_attachment", res.data["error"]["message"].split("Available:")[1]
+        )
         self.assertEqual(TaskAttachments.objects.filter(task=self.task).count(), 2)
 
     def test_get_task_carries_no_attachments_key(self):

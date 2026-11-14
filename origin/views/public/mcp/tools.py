@@ -2332,7 +2332,9 @@ def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpToo
     return [
         t
         for t in CATALOG
-        if t.registry_name not in disabled and published(t) and _permitted(t, scope, allow_destructive)
+        if t.registry_name not in disabled
+        and published(t)
+        and _permitted(t, scope, allow_destructive)
     ]
 
 

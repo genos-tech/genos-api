@@ -39,7 +39,9 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 # MIP-1562: +984 more (141,966 all-on, 143,421 with a Long member's block): 79 characters left.
-ALL_ON_BUDGET_CHARS = 143_500
+# MIP-1563: +913 more (the flag-gated delete tool and `fetch_task`'s sentence; 142,879 all-on, 144,334
+# with a Long member's block), so 144,500: 166 characters left.
+ALL_ON_BUDGET_CHARS = 144_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.

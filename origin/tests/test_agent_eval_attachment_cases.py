@@ -147,7 +147,9 @@ class SeedAndCardTests(BaseAPITestCase):
         self.assertEqual(TaskAttachments.objects.filter(task=task).count(), 2)
         project = ProjectMaster.objects.get(code="EAF", team=self.team)
         self.assertEqual(
-            set(ProjectMembers.objects.filter(project=project).values_list("attendee_id", flat=True)),
+            set(
+                ProjectMembers.objects.filter(project=project).values_list("attendee_id", flat=True)
+            ),
             {self.user.id},
         )
         self.assertIsNone(task.assignee_id)

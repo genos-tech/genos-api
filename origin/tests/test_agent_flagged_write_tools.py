@@ -142,16 +142,16 @@ class FlagOnTests(SimpleTestCase):
             names = [d.name for d in _build_tool_declarations()]
             self.assertEqual(names[-1], NAME)
             self.assertEqual(names.count(NAME), 1)
-            self.assertEqual(
-                {t.name for t in app_write_tools()}, registered_writes() | {NAME}
-            )
+            self.assertEqual({t.name for t in app_write_tools()}, registered_writes() | {NAME})
 
     def test_the_declaration_says_it_asks_first_and_is_destructive(self):
         with flag(**ON):
             declared = {d.name: d for d in _build_tool_declarations()}[NAME]
         self.assertIn("REQUIRES USER APPROVAL", declared.description)
         self.assertIn("destructive", declared.description)
-        self.assertEqual(set(declared.parameters_schema["properties"]), {"task_id", "attachment_id"})
+        self.assertEqual(
+            set(declared.parameters_schema["properties"]), {"task_id", "attachment_id"}
+        )
         self.assertEqual(declared.parameters_schema["required"], ["task_id", "attachment_id"])
 
     def test_the_read_tier_hides_it_and_the_act_tier_keeps_it(self):

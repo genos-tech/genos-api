@@ -2361,7 +2361,9 @@ class TaskAttachmentsView(AuthenticatedAPIView):
             )
         # The file, then the row: the one delete the agent's `delete_task_attachment` shares.
         delete_attachment(attachment)
-        return Response({"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
+        )
 
 
 def _own_comment(request, task_id, comment_id):
