@@ -780,6 +780,13 @@ class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):
             return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         from origin.views.utils.note_role import get_effective_role
+        from origin.views.utils.scope_guards import is_team_member
+
+        # The caller must belong to the team the request names, or a stranger who knows a team id
+        # could tell a note that exists from one that does not (the request would be filed and
+        # the note's title handed back). The answer is the one a missing note gets.
+        if not is_team_member(team_id, request.user.id):
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
 
         note, owner_id = _note_and_owner(note_type, note_id)
         if note is None or owner_id is None:
