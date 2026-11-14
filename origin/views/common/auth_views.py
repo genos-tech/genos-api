@@ -27,6 +27,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.services import demo_v2
+from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
     create_demo_environment,
@@ -834,25 +835,43 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user.set_password(new_password)
-        user.password_reset_token_hash = None
-        user.password_reset_token_expires_at = None
-        user.save(
-            update_fields=[
-                "password",
-                "password_reset_token_hash",
-                "password_reset_token_expires_at",
-            ]
+        # One transaction: a reset that changed the password but failed to end the
+        # connected apps and API keys would leave the member believing they were safe.
+        # Everything here is after the checks above, so a refused reset ends nothing.
+        with transaction.atomic():
+            user.set_password(new_password)
+            user.password_reset_token_hash = None
+            user.password_reset_token_expires_at = None
+            user.save(
+                update_fields=[
+                    "password",
+                    "password_reset_token_hash",
+                    "password_reset_token_expires_at",
+                ]
+            )
+            # Browser sessions end by themselves (the JWT is bound to the old password
+            # hash). A connected AI app's token and an API key are not, so they end here
+            # (owner decision 2026-11-14), each leaving the row an explicit disconnect or
+            # revoke leaves.
+            ended = end_all_credentials(user, by="password_reset", request=request)
+            record_security_event(
+                SecurityAction.PASSWORD_RESET,
+                request=request,
+                actor=user,
+                target_type="user",
+                target_id=user.pk,
+                target_label=user.email,
+                metadata={
+                    "connections_ended": ended.connections,
+                    "api_keys_revoked": ended.api_keys,
+                },
+            )
+        # Counts only. The frontend words the notice ("connected apps and API keys were
+        # ended; reconnect them"); nothing in here names an app, a key or a token.
+        return Response(
+            {"connections_ended": ended.connections, "api_keys_revoked": ended.api_keys},
+            status=status.HTTP_200_OK,
         )
-        record_security_event(
-            SecurityAction.PASSWORD_RESET,
-            request=request,
-            actor=user,
-            target_type="user",
-            target_id=user.pk,
-            target_label=user.email,
-        )
-        return Response(status=status.HTTP_200_OK)
 
 
 def _issue_verification_token(user) -> str:
