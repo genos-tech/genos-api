@@ -868,20 +868,27 @@ def _task_notes(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMast
         for n in TaskNoteMaster.objects.filter(team_id=sc.team, task_id=task.task_id)
     }
     own_keys = set(keys)
-    # Notes anywhere that point at the task with a chip. Candidates are the notes with a version that
-    # has such a chip, newest first (at most `CHIP_NOTE_SCAN` looked at). The member's note rule is
-    # applied BEFORE the cap, so a note they cannot open can neither take one of the
-    # `CHIP_NOTE_CANDIDATES` places nor tip `capped.notes`.
-    chipped = item_lines._chip_filter(
-        NoteVersionMaster.objects.filter(team_id=sc.team, editor__isnull=False),
-        "body",
-        [task.task_id],
-    )
+    # Notes anywhere that point at the task with a chip. Candidates are the notes with a version
+    # that has such a chip INSIDE THE WINDOW asked for (not the cursor: every page and the count
+    # must see the same candidates), newest first, at most `CHIP_NOTE_SCAN` looked at. The member's
+    # note rule is applied BEFORE the cap, so a note they cannot open can neither take one of the
+    # `CHIP_NOTE_CANDIDATES` places nor tip `capped.notes`. The scan runs before that rule (it is
+    # not a filter), so when it ran out `capped.notes` says "may be cut", as `item_lines`'s scan
+    # does: a note beyond it could be one they can open.
+    versions = NoteVersionMaster.objects.filter(team_id=sc.team, editor__isnull=False)
+    if sc.since is not None:
+        versions = versions.filter(ts_updated_at__gte=sc.since)
+    if sc.until is not None:
+        versions = versions.filter(ts_updated_at__lt=sc.until)
+    chipped = item_lines._chip_filter(versions, "body", [task.task_id])
     listed = list(
         chipped.values("note_type", "note_id")
         .annotate(last=Max("ts_updated_at"))
-        .order_by("-last")[:CHIP_NOTE_SCAN]
+        .order_by("-last")[: CHIP_NOTE_SCAN + 1]
     )
+    if len(listed) > CHIP_NOTE_SCAN:
+        sc.capped.add("notes")
+        listed = listed[:CHIP_NOTE_SCAN]
     found = [
         (row["note_type"], row["note_id"])
         for row in listed
