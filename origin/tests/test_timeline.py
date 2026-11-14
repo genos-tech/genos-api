@@ -881,7 +881,9 @@ class TestTheAudienceRule(TimelineBase):
             self.assertEqual(
                 set(e) - {"at", "kind", "key", "from", "to", "anchor", "via"}, set(), e
             )
-            self.assertEqual(e["anchor"], f"task:{self.task.display_id}")
+            # the numeric anchor: the display id would tell this member the project's code (MIP-1534)
+            self.assertEqual(e["anchor"], f"task:{self.task.task_id}")
+        self.assertNotIn(self.task.display_id, json.dumps(out))
         blob = json.dumps(out)
         for secret in (
             "secret title",
@@ -917,6 +919,9 @@ class TestTheAudienceRule(TimelineBase):
         )
         created = out["events"][1]
         self.assertIn("secret title", created["text"])
+        # a member who can open the task is told its display id (MIP-1534)
+        for e in out["events"][1:]:
+            self.assertEqual(e["anchor"], f"task:{self.task.display_id}")
         self.assertNotIn("internal comment", json.dumps(out))
         self.assertIn(
             {

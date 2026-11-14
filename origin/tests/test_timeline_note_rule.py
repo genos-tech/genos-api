@@ -21,6 +21,8 @@ every case, and (3) the four cases that used to differ now have the answer below
 
 from __future__ import annotations
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
@@ -34,7 +36,7 @@ from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.fetch_note import _run as fetch_note_run
 from origin.search_engine.agent.tools.note_access import load_readable_note
-from origin.services import briefing, timeline
+from origin.services import briefing, item_lines, timeline
 from origin.tests.test_item_lines import LineBase
 
 User = get_user_model()
@@ -270,6 +272,34 @@ class NoteRuleMatrix(LineBase):
         self.assertLessEqual(len(many), 24)
         self.assertLessEqual(len(few), len(many))
         print("[MIP-1281 note batch queries] 41 notes:", len(many), "6 notes:", len(few))
+
+    def test_the_item_lines_use_the_same_batch_rule_for_every_case(self):
+        """MIP-1534: `item_lines._readable_notes` is the timeline's batch rule, not a second one
+        (it used the briefing's per-note rule, one check per note)."""
+        from django.db import connection  # noqa: PLC0415
+        from django.test.utils import CaptureQueriesContext  # noqa: PLC0415
+
+        self.build()
+        keys = [(t, n.note_id) for t, n in self.cases.values()]
+        ctx = self.viewer_ctx()
+        self.assertLessEqual(len(keys), item_lines.MAX_NOTES_SCANNED)
+        with mock.patch.object(item_lines, "MAX_NOTES_CHECKED", 100):
+            notes, capped = item_lines._readable_notes(ctx, keys, False)
+        # every note the viewer may open is told (the cap is lifted for the matrix)
+        self.assertEqual(set(notes), timeline.readable_notes(ctx, keys) & set(keys))
+        self.assertFalse(capped)
+        for name, (note_type, note) in self.cases.items():
+            self.assertEqual(
+                (note_type, note.note_id) in notes, self.get_note_rule(note_type, note), name
+            )
+        with CaptureQueriesContext(connection) as lines:
+            item_lines._readable_notes(ctx, keys, False)
+        with CaptureQueriesContext(connection) as batch:
+            timeline.readable_notes(ctx, keys)
+        # the same queries as the timeline's batch, whatever the number of notes (41 here), and
+        # not one check per note
+        self.assertEqual(len(lines), len(batch))
+        self.assertLessEqual(len(lines), 24)
 
     def test_every_way_of_asking_gives_the_same_answer_for_every_case(self):
         """One rule: `get_note`'s per-note resolver, `get_note` over MCP (the index's set rule),
