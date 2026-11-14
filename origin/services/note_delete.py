@@ -26,6 +26,7 @@ from django.db import transaction
 from origin.models.chat.unified_models import Activity
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.favorite_note_models import NoteFavoriteMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -65,21 +66,33 @@ class DeleteRefused(Exception):
         self.extra = extra or {}
 
 
+_FORGET_BATCH = 500
+
+
 def forget_deleted_notes(code: int, note_ids) -> None:
-    """Drop what other people still hold about notes that are gone (MIP-1489): their "recently
-    opened" rows, and the @mention / comment `Activity` rows the notes wrote for them (surface
-    types 6/7/8, `meta.noteId`), which a full resync of the feed would otherwise bring back,
-    pointing at a note that no longer exists. `code` is the `NOTE_TYPE_*` of the family."""
+    """Drop what other people still hold about notes that are gone (MIP-1489, MIP-1514): their
+    "recently opened" and favorite rows, and the @mention / comment `Activity` rows the notes
+    wrote for them (surface types 6/7/8, `meta.noteId`), which a full resync of the feed would
+    otherwise bring back, pointing at a note that no longer exists. `code` is the `NOTE_TYPE_*`
+    of the family.
+
+    EVERY path that removes note rows calls this with the ids it removed: the page and agent
+    deletes here, a project or a task delete (the notes cascade), the account erasure and the
+    demo team's cleanup. A path that deletes note rows and does not is the bug."""
+    ids = sorted({int(n) for n in note_ids})
+    for start in range(0, len(ids), _FORGET_BATCH):
+        _forget_batch(code, ids[start : start + _FORGET_BATCH])
+
+
+def _forget_batch(code: int, ids: list[int]) -> None:
     from origin.services.v3_activity import (
         SURFACE_CHAT_NOTE,
         SURFACE_PERSONAL_NOTE,
         SURFACE_TASK_NOTE,
     )
 
-    ids = [int(n) for n in note_ids]
-    if not ids:
-        return
     NoteRecentMaster.objects.filter(note_type=code, note_id__in=ids).delete()
+    NoteFavoriteMaster.objects.filter(note_type=code, note_id__in=ids).delete()
     surface = {
         NOTE_TYPE_PERSONAL: SURFACE_PERSONAL_NOTE,
         NOTE_TYPE_TASK: SURFACE_TASK_NOTE,

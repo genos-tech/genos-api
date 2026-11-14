@@ -2911,6 +2911,14 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         TaskNoteMaster.objects.filter(team=team_id).delete()
         PersonalNoteMaster.objects.filter(team=team_id).delete()
         PersonalNoteFolder.objects.filter(team=team_id).delete()
+        # What other people hold about the notes just deleted (MIP-1514): the demo users'
+        # recents and favorites, and their mention rows. The team's own rows go with the team
+        # below, but a favorite or a mention row carries no hard link to it.
+        from origin.services.note_delete import forget_deleted_notes
+
+        forget_deleted_notes(1, personal_note_ids)
+        forget_deleted_notes(2, task_note_ids)
+        forget_deleted_notes(3, chat_note_ids)
 
         # Tasks. TaskActivity / TaskComments / TaskAttachments all CASCADE
         # on task delete, so TaskMaster.delete() sweeps them. The explicit

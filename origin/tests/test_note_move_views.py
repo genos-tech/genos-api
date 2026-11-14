@@ -255,8 +255,9 @@ class TaskNoteMoveViewTests(BaseAPITestCase):
         )
         self.assertEqual(res.status_code, 404)
 
-    def test_no_write_role_403(self):
-        # user2 has no project membership and no explicit grant.
+    def test_no_write_role_404(self):
+        # user2 has no project membership and no explicit grant: no role at all answers like a
+        # missing note (MIP-1512); a Viewer would still get 403.
         self.authenticate(self.user2)
         res = self.client.put(
             TASK_MOVE_URL,
@@ -268,7 +269,7 @@ class TaskNoteMoveViewTests(BaseAPITestCase):
             },
             format="json",
         )
-        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.status_code, 404)
 
 
 class ChatNoteMoveViewTests(BaseAPITestCase):

@@ -307,7 +307,8 @@ class GuestReadsTheSharedNoteTests(CrossTeamTestCase):
                 "note_id": str(self.note.note_id),
             },
         )
-        self.assertEqual(res.status_code, 403, res.data)
+        # a stranger to the note's team: the 404 a missing note gets, not the teammate's 403
+        self.assertEqual(res.status_code, 404, res.data)
 
     def test_a_stranger_cannot_open_it(self):
         self.authenticate(self.c_owner)
@@ -319,4 +320,5 @@ class GuestReadsTheSharedNoteTests(CrossTeamTestCase):
                 "note_id": str(self.note.note_id),
             },
         )
-        self.assertEqual(res.status_code, 403, res.data)
+        # a stranger to the note's team: the 404 a missing note gets, not the teammate's 403
+        self.assertEqual(res.status_code, 404, res.data)
