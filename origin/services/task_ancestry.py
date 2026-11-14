@@ -72,6 +72,17 @@ class Verdict(NamedTuple):
     ancestor_id: int
 
 
+def _parent_links(row, backing_of: dict[int, int]) -> list[int]:
+    """The ids a row's walk goes up to, nearest first: its parent link, then (when it is not a
+    milestone itself) the backing row of its milestone. `backing_of` maps a milestone id to the task
+    id of its backing row."""
+    _, milestone_id, parent_id, is_milestone, _status = row
+    parents = [parent_id]
+    if not is_milestone and milestone_id is not None:
+        parents.append(backing_of.get(milestone_id))
+    return [p for p in parents if p is not None]
+
+
 def ancestor_verdicts(rows) -> dict[int, Verdict]:
     """`{task_id: Verdict}` for the rows under a Closed or Deleted ancestor.
 
@@ -96,11 +107,7 @@ def ancestor_verdicts(rows) -> dict[int, Verdict]:
     backing_of = {r[1]: r[0] for r in rows if r[3] and r[1] is not None}
 
     def parents_of(row) -> list[int]:
-        _, milestone_id, parent_id, is_milestone, _status = row
-        parents = [parent_id]
-        if not is_milestone and milestone_id is not None:
-            parents.append(backing_of.get(milestone_id))
-        return [p for p in parents if p is not None]
+        return _parent_links(row, backing_of)
 
     def verdict(task_id) -> Verdict | None:
         seen = {task_id}
@@ -122,6 +129,34 @@ def ancestor_verdicts(rows) -> dict[int, Verdict]:
         return closed
 
     return {task_id: v for task_id in by_id if (v := verdict(task_id)) is not None}
+
+
+def descendant_ids(task_id: int, project_id: int) -> set[int]:
+    """The ids of every task that has `task_id` among its ancestors, by the same two links the
+    walk above goes up (a task's parent, and the backing row of its milestone): the tasks whose
+    effective status can change when `task_id` is closed, deleted or reopened. One query (the
+    project's narrow rows); `task_id` itself is not in the answer, and a loop in the links ends.
+
+    Over-reporting is harmless for its callers (they re-derive from the rows); under-reporting is
+    not, so a soft-deleted `task_id` still answers: its children still point at it."""
+    rows = list(
+        TaskMaster.objects.filter(
+            project_id=project_id, is_deleted=False, is_init_task=False
+        ).values_list(*COLUMNS)
+    )
+    backing_of = {r[1]: r[0] for r in rows if r[3] and r[1] is not None}
+    children: dict[int, list[int]] = {}
+    for row in rows:
+        for parent in _parent_links(row, backing_of):
+            children.setdefault(parent, []).append(row[0])
+    found: set[int] = set()
+    stack = [task_id]
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child != task_id and child not in found:
+                found.add(child)
+                stack.append(child)
+    return found
 
 
 class Effective(NamedTuple):

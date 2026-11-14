@@ -17,6 +17,14 @@ in two batched lookups (one for `blocker_task_id__in=...`, one for
 `blocked_task_id__in=...`) so the cost is O(my-open-tasks + edges) and
 not O(my-open-tasks * edges).
 
+CLOSED-ANCESTOR RULE (MIP-1544, behind `AGENT_CLOSED_ANCESTOR_RULE`): a task under a Closed or Deleted
+parent, grandparent or milestone reads as Closed (`services/task_ancestry.py`), so such a task is not
+"open work" (my own, or the other side of an edge) and an edge to one is left out, exactly as one
+whose own status is Closed. The auto-Blocked flip (`services/task_blocking.py`) reads the same rule, so
+the board and this tool agree. One extra query per call (`ancestor_rule.rule_for_projects` over the
+projects the caller is in); a task in a project the caller is not in keeps its own status, its edge
+is redacted either way. Flag off: nothing here runs.
+
 ACL contract:
   * Walked tasks: `assignee_id == ctx.user_id` AND project in
     `member_project_ids`.
@@ -30,6 +38,7 @@ from typing import Any
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskDependency, TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext
 
 _INACTIVE_STATUSES = ["Closed", "Deleted"]
@@ -69,6 +78,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         ).values_list("project_id", flat=True)
     )
 
+    # None = flag off: every filter below is the old one.
+    rule = (
+        ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
+        if ancestor_rule.enabled()
+        else None
+    )
+    not_open = rule.not_open if rule is not None else frozenset()
+
     my_open_tasks = list(
         TaskMaster.objects.filter(
             team_id=ctx.team_id,
@@ -80,6 +97,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         .exclude(status__in=_INACTIVE_STATUSES)
         .select_related("project")
     )
+    if not_open:
+        my_open_tasks = [t for t in my_open_tasks if t.task_id not in not_open]
 
     if not my_open_tasks:
         return {
@@ -124,6 +143,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         if blocker.project_id and blocker.project_id not in member_project_ids:
             redacted_count += 1
             continue
+        if blocker.task_id in not_open:
+            continue
         blocked_on_me_by_task.setdefault(dep.blocked_task_id, []).append(
             _serialize_edge(dep.id, blocker)
         )
@@ -136,6 +157,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
             continue
         if blocked.project_id and blocked.project_id not in member_project_ids:
             redacted_count += 1
+            continue
+        if blocked.task_id in not_open:
             continue
         blocking_others_by_task.setdefault(dep.blocker_task_id, []).append(
             _serialize_edge(dep.id, blocked)
