@@ -1333,8 +1333,14 @@ class TestSuggestions(BriefingBase):
 
 class TestItIsTheCallersOwnView(BriefingBase):
     def test_another_member_sees_none_of_my_things(self):
-        task = self.make_task("Private plan", due_date=self.now.date() - timedelta(days=1))
-        untouched = self.make_task("Hidden plan", due_date=self.now.date() - timedelta(days=1))
+        # `reporter=self.user`: the other member made neither (MIP-1287 lists what a member
+        # made and handed to someone else, and these are the first member's own things).
+        task = self.make_task(
+            "Private plan", reporter=self.user, due_date=self.now.date() - timedelta(days=1)
+        )
+        untouched = self.make_task(
+            "Hidden plan", reporter=self.user, due_date=self.now.date() - timedelta(days=1)
+        )
         self.comment(task, self.user2, "for you only", at=self.ago(hours=1))
         self._key(scope=SCOPE_READ, user=self.user2)
         brief = self.brief()
