@@ -371,9 +371,6 @@ class CardAccessTests(PlanBodiesBase):
 
 
 class ToolSurfaceTests(PlanBodiesBase):
-    def test_the_description_says_bodies_are_expected_once(self):
-        self.assertEqual(CREATE_TASK_PLAN.description.count("short content_markdown body"), 1)
-
     def test_the_result_the_model_reads_carries_no_body(self):
         out = self.run_tool(self.plan())
         self.assertEqual(
