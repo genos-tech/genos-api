@@ -38,7 +38,6 @@ from origin.services.task_collaborators import (
     sync_task_collaborators,
 )
 from origin.services.task_progress import progress_at
-from origin.services.task_project_move import milestone_subtree_task_ids, relocate_tasks
 from origin.services.thread_link import (
     THREAD_NOT_FOUND,
     find_thread_link_conflict,
@@ -567,26 +566,9 @@ class MilestoneView(AuthenticatedAPIView):
 
         added_assignee_ids: list[str] = []
         with transaction.atomic():
+            # A project move clears the milestone's sprint, folder and tags and carries its tasks
+            # into the destination; `update_milestone` does all of it, LAST (`project_move`).
             fields = {f: request.data.get(f) for f in PATCHABLE_FIELDS if f in request.data}
-            if project_move is not None:
-                milestone.project = project_move
-                milestone.team_id = project_move.team_id
-                # Sprints are defined per project, so whatever sprint this
-                # milestone sits in does not exist in the destination and no
-                # mapping between the two is meaningful. It lands unplanned
-                # and the user re-picks a sprint there. Any `sprint_id` in
-                # the same payload is ignored for the same reason — it names
-                # a sprint in one project or the other, and both are wrong.
-                # (Cleared through the sprint parameter, which also fans the
-                # cleared sprint out to the member tasks.)
-                new_sprint = None
-                # Folders belong to one project; the milestone lands unfiled.
-                milestone.folder = None
-                # Tags are project-scoped rows, and another tenant's labels
-                # once a team boundary is crossed. Cleared after the payload's
-                # own fields, so a `tags` value in the same payload can't
-                # reinstate the source project's labels.
-                fields["tags"] = None
 
             def _backing_only_writes():
                 # Custom field values are stored on the backing task only —
@@ -623,24 +605,8 @@ class MilestoneView(AuthenticatedAPIView):
                     else UNSET
                 ),
                 after_sync=_backing_only_writes,
+                project_move=project_move,
             )
-
-            # Carry the milestone's world into the destination project.
-            # LAST in the transaction: `_sync_backing_task` above may have
-            # only just created the backing task (legacy rows), and it
-            # writes the backing row wholesale — so the project / team /
-            # per-project number this settles have to be written after it.
-            if project_move is not None:
-                relocate_tasks(
-                    milestone_subtree_task_ids(milestone),
-                    project_id=milestone.project_id,
-                    team_id=milestone.team_id,
-                    clear_sprint=True,
-                )
-                # The assignee join denormalizes the team for scoped reads.
-                MilestoneAssignees.objects.filter(milestone=milestone).update(
-                    team_id=milestone.team_id
-                )
 
         # Whoever was just added to an existing milestone is told (MIP-1464). After the commit.
         notify_milestone_assigned(
