@@ -142,9 +142,8 @@ class NoteSummaryBodyShapeTests(_BodyShapeTests, _AgentClient):
     def test_a_valid_body_still_answers_what_it_did(self):
         body = {"team_id": str(self.team.pk), "note_type": 1, "note_id": 999999}
         resp = self.client.post(self.URL, body, format="json")
-        self.assertEqual(
-            (resp.status_code, resp.json()), (403, {"error": "Personal note 999999 not found."})
-        )
+        # a missing note, the one answer every kind of "no" on a note gets (MIP-1516)
+        self.assertEqual((resp.status_code, resp.json()), (404, {"error": "Note not found."}))
 
 
 class SearchBodyShapeTests(_BodyShapeTests, _AgentClient):
