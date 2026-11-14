@@ -61,6 +61,7 @@ from origin.search_engine.agent import tool_cache, undo
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.body_mentions import store_note_mention_baseline
 from origin.search_engine.agent.tools.note_access import has_write_permission
+from origin.search_engine.chunkers import conversation_chunker
 from origin.search_engine.models import AgentRun, AgentStep
 from origin.services.collab_push import push_note_body_now
 from origin.services.note_delete import DeleteRefused, child_note_count, delete_note
@@ -464,6 +465,22 @@ HANDLERS: dict[str, Callable[[Undoing, dict[str, Any]], Outcome]] = {
 # --------------------------------------------------------------------------- #
 
 
+def _refresh_memory(run: AgentRun) -> None:
+    """MIP-1530, behind `AGENT_UNDO_NOTE_IN_MEMORY`: this run's conversation-memory chunk now says
+    the person undid a write of it. Only THIS run (the caller has checked it is the user's own);
+    the chunker derives the note from the run's undone steps, so it is re-embedded once and
+    a repeat embeds nothing. The undo is done: a failure here is logged, and the next full
+    reindex rebuilds the chunk with the note."""
+    from origin.search_engine import ingestion  # noqa: PLC0415 — lazy: a heavy module, and patchable
+
+    if not conversation_chunker.memory_note_enabled():
+        return
+    try:
+        ingestion.ingest_conversation_run(run)
+    except Exception:  # noqa: BLE001 — the undo is done; only its memory note failed
+        log.exception("The memory note of undoing a write of run %s was not stored", run.run_id)
+
+
 def perform_undo(*, run: AgentRun, step_id: int, user: Any) -> dict[str, Any]:
     """Undo one approved write of `run`, for `user`, who must be the run's own and
     is checked by the caller. Returns the answer, or raises `UndoNotFound` /
@@ -532,6 +549,7 @@ def perform_undo(*, run: AgentRun, step_id: int, user: Any) -> dict[str, Any]:
             log.exception("An effect of undoing step %s failed", step.step_id)
     if run.session_id:
         tool_cache.invalidate_session(str(run.session_id))
+    _refresh_memory(run)
     return {
         "run_id": str(run.run_id),
         "step_id": step.step_id,

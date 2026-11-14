@@ -1,0 +1,129 @@
+# MIP-1530 (flag AGENT_UNDO_NOTE_IN_MEMORY): after the person UNDOES a write, what the model reads
+# from its conversation memory says so. ON = the run's memory chunk (what `search_past_conversations`
+# returns) gets one line per undone write, "(the person undid this: created task WEB-3)", and the
+# earlier-turns window ends the answer with the SAME line (it replaces MIP-889's bracketed note
+# "[Note: after this answer the person undid create_task ...]", which arm0 still shows).
+#
+# What these cases reach: the WINDOW half (a follow-up in the same session). The runner switches
+# conversation ingestion off and follows up in the same session, so the `search_past_conversations`
+# half (a chunk in OpenSearch, a later session) is NOT measured here: it is pinned by stub tests
+# (`test_agent_undo_note_in_memory`), and measuring it needs a runner option that serves the real
+# chunk (`conversation_chunks_for_run`) to a later session's `search_past_conversations`. Follow-up.
+#
+# The write is approved, then undone through the production undo (`undo: true`), then a follow-up
+# ask in the same session asks about it. Per language: a positive (asks if the task is still there:
+# the prompt carries the new line, which arm0 does not), an edge (a DIFFERENT write of the same
+# conversation was kept and must still be reported as done), a negative (the write is NOT undone:
+# no line, the model keeps saying it is there; arm0 and arm t1530 must both pass it).
+
+- id: t1530.still-there.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t1530]
+  fixture: false
+  polarity: pos
+  expect_baseline: fail
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "Is the task you created for me still there? Answer in one sentence."
+  expect:
+    follow_up_prompt_contains: ["(the person undid this: created task"]
+    follow_up_prompt_excludes: ["[Note: after this answer"]
+    answer_contains_any: ["undone", "undid", "deleted", "removed", "no longer", "not there", "reverted"]
+
+- id: t1530.still-there.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t1530]
+  fixture: false
+  polarity: pos
+  expect_baseline: fail
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "さっき作ってもらったタスクはまだ残っていますか?一文で答えてください。"
+  expect:
+    follow_up_prompt_contains: ["(the person undid this: created task"]
+    follow_up_prompt_excludes: ["[Note: after this answer"]
+    answer_contains_any: ["取り消", "削除", "元に戻", "ありません", "残っていません", "取消"]
+
+- id: t1530.kept-and-undone.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t1530]
+  fixture: false
+  polarity: pos
+  expect_baseline: fail
+  earlier_turns:
+    - q: "Create a task called 'Plan the launch'."
+      a: "Done: I created the task 'Plan the launch' (WEB-1) for you."
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "Which of the tasks you created for me in this conversation are still there? Name them."
+  expect:
+    follow_up_prompt_contains: ["(the person undid this: created task"]
+    answer_contains_any: ["Plan the launch", "WEB-1"]
+
+- id: t1530.kept-and-undone.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t1530]
+  fixture: false
+  polarity: pos
+  expect_baseline: fail
+  earlier_turns:
+    - q: "「リリースを計画する」というタスクを作成してください。"
+      a: "完了しました。タスク「リリースを計画する」(WEB-1)を作成しました。"
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  undo: true
+  follow_up: "この会話で作ってもらったタスクのうち、今も残っているものを教えてください。"
+  expect:
+    follow_up_prompt_contains: ["(the person undid this: created task"]
+    answer_contains_any: ["リリースを計画する", "WEB-1"]
+
+- id: t1530.not-undone.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t1530]
+  fixture: false
+  polarity: neg
+  query: "Create a task called 'Ship it' in the project."
+  proposal:
+    tool: create_task
+    args: {title: "Ship it", project_id: "{project_id}", priority: Low}
+  decision: approve
+  follow_up: "Is the task you created for me still there? Answer in one sentence."
+  expect:
+    follow_up_prompt_excludes: ["the person undid", "undone_by_user"]
+    answer_excludes: ["undone", "undid", "was deleted", "no longer"]
+
+- id: t1530.not-undone.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t1530]
+  fixture: false
+  polarity: neg
+  query: "プロジェクトに「出荷する」というタスクを作成してください。"
+  proposal:
+    tool: create_task
+    args: {title: "出荷する", project_id: "{project_id}", priority: Low}
+  decision: approve
+  follow_up: "さっき作ってもらったタスクはまだ残っていますか?一文で答えてください。"
+  expect:
+    follow_up_prompt_excludes: ["the person undid", "undone_by_user"]
+    answer_excludes: ["取り消", "削除されました", "元に戻"]

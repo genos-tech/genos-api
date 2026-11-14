@@ -132,6 +132,7 @@ from origin.search_engine.agent.thread_summary import (
 )
 from origin.search_engine.agent.tool_tiers import disabled_tools_for_user, tier_system_extra
 from origin.search_engine.agent.tools import ToolContext
+from origin.search_engine.chunkers import conversation_chunker
 from origin.search_engine.chunkers.spotlight_answer_chunker import answer_snippet
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.choice import (
@@ -421,21 +422,28 @@ def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
     )
     runs = list(runs)
     turns = [(r.query, r.final_answer_text[:max_chars]) for r in runs]
-    if approval_notes.enabled() and runs:
+    # MIP-1530 `AGENT_UNDO_NOTE_IN_MEMORY`: the SAME line the memory chunk carries, in place of
+    # MIP-889's bracketed note (one note, not two). Needs no other flag.
+    memory_note = conversation_chunker.memory_note_enabled()
+    if (memory_note or approval_notes.enabled()) and runs:
         # `AGENT_TELL_MODEL_UNDO`: an earlier answer whose write the person has since
         # undone ends with a short factual note saying so (after the cap, so it is not cut).
-        # One query for the whole window, and none at all with the flag off.
+        # One query for the whole window, and none at all with both flags off.
         undone: dict[Any, list[AgentStep]] = {}
         for step in AgentStep.objects.filter(
             run_id__in=[r.run_id for r in runs], undone_at__isnull=False
         ).order_by("step_index", "step_id"):
             undone.setdefault(step.run_id, []).append(step)
+
+        def note_of(steps: list[AgentStep]) -> str:
+            if memory_note:
+                return "\n".join(conversation_chunker.undo_note_lines(steps))
+            return approval_notes.undo_note_text(steps)
+
         turns = [
             (
                 query,
-                f"{answer}\n\n{note}"
-                if (note := approval_notes.undo_note_text(undone.get(r.run_id, [])))
-                else answer,
+                f"{answer}\n\n{note}" if (note := note_of(undone.get(r.run_id, []))) else answer,
             )
             for r, (query, answer) in zip(runs, turns)
         ]
