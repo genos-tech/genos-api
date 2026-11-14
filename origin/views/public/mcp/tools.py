@@ -126,6 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
+from origin.search_engine.agent.tool_flag_text import ADDITIONS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
@@ -2401,12 +2402,40 @@ def annotations(tool: McpTool) -> dict[str, Any]:
     }
 
 
+#: `(registry tool, flag)` pairs whose in-app sentence is NOT added to the MCP description: MCP
+#: says it in its own words already (the task reads' `effective_status`), has its own field (note
+#: threads) or promises it unconditionally (the team).
+_MCP_SAYS_IT_ITSELF = frozenset(
+    {
+        ("fetch_task", "AGENT_CLOSED_ANCESTOR_RULE"),
+        ("list_tasks", "AGENT_CLOSED_ANCESTOR_RULE"),
+        ("fetch_note", "AGENT_NOTE_THREADS_IN_GET_NOTE"),
+        ("get_current_user", "AGENT_TEAM_IN_CURRENT_USER"),
+    }
+)
+
+
+def shared_flag_text(tool: McpTool) -> str:
+    """What the in-app flags add to a result that MCP serves from the same function, said once
+    more in the MCP description (MIP-1478): the sentence the in-app declaration gets
+    (`tool_flag_text.ADDITIONS`), with the tool names MCP knows, while the flag is on. Read at
+    call time; with every flag off this is empty and the catalog text is unchanged."""
+    text = "".join(
+        addition
+        for name, flag, addition in ADDITIONS
+        if name == tool.registry_name
+        and (name, flag) not in _MCP_SAYS_IT_ITSELF
+        and settings.SEARCH_ENGINE.get(flag)
+    )
+    return _rewrite_refs(text)
+
+
 def description_for(tool: McpTool, credential_kind: str = "api_key") -> str:
     """The description as the holder of THIS credential should read it. The text is written
     for an API key ("Requires a write-scoped API key"); a person who connected an app has no
     key, and OpenAI's review asks that descriptions match behaviour, so they are told what
     they actually need: write access in their connection (MIP-1110)."""
-    text = tool.description
+    text = tool.description + shared_flag_text(tool)
     if credential_kind == "api_key":
         return text
     text = text.replace(
