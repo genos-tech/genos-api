@@ -43,6 +43,7 @@ from django.utils import timezone
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.services import start_here_note
 from origin.services.demo_seeder import _body
 
 log = logging.getLogger(__name__)
@@ -3578,6 +3579,11 @@ def seed_guide_notes(user, team, *, force: bool = False) -> bool:
     that repair even for stamped memberships. Raises on failure; callers treat
     seeding as best-effort.
     """
+
+    # The person's team-less "Start here" note (MIP-1555) belongs to the first team
+    # they join; this runs on every join, and is a no-op once it has been given.
+    # Never raises.
+    start_here_note.adopt_for_team(user, team)
 
     notes_created = 0
     with transaction.atomic():

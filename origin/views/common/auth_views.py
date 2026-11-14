@@ -80,7 +80,7 @@ from origin.serializers.common.user_serializers import (
     UserCreateSerializer,
     UserSerializer,
 )
-from origin.services import signup_consent
+from origin.services import signup_consent, start_here_note
 from origin.services.email import send_templated_email
 
 User = get_user_model()
@@ -188,6 +188,11 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             )
 
         user = serializer.save(**signup_consent.acceptance_fields())
+
+        # The one "Start here" note every new account gets (MIP-1555). After the
+        # account exists, before either branch below; never raises, never needed
+        # for the signup to succeed.
+        start_here_note.create_for(user, request=request)
 
         # Invite-signup path. The token was validated in the serializer
         # (live + invited_email matches this signup), so receiving it proves
