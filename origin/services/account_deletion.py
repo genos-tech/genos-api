@@ -53,7 +53,6 @@ from oauth2_provider.models import (
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
-from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
@@ -69,6 +68,7 @@ from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
 from origin.services import blind_index, change_feed
+from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
 from origin.services.deleted_account_memberships import end_group_memberships
 from origin.services.security_events import record_security_event
 
@@ -176,10 +176,12 @@ def _delete_personal_data(user) -> None:
     # client holds for this person. The account is soft-deleted, so no FK cascade fires:
     # without this the tokens would outlive the person.
     McpConnection.objects.filter(user=user).delete()
-    # What those apps told the member they did (MIP-1541): `Activity` rows of kind AI_APP, each
-    # naming up to five item titles. recipient FK is CASCADE but the account is soft-deleted, so
-    # nothing fires; the daily expiry would only take them after the window.
-    Activity.objects.filter(recipient=user, activity_type=ActivityType.AI_APP).delete()
+    # The member's whole activity feed (MIP-1541, MIP-1542): every `Activity` row addressed to
+    # them, whatever the kind (mention, reply, reaction, message, comment notification, AI-app
+    # notice). `meta` can carry previews of other people's messages. `recipient` is a CASCADE
+    # FK, but the account is soft-deleted so nothing fires. Rows where they are only the
+    # ACTOR stay: they are someone else's feed and read "Deleted user".
+    delete_activity_for(user.pk)
     get_grant_model().objects.filter(user=user).delete()
     get_refresh_token_model().objects.filter(user=user).delete()
     get_access_token_model().objects.filter(user=user).delete()
