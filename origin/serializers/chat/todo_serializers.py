@@ -7,6 +7,7 @@ from origin.models.chat.todo_models import (
     ToDoItemReminder,
     ToDoSchedule,
 )
+from origin.views.public.mcp.via_privacy import via_for_viewer
 
 
 class ToDoCategorySerializer(serializers.ModelSerializer):
@@ -41,6 +42,7 @@ class ToDoItemSerializer(serializers.ModelSerializer):
     tsCreatedAt = serializers.DateTimeField(source="ts_created_at", read_only=True)
     tsUpdatedAt = serializers.DateTimeField(source="ts_updated_at", read_only=True)
     tsCompletedAt = serializers.DateTimeField(source="ts_completed_at", read_only=True)
+    via = serializers.SerializerMethodField()
 
     class Meta:
         model = ToDoItem
@@ -56,7 +58,16 @@ class ToDoItemSerializer(serializers.ModelSerializer):
             "tsCreatedAt",
             "tsUpdatedAt",
             "tsCompletedAt",
+            "via",
         ]
+
+    def get_via(self, obj):
+        """How the LAST write to the content arrived (MIP-1488): `null` for the person's own and
+        every older row. The to-do's owner is the actor and the only member who is sent it, so
+        they read it whole; the reduction (`{kind}` and a connected app's `app` family) is the
+        shared rule applied anyway, so a reader who is not the owner, or none named in
+        `context["viewer_id"]`, never gets a key's or app's name."""
+        return via_for_viewer(obj.via, obj.group.user_id, self.context.get("viewer_id"))
 
 
 class ToDoItemReminderSerializer(serializers.ModelSerializer):

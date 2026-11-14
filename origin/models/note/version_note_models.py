@@ -38,6 +38,12 @@ class NoteVersionMaster(models.Model):
     # Null for ordinary edits; set to the source version_no when this
     # row was written by a restore action.
     restored_from_version_no = models.IntegerField(blank=True, null=True)
+    # How the write arrived when it came through an API key or a connected app (MCP): the
+    # source `get_current_source()` reported (MIP-1488), `origin.services.write_via`. NULL for the
+    # web app, the in-app AI, an Undo, the copy kept before an edit, and every row written before
+    # this existed. The key's or app's NAME is its owner's: read it through `via_for_viewer`,
+    # the `editor` being the actor.
+    via = models.JSONField(blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

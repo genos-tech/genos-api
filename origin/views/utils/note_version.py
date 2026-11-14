@@ -2,6 +2,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.services.write_via import recorded_via
 
 COALESCE_SECONDS = 300  # 5 minutes — one autosave burst becomes one row.
 
@@ -68,10 +69,19 @@ def snapshot_note_version(
       key sets it: it is not a typing session, and the row it would overwrite
       holds the text it has just replaced (MIP-883).
 
+    `via` (MIP-1488) is how the write arrived, from the write in progress
+    (`write_via.recorded_via`): an API key or a connected app (MCP), else NULL (the web app,
+    the in-app AI, an Undo, a command). A row with no `editor` is a copy of what was already
+    there (`keep_current_state`), not anyone's write, so it never has one. A row is only
+    coalesced into by a write with the same `via`: an autosave never takes over a row the
+    AI app wrote (it would show the AI app's chip on the person's typing), and the AI app
+    never takes over a person's.
+
     Returns the resulting `NoteVersionMaster` instance.
     """
 
     latest = _latest_version(note_type, note_id)
+    via = recorded_via() if editor is not None else None
 
     if (
         latest is not None
@@ -82,6 +92,7 @@ def snapshot_note_version(
         and latest.restored_from_version_no is None
         and editor is not None
         and latest.editor_id == editor.id
+        and latest.via == via
         and (timezone.now() - latest.ts_updated_at).total_seconds() < COALESCE_SECONDS
     ):
         latest.title = title
@@ -107,6 +118,7 @@ def snapshot_note_version(
                     title=title,
                     body=body,
                     restored_from_version_no=restored_from_version_no,
+                    via=via,
                 )
         except IntegrityError:
             if attempt == 1:

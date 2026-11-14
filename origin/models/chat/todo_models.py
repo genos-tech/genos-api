@@ -164,6 +164,56 @@ class ToDoItem(models.Model):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
     ts_completed_at = models.DateTimeField(null=True, blank=True)
+    # How the LAST write to this to-do's content arrived, when it came through an API key or a
+    # connected app (MCP): the source `get_current_source()` reported (MIP-1488). A to-do keeps
+    # no per-write history (the row is overwritten in place), so this is the last writer, not the
+    # creator: a person's own edit of the title, notes, tag, day or tick sets it back to NULL.
+    # A reorder, a reminder and a save that changes nothing leave it. Read it through
+    # `via_for_viewer` (the to-do's owner is the actor); see `save` below.
+    via = models.JSONField(null=True, blank=True)
+
+    # What `save` compares to tell a write to the content from any other save.
+    _CONTENT_FIELDS = ("title", "notes", "is_completed", "category_id", "group_id")
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._content_when_loaded = {
+            name: instance.__dict__[name]
+            for name in cls._CONTENT_FIELDS
+            if name in instance.__dict__
+        }
+        return instance
+
+    def refresh_from_db(self, *args, **kwargs):
+        super().refresh_from_db(*args, **kwargs)
+        self._content_when_loaded = {
+            name: self.__dict__[name] for name in self._CONTENT_FIELDS if name in self.__dict__
+        }
+
+    def save(self, *args, **kwargs):
+        """Stamp `via` when this save writes the to-do's content (a new row, or a change to the
+        title, notes, completion, tag or day), from the write in progress. Done here, not in each
+        caller, so the REST endpoint, the agent and MCP tools and the seeders all leave the same
+        mark; `origin.services.write_via` decides what is recorded (an API key or a connected app,
+        else NULL)."""
+        loaded = getattr(self, "_content_when_loaded", None)
+        written = loaded is None or any(
+            loaded[name] != self.__dict__[name]
+            for name in self._CONTENT_FIELDS
+            if name in loaded and name in self.__dict__
+        )
+        if written:
+            from origin.services.write_via import recorded_via  # noqa: PLC0415
+
+            self.via = recorded_via()
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "via" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "via"]
+        super().save(*args, **kwargs)
+        self._content_when_loaded = {
+            name: self.__dict__[name] for name in self._CONTENT_FIELDS if name in self.__dict__
+        }
 
     class Meta:
         indexes = [
