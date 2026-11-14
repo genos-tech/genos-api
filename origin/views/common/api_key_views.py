@@ -33,6 +33,7 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
+from origin.services.api_keys import key_label, revoke_api_key
 from origin.services.member_roles import can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -171,7 +172,7 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
             team_id=key.team_id,
             target_type="api_key",
             target_id=key.id,
-            target_label=_label(key),
+            target_label=key_label(key),
             metadata={
                 "scope": key.scope,
                 "allow_destructive": key.allow_destructive,
@@ -186,25 +187,8 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
         return Response(payload, status=status.HTTP_201_CREATED)
 
 
-def _label(key: ApiKey) -> str:
-    return f"{key.name} ({key.prefix})"
-
-
 def _revoke(request, key: ApiKey, *, by: str) -> None:
-    """Revoke and record it. Revoking an already-revoked key changes
-    nothing, so it records nothing."""
-    if key.revoked_at is not None:
-        return
-    key.revoke()
-    record_security_event(
-        SecurityAction.API_KEY_REVOKED,
-        request=request,
-        team_id=key.team_id,
-        target_type="api_key",
-        target_id=key.id,
-        target_label=_label(key),
-        metadata={"by": by, "owner_id": str(key.user_id)},
-    )
+    revoke_api_key(key, by=by, request=request)
 
 
 class ApiKeyDetailView(AuthenticatedAPIView):
