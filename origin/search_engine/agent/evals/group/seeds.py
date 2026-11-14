@@ -394,12 +394,88 @@ def seed_closed_ancestor_tree(info: dict[str, Any]) -> None:
     make("open", "Open", due=date(2026, 10, 1))
 
 
+# --------------------------------------------------------------------------- #
+# t1563: a task with two files attached                                        #
+# --------------------------------------------------------------------------- #
+
+#: The task (also the idempotency marker) and its two files, per language: `(name, type, content)`.
+#: In a project of its own (EAF) that only the viewer belongs to. The files are
+#: real (tiny) ones in media storage, so the size the agent reads is a real size.
+TASK_FILES = {
+    "en": {
+        "task": "Prepare the board deck",
+        "files": (
+            (
+                "budget-2026.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                b"Budget 2026, first draft.\n",
+            ),
+            ("kickoff-notes.pdf", "application/pdf", b"Kick-off notes, agenda and owners.\n"),
+        ),
+    },
+    "ja": {
+        "task": "取締役会の資料を準備する",
+        "files": (
+            (
+                "予算2026.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                b"Budget 2026, first draft.\n",
+            ),
+            ("キックオフ議事録.pdf", "application/pdf", b"Kick-off notes, agenda and owners.\n"),
+        ),
+    },
+}
+
+
+def seed_task_files(info: dict[str, Any]) -> None:
+    """One task of the viewer's, in a project of its own, with two files attached (MIP-1563): what
+    "list the files on this task" and "delete that file" ask about. Files are `attachment_id` 1 and 2,
+    in the order of `TASK_FILES`."""
+    from django.core.files.base import ContentFile  # noqa: PLC0415
+    from django.db.models import Max  # noqa: PLC0415
+
+    from origin.models.task.task_models import TaskAttachments, TaskMaster  # noqa: PLC0415
+
+    lang = "ja" if info["team"] == "ja" else "en"
+    spec = TASK_FILES[lang]
+    team_id = info["team_id"]
+    if TaskMaster.objects.filter(team_id=team_id, title=spec["task"], is_deleted=False).exists():
+        return
+    me = info["user_id"]
+    project = _isolated_project(info, "Eval task files", "EAF", [me])
+    number = (
+        TaskMaster.objects.filter(project=project).aggregate(m=Max("project_task_number"))["m"] or 0
+    )
+    task = TaskMaster.objects.create(
+        team_id=team_id,
+        project=project,
+        reporter_id=me,
+        # Nobody's: the viewer reads it as a member of the project, and it does not join "my tasks"
+        # lists that other items' cases count and name.
+        assignee_id=None,
+        title=spec["task"],
+        status="Open",
+        priority="Normal",
+        project_task_number=number + 1,
+    )
+    for index, (name, mime, content) in enumerate(spec["files"], start=1):
+        attachment = TaskAttachments(
+            task=task,
+            attachment_id=index,
+            attached_type=mime,
+            original_filename=name,
+        )
+        attachment.attached_file.save(name, ContentFile(content), save=False)
+        attachment.save()
+
+
 #: The story's people (`a` client, `b` PM, `c` developer) who can read a seed's rows: the guard
 #: `test_agent_eval_group_seeds` checks only their cases against the seed's text.
 VISIBLE_TO: dict[str, frozenset[str]] = {
     "inbox_report": frozenset({"b"}),  # the viewer's own inbox
     "note_threads_stub": frozenset({"b", "c"}),  # project ENT: the viewer and the developer
     "closed_ancestor_tree": frozenset({"a"}),  # project ECT: the viewer alone
+    "task_files": frozenset({"b"}),  # project EAF: the viewer alone
 }
 
 
@@ -416,6 +492,9 @@ def seed_texts(name: str, lang: str) -> list[str]:
         ]
     if name == "closed_ancestor_tree":
         return list(CLOSED_TREE_TITLES[lang].values())
+    if name == "task_files":
+        spec = TASK_FILES[lang]
+        return [spec["task"], *[file_name for file_name, _mime, _content in spec["files"]]]
     if name == "note_threads_stub":
         t = NOTE_THREAD_TEXT[lang]
         return [*NOTE_TITLES[lang].values(), NOTE_BODY[lang], *t.values()]
@@ -426,6 +505,7 @@ SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "inbox_report": seed_inbox_report,
     "note_threads_stub": seed_note_threads_stub,
     "closed_ancestor_tree": seed_closed_ancestor_tree,
+    "task_files": seed_task_files,
 }
 
 

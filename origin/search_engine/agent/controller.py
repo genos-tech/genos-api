@@ -1171,6 +1171,44 @@ def _friendly_delete_milestone_arguments(
     out["current"] = {"title": milestone.title, "tasks": milestone_task_count(milestone)}
 
 
+def _friendly_delete_task_attachment_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `delete_task_attachment` arguments (MIP-1563).
+
+    ADDS what the approver is about to lose: the file's name, its size and its type, so the card
+    says WHICH file instead of "file 2". Only for a task the caller can read, and only a file that is
+    on that task (the lookup is `(task, attachment_id)`, the delete's own), so an id from another
+    task shows nothing. Plain text for the card, never a link to the file."""
+    from origin.search_engine.agent.tools.delete_task_attachment import (  # noqa: PLC0415
+        find_attachment,
+    )
+    from origin.search_engine.agent.tools.task_attachments import (  # noqa: PLC0415
+        attachment_name,
+        attachment_size,
+    )
+
+    task = access.task(args.get("task_id"))
+    attachment_id = _as_int_or_none(args.get("attachment_id"))
+    if task is None or attachment_id is None:
+        return
+    attachment = find_attachment(task.task_id, attachment_id)
+    if attachment is None:
+        return
+    out["current"] = {
+        "name": attachment_name(attachment),
+        "size_bytes": attachment_size(attachment),
+        "type": attachment.attached_type or None,
+    }
+
+
+def _as_int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 # Each edits the labelled copy and may read the caller's raw args for an
 # id the flat pass has already replaced with a label.
@@ -1181,6 +1219,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "update_task": _friendly_update_task_arguments,
     "manage_milestone": _friendly_manage_milestone_arguments,
     "delete_milestone": _friendly_delete_milestone_arguments,
+    "delete_task_attachment": _friendly_delete_task_attachment_arguments,
     "update_todo_item": _friendly_update_todo_arguments,
     "create_todo_item": _friendly_create_todo_arguments,
     "update_comment": _friendly_update_comment_arguments,

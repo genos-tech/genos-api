@@ -14,11 +14,17 @@ from __future__ import annotations
 
 from django.test import SimpleTestCase
 
-from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
+from origin.search_engine.agent.tools import FLAGGED_REGISTRY, MCP_ONLY_REGISTRY, REGISTRY
 from origin.views.public.mcp.tools import CATALOG
 
 # What the doc says. Update both together.
+# `PUBLISHED` is what a client is offered while every flag is off (the catalog minus `FLAGGED`).
+# MIP-1563 added one flag-gated WRITE tool (`delete_task_attachment`, flag `AGENT_PARITY_TOOLS`),
+# which is in `CATALOG` but published only while its flag is on: the number a client sees today did
+# not move, and `FLAGGED_WRITES` is the one that will be added to it on the flip.
 PUBLISHED = 97
+FLAGGED = 1
+FLAGGED_WRITES = 1
 FROM_REGISTRY = (
     83  # published tools backed by a tool in the agent registry (some under another name)
 )
@@ -45,15 +51,25 @@ HOW = (
 
 class McpToolCountTests(SimpleTestCase):
     def setUp(self):
-        self.mcp_only = [t for t in CATALOG if t.registry_name in MCP_ONLY_REGISTRY]
-        self.shared = [t for t in CATALOG if t.registry_name in REGISTRY]
+        self.flagged = [t for t in CATALOG if t.flag]
+        self.mcp_only = [t for t in CATALOG if not t.flag and t.registry_name in MCP_ONLY_REGISTRY]
+        self.shared = [t for t in CATALOG if not t.flag and t.registry_name in REGISTRY]
 
     def test_every_published_tool_is_backed_by_exactly_one_registry(self):
-        self.assertEqual(len(self.mcp_only) + len(self.shared), len(CATALOG))
+        self.assertEqual(len(self.mcp_only) + len(self.shared) + len(self.flagged), len(CATALOG))
         self.assertEqual({t.registry_name for t in self.mcp_only} & set(REGISTRY), set())
+        # A flag-gated tool is backed by the app's flag-gated registry and by no other, so it
+        # cannot shadow (or be shadowed by) a registered tool of the same name.
+        for tool in self.flagged:
+            with self.subTest(tool=tool.name):
+                self.assertIn(tool.registry_name, FLAGGED_REGISTRY)
+                self.assertEqual(FLAGGED_REGISTRY[tool.registry_name][0], tool.flag)
+                self.assertNotIn(tool.registry_name, REGISTRY)
 
     def test_published_total(self):
-        self.assertEqual(len(CATALOG), PUBLISHED, HOW)
+        self.assertEqual(len(CATALOG) - len(self.flagged), PUBLISHED, HOW)
+        self.assertEqual(len(self.flagged), FLAGGED, HOW)
+        self.assertEqual(sum(1 for t in self.flagged if t.write), FLAGGED_WRITES, HOW)
 
     def test_from_the_agent_registry(self):
         self.assertEqual(len(self.shared), FROM_REGISTRY, HOW)
