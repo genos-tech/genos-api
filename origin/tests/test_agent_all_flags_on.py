@@ -179,13 +179,12 @@ class AllOnDeclarationTests(SimpleTestCase):
             f"with the system prompt: off={off_total} on={on_total} budget={BUDGET_CHARS}"
         )
         self.assertGreater(delta, 0)
-        # FINDING: with EVERY flag on the prefix is over `test_agent_prefix_budget`'s BUDGET_CHARS
-        # (the budget is the production number; each flag alone fits). The flip PR that turns several
-        # on must raise it with its routing evidence. This pin only stops all-on growing unnoticed.
+        # With EVERY flag on the prefix was over `test_agent_prefix_budget`'s BUDGET_CHARS until the
+        # flips of 2026-11-14 raised it (140,000 with the timeline tool). Now even all-on fits it:
+        # a flag turned on later must keep that true or raise the budget with its routing evidence.
+        # `ALL_ON_BUDGET_CHARS` also stops all-on growing unnoticed.
         self.assertLessEqual(on_total, ALL_ON_BUDGET_CHARS)
-        self.assertGreater(
-            on_total, BUDGET_CHARS, "all-on now fits the production budget: tighten this"
-        )
+        self.assertLessEqual(on_total, BUDGET_CHARS, "all-on no longer fits the production budget")
 
     def test_only_the_reject_reason_flag_edits_the_system_prompt(self):
         # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; every other
