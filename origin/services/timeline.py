@@ -1564,8 +1564,15 @@ def _render(
     return rendered, people
 
 
-def wire_size(result: dict[str, Any]) -> int:
-    """Characters of the JSON a client reads: the fences removed, as the MCP layer removes them."""
+def wire_size(result: dict[str, Any], *, fenced: bool = False) -> int:
+    """Characters of the JSON a client reads: the fences removed, as the MCP layer removes them.
+
+    `fenced=True` counts the result as the in-app model reads it, the fences ON (MIP-1477): each
+    fenced text is 41 characters longer than its bare text, so a full page of short snippets is
+    about 4,000 characters bigger."""
+
+    if fenced:
+        return len(json.dumps(result, indent=2, ensure_ascii=False, default=str))
 
     def strip(value: Any) -> Any:
         if isinstance(value, str):
@@ -1598,8 +1605,14 @@ def timeline(
     lead_in: Any = None,
     text_chars: Any = None,
     now: datetime | None = None,
+    in_app: bool = False,
 ) -> dict[str, Any]:
-    """One anchor's history: see the module docstring for the contract."""
+    """One anchor's history: see the module docstring for the contract.
+
+    `in_app` (MIP-1477, the in-app `get_timeline` only; MCP leaves it False and is unchanged): the
+    result goes to the in-app model with its fences ON, so the size budget is counted with them
+    (`wire_size(fenced=True)`), and `last_seen_at` is left out (it is the member's own AI-app
+    opens, which the in-app model would read as "when I last looked at this")."""
     now = now or timezone.now()
     if anchor_type not in ANCHOR_TYPES:
         raise ToolError(f"`anchor_type` must be one of: {', '.join(ANCHOR_TYPES)}.")
@@ -1675,18 +1688,20 @@ def timeline(
 
     links, origin = _links(sc)
     capped: dict[str, Any] = {}
+
+    def size(r: dict[str, Any]) -> int:
+        return wire_size(r, fenced=in_app)
+
     asked_n = len(page)
     result = _assemble(sc, anchor, page, links, origin, total, omitted, seen_before, more, capped)
-    if wire_size(result) > BUDGET_CHARS - CURSOR_RESERVE:
+    if size(result) > BUDGET_CHARS - CURSOR_RESERVE:
         # Over the budget: tell fewer, keeping the NEWEST (the cursor walks back to the rest).
         rendered, _people = _render(sc, page, anchor)
-        room = (
-            BUDGET_CHARS - CURSOR_RESERVE - wire_size({**result, "events": [], "people": {}}) - 300
-        )
+        room = BUDGET_CHARS - CURSOR_RESERVE - size({**result, "events": [], "people": {}}) - 300
         keep = 0
         used = 0
         for d in reversed(rendered):
-            used += wire_size(d) + 6
+            used += size(d) + 6
             if used > room:
                 break
             keep += 1
@@ -1695,7 +1710,7 @@ def timeline(
         result = _assemble(
             sc, anchor, page, links, origin, total, omitted, seen_before, more, capped
         )
-        while len(page) > 1 and wire_size(result) > BUDGET_CHARS - CURSOR_RESERVE:
+        while len(page) > 1 and size(result) > BUDGET_CHARS - CURSOR_RESERVE:
             page = page[max(1, len(page) // 10) :]
             result = _assemble(
                 sc, anchor, page, links, origin, total, omitted, seen_before, more, capped
@@ -1715,7 +1730,7 @@ def timeline(
                 "seen": seen_before + len(page),
             }
         )
-    if anchor.type == "task":
+    if anchor.type == "task" and not in_app:
         looks, seen_cut = item_lines.seen_at_checked(ctx, [anchor.task.task_id])
         seen = looks.get(anchor.task.task_id)
         result["last_seen_at"] = _z(seen) if seen else None
