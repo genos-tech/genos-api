@@ -293,9 +293,7 @@ class Command(BaseCommand):
         if violations:
             if enforce:
                 self.stdout.write(
-                    self.style.ERROR(
-                        "  → north-star gate FAILED: " + "; ".join(violations)
-                    )
+                    self.style.ERROR("  → north-star gate FAILED: " + "; ".join(violations))
                 )
                 return True
             self.stdout.write(
@@ -352,15 +350,21 @@ class Command(BaseCommand):
         The rate card is printed alongside so a yen trend can be
         segmented rather than silently spanning two price regimes.
 
-        Silent when the meter is off (its default) — the suite then
-        behaves exactly as it did before.
+        With the meter off (its default) the figures come from the
+        runner's in-process usage capture instead of the ledger
+        (`runner._case_cost`, MIP-1468), so a paid run is never invisible.
+        Silent only when no LLM call was made (the retrieval suite).
         """
         calls = sum(getattr(r, "llm_calls", 0) for r in results)
         if not calls:
             return
         tokens = sum(getattr(r, "total_tokens", 0) for r in results)
         jpy_milli = sum(getattr(r, "cost_jpy_milli", 0) for r in results)
-        cards = {getattr(r, "rate_card_version", "") for r in results if getattr(r, "rate_card_version", "")}
+        cards = {
+            getattr(r, "rate_card_version", "")
+            for r in results
+            if getattr(r, "rate_card_version", "")
+        }
         n = len(results) or 1
 
         card_part = f"  [rate card {cards.pop()}]" if len(cards) == 1 else ""

@@ -139,6 +139,8 @@ class UsageCapture:
     cache_write_tokens: int = 0
     thought_tokens: int = 0
     cost_usd: float = 0.0
+    #: The same cost in milli-yen at the pinned rate card (the legacy `agent_eval` report's unit).
+    cost_jpy_milli: int = 0
     calls: int = 0
     #: Calls on a model with no catalog price: cost_usd is a lower bound if > 0.
     unpriced_calls: int = 0
@@ -161,12 +163,13 @@ class UsageCapture:
         usage = rec.usage
         with self._lock:
             if usage is not None:
-                usd_micro, _jpy, basis = spend_recorder.price_llm_usage(usage)
+                usd_micro, jpy_milli, basis = spend_recorder.price_llm_usage(usage)
                 if rec.unit_kind != spend.UNIT_TOKENS:
                     # Token-priced non-LLM spend (an embedding with a reported token
                     # count): money, but not a model call.
                     self.other_cost_usd += usd_micro / 1_000_000.0
                     self.cost_usd += usd_micro / 1_000_000.0
+                    self.cost_jpy_milli += jpy_milli
                     return
                 self.calls += 1
                 prompt = max(int(usage.prompt_tokens), 0) + max(int(usage.tool_prompt_tokens), 0)
@@ -179,15 +182,17 @@ class UsageCapture:
                 self.output_tokens += max(int(usage.output_tokens), 0) + thought
                 self.thought_tokens += thought
                 self.cost_usd += usd_micro / 1_000_000.0
+                self.cost_jpy_milli += jpy_milli
                 if basis == "unpriced":
                     self.unpriced_calls += 1
                 self.models[usage.model or "?"] = self.models.get(usage.model or "?", 0) + 1
             else:
-                usd_micro, _jpy, basis = spend_recorder.price_units(
+                usd_micro, jpy_milli, basis = spend_recorder.price_units(
                     rec.unit_kind, rec.provider, rec.model, rec.units
                 )
                 self.other_cost_usd += usd_micro / 1_000_000.0
                 self.cost_usd += usd_micro / 1_000_000.0
+                self.cost_jpy_milli += jpy_milli
                 if basis == "unpriced":
                     self.unpriced_calls += 1
 
