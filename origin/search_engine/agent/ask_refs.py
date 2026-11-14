@@ -51,7 +51,6 @@ the same code path with the same number of queries, and nothing else is logged.
 
 from __future__ import annotations
 
-import re
 import unicodedata
 import uuid
 from collections.abc import Sequence
@@ -84,10 +83,43 @@ _NEWLINES = ("\r\n", "\r", "\u2028", "\u2029", "\x85")
 # ASCII characters they have no use at all (a keycap emoji is "1", U+FE0F, U+20E3: the next character is not
 # ASCII), and they are exactly how a tag name is split so that nothing reads it as one: a closing tag with a
 # joiner in the middle of its name. Removed there, and only there, so emoji and scripts that need them keep them.
-_INVISIBLE_BETWEEN_ASCII = re.compile(
-    "(?<=[\x00-\x7f])[\u034f\u115f\u1160\u180b-\u180f\u200c\u200d\u2800\u3164\ufe00-\ufe0f\uffa0"
-    "\U000e0100-\U000e01ef]+(?=[\x00-\x7f])"
+_INVISIBLE_RANGES = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x180B, 0x180F),
+    (0x200C, 0x200D),
+    (0x2800, 0x2800),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFFA0, 0xFFA0),
+    (0xE0100, 0xE01EF),
 )
+
+
+def _is_invisible(ch: str) -> bool:
+    code = ord(ch)
+    return any(low <= code <= high for low, high in _INVISIBLE_RANGES)
+
+
+def _drop_invisible_between_ascii(chars: list[str]) -> list[str]:
+    """`chars` without each run of `_INVISIBLE_RANGES` characters that has an ASCII character on both sides. One
+    pass, linear in the length (a regular expression for this backtracks on a long run: CodeQL py/polynomial-redos)."""
+    out: list[str] = []
+    i, n = 0, len(chars)
+    while i < n:
+        if not _is_invisible(chars[i]):
+            out.append(chars[i])
+            i += 1
+            continue
+        j = i
+        while j < n and _is_invisible(chars[j]):
+            j += 1
+        between_ascii = bool(out) and ord(out[-1]) < 128 and j < n and ord(chars[j]) < 128
+        if not between_ascii:
+            out.extend(chars[i:j])
+        i = j
+    return out
+
 
 # How long a name a person chose may be in a block (a username is 50 characters, a chat title 255, and a direct
 # message is named after up to five other people).
@@ -109,7 +141,7 @@ def clean_text(text: str) -> str:
         if category == "Cf" and ch not in _KEEP_FORMAT:
             continue
         out.append(ch)
-    text = _INVISIBLE_BETWEEN_ASCII.sub("", "".join(out))
+    text = "".join(_drop_invisible_between_ascii(out))
     # A look-alike of a fence tag (a full-width "<", a compatibility letter) is not one to the fence's escape,
     # and may not be one to a model either. Only text that BECOMES a tag under compatibility normalisation is
     # normalised, so ordinary full-width Japanese text is left as it was written.

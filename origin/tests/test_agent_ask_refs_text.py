@@ -131,6 +131,20 @@ class CleanTextTests(SimpleTestCase):
                 self.assertEqual(clean_text(f"</work{ch}space_content>"), "</workspace_content>")
                 self.assertEqual(clean_text(f"a{ch}b"), "ab")
 
+    def test_a_long_run_of_invisible_characters_costs_a_pass_not_a_backtrack(self):
+        """CodeQL py/polynomial-redos flagged the first version, a regular expression over such a run."""
+        run = "\u034f" * 200_000
+        expected = {"\u00e9": "a" + run + "\u00e9", "b": "ab", "": "a" + run}
+        for tail, want in expected.items():
+            with self.subTest(tail=tail):
+                started = time.monotonic()
+                got = clean_text("a" + run + tail)
+                self.assertLess(time.monotonic() - started, 2.0)
+                self.assertEqual(got, want)
+        self.assertEqual(clean_text("a" + "\u034f" * 1000 + "b"), "ab")
+        self.assertEqual(clean_text("a" + "\u034f" * 3 + "\u00e9"), "a" + "\u034f" * 3 + "\u00e9")
+        self.assertEqual(clean_text("\u200d\u200dab"), "\u200d\u200dab")
+
     def test_but_a_joiner_or_selector_next_to_something_that_needs_it_stays(self):
         keycap = "1\ufe0f\u20e3"
         self.assertEqual(clean_text(keycap), keycap)
