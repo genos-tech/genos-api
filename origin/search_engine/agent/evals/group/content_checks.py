@@ -20,7 +20,9 @@ does not use them:
       to three times English, so a character bound is the only fair one across languages).
       `pending_write` keys: tool, tasks_at_least, tasks_at_most, total_chars_at_least,
       total_chars_at_most, each_body_chars_at_least, each_body_chars_at_most,
-      each_body_headings_at_least, each_body_headings_at_most, not_cut_off.
+      each_body_headings_at_least, each_body_headings_at_most, not_cut_off,
+      each_body_kind_at_least (MIP-1532: `skeleton` = no task body is empty, `content` = no task
+      body is a bare template), report_body_kinds (MIP-1532: only count none / skeleton / content).
 
 The pending events are teed out of `run_agent` by wrapping the name `runner.run_agent` for the
 duration of a case, reference-counted and routed by a ContextVar (the same pattern as the locale
@@ -193,23 +195,107 @@ def heading_count(body: str) -> int:
 _TERMINAL = set(".。!！?？)）]】\"'”’`*_|:;…~」』")
 _LIST_OR_HEADING = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|\|)")
 
+# A last line that ends on one of these has not finished its sentence. A word that ends a deliberate
+# short line (a title: "Roll out to 10% of users", "フィルターUIの設計") is NOT in the list.
+_DANGLING_CHARS = set(",、，;；(（[「『{-–—/&+=<>")
+_DANGLING_WORDS = frozenset(
+    "a an the and or but of to in on at for with by from into onto as that which who whose if "
+    "than then so is are was were be been will would can could should may might not no".split()
+)
+_DANGLING_PARTICLES = (
+    "を",
+    "に",
+    "の",
+    "は",
+    "が",
+    "と",
+    "で",
+    "や",
+    "も",
+    "へ",
+    "から",
+    "より",
+    "ため",
+)
+_OPENERS = {"(": ")", "（": "）", "[": "]", "「": "」", "『": "』", "{": "}"}
+
 
 def looks_cut_off(body: str) -> bool:
-    """A heuristic for "this body stops mid-thought" (the real signals are the task count and the
-    absence of an error event; this catches a body whose last line trails off).
+    """A heuristic for "this body stops mid-thought". The real signals are the task count and the
+    absence of an error event; this catches a body that visibly trails off.
 
-    Cut off when: the body is empty, has an odd number of code fences, or its last character is a
-    letter or digit while the last line is neither a list item, a heading nor a table row (a
-    list item may end on a bare word: "- Tests pass")."""
+    Cut off when: the body is empty, has an odd number of code fences, or its last line (not a
+    list item, heading or table row, which may end on anything) leaves a bracket or quote open,
+    ends on a joining character (a comma, a dash, an opening bracket) or ends on a word that
+    cannot end a sentence (an article, a preposition, a conjunction; a Japanese particle).
+
+    MIP-1532: this used to be "the last character is a letter or digit". Every CJK character is
+    alphanumeric to Python and a short deliberate body ("### Summary" + a title) never ends in a
+    full stop, so EVERY plain body was flagged, in English and Japanese alike. Ending without a
+    full stop is how titles and short notes end. What this cannot see is a body cut inside a word
+    ("The first par"); the model's stop reason and the error event are the signal for that."""
     text = body.rstrip()
     if not text:
         return True
     if text.count("```") % 2:
         return True
-    last_line = text.splitlines()[-1]
-    if last_line[-1] in _TERMINAL or _LIST_OR_HEADING.match(last_line):
+    last_line = text.splitlines()[-1].rstrip()
+    if _LIST_OR_HEADING.match(last_line):
         return False
-    return last_line[-1].isalnum()
+    for opener, closer in _OPENERS.items():
+        if last_line.count(opener) > last_line.count(closer):
+            return True
+    if last_line.count("\u201c") > last_line.count("\u201d"):
+        return True
+    tail = last_line[-1]
+    if tail in _DANGLING_CHARS:
+        return True
+    if tail in _TERMINAL:
+        return False
+    words = re.findall(r"[A-Za-z']+$", last_line)
+    if words and words[0].lower() in _DANGLING_WORDS:
+        return True
+    return last_line.endswith(_DANGLING_PARTICLES)
+
+
+# --------------------------------------------------------------------------- #
+# What a body IS: none / skeleton / content (MIP-1532)                         #
+# --------------------------------------------------------------------------- #
+
+BODY_KINDS = ("none", "skeleton", "content")
+_HEADING_LINE = re.compile(r"^#{1,6}(?:\s.*)?$")
+_EMPTY_ITEM = re.compile(r"^(?:[-*+]|\d+[.)])(?:\s*\[[ xX]?\])?$")
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _plain(text: str) -> str:
+    return " ".join(re.sub(r"[*_`]", "", text).split()).casefold()
+
+
+def body_kind(body: str, title: str = "") -> str:
+    """`none` (blank), `skeleton` (nothing the member did not already have: only headings, empty
+    list items and checkboxes, and at most the task's own title echoed) or `content`.
+
+    Since MIP-1510 the server fills a task that came without a body with `### Summary` + title (or
+    the project's default template with the title under its first heading), so a plan can no longer
+    reach the card without a body. A skeleton is what the member FILLS IN; content is what the
+    model wrote. A project template's hint paragraphs count as content (they are text)."""
+    if not (body or "").strip():
+        return "none"
+    kept = []
+    for line in _COMMENT.sub("", body).splitlines():
+        line = line.strip()
+        if line and not _HEADING_LINE.match(line) and not _EMPTY_ITEM.match(line):
+            kept.append(line)
+    rest = _plain(" ".join(kept))
+    return "skeleton" if not rest or rest == _plain(title) else "content"
+
+
+def task_titles_of(arguments: Any) -> list[str]:
+    tasks = arguments.get("tasks") if isinstance(arguments, dict) else None
+    if not isinstance(tasks, list):
+        return []
+    return [str(t.get("title") or "") if isinstance(t, dict) else "" for t in tasks]
 
 
 def check_pending(
@@ -292,8 +378,28 @@ def check_pending(
                 bool(counts) and all(c <= want for c in counts),
                 f"headings per body {counts}, want each <= {want}",
             )
+    titles = task_titles_of(arguments) if task_bodies_of(arguments) else []
+    kinds = [body_kind(b, titles[i] if i < len(titles) else "") for i, b in enumerate(bodies)]
+    if "each_body_kind_at_least" in spec or spec.get("report_body_kinds"):
+        counts = {k: kinds.count(k) for k in BODY_KINDS}
+        summary = ", ".join(f"{k} {counts[k]}" for k in BODY_KINDS) + f" of {len(kinds)} bodies"
+        add("body_kinds", True, summary)  # information for the report, never a verdict
+        if "each_body_kind_at_least" in spec:
+            floor = str(spec["each_body_kind_at_least"])
+            rank = {k: i for i, k in enumerate(BODY_KINDS)}
+            low = [i for i, k in enumerate(kinds) if rank[k] < rank.get(floor, 0)]
+            add(
+                "each_body_kind_at_least",
+                floor in rank and bool(kinds) and not low,
+                f"want each body >= {floor}; below it: {low}; {summary}",
+            )
     if spec.get("not_cut_off"):
-        cut = [i for i, b in enumerate(bodies) if looks_cut_off(b)]
+        # A skeleton ends where the server ended it, by construction: never "cut off".
+        cut = [
+            i
+            for i, b in enumerate(bodies)
+            if looks_cut_off(b) and (not b.strip() or kinds[i] != "skeleton")
+        ]
         add(
             "not_cut_off",
             bool(bodies) and not cut,

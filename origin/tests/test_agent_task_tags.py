@@ -104,7 +104,7 @@ class ListProjectTagsTests(TaskTagTestBase):
             team_name="Other", team_email="other-team@example.com", owner=self.user2
         )
         ProjectMaster.objects.filter(pk=self.project.pk).update(team=other_team)
-        with self.assertRaisesRegex(ToolError, "different team"):
+        with self.assertRaisesRegex(ToolError, "not found"):
             LIST_PROJECT_TAGS.run({"project_id": self.project.project_id}, self.ctx)
 
 

@@ -19,6 +19,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.tools import ToolContext, ToolError
+from origin.search_engine.agent.tools.base import ToolForbidden
 from origin.search_engine.agent.tools.get_team_members import GET_TEAM_MEMBERS
 from origin.search_engine.agent.tools.list_channel_members import LIST_CHANNEL_MEMBERS
 from origin.search_engine.agent.tools.list_project_members import LIST_PROJECT_MEMBERS
@@ -68,7 +69,7 @@ class ListProjectMembersTests(BaseAPITestCase):
             team_name="Other", team_email="other-team@example.com", owner=self.user2
         )
         ctx_other = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user2.id))
-        with self.assertRaisesMessage(ToolError, "different team"):
+        with self.assertRaisesMessage(ToolForbidden, "not found"):
             LIST_PROJECT_MEMBERS.run({"project_id": self.project.project_id}, ctx_other)
 
     def test_deleted_and_system_users_are_hidden(self):

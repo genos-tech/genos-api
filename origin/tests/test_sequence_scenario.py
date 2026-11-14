@@ -34,10 +34,10 @@ The gaps, in one place:
   GAP-3  the briefing counts one task comment twice (the task item and the project chat thread);
   GAP-4  the briefing never shows the task note C wrote (step 9) to the PM who reported the task;
   GAP-5  a note event on a line says "edited the note" and never what it says;
-  GAP-6  the briefing's "waiting on others" never names the task B handed to C;
+  GAP-6  (FIXED, MIP-1287) the briefing's "waiting on others" never named the task B handed to C;
   GAP-7  in-app `fetch_task` names neither the task's thread nor its note;
   GAP-8  the in-app agent has no merged line (`get_item_line` is MCP only);
-  GAP-9  B's top-level answer to A's question (step 2) is not in A's briefing.
+  GAP-9  (FIXED, MIP-1290) B's top-level answer to A's question (step 2) was not in A's briefing.
 
 Time: every instant is the local midnight three days ago plus minutes, the clock is frozen per
 step and every briefing is given its `now`, so no test depends on the hour it runs at.
@@ -494,13 +494,25 @@ class TestTheBriefingForThePM(Story):
         brief = self.briefing_as(seq.b, seq)
         self.assertIn("note_edit", briefing_text(brief, "changed_for_me"))
 
-    @unittest.expectedFailure
     def test_gap_6_b_waits_on_c_and_the_briefing_says_so(self):
-        """GAP-6: B handed the task to C and C has not finished, but `waiting_on_others` only
-        lists tasks blocked by a dependency, so the PM's wait on C is not in it."""
+        """GAP-6 (fixed, MIP-1287): B handed the task to C and C has not finished, so it is in
+        `waiting_on_others.delegated`, with C named and the task's status."""
         seq = self.build_sequence(upto=7)
         brief = self.briefing_as(seq.b, seq)
-        self.assertIn(seq.task.display_id, briefing_text(brief, "waiting_on_others"))
+        delegated = brief["waiting_on_others"]["delegated"]
+        self.assertEqual([row["task_id"] for row in delegated], [seq.task.task_id])
+        self.assertEqual(delegated[0]["display_id"], seq.task.display_id)
+        self.assertEqual(delegated[0]["status"], "WIP")
+        self.assertIn(seq.c.username, json.dumps(delegated[0]["assignee"]))
+        self.assertFalse(brief["waiting_on_others"]["delegated_truncated"])
+
+    def test_gap_6_it_is_not_waiting_once_the_task_is_closed(self):
+        seq = self.build_sequence()  # the whole story: the task closed at the end
+        self.assertEqual(self.briefing_as(seq.b, seq)["waiting_on_others"]["delegated"], [])
+
+    def test_gap_6_the_dev_who_holds_the_task_is_not_waiting_on_it(self):
+        seq = self.build_sequence(upto=7)
+        self.assertEqual(self.briefing_as(seq.c, seq)["waiting_on_others"]["delegated"], [])
 
 
 class TestTheBriefingForTheDev(Story):
@@ -570,15 +582,22 @@ class TestTheBriefingForTheClientOnTheProject(TheClientsBriefing, Story):
         looked = self.briefing_as(seq.a, seq)["what_you_did"]["today"]["looked_at"]
         self.assertEqual([row["display_id"] for row in looked], [seq.task.display_id])
 
-    @unittest.expectedFailure
     def test_gap_9_a_top_level_answer_to_the_clients_question_reaches_her_briefing(self):
-        """GAP-9: in a flat chat B answers A's question (step 2) with an ordinary message, not a
-        thread reply and not an @mention, and the briefing reads only those two, so nothing in
-        A's briefing says B answered her. Desired: a reply to the member's own message, or any
-        message in a chat they asked in, since they last looked, is news. (A product call: the
-        app's unread badge covers it for a person; the briefing is what an AI app reads.)"""
+        """GAP-9 (fixed, MIP-1290): in a flat chat B answers A's question (step 2) with an
+        ordinary message, not a thread reply and not an @mention. The briefing now tells it, as
+        one item for the chat in `changed_for_me.chat_answers`."""
         seq = self.build_sequence(upto=2)
-        self.assertIn("S02", briefing_text(self.briefing_as(seq.a, seq)))
+        brief = self.briefing_as(seq.a, seq)
+        self.assertIn("S02", briefing_text(brief))
+        (chat,) = brief["changed_for_me"]["chat_answers"]["chats"]
+        self.assertEqual(chat["chat_id"], str(seq.gm.id))
+        self.assertEqual(chat["count"], 1)
+        self.assertNotIn("S01", json.dumps(chat))  # her own question is not news to her
+
+    def test_gap_9_once_a_has_written_again_the_answer_is_no_longer_news(self):
+        seq = self.build_sequence(upto=3)  # step 3 is A's own message after B's answer
+        brief = self.briefing_as(seq.a, seq)
+        self.assertEqual(brief["changed_for_me"]["chat_answers"]["chats"], [])
 
     def test_gap_2_the_client_on_the_project_is_told_the_task_closed(self):
         """GAP-2 (V1): A asked for Y in a thread and is on the project, but A holds no role on

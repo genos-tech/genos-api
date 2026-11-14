@@ -84,6 +84,8 @@ GROUP_ONLY_KEYS = frozenset(
 GROUP_EXPECT_KEYS = frozenset(
     {
         "facts_in_order",
+        # MIP-1532: line regexes dropped from the answer before `facts_in_order` is read
+        "facts_ignore_lines",
         "tools_in_order",
         "max_calls",
         "no_tool_results_contain",
@@ -95,6 +97,49 @@ GROUP_EXPECT_KEYS = frozenset(
         "answer_chars_at_least",
     }
 )
+
+# MIP-1471: what a `kind: resume` case may carry. The resume runner reads `case[...]` and the
+# loader strips nothing for it, so a typo'd key ("follow-up") used to be ignored and the case ran
+# without its follow-up. Checked at load time; behaviour and routing cases keep their open schema.
+RESUME_KEYS = frozenset(
+    {
+        # the harness's own (as for every case)
+        "id",
+        "kind",
+        "lang",
+        "tags",
+        "fixture",
+        "reps",
+        "requires_arm",
+        "est",
+        "expect_baseline",
+        "needs_env",
+        # the world and the ask (resume_runner's schema)
+        "query",
+        "thread",
+        "note",
+        "tasks",
+        "mentions",
+        "earlier_turns",
+        "proposal",
+        "decision",
+        "reason",
+        "edited_args",
+        "undo",
+        "follow_up",
+        "expect",
+        # `scenario: closing_line` (no resume at all) and its own keys
+        "scenario",
+        "task_title",
+        "close",
+        "reopen_and_close_again",
+        # metadata the case-shape test reads (pos: arm0 must fail the prompt check)
+        "polarity",
+    }
+)
+#: Keys of a resume case's `thread:` block (`first_sender: other` makes the asker the client).
+RESUME_THREAD_KEYS = frozenset({"messages", "summary", "first_sender"})
+POLARITIES = ("pos", "neg")
 
 _CJK = re.compile(r"[぀-ヿ㐀-鿿]")
 
@@ -138,6 +183,34 @@ class GroupCase:
         return max(len(self.raw.get("turns") or []), 1)
 
 
+def _check_resume_entry(entry: dict[str, Any], *, source: str, cid: str) -> None:
+    """Refuse a resume case that carries a key the runner does not read (MIP-1471).
+
+    `fixture` is accepted whatever its value (the runner builds its own team and never reads
+    it); the files say `fixture: false` and a case without the key has none."""
+    unknown = sorted(set(entry) - RESUME_KEYS)
+    if unknown:
+        raise HarnessError(
+            f"{source}: case {cid}: unknown key(s) for a resume case: {', '.join(unknown)} "
+            f"(the runner reads only: {', '.join(sorted(RESUME_KEYS))})"
+        )
+    thread = entry.get("thread")
+    if thread is not None:
+        bad = (
+            sorted(set(thread) - RESUME_THREAD_KEYS)
+            if isinstance(thread, dict)
+            else ["(not a mapping)"]
+        )
+        if bad:
+            raise HarnessError(
+                f"{source}: case {cid}: unknown `thread:` key(s): {', '.join(bad)} "
+                f"(allowed: {', '.join(sorted(RESUME_THREAD_KEYS))})"
+            )
+    polarity = entry.get("polarity")
+    if polarity is not None and polarity not in POLARITIES:
+        raise HarnessError(f"{source}: case {cid}: polarity must be one of {POLARITIES}")
+
+
 EXPECTED_RESULTS = ("pass", "fail")
 
 
@@ -170,13 +243,16 @@ def _case_from_entry(entry: dict[str, Any], *, source: str, group_file: bool) ->
     kind = entry.get("kind") or "behaviour"
     if kind not in KINDS:
         raise HarnessError(f"{source}: case {cid}: kind {kind!r} is not one of {KINDS}")
-    fixture = entry.get("fixture", "v1" if group_file else None)
+    # A resume case builds its own throwaway team: it has no fixture, whatever the file default.
+    fixture = entry.get("fixture", "" if kind == "resume" else "v1" if group_file else None)
     if fixture is True:
         fixture = "v1"
-    if fixture in (None, False):
+    if fixture in (None, False, ""):
         fixture = ""
     elif fixture not in FIXTURES:
         raise HarnessError(f"{source}: case {cid}: fixture {fixture!r} is not one of {FIXTURES}")
+    if kind == "resume":
+        _check_resume_entry(entry, source=source, cid=cid)
     tags = set(entry.get("tags") or ())
     tags.add("legacy" if not group_file else GROUP_TAG)
     if group_file:
@@ -872,6 +948,11 @@ def group_checks(
     facts_in_order        [fact, ...]; a fact is a phrase or a list of alternatives (any one
                           counts). Every fact must appear, and the FIRST appearances must be
                           in this order. Match on distinctive phrases, not on tokens.
+    facts_ignore_lines    (MIP-1532) regexes (case-insensitive, one line at a time); a line that
+                          matches is dropped from the answer before `facts_in_order` is read. For
+                          a SUMMARY line that says a fact without being the event ("ステータス:
+                          Closed" above a timeline): it is not an event, so it must neither count
+                          as the first appearance of the closing fact nor satisfy a missing one.
     tools_in_order        tool names that must be called, in this order (other calls may sit
                           between them)
     max_calls             model calls <= N
@@ -900,7 +981,11 @@ def group_checks(
             )
         checks += content_checks.check_answer_length(expect, answer)
     if "facts_in_order" in expect:
-        text = _norm(answer)
+        ignore = [re.compile(p, re.IGNORECASE) for p in expect.get("facts_ignore_lines") or []]
+        kept = [
+            line for line in (answer or "").splitlines() if not any(p.search(line) for p in ignore)
+        ]
+        text = _norm("\n".join(kept))
         last = -1
         missing: list[str] = []
         misordered: list[str] = []
