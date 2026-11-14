@@ -2025,7 +2025,9 @@ SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
     os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "true").lower() == "true"
 )
 
-# MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905`): how much CONTENT Genos
+# MIP-905 (model-visible, dark-shipped OFF, DEFAULT ON since 2026-11-14: eval 16/22, Standard identical to
+# the flag-off baseline, the 6 misses were case thresholds, retuned; env `false` is the rollback; no screen
+# sets the level yet, so every member is on Standard and nothing changes until one ships): how much CONTENT Genos
 # writes (task, milestone and note bodies, plans), a setting of the member's own
 # (`CustomUser.preferred_content_length`: short | standard | long, default standard; stored by
 # `PATCH /api/v2/user/preferences/content-length/` whatever this says). ON = for a member on Short
@@ -2038,7 +2040,7 @@ SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
 # (by characters, JA included), structure kept, no plan cut off, chat answers no longer at any
 # level, and Standard identical to arm0.
 SEARCH_ENGINE["AGENT_CONTENT_LENGTH"] = (
-    os.environ.get("AGENT_CONTENT_LENGTH", "false").lower() == "true"
+    os.environ.get("AGENT_CONTENT_LENGTH", "true").lower() == "true"
 )
 
 # MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905-a2`): on the Medium two-tier

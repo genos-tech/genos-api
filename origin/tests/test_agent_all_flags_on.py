@@ -52,6 +52,7 @@ SHIPPED_ON = frozenset(
         "AGENT_NOTE_THREADS_IN_GET_NOTE",
         "AGENT_CLOSED_ANCESTOR_RULE",
         "AGENT_INAPP_TIMELINE_TOOL",
+        "AGENT_CONTENT_LENGTH",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
