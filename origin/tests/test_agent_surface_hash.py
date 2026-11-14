@@ -272,6 +272,15 @@ class DecideTests(PlainTestCase):
         run, why = self.decide(event="workflow_dispatch", dry_run=True)
         self.assertIn("dry run", why)
 
+    def test_the_weekly_schedule_always_runs(self):
+        # on `main` the base is the previous commit, so the hashes are equal and no file "changed":
+        # without its own rule the weekly run would skip itself every week
+        run, why = self.decide(event="schedule", changed_files=["README.md"])
+        self.assertTrue(run)
+        self.assertIn("weekly", why)
+        self.assertTrue(self.decide(event="schedule", base_hash=None, changed_files=None)[0])
+        self.assertTrue(self.decide(event="schedule", labels={"skip-evals"})[0])
+
     def test_an_empty_file_list_is_a_readable_list(self):
         self.assertFalse(self.decide(changed_files=[])[0])
 
@@ -280,18 +289,21 @@ class ForcedPathsTests(PlainTestCase):
     def forced(self, path):
         return bool(gate.forced_by([path]))
 
-    def test_files_that_can_move_the_numbers_without_moving_the_hash_run_the_evals(self):
+    def test_the_retrieval_files_run_the_evals(self):
         for path in (
             "origin/search_engine/search.py",
             "origin/search_engine/reranker.py",
             "origin/search_engine/query_rewriter.py",
             "origin/search_engine/chunkers/task_chunker.py",
-            "origin/search_engine/embeddings/vertex.py",
+            "origin/search_engine/embeddings/vertex_embedder.py",
             "origin/search_engine/llm/gemini_client.py",
-            "origin/search_engine/agent/model_fence.py",
-            "origin/search_engine/agent/fence.py",
-            "origin/search_engine/agent/content_length.py",
-            "origin/search_engine/agent/tools/search_kb.py",
+            "origin/search_engine/llm/choice.py",
+            "origin/search_engine/ingestion.py",
+            "origin/search_engine/agent/acl.py",  # stamped on every indexed chunk
+            "origin/search_engine/agent/evals/retrieval_cases.yaml",
+            "origin/search_engine/agent/evals/fixture.py",
+            "origin/search_engine/agent/evals/runner.py",
+            "origin/search_engine/management/commands/agent_eval.py",
             "origin/services/demo_seeder.py",
             "Pipfile",
             "Pipfile.lock",
@@ -299,27 +311,37 @@ class ForcedPathsTests(PlainTestCase):
             with self.subTest(path=path):
                 self.assertTrue(self.forced(path))
 
-    def test_the_cases_the_gate_exists_for_do_not(self):
+    def test_what_the_retrieval_suite_cannot_see_does_not(self):
+        # MIP-1527: the run exercises search + the index, never the agent's prompts, tool
+        # declarations, tool results or loop, so none of these may start it
         for path in (
             "origin/search_engine/agent/tools/list_tasks.py",  # a tool's implementation
+            "origin/search_engine/agent/tools/search_kb.py",  # the tool, not search() itself
             "origin/search_engine/agent/tools/__init__.py",  # a registration
             "origin/search_engine/agent/tools/base.py",  # where MCP-only tools are filed
             "origin/search_engine/agent/prompts.py",  # the prompt is in the hash
-            "origin/search_engine/agent/controller.py",  # deliberate: label `run-evals` (see FORCE_PATHS)
+            "origin/search_engine/agent/controller.py",  # the loop (MIP-1528: not forced)
+            "origin/search_engine/agent/model_fence.py",
+            "origin/search_engine/agent/fence.py",  # only the reranker uses it, off in CI
+            "origin/search_engine/agent/content_length.py",
             "origin/search_engine/agent/tools/task_access.py",
-            "origin/search_engine/agent/acl.py",
             "origin/search_engine/agent/label_acl.py",
             "origin/search_engine/agent/source_visibility.py",
             "origin/search_engine/agent_views.py",
             "origin/search_engine/models.py",
             "origin/search_engine/credits.py",
+            "origin/search_engine/llm/claude_client.py",  # not the rewrite path
+            "origin/search_engine/llm/openai_client.py",
+            "origin/search_engine/llm/gemini_cache.py",
             "origin/search_engine/management/commands/agent_eval_group.py",
             "origin/search_engine/agent/evals/cases.yaml",
+            "origin/search_engine/agent/evals/routing_cases.yaml",
             "origin/views/public/mcp/tools.py",
             "origin/models/task/task_models.py",
-            "apis/settings.py",  # the hash decides: its knobs are in it
+            "apis/settings.py",  # agent flags / billing every day: the weekly run covers it
             "README.md",
             ".github/workflows/agent-evals.yml",
+            "scripts/retrieval_gate.py",
         ):
             with self.subTest(path=path):
                 self.assertFalse(self.forced(path))
@@ -508,6 +530,55 @@ class WorkflowTextTests(PlainTestCase):
         self.assertIn(".github/workflows/agent-evals.yml", paths)
         for path in paths:
             self.assertNotIn("scripts", path)
+
+    def test_the_pull_request_paths_are_exactly_the_retrieval_list_plus_the_workflow(self):
+        # one list (RETRIEVAL_PATHS in the gate script), mirrored here: a drift would either start
+        # a billed run for nothing or skip a retrieval change
+        self.assertEqual(
+            self.on["pull_request"]["paths"],
+            [*gate.RETRIEVAL_PATHS, ".github/workflows/agent-evals.yml"],
+        )
+        # no negation left over from the old `origin/search_engine/**` filter, no broad directory
+        for path in self.on["pull_request"]["paths"]:
+            self.assertFalse(path.startswith("!"), path)
+            self.assertNotIn(path, ("origin/search_engine/**", "origin/search_engine/agent/**"))
+            self.assertNotEqual(path, "apis/settings.py")
+
+    def test_no_push_trigger_and_a_weekly_schedule(self):
+        # MIP-1527: a merge only repeated the PR's run (and a successor's push cancelled it)
+        self.assertNotIn("push", self.on)
+        self.assertIn("workflow_dispatch", self.on)
+        (entry,) = self.on["schedule"]
+        minute, hour, dom, month, dow = entry["cron"].split()
+        self.assertEqual((dom, month), ("*", "*"))
+        self.assertTrue(dow.isdigit(), "weekly, not nightly: one weekday")
+        # the same repo-variable switch the other scheduled evals use
+        condition = " ".join(self.wf["jobs"]["agent-evals"]["if"].split())
+        self.assertIn("vars.RUN_AGENT_EVALS == 'true'", condition)
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertNotIn("push", self.wf["jobs"]["surface"]["if"])
+
+    def test_the_floors_live_only_in_the_gate_script(self):
+        self.assertNotIn("EVAL_MIN", self.text)
+        self.assertNotIn("EVAL_MIN", json.dumps(self.wf.get("env", {})))
+        step = next(
+            s
+            for s in self.wf["jobs"]["agent-evals"]["steps"]
+            if "retrieval_gate" in s.get("run", "")
+        )
+        self.assertIn("scripts/retrieval_gate.py eval.out", step["run"])
+        self.assertIn("steps.changes.outputs.relevant == 'true'", step["if"])
+
+    def test_the_behaviour_smoke_is_gone(self):
+        self.assertNotIn("simple_rag_wip_tasks", self.text)
+        self.assertNotIn("--judge", self.text)
+        for step in self.wf["jobs"]["agent-evals"]["steps"]:
+            run = step.get("run", "")
+            if "agent_eval" in run:
+                # the only suite this workflow runs is the retrieval one
+                for line in run.splitlines():
+                    if "manage.py agent_eval " in line and "agent_eval_setup" not in line:
+                        self.assertIn("--retrieval", line)
 
     def test_the_motivating_prs_are_not_forced(self):
         # #619 (MCP-only tools) touched these; none can move what the model reads
