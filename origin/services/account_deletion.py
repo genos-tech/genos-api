@@ -53,6 +53,7 @@ from oauth2_provider.models import (
 
 from origin.models.chat.personal_tag_models import PersonalChannelTag
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
+from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
@@ -174,6 +175,10 @@ def _delete_personal_data(user) -> None:
     # client holds for this person. The account is soft-deleted, so no FK cascade fires:
     # without this the tokens would outlive the person.
     McpConnection.objects.filter(user=user).delete()
+    # What those apps told the member they did (MIP-1541): `Activity` rows of kind AI_APP, each
+    # naming up to five item titles. recipient FK is CASCADE but the account is soft-deleted, so
+    # nothing fires; the daily expiry would only take them after the window.
+    Activity.objects.filter(recipient=user, activity_type=ActivityType.AI_APP).delete()
     get_grant_model().objects.filter(user=user).delete()
     get_refresh_token_model().objects.filter(user=user).delete()
     get_access_token_model().objects.filter(user=user).delete()
