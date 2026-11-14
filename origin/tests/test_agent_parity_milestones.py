@@ -22,6 +22,10 @@ from unittest import mock
 
 from django.conf import settings
 
+from origin.models.chat.unified_models import Activity, ActivityType
+from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
+from origin.models.common.member_event_models import MemberEvent
+from origin.models.common.security_event_models import SecurityEvent
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -33,8 +37,11 @@ from origin.search_engine.agent.tools.manage_milestone import (
     MANAGE_MILESTONE,
 )
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
+from origin.services.milestone_service import create_milestone
+from origin.views.public.mcp import tools as mcp
 
 from .test_convert_task_milestone import ConversionBase
+from .test_mcp_endpoint import McpBase
 
 ON = {PARITY_FLAG: True}
 OFF = {PARITY_FLAG: False}
@@ -940,4 +947,485 @@ class NoticeAndMarkerTests(ToolBase):
         )
         self.assertEqual(
             member_events.subjects("manage_milestone", {"action": "create", "project_id": 2}), []
+        )
+
+
+# --------------------------------------------------------------------------------------------
+# the in-app loop: the pause for approval, the card, the approved run
+# --------------------------------------------------------------------------------------------
+
+
+class LoopBase(ToolBase):
+    def paused(self, args):
+        import uuid  # noqa: PLC0415
+
+        from origin.search_engine.models import AgentRun, AgentStep  # noqa: PLC0415
+
+        run = AgentRun.objects.create(
+            team_id=self.ctx().team_id,
+            user_id=self.ctx().user_id,
+            query="convert it",
+            status="awaiting_approval",
+            pending_approval_token=uuid.uuid4(),
+        )
+        from origin.search_engine.agent import controller  # noqa: PLC0415
+
+        AgentStep.objects.create(
+            run=run,
+            step_index=0,
+            tool_name="manage_milestone",
+            arguments_json=args,
+            summary=controller.PENDING_APPROVAL_MARKER,
+        )
+        return run
+
+    def approve(self, args, **flags):
+        from origin.search_engine.agent import controller  # noqa: PLC0415
+
+        events = []
+        with (
+            mock.patch.dict(settings.SEARCH_ENGINE, flags),
+            mock.patch.object(controller, "_drive_loop", return_value=None),
+        ):
+            controller.resume_agent(self.paused(args), "approve", self.ctx(), events.append)
+        return events
+
+
+class LoopTests(LoopBase):
+    def drive(self, args, **flags):
+        from origin.search_engine.agent import controller  # noqa: PLC0415
+        from origin.search_engine.llm.types import AgentMessage, FunctionCall  # noqa: PLC0415
+
+        class Client:
+            def __init__(self):
+                self.script = [
+                    [(None, FunctionCall(name="manage_milestone", args=args))],
+                    [("done", None)],
+                ]
+
+            def generate_step(self, messages, tools, system_instruction, **kwargs):
+                yield from self.script.pop(0)
+
+        events = []
+        with (
+            mock.patch.dict(settings.SEARCH_ENGINE, flags),
+            mock.patch.object(controller, "get_model_client", return_value=Client()),
+        ):
+            pause = controller._drive_loop(
+                messages=[AgentMessage(role="user", text="convert it")],
+                ctx=self.ctx(),
+                emit=events.append,
+                run_id=None,
+                starting_step=0,
+                seen_sources_by_id={},
+                disabled_tools=None,
+            )
+        return events, pause
+
+    def card(self, args, **flags):
+        events, pause = self.drive(args, **flags)
+        self.assertIsNotNone(pause)
+        (card,) = [e for e in events if e["type"] == "tool_call_pending_approval"]
+        return card
+
+    def test_a_convert_pauses_for_approval_with_the_card_and_runs_nothing(self):
+        t = self.task("Plan the launch")
+        card = self.card({"action": "convert", "task_id": t.task_id}, **ON)
+        self.assertEqual(card["tool_name"], "manage_milestone")
+        self.assertEqual(card["arguments"]["current"]["direction"], "task_to_milestone")
+        self.assertEqual(card["arguments"]["current"]["title"], "Plan the launch")
+        self.assertIs(card["undoable"], False)
+        self.assertEqual(card["undo_reason"], "no_snapshot")
+        self.assertFalse(self.fresh(t).is_milestone)
+
+    def test_a_display_id_resolves_before_the_card_and_the_tool_see_it(self):
+        t = self.task("Plan the launch")
+        card = self.card({"action": "convert", "task_id": t.display_id}, **ON)
+        self.assertEqual(card["arguments"]["current"]["display_id"], t.display_id)
+
+    def test_a_move_pauses_with_what_it_does(self):
+        m = self.roadmap_milestone()
+        card = self.card(
+            {
+                "action": "update",
+                "milestone_id": m.milestone_id,
+                "project_id": self.dest.project_id,
+            },
+            **ON,
+        )
+        self.assertEqual(card["arguments"]["project_id"], "Destination")
+        self.assertEqual(card["arguments"]["current"]["move"]["tasks"], 3)
+        self.assertIs(card["undoable"], False)
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
+
+    def test_with_the_flag_off_the_card_promises_nothing_about_a_move(self):
+        m = self.roadmap_milestone()
+        card = self.card(
+            {
+                "action": "update",
+                "milestone_id": m.milestone_id,
+                "project_id": self.dest.project_id,
+            },
+            **OFF,
+        )
+        self.assertNotIn("move", card["arguments"].get("current", {}))
+
+    def test_the_declared_tool_carries_the_action_only_while_the_flag_is_on(self):
+        from origin.search_engine.agent.controller import _build_tool_declarations  # noqa: PLC0415
+
+        for flags, expect in ((ON, True), (OFF, False)):
+            with mock.patch.dict(settings.SEARCH_ENGINE, flags):
+                decl = {d.name: d for d in _build_tool_declarations()}["manage_milestone"]
+            self.assertEqual(
+                "convert" in decl.parameters_schema["properties"]["action"]["enum"], expect
+            )
+
+
+class ApproveTests(LoopBase):
+    def test_approving_a_convert_runs_it_and_tells_the_browser_what_to_drop(self):
+        t = self.task("Plan the launch")
+        events = self.approve({"action": "convert", "task_id": t.task_id}, **ON)
+        (result,) = [e for e in events if e["type"] == "tool_call_result"]
+        row = self.fresh(t)
+        self.assertTrue(row.is_milestone)
+        self.assertEqual(
+            result["milestone_change"],
+            {
+                "kind": "convert",
+                "direction": "task_to_milestone",
+                "task_id": t.task_id,
+                "milestone_id": row.milestone_id,
+                "project_id": self.project.project_id,
+            },
+        )
+        # no Undo is offered: the answer is stored with no pre-image
+        self.assertFalse(result.get("undo"))
+
+    def test_approving_a_milestone_to_task_names_the_retired_milestone(self):
+        m = self.roadmap_milestone()
+        events = self.approve({"action": "convert", "milestone_id": m.milestone_id}, **ON)
+        (result,) = [e for e in events if e["type"] == "tool_call_result"]
+        self.assertEqual(
+            result["milestone_change"],
+            {
+                "kind": "convert",
+                "direction": "milestone_to_task",
+                "task_id": m.task_id,
+                "milestone_id": m.milestone_id,
+                "project_id": self.project.project_id,
+            },
+        )
+        self.assertTrue(MilestoneMaster.objects.get(pk=m.pk).is_deleted)
+
+    def test_approving_a_move_says_which_project_to_re_read_too(self):
+        m = self.roadmap_milestone()
+        events = self.approve(
+            {
+                "action": "update",
+                "milestone_id": m.milestone_id,
+                "project_id": self.dest.project_id,
+            },
+            **ON,
+        )
+        (result,) = [e for e in events if e["type"] == "tool_call_result"]
+        self.assertEqual(
+            result["milestone_change"],
+            {
+                "kind": "move",
+                "task_id": m.task_id,
+                "milestone_id": m.milestone_id,
+                "project_id": self.dest.project_id,
+                "from_project_id": self.project.project_id,
+            },
+        )
+
+    def test_an_ordinary_milestone_write_carries_no_such_ref(self):
+        m = self.milestone("Plain")
+        events = self.approve(
+            {"action": "update", "milestone_id": m.milestone_id, "title": "Renamed"}, **ON
+        )
+        for event in events:
+            self.assertNotIn("milestone_change", event)
+
+    def test_approving_after_the_flag_went_off_changes_nothing(self):
+        t = self.task("Plan the launch")
+        events = self.approve({"action": "convert", "task_id": t.task_id}, **OFF)
+        errors = [e["error"] for e in events if e["type"] == "tool_call_error"]
+        self.assertEqual(len(errors), 1)
+        self.assertIn("`action` must be one of", errors[0])
+        self.assertNotIn("convert'", errors[0].split("(got")[0])
+        self.assertFalse(self.fresh(t).is_milestone)
+        m = self.milestone("Stay")
+        self.approve(
+            {
+                "action": "update",
+                "milestone_id": m.milestone_id,
+                "project_id": self.dest.project_id,
+            },
+            **OFF,
+        )
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
+
+    def test_a_member_on_the_read_tier_cannot_get_it_approved_even_by_name(self):
+        from origin.search_engine.agent import controller, tool_tiers  # noqa: PLC0415
+
+        t = self.task("Plan the launch")
+        events = []
+        with (
+            mock.patch.dict(settings.SEARCH_ENGINE, ON),
+            mock.patch.object(controller, "_drive_loop", return_value=None),
+        ):
+            controller.resume_agent(
+                self.paused({"action": "convert", "task_id": t.task_id}),
+                "approve",
+                self.ctx(),
+                events.append,
+                disabled_tools=tool_tiers.disabled_tools_for_level("read"),
+            )
+        self.assertIn(
+            "no longer available",
+            [e["error"] for e in events if e["type"] == "tool_call_error"][0],
+        )
+        self.assertFalse(self.fresh(t).is_milestone)
+
+    def test_a_refused_convert_is_an_error_the_model_can_act_on_and_changes_nothing(self):
+        parent = self.task("Parent")
+        sub = self.task("Sub", parent_task_id=parent.task_id, root_task_id=parent.task_id)
+        events = self.approve({"action": "convert", "task_id": sub.task_id}, **ON)
+        error = [e["error"] for e in events if e["type"] == "tool_call_error"][0]
+        self.assertIn("`update_task` with `parent_task_id` ''", error)
+        self.assertFalse(self.fresh(sub).is_milestone)
+
+
+# --------------------------------------------------------------------------------------------
+# MCP
+# --------------------------------------------------------------------------------------------
+
+
+class McpMilestoneBase(McpBase):
+    """McpBase's task is WRD-7 (a root task; `self.user` is its assignee and a member)."""
+
+    flag = True
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(settings.SEARCH_ENGINE, ON if self.flag else OFF)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.milestone = create_milestone(
+            self.project, reporter_id=self.user.id, title="Launch the redesign"
+        )
+        self.other = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Other",
+            code="OTH",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.other, attendee=self.user)
+
+    def text(self, name, arguments):
+        return self._tool_text(self._call(name, arguments))
+
+    def listed(self):
+        return {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+
+
+class McpFlagOnTests(McpMilestoneBase):
+    def test_a_write_key_is_offered_the_action_and_the_parameter(self):
+        self._key(scope=SCOPE_WRITE)
+        tool = self.listed()["manage_milestone"]
+        props = tool["inputSchema"]["properties"]
+        self.assertIn("convert", props["action"]["enum"])
+        self.assertEqual(props["task_id"]["type"], "string")
+        self.assertIn("convert", tool["description"])
+
+    def test_a_task_is_turned_into_a_milestone_by_its_display_id(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "task_id": self.task.display_id}
+        )
+        self.assertFalse(is_error, text)
+        self.task.refresh_from_db()
+        self.assertTrue(self.task.is_milestone)
+        self.assertIn(self.task.display_id, text)
+        self.assertIn("task_to_milestone", text)
+
+    def test_a_milestone_is_turned_into_a_task_by_its_display_id_or_its_number(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self.text(
+            "manage_milestone",
+            {"action": "convert", "milestone_id": self.milestone.task.display_id},
+        )
+        self.assertFalse(is_error, text)
+        self.assertIn("milestone_to_task", text)
+        self.assertTrue(MilestoneMaster.objects.get(pk=self.milestone.pk).is_deleted)
+        again = create_milestone(self.project, reporter_id=self.user.id, title="Second")
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "milestone_id": again.milestone_id}
+        )
+        self.assertFalse(is_error, text)
+
+    def test_a_milestone_is_moved_by_a_number_and_the_result_says_what_happened(self):
+        self._key(scope=SCOPE_WRITE)
+        result = self._result(
+            self._call(
+                "manage_milestone",
+                {
+                    "action": "update",
+                    "milestone_id": self.milestone.milestone_id,
+                    "project_id": self.other.project_id,
+                },
+            )
+        )
+        self.assertFalse(result.get("isError"), result["content"][0]["text"])
+        moved = result["structuredContent"]["moved"]
+        self.assertEqual(moved["from_project_name"], "Website Redesign")
+        self.assertEqual(moved["cleared"], ["sprint", "folder", "tags"])
+        self.assertEqual(
+            MilestoneMaster.objects.get(pk=self.milestone.pk).project_id, self.other.project_id
+        )
+
+    def test_a_refusal_is_a_sentence_with_the_next_step_and_changes_nothing(self):
+        self._key(scope=SCOPE_WRITE)
+        sub = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            title="Sub",
+            status="Open",
+            parent_task_id=self.task.task_id,
+            root_task_id=self.task.task_id,
+            reporter=self.user,
+        )
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "task_id": sub.task_id}
+        )
+        self.assertTrue(is_error)
+        self.assertIn("`update_task` with `parent_task_id` ''", text)
+        sub.refresh_from_db()
+        self.assertFalse(sub.is_milestone)
+
+    def test_a_read_only_key_cannot_use_it_and_nothing_changes(self):
+        self._key(scope=SCOPE_READ)
+        self.assertNotIn("manage_milestone", self.listed())
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "task_id": self.task.task_id}
+        )
+        self.assertTrue(is_error)
+        self.assertIn("read-only", text)
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.is_milestone)
+
+    def test_neither_is_destructive_so_a_write_key_without_the_opt_in_may_do_both(self):
+        # Decision: nothing is deleted for good (see the PR); a key that may change things may
+        # convert and move, and the announcement stays `destructiveHint: true` as for every overwrite.
+        self._key(scope=SCOPE_WRITE, allow_destructive=False)
+        tool = next(t for t in mcp.CATALOG if t.name == "manage_milestone")
+        self.assertFalse(tool.destructive)
+        self.assertIsNone(
+            mcp.deleting_argument("manage_milestone", {"action": "convert", "task_id": 1})
+        )
+        self.assertIsNone(
+            mcp.deleting_argument(
+                "manage_milestone", {"action": "update", "milestone_id": 1, "project_id": 2}
+            )
+        )
+        self.assertIs(self.listed()["manage_milestone"]["annotations"]["destructiveHint"], True)
+        before = SecurityEvent.objects.count()
+        _text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "task_id": self.task.task_id}
+        )
+        self.assertFalse(is_error)
+        # not a delete, so it leaves no entry in the destructive-call log
+        self.assertEqual(SecurityEvent.objects.count(), before)
+
+    def test_it_leaves_a_marker_on_the_converted_task_and_no_notice(self):
+        self._key(scope=SCOPE_WRITE)
+        notices = Activity.objects.filter(activity_type=ActivityType.AI_APP).count()
+        self.text("manage_milestone", {"action": "convert", "task_id": self.task.task_id})
+        self.assertTrue(
+            MemberEvent.objects.filter(
+                user=self.user, object_type="task", object_id=str(self.task.task_id)
+            ).exists()
+        )
+        self.assertEqual(
+            Activity.objects.filter(activity_type=ActivityType.AI_APP).count(), notices
+        )
+
+    def test_a_project_of_another_team_is_not_found_over_mcp_too(self):
+        self._key(scope=SCOPE_WRITE)
+        from origin.models.common.team_models import TeamMaster, TeamMembers  # noqa: PLC0415
+
+        elsewhere = TeamMaster.objects.create(
+            team_name="Elsewhere", team_email="e@example.com", owner=self.user
+        )
+        TeamMembers.objects.create(team=elsewhere, attendee=self.user)
+        foreign = ProjectMaster.objects.create(
+            team=elsewhere,
+            project_name="Foreign",
+            code="FOR",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=elsewhere, project=foreign, attendee=self.user)
+        text, is_error = self.text(
+            "manage_milestone",
+            {
+                "action": "update",
+                "milestone_id": self.milestone.milestone_id,
+                "project_id": foreign.project_id,
+            },
+        )
+        self.assertTrue(is_error)
+        self.assertIn(f"Project {foreign.project_id} not found", text)
+        self.assertEqual(
+            MilestoneMaster.objects.get(pk=self.milestone.pk).project_id, self.project.project_id
+        )
+
+
+class McpFlagOffTests(McpMilestoneBase):
+    flag = False
+
+    def test_the_tool_a_client_sees_is_what_it_was(self):
+        self._key(scope=SCOPE_WRITE)
+        tool = self.listed()["manage_milestone"]
+        props = tool["inputSchema"]["properties"]
+        self.assertNotIn("convert", props["action"]["enum"])
+        self.assertNotIn("task_id", props)
+        self.assertNotIn("convert", tool["description"])
+        self.assertIn("A milestone can't be moved to another project", tool["description"])
+
+    def test_the_new_argument_is_refused_and_nothing_changes(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "task_id": self.task.task_id}
+        )
+        self.assertTrue(is_error)
+        self.assertIn("does not take `task_id`", text)
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.is_milestone)
+
+    def test_the_action_alone_is_refused_in_the_words_of_an_unknown_action(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "milestone_id": self.milestone.milestone_id}
+        )
+        self.assertTrue(is_error)
+        self.assertEqual(text, FLAG_OFF_ACTION_REFUSAL)
+        self.assertFalse(MilestoneMaster.objects.get(pk=self.milestone.pk).is_deleted)
+
+    def test_a_move_is_refused_as_it_always_was(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self.text(
+            "manage_milestone",
+            {
+                "action": "update",
+                "milestone_id": self.milestone.milestone_id,
+                "project_id": self.other.project_id,
+            },
+        )
+        self.assertTrue(is_error)
+        self.assertEqual(text, FLAG_OFF_MOVE_REFUSAL)
+        self.assertEqual(
+            MilestoneMaster.objects.get(pk=self.milestone.pk).project_id, self.project.project_id
         )

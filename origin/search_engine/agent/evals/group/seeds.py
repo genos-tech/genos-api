@@ -476,6 +476,93 @@ def seed_task_files(info: dict[str, Any]) -> None:
         attachment.save()
 
 
+# --------------------------------------------------------------------------- #
+# t1564: a root task, two milestones, and a second project to move one to      #
+# --------------------------------------------------------------------------- #
+
+#: The rows the milestone cases name. Created in this order, so the display ids are the ones the cases
+#: quote: the root task EMC-1, "onboarding" EMC-2 with its two tasks EMC-3 and EMC-4, "spring" EMC-5 with
+#: its task EMC-6. Every task belongs to nobody (the viewer is a member of both projects and reads them).
+MILESTONE_CASES = {
+    "en": {
+        "project": "Eval milestones",
+        "archive": "Eval archive",
+        "root": "Draft the vendor questionnaire",
+        "onboarding": "Customer onboarding launch",
+        "onboarding_tasks": ("Write the welcome email", "Record the demo video"),
+        "spring": "Spring campaign",
+        "spring_tasks": ("Book the campaign venue",),
+    },
+    "ja": {
+        "project": "評価マイルストーン",
+        "archive": "評価アーカイブ",
+        "root": "ベンダー向けアンケートを下書きする",
+        "onboarding": "顧客オンボーディングの公開",
+        "onboarding_tasks": ("ウェルカムメールを書く", "デモ動画を録画する"),
+        "spring": "春のキャンペーン",
+        "spring_tasks": ("キャンペーン会場を予約する",),
+    },
+}
+
+
+def seed_milestone_convert(info: dict[str, Any]) -> None:
+    """A root task and two milestones (one with two tasks, one with one) in a project of the viewer's
+    own, and a second project of theirs to move a milestone to (MIP-1564): what "turn this task into a
+    milestone", "turn this milestone back into a task" and "move this milestone" ask about. Each row is
+    looked for by title, so a seed that stopped half way is finished by the next run and a finished one
+    writes nothing."""
+    import uuid  # noqa: PLC0415
+
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+    from origin.services.milestone_service import create_milestone  # noqa: PLC0415
+
+    lang = "ja" if info["team"] == "ja" else "en"
+    spec = MILESTONE_CASES[lang]
+    team_id = info["team_id"]
+    me = info["user_id"]
+    project = _isolated_project(info, spec["project"], "EMC", [me])
+    _isolated_project(info, spec["archive"], "EMA", [me])
+
+    def task(title: str, **extra: Any) -> Any:
+        found = TaskMaster.objects.filter(
+            team_id=team_id, project=project, title=title, is_deleted=False
+        ).first()
+        if found is not None:
+            return found
+        return TaskMaster.objects.create(
+            team_id=team_id,
+            project=project,
+            reporter_id=me,
+            assignee_id=None,
+            title=title,
+            status="Open",
+            priority="Normal",
+            **extra,
+        )
+
+    def milestone(title: str, task_titles: tuple[str, ...]) -> None:
+        row = MilestoneMaster.objects.filter(
+            team_id=team_id, project=project, title=title, is_deleted=False
+        ).first()
+        if row is None:
+            row = create_milestone(project, reporter_id=uuid.UUID(str(me)), title=title)
+            # A milestone's own row is assigned to its reporter until someone is put on it; the rows
+            # here are nobody's, so they do not join the viewer's "my tasks" lists.
+            TaskMaster.objects.filter(task_id=row.task_id).update(assignee=None)
+        for child in task_titles:
+            task(
+                child,
+                milestone=row,
+                parent_task_id=row.task_id,
+                root_task_id=row.task_id,
+            )
+
+    task(spec["root"])
+    milestone(spec["onboarding"], spec["onboarding_tasks"])
+    milestone(spec["spring"], spec["spring_tasks"])
+
+
 #: The story's people (`a` client, `b` PM, `c` developer) who can read a seed's rows: the guard
 #: `test_agent_eval_group_seeds` checks only their cases against the seed's text.
 VISIBLE_TO: dict[str, frozenset[str]] = {
@@ -483,6 +570,7 @@ VISIBLE_TO: dict[str, frozenset[str]] = {
     "note_threads_stub": frozenset({"b", "c"}),  # project ENT: the viewer and the developer
     "closed_ancestor_tree": frozenset({"a"}),  # project ECT: the viewer alone
     "task_files": frozenset({"b"}),  # project EAF: the viewer alone
+    "milestone_convert": frozenset({"b"}),  # projects EMC and EMA: the viewer alone
 }
 
 
@@ -502,6 +590,17 @@ def seed_texts(name: str, lang: str) -> list[str]:
     if name == "task_files":
         spec = TASK_FILES[lang]
         return [spec["task"], *[file_name for file_name, _mime, _content in spec["files"]]]
+    if name == "milestone_convert":
+        spec = MILESTONE_CASES[lang]
+        return [
+            spec["project"],
+            spec["archive"],
+            spec["root"],
+            spec["onboarding"],
+            *spec["onboarding_tasks"],
+            spec["spring"],
+            *spec["spring_tasks"],
+        ]
     if name == "note_threads_stub":
         t = NOTE_THREAD_TEXT[lang]
         return [*NOTE_TITLES[lang].values(), NOTE_BODY[lang], *t.values()]
@@ -513,6 +612,7 @@ SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "note_threads_stub": seed_note_threads_stub,
     "closed_ancestor_tree": seed_closed_ancestor_tree,
     "task_files": seed_task_files,
+    "milestone_convert": seed_milestone_convert,
 }
 
 
