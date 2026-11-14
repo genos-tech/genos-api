@@ -204,3 +204,23 @@ class NoteSurfaceGate(ChatNoteFixtures):
         res = self.comment(self.reader, TASK, note.note_id)
         self.assertEqual(res.status_code, 404, res.content)
         self.assertEqual(self.written(TASK), 0)
+
+    def test_the_owner_of_a_note_made_through_the_real_create_endpoint_is_let_in(self):
+        """Production state, not the fixture's: the REST create writes the owner's role row."""
+        self.authenticate(self.owner)
+        res = self.client.post(
+            "/api/v2/note/personal/",
+            {
+                "team_id": str(self.team.team_id),
+                "user_id": str(self.owner.id),
+                "title": "Made by the endpoint",
+                "body": [],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        note_id = res.data["noteId"]
+        self.assertEqual(self.comment(self.owner, PERSONAL, note_id).status_code, 201)
+        self.assertEqual(self.mention(self.owner, PERSONAL, note_id, []).status_code, 201)
+        # and a stranger still is not
+        self.assertEqual(self.comment(self.outsider, PERSONAL, note_id).status_code, 404)
