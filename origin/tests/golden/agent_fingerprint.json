@@ -1,0 +1,224 @@
+{
+  "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py agent_fingerprint --write-golden` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
+  "states": {
+    "flags_off": {
+      "all": "603d32d5c659d3c8b6abf9d80b8f4eb4ff199e9be10a203dfd1a840d6e2bb83b",
+      "surfaces": {
+        "prompt.level.act": {
+          "bytes": 27254,
+          "sha256": "1f7efebf6cb8a12d3ab1205ddcbc8ba27c2574437bfce2c8217e67807e02a80c"
+        },
+        "prompt.level.organize": {
+          "bytes": 27329,
+          "sha256": "6d0675d04061f7bb1fe7c047f83025f04ebbcbb5cd87d8ae2449f76487eeb9d9"
+        },
+        "prompt.level.read": {
+          "bytes": 27203,
+          "sha256": "3fd1eb4fdd055cd92f117fe66fdc2ecd73e451aa2c968ac2092a714827a3d14c"
+        },
+        "prompt.mentions": {
+          "bytes": 28541,
+          "sha256": "25ddf2ea80fb337486e591b5b192bfcabb064d7de8e8fb9bf2a621599725dd5c"
+        },
+        "prompt.note_ask.template": {
+          "bytes": 1080,
+          "sha256": "2c1fac5ba2514815ce404a1539f45009ecb13e81148992bb63f0ae6843f96fde"
+        },
+        "prompt.plain": {
+          "bytes": 27329,
+          "sha256": "6d0675d04061f7bb1fe7c047f83025f04ebbcbb5cd87d8ae2449f76487eeb9d9"
+        },
+        "prompt.plain.ja": {
+          "bytes": 27630,
+          "sha256": "1cc639c476cfaa782bd1a461a18dd67cd853e6b5a6ba99e5d509c746be137faa"
+        },
+        "prompt.thread_ask.template": {
+          "bytes": 1114,
+          "sha256": "9f785759077ea05a06ccb0b178a69a08203140bba1eb010bc704065025d26183"
+        },
+        "result.fetch_chat_thread": {
+          "bytes": 610,
+          "sha256": "18dcb5399eae01b5b4f3f4ae26683a9be9f5a9de978ac14c810275be6cc3cd02"
+        },
+        "result.fetch_note": {
+          "bytes": 494,
+          "sha256": "5f58d6045b98a1831ff95cc06e587989f2bf5cd4090f846f33538be7e2297e77"
+        },
+        "result.fetch_task": {
+          "bytes": 899,
+          "sha256": "0b154a3f9f84cf7781fd06463c359c287ad0c9dbf9a347d0fbc5082d0025f780"
+        },
+        "result.get_current_user": {
+          "bytes": 202,
+          "sha256": "bac010286bb91218be0f69dfbabc5e0e36ea0654f0186f828b89d04d858090ea"
+        },
+        "result.get_project_summary": {
+          "bytes": 292,
+          "sha256": "8a4cc5a2ed16231fdef42acf275a54a6831bdc9ae2aadd242c983ff32b48be84"
+        },
+        "result.get_task_history": {
+          "bytes": 688,
+          "sha256": "a25cfae84c6fc6588cc1dcb45d01e81faab5fd98e4445fdd45ee2f30fd2190e7"
+        },
+        "result.get_team_members": {
+          "bytes": 286,
+          "sha256": "bfe792d8af31b9ecf911ca14818448d4e523c1084506a0b17e2175e05ac1a564"
+        },
+        "result.list_my_chats": {
+          "bytes": 417,
+          "sha256": "fc179fc5547cc21c4af6de913bbab3b12197f98c3de6f794c4853b361e8e940e"
+        },
+        "result.list_projects": {
+          "bytes": 208,
+          "sha256": "6043413041be8e0a5c4a2b4117e428124027767367b2f745c3b46f1660f71646"
+        },
+        "result.list_tasks": {
+          "bytes": 876,
+          "sha256": "deed7095a5f946277261de9695683e2dda795f9398a1b162bbfd5e89f7d39659"
+        },
+        "tools.claude.full": {
+          "bytes": 131212,
+          "sha256": "ab937eecc58a9282248db88e3fcc07bdb4dc6e3a5b7043c2e2750e005fcf2fbe"
+        },
+        "tools.claude.read": {
+          "bytes": 58361,
+          "sha256": "dd2bd2a0e9df6814f5308bbb2afa7d28e365a7339f12b89f866dd8e75cc651d9"
+        },
+        "tools.gemini.full": {
+          "bytes": 139356,
+          "sha256": "a40caaff3fedadbbb955235ffb9f89d43f0b58d0bc48ccd72d4f43732b2505ef"
+        },
+        "tools.gemini.read": {
+          "bytes": 61677,
+          "sha256": "4414bed56a77c07f34d9ada9569a8661818389fc013004be441cd055d453def2"
+        },
+        "tools.neutral.full": {
+          "bytes": 127612,
+          "sha256": "612b5cd1edc96152978a433bd80069686eda36e34a095f377421a3be69d4d8a7"
+        },
+        "tools.neutral.read": {
+          "bytes": 56617,
+          "sha256": "8acf20fe95f64fe0e86616050958ebf3f0331c42bbc4cb0b1c871d9cbeb79a28"
+        },
+        "tools.openai.full": {
+          "bytes": 137600,
+          "sha256": "6e59199dedb15e1303481ced88bfc365652b2387532c51ff937a0359edf14c68"
+        },
+        "tools.openai.read": {
+          "bytes": 61598,
+          "sha256": "0cff03c999e2d3a52df56351801372614fe85d52cce0d7d4b1778abee107c963"
+        }
+      }
+    },
+    "production": {
+      "all": "1f44b0d999929b7608833e7ed6c1bcf90c48abc9f0c159a6bd400accc9dd43a2",
+      "surfaces": {
+        "prompt.level.act": {
+          "bytes": 27482,
+          "sha256": "b79fbc12f8cc90a30ea786ceba367814043e462288f6a60dc5ee64a73e785f0e"
+        },
+        "prompt.level.organize": {
+          "bytes": 27557,
+          "sha256": "622df7d8e9383512c1452c1a47faa14a0726d45e43c2fbd996dac281017d4f14"
+        },
+        "prompt.level.read": {
+          "bytes": 27431,
+          "sha256": "c35ccb5ab6acf0eb60ce8fffb194dabfdeefadc2fd8e444c188d3507018f6a9a"
+        },
+        "prompt.mentions": {
+          "bytes": 28769,
+          "sha256": "e7b4d56d1184e4e28be7e2b9d1738b5cba15cfd00c0151d0b2b5cf1cd3df75ba"
+        },
+        "prompt.note_ask.template": {
+          "bytes": 1080,
+          "sha256": "2c1fac5ba2514815ce404a1539f45009ecb13e81148992bb63f0ae6843f96fde"
+        },
+        "prompt.plain": {
+          "bytes": 27557,
+          "sha256": "622df7d8e9383512c1452c1a47faa14a0726d45e43c2fbd996dac281017d4f14"
+        },
+        "prompt.plain.ja": {
+          "bytes": 27858,
+          "sha256": "adc3d2c9dc388f37b72d7bbc0c3844a9cbe00c79e0a5a46ee70577575b10e920"
+        },
+        "prompt.thread_ask.template": {
+          "bytes": 1114,
+          "sha256": "9f785759077ea05a06ccb0b178a69a08203140bba1eb010bc704065025d26183"
+        },
+        "result.fetch_chat_thread": {
+          "bytes": 610,
+          "sha256": "18dcb5399eae01b5b4f3f4ae26683a9be9f5a9de978ac14c810275be6cc3cd02"
+        },
+        "result.fetch_note": {
+          "bytes": 672,
+          "sha256": "113086a3ff0116641f9fb7a3192749391b6f31a00d5d3f82c1116fa99e6cec26"
+        },
+        "result.fetch_task": {
+          "bytes": 943,
+          "sha256": "59f2e3ade889362cadd4f3bf315afe2102d80dbb3c5052e0dee45dacc48923fb"
+        },
+        "result.get_current_user": {
+          "bytes": 347,
+          "sha256": "0c56e518610e9019eae0f694de4c500d98516a0825cb57a4e34bf1ae813915c8"
+        },
+        "result.get_project_summary": {
+          "bytes": 292,
+          "sha256": "8a4cc5a2ed16231fdef42acf275a54a6831bdc9ae2aadd242c983ff32b48be84"
+        },
+        "result.get_task_history": {
+          "bytes": 688,
+          "sha256": "a25cfae84c6fc6588cc1dcb45d01e81faab5fd98e4445fdd45ee2f30fd2190e7"
+        },
+        "result.get_team_members": {
+          "bytes": 286,
+          "sha256": "bfe792d8af31b9ecf911ca14818448d4e523c1084506a0b17e2175e05ac1a564"
+        },
+        "result.list_my_chats": {
+          "bytes": 417,
+          "sha256": "fc179fc5547cc21c4af6de913bbab3b12197f98c3de6f794c4853b361e8e940e"
+        },
+        "result.list_projects": {
+          "bytes": 208,
+          "sha256": "6043413041be8e0a5c4a2b4117e428124027767367b2f745c3b46f1660f71646"
+        },
+        "result.list_tasks": {
+          "bytes": 937,
+          "sha256": "0f91563de066d29a0bad81904b1a05efe0a8a1637549055ebb210e6b9de27d7c"
+        },
+        "tools.claude.full": {
+          "bytes": 136051,
+          "sha256": "caeed15c642a663480b266d1c4661cf9470a682e6a2e0e886ef7b0a295f261ff"
+        },
+        "tools.claude.read": {
+          "bytes": 63200,
+          "sha256": "dcd7645bd42ab8c7a4204961b1799ef89c39941762fef39db1b8b37cb86bad7f"
+        },
+        "tools.gemini.full": {
+          "bytes": 144319,
+          "sha256": "6c78c74bdda8a701b6668efd52bc4be8a838906faf7021af4f4905632da77d33"
+        },
+        "tools.gemini.read": {
+          "bytes": 66640,
+          "sha256": "c660ed5eb1c82a4c3c2bdf71f742dcca830a95eeabff2e0e52cc13f50fa62857"
+        },
+        "tools.neutral.full": {
+          "bytes": 132403,
+          "sha256": "c61cafd0bd81b19f3c90dca97c1bae70d5d6d26bccedc2feddbc6e998e44c65f"
+        },
+        "tools.neutral.read": {
+          "bytes": 61408,
+          "sha256": "61a0f66081cc6ec8faed0022ecebf70b9826d336d3f147e59ae7b65a2ff4fee2"
+        },
+        "tools.openai.full": {
+          "bytes": 142522,
+          "sha256": "4815a3c3d36c9c981f78741a147471ade22b9e5a5a8fc1bb02e53ccea136fe74"
+        },
+        "tools.openai.read": {
+          "bytes": 66520,
+          "sha256": "2e0f6e0df59b1891edd31e50e5eab8a587f31c1769d93b960a8150e048d51140"
+        }
+      }
+    }
+  },
+  "version": 1
+}
