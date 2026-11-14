@@ -39,6 +39,8 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Activity
 from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
@@ -54,25 +56,41 @@ _DEFAULT_SINCE_DAYS = 30
 _MAX_ROWS = 200
 
 
-def _unreadable_chat_note(user, team_id, surface_type, meta) -> Response | None:
-    """A 404 when `surface_type` is a chat note (8) the caller cannot read, else None.
+def _unreadable_note(user, team_id, surface_type, meta) -> Response | None:
+    """A 404 when `surface_type` is a note surface the caller cannot read, else None.
 
     The surface routes need team membership, but a note's activity names its owner, its
-    members and its id, so the caller must also be able to open the note (MIP-1484):
-    `get_effective_role`, the one chat-note rule. A note the caller cannot read answers as a
-    note that does not exist (the same 404 body), so neither its existence nor its roster can
-    be probed. Other surfaces are not gated here.
+    members and its id, so the caller must also be able to open the note: personal (6), task
+    (7) and chat (8) notes, by `get_effective_role`, the one note rule (MIP-1484, MIP-1498). A
+    note the caller cannot read answers as a note that does not exist (the same 404 body), so
+    neither its existence nor its roster can be probed, and nothing is written into another
+    member's feed on its behalf. Other surfaces are not gated here.
     """
-    from origin.services.v3_activity import SURFACE_CHAT_NOTE
-    from origin.views.utils.note_role import NOTE_TYPE_CHAT, get_effective_role
+    from origin.services.v3_activity import (
+        SURFACE_CHAT_NOTE,
+        SURFACE_PERSONAL_NOTE,
+        SURFACE_TASK_NOTE,
+    )
+    from origin.views.utils.note_role import (
+        NOTE_TYPE_CHAT,
+        NOTE_TYPE_PERSONAL,
+        NOTE_TYPE_TASK,
+        get_effective_role,
+    )
 
-    if surface_type != SURFACE_CHAT_NOTE:
+    note_surfaces = {
+        SURFACE_PERSONAL_NOTE: (NOTE_TYPE_PERSONAL, PersonalNoteMaster),
+        SURFACE_TASK_NOTE: (NOTE_TYPE_TASK, TaskNoteMaster),
+        SURFACE_CHAT_NOTE: (NOTE_TYPE_CHAT, ChatNoteMaster),
+    }
+    if surface_type not in note_surfaces:
         return None
+    note_type, master = note_surfaces[surface_type]
     note_id = as_int((meta or {}).get("noteId")) if isinstance(meta, dict) else None
     if (
         note_id is None
-        or not ChatNoteMaster.objects.filter(note_id=note_id, team_id=team_id).exists()
-        or get_effective_role(user.id, NOTE_TYPE_CHAT, note_id, team_id) is None
+        or not master.objects.filter(note_id=note_id, team_id=team_id).exists()
+        or get_effective_role(user.id, note_type, note_id, team_id) is None
     ):
         return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
     return None
@@ -410,7 +428,7 @@ class ActivitySurfaceView(AuthenticatedAPIView):
                 {"error": "Not a member of this team."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if refusal := _unreadable_chat_note(request.user, team_id, surface_type, data.get("meta")):
+        if refusal := _unreadable_note(request.user, team_id, surface_type, data.get("meta")):
             return refusal
         rows = v3_activity.create_surface_mention_activities(
             team_id=team_id,
@@ -481,7 +499,7 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
                 {"error": "Not a member of this team."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if refusal := _unreadable_chat_note(request.user, team_id, surface_type, data.get("meta")):
+        if refusal := _unreadable_note(request.user, team_id, surface_type, data.get("meta")):
             return refusal
         rows = v3_activity.create_surface_comment_activities(
             team_id=team_id,
