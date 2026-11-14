@@ -294,7 +294,7 @@ class AddingATag(CatalogBase):
             lambda: ADD_PROJECT_TAG.run(
                 {"project_id": self.other_project.project_id, "tag_name": "x"}, self.ctx
             ),
-            "different team",
+            "not found",
             ToolForbidden,
         )
         self.assertFalse(ProjectTags.objects.filter(project=self.other_project).exists())
@@ -494,7 +494,7 @@ class CreatingALabel(CatalogBase):
             lambda: self.labels(
                 "create", ctx=self.ctx_of(self.stranger, self.other_team), name="X"
             ),
-            "different team",
+            "not found",
             ToolForbidden,
         )
 
@@ -643,7 +643,7 @@ class PuttingLabelsOnAProject(CatalogBase):
         a = self.label("A")
         self.refused(
             lambda: self.labels("assign", project=self.other_project, label_ids=[a.label_id]),
-            "different team",
+            "not found",
             ToolForbidden,
         )
 

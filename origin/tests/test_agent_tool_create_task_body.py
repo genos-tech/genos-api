@@ -175,7 +175,7 @@ class CreateTaskBodyTests(BaseAPITestCase):
         )
         milestone = self._milestone()
         MilestoneMaster.objects.filter(pk=milestone.pk).update(team=other_team)
-        with self.assertRaisesRegex(ToolError, "different team"):
+        with self.assertRaisesRegex(ToolError, "Milestone .* not found"):
             self._create(milestone_id=milestone.milestone_id)
 
     def test_unknown_deleted_or_garbage_milestone_is_refused(self):
