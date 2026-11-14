@@ -319,6 +319,17 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         else:
             chat_notes = chat_notes.filter(thread_root_id__isnull=True)
 
+        # The caller's OWN notes of this chat, narrowed by the ONE chat-note rule: an author is
+        # no exception (MIP-1492), so one whose row was ended when they left, or who is off the
+        # project, no longer gets the note back from here. An explicit row still opens it, and a
+        # soft-deleted chat's note stays for its row holders (MIP-1505): `readable_note_ids` is
+        # the batch form of `get_effective_role`, a fixed number of queries (MIP-1547).
+        chat_notes = chat_notes.filter(
+            note_id__in=readable_note_ids(
+                request_user_id, NOTE_TYPE, chat_notes.values_list("note_id", flat=True)
+            )
+        )
+
         chat_notes = (
             chat_notes.annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
