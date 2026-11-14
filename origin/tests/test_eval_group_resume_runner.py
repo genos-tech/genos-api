@@ -41,7 +41,7 @@ from origin.search_engine.llm import spend
 from origin.search_engine.llm.types import CallUsage, FunctionCall
 
 GROUP_DIR = Path(resume_runner.__file__).parent
-MY_TAGS = ("t977", "t991", "t1283", "t889-reason", "t889-undo")
+MY_TAGS = ("t977", "t991", "t1283", "t889-reason", "t889-undo", "t1530")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -444,6 +444,7 @@ class EveryCaseFileTests(RunnerBase):
         self.assertEqual(arm_overrides("t1283"), {"AGENT_CLOSING_LINE_IN_ORIGIN_THREAD": True})
         self.assertEqual(arm_overrides("t889-reason"), {"AGENT_REJECT_REASON": True})
         self.assertEqual(arm_overrides("t889-undo"), {"AGENT_TELL_MODEL_UNDO": True})
+        self.assertEqual(arm_overrides("t1530"), {"AGENT_UNDO_NOTE_IN_MEMORY": True})
         self.assertNotIn("AGENT_TELL_MODEL_EDIT_UNDO", settings.SEARCH_ENGINE)
         for tag in MY_TAGS:
             for key in arm_overrides(tag):

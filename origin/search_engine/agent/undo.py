@@ -44,6 +44,11 @@ stands. The flag is on by default (`apis/settings.py`; the env value `false` is 
 so the next turn's earlier answer ends with a short factual note, and a replayed result carries
 `undone_by_user` (`agent/approval_notes.py`; the outcome is kept on `AgentStep.undo_outcome_json`).
 
+The conversation MEMORY (`search_past_conversations`, the earlier-turns window) is told by
+`SEARCH_ENGINE["AGENT_UNDO_NOTE_IN_MEMORY"]` (default off, MIP-1530): the run's chunk carries one
+`(the person undid this: ...)` line per undone write (derived from the steps by
+`chunkers/conversation_chunker.py`) and `undo_apply.perform_undo` re-ingests that run.
+
 This module is imported by the tools, so it must not import the tool registry.
 Executing an undo is `undo_apply`.
 """
