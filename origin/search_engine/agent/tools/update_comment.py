@@ -44,7 +44,9 @@ from origin.services.task_comment_manage import edit_comment
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     args = ignore_unless_parity(args, PARITY_PROPERTIES)
-    if any(args.get(name) is not None for name in PARITY_PROPERTIES):
+    # A blank or false extra is a model filling an optional slot, not a request: an edit that
+    # carries `reaction: ""` is still an edit.
+    if any(_given(args.get(name)) for name in PARITY_PROPERTIES):
         return _mark(args, ctx)
     check_body_size(args.get("body_text"), "body_text")
     body_text = (args.get("body_text") or "").strip()
@@ -76,12 +78,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
 
 
+def _given(value: Any) -> bool:
+    return value is not None and value != "" and value is not False
+
+
 def _mark(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """A reaction or a flag on a comment, not an edit of it."""
     one = "Send ONE of `body_text` (edit your own comment), `reaction` or `flag` per call."
     if (args.get("body_text") or "").strip():
         raise ToolError(one)
-    reaction, flag, remove = args.get("reaction"), args.get("flag"), args.get("remove_reaction")
+    reaction = args.get("reaction") if _given(args.get("reaction")) else None
+    flag = args.get("flag") if _given(args.get("flag")) else None
+    remove = args.get("remove_reaction")
     if reaction is not None and flag is not None:
         raise ToolError(one)
     if remove is not None and not isinstance(remove, bool):

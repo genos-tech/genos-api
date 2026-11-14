@@ -310,6 +310,55 @@ class OverMcpTests(McpBase):
         notes = ToDoItem.objects.get().notes
         self.assertIn(f"/task/{self.task.task_id}/comment/{self.comment_id}", str(notes))
 
+    def test_over_mcp_a_reaction_tells_exactly_what_the_app_tells(self):
+        """Over MCP the extra channel would be the "your AI app did this" notice
+        (`mcp_notice`, MIP-1432). A reaction and a flag are among the small edits that stay silent,
+        so what the author is told is the app's own: one feed row, one Web Push; nothing for the
+        key's owner, and nothing at all for a flag."""
+        from origin.models.chat.unified_models import Activity, ActivityType  # noqa: PLC0415
+        from origin.search_engine.agent.tools import ToolContext  # noqa: PLC0415
+
+        from .notice_watch import watching_notices  # noqa: PLC0415
+
+        from origin.models.project.prj_models import ProjectMembers  # noqa: PLC0415
+
+        author = self.user2
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=author)
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(author.id))
+        by_author = ADD_COMMENT.run(
+            {"task_id": self.task.task_id, "body_text": "Please check the footer."}, ctx
+        )["comment_id"]
+        with (
+            mock.patch.dict(settings.SEARCH_ENGINE, ON),
+            mock.patch("origin.services.realtime_push.push_task_comment"),
+        ):
+            with watching_notices() as reacted:
+                text, is_error = self._tool_text(
+                    self._call(
+                        "update_comment",
+                        {"task_id": "WRD-7", "comment_id": by_author, "reaction": "🎉"},
+                    )
+                )
+            self.assertFalse(is_error, text)
+            with watching_notices() as flagged:
+                text, is_error = self._tool_text(
+                    self._call(
+                        "update_comment",
+                        {"task_id": "WRD-7", "comment_id": by_author, "flag": "flag"},
+                    )
+                )
+            self.assertFalse(is_error, text)
+        self.assertEqual(
+            reacted,
+            {"rows": {"Activity": 1}, "emails": 0, "pushes": {"schedule_push_for_activities": 1}},
+        )
+        row = Activity.objects.get(
+            message__metadata__taskCommentId=by_author, activity_type=ActivityType.REACTION
+        )
+        self.assertEqual(row.recipient_id, author.id)
+        self.assertFalse(Activity.objects.filter(activity_type=ActivityType.AI_APP).exists())
+        self.assertEqual(flagged, {"rows": {}, "emails": 0, "pushes": {}})
+
     def test_a_read_only_key_cannot_use_them(self):
         from origin.models.common.api_key_models import SCOPE_READ  # noqa: PLC0415
 

@@ -236,3 +236,14 @@ the model.
   The server-side fill (a template body, the default template) is pinned by free tests, not here. Read the
   `links-update` proposals by hand: `links` is the FULL set, and whether the model kept the task's existing
   links is a report line, not a failure.
+* **Parity: comments and to-dos (MIP-1562, tag `t1562`, the same arm `parity`).** `t1562-reactions.yaml`,
+  `-flags.yaml` and `-todo-source.yaml` (EN and JA per case), on the sequence fixture: viewer `b` / `ja-b` is
+  Ben, so Chris's comments on "Fix the export that fails (Y)" are a colleague's and "Thanks, please also
+  check the CSV export" is his own. The positives (`reaction-add`, `reaction-remove`, `flag-set`, `flag-done`,
+  `flag-unflag`, `todo-comment`, `todo-task`) have `requires_arm: parity`; the negatives (`edit-own`,
+  `reply-stays-a-comment`, `todo-plain`, `todo-reminder-plain`) run on arm0 too and are the baseline for "fixing
+  your own comment is still an edit, replying is still add_comment, and a to-do the person typed carries no
+  task unasked". They judge the PROPOSAL with the same `pending_write` keys as t1561; the server side (access,
+  idempotence, what a reaction tells people) is pinned by free tests, not here. Read the `reaction-remove`
+  and `flag-done` proposals by hand: nothing in the fixture holds a reaction or a flag, so a model that
+  asks first whether there is one is not a failure.

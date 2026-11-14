@@ -508,6 +508,22 @@ class CallShapeTests(MarksBase):
             out = self.mark(comment_id, body_text="  ", reaction="👍")
         self.assertTrue(out["changed"])
 
+    def test_blank_extras_beside_an_edit_are_a_model_filling_slots_not_a_request(self):
+        comment_id = self.comment(ctx=self.ctx)
+        out = self.mark(
+            comment_id, body_text="reworded", reaction="", flag="", remove_reaction=False
+        )
+        self.assertEqual(out["comment_id"], comment_id)
+        self.assertNotIn("changed", out)
+        row = TaskComments.objects.get(task=self.task, comment_id=comment_id)
+        self.assertEqual(plain_text(row.comment_body), "reworded")
+        self.assertEqual(self.reactions(comment_id), [])
+        self.assertEqual(self.flags(comment_id), [])
+
+    def test_only_blank_extras_say_what_to_send(self):
+        comment_id = self.comment(ctx=self.ctx)
+        self.refused(comment_id, "Send `body_text` to edit your comment", reaction="", flag="")
+
     def test_remove_reaction_needs_a_reaction(self):
         comment_id = self.comment()
         self.refused(comment_id, "goes with `reaction`", remove_reaction=True)
