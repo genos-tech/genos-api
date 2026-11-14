@@ -73,8 +73,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
         # Surface as ToolError so the model can explain gracefully.
         raise ToolError("Current user record not found.")
 
-    # Flag off: no `team` key, the result is what it always was (MIP-1090).
-    team = _team_of(user, ctx) if team_enabled() else None
+    # Flag off: no `team` key, the result is what it always was (MIP-1090). MCP always has it:
+    # its catalog text says "user id, name, team", so the promise does not hang on an in-app flag
+    # (MIP-1478).
+    team = _team_of(user, ctx) if team_enabled() or ctx.surface == "mcp" else None
     return {
         "user_id": str(user.id),
         "username": user.username or "",

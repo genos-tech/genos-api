@@ -40,7 +40,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Project {project_id} not found.")
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: project belongs to a different team.")
+        # The words of a missing one, so a guessed id does not say which projects exist in
+        # other teams (MIP-1519). Only the class differs: it counts toward the MCP refusal
+        # alarm. Same pattern as `milestone_access.load_project`.
+        raise ToolForbidden(f"Project {project_id} not found.")
 
     is_member = ProjectMembers.objects.filter(
         project_id=project_id,

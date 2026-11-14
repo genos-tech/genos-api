@@ -234,7 +234,9 @@ def find_parent(parent_task_id, team_id):
     if parent is None:
         return None, f"Task {parent_task_id} not found."
     if str(parent.team_id or "") != str(team_id):
-        return None, "Not authorized: that task belongs to a different team."
+        # The words of a missing one, so a guessed id does not say which tasks exist in other
+        # teams (MIP-1519).
+        return None, f"Task {parent_task_id} not found."
     return parent, None
 
 
@@ -304,7 +306,7 @@ def project_move_error(task, project_id, team_id, user_id, *, detaching=False) -
     if destination is None or not is_project_member(destination.project_id, user_id):
         return f"Project {project_id} not found."
     if str(destination.team_id or "") != str(team_id):
-        return "Not authorized: that project belongs to a different team."
+        return f"Project {project_id} not found."
     if not detaching and not task.is_init_task and is_nested_task(task):
         return (
             f"Task {task.display_id} follows the project of the task or milestone it is "

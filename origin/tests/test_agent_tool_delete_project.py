@@ -315,7 +315,7 @@ class WhoMayDelete(DeleteBase):
     def test_a_project_of_another_team_is_out_of_reach(self):
         self.refused(
             lambda: self.delete(ctx=self.ctx_of(self.stranger, self.other_team)),
-            "different team",
+            "not found",
             ToolForbidden,
         )
         self.assertTrue(self.exists())

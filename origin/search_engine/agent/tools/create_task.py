@@ -98,7 +98,9 @@ def _resolve_milestone(raw_id: Any, project_id: int, ctx: ToolContext) -> Milest
     except MilestoneMaster.DoesNotExist:
         raise ToolError(f"Milestone {milestone_id} not found.")
     if str(getattr(milestone, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: milestone belongs to a different team.")
+        # The words of a missing one, so a guessed id does not say which milestones exist in
+        # other teams (MIP-1519); only the class differs, for the MCP refusal alarm.
+        raise ToolForbidden(f"Milestone {milestone_id} not found.")
     if milestone.project_id != project_id:
         raise ToolError(
             f"Milestone {milestone_id} belongs to project {milestone.project_id}, not {project_id}."
@@ -161,7 +163,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # Tenant guard: project must be in the requesting team.
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: project belongs to a different team.")
+        # The words of a missing one (MIP-1519), as `milestone_access.load_project` does.
+        raise ToolForbidden(f"Project {project_id} not found.")
 
     # ACL: requesting user must be a project member. Reuses the same
     # set the read-side `fetch_task` enforces, so a user who can't see

@@ -93,6 +93,13 @@ SEARCH_ENGINE = {  # noqa: F405
     **{flag: False for flag in AGENT_FLAGS_ON_IN_PRODUCTION},
 }
 
+# MIP-1471: the embedding provider must not depend on the runner's environment. CI sets neither
+# EMBEDDING_PROVIDER nor an OpenAI key, so it runs the default (`openai`, which fails fast on the
+# missing key before any network call). A test container built from the dev compose env carried
+# EMBEDDING_PROVIDER=vertex without GEMINI_USE_VERTEX, and every ingestion-touching test logged a
+# caught "requires GEMINI_USE_VERTEX" error. Pinned to what CI runs.
+SEARCH_ENGINE = {**SEARCH_ENGINE, "EMBEDDING_PROVIDER": "openai"}  # noqa: F405
+
 # Speed up user-creation-heavy tests.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 

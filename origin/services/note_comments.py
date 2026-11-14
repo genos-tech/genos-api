@@ -15,6 +15,8 @@ check, so a thread is shown to exactly the people who can read the note body.
 from __future__ import annotations
 
 import logging
+import re
+import uuid
 from typing import Any
 
 from origin.search_engine.agent.label_acl import LabelAccess
@@ -32,6 +34,28 @@ MAX_THREADS = 50
 MAX_COMMENT_CHARS = 4000
 
 
+# Fields that came out of a Yjs document, which ANY editor of the note can write, and that are not
+# text a person types (so the fence does not cover them): a thread id, an instant, a user id. They
+# are checked to BE what they claim and become null otherwise (MIP-1090, for both surfaces: MIP-1478).
+_THREAD_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_INSTANT = re.compile(r"^\d{4}-\d{2}-\d{2}[T ][0-9:.]{4,16}(Z|[+-]\d{2}:?\d{2})?$")
+
+
+def _id_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and _THREAD_ID.match(value) else None
+
+
+def _instant_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and _INSTANT.match(value) else None
+
+
+def _user_id_or_none(value: Any) -> str | None:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _clip(text: str) -> str:
     return text if len(text) <= MAX_COMMENT_CHARS else text[:MAX_COMMENT_CHARS] + "…"
 
@@ -39,8 +63,9 @@ def _clip(text: str) -> str:
 def _person(user_id: Any, names: dict[str, str]) -> dict[str, Any] | None:
     if not isinstance(user_id, str) or not user_id:
         return None
-    name = names.get(user_id)
-    return {"user_id": user_id, "username": wrap_workspace_content(name) if name else None}
+    clean = _user_id_or_none(user_id)
+    name = names.get(clean) if clean else None
+    return {"user_id": clean, "username": wrap_workspace_content(name) if name else None}
 
 
 def _comment(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
@@ -48,7 +73,7 @@ def _comment(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
     created, updated = raw.get("createdAt"), raw.get("updatedAt")
     out: dict[str, Any] = {
         "author": _person(raw.get("userId"), names),
-        "ts": created,
+        "ts": _instant_or_none(created),
         "deleted": deleted,
     }
     if deleted:
@@ -61,12 +86,12 @@ def _comment(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
 
 def _thread(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {
-        "thread_id": raw.get("id"),
+        "thread_id": _id_or_none(raw.get("id")),
         "resolved": bool(raw.get("resolved")),
     }
     if out["resolved"]:
         out["resolved_by"] = _person(raw.get("resolvedBy"), names)
-        out["resolved_at"] = raw.get("resolvedAt")
+        out["resolved_at"] = _instant_or_none(raw.get("resolvedAt"))
     anchor = raw.get("anchorText")
     out["anchor_text"] = wrap_workspace_content(anchor) if anchor else None
     out["comments"] = [_comment(c, names) for c in raw.get("comments") or [] if isinstance(c, dict)]
@@ -119,6 +144,8 @@ def note_comment_fields(
         ]
         if isinstance(uid, str)
     }
+    # Only a real user id is looked up: whatever else an editor wrote there is not a user.
+    user_ids = {clean for uid in user_ids if (clean := _user_id_or_none(uid))}
     names = LabelAccess(ctx).usernames(user_ids) if user_ids else {}
 
     fields: dict[str, Any] = {"comment_threads": [_thread(t, names) for t in shown]}
