@@ -10,6 +10,9 @@ the conversation).
     python manage.py prune_deleted_account_memberships            # DRY RUN: counts only
     python manage.py prune_deleted_account_memberships --apply    # end them
 
+It ALSO hands the group and project chats such an account still owns to a live owner
+(`services/deleted_account_channel_owners.py`, MIP-1550), after the memberships above.
+
 A group row is soft-deleted; a project membership is deleted through the project's own delete, which
 soft-deletes the project chat's mirrored row. Output is COUNTS ONLY: no name, e-mail, title or id.
 Safe to re-run; one-off, not a cron (new deletions clean up after themselves).
@@ -20,6 +23,7 @@ from __future__ import annotations
 import logging
 
 from origin.management.cron_command import CronCommand
+from origin.services import deleted_account_channel_owners as owners_service
 from origin.services import deleted_account_memberships as service
 
 log = logging.getLogger("origin.mcp")
@@ -57,3 +61,27 @@ class Command(CronCommand):
             )
         elif result.total:
             self.stdout.write("re-run with --apply to end them")
+
+        # Then the chats a deleted account still OWNS (MIP-1550): after the memberships above, so
+        # a group is handed to someone who is still in it. Counts only, like everything here.
+        owned = owners_service.prune(apply=apply)
+        if not apply:
+            self.stdout.write(
+                f"would hand over {owned.chats} group / project chat(s) owned by {owned.accounts} "
+                "deleted account(s) to a live owner (a project may give the team owner a new project seat)"
+            )
+            return
+        self.stdout.write(
+            f"handed {owned.transferred} group(s) to a remaining member, "
+            f"{owned.projects_transferred} project(s) to the team owner ({owned.seats_added} of them "
+            f"gave the team owner a new project seat); left {owned.ownerless} "
+            f"group(s) ownerless and {owned.left} project chat(s) unchanged"
+        )
+        log.info(
+            "prune_deleted_account_memberships owners: groups=%d projects=%d seats=%d ownerless=%d left=%d",
+            owned.transferred,
+            owned.projects_transferred,
+            owned.seats_added,
+            owned.ownerless,
+            owned.left,
+        )

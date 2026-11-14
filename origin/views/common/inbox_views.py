@@ -9,6 +9,7 @@ from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
 from origin.services import inbox_ai
+from origin.services.deleted_account_channel_owners import join_request_receiver
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (
@@ -630,16 +631,14 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
         # A GM of the team the request is filed in: the caller was checked against `team_id`
         # above, not against the GM's team, so a member of one team could address a request to
         # the owner of a GM in another, and have themselves added there on Approve.
-        if (
-            gm_channel is None
-            or not gm_channel.owner_id
-            or gm_channel.team_id != as_uuid(body["team_id"])
-        ):
+        # A group with no live owner (none, or a deleted account) addresses the request to its
+        # longest-standing host-side member instead (MIP-1550); with nobody to receive it, 404.
+        gm_owner_id = join_request_receiver(gm_channel) if gm_channel is not None else None
+        if gm_channel is None or not gm_owner_id or gm_channel.team_id != as_uuid(body["team_id"]):
             return Response(
                 {"error": "GM not found or has no owner."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        gm_owner_id = gm_channel.owner_id
         if res := require_fields(body, "item_body"):
             return res
 

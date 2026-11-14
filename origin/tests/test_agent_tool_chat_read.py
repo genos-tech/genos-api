@@ -34,6 +34,7 @@ from origin.models.chat.unified_models import (
     MessageMention,
 )
 from origin.models.common.team_models import TeamMembers
+from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.controller import _ui_sources_from_tool_result
 from origin.search_engine.agent.evals import runner
@@ -626,6 +627,27 @@ class ListMyChatsTests(ChatFixtures, CrossTeamTestCase):
 
         self.assertEqual(rows[str(me.id)]["title"], "testuser")
         self.assertEqual(rows[str(gm.id)]["member_count"], 2)
+
+    def test_a_deleted_account_is_not_counted_as_a_member(self):
+        """Account deletion keeps a DM / MDM row (the others keep the conversation), so the
+        count must not include the person who no longer exists (MIP-1550). The chats are still
+        listed, and a live member is counted as before."""
+        dm = self.direct(self.a_owner, self.a_editor)
+        mdm = self.multi([self.a_owner, self.a_editor, self.a_viewer])
+        gm = self.group("Crew", [self.a_owner, self.a_editor, self.a_viewer])
+        before = {
+            r["chat_id"]: r["member_count"] for r in self._tool_rows(self.a_owner, self.team_a)
+        }
+        self.assertEqual((before[str(dm.id)], before[str(mdm.id)], before[str(gm.id)]), (2, 3, 3))
+
+        CustomUser.objects.filter(pk=self.a_editor.pk).update(is_deleted=True)
+
+        after = {
+            r["chat_id"]: r["member_count"] for r in self._tool_rows(self.a_owner, self.team_a)
+        }
+        self.assertEqual(after[str(dm.id)], 1)
+        self.assertEqual(after[str(mdm.id)], 2)
+        self.assertEqual(after[str(gm.id)], 2)
 
     def test_last_activity_ignores_deleted_messages_and_thread_replies(self):
         now = timezone.now()
