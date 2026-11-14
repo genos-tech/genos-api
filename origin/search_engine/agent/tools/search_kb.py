@@ -23,6 +23,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.search_window import SearchWindow, skip_rewrite
 from origin.search_engine.search import search
 
 _MAX_LIMIT = 20
@@ -124,12 +125,22 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = 10
     limit = max(1, min(limit, _MAX_LIMIT))
 
+    # MCP-only date window / order (MIP-1379). Inert for the in-app agent: it reads the
+    # arguments only when `ctx.surface == "mcp"`, so the shared declaration is unchanged.
+    # Parsed here, before any search, so a bad date is a clear error and costs nothing.
+    window = SearchWindow.from_args(args, ctx)
+    no_rewrite = skip_rewrite(args, ctx)
+
     # Phase 10 — query rewriting is scoped to the agent path only.
     # The Spotlight typeahead never passes through here, so the
     # `RAG_USE_QUERY_REWRITE` flag can't fire an LLM call per keystroke.
     # Enabled by default (see apis/settings.py) — measured +2 net pass /
     # 0 regressions on the agent eval suite (roadmap §1.1).
     use_rewrite = bool(settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False))
+    # MCP-only opt-out (`rewrite: false`): searches the raw query, no rewrite LLM call. It can
+    # only switch the rewrite off, never on; inert for the in-app agent (see `skip_rewrite`).
+    if no_rewrite:
+        use_rewrite = False
 
     # Mentions v2 — explicit person filter (LLM-chosen). A bogus or
     # unauthorized id simply matches nothing: the ACL filter still
@@ -168,6 +179,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # is `search_past_conversations`' job (and the answer→grounding
         # loop guard is a standing rule — see chunkers/spotlight docs).
         exclude_lanes=frozenset({"conversation", "spotlight_answer"}),
+        **window.search_kwargs(),
     )
 
     # Trim the per-entity payload to what the LLM actually needs:
@@ -218,6 +230,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "updated_at": entity.get("updated_at"),
             }
         )
+
+    matches = window.apply(matches)
 
     return {
         "matches": matches,

@@ -225,7 +225,9 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                     mdm_names[ch["id"]] = ch["title"]
 
         # DM partner usernames: the *other* member of each DM channel,
-        # keyed by Channel.id.
+        # keyed by Channel.id. `dm_ids` are chatType 1 notes, a direct message, whose
+        # membership IS its `ChannelMember` row, and this only names a partner (it opens
+        # nothing), so it does not go through `chat_member_q` (MIP-1523).
         if dm_ids:
             members_by_chan: dict = {}
             for m in ChannelMember.objects.filter(channel_id__in=dm_ids, is_deleted=False).values(

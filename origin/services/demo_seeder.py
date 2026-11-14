@@ -2932,6 +2932,10 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         # Projects (Sprint/SprintConfig/MilestoneMaster cascade on
         # project delete; MilestoneAssignees cascades on milestone).
         ProjectTags.objects.filter(team=team_id).delete()
+        # No chat-note role revoke here (`note_role_revoke`, the ProjectMembers post_delete
+        # receiver): the roles it would remove sit on notes this teardown already deleted, and
+        # every note delete takes its permission rows with it by note id. Pinned over project,
+        # group and direct chats in `test_demo_cleanup_note_rows` (MIP-1506).
         ProjectMembers.objects.filter(team=team_id).delete()
         ProjectMaster.objects.filter(team=team_id).delete()
 
