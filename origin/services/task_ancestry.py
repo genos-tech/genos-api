@@ -47,9 +47,12 @@ the slim picker (MIP-1353) and the reports (MIP-1300).
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from origin.models.task.task_models import TaskMaster
+
+if TYPE_CHECKING:
+    from origin.search_engine.agent.tools.base import ToolContext
 
 CLOSED = "Closed"
 DELETED = "Deleted"
@@ -58,7 +61,7 @@ DELETED = "Deleted"
 MAX_DEPTH = 200
 
 # `(task_id, milestone_id, parent_task_id, is_milestone, status)`
-_COLUMNS = ("task_id", "milestone_id", "parent_task_id", "is_milestone", "status")
+COLUMNS = ("task_id", "milestone_id", "parent_task_id", "is_milestone", "status")
 
 
 class Verdict(NamedTuple):
@@ -161,7 +164,7 @@ def effective_statuses(task_ids: Iterable[int], team_id) -> dict[int, Effective]
         ancestor_verdicts(
             TaskMaster.objects.filter(
                 project_id__in=project_ids, is_deleted=False, is_init_task=False
-            ).values_list(*_COLUMNS)
+            ).values_list(*COLUMNS)
         )
         if project_ids
         else {}
@@ -170,3 +173,37 @@ def effective_statuses(task_ids: Iterable[int], team_id) -> dict[int, Effective]
         task_id: effective(own, verdicts.get(task_id) if project_id is not None else None)
         for task_id, project_id, own in asked
     }
+
+
+def effective_fields(task_ids: Iterable[Any], ctx: "ToolContext") -> dict[int, dict[str, Any]]:
+    """`{task_id: {effective_status, closed_by_ancestor?}}` for tasks a read tool is returning: the
+    fields the MCP `get_task` / `list_tasks` carry, and the in-app tools carry behind
+    `AGENT_CLOSED_ANCESTOR_RULE` (one implementation for both surfaces: MIP-1413, MIP-1478).
+
+    `closed_by_ancestor` names the ancestor by `task_id`, and by `display_id` only when the
+    caller may read that task (`LabelAccess`): a task's assignee who is not in its project can
+    read the task, but not necessarily its grandparent. Ids that are not numbers are skipped."""
+    # Imported here: `label_acl` imports `tools.base`, which runs the tools package's `__init__`,
+    # which imports `ancestor_rule`, which imports this module.
+    from origin.search_engine.agent.label_acl import LabelAccess  # noqa: PLC0415
+
+    ids = []
+    for raw in task_ids:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    found = effective_statuses(ids, ctx.team_id)
+    ancestors = {e.closed_by_ancestor_id for e in found.values() if e.closed_by_ancestor_id}
+    readable = LabelAccess(ctx).tasks(ancestors) if ancestors else {}
+    out: dict[int, dict[str, Any]] = {}
+    for task_id, e in found.items():
+        fields: dict[str, Any] = {"effective_status": e.status}
+        if e.closed_by_ancestor_id is not None:
+            ancestor = readable.get(e.closed_by_ancestor_id)
+            fields["closed_by_ancestor"] = {
+                "task_id": e.closed_by_ancestor_id,
+                "display_id": ancestor.display_id if ancestor else None,
+            }
+        out[task_id] = fields
+    return out

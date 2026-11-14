@@ -367,6 +367,27 @@ class CapTests(SimpleTestCase):
         self.assertEqual([s["heading"] for s in out["sections"]], ["first"])
         self.assertEqual((cut["sections_omitted"], cut["items_omitted"]), (1, 1))
 
+    def test_an_empty_section_is_kept_while_it_fits_and_not_called_omitted(self):
+        """MIP-1478: nothing was cut from a section that had no items; it is not 'omitted'."""
+        body = self.body(("first", ["a" * 8]), ("empty", []), ("last", ["b" * 40]))
+        out, cut = self.cap(body, 20)
+        self.assertEqual([s["heading"] for s in out["sections"]], ["first", "empty"])
+        self.assertEqual(out["sections"][1]["items"], [])
+        # the empty one is not counted; only "last" (nothing of it shown) is
+        self.assertEqual((cut["sections_omitted"], cut["items_omitted"]), (1, 1))
+
+    def test_an_empty_section_after_the_cut_point_is_omitted_like_any_other(self):
+        body = self.body(("first", ["a" * 30]), ("empty", []))
+        out, cut = self.cap(body, 20)
+        self.assertEqual(out["sections"], [])  # "first" did not fit either
+        self.assertEqual((cut["sections_omitted"], cut["items_omitted"]), (2, 1))
+
+    def test_an_empty_section_that_does_not_fit_the_budget_is_omitted(self):
+        body = self.body(("first", ["a" * 8]), ("e" * 30, []), ("x", ["b" * 40]))
+        out, cut = self.cap(body, 15)
+        self.assertEqual([s["heading"] for s in out["sections"]], ["first"])
+        self.assertEqual((cut["sections_omitted"], cut["items_omitted"]), (2, 1))
+
     def test_a_long_title_and_summary_are_shortened_to_leave_room(self):
         body = self.body(("h", ["a" * 5]), title="T" * 9000, text="s" * 9000)
         out, cut = self.cap(body, 2000)
