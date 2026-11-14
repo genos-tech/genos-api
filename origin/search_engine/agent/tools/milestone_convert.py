@@ -72,8 +72,13 @@ MCP_MOVE_SENTENCE = (
     "A milestone can't be moved to another project, and its status can't be 'Deleted': use "
     "`delete_milestone`."
 )
+# Over MCP only: a milestone converted to a task, and a move, drop what nothing can put back (the folder,
+# the sprint, the old display ids, a note author's Owner role), so they are held to the destructive opt-in as
+# a delete is (`mcp.tools.dropping_call`). The in-app text is unchanged: the app asks the person instead.
 MCP_MOVE_SENTENCE_ON = (
-    GUIDANCE + " A milestone's status can't be 'Deleted': use `delete_milestone`."
+    GUIDANCE
+    + " A milestone to a task, and a move, also need a write-scoped API key that its owner also opted"
+    " into destructive tools. A milestone's status can't be 'Deleted': use `delete_milestone`."
 )
 
 # --------------------------------------------------------------------------------------------- #

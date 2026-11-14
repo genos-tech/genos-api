@@ -689,6 +689,12 @@ class GateOnTests(ToolBase):
         self.assertIn("A milestone's status can't be 'Deleted': use `delete_milestone`.", text)
         self.assertEqual(text.count("'convert'"), 1)
         self.assertEqual(text.count("MOVES the milestone"), 1)
+        self.assertIn("also need a write-scoped API key that its owner also opted into", text)
+        # a person who connected an app is told what they need, in the other words
+        self.assertIn(
+            "write access with destructive tools allowed",
+            mcp.description_for(tool, credential_kind="oauth"),
+        )
         # in the catalog's own place, before "Everything is checked ..."
         self.assertLess(text.index("'convert'"), text.index("Everything is checked"))
 
@@ -1252,7 +1258,7 @@ class McpFlagOnTests(McpMilestoneBase):
         self.assertIn("task_to_milestone", text)
 
     def test_a_milestone_is_turned_into_a_task_by_its_display_id_or_its_number(self):
-        self._key(scope=SCOPE_WRITE)
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
         text, is_error = self.text(
             "manage_milestone",
             {"action": "convert", "milestone_id": self.milestone.task.display_id},
@@ -1267,7 +1273,7 @@ class McpFlagOnTests(McpMilestoneBase):
         self.assertFalse(is_error, text)
 
     def test_a_milestone_is_moved_by_a_number_and_the_result_says_what_happened(self):
-        self._key(scope=SCOPE_WRITE)
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
         result = self._result(
             self._call(
                 "manage_milestone",
@@ -1316,28 +1322,102 @@ class McpFlagOnTests(McpMilestoneBase):
         self.task.refresh_from_db()
         self.assertFalse(self.task.is_milestone)
 
-    def test_neither_is_destructive_so_a_write_key_without_the_opt_in_may_do_both(self):
-        # Decision: nothing is deleted for good (see the PR); a key that may change things may
-        # convert and move, and the announcement stays `destructiveHint: true` as for every overwrite.
+    def test_the_two_that_drop_what_undo_cannot_return_need_the_destructive_opt_in(self):
+        # Decision (the lead's rule: "something dropped that an undo cannot bring back"): a milestone
+        # converted to a task drops its folder (recorded nowhere) and its sprint; a move clears the
+        # folder, the sprint and the tags and renumbers the tasks, and revokes a note author's Owner
+        # role (recorded nowhere). Held to the key's opt-in as a delete is. A task converted to a
+        # milestone drops nothing and is not.
         self._key(scope=SCOPE_WRITE, allow_destructive=False)
         tool = next(t for t in mcp.CATALOG if t.name == "manage_milestone")
-        self.assertFalse(tool.destructive)
-        self.assertIsNone(
-            mcp.deleting_argument("manage_milestone", {"action": "convert", "task_id": 1})
-        )
-        self.assertIsNone(
-            mcp.deleting_argument(
-                "manage_milestone", {"action": "update", "milestone_id": 1, "project_id": 2}
-            )
-        )
+        self.assertFalse(tool.destructive)  # the tool itself is not: create and update are not
+        before = SecurityEvent.objects.filter(action="mcp.destructive").count()
+        for args in (
+            {"action": "convert", "milestone_id": self.milestone.milestone_id},
+            {
+                "action": "update",
+                "milestone_id": self.milestone.milestone_id,
+                "project_id": self.other.project_id,
+            },
+        ):
+            with self.subTest(args=args):
+                text, is_error = self.text("manage_milestone", args)
+                self.assertTrue(is_error)
+                self.assertIn("drops what can't be put back", text)
+                self.assertIn("destructive tools", text)
+        stored = MilestoneMaster.objects.get(pk=self.milestone.pk)
+        self.assertFalse(stored.is_deleted)
+        self.assertEqual(stored.project_id, self.project.project_id)
+        # the refusal is written to the security log, as a refused delete is (one row per key, tool,
+        # outcome and hour: a planted instruction that loops must not flood the table)
+        self.assertEqual(SecurityEvent.objects.filter(action="mcp.destructive").count() - before, 1)
+        # what drops nothing is not held: a task into a milestone, a plain update, a create
+        for args in (
+            {"action": "convert", "task_id": self.task.task_id},
+            {"action": "update", "milestone_id": self.milestone.milestone_id, "title": "Renamed"},
+            {"action": "create", "project_id": self.project.project_id, "title": "Made"},
+        ):
+            with self.subTest(allowed=args):
+                text, is_error = self.text("manage_milestone", args)
+                self.assertFalse(is_error, text)
+        # still announced as an overwrite
         self.assertIs(self.listed()["manage_milestone"]["annotations"]["destructiveHint"], True)
-        before = SecurityEvent.objects.count()
-        _text, is_error = self.text(
-            "manage_milestone", {"action": "convert", "task_id": self.task.task_id}
+
+    def test_a_key_opted_into_destructive_tools_may_do_both_and_each_leaves_a_trace(self):
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
+        before = SecurityEvent.objects.filter(action="mcp.destructive").count()
+        text, is_error = self.text(
+            "manage_milestone",
+            {
+                "action": "update",
+                "milestone_id": self.milestone.milestone_id,
+                "project_id": self.other.project_id,
+            },
         )
-        self.assertFalse(is_error)
-        # not a delete, so it leaves no entry in the destructive-call log
-        self.assertEqual(SecurityEvent.objects.count(), before)
+        self.assertFalse(is_error, text)
+        again = create_milestone(self.other, reporter_id=self.user.id, title="Second")
+        text, is_error = self.text(
+            "manage_milestone", {"action": "convert", "milestone_id": again.milestone_id}
+        )
+        self.assertFalse(is_error, text)
+        rows = SecurityEvent.objects.filter(action="mcp.destructive").order_by("event_id")
+        self.assertEqual(rows.count() - before, 2)
+        kept = [r.metadata for r in rows[before:]]
+        for meta in kept:
+            self.assertEqual(meta["tool"], "manage_milestone")
+            self.assertEqual(meta["outcome"], "done")
+            # ids and the switch only, never a title or text
+            self.assertEqual(
+                set(meta["arguments"]) - {"action"} <= {"milestone_id", "project_id"}, True
+            )
+        self.assertEqual(
+            MilestoneMaster.objects.get(pk=self.milestone.pk).project_id, self.other.project_id
+        )
+        self.assertTrue(MilestoneMaster.objects.get(pk=again.pk).is_deleted)
+
+    def test_the_gate_reads_the_call_so_the_flag_off_it_holds_nothing(self):
+        from origin.views.public.mcp import tools as module  # noqa: PLC0415
+
+        call = {"action": "convert", "milestone_id": 3}
+        self.assertEqual(
+            module.dropping_call("manage_milestone", call), "action=convert, milestone_id"
+        )
+        move = {"action": "update", "milestone_id": 3, "project_id": 5}
+        self.assertEqual(
+            module.dropping_call("manage_milestone", move), "action=update, project_id"
+        )
+        for ok in (
+            {"action": "convert", "task_id": 3},
+            {"action": "update", "milestone_id": 3, "title": "x"},
+            {"action": "update", "milestone_id": 3, "project_id": ""},
+            {"action": "create", "project_id": 5, "title": "x"},
+            {"action": "delete_folder", "milestone_folder_id": 2},
+        ):
+            self.assertIsNone(module.dropping_call("manage_milestone", ok), ok)
+        self.assertIsNone(module.dropping_call("update_task", move))
+        with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
+            self.assertIsNone(module.dropping_call("manage_milestone", call))
+            self.assertIsNone(module.dropping_call("manage_milestone", move))
 
     def test_it_leaves_a_marker_on_the_converted_task_and_no_notice(self):
         self._key(scope=SCOPE_WRITE)
@@ -1353,7 +1433,7 @@ class McpFlagOnTests(McpMilestoneBase):
         )
 
     def test_a_project_of_another_team_is_not_found_over_mcp_too(self):
-        self._key(scope=SCOPE_WRITE)
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
         from origin.models.common.team_models import TeamMaster, TeamMembers  # noqa: PLC0415
 
         elsewhere = TeamMaster.objects.create(
@@ -1632,7 +1712,7 @@ class CardMirrorTests(ToolBase):
 
 class McpEmptyTaskIdTests(McpMilestoneBase):
     def test_an_empty_task_id_beside_a_milestone_id_is_an_unsent_one(self):
-        self._key(scope=SCOPE_WRITE)
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
         text, is_error = self.text(
             "manage_milestone",
             {"action": "convert", "milestone_id": self.milestone.milestone_id, "task_id": ""},
