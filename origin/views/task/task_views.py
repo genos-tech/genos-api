@@ -24,7 +24,7 @@ from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
-from origin.services import realtime_push, unified_writer
+from origin.services import realtime_push, task_ancestry, unified_writer
 from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
@@ -3057,14 +3057,40 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-def _hydrate_dependency_ref(dep, other_task):
+def _effective_status_by_task(other_tasks):
+    """`{task_id: effective status}` for the 'other' endpoints of a set of dependency rows.
+
+    The status the closed-ancestor rule reads (`services/task_ancestry`, MIP-1413): a task under
+    a Closed or Deleted parent, grandparent or milestone reads as Closed or Deleted, whatever its
+    own status. Two queries per team (edges are same-team, so one in practice), however many
+    tasks. A task with no entry (no team, no project tree) is left out: its callers fall back to
+    its own status.
+    """
+    ids_by_team: dict = {}
+    for task in other_tasks:
+        if task.team_id is not None:
+            ids_by_team.setdefault(task.team_id, set()).add(task.task_id)
+    out = {}
+    for team_id, ids in ids_by_team.items():
+        for task_id, found in task_ancestry.effective_statuses(ids, team_id).items():
+            out[task_id] = found.status
+    return out
+
+
+def _hydrate_dependency_ref(dep, other_task, effective=None):
     """Shape a TaskDependency row + its 'other' endpoint for the API.
 
     `other_task` is the endpoint the caller doesn't already have — i.e.
     when the row appears in `blocking`, `other_task` is the blocked
     side; when it appears in `blockedBy`, `other_task` is the blocker.
+
+    `effectiveStatus` is the status the closed-ancestor rule reads for that endpoint (MIP-1549),
+    from `effective` (`_effective_status_by_task`); its own status when it has none. `status`
+    stays the task's own, so a chip keeps showing what the row says. The client's Blocked badge
+    asks `effectiveStatus`, so it agrees with the server's auto-Blocked flip (MIP-1544).
     """
     status_label = other_task.status or ""
+    effective_label = (effective or {}).get(other_task.task_id) or status_label
     status_colors = status_color(status_label)
     return {
         "dependencyId": dep.id,
@@ -3079,6 +3105,7 @@ def _hydrate_dependency_ref(dep, other_task):
             "color": status_colors["chipColor"],
             "textColor": status_colors["textColor"],
         },
+        "effectiveStatus": effective_label,
         "assigneeUserId": other_task.assignee_id,
         "isMilestone": other_task.is_milestone,
     }
@@ -3151,10 +3178,19 @@ class TaskDependencyView(AuthenticatedAPIView):
             .exclude(blocker_task__is_deleted=True)
         )
 
+        blocking_rows = list(blocking_rows)
+        blocked_by_rows = list(blocked_by_rows)
+        effective = _effective_status_by_task(
+            [d.blocked_task for d in blocking_rows] + [d.blocker_task for d in blocked_by_rows]
+        )
         return Response(
             {
-                "blocking": [_hydrate_dependency_ref(d, d.blocked_task) for d in blocking_rows],
-                "blockedBy": [_hydrate_dependency_ref(d, d.blocker_task) for d in blocked_by_rows],
+                "blocking": [
+                    _hydrate_dependency_ref(d, d.blocked_task, effective) for d in blocking_rows
+                ],
+                "blockedBy": [
+                    _hydrate_dependency_ref(d, d.blocker_task, effective) for d in blocked_by_rows
+                ],
             },
             status=status.HTTP_200_OK,
         )
@@ -3236,7 +3272,7 @@ class TaskDependencyView(AuthenticatedAPIView):
         # so the caller (which was viewing `blocker`) can drop it into
         # its `blocking` list without a refetch.
         return Response(
-            _hydrate_dependency_ref(dep, blocked),
+            _hydrate_dependency_ref(dep, blocked, _effective_status_by_task([blocked])),
             status=status.HTTP_201_CREATED,
         )
 
@@ -3317,12 +3353,17 @@ class TaskDependencyBatchListView(AuthenticatedAPIView):
             .select_related("blocker_task", "blocker_task__project")
             .exclude(blocker_task__is_deleted=True)
         )
+        blocking_rows = list(blocking_rows)
+        blocked_by_rows = list(blocked_by_rows)
+        effective = _effective_status_by_task(
+            [d.blocked_task for d in blocking_rows] + [d.blocker_task for d in blocked_by_rows]
+        )
         for d in blocking_rows:
             by_task[str(d.blocker_task_id)]["blocking"].append(
-                _hydrate_dependency_ref(d, d.blocked_task)
+                _hydrate_dependency_ref(d, d.blocked_task, effective)
             )
         for d in blocked_by_rows:
             by_task[str(d.blocked_task_id)]["blockedBy"].append(
-                _hydrate_dependency_ref(d, d.blocker_task)
+                _hydrate_dependency_ref(d, d.blocker_task, effective)
             )
         return Response({"dependencies_by_task": by_task}, status=status.HTTP_200_OK)

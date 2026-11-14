@@ -486,7 +486,7 @@ REGISTRY = {
     "origin.views.note.chat_note_views.AllChatNotesView": checked("_accessible_chat_note_ids"),
     "origin.views.note.chat_note_views.ChatNoteAttachmentView": checked("require_write_role"),
     "origin.views.note.chat_note_views.ChatNoteMasterView": checked(
-        "require_write_role", "validate_request_user"
+        "readable_note_ids", "require_write_role", "validate_request_user"
     ),
     "origin.views.note.chat_note_views.ChatNoteMoveView": checked("require_write_role"),
     "origin.views.note.chat_note_views.ChatSubNotesView": checked("get_effective_role"),
