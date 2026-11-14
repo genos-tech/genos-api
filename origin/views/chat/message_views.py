@@ -51,6 +51,7 @@ from origin.serializers.chat.unified_serializers import (
 )
 from origin.services import webhook_enqueue
 from origin.services.channel_scope import chat_member_rows, is_chat_member
+from origin.services.deleted_account_channel_owners import acts_as_owner
 from origin.services.mention_extractor import (
     extract_mention_group_ids,
     extract_mentioned_user_ids,
@@ -827,7 +828,8 @@ class MessageDetailView(AuthenticatedAPIView):
         """
         message = self._fetch_for_user(message_id, request.user, with_prefetch=False)
         is_sender = message.sender_id == request.user.id
-        is_channel_owner = message.channel.owner_id and message.channel.owner_id == request.user.id
+        # A group with no live owner is moderated by any host-side member (MIP-1550).
+        is_channel_owner = acts_as_owner(message.channel, request.user.id)
         if not (is_sender or is_channel_owner):
             return Response(
                 {"error": "Only the sender or channel owner can delete."},
