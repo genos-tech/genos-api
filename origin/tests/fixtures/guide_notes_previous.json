@@ -1,0 +1,2642 @@
+{
+ "en": {
+  "API keys and webhooks, step by step": [
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Making a key",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Settings → Developer, then create a key. You give it a name and choose whether it may only read or also write. Every key expires — after 90 days unless you pick another length, up to one year — and then you make a new one. Keys begin with gnos_ so they're recognisable in a log.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "The key is shown once, at that moment. Copy it straight into wherever it's going to live; there is no way to read it again afterwards, only to delete it and make another.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "It acts as you — anything you can see, it can see. Treat it like your password: never in a public repository, never in code that runs in a browser.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Deleting a key stops it working on its very next request, so it's the right response to a key you think has leaked.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Using it",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Send the header Authorization: ApiKey <your key>. The scheme is the literal word ApiKey — Bearer is for the app's own sign-in and is refused here, and equally a key cannot be used to create or delete keys. That separation is deliberate: a leaked key can't mint more of itself.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/me/ — who the key acts as, and with what scope. Start here to prove the key works before debugging anything subtler.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/projects/ — your projects.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET and POST /api/public/v1/tasks/ — list tasks, or create one.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET and PATCH /api/public/v1/tasks/<id>/ — read or update a single task.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/openapi.json — the machine-readable description of all of the above, and the one endpoint that needs no key at all.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Each key is limited to 120 requests a minute. A personal key belongs to you rather than to one team, so requests have to say which team they mean — that's why me/ comes back with no team attached.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhooks",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "A webhook is Genos telling your server, instead of your script asking on a timer. A team owner or editor adds an https address in Settings → Developer and picks the events it should receive:",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.created, task.updated, task.completed",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.comment_created",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "message.created — and this one only ever covers channels you name explicitly. An empty list means no chat events, not all of them, and direct messages can never be sent to a webhook at all.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Deliveries are recorded, so you can see what was actually sent. If your endpoint fails 10 times in a row Genos disables it rather than hammering a dead server — fix the endpoint and turn it back on.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "MCP, for AI coding agents",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "On Pro and above, point an AI coding agent at Genos and it can work your tasks directly. Add it as an HTTP MCP server at https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id> — no trailing slash before the question mark — with the same ApiKey header as above. The agent gets tools for reading tasks and notes and searching the workspace; with a write key it can also create tasks, update them and comment back. Natural-language queries beat keywords in its search tool, the same as they do for you.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Things that don't exist yet",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Public links. Nothing in Genos can be shared with someone who isn't signed in and permitted — a link you paste anywhere still checks the reader's access.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Spreadsheet export. Settings → Account exports your own data as JSON, and a note exports as Markdown from its menu, but there's no CSV of tasks or chat.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Slack, Notion, Jira and Asana connections. Google and GitHub are the two integrations that exist; links to other tools pasted in a task are just links.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "The full reference",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Settings → Developer links to the Genos Developers page, which is the complete specification — every field, every event payload, and working examples — for all of the above.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "newest_commit": "146ee518",
+    "sha256": "5beb8dd7454262c7a9b1c1d67ac37fb83cc7b785945db52876b744a71dd2aedf"
+   },
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Making a key",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Settings → Developer, then create a key. You give it a name, choose whether it may only read or also write, and optionally an expiry anywhere from 1 day to 10 years. Keys begin with gnos_ so they're recognisable in a log.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "The key is shown once, at that moment. Copy it straight into wherever it's going to live; there is no way to read it again afterwards, only to delete it and make another.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "It acts as you — anything you can see, it can see. Treat it like your password: never in a public repository, never in code that runs in a browser.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Deleting a key stops it working on its very next request, so it's the right response to a key you think has leaked.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Using it",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Send the header Authorization: ApiKey <your key>. The scheme is the literal word ApiKey — Bearer is for the app's own sign-in and is refused here, and equally a key cannot be used to create or delete keys. That separation is deliberate: a leaked key can't mint more of itself.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/me/ — who the key acts as, and with what scope. Start here to prove the key works before debugging anything subtler.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/projects/ — your projects.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET and POST /api/public/v1/tasks/ — list tasks, or create one.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET and PATCH /api/public/v1/tasks/<id>/ — read or update a single task.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/openapi.json — the machine-readable description of all of the above, and the one endpoint that needs no key at all.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Each key is limited to 120 requests a minute. A personal key belongs to you rather than to one team, so requests have to say which team they mean — that's why me/ comes back with no team attached.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhooks",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "A webhook is Genos telling your server, instead of your script asking on a timer. A team owner or editor adds an https address in Settings → Developer and picks the events it should receive:",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.created, task.updated, task.completed",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.comment_created",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "message.created — and this one only ever covers channels you name explicitly. An empty list means no chat events, not all of them, and direct messages can never be sent to a webhook at all.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Deliveries are recorded, so you can see what was actually sent. If your endpoint fails 10 times in a row Genos disables it rather than hammering a dead server — fix the endpoint and turn it back on.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "MCP, for AI coding agents",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "On Pro and above, point an AI coding agent at Genos and it can work your tasks directly. Add it as an HTTP MCP server at https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id> — no trailing slash before the question mark — with the same ApiKey header as above. The agent gets tools for reading tasks and notes and searching the workspace; with a write key it can also create tasks, update them and comment back. Natural-language queries beat keywords in its search tool, the same as they do for you.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Things that don't exist yet",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Public links. Nothing in Genos can be shared with someone who isn't signed in and permitted — a link you paste anywhere still checks the reader's access.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Spreadsheet export. Settings → Account exports your own data as JSON, and a note exports as Markdown from its menu, but there's no CSV of tasks or chat.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Slack, Notion, Jira and Asana connections. Google and GitHub are the two integrations that exist; links to other tools pasted in a task are just links.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "The full reference",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Settings → Developer links to the Genos Developers page, which is the complete specification — every field, every event payload, and working examples — for all of the above.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "newest_commit": "d6015c9e",
+    "sha256": "0304c2e8dbd04d9e62e8a13c44be716c7e4c56ef0e523f6307aafb4058836c20"
+   }
+  ],
+  "Connecting Genos to other tools: API, MCP, and realtime": [
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Who this page is for",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "This page is for anyone connecting Genos to something else — a script, another app, or an AI coding agent. One part needs no programming at all: you paste one address into an AI coding agent's settings, and it can then work your tasks directly. If none of that is you, skip this page; nothing else in Genos depends on it.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "An API key acts as the person who created it, so it only ever sees what that person can see, and the realtime stream acts as whoever is signed in. Webhooks are the exception: a team owner or editor sets one up for the whole team, and it carries that team's events whoever created it.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Getting a key",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Create keys in Settings → Developer. A key is shown once, when you make it — copy it then, because there is no readable copy afterwards. Revoke one any time and it stops working on the next request.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Pick read or write. A read key sees what you can see and changes nothing; a write key can also create and update.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Keys made on that screen are personal: they act as you across every team you belong to, so each request has to name which team it means. Team-scoped keys, which carry their own team, exist in the API but cannot yet be created here.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Which one to reach for",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "The REST API — for a script or another app that reads or creates Genos data on demand: your projects, their tasks, and single tasks to create or update. Use it for reports, imports, and anything you run on a schedule.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhooks — when you would rather Genos told you. A team owner or editor gives it a public https address, and it posts there as tasks change, or as messages arrive in the channels you name, so you hear about changes as they happen instead of checking on a timer.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "MCP (Model Context Protocol) — when you want an AI coding agent to work your tasks directly instead of you pasting descriptions into it. Add Genos to an MCP client as an HTTP server at https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id> — no trailing slash before the question mark — sending the header Authorization: ApiKey <your key>. The scheme is the literal word ApiKey, not Bearer. The agent can then read tasks itself and, with a write key, update them and comment back.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "The realtime stream — for something live: a dashboard, or a bot that reacts the moment a message arrives. It carries the same live events the Genos app itself uses — messages, reactions, who has read what, who is online — and signs in with your Genos login rather than an API key. That is the dividing line: realtime where a person is signed in, webhooks for one server talking to another.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Checking it works",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Start with GET /api/public/v1/me/. It reports the person, the team, and the scope your key acts with, so you learn the key is live before something subtler fails. The team comes back empty for a personal key — that is your cue that you have to name a team on each request yourself.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Settings → Developer also links to the Genos Developers page — the full reference for the REST API, MCP, webhooks, and every realtime event, with working examples.",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "newest_commit": "146ee518",
+    "sha256": "b1a57876feef411031d8152e7b26162db0524277eaa5c28141f03feb14efec64"
+   }
+  ]
+ },
+ "ja": {
+  "APIキーとWebhook：手順ガイド": [
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "APIキーを作成する",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「設定」→「開発者」の順に選択し、キーを作成します。キーに名前を付け、読み取り専用にするか書き込みも可能にするかを選択し、有効期限を設定します（既定は90日、最長1年。期限が切れたら新しいキーを作成します）。キー名は「gnos_」で始まるため、ログ上で識別しやすくなっています。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "キーはその瞬間に一度だけ表示されます。それを保存する場所にそのままコピーしてください。一度表示されたキーを再度読み取ることはできず、削除して新しいキーを作成するしかありません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "それはあなたと同じように振る舞います――あなたが見えるものはすべて、それも見えます。パスワードと同じように扱ってください。公開リポジトリには絶対に置かないでください。また、ブラウザで実行されるコードの中にも絶対に含めないでください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "キーを削除すると、その直後のリクエストからそのキーは機能しなくなるため、漏洩したと思われるキーに対しては、これが適切な対応となります。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "APIキーを使用する",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "ヘッダー「Authorization: ApiKey <your key>」を送信してください。スキームは文字通り「ApiKey」です。「Bearer」はアプリ独自のサインイン用であり、ここでは拒否されます。同様に、キーを使用してキーを作成または削除することもできません。この分離は意図的なものです。つまり、漏洩したキーがそれ自体をさらに生成することはできないからです。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/me/：キーがどのユーザーとして機能し、どのようなスコープを持つかを確認します。より複雑なデバッグを行う前に、まずここから始めて、キーが正常に動作することを確認してください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/projects/：あなたのプロジェクト。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GETおよびPOST /api/public/v1/tasks/：タスクの一覧表示、または新規作成。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GETおよびPATCH /api/public/v1/tasks/<id>/：単一のタスクを読み取る、または更新する。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/openapi.json：上記のすべてに関する機械可読な記述であり、キーを一切必要としない唯一のエンドポイントです。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "各キーのリクエスト数は1分あたり120件に制限されています。個人用キーは特定のチームに属するものではなく、ユーザー個人に属するものです。そのため、リクエストでは対象となるチームを明示する必要があります。これが、`me/` に対してチームが指定されていない状態で返される理由です。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhook",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhookとは、スクリプトがタイマーで定期的に問い合わせるのではなく、Genosがサーバーに通知を行う仕組みです。チームオーナーまたはエディターは、「設定」→「開発者」でHTTPSアドレスを追加し、受信するイベントを選択します：",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.created、task.updated、task.completed",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.comment_created",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "message.created：ただし、これは明示的に指定したチャンネルにのみ適用されます。リストが空のリストはチャットイベントを一切送らないという意味であり、すべてのチャンネルを対象にするという意味ではありません。また、ダイレクトメッセージはWebhookに送信されることはありません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "配信状況は記録されるため、実際に何が送信されたかを確認できます。エンドポイントが10回連続で失敗した場合、Genosは応答のないサーバーに繰り返しリクエストを送り続けるのではなく、そのエンドポイントを無効化します。エンドポイントを修正してから、再度有効にしてください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "AIコーディングエージェント向けMCP",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Proプラン以上では、AIコーディングエージェントをGenosに割り当てると、タスクを直接処理できるようになります。https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けないでください）に、上記と同じApiKeyヘッダーを指定して、HTTP MCPサーバーとして追加してください。このエージェントは、タスクやノートを読み取り、ワークスペースを検索するためのツールを備えています。また、書き込みキーがあれば、タスクの作成、更新、コメントの返信も可能です。検索ツールでは、キーワード検索よりも自然言語によるクエリの方が精度が高く、これはユーザーが直接検索する場合と同様です。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "まだ提供されていない機能",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "公開リンク。Genosでは、ログインしておらず、アクセス許可を得ていないユーザーとは、いかなるコンテンツも共有できません。どこかに貼り付けたリンクであっても、ビューアーのアクセス権限が確認されます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "スプレッドシートへのエクスポート。「設定」→「アカウント」から自身のデータをJSON形式でエクスポートでき、ノートはメニューからMarkdown形式でエクスポートできますが、タスクやチャットのCSV形式でのエクスポート機能はありません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Slack、Notion、Jira、Asanaとの連携機能。現在利用できる連携はGoogleとGitHubの2つです。その他のツールへのリンクをタスクへ貼り付けても、通常のリンクとして扱われます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "完全なリファレンス",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「設定」→「開発者」から「Genos Developers」ページにリンクしています。このページには、上記のすべてに関する完全な仕様（すべてのフィールド、すべてのイベントペイロード、および動作例）が掲載されています。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "newest_commit": "146ee518",
+    "sha256": "56eb165a2f1c5fc20b3a8a1c19f649cf7986b258204ce849c8c9db7c2453ceee"
+   },
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "APIキーを作成する",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「設定」→「開発者」の順に選択し、キーを作成します。キーに名前を付け、読み取り専用にするか書き込みも可能にするかを選択し、必要に応じて有効期限を1日から10年の間で設定します。キー名は「gnos_」で始まるため、ログ上で識別しやすくなっています。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "キーはその瞬間に一度だけ表示されます。それを保存する場所にそのままコピーしてください。一度表示されたキーを再度読み取ることはできず、削除して新しいキーを作成するしかありません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "それはあなたと同じように振る舞います――あなたが見えるものはすべて、それも見えます。パスワードと同じように扱ってください。公開リポジトリには絶対に置かないでください。また、ブラウザで実行されるコードの中にも絶対に含めないでください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "キーを削除すると、その直後のリクエストからそのキーは機能しなくなるため、漏洩したと思われるキーに対しては、これが適切な対応となります。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "APIキーを使用する",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "ヘッダー「Authorization: ApiKey <your key>」を送信してください。スキームは文字通り「ApiKey」です。「Bearer」はアプリ独自のサインイン用であり、ここでは拒否されます。同様に、キーを使用してキーを作成または削除することもできません。この分離は意図的なものです。つまり、漏洩したキーがそれ自体をさらに生成することはできないからです。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/me/：キーがどのユーザーとして機能し、どのようなスコープを持つかを確認します。より複雑なデバッグを行う前に、まずここから始めて、キーが正常に動作することを確認してください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/projects/：あなたのプロジェクト。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GETおよびPOST /api/public/v1/tasks/：タスクの一覧表示、または新規作成。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GETおよびPATCH /api/public/v1/tasks/<id>/：単一のタスクを読み取る、または更新する。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "GET /api/public/v1/openapi.json：上記のすべてに関する機械可読な記述であり、キーを一切必要としない唯一のエンドポイントです。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "各キーのリクエスト数は1分あたり120件に制限されています。個人用キーは特定のチームに属するものではなく、ユーザー個人に属するものです。そのため、リクエストでは対象となるチームを明示する必要があります。これが、`me/` に対してチームが指定されていない状態で返される理由です。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhook",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhookとは、スクリプトがタイマーで定期的に問い合わせるのではなく、Genosがサーバーに通知を行う仕組みです。チームオーナーまたはエディターは、「設定」→「開発者」でHTTPSアドレスを追加し、受信するイベントを選択します：",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.created、task.updated、task.completed",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "task.comment_created",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "message.created：ただし、これは明示的に指定したチャンネルにのみ適用されます。リストが空のリストはチャットイベントを一切送らないという意味であり、すべてのチャンネルを対象にするという意味ではありません。また、ダイレクトメッセージはWebhookに送信されることはありません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "配信状況は記録されるため、実際に何が送信されたかを確認できます。エンドポイントが10回連続で失敗した場合、Genosは応答のないサーバーに繰り返しリクエストを送り続けるのではなく、そのエンドポイントを無効化します。エンドポイントを修正してから、再度有効にしてください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "AIコーディングエージェント向けMCP",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Proプラン以上では、AIコーディングエージェントをGenosに割り当てると、タスクを直接処理できるようになります。https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けないでください）に、上記と同じApiKeyヘッダーを指定して、HTTP MCPサーバーとして追加してください。このエージェントは、タスクやノートを読み取り、ワークスペースを検索するためのツールを備えています。また、書き込みキーがあれば、タスクの作成、更新、コメントの返信も可能です。検索ツールでは、キーワード検索よりも自然言語によるクエリの方が精度が高く、これはユーザーが直接検索する場合と同様です。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "まだ提供されていない機能",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "公開リンク。Genosでは、ログインしておらず、アクセス許可を得ていないユーザーとは、いかなるコンテンツも共有できません。どこかに貼り付けたリンクであっても、ビューアーのアクセス権限が確認されます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "スプレッドシートへのエクスポート。「設定」→「アカウント」から自身のデータをJSON形式でエクスポートでき、ノートはメニューからMarkdown形式でエクスポートできますが、タスクやチャットのCSV形式でのエクスポート機能はありません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Slack、Notion、Jira、Asanaとの連携機能。現在利用できる連携はGoogleとGitHubの2つです。その他のツールへのリンクをタスクへ貼り付けても、通常のリンクとして扱われます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "完全なリファレンス",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「設定」→「開発者」から「Genos Developers」ページにリンクしています。このページには、上記のすべてに関する完全な仕様（すべてのフィールド、すべてのイベントペイロード、および動作例）が掲載されています。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "newest_commit": "d6015c9e",
+    "sha256": "1f6c0cc8306c0505eb6b13906a6588bec45178b6bda3f166dbed2a323f417e26"
+   }
+  ],
+  "Genosと他のツールを接続する：API、MCP、リアルタイム": [
+   {
+    "body": [
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "このページの対象者",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "このページは、Genosをスクリプトや他のアプリ、AIコーディングエージェントなど、何か他のものと連携させる方に向けたものです。そのうちの1つの方法については、プログラミングは一切必要ありません。AIコーディングエージェントの設定画面に1つのアドレスを貼り付けるだけで、そのエージェントが直接タスクを実行できるようになります。もしこれらのいずれにも該当しない場合は、このページをスキップしてください。Genosの他の機能はこの方法に依存していません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "APIキーは、それを作成したユーザーとして機能するため、そのユーザーが閲覧できる範囲の情報のみを閲覧できます。一方、リアルタイムストリームは、ログインしているユーザーとして機能します。ただし、Webhookは例外です。チームオーナーまたはエディターがチーム全体向けに設定すると、作成者が誰であっても、そのチームのイベントを配信します。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "APIキーを取得する",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「設定」→「開発者」でキーを作成します。キーは作成時に一度だけ表示されます。その後、読み取れる形で保存されることはありませんので、その時点でコピーしておいてください。キーはいつでも無効化でき、無効化すると次のリクエストから使用できなくなります。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「読み取り」か「書き込み」を選択してください。「読み取り」キーでは、表示されている内容を確認するだけで、何も変更しません。「書き込み」キーでは、作成や更新も行うことができます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "その画面で作成されたキーは個人用です。これらのキーは、ユーザーが所属するすべてのチームでユーザー自身として機能するため、各リクエストでは対象となるチームを指定する必要があります。APIには、独自のチームを保持する「チームスコープのキー」が存在しますが、現時点ではこの画面から作成することはできません。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "用途に合う方法を選ぶ",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "REST API：スクリプトや他のアプリが、必要に応じてGenosのデータ（プロジェクト、そのタスク、および作成・更新対象の個々のタスク）を読み込んだり作成したりするためのものです。レポートの作成、データのインポート、およびスケジュールに基づいて実行するあらゆる処理にご利用ください。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "Webhook：Genosから変更を通知してほしい場合に使います。チームのオーナーまたはエディターが公開HTTPSアドレスを指定すると、タスクが変更されたときや、指定したチャンネルにメッセージが届いたときに、そのアドレスへPOSTされます。定期的に確認しなくても、変更が発生した時点で通知を受け取れます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "MCP（Model Context Protocol）：説明文を貼り付けるのではなく、AIコーディングエージェントに直接タスクを実行させたい場合。https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けない）で、GenosをHTTPサーバーとしてMCPクライアントに追加し、ヘッダー「Authorization: ApiKey <your key>」を送信します。スキームは「Bearer」ではなく、文字通りの「ApiKey」です。これにより、エージェントはタスクを自ら読み取り、書き込みキーを使用してタスクを更新し、コメントを返すことができます。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "リアルタイムストリーム：ライブコンテンツ向け：ダッシュボードや、メッセージが届いた瞬間に反応するボットなど。これは、Genosアプリ自体が使用するのと同じライブイベント（メッセージ、リアクション、誰が何を閲覧したか、誰がオンラインかなど）を伝送し、APIキーではなくGenosのログイン情報でサインインします。これが分かれ目となります。ユーザーがサインインしている場合はリアルタイムストリーム、サーバー間で通信する場合はWebhookとなります。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "動作を確認する",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "isToggleable": false,
+       "level": 3,
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "heading"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "まずは `GET /api/public/v1/me/` から試してみてください。このリクエストでは、そのキーが関連付けられているユーザー、チーム、およびスコープが返されるため、より微妙なエラーが発生する前に、キーが有効であることを確認できます。個人用キーの場合、チーム情報は空で返されます。これは、各リクエストでチーム名を自分で指定する必要があるという合図です。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     },
+     {
+      "children": [],
+      "content": [
+       {
+        "styles": {},
+        "text": "「設定」→「開発者」からは、Genos Developersページにもリンクされています。このページには、REST API、MCP、Webhook、およびすべてのリアルタイムイベントに関する完全なリファレンスと、動作確認済みのサンプルが掲載されています。",
+        "type": "text"
+       }
+      ],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "bulletListItem"
+     },
+     {
+      "children": [],
+      "content": [],
+      "props": {
+       "backgroundColor": "default",
+       "textAlignment": "left",
+       "textColor": "default"
+      },
+      "type": "paragraph"
+     }
+    ],
+    "newest_commit": "146ee518",
+    "sha256": "ffa3b0f12f8c855a07ebf6afdaf8af00138de4eab8f282b0dffc2cfd9f61c1df"
+   }
+  ]
+ }
+}
