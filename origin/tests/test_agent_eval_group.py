@@ -39,7 +39,7 @@ def write_yaml(path: Path, data) -> None:
 
 
 def case(cid, *tags, lang="en", **extra):
-    return {
+    entry = {
         "id": cid,
         "query": "q " + cid,
         "lang": lang,
@@ -49,6 +49,11 @@ def case(cid, *tags, lang="en", **extra):
         "fixture": "v1",
         **extra,
     }
+    if entry.get("kind") == "resume":
+        # a resume case builds its own team (MIP-1471: the loader refuses keys it does not read)
+        for key in ("team_id", "user_id", "fixture"):
+            entry.pop(key, None)
+    return entry
 
 
 class StubAdapter:
