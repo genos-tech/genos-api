@@ -1340,6 +1340,62 @@ class TestTheChipNoteCap(TimelineBase):
         self.assertEqual(len(out["events"]), 2)
 
 
+class TestTheChipNoteScanSaysWhenItCuts(TimelineBase):
+    """The scan that finds the notes pointing at a task (`CHIP_NOTE_SCAN`) used to cut without a
+    word, and chose its candidates by their latest edit anywhere, not by an edit inside the
+    window asked for (MIP-1475)."""
+
+    chipped_note = TestTheChipNoteCap.chipped_note
+
+    def test_a_scan_that_ran_out_says_so(self):
+        task = self.make_task("Export")
+        for minutes in (10, 11, 12, 13, 14):
+            self.chipped_note(task, self.user, minutes)
+        with mock.patch.object(timeline, "CHIP_NOTE_SCAN", 3):
+            out = self.tl("task", task.task_id)
+        self.assertEqual(out["capped"], {"notes": True})
+        self.assertEqual(len(out["events"]), 3)
+
+    def test_a_scan_that_just_fits_does_not_say_so(self):
+        task = self.make_task("Export")
+        for minutes in (10, 11, 12):
+            self.chipped_note(task, self.user, minutes)
+        with mock.patch.object(timeline, "CHIP_NOTE_SCAN", 3):
+            out = self.tl("task", task.task_id)
+        self.assertEqual(out["capped"], {})
+        self.assertEqual(len(out["events"]), 3)
+
+    def test_notes_edited_after_the_window_do_not_crowd_out_the_one_inside_it(self):
+        task = self.make_task("Export")
+        inside = self.chipped_note(task, self.user, 10)
+        for minutes in (200, 201, 202):
+            self.chipped_note(task, self.user, minutes)
+        with mock.patch.object(timeline, "CHIP_NOTE_SCAN", 2):
+            out = self.tl("task", task.task_id, since=self.at(0), until=self.at(60))
+        self.assertEqual(len(out["events"]), 1)
+        self.assertEqual(out["events_total"], 1)
+        self.assertEqual(out["capped"], {})
+        self.assertIn(f"note:task:{inside.note_id}", [e.get("anchor") for e in out["events"]])
+
+    def test_the_candidates_are_the_same_on_every_page(self):
+        task = self.make_task("Export")
+        for minutes in (10, 11, 12, 13):
+            self.chipped_note(task, self.user, minutes)
+        seen, cursor, totals = [], None, set()
+        for _ in range(6):
+            out = self.tl(
+                "task", task.task_id, since=self.at(0), until=self.at(60), limit=1, cursor=cursor
+            )
+            seen += [e["key"] for e in out["events"]]
+            if out["events_total"] is not None:
+                totals.add(out["events_total"])
+            cursor = out["next_cursor"]
+            if not cursor:
+                break
+        self.assertEqual(len(seen), 4)
+        self.assertEqual(len(set(seen)), 4)
+
+
 class TestFromTheReview(TimelineBase):
     def test_a_closing_notice_is_kept_when_status_is_not_asked_for(self):
         root = self.message(self.gm, self.user2, 10, text="root")
