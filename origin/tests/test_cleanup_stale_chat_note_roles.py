@@ -218,21 +218,61 @@ class Classification(Base):
             {"DM": 1, "GM": 1, "PM": 1, "MDM": 1},
         )
 
-    def test_a_deleted_chat_and_a_mismatched_note_are_skipped(self):
-        dead, who = self.chat(), self.person("deadchat")
-        n1 = self.note(dead)
-        self.member(dead, who, T0 + DAY, left=True)
-        r1 = self.role(who, n1, T0 + 2 * DAY)
+    def test_an_explicit_row_on_a_deleted_chat_still_opens_the_note(self):
+        """Why a deleted chat is judged and not skipped."""
+        from origin.views.utils.note_role import get_effective_role
+
+        dead, who = self.chat(), self.person("deadopen")
+        note = self.note(dead)
+        row = self.role(who, note, T0 + 2 * DAY)
         Channel.objects.filter(pk=dead.pk).update(is_deleted=True)
-        live = self.chat()
+        self.assertEqual(get_effective_role(who.id, CHAT, note.note_id), row.role_id)
+
+    def test_a_project_deleted_before_mip_1500_is_cleaned(self):
+        """The chat is detached and deleted, `ProjectMembers` gone, the mirror rows still live
+        with their join dates: nobody is a member, so the old members' rows go."""
+        project = self.project_of("OLD", self.reader)
+        pm = self.pm_chat(project)
+        note = self.note(pm)
+        ChannelMember.objects.filter(channel=pm, user=self.reader).update(ts_joined_at=T0 + DAY)
+        ProjectMembers.objects.filter(project=project).delete()
+        ChannelMember.objects.filter(channel=pm).update(is_deleted=False)  # what 1500's gap left
+        Channel.objects.filter(pk=pm.pk).update(is_deleted=True, project=None)
+        row = self.role(self.reader, note, T0 + 2 * DAY)
+        share = self.role(self.person("pmshare"), note, T0 + DAY, ROLE_VIEWER)
+        got = self.report()
+        self.assertEqual(got["by_chat_kind"]["PM"][stale.REVOKE_MEMBERSHIP], 1)
+        self.assertEqual(got["kept_deliberate_shares"], 1)
+        self.cmd("--apply", "--yes")
+        self.assertFalse(self.alive(row))
+        self.assertTrue(self.alive(share))
+
+    def test_a_current_member_of_a_deleted_group_is_kept_and_a_leaver_is_not(self):
+        dead, here, gone = self.chat(), self.person("here"), self.person("gone")
+        note = self.note(dead)
+        self.member(dead, here, T0 + DAY)
+        self.member(dead, gone, T0 + DAY, left=True)
+        kept = self.role(here, note, T0 + 2 * DAY)
+        out = self.role(gone, note, T0 + 2 * DAY)
+        Channel.objects.filter(pk=dead.pk).update(is_deleted=True)
+        self.cmd("--apply", "--yes")
+        self.assertTrue(self.alive(kept))
+        self.assertFalse(self.alive(out))
+
+    def test_a_note_of_another_kind_than_its_chat_is_skipped(self):
+        live, who = self.chat(), self.person("kindmix")
         n2 = self.note(live)
         ChatNoteMaster.objects.filter(pk=n2.pk).update(chat_type=ChannelKind.DM)
         self.member(live, who, T0 + DAY, left=True)
         r2 = self.role(who, n2, T0 + 2 * DAY)
         got = self.report()
-        self.assertEqual((got["skipped"], got["would_revoke"]), (2, 0))
+        self.assertEqual((got["skipped"], got["would_revoke"]), (1, 0))
         self.cmd("--apply", "--yes")
-        self.assertTrue(self.alive(r1) and self.alive(r2))
+        self.assertTrue(self.alive(r2))
+
+    def test_a_bad_team_id_is_a_command_error(self):
+        with self.assertRaises(CommandError):
+            self.cmd("--team", "not-a-uuid")
 
     def test_task_and_personal_notes_and_ownerless_rows_are_out_of_scope(self):
         gm, who = self.chat(), self.person("scope")

@@ -22,9 +22,14 @@ would have done about it, using the very same rule (`chat_note_access.row_is_mem
                           it is more likely a membership row whose recorded join date is wrong
                           or late. Counted apart so the owner can judge the heuristic. Never
                           revoked here.
-  * `SKIPPED`             no live chat to judge by (the chat is deleted) or the note is filed
-                          under another chat kind than its channel's: left for a separate
-                          decision.
+  * `SKIPPED`             the note is filed under another chat kind than its channel's: left
+                          for a separate decision.
+
+A DELETED chat is judged like any other: an explicit role row is honoured whether or not the chat
+is live (`get_explicit_role`), so a stale row on a deleted chat still opens the note. Projects
+deleted before MIP-1500 left exactly this: the project's chat is detached and deleted, the
+`ProjectMembers` rows are gone, and the revoke could not find the chat. Nobody is a current member
+of a detached project chat, and the soft-undeleted mirror rows carry the join dates.
 
 For a project chat the join date is the soft-deleted mirror `ChannelMember.ts_joined_at`: the
 `ProjectMembers` row the live revoke reads was hard-deleted when the person left, so it is a proxy
@@ -171,7 +176,7 @@ def _classify(rows):
             continue
         kind = KIND_NAMES.get(channel["kind"], str(channel["kind"]))
         cid, uid = str(channel["id"]), str(user_id)
-        if channel["is_deleted"] or note["chat_type"] != channel["kind"]:
+        if note["chat_type"] != channel["kind"]:
             out.append((row, SKIPPED, kind, cid, None))
             continue
         member = members.get((cid, uid))

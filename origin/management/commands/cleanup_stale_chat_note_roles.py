@@ -13,7 +13,9 @@ them, by the SAME rule as the live revoke (`origin/services/chat_note_access.py`
   * "ambiguous": kept like a share, but written within 60 s of the note's creation, which is what
     the creation fan-out looks like, so the recorded join date may be wrong. Counted apart, never
     revoked: read that number before trusting the heuristic;
-  * notes of a deleted chat, or filed under another chat kind than their channel, are skipped.
+  * notes filed under another chat kind than their channel are skipped. A deleted chat is judged
+    like any other (an explicit row still opens the note), which is what finds the rows of
+    projects deleted before MIP-1500.
   For a project chat the join date is the soft-deleted channel mirror's, a proxy for the
   `ProjectMembers` row that was hard-deleted (usually a bit later than the real join, so it errs
   toward keeping).
@@ -48,6 +50,7 @@ Runbook (owner), production, read-only first:
 from __future__ import annotations
 
 import json
+import uuid
 from contextlib import contextmanager
 
 from django.core.management.base import BaseCommand, CommandError
@@ -61,7 +64,7 @@ LINES = (
     ("kept: deliberate shares", "kept_deliberate_shares"),
     ("kept: AMBIGUOUS (looks like a membership row)", "ambiguous_kept"),
     ("untouched: current members", "current_members_untouched"),
-    ("skipped (deleted chat / kind mismatch)", "skipped"),
+    ("skipped (note kind != chat kind)", "skipped"),
 )
 
 
@@ -106,6 +109,11 @@ class Command(BaseCommand):
             raise CommandError("--limit must be >= 0.")
         if opts["batch_size"] < 1:
             raise CommandError("--batch-size must be >= 1.")
+        if opts["team"]:
+            try:
+                uuid.UUID(str(opts["team"]))
+            except ValueError:
+                raise CommandError("--team must be a team id (a UUID).")
         with read_only():
             report = stale.scan(team_id=opts["team"], limit=opts["limit"])
         data = report.as_dict()
