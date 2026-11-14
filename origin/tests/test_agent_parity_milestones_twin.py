@@ -716,3 +716,52 @@ class RoleMatrixTests(TwinBase):
             MilestoneMaster.objects.get(pk=tool_ms.pk).project_id, self.project.project_id
         )
         self.assertEqual(MilestoneMaster.objects.get(pk=rest_ms.pk).project_id, shared.project_id)
+
+
+class MovePeopleTwinTests(TwinBase):
+    def test_people_named_by_a_move_are_judged_against_the_destination_by_both(self):
+        # A guest holds a project row and no team row. Naming one as an assignee is fine in the
+        # project they are on (the source) and refused in a project they are not on (the destination),
+        # and a move is judged by where the milestone ENDS UP, by the PATCH and by the tool.
+        guest = User.objects.create_user(username="guest", email="guest@test.com", password="x")
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=guest)
+        rest_ms, tool_ms = self.milestone("rest guest"), self.milestone("tool guest")
+
+        self.auth(self.owner)
+        response = self.client.patch(
+            f"{MILESTONE_URL}{rest_ms.milestone_id}/",
+            {"project_id": self.dest.project_id, "assignee_ids": [str(guest.id)]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        with self.assertRaises(ToolError):
+            self.tool_move(tool_ms, assignee_ids=[str(guest.id)])
+        for ms in (rest_ms, tool_ms):
+            self.assertEqual(
+                MilestoneMaster.objects.get(pk=ms.pk).project_id, self.project.project_id
+            )
+        # without a move the same person is accepted by both (the source rule)
+        response = self.client.patch(
+            f"{MILESTONE_URL}{rest_ms.milestone_id}/",
+            {"assignee_ids": [str(guest.id)]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        out = self.tool(
+            {
+                "action": "update",
+                "milestone_id": tool_ms.milestone_id,
+                "assignee_ids": [str(guest.id)],
+            }
+        )
+        self.assertEqual(out["assignee_ids"], [str(guest.id)])
+
+    def tool_move(self, milestone, **extra):
+        return self.tool(
+            {
+                "action": "update",
+                "milestone_id": milestone.milestone_id,
+                "project_id": self.dest.project_id,
+                **extra,
+            }
+        )

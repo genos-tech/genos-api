@@ -1639,3 +1639,65 @@ class McpEmptyTaskIdTests(McpMilestoneBase):
         )
         self.assertFalse(is_error, text)
         self.assertIn("milestone_to_task", text)
+
+
+# --------------------------------------------------------------------------------------------
+# found by breaking the guards (see the PR): team scope, and who is told where a milestone went
+# --------------------------------------------------------------------------------------------
+
+
+class RunTeamScopeTests(ToolBase):
+    """A person who is on the project but whose RUN is in another team's workspace is refused, as
+    on every tool: the app's endpoints have no team in the request, the tool has one."""
+
+    def setUp(self):
+        super().setUp()
+        from origin.models.common.team_models import TeamMaster, TeamMembers  # noqa: PLC0415
+
+        self.elsewhere = TeamMaster.objects.create(
+            team_name="Elsewhere", team_email="else@test.com", owner=self.owner
+        )
+        TeamMembers.objects.create(team=self.elsewhere, attendee=self.owner)
+
+    def test_a_task_of_another_teams_workspace_is_not_found_and_stays_a_task(self):
+        t = self.task("Here")
+        with self.assertRaisesRegex(ToolForbidden, "not found"):
+            self.call({"action": "convert", "task_id": t.task_id}, team=self.elsewhere)
+        self.assertFalse(self.fresh(t).is_milestone)
+
+    def test_a_milestone_of_another_teams_workspace_is_not_found_and_not_converted_or_moved(self):
+        m = self.milestone("Here too")
+        with self.assertRaisesRegex(ToolForbidden, "not found"):
+            self.call({"action": "convert", "milestone_id": m.milestone_id}, team=self.elsewhere)
+        with self.assertRaisesRegex(ToolForbidden, "not found"):
+            self.call(
+                {
+                    "action": "update",
+                    "milestone_id": m.milestone_id,
+                    "project_id": self.dest.project_id,
+                },
+                team=self.elsewhere,
+            )
+        stored = MilestoneMaster.objects.get(pk=m.pk)
+        self.assertFalse(stored.is_deleted)
+        self.assertEqual(stored.project_id, self.project.project_id)
+
+
+class WhereItWentTests(ToolBase):
+    def test_a_person_who_can_no_longer_open_the_task_is_not_told_which_it_became(self):
+        # alice and bob are on the milestone; it becomes a task, which is then moved to DST, where
+        # bob (a collaborator now, not on DST) cannot open it.
+        m = self.roadmap_milestone()
+        self.to_task_tool(m)
+        UPDATE_TASK.run({"task_id": m.task_id, "project_id": self.dest.project_id}, self.ctx())
+        row = TaskMaster.objects.get(task_id=m.task_id)
+        self.assertEqual(row.project_id, self.dest.project_id)
+        # a member of both projects is told where it went
+        with self.assertRaises(ToolError) as told:
+            self.to_task_tool(m)
+        self.assertIn(row.display_id, str(told.exception))
+        # a member of only the project it left is not: it reads as a deleted milestone
+        with self.assertRaises(ToolError) as untold:
+            self.to_task_tool(m, user=self.bob)
+        self.assertEqual(str(untold.exception), f"Milestone {m.milestone_id} has been deleted.")
+        self.assertNotIn(row.display_id, str(untold.exception))
