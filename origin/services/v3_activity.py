@@ -51,10 +51,10 @@ from origin.models.chat.unified_models import (
     ActivityType,
     Channel,
     ChannelKind,
-    ChannelMember,
     Message,
 )
 from origin.models.common.user_models import CustomUser
+from origin.services.channel_scope import chat_member_rows, is_chat_member
 
 logger = logging.getLogger(__name__)
 
@@ -639,9 +639,9 @@ def create_task_assign_activity(
     if recipient_id == str(actor.id):
         return []
     channel = message.channel
-    if not ChannelMember.objects.filter(
-        channel=channel, user_id=recipient_id, is_deleted=False
-    ).exists():
+    # Whoever the chat's own membership rule says may open it: a project chat is the project's
+    # people, so a stray channel-member row is not told (MIP-1495).
+    if not is_chat_member(channel.id, recipient_id):
         return []
     if not getattr(message.sender, "is_system_user", False):
         if not _drop_active_viewers([recipient_id], message_surface(message), kind="mention"):
@@ -711,9 +711,7 @@ def create_thread_reply_activity(
     # (DM/MDM channels are small).
     if channel.kind in (ChannelKind.DM, ChannelKind.MDM):
         member_ids = (
-            ChannelMember.objects.filter(channel=channel, is_deleted=False)
-            .exclude(user_id=actor_id)
-            .values_list("user_id", flat=True)
+            chat_member_rows(channel).exclude(user_id=actor_id).values_list("user_id", flat=True)
         )
         recipients = {str(uid) for uid in member_ids if str(uid) not in excluded}
     else:

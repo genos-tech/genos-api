@@ -26,10 +26,11 @@ a client.
 This reports; it never grants. Adding someone stays an explicit action.
 """
 
-from origin.models.chat.unified_models import Channel, ChannelMember
+from origin.models.chat.unified_models import Channel, ChannelKind
 from origin.models.common.user_models import CustomUser
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services.channel_scope import chat_member_rows
 
 # Wire values for `scopeKind`, so the client can word the prompt ("Add
 # to project X" vs "Add to chat Y") and pick the right add endpoint.
@@ -52,13 +53,20 @@ def _members_of_project(project_id) -> set[str]:
 
 
 def _members_of_channel(channel_id) -> set[str]:
+    """Who is a member of the chat `channel_id`, by the chat-membership rule
+    (`channel_scope`, MIP-1495): a project chat is the PROJECT's people (its channel-member
+    row only mirrors that, so a stray row is not a member and is offered "add"), any other
+    chat its live channel-member rows."""
     if channel_id is None:
         return set()
+    channel = Channel.objects.filter(id=channel_id).first()
+    if channel is None:
+        return set()
+    if channel.kind == ChannelKind.PM:
+        return _members_of_project(channel.project_id)
     return {
         str(uid)
-        for uid in ChannelMember.objects.filter(
-            channel_id=channel_id, is_deleted=False
-        ).values_list("user_id", flat=True)
+        for uid in chat_member_rows(channel).values_list("user_id", flat=True)
         if uid is not None
     }
 
