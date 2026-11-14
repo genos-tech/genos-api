@@ -13,6 +13,12 @@ reporter. The requesting user must be on that list to write.
 Approval flow (Phase 7): like all write tools, `requires_approval=True`.
 The user sees the proposed argument set in the Approve / Reject card
 and decides whether to execute.
+
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF; with it off neither exists, see
+`parity.ignore_unless_parity`): `links` replaces the task's links as the app's task page saves them
+(`task_links`), and `reporter_id` changes the reporter under `assign_task`'s rule (a member of the
+team, or someone the task's own ACL already covers; a reporter already on the task is not judged
+again). Neither is something undo can put back (`undo.UPDATE_TASK_UNRESTORABLE_ARGS`).
 """
 
 from __future__ import annotations
@@ -23,11 +29,13 @@ from typing import Any
 from django.db import transaction
 
 from apis.request_id import log_failure
+from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
+from origin.search_engine.agent.parity import ignore_unless_parity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -45,8 +53,13 @@ from origin.search_engine.agent.tools.task_custom_fields import (
     plan_custom_fields,
     project_fields,
 )
+from origin.search_engine.agent.tools.task_links import (
+    LINKS_SCHEMA,
+    plan_links,
+    register_pr_webhooks,
+)
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
-from origin.search_engine.agent.tools.task_people import plan_collaborators
+from origin.search_engine.agent.tools.task_people import canonical_user_id, plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.search_engine.agent.undo import UNDO_KEY, TaskUpdateCapture
 from origin.services.collab_push import push_task_body
@@ -59,6 +72,7 @@ from origin.services.task_reparent import (
     parent_move_error,
     project_move_error,
 )
+from origin.views.utils.scope_guards import is_team_member
 
 # Backing-task columns whose milestone twin has a different name. Every
 # other mirrored field shares its name across the two models.
@@ -71,7 +85,33 @@ _VALID_PRIORITIES = {"Minimal", "Low", "Normal", "High", "Critical"}
 _VALID_EFFORTS = {"Minimal", "Low", "Moderate", "High", "Extensive"}
 
 
+def _new_reporter(raw: Any, task: TaskMaster, allowed: set[str], ctx: ToolContext) -> str | None:
+    """The reporter id to save, or None when `raw` is the reporter already (so a call that
+    restates the current one changes nothing and is not judged again). The guard is
+    `assign_task`'s: a member of this team, or someone the task's ACL already covers; both sets
+    are scoped to this team, so a UUID from another tenant is refused in the words of a missing
+    one. A task always has a reporter, so there is no clearing."""
+    if raw in ("", "null"):
+        raise ToolError("`reporter_id` must be a user id: a task always has a reporter.")
+    raw = canonical_user_id(raw, "`reporter_id`")
+    if raw == str(task.reporter_id):
+        return None
+    if not (raw in allowed or is_team_member(ctx.team_id, raw)):
+        raise ToolError(
+            f"User {raw!r} is not an active member of this team, and is not on this task's "
+            "project. Use get_team_members or list_project_members to find valid user ids."
+        )
+    try:
+        person = CustomUser.objects.get(id=raw)
+    except CustomUser.DoesNotExist:
+        raise ToolError(f"User {raw!r} not found.")
+    if person.is_deleted:
+        raise ToolError(f"User {raw!r} account has been deleted.")
+    return str(person.id)
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    args = ignore_unless_parity(args, PARITY_PROPERTIES)
     check_body_size(args.get("content_text"), "content_text")
     check_body_size(args.get("body_append"), "body_append")
     check_body_size(args.get("body_prepend"), "body_prepend")
@@ -275,6 +315,31 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 task.start_date = new_start
                 update_fields.append("start_date")
                 changed.append("start_date")
+
+    # --- reporter_id and links (MIP-1561, `AGENT_PARITY_TOOLS`) ---
+    # The links replace the whole set, as the task page's save does; the reporter is judged
+    # only when it changes. The reporter is judged against the project the task is in NOW, so it
+    # does not ride along with a project move (as `collaborators` and `custom_fields` do not); the
+    # links are the task's own and move with it.
+    new_links: list[dict[str, Any]] | None = None
+    if args.get("reporter_id") is not None and args.get("project_id") is not None:
+        raise ToolError(
+            "`reporter_id` is judged against the project the task is in: move the task with "
+            "`project_id` first, then set the reporter in a second call. Nothing was changed."
+        )
+    if args.get("reporter_id") is not None:
+        new_reporter = _new_reporter(args["reporter_id"], task, allowed, ctx)
+        if new_reporter is not None:
+            task.reporter_id = new_reporter
+            update_fields.append("reporter_id")
+            changed.append("reporter")
+    if args.get("links") is not None:
+        planned_links = plan_links(args["links"], task.links)
+        if planned_links != (task.links if isinstance(task.links, list) else []):
+            new_links = planned_links
+            task.links = planned_links
+            update_fields.append("links")
+            changed.append("links" if planned_links else "links(cleared)")
 
     # --- custom_fields (by name) and collaborators ---
     # Planned here, written below with the rest. Both belong to the project the
@@ -490,6 +555,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # next keystroke saved the old body back (MIP-694). After the save, and
     # from the re-read row, so a milestone pushes what sync_backing_task
     # actually stored.
+    if new_links:
+        # As the app's save does: a GitHub PR link gets the repo's webhook, best effort.
+        register_pr_webhooks(ctx.user_id, new_links)
+
     if "content" in update_fields:
         push_task_body(task.task_id, task.content or [])
         # `@` chips ping their people, diffed against the stored set so
@@ -526,6 +595,31 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         result[UNDO_KEY] = image
     return result
 
+
+#: What `AGENT_PARITY_TOOLS` adds to this tool's schema (`tool_flag_params`); the tool takes
+#: these only while the flag is on (`parity.ignore_unless_parity`).
+PARITY_PROPERTIES: dict[str, dict[str, Any]] = {
+    "links": {
+        **LINKS_SCHEMA,
+        "description": (
+            "The task's full new set of links, [{url, title}] (http(s) only). Replaces the "
+            "current links: include any you keep, as get_task shows them. [] clears. Omit to "
+            "leave unchanged."
+        ),
+    },
+    "reporter_id": {
+        "type": "STRING",
+        "description": (
+            "New reporter's user id (get_team_members / list_project_members). Same rule as "
+            "assign_task. Omit to leave unchanged."
+        ),
+    },
+}
+
+#: The sentence the flag adds to the description (`tool_flag_text`).
+DESCRIPTION_ADDITION = (
+    " `links` replaces the task's links ([] clears); `reporter_id` changes the reporter."
+)
 
 UPDATE_TASK = Tool(
     name="update_task",

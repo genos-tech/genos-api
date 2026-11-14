@@ -1612,13 +1612,18 @@ class TestUnknownArgumentsAreRefused(McpBase):
         import inspect
         import re
 
+        from origin.search_engine.agent.tool_flag_params import ADDITIONS  # noqa: PLC0415
         from origin.views.public.mcp import tools as mcp_tools
 
         offenders = []
+        # With every flag that publishes parameters ON (`tool_flag_params`): a tool reads those
+        # while the flag is off too, and ignores them (`parity.ignore_unless_parity`).
+        flags = {addition.flag: True for addition in ADDITIONS}
         for tool in mcp_tools.BY_NAME.values():
             run = get_mcp_tool(tool.registry_name).run
             source = inspect.getsource(inspect.getmodule(getattr(run, "__wrapped__", run)))
-            declared = set((mcp_tools.input_schema(tool).get("properties") or {}).keys())
+            with patch.dict(settings.SEARCH_ENGINE, flags):
+                declared = set((mcp_tools.input_schema(tool).get("properties") or {}).keys())
             # `args.get("x")` / `args["x"]`, not `create_kwargs["x"]`: the character
             # before `args` must not be a word character.
             read = set(re.findall(r'(?<![A-Za-z0-9_])args\.get\(\s*"([a-z_]+)"', source))

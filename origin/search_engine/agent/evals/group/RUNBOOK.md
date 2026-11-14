@@ -224,3 +224,15 @@ the model.
   * `t905.bigplan.*` pins `llm: gemini/low` (a 4,096-token cap that binds) and needs
     `AGENT_EFFORT_LEVELS=true`. Standard may come back cut off or with an error TODAY: that is the
     finding (truncation detection, MIP-905 A1, turns it into a message), not a harness fault.
+* **Parity parameters (MIP-1561, tag `t1561`, arm `parity`, flag `AGENT_PARITY_TOOLS`).** One arm for the
+  whole MIP-578 parity batch; later parity tasks add their parameters and cases to the same arm. The files
+  are `t1561-status.yaml`, `-template.yaml`, `-links.yaml` and `-reporter.yaml` (EN and JA per case). The
+  positives have `requires_arm: parity` (the parameter is not declared without it); the negatives
+  (`plain`, `template-none`, `links-body`, `assign-not-reporter`) run on arm0 too: they are the baseline for
+  "a plain request does not start sending a status, reporter, links or template unasked". They judge what the
+  model PROPOSED, with four more `pending_write` keys (`group/content_checks.py`): `args_present` (names that
+  must be sent), `args_absent` (names that must not be), `args_match` (name to a case-insensitive regex on
+  the value as text) and `task_args_match` (the same over the rows of a plan: at least one task must match).
+  The server-side fill (a template body, the default template) is pinned by free tests, not here. Read the
+  `links-update` proposals by hand: `links` is the FULL set, and whether the model kept the task's existing
+  links is a report line, not a failure.

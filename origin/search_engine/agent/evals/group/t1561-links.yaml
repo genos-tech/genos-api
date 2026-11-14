@@ -1,0 +1,95 @@
+# MIP-1561 (flag AGENT_PARITY_TOOLS, arm `parity`): a link is attached to a task, as the task page's
+# link list does. `get_task` already showed links; nothing wrote them. Judged on what the model
+# PROPOSES (`pending_write.args_*`, group/content_checks.py). Positives `requires_arm: parity`; the
+# negatives run on arm0 too. The v1 fixture is read, never written.
+#
+# The task is named by its title (the fixture's "Investigate slow homepage load on mobile Safari"),
+# so the model reads or searches first and then proposes update_task. `links` is the FULL set: the
+# case does not say "add", it says "attach"; whether the model keeps the existing links is read in
+# the report (`args` of the proposal), not failed.
+
+- id: t1561.links-update.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: attach a URL to an existing task through update_task.links."
+  query: 'Attach the link https://web.dev/articles/inp, titled "INP guide", to the task "Investigate slow homepage load on mobile Safari" in the Website Redesign project.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        links: "web\\.dev/articles/inp"
+
+- id: t1561.links-update.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: attach a URL to an existing task through update_task.links."
+  query: Website Redesign プロジェクトのタスク「Investigate slow homepage load on mobile Safari」に、リンク https://web.dev/articles/inp を「INP guide」というタイトルで添付してください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_write:
+      tool: update_task
+      args_match:
+        links: "web\\.dev/articles/inp"
+
+- id: t1561.links-create.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: a new task is created with the spec link attached."
+  query: 'In the Website Redesign project create a task "Implement the pricing page" and attach the spec at https://example.com/specs/pricing, titled "Pricing spec".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_match:
+        links: "example\\.com/specs/pricing"
+
+- id: t1561.links-create.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: a new task is created with the spec link attached."
+  query: Website Redesign プロジェクトに「料金ページを実装する」タスクを作り、仕様書 https://example.com/specs/pricing を「Pricing spec」というタイトルで添付してください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_match:
+        links: "example\\.com/specs/pricing"
+
+- id: t1561.links-body.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): a URL that is part of the DESCRIPTION stays in the description; links is for 'attach this link'."
+  query: 'In the Website Redesign project create a task "Review the competitor pricing" with the description: Compare us with https://example.com/competitor and note the differences.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_absent: [links]
+
+- id: t1561.links-body.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): a URL that is part of the DESCRIPTION stays in the description; links is for 'attach this link'."
+  query: Website Redesign プロジェクトに「競合の価格を確認する」タスクを作ってください。説明は「https://example.com/competitor と比較して、違いをまとめる」です。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_absent: [links]
