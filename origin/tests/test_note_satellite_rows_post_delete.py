@@ -1,11 +1,12 @@
-"""MIP-1517: a note row's removal takes its permission, version, summary, favorite and recent
-rows with it, on EVERY path that removes the row.
+"""MIP-1517: a note row's removal takes its permission, version and summary rows with it, on
+EVERY path that removes the row.
 
-`NotePermissionMaster`, `NoteVersionMaster` (whose rows hold the note's title and body),
-`NoteSummary`, `NoteFavoriteMaster` and `NoteRecentMaster` point at a note by `(note_type,
-note_id)` with no foreign key. A project delete, a task delete or an account erasure removed the
-note row and left all of them. One `post_delete` receiver on the three note models covers every
-path; a path that removes many notes wraps the delete in `batched_note_cleanup()`.
+`NotePermissionMaster`, `NoteVersionMaster` (whose rows hold the note's title and body) and
+`NoteSummary` point at a note by `(note_type, note_id)` with no foreign key. A project delete, a
+task delete or an account erasure removed the note row and left all of them. One `post_delete`
+receiver on the three note models covers every path; a path that removes many notes wraps the
+delete in `batched_note_cleanup()`. (The favorites, recents and mention rows are
+`forget_deleted_notes`', MIP-1514.)
 """
 
 from __future__ import annotations
@@ -18,9 +19,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.favorite_note_models import NoteFavoriteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -71,12 +70,6 @@ class Satellites(BaseAPITestCase):
             note_id=note_id,
             summary_text="a summary of the secret words",
         )
-        NoteFavoriteMaster.objects.create(
-            team=self.team, user=self.user2, note_type=code, note_id=note_id
-        )
-        NoteRecentMaster.objects.create(
-            team=self.team, user=self.user2, note_type=code, note_id=note_id
-        )
 
     def counts(self, code, note_id) -> dict[str, int]:
         kw = {"note_type": code, "note_id": note_id}
@@ -84,20 +77,18 @@ class Satellites(BaseAPITestCase):
             "permission": NotePermissionMaster.objects.filter(**kw).count(),
             "version": NoteVersionMaster.objects.filter(**kw).count(),
             "summary": NoteSummary.objects.filter(**kw).count(),
-            "favorite": NoteFavoriteMaster.objects.filter(**kw).count(),
-            "recent": NoteRecentMaster.objects.filter(**kw).count(),
         }
 
     def assertGone(self, code, note_id):
         self.assertEqual(
             self.counts(code, note_id),
-            {"permission": 0, "version": 0, "summary": 0, "favorite": 0, "recent": 0},
+            {"permission": 0, "version": 0, "summary": 0},
         )
 
     def assertKept(self, code, note_id):
         self.assertEqual(
             self.counts(code, note_id),
-            {"permission": 2, "version": 2, "summary": 1, "favorite": 1, "recent": 1},
+            {"permission": 2, "version": 2, "summary": 1},
         )
 
     def make_member(self, name):
@@ -313,7 +304,7 @@ class Cost(Satellites):
         many = self._project_delete_queries(60)
         self.assertEqual(self._version_deletes(few), 1)
         self.assertEqual(self._version_deletes(many), 1)
-        # 57 more notes: per-note statements would add 5 x 57; only the collector's own
+        # 57 more notes: per-note statements would add 3 x 57; only the collector's own
         # 100-row chunks of the permission rows may differ
         self.assertLess(len(many) - len(few), 5)
 
@@ -333,18 +324,17 @@ class Cost(Satellites):
         small, large = erase(2), erase(40)
         self.assertLess(large - small, 5)
 
-    def test_an_unbatched_delete_costs_five_statements_per_note(self):
+    def test_an_unbatched_delete_costs_one_statement_per_satellite_table(self):
         note = self.make_personal()
+        tables = {m._meta.db_table for m in note_satellites._SATELLITES}
         with CaptureQueriesContext(connection) as ctx:
             note.delete()
-        satellites = [
-            q["sql"]
+        deletes = [
+            q
             for q in ctx.captured_queries
-            if q["sql"].startswith('DELETE FROM "origin_note')
-            or q["sql"].startswith('DELETE FROM "origin_notesummary"')
-            or "search_engine_notesummary" in q["sql"]
+            if q["sql"].startswith("DELETE FROM") and any(f'"{t}"' in q["sql"] for t in tables)
         ]
-        self.assertEqual(len(satellites), len(note_satellites._SATELLITES))
+        self.assertEqual(len(deletes), len(tables))
 
     def test_a_failed_block_flushes_nothing(self):
         note = self.make_personal()

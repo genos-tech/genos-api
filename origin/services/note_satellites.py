@@ -1,27 +1,27 @@
 """The rows that hang off a note by `(note_type, note_id)` and die with it (MIP-1517).
 
 A note is HARD-deleted: none of the three note tables has an `is_deleted` flag, and there is no
-trash (`services/note_delete.py`). But five tables point at a note by number only, with no
+trash (`services/note_delete.py`). But three tables point at a note by number only, with no
 foreign key, so nothing cascades into them when a project, a task or an account takes the note
 row with it:
 
   * `NotePermissionMaster`: who may open it;
   * `NoteVersionMaster`: its history, every row of which holds the note's TITLE AND BODY;
-  * `NoteSummary` (Spotlight): the cached LLM summary of the body, in clear text;
-  * `NoteFavoriteMaster` and `NoteRecentMaster`: the lists of notes people starred or opened.
+  * `NoteSummary` (Spotlight): the cached LLM summary of the body, in clear text.
 
 `origin/signals/note_satellite_signals.py` calls `forget_note_satellites` from a `post_delete`
 receiver on the three note models, so EVERY way a note row goes (a page delete, a folder delete,
 a project or task cascade, the account erasure, a future path nobody has written yet) takes
-these rows with it. Rows that `forget_deleted_notes` (`services/note_delete.py`) also clears are
-simply already gone by then: the delete is a no-op the second time.
+these rows with it. The page and agent deletes also clear the permission and version rows
+themselves (`delete_note`, `_hard_delete`): the second delete finds nothing and is a no-op.
 
-One note costs five small DELETEs. A path that removes many notes at once wraps the delete in
+One note costs three small DELETEs. A path that removes many notes at once wraps the delete in
 `batched_note_cleanup()`: the receiver then only notes the ids, and the block's exit deletes the
-rows of ALL of them in five statements per `BATCH` notes, inside the same transaction.
+rows of ALL of them in three statements per `BATCH` notes, inside the same transaction.
 
-Not here: the `Activity` mention rows (`meta.noteId`, a JSON scan), which stay with
-`forget_deleted_notes`.
+Not here: what other people HOLD about a note (`NoteFavoriteMaster`, `NoteRecentMaster`, the
+`Activity` mention rows, `meta.noteId`), which every delete path clears through
+`forget_deleted_notes` (MIP-1514, `services/note_delete.py`).
 """
 
 from __future__ import annotations
@@ -33,8 +33,6 @@ from contextvars import ContextVar
 from django.db import transaction
 
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.favorite_note_models import NoteFavoriteMaster
-from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.models import NoteSummary
 
@@ -50,8 +48,6 @@ _SATELLITES = (
     NotePermissionMaster,
     NoteVersionMaster,
     NoteSummary,
-    NoteFavoriteMaster,
-    NoteRecentMaster,
 )
 
 

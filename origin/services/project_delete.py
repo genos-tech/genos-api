@@ -26,8 +26,8 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes
-from origin.views.utils.note_role import NOTE_TYPE_TASK
 from origin.services.note_satellites import batched_note_cleanup
+from origin.views.utils.note_role import NOTE_TYPE_TASK
 
 
 def project_contents(project: ProjectMaster) -> dict[str, int]:

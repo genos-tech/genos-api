@@ -1,6 +1,6 @@
 """A note row's removal ends the rows that point at it by number (MIP-1517).
 
-The permission, version, summary, favorite and recent rows of a note carry `(note_type,
+The permission, version and summary rows of a note carry `(note_type,
 note_id)` and no foreign key, so a project, task or account delete that takes the note row with
 it left them behind (the version rows holding the note's body). `QuerySet.delete()` and the
 `on_delete=CASCADE` paths both go through Django's collector, which sends `post_delete` per
