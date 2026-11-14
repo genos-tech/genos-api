@@ -12,6 +12,9 @@ could invent, is read exactly as it was before.
     filled from the window. A drop-only post-filter below repeats the check on the finished
     hits, because the graph expansion fetches its neighbour tasks with a filter of its own that
     has no window.
+  * `rewrite=false` (not a window, but the same kind of MCP-only option): skip the LLM query
+    rewrite and search the raw query. Off by default: absent or `true` is the server's setting,
+    so a caller can never force a paid rewrite where it is switched off. See `skip_rewrite`.
   * `order=newest`: re-orders the hits the search already chose (and the ACL already filtered)
     by `updated_at`, most recent first. It never adds a hit and never reads anything but the
     result list, so it cannot show a row the caller may not read.
@@ -52,6 +55,15 @@ SCHEMA: dict[str, dict[str, Any]] = {
             "Optional. Only return content last updated at or before this moment: an ISO 8601 "
             f"date or date-time, e.g. {_EXAMPLE}. A bare date includes that whole day "
             "(UTC). Combine with `updated_after` for a window."
+        ),
+    },
+    "rewrite": {
+        "type": "boolean",
+        "description": (
+            "Optional. Default: the search expands your query into a few rephrasings with a "
+            "language model before it runs, which takes about 1.5 to 2.5 seconds. Pass false "
+            "to search exactly the words you sent and skip that step: faster, but a vague query "
+            "can find fewer matches, so rephrase it yourself. Passing true changes nothing."
         ),
     },
     "order": {
@@ -179,3 +191,22 @@ class SearchWindow:
             )
             matches = [m for _, m in stamped]
         return matches
+
+
+def skip_rewrite(args: dict[str, Any], ctx: ToolContext) -> bool:
+    """True only for an MCP call that asked for `rewrite: false` (MIP-1378).
+
+    One direction only: `true`, absent or blank all mean "whatever the server is set to", so
+    this can switch the rewrite OFF for a call and never ON. Off the MCP surface it is always
+    False, so an argument a model invents on the in-app tool changes nothing.
+    """
+    if ctx.surface != "mcp":
+        return False
+    raw = args.get("rewrite")
+    if raw is None or raw == "":
+        return False
+    if isinstance(raw, bool):
+        return raw is False
+    if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+        return raw.strip().lower() == "false"
+    raise ToolError(f"`rewrite` must be true or false (got {raw!r}).")

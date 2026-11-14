@@ -525,7 +525,10 @@ CATALOG: tuple[McpTool, ...] = (
             '`order: "newest"` lists the matches by `updated_at`, most recent first, '
             "instead of by relevance; it re-orders what was found, so pair it with "
             '`updated_after`. Example: `{"query": "payment retries", '
-            '"updated_after": "2026-11-07", "order": "newest"}`.'
+            '"updated_after": "2026-11-07", "order": "newest"}`. A query is normally '
+            "expanded into a few rephrasings by a language model first (about 1.5 to 2.5 "
+            "seconds); `rewrite: false` skips that and searches your exact words, so "
+            "rephrase a vague query yourself."
         ),
         # Published here and not on the shared tool: its declaration is what the in-app model
         # reads. `search_kb._run` honours them only for an MCP call (MIP-1379).
