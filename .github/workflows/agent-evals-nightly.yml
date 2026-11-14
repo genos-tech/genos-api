@@ -1,8 +1,8 @@
 # Nightly behavior + judge TREND for the Spotlight / Genos AI agent.
 #
 # The PR gate (agent-evals.yml) hard-gates only the deterministic
-# retrieval core and smoke-judges ONE behavior case — the right call for
-# a gate (judge scores flap; gating on them would flap CI red). But that
+# retrieval core (it no longer smoke-judges a behavior case) — the right
+# call for a gate (judge scores flap; gating on them would flap CI red). But that
 # leaves the fullest quality signal — the whole behavior suite under the
 # LLM judge — unmeasured between releases. This workflow runs it nightly
 # and persists the output, so drift from agent changes (new tools,

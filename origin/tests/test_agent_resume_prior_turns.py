@@ -249,7 +249,8 @@ class ResumePriorBase(ResumeBase):
 class NormalAskUnchangedTests(ResumePriorBase):
     """What a normal (non-resumed) ask hands the model, message for message.
 
-    Recorded on the MIP-977 branch (39c64314) BEFORE this change was written, over
+    Recorded on the MIP-977 branch (39c64314: a branch commit that is not on main, the
+    branch was merged as squashed commits) BEFORE this change was written, over
     inputs fixed here (the question texts, a recap that says `RECAP-n`). The ask
     path is only read by the fix: its one edit is that the lines that put the
     earlier turns in front of the question became a function both legs call.
