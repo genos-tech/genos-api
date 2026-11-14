@@ -14,6 +14,7 @@ missing chat (no existence oracle).
 
 from __future__ import annotations
 
+import re
 import uuid
 from unittest import mock
 
@@ -104,6 +105,25 @@ class PmChatStrayRow(McpBase):
         self.assert_404_like_missing(
             lambda cid: self.client.get(f"/api/v3/channels/{cid}/members/")
         )
+
+    def test_mcp_list_channel_members_refuses_the_stray_row_like_a_missing_chat(self):
+        """MIP-1501: the registry tool shared by the in-app agent and MCP uses the same rule."""
+        self._key(user=self.outsider)
+        got = self._tool_text(self._call("list_channel_members", {"channel_id": str(self.chat.id)}))
+        missing = self._tool_text(
+            self._call("list_channel_members", {"channel_id": str(self.missing_chat_id())})
+        )
+        self.assertTrue(got[1] and missing[1], (got, missing))
+        uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        self.assertEqual(uuid_re.sub("<id>", got[0]), uuid_re.sub("<id>", missing[0]))
+        self.assertNotIn("insider", got[0])
+        self._key(user=self.insider)
+        ok, is_error = self._tool_text(
+            self._call("list_channel_members", {"channel_id": str(self.chat.id)})
+        )
+        self.assertFalse(is_error, ok)
+        self.assertIn("insider", ok)
+        self.assertNotIn("outsider", ok)
 
     def test_message_delta_is_a_404_like_a_missing_chat(self):
         self.as_user(self.outsider)
