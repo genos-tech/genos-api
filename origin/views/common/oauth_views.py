@@ -44,7 +44,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import MULTI_ACCOUNT_PROVIDERS, ConnectedAccount
-from origin.services import crypto, signup_consent
+from origin.services import crypto, signup_consent, start_here_note
 from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
 from origin.services.oauth.registry import get_provider, supported_provider_names
 from origin.services.security_events import record_security_event
@@ -399,6 +399,10 @@ class OAuthCallbackView(APIView):
             )
             self._save_tokens(existing, token_response, save=False)
             existing.save()
+            # The one "Start here" note every new account gets (MIP-1555): only
+            # this first-time branch, never a sign-in. Never raises, and runs in
+            # its own savepoint so it cannot poison this transaction.
+            start_here_note.create_for(user, request=getattr(self, "request", None))
 
         access_jwt, refresh_jwt = self._issue_jwt(user)
         record_security_event(
