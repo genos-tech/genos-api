@@ -232,17 +232,19 @@ class ContentTests(TestCase):
         self.assertEqual(title, "Start here")
 
     @override_settings(MCP_OAUTH_ENABLED=False, API_PUBLIC_BASE_URL=BASE)
-    def test_without_the_oauth_server_there_are_no_connection_steps(self):
+    def test_the_connect_section_does_not_depend_on_the_oauth_switch(self):
+        # Owner decision 2026-11-14: always written.
         _, text = self._text_for()
-        self.assertNotIn("Connect your AI app", text)
-        self.assertNotIn("claude mcp add", text)
-        self.assertIn("Spotlight", text)  # the rest of the note is still there
+        self.assertIn("Connect your AI app", text)
+        self.assertIn("claude mcp add", text)
+        self.assertIn("Spotlight", text)
 
     @override_settings(MCP_OAUTH_ENABLED=True, API_PUBLIC_BASE_URL="")
-    def test_without_a_public_address_the_note_never_shows_a_bare_path(self):
+    def test_without_a_public_address_the_section_keeps_its_steps_but_shows_no_address(self):
         _, text = self._text_for()
+        self.assertIn("Connect your AI app", text)
         self.assertNotIn("claude mcp add", text)
-        self.assertNotIn("`/api/public/v1/mcp`", text)
+        self.assertNotIn("/api/public/v1/mcp", text)
         self.assertEqual(start_here_note.mcp_url(), "")
 
     def test_locale_comes_from_the_account_then_the_browser_then_english(self):

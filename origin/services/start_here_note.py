@@ -31,8 +31,9 @@ How it fits together
   accounts and system users are made without going through signup; the guards
   here are belt and braces.)
 
-The connection steps are only written when the MCP OAuth server is on
-(`mcp_oauth.enabled()`): with it off they would be false.
+The "Connect your AI app" section is ALWAYS written (owner decision 2026-11-14): MCP OAuth is part
+of the product, so the note never depends on the switch. Only the address can be unknown (no
+`API_PUBLIC_BASE_URL`): then the section keeps its steps but shows no address and no command.
 """
 
 from __future__ import annotations
@@ -358,20 +359,17 @@ def _markdown(locale: str) -> str:
     lines = [copy["intro"], ""]
     lines += [f"- {bullet}" for bullet in copy["bullets"]]
 
-    if mcp_oauth.enabled():
-        url = mcp_url()
-        lines += ["", f"## {copy['h_connect']}", "", copy["connect_intro"], ""]
-        lines += [copy["url_label"], ""]
-        if url:
-            lines += [f"`{url}`", ""]
-        else:  # unreachable while enabled() holds; kept so a text never shows a bare path
-            lines += [copy["url_missing"].format(path=mcp_oauth.MCP_PATH), ""]
-        lines += [copy["url_hint"], "", f"### {copy['h_claude']}", ""]
-        lines += [f"{i}. {step}" for i, step in enumerate(copy["claude_steps"], start=1)]
+    url = mcp_url()
+    lines += ["", f"## {copy['h_connect']}", "", copy["connect_intro"], ""]
+    if url:
+        lines += [copy["url_label"], "", f"`{url}`", "", copy["url_hint"], ""]
+    lines += [f"### {copy['h_claude']}", ""]
+    lines += [f"{i}. {step}" for i, step in enumerate(copy["claude_steps"], start=1)]
+    if url:
         lines += ["", f"### {copy['h_code']}", "", copy["code_run"], ""]
-        lines += ["```", f"claude mcp add --transport http genos {url}".rstrip(), "```", ""]
-        lines += [copy["code_signin"], "", copy["plan"], ""]
-        lines += [copy["revoke"].format(menu=copy["menu"])]
+        lines += ["```", f"claude mcp add --transport http genos {url}", "```", ""]
+        lines += [copy["code_signin"]]
+    lines += ["", copy["plan"], "", copy["revoke"].format(menu=copy["menu"])]
     return "\n".join(lines)
 
 
