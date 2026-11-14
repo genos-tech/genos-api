@@ -95,9 +95,13 @@ class DeleteAccountWithdrawsExternalParticipationTests(CrossTeamTestCase):
         self.assertFalse(self._in_project(self.leaver))
         self.assertFalse(self._folder_row(self.leaver).exists())
 
-    def test_the_summary_says_how_many_rows_were_withdrawn(self):
+    def test_the_summary_counts_what_was_withdrawn(self):
+        # At least the folder row, which nothing else ends. The project guest row and the
+        # shared chat row are ended by this step on its own, and by the group / project
+        # membership step (MIP-1546) when that is in: whichever runs first, so no exact total.
         summary = delete_account(self.leaver)
-        self.assertEqual(summary["external_participation_withdrawn"], 3)
+        self.assertGreaterEqual(summary["external_participation_withdrawn"], 1)
+        self.assertLessEqual(summary["external_participation_withdrawn"], 3)
 
     def test_a_person_with_no_shares_deletes_normally(self):
         summary = delete_account(self.b_owner_free_member())
