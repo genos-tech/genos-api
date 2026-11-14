@@ -148,8 +148,10 @@ class CollabCheck(Probes):
 class RestReadersKeepTheir403(Probes):
     """The access-request panel reads this 403 (`NoteOpenFailure`): not part of this change."""
 
-    def test_the_single_note_reader_still_says_403_for_an_existing_unreadable_note(self):
-        self.authenticate(self.outsider)
+    def test_the_single_note_reader_still_says_403_for_a_teammate_with_no_role(self):
+        # A teammate only: a stranger to the note's team gets the 404 a missing note gets
+        # (MIP-1512, `test_note_role_gates_404`).
+        self.authenticate(self.user2)
         res = self.client.get(
             "/api/v2/note/personal/single/",
             {"team_id": str(self.team.team_id), "note_id": self.personal.note_id},
