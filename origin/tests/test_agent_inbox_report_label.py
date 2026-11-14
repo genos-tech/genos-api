@@ -43,7 +43,7 @@ GOLDEN: dict[str, str] = {
     "inbox/activity": "d9e1938fa41cc6f8a4b2060bddff28612112845e0fcae08adf593b359e0fa769",
     "inbox/requests": "ea7240167db1c3a878fcc951c7a2e5e8851bf5789a3fe000fe472821cb1e74ac",
     "inbox/limit-1": "df5493ac8c0e0128c606a9a8a5144ec1a91316510075316309565c8660de0ed9",
-    "declarations": "2ea75af309f465673ede2a6f8c0785617004f0b2f6797aaa2835653289e11998",
+    "declarations": "ed62ffd3efdd82d34a5205126a75ef8bb637d435288e1f1251e095112420dd28",
 }
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")

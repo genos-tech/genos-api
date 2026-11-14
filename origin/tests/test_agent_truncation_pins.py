@@ -45,14 +45,16 @@ from origin.search_engine.llm.types import AgentMessage, FunctionCall
 
 # sha256 of every model call of one run, per scenario, recorded on pristine origin/main
 # (see the module docstring for the recipe).
+# MIP-1533: the plan-bearing scenarios (all but `digest-like`) were re-recorded after the
+# `create_task_plan` declaration gained its body nudge (tool description + `content_markdown`).
 GOLDEN: dict[str, str] = {
-    "plain": "e3430711c12306ba2a30a8e8dfb64bbde25ee7e39dba30f962b5e1fac03bbde5",
-    "plain-ja": "4dd0e3da0db537182ad00acef5a254e9243d6e034d140bb40fe8037f3f74a21e",
-    "effort-low/gemini": "a4afe4d07a82791b87e9176bdef4fe5af5dea7814ed4148508f534722fae96df",
-    "effort-low-thinking/gemini": "1de5c403af64fb281bb96298c7c9e675bf33ba811713c41b0a608a5daa13f1bc",
-    "effort-medium/gemini": "e3430711c12306ba2a30a8e8dfb64bbde25ee7e39dba30f962b5e1fac03bbde5",
+    "plain": "686a8bf3ffe810cb56eae326ba8ebea4804024392a9e058bf6b56071046358bb",
+    "plain-ja": "a6737ba19e81b7a233d008f34ee6635de1f7479b389fa76291afdc7a016319e6",
+    "effort-low/gemini": "0ea5dac2b5b81ba6330a598b1e3c27e380ee69b7b918d234cc000c489d6dee44",
+    "effort-low-thinking/gemini": "4e3ab24144dbad4bb5f3e9141fbd861cb7601ced68b22e884f90f65b0f3f187d",
+    "effort-medium/gemini": "686a8bf3ffe810cb56eae326ba8ebea4804024392a9e058bf6b56071046358bb",
     "digest-like": "264c650056a9a57553446df29282232cb5d8aeb714ecdc197d82bef074f6f6cd",
-    "two-tier-write": "3a264548b958b43bf6e33b591956bbec2967b4c2339b0a60b55249c36bd5af0c",
+    "two-tier-write": "8cd611641eb86bb62e567112953e4359da58e949db4289fd20aa366a026f6ea6",
 }
 
 PLAN_BODY = "### Summary\nShip it.\n\n### Acceptance criteria\n- done\n"

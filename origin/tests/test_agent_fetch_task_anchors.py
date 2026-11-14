@@ -50,7 +50,7 @@ GOLDEN: dict[str, str] = {
     "result/pm": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
     "result/dev": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
     "result/client": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
-    "declarations": "2ea75af309f465673ede2a6f8c0785617004f0b2f6797aaa2835653289e11998",
+    "declarations": "ed62ffd3efdd82d34a5205126a75ef8bb637d435288e1f1251e095112420dd28",
     "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
     "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c",
 }

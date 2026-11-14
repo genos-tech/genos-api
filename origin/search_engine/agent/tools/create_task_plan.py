@@ -595,7 +595,9 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
         "content_markdown": {
             "type": "STRING",
             "description": (
-                "Optional task body in markdown following the house task "
+                "The task's body in markdown: write a short real one for EVERY "
+                "task (what to do, why, acceptance criteria), never a copy of "
+                "the title. Follow the house task "
                 "template: '### 🧾 Summary', '### 🪜 Motivation', "
                 "'### ✅ Acceptance criteria' (bulleted). For bug-type tasks "
                 "use '### 🐞 Summary', '### 🔁 Steps to reproduce', "
@@ -665,7 +667,9 @@ CREATE_TASK_PLAN = Tool(
         "milestone with tasks, break a discussion/chat/task into tasks, or "
         "add MULTIPLE related tasks — NEVER a series of create_task calls. "
         "(create_task remains correct for one single ad-hoc task; for a "
-        "plan as a DOCUMENT/note rather than tasks, use create_note.) Max "
+        "plan as a DOCUMENT/note rather than tasks, use create_note.) Give "
+        "EVERY task its own short content_markdown (what to do, why, "
+        "acceptance criteria), never just the title. Max "
         f"{_MAX_PLAN_TASKS} tasks; reference other tasks in the batch by "
         "array index (parent_index, blocked_by_indexes)."
     ),
