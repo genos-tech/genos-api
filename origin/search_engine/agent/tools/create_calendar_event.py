@@ -34,6 +34,7 @@ from origin.search_engine.agent.calendar import (
     build_time_endpoint,
     calendar_api_error,
     cite_event,
+    effective_time_zone,
     emails_to_attendees,
     google_calendar_request,
     resolve_google_calendar_account,
@@ -57,7 +58,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError("`start_iso` and `end_iso` are required.")
     validate_time_pair(start_iso, end_iso)
 
-    time_zone = args.get("time_zone") or None
+    time_zone = effective_time_zone(
+        args.get("time_zone") or None, (start_iso, end_iso), ctx.user_id
+    )
     calendar_id = args.get("calendar_id") or "primary"
 
     body: dict[str, Any] = {

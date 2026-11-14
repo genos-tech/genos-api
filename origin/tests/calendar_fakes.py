@@ -16,9 +16,11 @@ import copy
 import itertools
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from unittest import mock
 from urllib.parse import unquote
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -74,6 +76,14 @@ class FakeGoogle:
     #: tokens whose every call answers 200 with a body that is not JSON (an HTML error page)
     unreadable: set[str] = field(default_factory=set)
     calls: list[Call] = field(default_factory=list)
+    #: What Google does with a timed value that has NEITHER a UTC offset nor a `timeZone`. `None`: it
+    #: rejects it with HTTP 400, as the API reference says ("A time zone offset is required unless a time
+    #: zone is explicitly specified in `timeZone`"). A zone name: it reads the time in that zone, the
+    #: calendar's own (the other behaviour a caller could meet), so a test can show the event landing at
+    #: the wrong instant if the tool left the zone out.
+    naive_reading: str | None = None
+    #: `(token, calendar id, event id) -> (start, end)` as instants (UTC), for the writes that carried times.
+    instants: dict[tuple[str, str, str], tuple[Any, Any]] = field(default_factory=dict)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
 
     # ---- what a test sets up ---------------------------------------------------------------
@@ -96,6 +106,28 @@ class FakeGoogle:
         self.calendars.setdefault(token_for(account), []).append(
             {"id": calendar_id, "summary": calendar_id, **fields}
         )
+
+    # ---- what Google does with a time ---------------------------------------------------------
+
+    def _instant(self, endpoint: dict[str, Any]) -> datetime | None:
+        """An event endpoint as an instant, or raises `ValueError` where Google answers 400."""
+        if "date" in endpoint:
+            return None  # an all-day date is not an instant
+        parsed = datetime.fromisoformat(endpoint["dateTime"])
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(UTC)
+        zone = endpoint.get("timeZone") or self.naive_reading
+        if zone is None:
+            raise ValueError("Missing time zone definition for start time.")
+        return parsed.replace(tzinfo=ZoneInfo(zone)).astimezone(UTC)
+
+    def _times(self, body: Any) -> tuple[Any, Any] | mock.MagicMock | None:
+        if not isinstance(body, dict) or not ("start" in body or "end" in body):
+            return None
+        try:
+            return self._instant(body.get("start") or {}), self._instant(body.get("end") or {})
+        except ValueError as exc:
+            return response({"error": {"status": "INVALID_ARGUMENT", "message": str(exc)}}, 400)
 
     # ---- what the code under test sees ------------------------------------------------------
 
@@ -149,8 +181,13 @@ class FakeGoogle:
             ]
             return response({"items": items})
         if method == "POST":
+            times = self._times(call.body)
+            if isinstance(times, mock.MagicMock):
+                return times
             event = {"id": f"new{next(self._ids)}", "status": "confirmed", **(call.body or {})}
             self.events[(token, calendar_id, event["id"])] = event
+            if times is not None:
+                self.instants[(token, calendar_id, event["id"])] = times
             return response(event)
         return response({}, 405)
 
@@ -164,6 +201,11 @@ class FakeGoogle:
         if method == "GET":
             return response(event)
         if method == "PATCH":
+            times = self._times(call.body)
+            if isinstance(times, mock.MagicMock):
+                return times
+            if times is not None:
+                self.instants[key] = times
             for field_name, value in (call.body or {}).items():
                 if value is None:
                     event.pop(field_name, None)

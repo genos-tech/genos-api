@@ -41,6 +41,7 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.services.oauth.accounts import accounts_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
+from origin.services.user_time import zone_for_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,38 @@ def build_time_endpoint(value: str, time_zone: str | None) -> dict[str, Any]:
     if time_zone:
         body["timeZone"] = time_zone
     return body
+
+
+#: The end of a timed ISO value that carries its own UTC offset: `Z`, `+09:00`, `-0800`, `+09`.
+_UTC_OFFSET = re.compile(r"(?:[Zz]|[+-]\d{2}(?::?\d{2})?)$")
+
+
+def is_naive_datetime(value: Any) -> bool:
+    """True for a TIMED ISO value with no UTC offset ("2026-12-03T10:00:00"). A date-only value is an
+    all-day date, not a naive time."""
+    if not isinstance(value, str) or _is_date_only(value):
+        return False
+    time_part = value.strip().replace(" ", "T").partition("T")[2]
+    return _UTC_OFFSET.search(time_part) is None
+
+
+def effective_time_zone(time_zone: str | None, values: tuple[Any, ...], user_id: str) -> str | None:
+    """The `timeZone` a calendar write sends (MIP-1059, only while `AGENT_PARITY_TOOLS` is on).
+
+    Google's rule (events.insert / events.patch, `start.dateTime`): "A time zone offset is required
+    unless a time zone is explicitly specified in `timeZone`". The tools were told to pass a naive
+    "YYYY-MM-DDTHH:MM:SS" and, when the model gave no `time_zone`, sent it with neither: a request Google
+    rejects (HTTP 400), where it is not read in some other zone. The app never sends one (its form turns
+    the local time into an instant with `toISOString()`), so there is nothing to mirror: the member's own
+    zone is the reading the approval card states (`member_time_zone`), and it is what is sent.
+
+    A zone the model named wins; a value with an offset needs none; with the flag off the call is what
+    it always was."""
+    if time_zone or not parity_on():
+        return time_zone
+    if any(is_naive_datetime(v) for v in values):
+        return zone_for_user_id(user_id).key
+    return None
 
 
 def validate_time_pair(start_iso: str, end_iso: str) -> None:
