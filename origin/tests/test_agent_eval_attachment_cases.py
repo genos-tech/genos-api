@@ -97,6 +97,11 @@ class CaseFileTests(SimpleTestCase):
                 self.assertGreaterEqual(c.raw["expect"]["answer_chars_at_least"], 20, c.id)
                 self.assertNotIn("pending_write", c.raw["expect"], c.id)
 
+    def test_the_harness_hands_the_proposal_check_to_the_runner_that_reads_it(self):
+        # A key in `GROUP_EXPECT_KEYS` is taken out of `expect` before `runner.run_behavior_case`
+        # sees it (`case_runner`); `pending_tools_excludes` is the runner's own, so it must stay in.
+        self.assertNotIn("pending_tools_excludes", harness.GROUP_EXPECT_KEYS)
+
     def test_every_case_names_the_task_by_its_display_id_too(self):
         # The seed writes rows only, so no search index has seen the task: the display id is how a
         # model reaches it without one.
@@ -164,6 +169,20 @@ class SeedAndCardTests(BaseAPITestCase):
             {self.user.id},
         )
         self.assertIsNone(task.assignee_id)
+
+    def test_a_seed_that_stopped_half_way_is_finished_by_the_next_run(self):
+        task = self.seed()
+        TaskAttachments.objects.filter(task=task, attachment_id=2).delete()
+        seeds.apply(["task_files"], self.info)
+        self.assertEqual(
+            list(
+                TaskAttachments.objects.filter(task=task)
+                .order_by("attachment_id")
+                .values_list("attachment_id", flat=True)
+            ),
+            [1, 2],
+        )
+        self.assertEqual(TaskMaster.objects.filter(team=self.team, title=task.title).count(), 1)
 
     def test_the_seeded_task_has_the_display_id_the_cases_quote(self):
         self.assertEqual(self.seed().display_id, "EAF-1")

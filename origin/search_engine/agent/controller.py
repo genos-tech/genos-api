@@ -1182,6 +1182,7 @@ def _friendly_delete_task_attachment_arguments(
     task shows nothing. Plain text for the card, never a link to the file."""
     from origin.search_engine.agent.tools.delete_task_attachment import (  # noqa: PLC0415
         find_attachment,
+        whole_number,
     )
     from origin.search_engine.agent.tools.task_attachments import (  # noqa: PLC0415
         TYPE_CHARS,
@@ -1190,8 +1191,13 @@ def _friendly_delete_task_attachment_arguments(
     )
 
     task = access.task(args.get("task_id"))
-    attachment_id = _as_int_or_none(args.get("attachment_id"))
-    if task is None or attachment_id is None:
+    try:
+        # The tool's own reading of the id, so the card names a file only for a call that would run
+        # (`True` and `1.5` are refused by the tool, not read as file 1).
+        attachment_id = whole_number(args.get("attachment_id"), "attachment_id")
+    except ToolError:
+        return
+    if task is None:
         return
     attachment = find_attachment(task.task_id, attachment_id)
     if attachment is None:
@@ -1202,13 +1208,6 @@ def _friendly_delete_task_attachment_arguments(
         # What the uploading client sent as the type: cut, as the listing cuts it.
         "type": (attachment.attached_type or "")[:TYPE_CHARS] or None,
     }
-
-
-def _as_int_or_none(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 # Tool-name → nested enrichment pass, applied after the flat resolvers.

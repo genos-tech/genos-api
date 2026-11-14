@@ -800,6 +800,13 @@ class CardTests(AttachmentsBase):
         self.assertNotIn("current", card)
         self.assertNotIn("private.txt", json.dumps(card))
 
+    def test_an_id_the_tool_would_refuse_shows_no_file(self):
+        self.attach(self.task, "n.txt")
+        for bad in (True, 1.5, "1.9", None):
+            with self.subTest(attachment_id=bad):
+                card = self.card({"task_id": self.task.task_id, "attachment_id": bad})
+                self.assertNotIn("current", card)
+
     def test_junk_ids_show_no_file_and_do_not_break_the_card(self):
         for args in (
             {"task_id": self.task.task_id, "attachment_id": "x"},
@@ -858,6 +865,18 @@ class LoopTests(AttachmentsBase):
         # nothing ran before the person said yes
         self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
         self.assertTrue(default_storage.exists(attachment.attached_file.name))
+
+    def test_a_display_id_resolves_for_the_flag_gated_tool_as_for_every_other(self):
+        # The eval cases name the task by `EAF-1`: the loop turns a display id into the number
+        # before the tool sees it, through the catalog entry's `task_ref_args`.
+        attachment = self.attach(self.task, "kickoff.pdf", b"12345", "application/pdf")
+        events, pause = self.drive(
+            {"task_id": self.task.display_id, "attachment_id": attachment.attachment_id}, **ON
+        )
+        self.assertIsNotNone(pause)
+        card = [e for e in events if e["type"] == "tool_call_pending_approval"][0]
+        self.assertEqual(card["arguments"]["current"]["name"], "kickoff.pdf")
+        self.assertFalse([e for e in events if e["type"] == "tool_call_error"])
 
     def test_with_the_flag_off_the_call_is_an_unknown_tool_and_nothing_is_proposed(self):
         attachment = self.attach(self.task, "kickoff.pdf")

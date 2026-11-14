@@ -439,26 +439,33 @@ def seed_task_files(info: dict[str, Any]) -> None:
     lang = "ja" if info["team"] == "ja" else "en"
     spec = TASK_FILES[lang]
     team_id = info["team_id"]
-    if TaskMaster.objects.filter(team_id=team_id, title=spec["task"], is_deleted=False).exists():
-        return
     me = info["user_id"]
     project = _isolated_project(info, "Eval task files", "EAF", [me])
-    number = (
-        TaskMaster.objects.filter(project=project).aggregate(m=Max("project_task_number"))["m"] or 0
-    )
-    task = TaskMaster.objects.create(
-        team_id=team_id,
-        project=project,
-        reporter_id=me,
-        # Nobody's: the viewer reads it as a member of the project, and it does not join "my tasks"
-        # lists that other items' cases count and name.
-        assignee_id=None,
-        title=spec["task"],
-        status="Open",
-        priority="Normal",
-        project_task_number=number + 1,
-    )
+    task = TaskMaster.objects.filter(
+        team_id=team_id, project=project, title=spec["task"], is_deleted=False
+    ).first()
+    if task is None:
+        number = (
+            TaskMaster.objects.filter(project=project).aggregate(m=Max("project_task_number"))["m"]
+            or 0
+        )
+        task = TaskMaster.objects.create(
+            team_id=team_id,
+            project=project,
+            reporter_id=me,
+            # Nobody's: the viewer reads it as a member of the project, and it does not join "my
+            # tasks" lists that other items' cases count and name.
+            assignee_id=None,
+            title=spec["task"],
+            status="Open",
+            priority="Normal",
+            project_task_number=number + 1,
+        )
     for index, (name, mime, content) in enumerate(spec["files"], start=1):
+        # Each file is looked for on its own, so a seed that stopped half way (the task made, a file
+        # not saved) is finished by the next run, and a finished one writes nothing.
+        if TaskAttachments.objects.filter(task=task, attachment_id=index).exists():
+            continue
         attachment = TaskAttachments(
             task=task,
             attachment_id=index,
