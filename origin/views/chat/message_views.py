@@ -913,8 +913,11 @@ class TaskCardMessageView(AuthenticatedAPIView):
     can originate from surfaces (Task Home, board) where the PM channel
     isn't loaded client-side.
 
-    Authorization: the requester must be an active member of the PM
-    channel that holds the card. This deliberately does NOT require the
+    Authorization: the requester must be a member of the PM channel
+    that holds the card (`is_chat_member`: the project's people). A
+    non-member is answered exactly as a task with no card (200
+    `{"updated": false}`), so the response does not say whether a card
+    exists. This deliberately does NOT require the
     requester to be the message's sender (the card's sender is the
     project system user), which is why it can't reuse
     `MessageDetailView.patch` (sender-only).
@@ -950,9 +953,9 @@ class TaskCardMessageView(AuthenticatedAPIView):
             return Response({"updated": False}, status=status.HTTP_200_OK)
 
         if not is_chat_member(message.channel_id, request.user.id):
-            # 404-not-403 to match the existence-hiding rule used
-            # everywhere else in this view file.
-            raise Http404("Task card message not found.")
+            # The SAME answer as "no card" (MIP-1494). A 404 here against the 200 sentinel
+            # above told any team member whether a task id has a chat card they cannot read.
+            return Response({"updated": False}, status=status.HTTP_200_OK)
 
         rewrite_card_message(message, body=body_json, body_text=body_text, metadata=metadata)
 

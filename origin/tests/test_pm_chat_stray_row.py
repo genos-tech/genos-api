@@ -158,15 +158,21 @@ class PmChatStrayRow(McpBase):
         )
         self.assertEqual(res.status_code, 404, res.content)
 
-    def test_task_card_sync_is_a_404(self):
+    def test_task_card_sync_answers_a_stray_row_like_a_task_with_no_card(self):
+        """MIP-1494: not a 404 (that told a non-member the task has a card); the sentinel."""
         Message.objects.filter(pk=self.message.pk).update(task=self.task)
+        self.message.refresh_from_db()
+        body_before = self.message.body
         self.as_user(self.outsider)
         res = self.client.patch(
             f"/api/v3/tasks/{self.task.pk}/card-message/",
-            {"body": [{"type": "paragraph", "content": []}]},
+            {"body": [{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]},
             format="json",
         )
-        self.assertEqual(res.status_code, 404, res.content)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json(), {"updated": False})
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, body_before)
         self.as_user(self.insider)
         res = self.client.patch(
             f"/api/v3/tasks/{self.task.pk}/card-message/",
