@@ -476,6 +476,12 @@ export default defineRailway(() => {
       JWT_SECRET_KEY: preserve(),
       LOG_FORMAT: preserve(),
       REPORT_AI_SENTENCES: preserve(),
+      // MIP-1374: a scheduled report's web push is sent from this service, and it is silently skipped without the VAPID keys
+      // (`vapid_configured()` is false): the 17:00 recap of 2026-11-14 ran "ok" and no push arrived.
+      WEBPUSH_MEDIA_BASE_URL: preserve(),
+      WEBPUSH_VAPID_ADMIN_EMAIL: preserve(),
+      WEBPUSH_VAPID_PRIVATE_KEY: preserve(),
+      WEBPUSH_VAPID_PUBLIC_KEY: preserve(),
     },
     deploy: {
       cronSchedule: "*/5 * * * *",
