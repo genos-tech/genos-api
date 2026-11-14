@@ -85,9 +85,9 @@ def _grantees_of_personal_note(note_id) -> set[str]:
 
     out = {
         str(uid)
-        for uid in NotePermissionMaster.objects.filter(
-            note_type=1, note_id=note_id
-        ).values_list("user_id", flat=True)
+        for uid in NotePermissionMaster.objects.filter(note_type=1, note_id=note_id).values_list(
+            "user_id", flat=True
+        )
         if uid is not None
     }
     owner_id = (
@@ -157,9 +157,7 @@ def non_member_mentions(
         scope_kind = SCOPE_CHANNEL
         reachable = _members_of_channel(channel_id)
         scope_id = str(channel_id)
-        scope_name = (
-            Channel.objects.filter(id=channel_id).values_list("title", flat=True).first()
-        )
+        scope_name = Channel.objects.filter(id=channel_id).values_list("title", flat=True).first()
     elif folder_id is not None and is_team_folder(folder_id):
         folder = (
             PersonalNoteFolder.objects.filter(folder_id=folder_id)
@@ -197,7 +195,9 @@ def non_member_mentions(
     # simply drops out rather than surfacing an id with no label.
     users = [
         {"userId": str(row["id"]), "userName": row["username"]}
-        for row in CustomUser.objects.filter(id__in=missing).values("id", "username")
+        for row in CustomUser.objects.filter(id__in=missing, is_deleted=False).values(
+            "id", "username"
+        )
     ]
     if not users:
         return None
