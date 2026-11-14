@@ -128,3 +128,32 @@ arrived. Every row above has a numbered section in the runbook:
 - **backend-django** (required) — system check, migration-drift check, and
   `coverage run manage.py test origin.tests` against a Postgres 15 service.
 - **backend-django-lint** (report-only) — `ruff check origin apis`.
+
+### agent-evals: when the billed Vertex run starts
+
+`.github/workflows/agent-evals.yml` runs the Spotlight/Genos agent evals (a real Vertex run,
+about 5 minutes) only when what the in-app model sees could have changed, not by directory. A
+cheap `surface` job (no secrets, no Vertex, no database) runs `scripts/agent_surface_hash.py` on
+the PR merged into `main` and on `main`: one sha256 over the tool declarations as each provider
+adapter receives them, the system prompts the agent loop builds (flags as they ship, and with every
+`AGENT_*` flag off), the in-app tool directory and the `SEARCH_ENGINE` knobs that steer the model.
+`scripts/agent_eval_gate.py` then decides:
+
+- hashes equal, and no file that shapes retrieval or the loop changed: the Vertex steps are
+  **skipped** (the job still ends green, so the gated deploy is unaffected). An MCP-only tool, a change
+  inside a tool's `run`, an access fix, a log line, a flag that ships off or a middleware edit start no
+  billed step (unless the same PR also touches a `FORCE_PATHS` file).
+- hashes differ, or a `FORCE_PATHS` file changed (search, reranker, chunkers, embeddings, `llm/`, the
+  result fencing / length / history helpers, `search_kb`, `demo_seeder`, `Pipfile*`): the full eval **runs**.
+- the hash could not be computed, or anything in the gate breaks: the eval **runs** (fails open).
+
+Not in the hash: tool result text (it needs a database; `python manage.py agent_fingerprint` does
+fingerprint it) and `agent/controller.py` (the loop; it is also touched by changes the model never
+sees, which a path rule cannot tell apart). A PR that only changes what a tool returns, or how the loop
+assembles the model's input, is skipped by the gate: label it `run-evals`, or measure it in the grouped
+paid run. A `run-evals` label stays on the PR, so it bills on every later push; remove it when done.
+
+Escapes: label a PR `run-evals` to force the run (adding the label starts it) or `skip-evals` to force
+the skip; `workflow_dispatch` always runs (`dry_run: true` only prints the decision for that ref
+against `main`). To see what the hash covers locally:
+`python scripts/agent_surface_hash.py` (prints one line per component). Tests: `origin.tests.test_agent_surface_hash`.

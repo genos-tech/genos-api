@@ -25,6 +25,26 @@
 # Required repo VARIABLE:
 #   RUN_AGENT_EVALS = "true"  -> run the GCP-backed evals.
 #
+# WHEN THE BILLED STEPS RUN (MIP-1101). Not by directory: a new MCP-only tool, a refactor of
+# a tool's lookup, an access fix or a log line live under `origin/search_engine/` and cannot
+# change one word the model reads, yet used to start a Vertex run that somebody had to cancel by
+# hand. A cheap `surface` job (no secrets, no Vertex, no OIDC token, no database) now hashes what
+# the in-app model is shown (tool declarations, the system prompts, the tool directory and the
+# knobs that steer the model: scripts/agent_surface_hash.py) on the commit under test and on its
+# base, and `scripts/agent_eval_gate.py` decides:
+#   * the two hashes are equal AND no retrieval / agent-loop file changed -> the Vertex steps are
+#     skipped (the job still ends SUCCESS, so `deploy: needs: agent-evals` stays valid);
+#   * they differ, or a file in FORCE_PATHS (search, chunkers, llm adapters, the loop...) changed
+#     -> the full eval runs;
+#   * the hash could not be computed, or anything in the gate fails -> the evals RUN (fail open:
+#     a bug in the gate can cost a run, never skip a real change).
+# Escapes: label a PR `run-evals` to force the run (adding the label starts a run), `skip-evals`
+# to force the skip, or start the workflow by hand (workflow_dispatch always runs; `dry_run`
+# only prints the decision). Tool RESULT text is not in the hash (it needs a database): a PR that
+# only changes what a tool returns is skipped unless the file is in FORCE_PATHS; measure those in
+# the grouped paid run, and so is an edit to agent/controller.py (the loop: label the PR
+# `run-evals` when it changes what the model receives). See the README "CI" section.
+#
 # ⚠️ `RUN_AGENT_EVALS` is deliberately SEPARATE from `DEPLOY_TO_GCP`.
 # They used to be the same switch, which meant that turning off GCP
 # *hosting* (2026-07-30, the app moved to Railway-only) silently turned
@@ -47,17 +67,20 @@ on:
   # deploy is never skipped, so `deploy: needs: agent-evals` stays valid.
   push:
     branches: [main]
-  # PRs only run the evals when the change can actually move the numbers. This
-  # is an early warning, not the gate: the pre-deploy run on `main` above is
-  # what protects prod, and it still runs on every merge. The trade is that a
-  # regression from a path not listed here surfaces at merge (main red, deploy
-  # blocked) instead of on the PR.
+  # PRs only run the evals when the change can actually move the numbers. Two filters: this
+  # `paths:` list is the coarse one (no run at all), and the `surface` job below is the fine one
+  # (the run starts, costs a minute of plain CI, and skips the Vertex steps when what the model
+  # sees did not change). This is an early warning, not the gate: the pre-deploy run on `main`
+  # above is what protects prod, and it goes through the same surface check.
+  #
+  # `labeled` is here only so the `run-evals` label starts a run; every other label is ignored by
+  # the job `if`s and by the concurrency group (it never cancels a run in progress).
   #
   # Deliberately NOT listed:
   #   * `origin/models/**` — the chunkers do read them (task_chunker imports
   #     task_models), so a field change CAN move retrieval numbers. Left out
-  #     because most PRs here touch models, which would defeat the filter; the
-  #     merge run covers it.
+  #     because most PRs here touch models, which would defeat the filter. The chunker file
+  #     itself is in the gate's FORCE_PATHS, so a change that reaches the index text still runs.
   #   * `origin/agent/**` — that's `evals/runs/*.jsonl`, committed eval OUTPUT.
   #     Recording a run must not trigger another one.
   #
@@ -65,6 +88,7 @@ on:
   # ever turned on, a skipped run leaves the check pending forever and blocks
   # merges — you'd need the always-passing companion-job pattern instead.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "origin/search_engine/**" # agent, chunkers, embeddings, llm, eval harness + cases
       # ...but not a baseline-only refresh: trajectory_baseline.json is the
@@ -74,14 +98,26 @@ on:
       - "apis/settings.py" # EMBEDDING_PROVIDER / GEMINI_USE_VERTEX / RAG knobs
       - "Pipfile"
       - "Pipfile.lock"
+      # The gate's own workflow: an edit runs it once, which is how it is tested. The hashes are
+      # equal for such an edit, so the Vertex steps are skipped (the cheap `surface` job still runs).
       - ".github/workflows/agent-evals.yml"
+  # By hand. Always runs the evals (it is the escape hatch); `dry_run` runs only the surface job
+  # and prints what the gate would have decided for this ref against `main` (a free way to check it).
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only print the gate's decision; start no Vertex step"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   id-token: write # mint the WIF OIDC token
 
+# A label event gets a group of its own (named by the label), so an unrelated `labeled` run can
+# never cancel the run a push started, and a `run-evals` run is not cancelled by another label.
 concurrency:
-  group: agent-evals-${{ github.ref }}
+  group: agent-evals-${{ github.ref }}-${{ github.event.action == 'labeled' && format('label-{0}', github.event.label.name) || 'code' }}
   cancel-in-progress: true
 
 env:
@@ -99,6 +135,121 @@ env:
   EVAL_MIN_RECALL: "0.65"
 
 jobs:
+  # The cheap half (MIP-1101): decides whether `agent-evals` below may start its billed steps.
+  # No secrets, no Vertex, no OIDC token (`permissions: contents: read` only) and no database: it
+  # imports the app, builds the tool declarations and system prompts exactly as the agent loop
+  # does against a recording adapter, and hashes them (scripts/agent_surface_hash.py) for the
+  # commit under test and for its base. FAIL-OPEN end to end: every step but the checkout is
+  # `continue-on-error`, so a step that breaks leaves no hash and the evals run; the job itself
+  # stays green so a broken gate does not also paint the PR red.
+  #   pull_request  commit = the PR merged into its base (what GitHub checks out), base = that
+  #                 merge's first parent, i.e. `main` right now (a PR is compared with what
+  #                 would land, not with a stale branch point);
+  #   push to main  base = the commit before the push;
+  #   dispatch      base = origin/main (the commit before it when the ref IS main).
+  surface:
+    name: surface (what the model sees)
+    if: >-
+      (github.event_name != 'pull_request' || github.event.action != 'labeled'
+       || github.event.label.name == 'run-evals')
+      && (github.event_name != 'push' || vars.RUN_AGENT_EVALS == 'true'
+          || vars.DEPLOY_TO_GCP == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      reason: ${{ steps.gate.outputs.reason }}
+    env:
+      PIPENV_PIPFILE: ${{ github.workspace }}/Pipfile
+      PIPENV_VENV_IN_PROJECT: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      # Base and head are hashed in two processes: a fixed seed means a set-ordering leak cannot
+      # make every PR "differ" (which would fail safe, but silently defeat the gate).
+      PYTHONHASHSEED: "0"
+      # Settings only need to import: nothing here ever opens a connection.
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:1/unused
+      DJANGO_SETTINGS_MODULE: apis.settings_test
+      DJANGO_SECRET_KEY: ci-surface-secret-key
+      JWT_SECRET_KEY: ci-surface-secret-key
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base commit and the diff against it
+
+      - name: Pick the base commit, list the changed files
+        id: base
+        continue-on-error: true
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) base=$(git rev-parse --verify -q 'HEAD^1^{commit}' || true) ;;
+            push) base="$BEFORE" ;;
+            *)
+              base=$(git rev-parse --verify -q 'origin/main^{commit}' || true)
+              if [ "$base" = "$(git rev-parse HEAD)" ]; then
+                base=$(git rev-parse --verify -q 'HEAD~1^{commit}' || true)
+              fi
+              ;;
+          esac
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "::warning::No usable base commit (${base:-none}): the gate fails open and the evals run."
+            exit 0
+          fi
+          echo "base: $base"
+          git diff --name-only --no-renames "$base" HEAD > "$RUNNER_TEMP/changed.txt"
+          echo "changed files:"; cat "$RUNNER_TEMP/changed.txt"
+          git worktree add --detach "$RUNNER_TEMP/base-tree" "$base"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: setup-python
+        continue-on-error: true
+        with:
+          python-version: "3.11"
+      - run: pip install pipenv==2026.7.1
+        continue-on-error: true
+      # Its own cache key (not ci.yml's): this venv has no test tooling, and one saved under
+      # ci.yml's key would be restored there without it.
+      - name: Cache venv
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: ${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-surface-${{ hashFiles('Pipfile.lock') }}
+      - name: Install deps
+        continue-on-error: true
+        run: pipenv sync
+
+      # The SAME script, from this checkout, on both trees: the base does not have it yet when
+      # it lands, and a base without `agent_fingerprint` makes this step fail, which fails open.
+      - name: Hash the model surface (this commit)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pipenv run python scripts/agent_surface_hash.py --repo . | tee "$RUNNER_TEMP/head.txt"
+      - name: Hash the model surface (the base)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pipenv run python scripts/agent_surface_hash.py --repo "$RUNNER_TEMP/base-tree" | tee "$RUNNER_TEMP/base.txt"
+
+      - name: Decide
+        id: gate
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          EVENT: ${{ github.event_name }}
+          # An env var, never `${{ }}` inside the script: a label name is user-controlled text.
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BASE_HASH_FILE: ${{ runner.temp }}/base.txt
+          HEAD_HASH_FILE: ${{ runner.temp }}/head.txt
+          CHANGED_FILES_FILE: ${{ runner.temp }}/changed.txt
+        run: python3 scripts/agent_eval_gate.py
+
   agent-evals:
     name: agent-evals (quality gate)
     # On PRs the `on: pull_request: paths:` filter above already limits this to
@@ -112,9 +263,14 @@ jobs:
     # daily, and the deploy's post-deploy smoke runs a real agent query on the
     # live revision. GCP is the parallel env (Railway is live), so the residual
     # risk of an unlisted path moving retrieval numbers is bounded.
+    # `needs: surface` + `!cancelled()`: a `surface` job that FAILED still lets this run (its
+    # output is empty, which reads as "run"). Only a `surface` that was skipped on purpose (an
+    # unrelated label, or nothing enabled on a push) skips this too.
+    needs: surface
     if: >-
-      github.event_name == 'pull_request' || vars.RUN_AGENT_EVALS == 'true'
-      || vars.DEPLOY_TO_GCP == 'true'
+      !cancelled() && needs.surface.result != 'skipped'
+      && (github.event_name == 'pull_request' || vars.RUN_AGENT_EVALS == 'true'
+          || vars.DEPLOY_TO_GCP == 'true')
     runs-on: ubuntu-latest
     env:
       PIPENV_VENV_IN_PROJECT: "1"
@@ -177,20 +333,16 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      # Decide whether this run needs the (Vertex-billed, multi-minute) eval.
-      # PRs reach here only via the path-filtered `on: pull_request` trigger, so
-      # they always run. On a push to main we diff the merge and skip the heavy
-      # steps when nothing in the eval's dependency surface changed — the hard
-      # retrieval gate = the chunkers + search (`origin/search_engine`, which
-      # read `origin/models`) over seeded demo data (`origin/services/demo_seeder.py`,
-      # via the eval fixture) under RAG knobs (`apis/settings.py`) + deps
-      # (`Pipfile*`). A merge touching none of those can't move the numbers.
-      # FAIL-OPEN: any ambiguity (unknown base, API hiccup, empty diff) runs the
-      # full eval. Skipped-case coverage: agent-evals-nightly.yml still trends
-      # the full numbers daily, and the deploy job's post-deploy smoke runs a
-      # real agent query on the live revision. The job still finishes SUCCESS
-      # when skipped, so `deploy: needs: agent-evals` is unaffected and a future
-      # required-check can't deadlock (the concern in the `on:` comment).
+      # Whether this run needs the (Vertex-billed, multi-minute) eval is decided by the `surface`
+      # job above (it hashes what the model sees on this commit and on its base, forces the run for
+      # the files a hash cannot see, honours the `run-evals` / `skip-evals` labels, and fails open).
+      # Here it is only read: `run=false` is the one value that skips the billed steps, and an
+      # empty or any other value (a `surface` job that broke) runs them. This replaces the old
+      # path-regex over the push's file list: the gate now also covers pushes to main.
+      # Skipped-case coverage: agent-evals-nightly.yml still trends the full numbers daily, and
+      # the deploy job's post-deploy smoke runs a real agent query on the live revision. The job
+      # still finishes SUCCESS when skipped, so `deploy: needs: agent-evals` is unaffected and a
+      # future required-check can't deadlock (the concern in the `on:` comment).
       # The Vertex-billed steps need a live GCP project: WIF has no pool to
       # federate against once the env is torn down, so `auth@v2` fails with
       # `invalid_target` BEFORE anything is spent. That is not a quality
@@ -217,35 +369,22 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Decide if the eval is needed (path relevance)
+      - name: Decide if the eval is needed (surface gate)
         id: changes
         env:
-          GH_TOKEN: ${{ github.token }}
+          SURFACE_RUN: ${{ needs.surface.outputs.run }}
+          SURFACE_REASON: ${{ needs.surface.outputs.reason }}
         run: |
           if [ "${{ steps.gcp.outputs.available }}" != "true" ]; then
             echo "No GCP env — nothing to authenticate against."
             echo "relevant=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "PR run — the on.pull_request paths filter already gated this."
-            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          if [ "$SURFACE_RUN" = "false" ]; then
+            echo "Surface gate: skip. $SURFACE_REASON"
+            echo "relevant=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          files=$(gh api \
-            "repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.sha }}" \
-            --paginate --jq '.files[].filename' 2>/dev/null || true)
-          if [ -z "$files" ]; then
-            echo "No file list (new base / API hiccup) — fail open, run the eval."
-            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "changed files:"; printf '%s\n' "$files"
-          # Keep in sync with the eval's real dependency surface (see comment above).
-          if printf '%s\n' "$files" | grep -Eq \
-            '^(origin/search_engine/|origin/models/|origin/services/demo_seeder\.py$|apis/settings\.py$|Pipfile$|Pipfile\.lock$|\.github/workflows/agent-evals\.yml$)'; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No eval-relevant paths changed — skipping the Vertex eval."
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Surface gate: run (${SURFACE_REASON:-no answer from the surface job: failing open})."
+          echo "relevant=true" >> "$GITHUB_OUTPUT"
 
       - name: Eval skipped — deterministic gate auto-passes
         if: steps.changes.outputs.relevant != 'true'
@@ -254,7 +393,7 @@ jobs:
             echo "Skipped because the GCP env is unavailable, NOT because the change is safe."
             echo "Re-run this workflow once GCP is back, or move the evals to Railway."
           else
-            echo "Skipping the Vertex eval (no eval-relevant paths). Nightly + post-deploy smoke still cover retrieval."
+            echo "Skipping the Vertex eval: the surface gate says the model sees nothing new (see the surface job). Nightly + post-deploy smoke still cover retrieval."
           fi
           echo "Gate passes so \`deploy: needs: agent-evals\` stays valid."
 
