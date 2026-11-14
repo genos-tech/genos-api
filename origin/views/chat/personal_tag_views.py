@@ -27,7 +27,8 @@ from origin.models.chat.personal_tag_models import (
     PersonalChannelTag,
     PersonalChannelTagAssignment,
 )
-from origin.models.chat.unified_models import ChannelKind, Message
+from origin.models.chat.unified_models import Channel, ChannelKind, Message
+from origin.services.channel_scope import chat_member_q
 from origin.views.chat.channel_views import _get_channel_for_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 
@@ -112,8 +113,7 @@ class PersonalTagListView(AuthenticatedAPIView):
         assignment_rows = PersonalChannelTagAssignment.objects.filter(
             tag__user=request.user,
             channel__is_deleted=False,
-            channel__members__user=request.user,
-            channel__members__is_deleted=False,
+            channel_id__in=Channel.objects.filter(chat_member_q(request.user.id)).values("id"),
         ).values_list("channel_id", "tag_id")
         assignments = {}
         tags_by_channel_order = {}  # preserves per-channel insertion order for ranking
