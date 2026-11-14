@@ -1,17 +1,29 @@
-# Evals-in-CI quality gate for the Spotlight / Genos AI agent.
+# Retrieval quality gate for the Spotlight / Genos AI agent (MIP-1527 trimmed it to what it can
+# actually see).
 #
-# The "まわす / continuously improve the AI" half of DevOps × AI Agent: every
-# PR runs the agent eval harness against a deterministic seeded fixture, and
-# a merge to `main` only deploys to Cloud Run if the quality gate passes.
+# WHAT THIS RUNS. `agent_eval --retrieval` against a deterministic seeded fixture: the seed corpus is
+# re-indexed (Vertex embeddings), then 75 cases call `search()` (BM25 + vector + RRF); each call
+# runs the query rewriter, one small Gemini call, unless the case pins `rewrite: false` (MIP-860).
+# The reranker is OFF here. The gate fails when fewer cases pass, or mrr / recall_at_n are lower,
+# than the floors in `scripts/retrieval_gate.py` (the only place they live).
 #
-#   * HARD gate  = the RETRIEVAL suite (BM25 + vector + RRF; NOT LLM-free:
-#     each case's search() runs the query rewriter, one small Gemini call,
-#     unless the case pins `rewrite: false`; MIP-860). Regression if
-#     fewer cases pass than the committed baseline, or mrr/recall drop below
-#     their floors. This is what blocks a deploy.
-#   * REPORT-ONLY = the BEHAVIOR suite + LLM judge (real Gemini via Vertex).
-#     The agent's tool choices + judge scores vary run-to-run, so per-case
-#     behavior is trended/surfaced, never a hard blocker (would flap red).
+# WHAT IT CANNOT SEE, ON PURPOSE. Nothing in `search()` or the rewriter imports the agent's prompts,
+# tool declarations, tool results or loop, so an edit to those cannot move one number of this run
+# (the audit: #772 and #782 turned agent flags on and the run passed 66/75 unchanged). They are not
+# triggers any more. What covers them: the free tests (flag pins, the prefix budget, tool-registry /
+# approval tests; a committed `agent_fingerprint` golden is the next PR) on every PR, and the grouped paid run
+# (`agent_eval_group`, lead-run, with a cost cap) per batch. There is NO live behaviour eval in CI:
+# the one-case "behaviour + judge smoke" and the nightly / trajectory workflows are gone or off.
+#
+# WHEN IT RUNS (the single list of retrieval files is `RETRIEVAL_PATHS` in scripts/agent_eval_gate.py,
+# mirrored by `pull_request: paths:` below; a test pins that they agree):
+#   * a PR that changes one of those files, or Pipfile(.lock), or this workflow;
+#   * weekly on `main` (`schedule`), which catches what no path rule does: a change in
+#     `origin/models/**`, `apis/settings.py` or a model behaving differently;
+#   * by hand (`workflow_dispatch`), and on a PR labelled `run-evals`.
+# It does NOT run on a push to main. A merge was only ever a repeat of the run its PR had just done
+# (32 of 55 heavy runs since 11-01), and a successor's push cancelled its predecessor's, so it
+# protected nothing.
 #
 # Auth is keyless via Workload Identity Federation; the SA it impersonates has
 # roles/aiplatform.user, so CI calls the SAME Vertex (embeddings + Gemini) as
@@ -25,82 +37,91 @@
 # Required repo VARIABLE:
 #   RUN_AGENT_EVALS = "true"  -> run the GCP-backed evals.
 #
-# WHEN THE BILLED STEPS RUN (MIP-1101). Not by directory: a new MCP-only tool, a refactor of
-# a tool's lookup, an access fix or a log line live under `origin/search_engine/` and cannot
-# change one word the model reads, yet used to start a Vertex run that somebody had to cancel by
-# hand. A cheap `surface` job (no secrets, no Vertex, no OIDC token, no database) now hashes what
-# the in-app model is shown (tool declarations, the system prompts, the tool directory and the
-# knobs that steer the model: scripts/agent_surface_hash.py) on the commit under test and on its
-# base, and `scripts/agent_eval_gate.py` decides:
-#   * the two hashes are equal AND no retrieval / agent-loop file changed -> the Vertex steps are
-#     skipped (the job still ends SUCCESS, so `deploy: needs: agent-evals` stays valid);
-#   * they differ, or a file in FORCE_PATHS (search, chunkers, llm adapters, the loop...) changed
-#     -> the full eval runs;
-#   * the hash could not be computed, or anything in the gate fails -> the evals RUN (fail open:
-#     a bug in the gate can cost a run, never skip a real change).
-# Escapes: label a PR `run-evals` to force the run (adding the label starts a run), `skip-evals`
-# to force the skip, or start the workflow by hand (workflow_dispatch always runs; `dry_run`
-# only prints the decision). Tool RESULT text is not in the hash (it needs a database): a PR that
-# only changes what a tool returns is skipped unless the file is in FORCE_PATHS; measure those in
-# the grouped paid run, and so is an edit to agent/controller.py (the loop: label the PR
-# `run-evals` when it changes what the model receives). See the README "CI" section.
+# THE SURFACE JOB (MIP-1101). A cheap job (no secrets, no Vertex, no OIDC token, no database) hashes
+# what the in-app model is shown (scripts/agent_surface_hash.py) on the commit under test and on its
+# base, and `scripts/agent_eval_gate.py` decides whether the billed steps start:
+#   * a changed file in RETRIEVAL_PATHS, a `run-evals` label, a dispatch or the weekly schedule -> run;
+#   * otherwise equal hashes -> skip (the job still ends SUCCESS). This is how an edit of this
+#     workflow alone is tested for free: it matches `paths:` but changes no retrieval file;
+#   * a missing hash or any failure inside the gate -> the evals RUN (fail open).
+# Since the trigger list was narrowed to retrieval files the hash seldom decides anything, and a moved
+# hash does not mean the retrieval suite can see the change. It is kept because the job also prints
+# the decision in the run summary; whether to keep it is an open question (MIP-1527 follow-up).
+# Escapes: label a PR `run-evals` to force the run, `skip-evals` to force the skip, or start the
+# workflow by hand (`dry_run` only prints the decision). See the README "CI" section.
 #
 # ⚠️ `RUN_AGENT_EVALS` is deliberately SEPARATE from `DEPLOY_TO_GCP`.
 # They used to be the same switch, which meant that turning off GCP
 # *hosting* (2026-07-30, the app moved to Railway-only) silently turned
 # off the quality gate for a month — evals only need Vertex, which is a
-# project-level API, and never needed the app to run on GCP. `DEPLOY_TO_GCP`
-# still implies evals: a Cloud Run deploy must never ship ungated.
+# project-level API, and never needed the app to run on GCP. Either variable
+# set to "true" lets the scheduled and manual runs start; a PR run needs neither
+# to start but its billed steps need `RUN_AGENT_EVALS` (see the `gcp` step).
 
 name: agent-evals
 
 on:
-  # NOT path-filtered at the `on:` level, deliberately. The `deploy` job below
-  # lives in this workflow and is `needs: agent-evals`, so a `paths:` filter
-  # here would skip the whole workflow — and the deploy — on a non-agent merge.
-  # Instead: (1) the merge run is gated at the JOB level (the agent-evals `if:`)
-  # so it only runs when it actually gates a Cloud Run deploy
-  # (DEPLOY_TO_GCP == 'true') — flag off (Railway-only) → deploy skipped → the
-  # job skips too; and (2) inside the job, the Vertex-billed eval STEPS are
-  # skipped when the merge changed nothing in the eval's dependency surface (the
-  # `changes` step). Either way the job/workflow still runs to SUCCESS and the
-  # deploy is never skipped, so `deploy: needs: agent-evals` stays valid.
-  push:
-    branches: [main]
-  # PRs only run the evals when the change can actually move the numbers. Two filters: this
-  # `paths:` list is the coarse one (no run at all), and the `surface` job below is the fine one
-  # (the run starts, costs a minute of plain CI, and skips the Vertex steps when what the model
-  # sees did not change). This is an early warning, not the gate: the pre-deploy run on `main`
-  # above is what protects prod, and it goes through the same surface check.
+  # Paths = the files the retrieval suite really exercises, and nothing else. The list is
+  # `RETRIEVAL_PATHS` in scripts/agent_eval_gate.py (a test fails when the two drift apart); the
+  # reasons for each line and for what is left out are written there. In short: search, the query
+  # rewriter, rerank, the chunkers / embeddings / ingestion that build the index, the model client
+  # the rewriter calls, the retrieval cases + fixture + runner + the two commands CI invokes, the
+  # seeded corpus, and the dependencies. NOT the agent prompts, tools, controller or result fencing
+  # (this run cannot see them: they are covered by the free tests and the grouped paid run), NOT
+  # `apis/settings.py` (changes for agent flags and billing nearly every day; the weekly run catches a
+  # retrieval knob), NOT `origin/models/**` (weekly run).
   #
   # `labeled` is here only so the `run-evals` label starts a run; every other label is ignored by
   # the job `if`s and by the concurrency group (it never cancels a run in progress).
   #
-  # Deliberately NOT listed:
-  #   * `origin/models/**` — the chunkers do read them (task_chunker imports
-  #     task_models), so a field change CAN move retrieval numbers. Left out
-  #     because most PRs here touch models, which would defeat the filter. The chunker file
-  #     itself is in the gate's FORCE_PATHS, so a change that reaches the index text still runs.
-  #   * `origin/agent/**` — that's `evals/runs/*.jsonl`, committed eval OUTPUT.
-  #     Recording a run must not trigger another one.
+  # There is deliberately NO `push: branches: [main]` any more (see the header). That also means
+  # the `deploy` job below can never start: it needs a push event. See the note above it.
   #
-  # Safe today because `main` has no branch protection. If required checks are
-  # ever turned on, a skipped run leaves the check pending forever and blocks
-  # merges — you'd need the always-passing companion-job pattern instead.
+  # Required-check caveat: if this is ever made a required check, a path-filtered skip leaves it
+  # pending forever, so add an always-passing companion job first (the ruleset does not require it
+  # today).
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:
-      - "origin/search_engine/**" # agent, chunkers, embeddings, llm, eval harness + cases
-      # ...but not a baseline-only refresh: trajectory_baseline.json is the
-      # trajectory-diff reference and never moves retrieval/behavior scores,
-      # so it must not trigger a Vertex eval run (last match wins).
-      - "!origin/search_engine/agent/evals/trajectory_baseline.json"
-      - "apis/settings.py" # EMBEDDING_PROVIDER / GEMINI_USE_VERTEX / RAG knobs
+      - "origin/search_engine/search.py"
+      - "origin/search_engine/query_rewriter.py"
+      - "origin/search_engine/reranker.py"
+      - "origin/search_engine/friendly_titles.py"
+      - "origin/search_engine/milestone_mirrors.py"
+      - "origin/search_engine/ingestion.py"
+      - "origin/search_engine/chunkers/**"
+      - "origin/search_engine/embeddings/**"
+      - "origin/search_engine/index_config.py"
+      - "origin/search_engine/mapping_guard.py"
+      - "origin/search_engine/opensearch_client.py"
+      - "origin/search_engine/acl_dirty.py"
+      - "origin/search_engine/note_context.py"
+      - "origin/search_engine/text_extraction.py"
+      - "origin/search_engine/llm/__init__.py"
+      - "origin/search_engine/llm/base.py"
+      - "origin/search_engine/llm/types.py"
+      - "origin/search_engine/llm/choice.py"
+      - "origin/search_engine/llm/effort_router.py"
+      - "origin/search_engine/llm/gemini_client.py"
+      - "origin/search_engine/agent/acl.py"
+      - "origin/search_engine/agent/tools/template_prompts.py"
+      - "origin/search_engine/agent/mentions.py"
+      - "origin/search_engine/agent/evals/retrieval_cases.yaml"
+      - "origin/search_engine/agent/evals/fixture.py"
+      - "origin/search_engine/agent/evals/runner.py"
+      - "origin/search_engine/management/commands/agent_eval.py"
+      - "origin/search_engine/management/commands/agent_eval_setup.py"
+      - "origin/services/demo_seeder.py"
       - "Pipfile"
       - "Pipfile.lock"
       # The gate's own workflow: an edit runs it once, which is how it is tested. The hashes are
       # equal for such an edit, so the Vertex steps are skipped (the cheap `surface` job still runs).
       - ".github/workflows/agent-evals.yml"
+  # Weekly, on `main`, retrieval suite only (the only suite this workflow has). Off-peak Vertex
+  # window (Tue 02:00 JST). Gated by the same repo variable as every other scheduled eval
+  # (`RUN_AGENT_EVALS` or `DEPLOY_TO_GCP` == "true"), so with both off it is a skipped job.
+  schedule:
+    - cron: "0 17 * * 1"
   # By hand. Always runs the evals (it is the escape hatch); `dry_run` runs only the surface job
   # and prints what the gate would have decided for this ref against `main` (a free way to check it).
   workflow_dispatch:
@@ -124,15 +145,9 @@ env:
   GCP_PROJECT: amplified-album-496413-t2
   GCP_REGION: asia-northeast1
   AR: asia-northeast1-docker.pkg.dev/amplified-album-496413-t2/genos
-  # Retrieval-suite regression floors. The gate runs with the LLM reranker OFF
-  # (RAG_USE_RERANKER=false below) so it's DETERMINISTIC + FAST — no per-query
-  # Gemini call. Numbers sit below the reranked prod run (which adds ~+0.12
-  # recall). Conservative floors catch a real regression (e.g. a dead vector
-  # lane → mrr 0) without flapping; tighten once the no-reranker baseline is
-  # confirmed by a green run.
-  EVAL_MIN_PASS: "45"
-  EVAL_MIN_MRR: "0.65"
-  EVAL_MIN_RECALL: "0.65"
+  # The retrieval gate's pass / mrr / recall floors are NOT set here: they live in ONE place,
+  # scripts/retrieval_gate.py. The gate runs with the LLM reranker OFF (RAG_USE_RERANKER=false in
+  # the job env) so it is fast and mostly deterministic; the numbers sit below the reranked prod run.
 
 jobs:
   # The cheap half (MIP-1101): decides whether `agent-evals` below may start its billed steps.
@@ -145,14 +160,14 @@ jobs:
   #   pull_request  commit = the PR merged into its base (what GitHub checks out), base = that
   #                 merge's first parent, i.e. `main` right now (a PR is compared with what
   #                 would land, not with a stale branch point);
-  #   push to main  base = the commit before the push;
-  #   dispatch      base = origin/main (the commit before it when the ref IS main).
+  #   dispatch / schedule  base = origin/main (the commit before it when the ref IS main); the
+  #                 gate answers "run" for both whatever the hashes are.
   surface:
     name: surface (what the model sees)
     if: >-
       (github.event_name != 'pull_request' || github.event.action != 'labeled'
        || github.event.label.name == 'run-evals')
-      && (github.event_name != 'push' || vars.RUN_AGENT_EVALS == 'true'
+      && (github.event_name == 'pull_request' || vars.RUN_AGENT_EVALS == 'true'
           || vars.DEPLOY_TO_GCP == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -183,11 +198,9 @@ jobs:
         continue-on-error: true
         env:
           EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
         run: |
           case "$EVENT" in
             pull_request) base=$(git rev-parse --verify -q 'HEAD^1^{commit}' || true) ;;
-            push) base="$BEFORE" ;;
             *)
               base=$(git rev-parse --verify -q 'origin/main^{commit}' || true)
               if [ "$base" = "$(git rev-parse HEAD)" ]; then
@@ -252,20 +265,14 @@ jobs:
 
   agent-evals:
     name: agent-evals (quality gate)
-    # On PRs the `on: pull_request: paths:` filter above already limits this to
-    # agent-quality changes — a cheap early warning. On push to main the job runs
-    # when evals are enabled at all (RUN_AGENT_EVALS) or when it gates a deploy
-    # (DEPLOY_TO_GCP) — with both off nothing would be gated, so skip the whole
-    # job (skipped-via-`if` reports SUCCESS, no required-check deadlock). When it DOES run on a merge, the Vertex-billed
-    # steps are further skipped unless the merge touched the eval's dependency
-    # surface (the `changes` step below). Coverage for a step-skipped eval: the
-    # PR already ran the gate, agent-evals-nightly.yml trends the full numbers
-    # daily, and the deploy's post-deploy smoke runs a real agent query on the
-    # live revision. GCP is the parallel env (Railway is live), so the residual
-    # risk of an unlisted path moving retrieval numbers is bounded.
+    # On PRs the `on: pull_request: paths:` filter above already limits this to retrieval files. The
+    # weekly `schedule` and a manual dispatch run when evals are enabled at all (RUN_AGENT_EVALS) or
+    # DEPLOY_TO_GCP is on; with both off they skip the whole job (skipped-via-`if` reports SUCCESS,
+    # no required-check deadlock). When it does run, the Vertex-billed steps are skipped unless the
+    # `surface` job says run (a retrieval file changed, a label, the schedule, a dispatch).
     # `needs: surface` + `!cancelled()`: a `surface` job that FAILED still lets this run (its
     # output is empty, which reads as "run"). Only a `surface` that was skipped on purpose (an
-    # unrelated label, or nothing enabled on a push) skips this too.
+    # unrelated label, or nothing enabled for a schedule / dispatch) skips this too.
     needs: surface
     if: >-
       !cancelled() && needs.surface.result != 'skipped'
@@ -334,15 +341,11 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       # Whether this run needs the (Vertex-billed, multi-minute) eval is decided by the `surface`
-      # job above (it hashes what the model sees on this commit and on its base, forces the run for
-      # the files a hash cannot see, honours the `run-evals` / `skip-evals` labels, and fails open).
-      # Here it is only read: `run=false` is the one value that skips the billed steps, and an
-      # empty or any other value (a `surface` job that broke) runs them. This replaces the old
-      # path-regex over the push's file list: the gate now also covers pushes to main.
-      # Skipped-case coverage: agent-evals-nightly.yml still trends the full numbers daily, and
-      # the deploy job's post-deploy smoke runs a real agent query on the live revision. The job
-      # still finishes SUCCESS when skipped, so `deploy: needs: agent-evals` is unaffected and a
-      # future required-check can't deadlock (the concern in the `on:` comment).
+      # job above (retrieval files changed, the `run-evals` / `skip-evals` labels, a dispatch or the
+      # weekly schedule; equal hashes with no retrieval file skip; it fails open). Here it is only
+      # read: `run=false` is the one value that skips the billed steps, and an empty or any other
+      # value (a `surface` job that broke) runs them. The job still finishes SUCCESS when skipped,
+      # so a future required-check cannot deadlock on it (the concern in the `on:` comment).
       # The Vertex-billed steps need a live GCP project: WIF has no pool to
       # federate against once the env is torn down, so `auth@v2` fails with
       # `invalid_target` BEFORE anything is spent. That is not a quality
@@ -386,16 +389,16 @@ jobs:
           echo "Surface gate: run (${SURFACE_REASON:-no answer from the surface job: failing open})."
           echo "relevant=true" >> "$GITHUB_OUTPUT"
 
-      - name: Eval skipped — deterministic gate auto-passes
+      - name: Eval skipped — nothing measured, job ends green
         if: steps.changes.outputs.relevant != 'true'
         run: |
           if [ "${{ steps.gcp.outputs.available }}" != "true" ]; then
             echo "Skipped because the GCP env is unavailable, NOT because the change is safe."
             echo "Re-run this workflow once GCP is back, or move the evals to Railway."
           else
-            echo "Skipping the Vertex eval: the surface gate says the model sees nothing new (see the surface job). Nightly + post-deploy smoke still cover retrieval."
+            echo "Skipping the Vertex eval: no retrieval file changed and the model surface is unchanged (see the surface job). The weekly run on main still covers retrieval."
           fi
-          echo "Gate passes so \`deploy: needs: agent-evals\` stays valid."
+          echo "Skipped, not passed: nothing was measured. The job ends green so it cannot block."
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.changes.outputs.relevant == 'true'
@@ -471,57 +474,28 @@ jobs:
           pipenv run python manage.py opensearch_setup
           pipenv run python manage.py agent_eval_setup --reseed
 
-      # --- HARD GATE: deterministic retrieval suite ---
-      - name: Retrieval evals — deterministic quality gate
+      # --- HARD GATE: the retrieval suite (the only suite this workflow runs) ---
+      # The suite exits 1 on its documented-red cases, so its own exit code is ignored (`|| true`);
+      # scripts/retrieval_gate.py decides, on the floors it holds (the one place they live).
+      - name: Retrieval evals — quality gate
         if: steps.changes.outputs.relevant == 'true'
         run: |
           set -o pipefail
-          # The suite exits 1 on the documented-red cases, so capture instead of
-          # letting it hard-fail; the gate below decides on baseline + floors.
           pipenv run python manage.py agent_eval --retrieval | tee eval.out || true
-          python - <<'PY'
-          import os, re, sys
-          out = open("eval.out").read()
-          passed = int(re.search(r"(\d+)/\d+ passed", out).group(1))
-          # Parse the AGGREGATE line ("Continuous metrics: ... mrr=0.870 ..."),
-          # not the per-case "metrics: mrr=1.000" lines that precede it.
-          agg = re.search(r"Continuous metrics:(.*)", out)
-          agg_line = agg.group(1) if agg else ""
-          def metric(name, default=0.0):
-              m = re.search(rf"{name}=([0-9.]+)", agg_line)
-              return float(m.group(1)) if m else default
-          mrr, recall = metric("mrr"), metric("recall_at_n")
-          min_pass = int(os.environ["EVAL_MIN_PASS"])
-          min_mrr = float(os.environ["EVAL_MIN_MRR"])
-          min_recall = float(os.environ["EVAL_MIN_RECALL"])
-          ok = passed >= min_pass and mrr >= min_mrr and recall >= min_recall
-          print(f"\nGATE  passed={passed} (>= {min_pass})  mrr={mrr:.3f} (>= {min_mrr})  "
-                f"recall_at_n={recall:.3f} (>= {min_recall})  ->  {'PASS' if ok else 'FAIL — regression'}")
-          sys.exit(0 if ok else 1)
-          PY
+          python3 scripts/retrieval_gate.py eval.out
 
-      # --- REPORT-ONLY: behavior smoke + LLM judge (non-deterministic) ---
-      - name: Behavior + judge smoke — report-only (non-blocking)
-        if: steps.changes.outputs.relevant == 'true'
-        continue-on-error: true
-        # One representative case proves the full agent loop (Gemini generation
-        # + tool use + judge) works, without hammering Vertex with the whole
-        # suite on every PR. Trend the full behavior suite on a schedule instead.
-        run: pipenv run python manage.py agent_eval --case simple_rag_wip_tasks --judge
-
-  # COST SWITCH: DEPLOY_TO_GCP now gates BOTH the eval gate and this deploy. The
-  # agent-evals job (above) exists to protect this deploy, so on push to main it
-  # runs only when DEPLOY_TO_GCP == 'true'; with the flag off (Railway-only) it
-  # would gate nothing and is skipped (PRs still run it, path-filtered; the
-  # nightly suite still trends). This deploy step ships to GCP only when the
-  # repo/org variable DEPLOY_TO_GCP is "true". Unset (the default) = OFF →
-  # Railway-only, no GCP deploy. NOTE: turning the flag off only stops shipping
-  # new revisions AND the per-merge Vertex eval spend — it does NOT reduce the
-  # running GCP bill (Cloud SQL / OpenSearch VM / Redis / warm Cloud Run keep
-  # billing). To cut that, pause or tear down the infra (see genos-docs
-  # operations/ENVIRONMENTS.md "Going Railway-only").
+  # INERT, ON PURPOSE: this job needs a `push` to main, and this workflow no longer has a push
+  # trigger (MIP-1527), so it cannot start, whatever DEPLOY_TO_GCP says. It was already skipped on
+  # every run since the app moved to Railway (2026-07-30; the repo variable is "false"), so nothing
+  # is lost. It is kept, not deleted, as the record of how the Cloud Run deploy worked. To bring GCP
+  # hosting back: re-add `push: branches: [main]` to `on:`, set DEPLOY_TO_GCP to "true", and note
+  # that the push run would then gate the deploy with a retrieval run that cannot see the agent.
+  # (When it was live: it shipped to GCP only when DEPLOY_TO_GCP was "true", ran a post-deploy smoke
+  # query on the new revision and auto-reverted on failure. Turning the flag off never reduced the
+  # running GCP bill: Cloud SQL / OpenSearch VM / Redis / Cloud Run keep billing until the infra is
+  # paused or torn down, genos-docs operations/ENVIRONMENTS.md "Going Railway-only".)
   deploy:
-    name: deploy to Cloud Run (gated on evals)
+    name: deploy to Cloud Run (inert, no push trigger)
     needs: agent-evals
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_TO_GCP == 'true'
     runs-on: ubuntu-latest
