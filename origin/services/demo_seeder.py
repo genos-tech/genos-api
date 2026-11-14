@@ -1014,7 +1014,6 @@ def create_demo_environment(
     short: str | None = None,
     lang: str = "en",
     version: str = demo_v2.DEFAULT_VERSION,
-    team_name: str | None = None,
 ) -> dict:
     """Provision a fresh demo team + bot peers + sample data for
     `demo_user`. Returns `{"team_id": str, "team_name": str}` so the
@@ -1047,21 +1046,12 @@ def create_demo_environment(
     `demo_v2`). Only `DemoSignInView` passes "v2". The default must stay
     "v1" for the same reason the default language stays "en": the eval
     fixture passes neither, and `test_demo_v1_golden` pins its output.
-
-    `team_name`: a fixed name for the team instead of the generated one (v2 only;
-    the app-reviewer account, `create_reviewer_account`, MIP-1113). Given before
-    seeding, not renamed after, because the content quotes the team's name (the
-    group chat is titled after it). `team_name` is unique: a taken name raises
-    IntegrityError and the caller's transaction rolls back. None (the default)
-    changes nothing.
     """
     if short is None:
         short = uuid.uuid4().hex[:8]
     lang = _demo_lang(lang)
     version = demo_v2.normalize_version(version)
     is_v2 = version == "v2"
-    if team_name is not None and not is_v2:
-        raise ValueError("team_name is only supported with version='v2'")
 
     with transaction.atomic():
         # Set on the user so the agent's locale fallback resolves even
@@ -1099,7 +1089,7 @@ def create_demo_environment(
         # to take away (see the field comment in team_models.py) — and
         # this team self-destructs on logout anyway.
         if is_v2:
-            team = _create_v2_team(demo_user, short, lang, name=team_name)
+            team = _create_v2_team(demo_user, short, lang)
         else:
             team = TeamMaster.objects.create(
                 team_name=f"Demo Team {short}",
@@ -1311,29 +1301,14 @@ def kick_off_demo_reindex(since_minutes: int = 5) -> None:
     threading.Thread(target=_run, daemon=True, name="demo-reindex").start()
 
 
-def _create_v2_team(
-    demo_user: CustomUser, short: str, lang: str, *, name: str | None = None
-) -> TeamMaster:
+def _create_v2_team(demo_user: CustomUser, short: str, lang: str) -> TeamMaster:
     """The visitor's team with a human name.
 
     `team_name` is unique across the database, so two visitors seeding at the
     same moment can pick the same free name. The create runs in a savepoint and
     takes the next number on a collision, instead of failing the sign-in.
-
-    A caller-chosen `name` is taken as is: no pool, no retry, and a collision
-    raises IntegrityError.
     """
     from django.db import IntegrityError
-
-    if name is not None:
-        return TeamMaster.objects.create(
-            team_name=name,
-            team_email=f"demo-team-{short}@genos.app",
-            owner=demo_user,
-            is_demo=True,
-            plan="pro",
-            plan_set_by=TIER_SET_BY_OPERATOR,
-        )
 
     pool = demo_v2.TEAM_NAMES[lang]
     taken = set(

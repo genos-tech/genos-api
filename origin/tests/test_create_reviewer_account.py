@@ -43,7 +43,6 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine import quota
 from origin.services import demo_v2
-from origin.services.demo_seeder import create_demo_environment
 
 User = get_user_model()
 
@@ -256,8 +255,8 @@ class ApplyTests(TestCase):
         self.assertGreater(PersonalNoteMaster.objects.filter(team=self.team).count(), 0)
 
     def test_content_quotes_the_reviewer_team_name(self):
-        # The name is given to the seeder, not patched on after: the group chat is
-        # titled after the team, and a rename afterwards left the pool name there.
+        # The group chat is titled after the team: renaming only the team left the
+        # seeder's pool name ("general · Product & Design") in the chat list.
         titles = list(Channel.objects.filter(team=self.team).values_list("title", flat=True))
         self.assertTrue(any("Genos Review" in (t or "") for t in titles), titles)
         for pool_name in demo_v2.TEAM_NAMES["en"]:
@@ -431,12 +430,3 @@ class ApplyTests(TestCase):
             (other.team_name, other.plan, other.owner_id), ("Other", "free", other_owner.id)
         )
         self.assertEqual(TeamMaster.objects.get(pk=self.team.pk).plan, "max")
-
-
-class SeederTeamNameTests(TestCase):
-    def test_team_name_is_refused_for_v1(self):
-        # v1 is the frozen eval corpus: it takes no caller-chosen name.
-        user = _normal_user(is_demo=True)
-        with self.assertRaises(ValueError):
-            create_demo_environment(user, team_name="Anything")
-        self.assertFalse(TeamMaster.objects.filter(owner=user).exists())

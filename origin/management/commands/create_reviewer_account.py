@@ -123,6 +123,22 @@ def reviewer_team(user) -> TeamMaster | None:
     )
 
 
+def _rename_team(team: TeamMaster, name: str) -> None:
+    """Give the seeded team the reviewer team's name, and the one seeded text that
+    quotes the team's name with it: the group chat's title (`_create_group_chat`,
+    `CHANNEL_TITLES["gm"]`). Done here rather than through a seeder argument
+    because `demo_seeder.py` is on the billed `agent-evals` path filter.
+    """
+    gm_template = _content(LANG).CHANNEL_TITLES["gm"]
+    old_title = gm_template.format(team_name=team.team_name)
+    team.team_name = name
+    team.save(update_fields=["team_name"])
+    # `.save()` per row, not `.update()`: signals keep clients and the index in step.
+    for channel in Channel.objects.filter(team=team, title=old_title):
+        channel.title = gm_template.format(team_name=name)
+        channel.save(update_fields=["title"])
+
+
 def _new_password(user=None) -> str:
     for _ in range(10):
         candidate = secrets.token_urlsafe(PASSWORD_BYTES)
@@ -339,10 +355,9 @@ class Command(BaseCommand):
                     is_demo=False,
                     is_email_verified=True,
                 )
-                info = create_demo_environment(
-                    user, lang=LANG, version=demo_v2.VISITOR_VERSION, team_name=team_name
-                )
+                info = create_demo_environment(user, lang=LANG, version=demo_v2.VISITOR_VERSION)
                 team = TeamMaster.objects.get(team_id=info["team_id"])
+                _rename_team(team, team_name)
                 stripe_billing._set_team_plan(
                     team,
                     plan,
