@@ -2,14 +2,14 @@
 # title and NO body (4 of 4 probe runs on t905-a2.plan.ja), so the approval card was empty and the
 # tasks were created without a description. The fix is server-side and has no flag: a task proposed
 # without a body gets the project's default task template (or a one-line `### Summary` + title) on the
-# card and when it is created, and the tool description now asks for a short body on every task.
+# card and when it is created. No declaration or prompt changes.
 # There is no arm: it is measured as before/after on the same stack (arm0 of origin/main against
 # arm0 of the PR), at least 3 reps per language, because the model's own behaviour is noisy.
 #
 # What the checks read: `pending_write` judges the proposal as the member's approval card shows it
 # (the `tool_call_pending_approval` event), so with the server default a plan can no longer reach the
 # card without a body. These cases therefore pin the END STATE (every task has a body on the card),
-# and the regression cases pin the surface the description change could disturb (routing). The
+# and the regression cases pin the routing (no declaration changed, so it must not move). The
 # model's own bodies are compared in `answer` ("[proposed create_task_plan] ..."): a body that is
 # only `### Summary` + the title is the server's fill, a longer one is the model's.
 #
@@ -107,7 +107,7 @@
   lang: en
   tags: [eval-group, t1510]
   fixture: v1
-  note: "Negative: ONE ad-hoc task stays a create_task, the description change must not inflate it into a plan."
+  note: "Negative: ONE ad-hoc task stays a create_task, it must not be inflated into a plan."
   query: "Add a task to the Website Redesign project to buy more coffee for the office."
   expect:
     no_errors: true
@@ -118,7 +118,7 @@
   lang: ja
   tags: [eval-group, t1510]
   fixture: v1
-  note: "Negative: ONE ad-hoc task stays a create_task, the description change must not inflate it into a plan."
+  note: "Negative: ONE ad-hoc task stays a create_task, it must not be inflated into a plan."
   query: Website Redesign プロジェクトに、オフィスのコーヒーを買い足すタスクを1つ追加してください。
   expect:
     no_errors: true
