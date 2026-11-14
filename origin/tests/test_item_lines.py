@@ -2620,7 +2620,7 @@ class TestTool(LineBase):
         self.assertEqual(tool["inputSchema"]["required"], ["task_id"])
         self.assertEqual(
             sorted(tool["inputSchema"]["properties"]),
-            ["include_related", "limit", "since", "task_id", "until"],
+            ["include_related", "include_unattached", "limit", "since", "task_id", "until"],
         )
         self.assertEqual(tool["inputSchema"]["properties"]["task_id"]["type"], "string")
 

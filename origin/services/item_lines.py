@@ -1629,6 +1629,7 @@ def _build(
     limit: int,
     related_limit: int,
     now: datetime | None = None,
+    include_unattached: bool = True,
 ) -> dict[str, Any]:
     me = str(ctx.user_id)
     limit = max(1, min(_whole_number(limit, "limit"), MAX_LIMIT))
@@ -1691,7 +1692,9 @@ def _build(
         result["related_total"] = len(with_events)
         result["related_quiet"] = len(candidates) - len(with_events)
         result["related_capped"] = len(with_events) > related_limit or fanout_capped
-    result["unattached"], unattached_cut = _unattached(ctx, start, end)
+    unattached_cut: list[str] = []
+    if include_unattached:
+        result["unattached"], unattached_cut = _unattached(ctx, start, end)
     capped: dict[str, Any] = {}
     if line_read.pool_capped:
         capped["pool_capped"] = True
@@ -1764,6 +1767,12 @@ def item_lines(
     limit: int = DEFAULT_LIMIT,
     related_limit: int = RELATED_MAX,
     now: datetime | None = None,
+    include_unattached: bool = True,
 ) -> dict[str, Any]:
-    """A line and its related lines in one pass: what the MCP tool returns."""
-    return _build(ctx, item_ref, since, until, limit, related_limit, now)
+    """A line and its related lines in one pass: what the MCP tool returns.
+
+    `unattached` is the member's own events of the window that belong to no item, so it is the
+    same whichever task is asked about (MIP-1529). It is told once per response, as before; a
+    reader that has already read it passes `include_unattached=False` and gets no `unattached`
+    key (and none of its reads or cut flags)."""
+    return _build(ctx, item_ref, since, until, limit, related_limit, now, include_unattached)

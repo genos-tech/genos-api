@@ -2,10 +2,12 @@
 
 1. A description autosave burst is ONE entry with a count, by the rule of the Activity feed.
 2. `milestone_work` is only the work something connects to the asked task.
+3. `unattached` can be left out once a reader has it (`include_unattached`).
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from unittest import mock
 
@@ -405,3 +407,100 @@ class TestMilestoneWorkIsRelated(LineBase):
         for i in range(18):
             self.work(f"C{i}")
         self.assertEqual(queries(), small)
+
+
+# --------------------------------------------------------------------------- #
+# `unattached`: the same for every task of the window, so it can be left out   #
+# --------------------------------------------------------------------------- #
+
+
+class TestUnattachedOnce(LineBase):
+    """MIP-1529 (3). `unattached` is the member's OWN events of the window that belong to no
+    item: it does not depend on which task is asked about, so reading three tasks tells the same
+    block three times. Inside ONE response it is already told once (never per related line); what
+    repeated was the calls. A reader that has it passes `include_unattached` false, and a single
+    call, which keeps the default, loses nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self.parent = self.make_task("Parent")
+        self.task = self.make_task("Child", parent_task_id=self.parent.task_id)
+        self.comment(self.parent, self.user2, 10)
+        self.comment(self.task, self.user2, 11)
+        chat = self.channel([self.user, self.user2], title="DM")
+        for i in range(4):  # the member's own messages in no thread and with no chip
+            self.message(chat, self.user, 20 + i, text=f"elsewhere {i}")
+        self.marker(self.user, 30, "project", "1")
+
+    def tool_args(self, **extra):
+        return {
+            "task_id": self.task.display_id,
+            "since": self.since.isoformat(),
+            "until": self.until.isoformat(),
+            **extra,
+        }
+
+    def test_inside_one_response_it_is_told_once_with_its_neighbours(self):
+        out = self.full(self.task)
+        self.assertEqual(len(out["related"]), 1)
+        self.assertEqual(self.blob(out).count('"unattached"'), 1)
+        self.assertNotIn("unattached", out["related"][0])
+        self.assertNotIn("unattached", out["line"])
+
+    def test_by_default_a_single_call_still_has_all_of_it(self):
+        out = self.tool_json(**self.tool_args())
+        self.assertEqual(out["unattached"]["chat_messages"], 4)
+        self.assertEqual(out["unattached"]["app_markers"], 1)
+        self.assertEqual(out["unattached"]["total"], 5)
+        self.assertEqual([c["messages"] for c in out["unattached"]["chats"]], [4])
+
+    def test_explicit_true_and_null_are_the_default(self):
+        for value in (True, None):
+            out = self.tool_json(**self.tool_args(include_unattached=value))
+            self.assertEqual(out["unattached"]["total"], 5, value)
+
+    def test_false_leaves_it_out_and_everything_else_is_the_same(self):
+        with_it = self.tool_json(**self.tool_args())
+        without = self.tool_json(**self.tool_args(include_unattached=False))
+        self.assertNotIn("unattached", without)
+        # Reading marks the task as read, so the second call has a `last_seen_at`: not compared.
+        for out in (with_it, without):
+            out["line"].pop("last_seen_at", None)
+            out["line"].pop("since_seen", None)
+            for rel in out["related"]:
+                rel.pop("last_opened_at", None)
+        for key in ("window", "line", "people", "related", "related_total", "related_quiet"):
+            self.assertEqual(without[key], with_it[key], key)
+        self.assertEqual(
+            {k: v for k, v in with_it.items() if k != "unattached"}.keys(), without.keys()
+        )
+
+    def test_false_does_not_read_the_members_other_events_at_all(self):
+        def queries(**extra):
+            with CaptureQueriesContext(connection) as ctx:
+                self.tool_json(**self.tool_args(**extra))
+            return [q["sql"] for q in ctx]
+
+        asked = queries()
+        left_out = queries(include_unattached=False)
+        self.assertLess(len(left_out), len(asked))
+
+    def test_false_sets_no_unattached_cut_flag_either(self):
+        with mock.patch.object(item_lines, "POOL", 2):
+            kept = self.tool_json(**self.tool_args())
+            dropped = self.tool_json(**self.tool_args(include_unattached=False))
+        self.assertTrue(kept["capped"].get("unattached_capped"))
+        self.assertNotIn("unattached_capped", dropped["capped"])
+        self.assertNotIn("unattached_sources", dropped["capped"])
+
+    def test_the_second_and_third_call_of_a_session_are_smaller(self):
+        full = len(json.dumps(self.tool_json(**self.tool_args())))
+        again = len(json.dumps(self.tool_json(**self.tool_args(include_unattached=False))))
+        self.assertLess(again, full)
+
+    def test_the_description_and_the_declaration_say_so(self):
+        listed = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        tool = listed["get_item_line"]
+        self.assertIn("include_unattached", tool["description"])
+        prop = tool["inputSchema"]["properties"]["include_unattached"]
+        self.assertEqual(prop["type"], "boolean")
