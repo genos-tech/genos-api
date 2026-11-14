@@ -88,8 +88,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
-from origin.search_engine.text_extraction import extract_text
-from origin.services import briefing, item_lines, member_events
+from origin.services import briefing, item_lines, member_events, plain_text
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, readable_note_ids
 
@@ -229,24 +228,8 @@ def _cut(text: str, chars: int) -> str:
     return text if len(text) <= chars else text[: max(chars - 1, 1)] + "…"
 
 
-def _plain_body(node: Any, depth: int = 0) -> Any:
-    """A rich-text body with every `#` task chip turned into `#<numeric target id>`: the chip's own
-    label (its display id, its stored title) is text somebody could have written and is never
-    copied."""
-    if depth > 40:
-        return None
-    if isinstance(node, list):
-        return [_plain_body(n, depth + 1) for n in node]
-    if isinstance(node, dict):
-        if node.get("type") == "hashTask":
-            ids = item_lines.chip_task_ids(node)
-            return {"type": "text", "text": f"#{min(ids)}" if ids else "#task", "styles": {}}
-        return {k: _plain_body(v, depth + 1) for k, v in node.items()}
-    return node
-
-
-def _body_text(body: Any) -> str:
-    return extract_text(_plain_body(body))
+_plain_body = plain_text.plain_body
+_body_text = plain_text.body_text
 
 
 def _is_notice(message: Message) -> bool:
@@ -401,7 +384,7 @@ def _open_thread(ctx: ToolContext, ref: Any) -> Anchor:
     return Anchor(
         "thread",
         str(message.id),
-        _cut(message.body_text or "", TEXT_DEFAULT),
+        _cut(plain_text.message_text(message), TEXT_DEFAULT),
         start=message.ts_sent_at,
         channel=channel,
         root=message,
@@ -957,7 +940,7 @@ def _message_event(sc: Scope, m: Message, *, via: str | None, in_chat: str | Non
         label="system" if notice else None,
         text=SYSTEM_NOTICES[m.metadata["systemNotice"]]
         if notice
-        else sc.snippet(_body_text(m.body) or m.body_text),
+        else sc.snippet(plain_text.message_text(m)),
         via=via,
         ref=None if notice else ("m", m.id),
         ident=f"m:{m.id}",
