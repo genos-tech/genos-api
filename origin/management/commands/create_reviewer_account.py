@@ -200,9 +200,9 @@ class Command(BaseCommand):
 
     def _summary(self, user, team) -> None:
         projects = list(
-            ProjectMaster.objects.filter(team=team).order_by("project_id").values_list(
-                "project_id", "project_name"
-            )
+            ProjectMaster.objects.filter(team=team)
+            .order_by("project_id")
+            .values_list("project_id", "project_name")
         )
         tasks = TaskMaster.objects.filter(team=team, is_deleted=False)
         statuses = Counter(tasks.filter(is_milestone=False).values_list("status", flat=True))
@@ -239,8 +239,7 @@ class Command(BaseCommand):
         # a logger, never the audit row.
         self.stdout.write("")
         self.stdout.write(
-            "Password (shown once; hand it to the owner, then into the reviewer form): "
-            + password
+            "Password (shown once; hand it to the owner, then into the reviewer form): " + password
         )
 
     def _record(self, user, event: str) -> None:
@@ -311,7 +310,7 @@ class Command(BaseCommand):
             self._say("  4 sample teammates (cannot sign in)")
             for blueprint in content.PROJECT_BLUEPRINTS:
                 self._say(
-                    f'  project "{blueprint["name"]}": {len(blueprint["tasks"])} tasks '
+                    f'  project "{blueprint["name"]}": {len(blueprint["tasks"])} top-level tasks '
                     "with comments, statuses, a milestone and a sprint"
                 )
             self._say("  plus DMs, a group chat, project channels, notes and to-dos")

@@ -410,5 +410,7 @@ class ApplyTests(TestCase):
         )
         _run("--email", EMAIL, "--reset-password", "--plan", "max", "--apply", "--yes")
         other.refresh_from_db()
-        self.assertEqual((other.team_name, other.plan, other.owner_id), ("Other", "free", other_owner.id))
+        self.assertEqual(
+            (other.team_name, other.plan, other.owner_id), ("Other", "free", other_owner.id)
+        )
         self.assertEqual(TeamMaster.objects.get(pk=self.team.pk).plan, "max")
