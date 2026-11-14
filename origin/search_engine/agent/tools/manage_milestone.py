@@ -8,6 +8,10 @@ tool, with an `action`, so the in-app prompt pays for one declaration:
   create         a milestone with no tasks yet
   update         any of its fields, assignees, folder and sprint
   create_folder / rename_folder / delete_folder    the project's milestone folders
+  convert        a root task into a milestone, or a milestone back into a task   (flag, MIP-1564)
+
+`update` also takes `project_id` while `AGENT_PARITY_TOOLS` is on: the REST PATCH's project move
+(`update_milestone(project_move=...)`). Both are `convert` / `project_id` below.
 
 Every write goes through the same service the UI's endpoints call
 (`services/milestone_manage.py`, `services/milestone_service.py`), so the
@@ -36,7 +40,8 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
@@ -48,6 +53,11 @@ from origin.search_engine.agent.tools.milestone_access import (
     load_milestone,
     load_project,
 )
+from origin.search_engine.agent.tools.milestone_convert import (
+    converted_hint,
+    refusal_sentence,
+)
+from origin.search_engine.agent.tools.task_access import load_task
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -71,10 +81,20 @@ from origin.services.milestone_service import create_milestone
 from origin.services.task_assignment_notice import notify_milestone_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card
+from origin.services.task_milestone_conversion import (
+    ConversionRefused,
+    convert_milestone_to_task,
+    convert_task_to_milestone,
+)
+from origin.services.task_project_move import milestone_subtree_task_ids
+from origin.views.utils.scope_guards import can_access_task, is_project_member
 
 _TITLE_MAX = MilestoneMaster._meta.get_field("title").max_length
 
 ACTIONS = ("create", "update", "create_folder", "rename_folder", "delete_folder")
+# While `AGENT_PARITY_TOOLS` is on (MIP-1564): the same, and `convert`. Appended, so the order of
+# the others never moves.
+ACTIONS_ON = (*ACTIONS, "convert")
 
 # The arguments that describe the milestone itself (create and update).
 _MILESTONE_FIELDS = frozenset(
@@ -101,6 +121,11 @@ _ALLOWED = {
     "rename_folder": {"milestone_folder_id", "folder_name"},
     "delete_folder": {"milestone_folder_id"},
 }
+# What the flag adds to what an action takes: `convert`'s two ids, and the destination of a move.
+_ALLOWED_ON = {
+    "update": {"project_id"},
+    "convert": {"task_id", "milestone_id"},
+}
 _REQUIRED = {
     "create": ("project_id", "title"),
     "update": ("milestone_id",),
@@ -110,24 +135,33 @@ _REQUIRED = {
 }
 
 
+def _allowed(action: str) -> set[str]:
+    """The arguments `action` takes right now: with the flag on, a few more."""
+    allowed = set(_ALLOWED.get(action, ()))
+    if parity_on():
+        allowed |= _ALLOWED_ON.get(action, set())
+    return allowed
+
+
 def _check_arguments(action: str, args: dict[str, Any]) -> None:
     """The right arguments for the action, before anything is looked up."""
-    if action == "update" and args.get("project_id") is not None:
+    if action == "update" and args.get("project_id") is not None and not parity_on():
         raise ToolError(
             "A milestone can't be moved to another project with this tool, and "
             "`project_id` isn't an argument of `update`. Nothing was changed."
         )
+    allowed = _allowed(action)
     unexpected = sorted(
         key
         for key, value in args.items()
-        if key != "action" and value is not None and key not in _ALLOWED[action]
+        if key != "action" and value is not None and key not in allowed
     )
     if unexpected:
         raise ToolError(
             f"{', '.join(f'`{k}`' for k in unexpected)} does not apply to `{action}`; it takes "
-            f"{', '.join(f'`{k}`' for k in sorted(_ALLOWED[action]))}. Nothing was changed."
+            f"{', '.join(f'`{k}`' for k in sorted(allowed))}. Nothing was changed."
         )
-    missing = [key for key in _REQUIRED[action] if args.get(key) in (None, "")]
+    missing = [key for key in _REQUIRED.get(action, ()) if args.get(key) in (None, "")]
     if missing:
         raise ToolError(
             f"`{action}` needs {', '.join(f'`{k}`' for k in missing)}. Nothing was changed."
@@ -376,9 +410,42 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
 
 
+# What a project move clears, and so what a call that MOVES may not also set: they belong to the project
+# being left (a sprint, a folder) or are its labels (tags).
+_CLEARED_BY_A_MOVE = ("sprint_id", "milestone_folder_id", "tags")
+
+
+def _destination(args: dict[str, Any], milestone: MilestoneMaster, ctx: ToolContext):
+    """The project an `update` moves the milestone to, or None when it does not move.
+
+    Only while the flag is on (`_check_arguments` refuses a `project_id` on update otherwise). The
+    destination is judged as the app's PATCH judges it (a live project the caller is a member of)
+    and, as `update_task` does, it has to be in the caller's team: a project of another team, which
+    the app's PATCH would accept for a member of both, is answered "not found" here. The project the
+    milestone is already in is not a move, as in the PATCH.
+    """
+    raw = args.get("project_id")
+    if not parity_on() or raw in (None, ""):
+        return None
+    destination = load_project(raw, ctx)
+    if destination.project_id == milestone.project_id:
+        return None
+    given = [key for key in _CLEARED_BY_A_MOVE if args.get(key) is not None]
+    if given:
+        raise ToolError(
+            f"{', '.join(f'`{k}`' for k in given)} can't be set in the same call as a project "
+            "move: a move clears the milestone's sprint, folder and tags, because they belong to "
+            "the project it leaves. Move it first, then set them with a second `update` in "
+            f"{destination.project_name}. Nothing was changed."
+        )
+    return destination
+
+
 def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     milestone = load_milestone(args["milestone_id"], ctx)
-    parsed, errors = _parse_fields(args, milestone.project, ctx, creating=False)
+    destination = _destination(args, milestone, ctx)
+    # The people are judged against the project the milestone ends up in, as the PATCH judges them.
+    parsed, errors = _parse_fields(args, destination or milestone.project, ctx, creating=False)
     if errors:
         raise _refuse(errors, "Nothing was changed")
 
@@ -428,6 +495,14 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             assignee_ids = parsed["assignee_ids"]
             changed.append("assignees" if assignee_ids else "assignees(cleared)")
 
+    # Read before the write: the milestone object is moved in memory by it.
+    source = (milestone.team_id, milestone.project_id, milestone.project.project_name)
+    moved_tasks = 0
+    if destination is not None:
+        changed.insert(0, "project")
+        # The tasks that go with it: not the milestone's own row, which is the milestone.
+        moved_tasks = len(milestone_subtree_task_ids(milestone) - {milestone.task_id})
+
     if not changed:
         payload = _milestone_payload(milestone.milestone_id)
         return {
@@ -448,6 +523,7 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 sprint=sprint,
                 folder=folder,
                 assignee_ids=assignee_ids,
+                project_move=destination,
             )
     except ToolError:
         raise
@@ -458,6 +534,9 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # The backing task mirrors most of these fields and a sprint change reaches
     # every task in the milestone.
     invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+    if destination is not None:
+        # A move also emptied the project it left, keyed by the team that owned it.
+        invalidate_project_tasks_cache(source[0], source[1])
     # Whoever was just added to the milestone is told, as in the app (MIP-1464).
     notify_milestone_assigned(milestone, actor_id=ctx.user_id, added_user_ids=added_assignees)
 
@@ -471,12 +550,134 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         notify_task_body_mentions(backing, actor_id=ctx.user_id)
 
     payload = _milestone_payload(milestone.milestone_id)
-    return {
+    result: dict[str, Any] = {
         "action": "update",
         **payload,
         "changed_fields": changed,
         "__summary__": f"Updated {_label(payload)}: {', '.join(changed)}",
     }
+    if destination is not None:
+        # What the move did, for the model to report and not to guess: the display ids are new, and
+        # what belonged to the old project is gone.
+        result["moved"] = {
+            "from_project_id": source[1],
+            "from_project_name": source[2],
+            "tasks_moved": moved_tasks,
+            "cleared": ["sprint", "folder", "tags"],
+            "display_ids_changed": True,
+        }
+        result["__summary__"] = (
+            f"Moved {_label(payload)} from {source[2]} to {destination.project_name} with "
+            f"{moved_tasks} task(s); new display ids, sprint, folder and tags cleared"
+            + (f"; also changed: {', '.join(changed[1:])}" if len(changed) > 1 else "")
+        )
+    return result
+
+
+# --------------------------------------------------------------------------
+# convert (MIP-1564, behind AGENT_PARITY_TOOLS)
+# --------------------------------------------------------------------------
+
+
+def _convert(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Turn a root task into a milestone, or a milestone into a task, as the app's two endpoints do.
+    The caller names the item by the argument that fits it: `task_id` for the task to promote,
+    `milestone_id` for the milestone to demote; the direction follows."""
+    task_ref, milestone_ref = args.get("task_id"), args.get("milestone_id")
+    has_task, has_milestone = task_ref not in (None, ""), milestone_ref not in (None, "")
+    if has_task == has_milestone:
+        raise ToolError(
+            "`convert` needs exactly one of `task_id` (a root task to turn into a milestone) or "
+            "`milestone_id` (a milestone to turn into a task). Nothing was changed."
+        )
+    return _task_to_milestone(task_ref, ctx) if has_task else _milestone_to_task(milestone_ref, ctx)
+
+
+def _refused(refusal: ConversionRefused) -> ToolError:
+    return ToolError(refusal_sentence(refusal.code, refusal.message))
+
+
+def _task_to_milestone(raw_task_id: Any, ctx: ToolContext) -> dict[str, Any]:
+    # Who may open the task (the app's `can_access_task`, plus the run's team), then who belongs to
+    # its project: an assignee who was never added can open it but cannot restructure the project's
+    # milestones (the same bar as creating or deleting one).
+    task = load_task(raw_task_id, ctx, action="convert")
+    if not is_project_member(task.project_id, ctx.user_id):
+        raise ToolForbidden(
+            f"Only a member of {task.display_id}'s project can turn it into a milestone, and you "
+            "are not on that project. Nothing was changed."
+        )
+    try:
+        milestone = convert_task_to_milestone(task.task_id)
+    except ConversionRefused as refusal:
+        raise _refused(refusal) from None
+    except Exception as e:  # noqa: BLE001
+        ref = log_failure("manage_milestone convert failed", e)
+        raise ToolError(f"Failed to convert the task (nothing was changed) (ref {ref}).")
+
+    payload = _milestone_payload(milestone.milestone_id)
+    in_it = TaskMaster.objects.filter(milestone=milestone).exclude(task_id=task.task_id).count()
+    return {
+        "action": "convert",
+        "direction": "task_to_milestone",
+        **payload,
+        "tasks_in_milestone": in_it,
+        "__summary__": (
+            f'Converted {_label(payload)} "{payload["title"]}" into a milestone '
+            f"(milestone {payload['milestone_id']}); {in_it} sub-task(s) are now in it"
+        ),
+    }
+
+
+def _milestone_to_task(raw_milestone_id: Any, ctx: ToolContext) -> dict[str, Any]:
+    milestone = load_milestone(raw_milestone_id, ctx, allow_deleted=True)
+    if milestone.is_deleted:
+        raise ToolError(_already_gone(milestone, ctx))
+    try:
+        row, retired, kept = convert_milestone_to_task(milestone.milestone_id)
+    except ConversionRefused as refusal:
+        raise _refused(refusal) from None
+    except Exception as e:  # noqa: BLE001
+        ref = log_failure("manage_milestone convert failed", e)
+        raise ToolError(f"Failed to convert the milestone (nothing was changed) (ref {ref}).")
+
+    collaborators = sorted(str(uid) for uid in row.collaborators.values_list("id", flat=True))
+    # No `milestone_id` key: there is no milestone any more, and a result that carried one would be
+    # read as a live milestone (the chip a write leaves, the use marker).
+    return {
+        "action": "convert",
+        "direction": "milestone_to_task",
+        "task_id": row.task_id,
+        "display_id": row.display_id,
+        "title": row.title,
+        "project_id": row.project_id,
+        "project_name": row.project.project_name,
+        "converted_milestone_id": retired.milestone_id,
+        "sub_tasks_kept": kept,
+        "assignee_id": str(row.assignee_id) if row.assignee_id else None,
+        "collaborator_ids": collaborators,
+        "__summary__": (
+            f'Converted milestone {retired.milestone_id} "{row.title}" into the task '
+            f"{row.display_id}; {kept} task(s) stay under it as sub-tasks, its folder and sprint "
+            "were dropped"
+        ),
+    }
+
+
+def _already_gone(milestone: MilestoneMaster, ctx: ToolContext) -> str:
+    """Why a retired milestone can't be converted: it was turned into a task (say which, when the
+    caller may open it, as the app's 410 does) or it was deleted."""
+    gone = f"Milestone {milestone.milestone_id} "
+    task = (
+        TaskMaster.objects.filter(task_id=milestone.converted_to_task_id).first()
+        if milestone.converted_to_task_id
+        else None
+    )
+    if task is None or task.is_deleted or not can_access_task(task.task_id, ctx.user_id):
+        return gone + "has been deleted."
+    return gone + converted_hint(
+        task.display_id, task.task_id, task.milestone_id if task.is_milestone else None
+    )
 
 
 # --------------------------------------------------------------------------
@@ -580,15 +781,20 @@ _HANDLERS = {
     "rename_folder": _rename_folder,
     "delete_folder": _delete_folder,
 }
+_HANDLERS_ON = {**_HANDLERS, "convert": _convert}
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     action = args.get("action")
-    if action not in _HANDLERS:
-        raise ToolError(f"`action` must be one of {list(ACTIONS)} (got {action!r}).")
+    # With the flag off `convert` is no action at all, refused in the words every unknown one is.
+    on = parity_on()
+    if action not in (_HANDLERS_ON if on else _HANDLERS):
+        raise ToolError(
+            f"`action` must be one of {list(ACTIONS_ON if on else ACTIONS)} (got {action!r})."
+        )
     _check_arguments(action, args)
     check_body_size(args.get("description_markdown"), "description_markdown")
-    return _HANDLERS[action](args, ctx)
+    return (_HANDLERS_ON if on else _HANDLERS)[action](args, ctx)
 
 
 MANAGE_MILESTONE = Tool(

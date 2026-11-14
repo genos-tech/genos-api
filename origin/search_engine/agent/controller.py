@@ -1098,6 +1098,12 @@ def _friendly_manage_milestone_arguments(
     proposed = [u for u in proposed if u] if isinstance(proposed, list) else []
     action = args.get("action")
 
+    if action == "convert":
+        # MIP-1564 (flag-gated: the tool refuses the action while the flag is off, and a refused call
+        # shows no card of its own).
+        _friendly_convert_arguments(out, args, access)
+        return
+
     milestone = access.milestone(args.get("milestone_id")) if action == "update" else None
     current_people = (
         [
@@ -1138,6 +1144,10 @@ def _friendly_manage_milestone_arguments(
                 if milestone.sprint_id
                 else None
             )
+        move = _milestone_move_facts(milestone, args, access)
+        if move is not None:
+            current["project_id"] = move.pop("from_project")
+            current["move"] = move
         out["current"] = current
         return
 
@@ -1151,6 +1161,124 @@ def _friendly_manage_milestone_arguments(
                 folder=folder, is_deleted=False
             ).count()
         out["current"] = current
+
+
+def _milestone_move_facts(
+    milestone: Any, args: dict[str, Any], access: LabelAccess
+) -> dict[str, Any] | None:
+    """What a project move of `milestone` would do, for the approval card (MIP-1564): the project it
+    leaves, how many tasks go with it, and what is cleared that it holds now. None unless the call
+    really moves it: the flag is on and the destination is a different project the caller may use
+    (the tool's own test, `manage_milestone._destination`), so a card never promises a move the tool
+    would refuse."""
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
+    from origin.search_engine.agent.tools.task_tags import tag_names  # noqa: PLC0415
+    from origin.services.task_project_move import milestone_subtree_task_ids  # noqa: PLC0415
+
+    raw = args.get("project_id")
+    if not parity_on() or raw in (None, "") or access.project_name(raw) is None:
+        return None
+    if _label_key(raw) == milestone.project_id:
+        return None
+    return {
+        "from_project": access.project_name(milestone.project_id) or milestone.project_id,
+        "tasks": len(milestone_subtree_task_ids(milestone) - {milestone.task_id}),
+        "sprint": (
+            (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
+            if milestone.sprint_id
+            else None
+        ),
+        "folder": (
+            (access.milestone_folder_name(milestone.folder_id) or milestone.folder_id)
+            if milestone.folder_id
+            else None
+        ),
+        "tags": tag_names(milestone.tags),
+    }
+
+
+def _friendly_convert_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """ADDS what a `manage_milestone` convert changes, under `current` (MIP-1564), so the card says
+    WHAT is converted and what comes along or is dropped, not "convert 42":
+
+      * a root task (`task_id`): its title and display id, the sub-tasks that join the new milestone,
+        its assignee;
+      * a milestone (`milestone_id`): its title, the tasks that stay under it as sub-tasks, the people
+        (the first stays the assignee, the others become collaborators), and the folder and sprint
+        that are dropped.
+
+    Only for an object the caller may read, so an id they can't see shows nothing; `direction` says
+    which of the two it is. A call with both or neither id (the tool refuses it) gets nothing."""
+    from origin.models.task.milestone_models import MilestoneAssignees  # noqa: PLC0415
+    from origin.services.task_project_move import collect_descendant_task_ids  # noqa: PLC0415
+
+    has_task = args.get("task_id") not in (None, "")
+    has_milestone = args.get("milestone_id") not in (None, "")
+    if has_task == has_milestone:
+        return
+    if has_task:
+        task = access.task(args.get("task_id"))
+        if task is None:
+            return
+        out["current"] = {
+            "direction": "task_to_milestone",
+            "title": task.title,
+            "display_id": task.display_id,
+            "sub_tasks": len(collect_descendant_task_ids(task.task_id)),
+            "assignee": access.username(task.assignee_id) if task.assignee_id else None,
+        }
+        return
+    milestone = access.milestone(args.get("milestone_id"))
+    if milestone is None:
+        return
+    people = [
+        str(uid)
+        for uid in MilestoneAssignees.objects.filter(milestone=milestone)
+        .order_by("ts_created_at", "id")
+        .values_list("user_id", flat=True)
+    ]
+    names = access.usernames(people) if people else {}
+    out["current"] = {
+        "direction": "milestone_to_task",
+        "title": milestone.title,
+        "display_id": _backing_display(milestone),
+        "tasks": _milestone_task_count(milestone),
+        "assignee": names.get(people[0], people[0]) if people else None,
+        "collaborators": [names.get(uid, uid) for uid in people[1:]],
+        "folder": (
+            (access.milestone_folder_name(milestone.folder_id) or milestone.folder_id)
+            if milestone.folder_id
+            else None
+        ),
+        "sprint": (
+            (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
+            if milestone.sprint_id
+            else None
+        ),
+    }
+
+
+def _backing_display(milestone: Any) -> str | None:
+    from origin.search_engine.agent.tools.list_milestones import (  # noqa: PLC0415
+        _backing_display_id,
+    )
+
+    return _backing_display_id(milestone)
+
+
+def _milestone_task_count(milestone: Any) -> int:
+    """The live tasks that stay under a converted milestone's row as sub-tasks: those filed in it
+    (`milestone_id`), not its own row. The conversion service counts every row, deleted ones too;
+    the card says what a person would still see."""
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    return (
+        TaskMaster.objects.filter(milestone=milestone, is_deleted=False)
+        .exclude(task_id=milestone.task_id)
+        .count()
+    )
 
 
 def _friendly_delete_milestone_arguments(
@@ -1880,7 +2008,17 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
 
     if call_name == "manage_milestone":
         # A milestone action → the milestone's chip; a folder action has no
-        # milestone, so the chip is its project's.
+        # milestone, so the chip is its project's. A milestone converted to a task has no
+        # milestone any more (MIP-1564): the chip is the task it became.
+        if result.get("direction") == "milestone_to_task" and result.get("task_id"):
+            return [
+                _task_source(
+                    result["task_id"],
+                    result.get("title"),
+                    result.get("project_id"),
+                    display_id=result.get("display_id"),
+                )
+            ]
         if result.get("milestone_id"):
             return [
                 _milestone_source(
@@ -2705,6 +2843,26 @@ def resume_agent(
                         "task_id": result["task_id"],
                         "attachment_id": result.get("attachment_id"),
                         "deleted": True,
+                    }
+                # A converted or moved milestone (MIP-1564): the browser's copy of the row is the
+                # other kind of thing, or in another project, and its project tables list the old
+                # picture. The ref names what the browser has to drop and which projects to
+                # re-read. Additive.
+                if call_name == "manage_milestone" and (
+                    result.get("action") == "convert" or result.get("moved")
+                ):
+                    moved = result.get("moved") or {}
+                    change_ref = {
+                        "kind": "convert" if result.get("action") == "convert" else "move",
+                        "direction": result.get("direction"),
+                        "task_id": result.get("task_id"),
+                        "milestone_id": result.get("milestone_id")
+                        or result.get("converted_milestone_id"),
+                        "project_id": result.get("project_id"),
+                        "from_project_id": moved.get("from_project_id"),
+                    }
+                    result_event["milestone_change"] = {
+                        k: v for k, v in change_ref.items() if v is not None
                     }
                 # Approved note writes carry a compact `note` ref so the
                 # frontend can refresh caches and (for body updates) push

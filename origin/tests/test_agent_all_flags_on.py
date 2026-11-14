@@ -41,7 +41,9 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-1562: +984 more (141,966 all-on, 143,421 with a Long member's block): 79 characters left.
 # MIP-1563: +913 more (the flag-gated delete tool and `fetch_task`'s sentence; 142,879 all-on, 144,334
 # with a Long member's block), so 144,500: 166 characters left.
-ALL_ON_BUDGET_CHARS = 144_500
+# MIP-1564: +769 more (`manage_milestone`'s convert action, `task_id` and project move; 143,648 all-on,
+# 145,103 with a Long member's block), so 145,500: 397 characters left.
+ALL_ON_BUDGET_CHARS = 145_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.
@@ -165,6 +167,17 @@ class AllOnDeclarationTests(SimpleTestCase):
                     for name in row_props:
                         self.assertIn(name, rows, before.name)
                         del rows[name]
+                # An enum value the flag appends (`manage_milestone`'s `convert`) and a description it
+                # words for itself (`project_id`): taken back to the base schema's own.
+                for name, values in addition.enum_values.items():
+                    enum = stripped["properties"][name]["enum"]
+                    self.assertEqual(enum[-len(values) :], list(values), before.name)
+                    del enum[-len(values) :]
+                for name, text in addition.descriptions.items():
+                    self.assertEqual(stripped["properties"][name]["description"], text)
+                    stripped["properties"][name]["description"] = before.parameters_schema[
+                        "properties"
+                    ][name]["description"]
                 # A parameter the new ones are an alternative to (`update_comment`'s `body_text`) is
                 # `required` only while the flag is off.
                 if addition.optional:

@@ -29,6 +29,15 @@ from typing import Any
 from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
 from origin.search_engine.agent.tools.create_task import PARITY_PROPERTIES as _CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import PARITY_ROW_PROPERTIES as _PLAN_ROWS
+from origin.search_engine.agent.tools.milestone_convert import (
+    PARITY_DESCRIPTIONS as _MILESTONE_DESCRIPTIONS,
+)
+from origin.search_engine.agent.tools.milestone_convert import (
+    PARITY_ENUM_VALUES as _MILESTONE_ENUM,
+)
+from origin.search_engine.agent.tools.milestone_convert import (
+    PARITY_PROPERTIES as _MILESTONE_PROPERTIES,
+)
 from origin.search_engine.agent.tools.todo_source import PARITY_PROPERTIES as _CREATE_TODO
 from origin.search_engine.agent.tools.update_comment import PARITY_OPTIONAL as _COMMENT_OPTIONAL
 from origin.search_engine.agent.tools.update_comment import PARITY_PROPERTIES as _UPDATE_COMMENT
@@ -46,6 +55,12 @@ class ParamAddition:
     #: Top-level parameters that stop being `required` while the flag is on: the new parameters
     #: are an alternative to them (a reaction has no `body_text`).
     optional: tuple[str, ...] = ()
+    #: `property -> values appended to its `enum``: an action the tool gains (`manage_milestone`'s
+    #: `convert`, MIP-1564). The tool's own enum is never edited.
+    enum_values: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: `property -> description`: an EXISTING property worded for the flag (`manage_milestone`'s
+    #: `project_id` also names a destination). Only the description changes; the property stays.
+    descriptions: dict[str, str] = field(default_factory=dict)
 
 
 #: Append, never reorder: a tool's added properties follow the order of the rows.
@@ -58,6 +73,14 @@ ADDITIONS: tuple[ParamAddition, ...] = (
         "update_comment", PARITY_FLAG, properties=_UPDATE_COMMENT, optional=_COMMENT_OPTIONAL
     ),
     ParamAddition("create_todo_item", PARITY_FLAG, properties=_CREATE_TODO),
+    # MIP-1564: convert a root task to a milestone and back, and move a milestone to another project.
+    ParamAddition(
+        "manage_milestone",
+        PARITY_FLAG,
+        properties=_MILESTONE_PROPERTIES,
+        enum_values=_MILESTONE_ENUM,
+        descriptions=_MILESTONE_DESCRIPTIONS,
+    ),
 )
 
 
@@ -76,6 +99,14 @@ def with_flagged_params(tool: str, schema: dict[str, Any]) -> dict[str, Any]:
             row_schema = (props.get(array_name) or {}).get("items")
             if isinstance(row_schema, dict):
                 row_schema.setdefault("properties", {}).update(copy.deepcopy(row_props))
+        for name, values in addition.enum_values.items():
+            prop = props.get(name)
+            if isinstance(prop, dict) and isinstance(prop.get("enum"), list):
+                prop["enum"] = [*prop["enum"], *(v for v in values if v not in prop["enum"])]
+        for name, text in addition.descriptions.items():
+            prop = props.get(name)
+            if isinstance(prop, dict):
+                prop["description"] = text
         if addition.optional and "required" in out:
             out["required"] = [r for r in out["required"] if r not in addition.optional]
     return out

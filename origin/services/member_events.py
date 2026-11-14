@@ -281,6 +281,12 @@ def subjects(tool_name: str, args: dict[str, Any]) -> list[tuple[str, str]]:
             if isinstance(thread, str) and _THREAD_RE.match(thread):
                 chat = f"{chat}:{thread}"
             found.append((OBJECT_CHAT_THREAD, chat))
+    if tool_name == "manage_milestone":
+        # `convert` (MIP-1564, only published while `AGENT_PARITY_TOOLS` is on) names the root task
+        # it turns into a milestone by `task_id`: that row is what changed.
+        ident = _int_id(args.get("task_id"))
+        if ident:
+            found.append((OBJECT_TASK, ident))
     seen: set[tuple[str, str]] = set()
     unique = []
     for item in found:

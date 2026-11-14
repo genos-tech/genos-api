@@ -52,6 +52,9 @@ COMMENT_TOOLS = ("update_comment", "create_todo_item")
 # (a WRITE tool, so flag-gated in `FLAGGED_REGISTRY` and not by parameters) appears after the rest.
 # Both are pinned in `test_agent_parity_attachments`.
 ATTACHMENT_TOOLS = ("fetch_task",)
+# MIP-1564: `manage_milestone` gains the `convert` action, `task_id` and a project move; pinned in
+# `test_agent_parity_milestones` (and `test_agent_parity_milestones_gate`).
+MILESTONE_TOOLS = ("manage_milestone",)
 FLAGGED_WRITES = ["delete_task_attachment"]
 CREATE_NEW = {"status", "reporter_id", "links", "template"}
 UPDATE_NEW = {"links", "reporter_id"}
@@ -132,7 +135,7 @@ class OffIsByteIdenticalTests(SimpleTestCase):
         self.assertEqual(list(on)[: len(off)], list(off))
         self.assertEqual(list(on)[len(off) :], FLAGGED_WRITES)
         for name in off:
-            if name in THREE + COMMENT_TOOLS + ATTACHMENT_TOOLS:
+            if name in THREE + COMMENT_TOOLS + ATTACHMENT_TOOLS + MILESTONE_TOOLS:
                 continue
             with self.subTest(tool=name):
                 self.assertEqual(canon(off[name]), canon(on[name]))

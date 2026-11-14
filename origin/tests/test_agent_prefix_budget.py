@@ -54,7 +54,13 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # shipped flags (142,879 with EVERY flag on). Raised to 143,000, the measurement rounded up to the next
 # 500: 267 characters are left, so the next parity task raises it with its own measurement. With the flag
 # off production sends 138,938, as before.
-BUDGET_CHARS = 143_000
+# MIP-1564 (the same flag): `manage_milestone` gains the `convert` action, `task_id` and the project
+# move of `update` (one added description sentence of 617 characters, a `task_id` property, the enum
+# value and the re-worded `project_id`, less the sentence that said a move is not supported): +769,
+# 143,502 measured with it on over the shipped flags (143,648 with EVERY flag on). Raised to 144,000,
+# the measurement rounded up to the next 500: 498 characters are left, so the next parity task raises
+# it with its own measurement. With the flag off production still sends 138,938.
+BUDGET_CHARS = 144_000
 
 
 def _declared_chars() -> int:

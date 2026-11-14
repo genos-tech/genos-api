@@ -126,7 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
-from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
+from origin.search_engine.agent.parity import PARITY_FLAG, flag_on, parity_on
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
@@ -206,6 +206,10 @@ class McpTool:
     # Argument names whose value is a task reference to resolve before
     # the underlying tool sees it.
     task_ref_args: tuple[str, ...] = ()
+    # Task-reference arguments that exist only while `AGENT_PARITY_TOOLS` is on (MIP-1564: `manage_milestone`'s
+    # `task_id`, for `convert`). Resolved like `task_ref_args`, but only while the flag is on, so with it off
+    # such a value reaches the tool untouched and is refused in the tool's own words, as it always was.
+    parity_task_ref_args: tuple[str, ...] = ()
     # Task-reference arguments where '' is a real value ("no task": make it
     # top-level) and passes through unresolved. Every other blank is refused.
     clearable_task_ref_args: tuple[str, ...] = ()
@@ -1484,6 +1488,7 @@ CATALOG: tuple[McpTool, ...] = (
         name="manage_milestone",
         registry_name="manage_milestone",
         milestone_ref_args=("milestone_id",),
+        parity_task_ref_args=("task_id",),
         description=(
             "Create or change a milestone, or manage a project's milestone "
             "folders; `action` says which. 'create' makes a milestone with no "
@@ -2257,7 +2262,7 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
     Raises `ToolError` for a reference that names nothing. `args` is untouched.
     """
     args = dict(args)
-    for arg in tool.task_ref_args:
+    for arg in (*tool.task_ref_args, *(tool.parity_task_ref_args if parity_on() else ())):
         if arg in args and args[arg] is not None:
             if args[arg] == "" and arg in tool.clearable_task_ref_args:
                 continue
