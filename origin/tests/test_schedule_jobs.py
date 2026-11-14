@@ -27,7 +27,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_activity_models import TaskActivity
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools import ToolError
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import briefing, schedule_delivery, schedules
@@ -165,8 +165,8 @@ class TestWhatToDoToday(JobBase):
 
     def test_only_my_work_is_in_my_report(self):
         today = self.local_today()
-        self.make_task("Mine", due_date=today)
-        self.make_task("Theirs", assignee=self.user2, due_date=today)
+        self.make_task("Mine", reporter=self.user, due_date=today)
+        self.make_task("Theirs", reporter=self.user2, assignee=self.user2, due_date=today)
         mine = json.dumps(self.run_job("what_to_do_today"))
         theirs = json.dumps(self.as_user2("what_to_do_today"))
         self.assertIn("Mine", mine)
@@ -242,6 +242,54 @@ class TestWhatToDoToday(JobBase):
         self.assertEqual(len(waiting), briefing.MAX_LIST + 1)
         self.assertIn("There may be more", waiting[-1]["text"])
         self.assertIn(f"{briefing.MAX_LIST}+ waiting on you", report["summary"])
+
+    def handed(self, title="Handed over", **extra):
+        return self.make_task(title, reporter=self.user, assignee=self.user2, **extra)
+
+    def test_a_task_i_handed_to_someone_is_in_what_i_wait_on_with_who_has_it(self):
+        """MIP-1538: the briefing's `waiting_on_others.delegated` reaches the Morning plan."""
+        task = self.handed("Write the release notes", status="WIP")
+        report = self.run_job("what_to_do_today")
+        (row,) = self.section(report, "You are waiting on others")
+        self.assertEqual(row["link"], self.task_link(task))
+        self.assertIn(task.display_id, row["text"])
+        self.assertIn("Write the release notes", row["text"])
+        self.assertIn("otheruser", row["text"])
+        self.assertIn("WIP", row["text"])
+        section = [s for s in report["sections"] if s["heading"] == "You are waiting on others"]
+        self.assertEqual(section[0]["key"], "waiting_on_others")
+        self.assertNotIn("workspace_content", json.dumps(report))
+        self.assertIn({"key": "waiting_on_others", "count": 1}, report["stats"])
+
+    def test_a_task_handed_to_me_or_by_someone_else_is_not_in_the_section(self):
+        self.handed("Gone to them")
+        self.make_task("Handed to me", reporter=self.user2, assignee=self.user)
+        report = self.run_job("what_to_do_today")
+        self.assertNotIn(
+            "Handed to me", json.dumps(self.section(report, "You are waiting on others"))
+        )
+        theirs = self.as_user2("what_to_do_today")
+        self.assertNotIn(
+            "Gone to them", json.dumps(self.section(theirs, "You are waiting on others"))
+        )
+
+    def test_handed_over_tasks_are_capped_and_the_rest_are_counted(self):
+        for n in range(briefing.MAX_LIST + 3):
+            self.handed(f"Handed {n:02d}")
+        report = self.run_job("what_to_do_today")
+        rows = self.section(report, "You are waiting on others")
+        self.assertEqual(len(rows), briefing.MAX_LIST + 1)
+        self.assertEqual(rows[-1], {"text": "and 3 more handed-over tasks", "kind": "more"})
+
+    def test_a_blocked_task_and_a_handed_over_one_share_the_section(self):
+        blocked = self.make_task("Mine, stuck", status="Blocked")
+        blocker = self.make_task("Their work", assignee=self.user2, status="WIP")
+        TaskDependency.objects.create(blocker_task=blocker, blocked_task=blocked)
+        handed = self.handed("Handed over")
+        rows = self.section(self.run_job("what_to_do_today"), "You are waiting on others")
+        links = [r.get("link") for r in rows]
+        self.assertIn(self.task_link(blocked), links)
+        self.assertIn(self.task_link(handed), links)
 
     def test_a_quiet_day_says_so_and_has_no_sections(self):
         with mock.patch.object(briefing, "_calendar_today", return_value={"events": []}):

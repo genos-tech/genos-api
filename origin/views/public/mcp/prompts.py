@@ -93,8 +93,12 @@ def _catch_me_up(args: dict[str, str], tools: frozenset[str]) -> str:
             "3. Answer short, in the user's language, in this order, and then stop:",
             "   - Needs you first: `waiting_on_me` (requests, unanswered mentions), then "
             "anything overdue or due today.",
-            "   - What changed: at most 5 items, one line each, and say how many more there were.",
-            "   - What you are waiting on: one line.",
+            "   - What changed: at most 5 items, one line each, and say how many more there were. "
+            "Add `changed_for_me.chat_answers` (answers in chats the user wrote in) as one "
+            "line per chat.",
+            "   - What you are waiting on: one line, from `waiting_on_others`: tasks stuck on "
+            "others, and `waiting_on_others.delegated`, the tasks the user handed over and who "
+            "has them.",
             "   - Then offer two or three next steps the user can pick in a word.",
             "4. Say which window you looked at (`window.since`). If nothing is new, say so in "
             "one line and do not list old things.",
@@ -122,6 +126,8 @@ def _plan_my_day(args: dict[str, str], tools: frozenset[str]) -> str:
         "what is due or overdue in `agenda`, and anything "
         "in `waiting_on_me` that needs a reaction. Give each a few-word reason taken from the "
         "briefing, so the user can disagree with it. A priority label alone is not a reason.",
+        "   Also weigh new answers in `changed_for_me.chat_answers`, and tasks the user handed "
+        "over, longest quiet first, in `waiting_on_others.delegated`: a nudge may be worth a slot.",
     ]
     if focus:
         lines.append(
