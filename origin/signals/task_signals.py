@@ -367,14 +367,17 @@ def _resolve_actor() -> Optional[Any]:
 
 
 # Surfaces whose body rewrite keeps the previous body. The editor's own autosave
-# (`app`) does not: it is a stream of small changes, not a replacement.
-_BODY_SNAPSHOT_KINDS = {"agent", "api_key"}
+# (`app`) does not: it is a stream of small changes, not a replacement. A connected
+# app (`oauth`, MCP) rewrites the whole body exactly as an API key does, by the
+# same author and at the same risk, so it is kept too (MIP-1487). A credential kind
+# added later keeps nothing until it is listed here on purpose.
+_BODY_SNAPSHOT_KINDS = {"agent", "api_key", "oauth"}
 
 
 def _keeps_previous_body(instance=None) -> bool:
     """Should the body being replaced be kept on the history row?
 
-    True for an unattended whole-body rewrite (the agent, an API key), and for a
+    True for an unattended whole-body rewrite (the agent, an API key, a connected app), and for a
     write that asks for it by setting `_keep_previous_body` on the instance. A
     restore from the history does, so a mistaken restore can be undone too
     although it arrives as the app, whose own autosave is deliberately not kept.
