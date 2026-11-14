@@ -155,8 +155,16 @@ def chat_member_rows(channel: Channel):
     people who are ON THE PROJECT, because a stray row (a person who is not on the project) is
     not a member by `chat_member_q`, so it must not be listed in the roster, mentioned into the
     chat, or notified of its messages.
+
+    A DELETED ACCOUNT is never listed, even where its row is kept (a direct message or a
+    multi-person DM keeps the row so the others keep the conversation, MIP-1546): this is the
+    roster that OFFERS people (the roster endpoints, `list_channel_members`, the mention check,
+    the notification fan-out), and a person who no longer exists is not one to mention, add or
+    notify. A group or project row of an account deleted before that change is hidden here too.
+    The chat list's own DM/MDM identity roster is NOT this helper: it keeps the row so the chat
+    still names its other side "Deleted user".
     """
-    rows = ChannelMember.objects.filter(channel=channel, is_deleted=False)
+    rows = ChannelMember.objects.filter(channel=channel, is_deleted=False, user__is_deleted=False)
     if channel.kind == ChannelKind.PM:
         rows = rows.filter(
             user_id__in=ProjectMembers.objects.filter(
