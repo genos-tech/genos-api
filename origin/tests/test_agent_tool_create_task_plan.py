@@ -116,13 +116,9 @@ class CreateTaskPlanHappyPathTests(CreateTaskPlanTestBase):
         # Markdown body converted; assignee applied.
         impl = tasks["Implementation"]
         self.assertEqual(str(impl.assignee_id), str(self.user2.id))
-        self.assertTrue(
-            any(s.get("styles", {}).get("bold") for s in impl.content[0]["content"])
-        )
+        self.assertTrue(any(s.get("styles", {}).get("bold") for s in impl.content[0]["content"]))
 
-        deps = {
-            (d.blocker_task.title, d.blocked_task.title) for d in TaskDependency.objects.all()
-        }
+        deps = {(d.blocker_task.title, d.blocked_task.title) for d in TaskDependency.objects.all()}
         self.assertEqual(
             deps,
             {("Design review", "Implementation"), ("Implementation", "QA pass")},
@@ -226,9 +222,7 @@ class CreateTaskPlanValidationTests(CreateTaskPlanTestBase):
 
     def test_attach_modes_are_mutually_exclusive(self):
         with self.assertRaisesMessage(ToolError, "at most ONE"):
-            self.run_tool(
-                self._base_args(milestone={"title": "New"}, existing_milestone_id=1)
-            )
+            self.run_tool(self._base_args(milestone={"title": "New"}, existing_milestone_id=1))
         with self.assertRaisesMessage(ToolError, "at most ONE"):
             self.run_tool(self._base_args(milestone={"title": "New"}, parent_task_id=1))
         with self.assertRaisesMessage(ToolError, "at most ONE"):
@@ -294,9 +288,7 @@ class CreateTaskPlanValidationTests(CreateTaskPlanTestBase):
 
     def test_task_count_cap(self):
         with self.assertRaisesMessage(ToolError, "Too many tasks"):
-            self.run_tool(
-                self._base_args(tasks=[{"title": f"T{i}"} for i in range(21)])
-            )
+            self.run_tool(self._base_args(tasks=[{"title": f"T{i}"} for i in range(21)]))
         self.assert_nothing_created()
 
     def test_bad_enum_and_date_report_the_index(self):
@@ -346,7 +338,7 @@ class CreateTaskPlanAclTests(CreateTaskPlanTestBase):
             team_name="Other", team_email="other-team@example.com", owner=self.user2
         )
         ctx_other = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user2.id))
-        with self.assertRaisesMessage(ToolError, "different team"):
+        with self.assertRaisesMessage(ToolError, f"Project {self.project.project_id} not found."):
             self.run_tool(
                 {"project_id": self.project.project_id, "tasks": [{"title": "A"}]},
                 ctx=ctx_other,

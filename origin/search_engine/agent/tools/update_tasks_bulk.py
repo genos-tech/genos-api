@@ -174,11 +174,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if task is None:
             errors.append(f"{where}: task {tid} not found.")
             continue
+        if str(getattr(task, "team_id", "") or "") != ctx.team_id:
+            # The words of a missing one (MIP-1531), and before the "deleted" answer.
+            errors.append(f"{where}: task {tid} not found.")
+            continue
         if task.is_deleted:
             errors.append(f"{where}: task {tid} has been deleted.")
-            continue
-        if str(getattr(task, "team_id", "") or "") != ctx.team_id:
-            errors.append(f"{where}: not authorized — task {tid} is in a different team.")
             continue
         if not _may_edit(task):
             errors.append(f"{where}: not authorized to update task {tid}.")

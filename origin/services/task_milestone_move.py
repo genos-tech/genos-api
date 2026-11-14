@@ -155,7 +155,9 @@ def milestone_move_error(task, milestone_id, team_id) -> str | None:
     if milestone is None:
         return f"Milestone {milestone_id} not found."
     if str(milestone.team_id or "") != str(team_id):
-        return "Not authorized: milestone belongs to a different team."
+        # The words of a missing one, so a guessed id does not say which milestones exist in
+        # other teams (MIP-1531).
+        return f"Milestone {milestone_id} not found."
     if milestone.project_id != task.project_id:
         return (
             f"Milestone {milestone_id} belongs to project {milestone.project_id}, "

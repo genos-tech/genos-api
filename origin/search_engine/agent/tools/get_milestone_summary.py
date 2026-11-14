@@ -64,7 +64,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"Milestone {milestone_id} not found.")
 
     if str(getattr(m, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: milestone is in a different team.")
+        # The words of a missing one (MIP-1531).
+        raise ToolForbidden(f"Milestone {milestone_id} not found.")
 
     is_member = ProjectMembers.objects.filter(
         project_id=m.project_id,

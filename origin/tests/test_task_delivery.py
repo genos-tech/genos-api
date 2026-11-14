@@ -496,7 +496,7 @@ class AddTaskDeliveryTests(DeliveryBase):
 
     def test_another_team_is_refused(self):
         other = TeamMaster.objects.create(team_name="O", team_email="o@x.com", owner=self.user)
-        with self.assertRaisesMessage(ToolError, "different team"):
+        with self.assertRaisesMessage(ToolError, f"Task {self.task.task_id} not found."):
             self._add(ToolContext(team_id=str(other.team_id), user_id=str(self.user.id)), pr_url=PR)
         self.assertFalse(TaskDelivery.objects.exists())
 
@@ -671,7 +671,7 @@ class RemoveTaskDeliveryTests(DeliveryBase):
     def test_another_team_is_refused(self):
         self._link(self.task)
         other = TeamMaster.objects.create(team_name="O", team_email="o@x.com", owner=self.user)
-        with self.assertRaisesMessage(ToolError, "different team"):
+        with self.assertRaisesMessage(ToolError, f"Task {self.task.task_id} not found."):
             self._remove(
                 ToolContext(team_id=str(other.team_id), user_id=str(self.user.id)), pr_url=PR
             )

@@ -40,9 +40,11 @@ def load_sprint(raw_sprint_id: Any, ctx: ToolContext, *, allow_deleted: bool = F
         sprint = Sprint.objects.get(sprint_id=sprint_id)
     except Sprint.DoesNotExist:
         raise ToolError(f"Sprint {sprint_id} not found. Get ids from `list_sprints`.")
+    if str(sprint.team_id) != ctx.team_id:
+        # Before the "deleted" answer, so a sprint deleted in another team reads like a missing
+        # one (MIP-1531).
+        raise ToolForbidden(f"Sprint {sprint_id} not found. Get ids from `list_sprints`.")
     if sprint.is_deleted and not allow_deleted:
         raise ToolError(f"Sprint {sprint_id} has been deleted.")
-    if str(sprint.team_id) != ctx.team_id:
-        raise ToolForbidden(f"Sprint {sprint_id} not found. Get ids from `list_sprints`.")
     _require_member(sprint.project_id, ctx, f"sprint {sprint_id}")
     return sprint

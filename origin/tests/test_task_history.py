@@ -267,7 +267,7 @@ class GetTaskHistoryTests(TaskHistoryTestBase):
         )
         TeamMembers.objects.create(team=other, attendee=self.user)
         ctx = ToolContext(team_id=str(other.team_id), user_id=str(self.user.id))
-        with self.assertRaisesMessage(ToolError, "different team"):
+        with self.assertRaisesMessage(ToolError, f"Task {self.task.task_id} not found."):
             self._run(ctx=ctx)
 
     def test_a_teammate_outside_the_project_is_refused(self):
