@@ -38,7 +38,8 @@ THREAD anchor, the task that claims the thread contributes rows by what the memb
 
   * a member who CAN open the task gets the headline of it: created, status, assignee, due date,
     merged PRs (the title fenced) and a link to the task's own timeline;
-  * a member who cannot gets `created` and `status` only, no title, no person, nothing else, and
+  * a member who cannot gets `created` and `status` only, no title, no person, nothing else (its
+    anchor is the numeric `task:<id>`, not the display id, which carries the project code), and
     a status change only when both of its words are in the known vocabulary;
   * the rule applies only when the task is live, is the ONLY live task claiming this thread in
     the member's team, was made in this very chat, and the task, the chat and the member are in
@@ -50,7 +51,6 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -88,9 +88,8 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
-from origin.services import briefing, item_lines, member_events, plain_text
+from origin.services import briefing, item_lines, member_events, note_scope, plain_text
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
-from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, readable_note_ids
 
 # --------------------------------------------------------------------------- #
 # The contract's constants                                                     #
@@ -198,7 +197,8 @@ class TEv:
     label: str | None = None
     # Raw text, whitespace-collapsed and cut; fenced when rendered.
     text: str = ""
-    # `task:<display id>`, `note:<family>:<id>` ...: only when it is not the timeline's anchor.
+    # `task:<display id>` (`task:<numeric id>` to a member who cannot open the task, MIP-1534),
+    # `note:<family>:<id>` ...: only when it is not the timeline's anchor.
     anchor: str | None = None
     frm: str | None = None
     to: str | None = None
@@ -782,35 +782,7 @@ def _deliveries(
 # -- notes --------------------------------------------------------------------------------- #
 
 
-def readable_notes(ctx: ToolContext, keys) -> set[tuple[int, int]]:
-    """The `(note_type, note_id)` among `keys` the member can open now: ONE rule, the one
-    `get_note` applies (`load_readable_note`: the note is in this team, and the member owns it or
-    holds a role on it: `may_read_note` / `get_effective_role`), in a fixed number of queries
-    however many notes. A test pins it equal to the per-note rule over a generated matrix.
-    (The briefing's `_may_read_note` is a second, narrower rule for chat notes: see MIP-1281.)"""
-    me = str(ctx.user_id)
-    by_type: dict[int, set[int]] = defaultdict(set)
-    for note_type, note_id in keys:
-        if note_type in _NOTE_MODELS:
-            by_type[note_type].add(int(note_id))
-    out: set[tuple[int, int]] = set()
-    for note_type, ids in by_type.items():
-        rows = list(
-            _NOTE_MODELS[note_type]
-            .objects.filter(note_id__in=ids, team_id=ctx.team_id)
-            .values_list("note_id", "owner_id")
-        )
-        # Only a personal note has an author exception: a chat note's (MIP-1492) or a task note's
-        # (MIP-1511) author who left is a stranger.
-        owned = (
-            {nid for nid, owner in rows if owner and str(owner) == me}
-            if note_type == NOTE_TYPE_PERSONAL
-            else set()
-        )
-        others = {nid for nid, _o in rows} - owned
-        out |= {(note_type, n) for n in owned}
-        out |= {(note_type, n) for n in readable_note_ids(me, note_type, others)}
-    return out
+readable_notes = note_scope.readable_notes
 
 
 def _version_event(sc: Scope, v: NoteVersionMaster, title: str, family: str, own: bool) -> TEv:
@@ -1173,10 +1145,14 @@ def _claim_events(sc: Scope, kinds: frozenset[str], count: bool, task: TaskMaste
         if ev is None:
             continue
         if not can_open:
-            # A headline and nothing else: no person, no words, only the display id.
+            # A headline and nothing else: no person, no words, only the numeric anchor.
             ev.actor = ev.label = ev.to_actor = None
             ev.text = ""
             ev.extra = {}
+            # The display id carries the project's code, which this member may not know: the
+            # numeric anchor names the task without it (MIP-1534). `can_open` is the rule already
+            # computed above for the whole claim, so there is no query per event.
+            ev.anchor = f"task:{task.task_id}"
         elif ev.kind == "created":
             ev.text = sc.snippet(task.title or "")
         out.append(ev)
