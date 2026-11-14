@@ -17,8 +17,12 @@
 # already ships with (team 6f9de2de... has the indexed chats, tasks,
 # and notes you can browse at OpenSearch Dashboards).
 #
-# Cost: each case is a real Gemini call (~$0.001 on gemini-2.5-flash),
-# so the suite is cheap enough to run in CI.
+# Cost: each case runs the whole agent loop (several model calls with tool
+# results in the prompt): about $0.03 to $0.07 per case on gemini-3.6-flash,
+# measured in the 2026-11-14 grouped paid session (MIP-1089), so the full
+# suite costs a few dollars and a judged run more. Both commands print the
+# tokens and cost per run (also with AI_COST_METER off); CI runs only the
+# retrieval suite (no model calls) and one judged smoke case.
 
 # --------------------------------------------------------------------- #
 # A. Simple RAG (3)                                                      #

@@ -31,11 +31,13 @@ Design notes:
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import logging
 import re
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,7 @@ import yaml
 from origin.search_engine.agent.abstention import is_abstention
 from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.evals import web_injection
+from origin.search_engine.agent.evals.group import usage as group_usage
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.spend import spend_purpose
@@ -210,8 +213,14 @@ def _case_cost() -> dict[str, Any]:
     single token. The ledger keys on `request_id` instead of the run,
     which is exactly why it can see what `AgentLlmCall` cannot.
 
-    Returns zeros when the meter is off (its default) or on any error —
-    an eval must never fail because accounting did.
+    METER OFF (its default): the ledger has no rows, so the figures come from
+    the in-process capture `run_behavior_case` wraps the case in (the same
+    `capture_usage` the grouped harness uses: the provider's own usage
+    metadata, priced from the catalog). A paid run is never invisible
+    (MIP-1468). With the meter ON the ledger wins, exactly as before.
+
+    Returns zeros on any error — an eval must never fail because
+    accounting did.
     """
     blank = {
         "llm_calls": 0,
@@ -223,6 +232,7 @@ def _case_cost() -> dict[str, Any]:
     ctx = spend.current_context()
     if ctx is None:
         return blank
+    measured = _case_usage.get()
     try:
         from django.db.models import Count, Sum  # noqa: PLC0415
 
@@ -241,6 +251,8 @@ def _case_cost() -> dict[str, Any]:
         card = (
             rows.exclude(rate_card_version="").values_list("rate_card_version", flat=True).first()
         )
+        if not agg["n"] and measured is not None and measured.calls:
+            return _measured_cost(measured)
         return {
             "llm_calls": int(agg["n"] or 0),
             "total_tokens": sum(
@@ -252,13 +264,53 @@ def _case_cost() -> dict[str, Any]:
         }
     except Exception:  # noqa: BLE001 — an eval must not fail on accounting
         log.debug("Could not collect case cost", exc_info=True)
+        if measured is not None and measured.calls:  # the ledger table may be unreachable
+            return _measured_cost(measured)
         return blank
+
+
+#: The capture of the case in flight (set by `_measured`), read by `_case_cost`.
+_case_usage: ContextVar[group_usage.UsageCapture | None] = ContextVar(
+    "eval_case_usage", default=None
+)
+
+
+def _measured_cost(capture: group_usage.UsageCapture) -> dict[str, Any]:
+    """The `_case_cost` fields from an in-process capture (the meter-off path)."""
+    return {
+        "llm_calls": capture.calls,
+        "total_tokens": capture.input_tokens + capture.output_tokens,
+        "cost_jpy_milli": capture.cost_jpy_milli,
+        "cost_usd_micro": int(round(capture.cost_usd * 1_000_000)),
+        "rate_card_version": "",
+    }
+
+
+def _measured(fn):
+    """Run the case inside a `capture_usage()` and expose it to `_case_cost`.
+
+    Outermost on purpose: `capture_usage` binds the case's spend context (surface `eval`), and
+    the `spend_context` decorator under it reuses that same one, so the ledger path and the
+    capture see the same request id.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(case: dict[str, Any]) -> Any:
+        with group_usage.capture_usage() as capture:
+            token = _case_usage.set(capture)
+            try:
+                return fn(case)
+            finally:
+                _case_usage.reset(token)
+
+    return wrapper
 
 
 # Bind one logical request per case so every LLM call it makes — loop
 # steps, rewrite, rerank, critique, summaries — rolls up under a single
 # request_id. Decorator form: the context manager is recreated per call,
 # so each case gets its own id.
+@_measured
 @spend.spend_context(surface="eval")
 def run_behavior_case(case: dict[str, Any]) -> CaseResult:
     """Execute one behavior case through the full agent loop.
