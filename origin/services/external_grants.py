@@ -1047,6 +1047,11 @@ def _write_participant(grant: ExternalGrant, user_id, role: str) -> None:
     if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
         from origin.models.chat.unified_models import ChannelMember
 
+        # The choke point every way in goes through (accepting, adding a person, raising the
+        # ceiling), so a grant made before `offer_grant` refused a DM or a project chat
+        # (MIP-1496) cannot admit anyone either.
+        _channel_shareable_or_raise(grant.object_id)
+
         # `role` maps onto the channel table's own older vocabulary
         # (`admin`/`member`) — see `member_roles` for why that mapping
         # exists rather than a migration. Un-delete-or-create, because

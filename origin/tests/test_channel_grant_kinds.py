@@ -20,7 +20,12 @@ from __future__ import annotations
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
 from origin.models.common.team_models import ExternalGrant
-from origin.services.external_grants import ExternalGrantError, offer_grant, respond_to_grant
+from origin.services.external_grants import (
+    ExternalGrantError,
+    add_external_participants,
+    offer_grant,
+    respond_to_grant,
+)
 from origin.services.member_roles import EDITOR
 from origin.tests.cross_team_fixtures import CrossTeamTestCase
 
@@ -106,36 +111,66 @@ class ChannelGrantKinds(CrossTeamTestCase):
         self.assertEqual(grant.status, "active")
 
 
-class GuestReadsAfterAnAcceptedShare(CrossTeamTestCase):
-    """A grant on a project chat made before the refusal existed (written straight into the
-    table) is inert: the guest's approver holds a stray row, which opens nothing (MIP-1480).
+class GrantsMadeBeforeTheRefusal(CrossTeamTestCase):
+    """Grants on a DM or a project chat that already exist (written straight into the table).
 
-    Not pinned for a direct message: such a row WOULD still open it, which is why the offer
-    is refused now; rows made earlier need a data audit, not a code path.
+    A guest row on a DM opens it, so `_write_participant`, the one place cross-team access is
+    written, refuses these kinds: accepting, adding a person and raising the ceiling all go
+    through it. A project chat's stray row would open nothing (MIP-1480) and is refused too, so
+    no stray row is written.
     """
 
     def setUp(self):
         super().setUp()
         self.connection = self.connect_a_and_b()
         self.pm_chat = Channel.objects.get(kind=ChannelKind.PM, project=self.project)
+        self.dm = Channel.objects.create(team=self.team_a, kind=ChannelKind.DM, title="")
+        for u in (self.a_editor, self.a_viewer):
+            ChannelMember.objects.create(channel=self.dm, user=u)
         Message.objects.create(
-            channel=self.pm_chat, sender=self.a_editor, seq=1, body=[], body_text="host only text"
+            channel=self.dm, sender=self.a_editor, seq=1, body=[], body_text="private dm text"
         )
-        grant = ExternalGrant.objects.create(
+
+    def legacy_grant(self, chat, status="pending", ceiling=EDITOR):
+        return ExternalGrant.objects.create(
             connection=self.connection,
             owner_team_id=self.team_a.team_id,
             guest_team_id=self.team_b.team_id,
             object_type=ExternalGrant.ObjectType.CHANNEL,
-            object_id=str(self.pm_chat.id),
-            role_ceiling=EDITOR,
-            status="pending",
+            object_id=str(chat.id),
+            role_ceiling=ceiling,
+            status=status,
             invited_by=self.a_owner,
         )
-        respond_to_grant(grant, self.b_owner, accept=True)
 
-    def read(self, chat):
+    def test_accepting_a_pending_grant_on_a_dm_admits_nobody_and_the_guest_reads_nothing(self):
+        grant = self.legacy_grant(self.dm)
+        with self.assertRaises(ExternalGrantError) as ctx:
+            respond_to_grant(grant, self.b_owner, accept=True)
+        self.assertEqual(ctx.exception.code, "bad_object")
+        self.assertFalse(ChannelMember.objects.filter(channel=self.dm, user=self.b_owner).exists())
         self.authenticate(self.b_owner)
-        return self.client.get(f"/api/v3/channels/{chat.id}/messages/")
+        res = self.client.get(f"/api/v3/channels/{self.dm.id}/messages/")
+        self.assertEqual(res.status_code, 404, res.content)
 
-    def test_the_guest_cannot_read_the_project_chat(self):
-        self.assertEqual(self.read(self.pm_chat).status_code, 404)
+    def test_accepting_a_pending_grant_on_a_project_chat_writes_no_stray_row(self):
+        grant = self.legacy_grant(self.pm_chat)
+        with self.assertRaises(ExternalGrantError):
+            respond_to_grant(grant, self.b_owner, accept=True)
+        self.assertFalse(
+            ChannelMember.objects.filter(channel=self.pm_chat, user=self.b_owner).exists()
+        )
+
+    def test_an_active_grant_on_a_dm_cannot_add_people(self):
+        grant = self.legacy_grant(self.dm, status="active")
+        with self.assertRaises(ExternalGrantError) as ctx:
+            add_external_participants(grant, [self.b_editor.id], self.b_owner)
+        self.assertEqual(ctx.exception.code, "bad_object")
+        self.assertFalse(ChannelMember.objects.filter(channel=self.dm, user=self.b_editor).exists())
+
+    def test_the_guest_cannot_read_a_project_chat_a_legacy_grant_names(self):
+        """Evidence kept from the probe: a stray row on a project chat opens nothing."""
+        ChannelMember.objects.create(channel=self.pm_chat, user=self.b_owner)
+        self.authenticate(self.b_owner)
+        res = self.client.get(f"/api/v3/channels/{self.pm_chat.id}/messages/")
+        self.assertEqual(res.status_code, 404, res.content)
