@@ -342,6 +342,11 @@ def delete_account(user) -> dict:
         _purge_search_engine_rows(user_id)
         # Both read the identity that is overwritten just below, so they run first.
         invites_removed = _delete_invites_to(original_email)
+        # A group or project chat the person owned gets a live owner (MIP-1550). The row below
+        # is still not marked deleted, so the helper is told which account to leave out.
+        from origin.services.deleted_account_channel_owners import reassign_owned_channels
+
+        reassign_owned_channels(user.pk)
 
         # Identity erasure. The email must stay unique and unroutable.
         user.email = f"deleted-{uuid.uuid4().hex[:16]}@{DELETED_EMAIL_DOMAIN}"
