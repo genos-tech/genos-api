@@ -155,8 +155,10 @@ def refuse_new_people(task, project, data) -> str | None:
     if isinstance(raw_collaborators, list):
         already = {str(pk) for pk in task.collaborators.values_list("id", flat=True)}
         # The assignee and the reporter the task will have once this save lands.
-        holders = [data.get(key) or current for key, current in (
-            ("assignee", task.assignee_id), ("reporter", task.reporter_id))]
+        holders = [
+            data.get(key) or current
+            for key, current in (("assignee", task.assignee_id), ("reporter", task.reporter_id))
+        ]
 
         def rule(project, canon):
             return may_collaborate(project, canon, holders)

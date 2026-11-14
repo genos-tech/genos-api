@@ -33,8 +33,8 @@ from origin.models.chat.unified_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.label_acl import LabelAccess
+from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import v3_activity
 from origin.services.task_collaborator_revoke import drop_collaborator_on_project_leave
 from origin.services.task_collaborators import notifiable_collaborator_ids
@@ -119,7 +119,9 @@ class TaskReaderIdsTests(ReadRuleBase):
     def test_nobody_asked_means_nothing_read_and_no_query(self):
         with CaptureQueriesContext(connection) as ctx:
             self.assertEqual(task_reader_ids(self.project.project_id, None, None, []), set())
-            self.assertEqual(task_reader_ids(self.project.project_id, None, None, [None, ""]), set())
+            self.assertEqual(
+                task_reader_ids(self.project.project_id, None, None, [None, ""]), set()
+            )
         self.assertEqual(len(ctx), 0)
 
     def test_a_malformed_project_id_reads_nothing_instead_of_raising(self):
