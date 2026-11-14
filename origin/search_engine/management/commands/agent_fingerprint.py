@@ -803,7 +803,9 @@ def _build_fixture_b() -> None:
     )
     # a dependency: the plain task waits on the child under the Closed parent
     TaskDependency.objects.create(blocker_task=child, blocked_task=plain, team=team, created_by=c)
-    InboxItems.objects.create(team=team, receiver=c, item_type=10, item_body=_report_body())
+    # Built, not filed through a producer's helper: this is a fixture row in a rolled-back
+    # transaction, not an inbox producer (`test_inbox_ai` inventories those).
+    InboxItems(team=team, receiver=c, item_type=10, item_body=_report_body()).save()
     note = PersonalNoteMaster.objects.create(
         note_id=NOTE_B_ID,
         team=team,
