@@ -61,6 +61,7 @@ from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPL
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import member_events
 from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
+from origin.services.plain_text import body_text, message_text
 from origin.services.user_time import zone_for_user_id
 
 log = logging.getLogger(__name__)
@@ -436,8 +437,6 @@ def _changed_tasks(
     candidate_ids = {a.task_id for a in activities} | {c.task_id for c in comments}
     readable = LabelAccess(ctx).tasks(candidate_ids)
 
-    from origin.search_engine.text_extraction import extract_text  # noqa: PLC0415
-
     by_task: dict[int, list[dict[str, Any]]] = {}
     for row in activities:
         if row.task_id in readable:
@@ -450,7 +449,7 @@ def _changed_tasks(
                     "kind": "comment",
                     "_actor": c.sender_id,
                     "summary": "commented",
-                    "_text": _snippet(extract_text(c.comment_body)),
+                    "_text": _snippet(body_text(c.comment_body)),
                 }
             )
     items = []
@@ -530,7 +529,7 @@ def _changed_threads(ctx: ToolContext, win: Window, names: _Names) -> list[dict[
                 "kind": "reply",
                 "_actor": m.sender_id,
                 "summary": "replied",
-                "_text": _snippet(m.body_text),
+                "_text": _snippet(message_text(m)),
             }
         )
     for thread in threads.values():
@@ -1002,8 +1001,6 @@ def _activity_mentions(
             task = readable.get(task_id)
             return task if task is not None and touched.get(task_id, at) <= at else None
 
-        from origin.search_engine.text_extraction import extract_text  # noqa: PLC0415
-
         bodies = {
             (c.task_id, c.comment_id): c
             for c in TaskComments.objects.filter(
@@ -1024,7 +1021,7 @@ def _activity_mentions(
                     "display_id": task.display_id,
                     "title": wrap_workspace_content(task.title or ""),
                     "comment_id": comment_id,
-                    "text": wrap_workspace_content(_snippet(extract_text(comment.comment_body))),
+                    "text": wrap_workspace_content(_snippet(body_text(comment.comment_body))),
                     "_actor": row.actor_id,
                 }
             )
