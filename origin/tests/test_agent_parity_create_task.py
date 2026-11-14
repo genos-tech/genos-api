@@ -236,6 +236,14 @@ class ReporterAtCreateTests(ParityCreateBase):
             missing.replace("00000000-0000-0000-0000-000000000000", "X"),
         )
 
+    def test_a_name_or_number_is_not_a_user_id(self):
+        for bad in ("alice", "42", "otheruser"):
+            with self.subTest(reporter_id=bad):
+                message = self.assert_nothing_created(reporter_id=bad)
+
+                self.assertIn("not a user id", message)
+                self.assertIn("get_team_members", message)
+
     def test_a_deleted_account_is_refused(self):
         self.user2.is_deleted = True
         self.user2.save(update_fields=["is_deleted"])
@@ -561,6 +569,17 @@ class CardTests(ParityCreateBase):
 
         self.assertEqual(shown, self.body(out))
         self.assertEqual(self.card(args)["template"], "bug")
+
+    def test_the_body_the_card_fills_in_is_not_editable_so_it_cannot_meet_the_template(self):
+        # An edit may only change a value the model proposed (`editable_paths`): the filled body is
+        # shown, not proposed, so a person cannot turn it into `content_text` + `template`, which
+        # the tool refuses.
+        from origin.search_engine.agent import approval_edits  # noqa: PLC0415
+
+        proposed = {"title": "T", "project_id": self.project.project_id, "template": "bug"}
+
+        self.assertIn("content_text", self.card(proposed))
+        self.assertNotIn("content_text", approval_edits.editable_paths("create_task", proposed))
 
     def test_a_body_the_model_wrote_is_shown_as_it_is(self):
         args = {"title": "T", "project_id": self.project.project_id, "content_text": "mine"}

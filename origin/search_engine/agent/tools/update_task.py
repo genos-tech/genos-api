@@ -59,7 +59,7 @@ from origin.search_engine.agent.tools.task_links import (
     register_pr_webhooks,
 )
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
-from origin.search_engine.agent.tools.task_people import plan_collaborators
+from origin.search_engine.agent.tools.task_people import canonical_user_id, plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.search_engine.agent.undo import UNDO_KEY, TaskUpdateCapture
 from origin.services.collab_push import push_task_body
@@ -93,16 +93,17 @@ def _new_reporter(raw: Any, task: TaskMaster, allowed: set[str], ctx: ToolContex
     one. A task always has a reporter, so there is no clearing."""
     if raw in ("", "null"):
         raise ToolError("`reporter_id` must be a user id: a task always has a reporter.")
-    if str(raw) == str(task.reporter_id):
+    raw = canonical_user_id(raw, "`reporter_id`")
+    if raw == str(task.reporter_id):
         return None
-    if not (str(raw) in allowed or is_team_member(ctx.team_id, raw)):
+    if not (raw in allowed or is_team_member(ctx.team_id, raw)):
         raise ToolError(
             f"User {raw!r} is not an active member of this team, and is not on this task's "
             "project. Use get_team_members or list_project_members to find valid user ids."
         )
     try:
         person = CustomUser.objects.get(id=raw)
-    except (CustomUser.DoesNotExist, Exception):
+    except CustomUser.DoesNotExist:
         raise ToolError(f"User {raw!r} not found.")
     if person.is_deleted:
         raise ToolError(f"User {raw!r} account has been deleted.")
@@ -317,9 +318,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # --- reporter_id and links (MIP-1561, `AGENT_PARITY_TOOLS`) ---
     # The links replace the whole set, as the task page's save does; the reporter is judged
-    # only when it changes. Neither rides along with a project move: the reporter is judged
-    # against the project the task is in now, and the links are the task's own.
+    # only when it changes. The reporter is judged against the project the task is in NOW, so it
+    # does not ride along with a project move (as `collaborators` and `custom_fields` do not); the
+    # links are the task's own and move with it.
     new_links: list[dict[str, Any]] | None = None
+    if args.get("reporter_id") is not None and args.get("project_id") is not None:
+        raise ToolError(
+            "`reporter_id` is judged against the project the task is in: move the task with "
+            "`project_id` first, then set the reporter in a second call. Nothing was changed."
+        )
     if args.get("reporter_id") is not None:
         new_reporter = _new_reporter(args["reporter_id"], task, allowed, ctx)
         if new_reporter is not None:

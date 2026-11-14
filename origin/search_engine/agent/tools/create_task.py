@@ -79,7 +79,7 @@ from origin.search_engine.agent.tools.task_links import (
     register_pr_webhooks,
 )
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
-from origin.search_engine.agent.tools.task_people import plan_collaborators
+from origin.search_engine.agent.tools.task_people import canonical_user_id, plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.agent.undo import UNDO_KEY, created_task_capture
 from origin.search_engine.quota import (
@@ -242,7 +242,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if parity:
         status = _parity_status(args.get("status"))
         if args.get("reporter_id") not in (None, "", "null"):
-            reporter = _resolve_assignee(args["reporter_id"], allowed, ctx)
+            reporter = _resolve_assignee(
+                canonical_user_id(args["reporter_id"], "`reporter_id`"), allowed, ctx
+            )
             reporter_id = str(reporter.id)
         if args.get("links") is not None:
             links = plan_links(args["links"], None)

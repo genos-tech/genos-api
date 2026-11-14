@@ -321,11 +321,56 @@ class ReporterTests(ParityUpdateBase):
             missing.replace("00000000-0000-0000-0000-000000000000", "X"),
         )
 
+    def test_a_name_or_number_is_not_a_user_id(self):
+        for bad in ("alice", "42", "otheruser"):
+            with self.subTest(reporter_id=bad):
+                self.refused_and_unchanged(self.task(), "not a user id", reporter_id=bad)
+
     def test_a_deleted_account_is_refused(self):
         self.user2.is_deleted = True
         self.user2.save(update_fields=["is_deleted"])
 
         self.refused_and_unchanged(self.task(), "deleted", reporter_id=str(self.user2.id))
+
+    def test_the_reporter_is_not_judged_with_a_project_move_it_is_set_in_a_second_call(self):
+        # It is judged against the project the task is in NOW: a reporter who is on this project
+        # and not on the destination would be accepted and then have no access to the task.
+        other = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Elsewhere",
+            code="ELS",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=other, attendee=self.user)
+        task = self.task()
+
+        self.refused_and_unchanged(
+            task, "second call", reporter_id=str(self.guest.id), project_id=other.project_id
+        )
+        self.set(task, project_id=other.project_id)
+        self.set(task, reporter_id=str(self.user2.id))
+
+        task.refresh_from_db()
+        self.assertEqual(task.project_id, other.project_id)
+        self.assertEqual(task.reporter_id, self.user2.id)
+
+    def test_links_move_with_the_task_in_one_call(self):
+        other = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Elsewhere",
+            code="ELS",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=other, attendee=self.user)
+        task = self.task()
+
+        self.set(task, project_id=other.project_id, links=["https://example.com/a"])
+
+        task.refresh_from_db()
+        self.assertEqual(task.project_id, other.project_id)
+        self.assertEqual(task.links[0]["url"], "https://example.com/a")
 
     def test_an_empty_reporter_is_refused_a_task_always_has_one(self):
         for empty in ("", "null"):

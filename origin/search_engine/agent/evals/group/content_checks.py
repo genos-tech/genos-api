@@ -26,7 +26,8 @@ does not use them:
       MIP-1561 (the parity cases, arm `parity`) judges the ARGUMENTS the model proposed: `args_present`
       (names that must be sent), `args_absent` (names that must NOT be: a plain "create a task" must
       not start sending a status, reporter, links or template unasked), `args_match` (name -> regex,
-      case-insensitive, full match on the value as text, a list or object as JSON), and
+      case-insensitive SEARCH on the value as text, a list or object as JSON; anchor with ^ and $ for
+      an exact value), and
       `task_args_match` (the same for the rows of a plan: at least one task must match each).
 
 The pending events are teed out of `run_agent` by wrapping the name `runner.run_agent` for the

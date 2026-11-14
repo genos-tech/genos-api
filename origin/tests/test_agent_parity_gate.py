@@ -217,6 +217,10 @@ class OnPublishesTests(SimpleTestCase):
             self.assertEqual(props["links"]["type"], "array")
             self.assertEqual(props["status"]["type"], "string")
             self.assertIn("`links`", mcp.description_for(create))
+            # MCP words create_task itself and never said "always Open", so the in-app
+            # REPLACEMENT has nothing to swap there and nothing contradicts the added sentence.
+            self.assertNotIn("always created", mcp.description_for(create))
+            self.assertNotIn(STATUS_SENTENCE, mcp.description_for(create))
             update = mcp.input_schema(by_name["update_task"])["properties"]
             self.assertTrue(UPDATE_NEW <= set(update))
             rows = mcp.input_schema(by_name["create_task_plan"])["properties"]["tasks"]["items"]

@@ -294,12 +294,16 @@ def fill_plan_task_bodies(
 
     def build(use_template: bool) -> dict[int, str]:
         out: dict[int, str] = {}
+        refused: list[str] = []
         for i in missing:
             try:
                 out[i] = one(i, use_template)
-            except ToolError:
-                if strict:
-                    raise
+            except ToolError as e:
+                refused.append(f"tasks[{i}]: {e}")
+        if refused and strict:
+            # Every task that names a template there is not, in one answer, as the plan's own
+            # validation reports its problems: a retry per task would be a retry per typo.
+            raise ToolError("Plan validation failed:\n- " + "\n- ".join(refused[:25]))
         return out
 
     bodies = build(True)

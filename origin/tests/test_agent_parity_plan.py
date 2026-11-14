@@ -150,6 +150,22 @@ class TemplateTests(ParityPlanBase):
         self.assertIn("default, bug, spike, milestone", str(caught.exception))
         self.assertEqual(TaskMaster.objects.count(), 0)
 
+    def test_every_unknown_template_is_named_in_one_answer(self):
+        with self.assertRaises(ToolError) as caught:
+            self.run_tool(
+                self.plan(
+                    {"title": "A", "template": "Nope"},
+                    {"title": "B", "template": "bug"},
+                    {"title": "C", "template": "Also nope"},
+                )
+            )
+
+        message = str(caught.exception)
+        self.assertIn("tasks[0]", message)
+        self.assertIn("tasks[2]", message)
+        self.assertNotIn("tasks[1]", message)
+        self.assertEqual(TaskMaster.objects.count(), 0)
+
     def test_a_template_and_a_body_on_one_task_are_refused(self):
         with self.assertRaises(ToolError) as caught:
             self.run_tool(

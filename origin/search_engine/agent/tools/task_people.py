@@ -69,3 +69,18 @@ def plan_collaborators(
         if uid not in current_ids:
             person_id(uid, project, where)
     return ids
+
+
+def canonical_user_id(raw: Any, where: str) -> str:
+    """`raw` as a canonical user id, or a ToolError that says what to send instead.
+
+    For a person a model named by something that is not an id (`reporter_id: "alice"`): the
+    lookups behind `assign_task`'s rule take a UUID, and what they do with anything else is
+    not an answer a model can act on (MIP-1561)."""
+    try:
+        return str(uuid.UUID(str(raw).strip()))
+    except (ValueError, AttributeError):
+        raise ToolError(
+            f"{where}: {raw!r} is not a user id. Use get_team_members or "
+            "list_project_members to find one, or get_current_user for yourself."
+        )
