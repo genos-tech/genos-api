@@ -4,8 +4,8 @@ The person puts a write back afterwards (`POST .../undo/`). The model's next tur
 answer that says the write was done, and a replay of the run still shows its result, so the model
 may speak as if the write stands.
 
-Behind `SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"]` (default off) the model is told, with short factual
-data and no instruction:
+Behind `SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"]` (default on; the env value `false` is the rollback)
+the model is told, with short factual data and no instruction:
 
   * a replayed result of an undone write carries `undone_by_user` (`restored` fields and
     `not_restored` fields with their reason code);

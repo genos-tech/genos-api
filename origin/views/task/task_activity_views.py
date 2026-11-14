@@ -1,6 +1,5 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import Any
 
 from django.db.models import Q
 from rest_framework import status
@@ -8,6 +7,7 @@ from rest_framework.response import Response
 
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
+from origin.services import description_edit_runs
 from origin.services.task_body_restore import RestoreRefused, restore_task_body
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.public.mcp.via_privacy import via_for_viewer
@@ -30,7 +30,7 @@ MAX_LIMIT = 500
 # response (see `_collapse_description_edits`). The body editor
 # auto-saves every few seconds, so without this a 5-minute edit session
 # floods the Activity tab with near-duplicates.
-DESCRIPTION_EDIT_GROUP_WINDOW = timedelta(minutes=15)
+DESCRIPTION_EDIT_GROUP_WINDOW = description_edit_runs.DESCRIPTION_EDIT_GROUP_WINDOW
 
 # Defensive cap on the pre-collapse fetch. Typical tasks fall well
 # under this; collapse-then-paginate beyond it is degraded by design
@@ -86,18 +86,7 @@ def _serialize_activity(row: TaskActivity, viewer_id) -> dict:
     }
 
 
-def _via_identity(row: TaskActivity) -> tuple[Any, Any, Any]:
-    """How a write arrived, as far as the feed's chip tells it apart: the kind, and
-    which key or connection for the kinds that name one (MIP-1487).
-
-    `undo_of` and the like are left out on purpose: an Undo click and an autosave
-    are both `app` and show the same (no) chip, so they may still fold. Rows with
-    no `via` at all (older rows, webhooks) are all `(None, None, None)`.
-    """
-    via = (row.metadata or {}).get("via")
-    if not isinstance(via, dict):
-        return (None, None, None)
-    return (via.get("kind"), via.get("key_id"), via.get("connection_id"))
+_via_identity = description_edit_runs.via_identity
 
 
 def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
@@ -129,72 +118,22 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
     """
     desc = TaskActivityActionType.DESCRIPTION
     out: list[TaskActivity] = []
-
-    # State for the currently-open run. The anchor (newest row of the
-    # run) lives at `out[-1]`; we never re-walk the list to find it.
-    run_count = 0
-    run_actor_id: int | None = None
-    run_via: tuple[Any, Any, Any] = (None, None, None)
-    run_first_ts = None  # oldest ts seen in the run so far
-    run_prev_ts = None  # ts of the most recent row added to the run
-
-    def _stamp_anchor() -> None:
-        if run_count > 1 and out:
-            anchor = out[-1]
+    for run in description_edit_runs.fold_description_runs(
+        rows,
+        is_description=lambda r: r.action_type == desc,
+        actor=lambda r: r.actor_id,
+        via=lambda r: _via_identity(r.metadata),
+        keeps_body=lambda r: description_edit_runs.keeps_previous_body(r.metadata),
+        ts=lambda r: r.ts_created_at,
+    ):
+        anchor = run.row
+        if run.count > 1:
             anchor.metadata = {
                 **(anchor.metadata or {}),
-                "grouped_count": run_count,
-                "grouped_first_ts": run_first_ts.isoformat() if run_first_ts else None,
+                "grouped_count": run.count,
+                "grouped_first_ts": run.first_ts.isoformat() if run.first_ts else None,
             }
-
-    for r in rows:
-        is_desc = r.action_type == desc
-        keeps_body = is_desc and bool((r.metadata or {}).get("previousBodyKept"))
-        if keeps_body:
-            # Closes the open run, stands alone, and starts none, so the
-            # edits on either side of it cannot fold into it.
-            _stamp_anchor()
-            out.append(r)
-            run_count = 0
-            run_actor_id = None
-            run_via = (None, None, None)
-            run_first_ts = None
-            run_prev_ts = None
-            continue
-        # Tuples compare equal even when both actor_ids are None, so a
-        # run of anonymous edits (rare but possible — actor FK is
-        # SET_NULL) merges sensibly without merging into a named-actor
-        # run.
-        same_actor = is_desc and r.actor_id == run_actor_id and _via_identity(r) == run_via
-        within_window = (
-            run_prev_ts is not None
-            and (run_prev_ts - r.ts_created_at) <= DESCRIPTION_EDIT_GROUP_WINDOW
-        )
-        if is_desc and run_count > 0 and same_actor and within_window:
-            run_count += 1
-            run_first_ts = r.ts_created_at
-            run_prev_ts = r.ts_created_at
-            continue
-
-        # New row breaks any open run — finalise the anchor before
-        # appending.
-        _stamp_anchor()
-        out.append(r)
-        if is_desc:
-            run_count = 1
-            run_actor_id = r.actor_id
-            run_via = _via_identity(r)
-            run_first_ts = r.ts_created_at
-            run_prev_ts = r.ts_created_at
-        else:
-            run_count = 0
-            run_actor_id = None
-            run_via = (None, None, None)
-            run_first_ts = None
-            run_prev_ts = None
-
-    # Finalise the trailing run (loop exited mid-run).
-    _stamp_anchor()
+        out.append(anchor)
     return out
 
 

@@ -4,7 +4,9 @@ A LINE is one item's events from every source, in time order. One comment is a d
 comment, a reply in the linked chat thread, a note edit and a merged PR on the same task
 are a line that says what is going on. `related_lines` joins a line to the lines of the
 items around it: the parent task, the milestone, the dependency neighbours, the task's own
-subtasks, and last the milestone's other work.
+subtasks, and last the milestone's other work that something connects to it (a `#` chip either
+way round, a longer parent / child chain: `_connected_work`, MIP-1529; being in the same
+milestone is not a connection, except when the milestone's own row is asked about).
 
 **Computed on read, nothing copied.** Every event is read live from the table that already
 holds it (task history, task comments and their reactions and mentions, chat messages and
@@ -44,9 +46,14 @@ run of them by one app with nothing else between, each within `APP_BURST_GAP` of
 before, is one entry (`calls`, `first_at`). On a neighbour they take no slot at all: its
 latest events are real ones, and `last_opened_at` says when the member last opened it.
 
+The body editor auto-saves every few seconds, so a run of description edits would fill the line
+too (MIP-1529): on the line and on a neighbour a run is ONE entry (`edits`, `first_at`), by the
+rule of the task's Activity feed (`description_edit_runs`).
+
 **Access.** An event is shown only when the member can open BOTH the item and the event's own
 container, now: the task (`LabelAccess`), the chat the message is in (`readable_chats_qs`),
-the task a referencing comment sits on, the note a version belongs to (`briefing._may_read_note`).
+the task a referencing comment sits on, the note a version belongs to
+(`note_scope.readable_note_rows`, the batch form of `get_note`'s rule).
 A milestone's neighbours appear only when the member can open the milestone itself
 (`LabelAccess.milestone`, the rule of `get_milestone_summary`). Every count (`events_total`,
 `related_total`, `people`) is over what the member may open: a number never gives away
@@ -77,7 +84,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import reduce
 from operator import or_
@@ -117,8 +124,13 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
-from origin.services import briefing, member_events
+from origin.services import briefing, member_events, note_scope
 from origin.services.channel_scope import channel_titles, readable_chats_qs
+from origin.services.description_edit_runs import (
+    fold_description_runs,
+    keeps_previous_body,
+    via_identity,
+)
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.plain_text import body_text, chip_task_ids, message_text
 from origin.services.user_time import zone_for_user_id
@@ -234,6 +246,11 @@ class Ev:
     # The member's own AI-app open or change (a `read` / `write` marker of the MCP source): the
     # events a line folds and a neighbour leaves out. Other ledger kinds are real changes.
     ai_app: bool = False
+    # What a run of description edits is folded by (MIP-1529): the audit row's action, how the
+    # write arrived and whether it kept the previous body. Read from the row, never rendered.
+    action: str = ""
+    write_via: tuple = (None, None, None)
+    keeps_body: bool = False
 
     def sort_key(self) -> tuple:
         return (self.at, _RANK.get(self.source, 9), str(self.key))
@@ -298,7 +315,8 @@ def readable_task_q(ctx: ToolContext, prefix: str = "") -> Q:
 
 def _readable_notes(ctx: ToolContext, candidates: list[tuple[int, int]], exceeded: bool):
     """`(notes, capped)`: the notes among `candidates` (newest version first) the member can
-    open now (the rule `get_note` applies), at most `MAX_NOTES_CHECKED` of them.
+    open now (the rule `get_note` applies: `note_scope.readable_note_rows`, the one batch rule the
+    timeline uses too), at most `MAX_NOTES_CHECKED` of them.
 
     The cap is on notes they may open: a note they may not is looked up and skipped, and never
     counts, so it cannot tip `capped`. `capped` is True when a note they may open was left out,
@@ -306,20 +324,11 @@ def _readable_notes(ctx: ToolContext, candidates: list[tuple[int, int]], exceede
     says there were more than the caller could list): then nobody knows, and "may be cut" is
     the honest answer."""
     candidates = [k for k in candidates[:MAX_NOTES_SCANNED] if k[0] in _NOTE_MODELS]
-    rows: dict[tuple[int, int], Any] = {}
-    for note_type in {t for t, _i in candidates}:
-        wanted = [i for t, i in candidates if t == note_type]
-        for row in _NOTE_MODELS[note_type].objects.filter(note_id__in=wanted):
-            rows[(note_type, row.note_id)] = row
-    notes: dict[tuple[int, int], Any] = {}
-    for key in candidates:
-        note = rows.get(key)
-        if note is None or not briefing._may_read_note(ctx, key[0], note):
-            continue
-        if len(notes) >= MAX_NOTES_CHECKED:
-            return notes, True
-        notes[key] = note
-    return notes, exceeded
+    allowed = note_scope.readable_note_rows(ctx, candidates)
+    kept = [k for k in candidates if k in allowed]
+    return {k: allowed[k] for k in kept[:MAX_NOTES_CHECKED]}, len(
+        kept
+    ) > MAX_NOTES_CHECKED or exceeded
 
 
 def _claims(team_id: str, thread_ids: list[str]) -> dict[str, list[int]]:
@@ -411,6 +420,9 @@ def _read_history(rd: _Reader) -> None:
                 label=shaped["_label"],
                 automated=shaped["automated"],
                 via="task",
+                action=row.action_type,
+                write_via=via_identity(row.metadata),
+                keeps_body=keeps_previous_body(row.metadata),
             ),
         )
 
@@ -1036,6 +1048,40 @@ def _fold_app_runs(events: list[Ev]) -> list[Ev]:
     return folded
 
 
+def _fold_description_runs(events: list[Ev]) -> list[Ev]:
+    """`events` with each run of description edits folded into one entry (MIP-1529).
+
+    The body editor auto-saves every few seconds, so one edit session is dozens of audit rows
+    and used to fill the line (and push the older events out of its window). A run is told
+    ONCE, by the rule of the task's Activity feed (`description_edit_runs`): the same actor, the
+    same way of writing (api #787: a connected app's rewrite is not an autosave), no more than
+    `DESCRIPTION_EDIT_GROUP_WINDOW` between neighbours, nothing else between them, and a rewrite
+    that kept the previous body stands alone. It is told at its NEWEST edit, with `edits` (how
+    many) and `first_at` (the oldest), the convention of a folded app run. The member's own
+    AI-app opens between two edits are context, not news: they do not close a run.
+
+    Called by `_build` on a line and on its neighbours, not by `read_events`: the briefing's
+    activity reads the same events and counts every edit."""
+    newest_first = sorted(events, key=Ev.sort_key, reverse=True)
+    runs = fold_description_runs(
+        [e for e in newest_first if not e.ai_app],
+        is_description=lambda e: e.action == TaskActivityActionType.DESCRIPTION,
+        actor=lambda e: e.actor,
+        via=lambda e: e.write_via,
+        keeps_body=lambda e: e.keeps_body,
+        ts=lambda e: e.at,
+    )
+    folded = [e for e in newest_first if e.ai_app]
+    for run in runs:
+        ev = run.row
+        if run.count > 1:
+            ev = replace(
+                ev, extra={**ev.extra, "edits": run.count, "first_at": run.first_ts.isoformat()}
+            )
+        folded.append(ev)
+    return folded
+
+
 # --------------------------------------------------------------------------- #
 # Seen markers (MIP-1084)                                                      #
 # --------------------------------------------------------------------------- #
@@ -1350,12 +1396,100 @@ def _pool(qs, pool: int) -> tuple[list[int], list[int]]:
     return rows[:pool], rows[pool:]
 
 
+# A parent / child chain longer than this is a bad link, not a task tree.
+MAX_KIN_DEPTH = 12
+
+
+def _kin(root: TaskMaster, ids: set[int]) -> set[int]:
+    """The `ids` that are an ancestor or a descendant of `root` (the parent chain, any depth).
+
+    The direct parent and children have their own relations; what this adds is the longer chain
+    (a grandchild, a grandparent). One read of the parent of every id, then one per level above
+    them that is not known yet. A cycle in the links is survived."""
+    parent_of: dict[int, int | None] = {root.task_id: root.parent_task_id}
+
+    def learn(task_ids: set[int]) -> None:
+        rows = TaskMaster.objects.filter(team_id=root.team_id, task_id__in=task_ids).values_list(
+            "task_id", "parent_task_id"
+        )
+        parent_of.update(rows)
+        for task_id in task_ids:
+            parent_of.setdefault(task_id, None)
+
+    learn(ids)
+    for _depth in range(MAX_KIN_DEPTH):
+        unknown = {p for p in parent_of.values() if p is not None and p not in parent_of}
+        if not unknown:
+            break
+        learn(unknown)
+
+    def above(task_id: int) -> set[int]:
+        chain: set[int] = set()
+        parent = parent_of.get(task_id)
+        while parent is not None and parent not in chain and len(chain) < MAX_KIN_DEPTH * 2:
+            chain.add(parent)
+            parent = parent_of.get(parent)
+        return chain
+
+    ancestors = above(root.task_id)
+    return {t for t in ids if t in ancestors or root.task_id in above(t)}
+
+
+def _connected_work(root: TaskMaster, sibling_ids: list[int]) -> set[int]:
+    """Which of the milestone's other tasks something other than the milestone connects to
+    `root` (MIP-1529): they are the `milestone_work` neighbours, the rest are only in the same
+    milestone (MIP-1333 listed MIP-1270, 1290, 1287 and 1527 with no link to it).
+
+    Connected is a fact about the two tasks, with no window and no access rule of its own (the
+    caller's ids are already tasks the member may open):
+
+      * a `#` task chip, either way round, in a description or in a comment that is not
+        deleted (the containers of rule 5 that belong to a task; a chip with only a display id
+        is not followed, as everywhere);
+      * a parent / child chain longer than the direct ones (`_kin`).
+
+    A direct parent, child or dependency has its own relation and is not asked here. A shared
+    thread is no connection: a thread two tasks claim is told to neither (rule 4). A task note
+    belongs to one task. Two tasks that only share a parent are not connected by it. A fixed
+    number of reads, however many tasks are asked about."""
+    ids = set(sibling_ids)
+    if not ids:
+        return set()
+    found = chip_task_ids(root.content) & ids
+    found.update(
+        _chip_filter(
+            TaskMaster.objects.filter(team_id=root.team_id, task_id__in=ids),
+            "content",
+            [root.task_id],
+        ).values_list("task_id", flat=True)
+    )
+    said_by_root = (
+        _chip_filter(
+            TaskComments.objects.filter(task_id=root.task_id, is_deleted=False),
+            "comment_body",
+            ids,
+        )
+        .order_by("-ts_sent_at", "-pk")
+        .values_list("comment_body", flat=True)[:POOL]
+    )
+    for body in said_by_root:
+        found |= chip_task_ids(body) & ids
+    found.update(
+        _chip_filter(
+            TaskComments.objects.filter(task_id__in=ids, is_deleted=False),
+            "comment_body",
+            [root.task_id],
+        ).values_list("task_id", flat=True)
+    )
+    return found | _kin(root, ids - found)
+
+
 def _candidates(
     ctx: ToolContext, access: LabelAccess, root: TaskMaster
 ) -> tuple[list[tuple[str, TaskMaster]], bool]:
     """The items around `root` the member may open, `[(relation, task)]` in priority order
     (parent, milestone, what blocks it, what it blocks, its own subtasks, the milestone's other
-    work), at most `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are
+    work that something connects to it, `_connected_work`), at most `CANDIDATE_CAP`; `True` when more were left out. Unreadable neighbours are
     dropped before anything is counted. The subtasks come before the milestone's work: a phase
     and its steps are the closest lines there are, and the work only fills what is left.
 
@@ -1384,6 +1518,11 @@ def _candidates(
             SIBLING_POOL,
         )
         left_out.update(more)
+        if milestone.task_id != root.task_id:
+            # Asked about a task of the milestone, not about the milestone's own row: only the
+            # work that something connects to it (MIP-1529).
+            connected = _connected_work(root, sibling_ids)
+            sibling_ids = [t for t in sibling_ids if t in connected]
     blockers, more = _pool(
         TaskDependency.objects.filter(
             readable_task_q(ctx, "blocker_task__"), blocked_task_id=root.task_id
@@ -1483,6 +1622,7 @@ def _build(
     limit: int,
     related_limit: int,
     now: datetime | None = None,
+    include_unattached: bool = True,
 ) -> dict[str, Any]:
     me = str(ctx.user_id)
     limit = max(1, min(_whole_number(limit, "limit"), MAX_LIMIT))
@@ -1503,7 +1643,9 @@ def _build(
 
     names = briefing._Names(ctx)
     pending: list = []
-    root_events = _fold_app_runs(list(line_read.events[root.task_id].values()))
+    root_events = _fold_app_runs(
+        _fold_description_runs(list(line_read.events[root.task_id].values()))
+    )
     result: dict[str, Any] = {
         "window": {"since": start.isoformat(), "until": end.isoformat()},
         "line": _line(root, root_events, limit, names, me, pending),
@@ -1514,7 +1656,7 @@ def _build(
         # A neighbour's events are the real ones: the member's own AI-app opens say nothing
         # about what happened there, and used to fill its few latest slots.
         real: dict[int, list[Ev]] = {
-            task_id: [e for e in found.values() if not e.ai_app]
+            task_id: _fold_description_runs([e for e in found.values() if not e.ai_app])
             for task_id, found in (near_read.events if near_read else {}).items()
         }
         with_events = [(relation, task) for relation, task in candidates if real[task.task_id]]
@@ -1543,7 +1685,9 @@ def _build(
         result["related_total"] = len(with_events)
         result["related_quiet"] = len(candidates) - len(with_events)
         result["related_capped"] = len(with_events) > related_limit or fanout_capped
-    result["unattached"], unattached_cut = _unattached(ctx, start, end)
+    unattached_cut: list[str] = []
+    if include_unattached:
+        result["unattached"], unattached_cut = _unattached(ctx, start, end)
     capped: dict[str, Any] = {}
     if line_read.pool_capped:
         capped["pool_capped"] = True
@@ -1616,6 +1760,12 @@ def item_lines(
     limit: int = DEFAULT_LIMIT,
     related_limit: int = RELATED_MAX,
     now: datetime | None = None,
+    include_unattached: bool = True,
 ) -> dict[str, Any]:
-    """A line and its related lines in one pass: what the MCP tool returns."""
-    return _build(ctx, item_ref, since, until, limit, related_limit, now)
+    """A line and its related lines in one pass: what the MCP tool returns.
+
+    `unattached` is the member's own events of the window that belong to no item, so it is the
+    same whichever task is asked about (MIP-1529). It is told once per response, as before; a
+    reader that has already read it passes `include_unattached=False` and gets no `unattached`
+    key (and none of its reads or cut flags)."""
+    return _build(ctx, item_ref, since, until, limit, related_limit, now, include_unattached)

@@ -21,8 +21,9 @@ When: lazily on the member's first Schedules list in that team (REST or MCP), an
 (`seed_pending`, a few per tick, never a dormant or inactive account).
 
 Core and up only (MIP-1213): a Free member is not seeded and gets no marker, so they are seeded,
-once, when they upgrade. Push stays off: the seeded schedules are created exactly like an
-accepted suggestion.
+once, when they upgrade. Push is on: the seeded schedules are created exactly like an
+accepted suggestion, through `schedules.create`, whose `deliver_push` defaults to True (since
+2026-11-13, MIP-1374), so each report also sends a push (a member can turn it off per schedule).
 """
 
 from __future__ import annotations
