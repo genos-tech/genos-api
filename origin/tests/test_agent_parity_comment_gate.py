@@ -316,11 +316,10 @@ class OverMcpTests(McpBase):
         so what the author is told is the app's own: one feed row, one Web Push; nothing for the
         key's owner, and nothing at all for a flag."""
         from origin.models.chat.unified_models import Activity, ActivityType  # noqa: PLC0415
+        from origin.models.project.prj_models import ProjectMembers  # noqa: PLC0415
         from origin.search_engine.agent.tools import ToolContext  # noqa: PLC0415
 
         from .notice_watch import watching_notices  # noqa: PLC0415
-
-        from origin.models.project.prj_models import ProjectMembers  # noqa: PLC0415
 
         author = self.user2
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=author)

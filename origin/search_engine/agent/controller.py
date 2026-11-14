@@ -925,7 +925,8 @@ def _friendly_update_comment_arguments(
     so the card says WHAT is being reacted to or flagged: unlike an edit, it is usually a colleague's
     comment, and a bare comment number tells the approver nothing. Only for a comment on a task the
     caller may read, and only while the parity flag publishes the two parameters."""
-    if not parity_on() or (args.get("reaction") is None and args.get("flag") is None):
+    # A blank value is a model filling a slot (`update_comment` reads it as an edit), not a request.
+    if not parity_on() or (args.get("reaction") in (None, "") and args.get("flag") in (None, "")):
         return
     task = access.task(args.get("task_id"))
     try:

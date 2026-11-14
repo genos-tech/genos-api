@@ -145,15 +145,22 @@ def add_reaction(*, team_id, task_id, comment_id, user_id, emoji: str) -> Added:
     refresh the comment list, as the socket handler would have. The caller has already checked the
     comment is live and the task theirs to open.
     """
-    existing = TaskCommentReactionFact.objects.filter(
-        task_id=task_id, comment_id=comment_id, sender_id=user_id, reaction_emoji=emoji
-    ).first()
-    if existing is not None:
-        return Added(existing, False)
     reaction = None
     for attempt in range(_ADD_ATTEMPTS):
         try:
             with transaction.atomic():
+                # The comment row is the lock: two calls for the same comment take turns, so the
+                # "already reacted" check below and the counter cannot both be read by each.
+                list(
+                    TaskComments.objects.select_for_update()
+                    .filter(task=task_id, comment_id=comment_id)
+                    .values_list("pk", flat=True)
+                )
+                existing = TaskCommentReactionFact.objects.filter(
+                    task_id=task_id, comment_id=comment_id, sender_id=user_id, reaction_emoji=emoji
+                ).first()
+                if existing is not None:
+                    return Added(existing, False)
                 reaction = TaskCommentReactionFact.objects.create(
                     team_id=team_id,
                     task_id=task_id,
@@ -164,7 +171,8 @@ def add_reaction(*, team_id, task_id, comment_id, user_id, emoji: str) -> Added:
                 )
             break
         except IntegrityError:
-            # Two reactions on one comment took the same counter: take the next one.
+            # The app's own route took the same counter between the read and the write: take the
+            # next one.
             if attempt == _ADD_ATTEMPTS - 1:
                 raise
     announce_reaction(task_id=task_id, comment_id=comment_id, emoji=emoji, actor_id=user_id)
@@ -184,11 +192,3 @@ def remove_reaction(*, task_id, comment_id, user_id, emoji: str) -> int:
     if removed:
         realtime_push.push_task_comment(int(task_id), int(comment_id), realtime_push.EDITED)
     return removed
-
-
-def live_comment(task_id, comment_id) -> TaskComments | None:
-    """The live comment `comment_id` of task `task_id`, or None: the REST route reacts to a
-    comment that is not there; the tool does not."""
-    return TaskComments.objects.filter(
-        task=task_id, comment_id=comment_id, is_deleted=False
-    ).first()
