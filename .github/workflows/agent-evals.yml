@@ -37,16 +37,16 @@
 # Required repo VARIABLE:
 #   RUN_AGENT_EVALS = "true"  -> run the GCP-backed evals.
 #
-# THE SURFACE JOB (MIP-1101). A cheap job (no secrets, no Vertex, no OIDC token, no database) hashes
-# what the in-app model is shown (scripts/agent_surface_hash.py) on the commit under test and on its
-# base, and `scripts/agent_eval_gate.py` decides whether the billed steps start:
+# THE GATE JOB (MIP-1101, simplified in MIP-1537). A cheap job (no secrets, no Vertex, no OIDC token,
+# no database, no Python dependencies) lists the files the PR changes, and `scripts/agent_eval_gate.py`
+# decides whether the billed steps start:
 #   * a changed file in RETRIEVAL_PATHS, a `run-evals` label, a dispatch or the weekly schedule -> run;
-#   * otherwise equal hashes -> skip (the job still ends SUCCESS). This is how an edit of this
-#     workflow alone is tested for free: it matches `paths:` but changes no retrieval file;
-#   * a missing hash or any failure inside the gate -> the evals RUN (fail open).
-# Since the trigger list was narrowed to retrieval files the hash seldom decides anything, and a moved
-# hash does not mean the retrieval suite can see the change. It is kept because the job also prints
-# the decision in the run summary; whether to keep it is an open question (MIP-1527 follow-up).
+#   * otherwise -> skip (the job still ends SUCCESS). This is how an edit of this workflow alone is
+#     tested for free: it matches `paths:` but changes no retrieval file;
+#   * an unreadable file list or any failure inside the gate -> the evals RUN (fail open).
+# It used to hash what the in-app model is shown and also ran on "the hash moved". That rule was
+# removed: the retrieval suite cannot see prompts or tool declarations, and the free golden test
+# `origin.tests.test_agent_fingerprint_golden` already fails when what the model reads changes.
 # Escapes: label a PR `run-evals` to force the run, `skip-evals` to force the skip, or start the
 # workflow by hand (`dry_run` only prints the decision). See the README "CI" section.
 #
@@ -75,7 +75,7 @@ on:
   # the job `if`s and by the concurrency group (it never cancels a run in progress).
   #
   # There is deliberately NO `push: branches: [main]` any more (see the header). That also means
-  # the `deploy` job below can never start: it needs a push event. See the note above it.
+  # the Cloud Run deploy job that used to follow the evals is gone (MIP-1537, see the end of the file).
   #
   # Required-check caveat: if this is ever made a required check, a path-filtered skip leaves it
   # pending forever, so add an always-passing companion job first (the ruleset does not require it
@@ -115,14 +115,14 @@ on:
       - "Pipfile"
       - "Pipfile.lock"
       # The gate's own workflow: an edit runs it once, which is how it is tested. The hashes are
-      # equal for such an edit, so the Vertex steps are skipped (the cheap `surface` job still runs).
+      # no retrieval file changes for such an edit, so the Vertex steps are skipped (the cheap `gate` job still runs).
       - ".github/workflows/agent-evals.yml"
   # Weekly, on `main`, retrieval suite only (the only suite this workflow has). Off-peak Vertex
   # window (Tue 02:00 JST). Gated by the same repo variable as every other scheduled eval
   # (`RUN_AGENT_EVALS` or `DEPLOY_TO_GCP` == "true"), so with both off it is a skipped job.
   schedule:
     - cron: "0 17 * * 1"
-  # By hand. Always runs the evals (it is the escape hatch); `dry_run` runs only the surface job
+  # By hand. Always runs the evals (it is the escape hatch); `dry_run` runs only the gate job
   # and prints what the gate would have decided for this ref against `main` (a free way to check it).
   workflow_dispatch:
     inputs:
@@ -151,63 +151,41 @@ env:
 
 jobs:
   # The cheap half (MIP-1101): decides whether `agent-evals` below may start its billed steps.
-  # No secrets, no Vertex, no OIDC token (`permissions: contents: read` only) and no database: it
-  # imports the app, builds the tool declarations and system prompts exactly as the agent loop
-  # does against a recording adapter, and hashes them (scripts/agent_surface_hash.py) for the
-  # commit under test and for its base. FAIL-OPEN end to end: every step but the checkout is
-  # `continue-on-error`, so a step that breaks leaves no hash and the evals run; the job itself
+  # No secrets, no Vertex, no OIDC token (`permissions: contents: read` only), no database and no
+  # Python dependencies (the stdlib `python3` of the runner is enough): it lists the files the PR
+  # changes and runs scripts/agent_eval_gate.py. FAIL-OPEN end to end: every step but the checkout is
+  # `continue-on-error`, so a step that breaks leaves no answer and the evals run; the job itself
   # stays green so a broken gate does not also paint the PR red.
-  #   pull_request  commit = the PR merged into its base (what GitHub checks out), base = that
-  #                 merge's first parent, i.e. `main` right now (a PR is compared with what
-  #                 would land, not with a stale branch point);
-  #   dispatch / schedule  base = origin/main (the commit before it when the ref IS main); the
-  #                 gate answers "run" for both whatever the hashes are.
-  surface:
-    name: surface (what the model sees)
+  #   pull_request  the files changed by the PR merged into its base (what GitHub checks out; the
+  #                 base is that merge's first parent, i.e. `main` right now);
+  #   dispatch / schedule  no file list is needed: the gate answers "run" for both.
+  gate:
+    name: gate (which files changed)
     if: >-
       (github.event_name != 'pull_request' || github.event.action != 'labeled'
        || github.event.label.name == 'run-evals')
       && (github.event_name == 'pull_request' || vars.RUN_AGENT_EVALS == 'true'
           || vars.DEPLOY_TO_GCP == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
       run: ${{ steps.gate.outputs.run }}
       reason: ${{ steps.gate.outputs.reason }}
-    env:
-      PIPENV_PIPFILE: ${{ github.workspace }}/Pipfile
-      PIPENV_VENV_IN_PROJECT: "1"
-      PYTHONDONTWRITEBYTECODE: "1"
-      # Base and head are hashed in two processes: a fixed seed means a set-ordering leak cannot
-      # make every PR "differ" (which would fail safe, but silently defeat the gate).
-      PYTHONHASHSEED: "0"
-      # Settings only need to import: nothing here ever opens a connection.
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:1/unused
-      DJANGO_SETTINGS_MODULE: apis.settings_test
-      DJANGO_SECRET_KEY: ci-surface-secret-key
-      JWT_SECRET_KEY: ci-surface-secret-key
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # the base commit and the diff against it
+          fetch-depth: 2 # the merge commit and its first parent
 
-      - name: Pick the base commit, list the changed files
+      - name: List the changed files
         id: base
         continue-on-error: true
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          case "$EVENT" in
-            pull_request) base=$(git rev-parse --verify -q 'HEAD^1^{commit}' || true) ;;
-            *)
-              base=$(git rev-parse --verify -q 'origin/main^{commit}' || true)
-              if [ "$base" = "$(git rev-parse HEAD)" ]; then
-                base=$(git rev-parse --verify -q 'HEAD~1^{commit}' || true)
-              fi
-              ;;
-          esac
+          [ "$EVENT" = "pull_request" ] || exit 0
+          base=$(git rev-parse --verify -q 'HEAD^1^{commit}' || true)
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "::warning::No usable base commit (${base:-none}): the gate fails open and the evals run."
             exit 0
@@ -215,39 +193,6 @@ jobs:
           echo "base: $base"
           git diff --name-only --no-renames "$base" HEAD > "$RUNNER_TEMP/changed.txt"
           echo "changed files:"; cat "$RUNNER_TEMP/changed.txt"
-          git worktree add --detach "$RUNNER_TEMP/base-tree" "$base"
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        id: setup-python
-        continue-on-error: true
-        with:
-          python-version: "3.11"
-      - run: pip install pipenv==2026.7.1
-        continue-on-error: true
-      # Its own cache key (not ci.yml's): this venv has no test tooling, and one saved under
-      # ci.yml's key would be restored there without it.
-      - name: Cache venv
-        continue-on-error: true
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .venv
-          key: ${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-surface-${{ hashFiles('Pipfile.lock') }}
-      - name: Install deps
-        continue-on-error: true
-        run: pipenv sync
-
-      # The SAME script, from this checkout, on both trees: the base does not have it yet when
-      # it lands, and a base without `agent_fingerprint` makes this step fail, which fails open.
-      - name: Hash the model surface (this commit)
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          pipenv run python scripts/agent_surface_hash.py --repo . | tee "$RUNNER_TEMP/head.txt"
-      - name: Hash the model surface (the base)
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          pipenv run python scripts/agent_surface_hash.py --repo "$RUNNER_TEMP/base-tree" | tee "$RUNNER_TEMP/base.txt"
 
       - name: Decide
         id: gate
@@ -258,8 +203,6 @@ jobs:
           # An env var, never `${{ }}` inside the script: a label name is user-controlled text.
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           DRY_RUN: ${{ inputs.dry_run }}
-          BASE_HASH_FILE: ${{ runner.temp }}/base.txt
-          HEAD_HASH_FILE: ${{ runner.temp }}/head.txt
           CHANGED_FILES_FILE: ${{ runner.temp }}/changed.txt
         run: python3 scripts/agent_eval_gate.py
 
@@ -269,13 +212,13 @@ jobs:
     # weekly `schedule` and a manual dispatch run when evals are enabled at all (RUN_AGENT_EVALS) or
     # DEPLOY_TO_GCP is on; with both off they skip the whole job (skipped-via-`if` reports SUCCESS,
     # no required-check deadlock). When it does run, the Vertex-billed steps are skipped unless the
-    # `surface` job says run (a retrieval file changed, a label, the schedule, a dispatch).
-    # `needs: surface` + `!cancelled()`: a `surface` job that FAILED still lets this run (its
-    # output is empty, which reads as "run"). Only a `surface` that was skipped on purpose (an
+    # `gate` job says run (a retrieval file changed, a label, the schedule, a dispatch).
+    # `needs: gate` + `!cancelled()`: a `gate` job that FAILED still lets this run (its
+    # output is empty, which reads as "run"). Only a `gate` that was skipped on purpose (an
     # unrelated label, or nothing enabled for a schedule / dispatch) skips this too.
-    needs: surface
+    needs: gate
     if: >-
-      !cancelled() && needs.surface.result != 'skipped'
+      !cancelled() && needs.gate.result != 'skipped'
       && (github.event_name == 'pull_request' || vars.RUN_AGENT_EVALS == 'true'
           || vars.DEPLOY_TO_GCP == 'true')
     runs-on: ubuntu-latest
@@ -340,11 +283,11 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      # Whether this run needs the (Vertex-billed, multi-minute) eval is decided by the `surface`
+      # Whether this run needs the (Vertex-billed, multi-minute) eval is decided by the `gate`
       # job above (retrieval files changed, the `run-evals` / `skip-evals` labels, a dispatch or the
       # weekly schedule; equal hashes with no retrieval file skip; it fails open). Here it is only
       # read: `run=false` is the one value that skips the billed steps, and an empty or any other
-      # value (a `surface` job that broke) runs them. The job still finishes SUCCESS when skipped,
+      # value (a `gate` job that broke) runs them. The job still finishes SUCCESS when skipped,
       # so a future required-check cannot deadlock on it (the concern in the `on:` comment).
       # The Vertex-billed steps need a live GCP project: WIF has no pool to
       # federate against once the env is torn down, so `auth@v2` fails with
@@ -372,21 +315,21 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Decide if the eval is needed (surface gate)
+      - name: Decide if the eval is needed (gate job)
         id: changes
         env:
-          SURFACE_RUN: ${{ needs.surface.outputs.run }}
-          SURFACE_REASON: ${{ needs.surface.outputs.reason }}
+          GATE_RUN: ${{ needs.gate.outputs.run }}
+          GATE_REASON: ${{ needs.gate.outputs.reason }}
         run: |
           if [ "${{ steps.gcp.outputs.available }}" != "true" ]; then
             echo "No GCP env — nothing to authenticate against."
             echo "relevant=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if [ "$SURFACE_RUN" = "false" ]; then
-            echo "Surface gate: skip. $SURFACE_REASON"
+          if [ "$GATE_RUN" = "false" ]; then
+            echo "Gate: skip. $GATE_REASON"
             echo "relevant=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          echo "Surface gate: run (${SURFACE_REASON:-no answer from the surface job: failing open})."
+          echo "Gate: run (${GATE_REASON:-no answer from the gate job: failing open})."
           echo "relevant=true" >> "$GITHUB_OUTPUT"
 
       - name: Eval skipped — nothing measured, job ends green
@@ -396,7 +339,7 @@ jobs:
             echo "Skipped because the GCP env is unavailable, NOT because the change is safe."
             echo "Re-run this workflow once GCP is back, or move the evals to Railway."
           else
-            echo "Skipping the Vertex eval: no retrieval file changed and the model surface is unchanged (see the surface job). The weekly run on main still covers retrieval."
+            echo "Skipping the Vertex eval: no retrieval file changed (see the gate job). The weekly run on main still covers retrieval."
           fi
           echo "Skipped, not passed: nothing was measured. The job ends green so it cannot block."
 
@@ -484,126 +427,9 @@ jobs:
           pipenv run python manage.py agent_eval --retrieval | tee eval.out || true
           python3 scripts/retrieval_gate.py eval.out
 
-  # INERT, ON PURPOSE: this job needs a `push` to main, and this workflow no longer has a push
-  # trigger (MIP-1527), so it cannot start, whatever DEPLOY_TO_GCP says. It was already skipped on
-  # every run since the app moved to Railway (2026-07-30; the repo variable is "false"), so nothing
-  # is lost. It is kept, not deleted, as the record of how the Cloud Run deploy worked. To bring GCP
-  # hosting back: re-add `push: branches: [main]` to `on:`, set DEPLOY_TO_GCP to "true", and note
-  # that the push run would then gate the deploy with a retrieval run that cannot see the agent.
-  # (When it was live: it shipped to GCP only when DEPLOY_TO_GCP was "true", ran a post-deploy smoke
-  # query on the new revision and auto-reverted on failure. Turning the flag off never reduced the
-  # running GCP bill: Cloud SQL / OpenSearch VM / Redis / Cloud Run keep billing until the infra is
-  # paused or torn down, genos-docs operations/ENVIRONMENTS.md "Going Railway-only".)
-  deploy:
-    name: deploy to Cloud Run (inert, no push trigger)
-    needs: agent-evals
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_TO_GCP == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Authenticate to Google Cloud (keyless WIF)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-      - name: Build + push api image (amd64 — Cloud Run requires it)
-        run: |
-          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
-          docker build --platform linux/amd64 \
-            -t "$AR/api:${GITHUB_SHA}" -t "$AR/api:latest" .
-          docker push "$AR/api:${GITHUB_SHA}"
-          docker push "$AR/api:latest"
-      - name: Record previous revision (rollback target)
-        id: prev
-        run: |
-          PREV=$(gcloud run services describe genos-api \
-            --project "$GCP_PROJECT" --region "$GCP_REGION" \
-            --format 'value(status.latestReadyRevisionName)' 2>/dev/null || true)
-          echo "rev=$PREV" >> "$GITHUB_OUTPUT"
-          echo "previous ready revision: ${PREV:-<none — first deploy>}"
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy genos-api \
-            --project "$GCP_PROJECT" --region "$GCP_REGION" \
-            --image "$AR/api:${GITHUB_SHA}"
-          # Self-heal: if a previous run auto-reverted, traffic is pinned
-          # to an old revision and `gcloud run deploy` alone would NOT
-          # move it. Explicitly route back to latest on every deploy.
-          gcloud run services update-traffic genos-api \
-            --project "$GCP_PROJECT" --region "$GCP_REGION" \
-            --to-latest --quiet
-
-      # Cloud Run's health check only proves the process BOOTED. This
-      # proves the agent path answers a real query on the new revision
-      # (SPOTLIGHT_AGENT_CHANGE_SAFETY.md §5.3, genos-docs): provision a
-      # throwaway demo user (public-by-design endpoint, self-cleaning —
-      # signout deletes it and the daily cron sweeps leftovers), stream
-      # one /agent/ask/, and require a terminal `done` (or
-      # `tool_call_pending_approval`) NDJSON event. One retry absorbs
-      # transient LLM/network hiccups so a flake doesn't flip traffic.
-      - name: Post-deploy smoke — one real agent query on the live revision
-        id: smoke
-        run: |
-          set -uo pipefail
-          URL=$(gcloud run services describe genos-api \
-            --project "$GCP_PROJECT" --region "$GCP_REGION" \
-            --format 'value(status.url)')
-          echo "service URL: $URL"
-          smoke() {
-            rm -f cookies.txt ask.ndjson demo.json
-            curl -sSf -X POST "$URL/api/v2/user/demo/" \
-              -H 'Content-Type: application/json' -d '{}' \
-              -c cookies.txt -o demo.json || return 1
-            ACCESS=$(python3 -c 'import json;print(json.load(open("demo.json"))["access"])') || return 1
-            TEAM=$(python3 -c 'import json;print(json.load(open("demo.json"))["team_id"])') || return 1
-            curl -sS -N --max-time 180 -X POST "$URL/api/v2/agent/ask/" \
-              -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
-              -d "{\"query\": \"What tasks are currently in progress?\", \"team_id\": \"$TEAM\"}" \
-              -o ask.ndjson || true
-            # Best-effort demo cleanup — signout deletes demo accounts;
-            # the daily cron sweeps anything this misses.
-            curl -sS -X POST "$URL/api/v2/user/signout/" \
-              -b cookies.txt -H "Authorization: Bearer $ACCESS" >/dev/null || true
-            grep -qE '"type":\s*"(done|tool_call_pending_approval)"' ask.ndjson
-          }
-          if smoke; then echo "smoke PASS — terminal agent event received"; exit 0; fi
-          echo "first attempt failed — retrying once"
-          sleep 10
-          if smoke; then echo "smoke PASS on retry"; exit 0; fi
-          echo "::error::post-deploy smoke FAILED — /api/v2/agent/ask/ produced no terminal event on the new revision"
-          echo "--- tail of last agent response ---"
-          tail -c 2000 ask.ndjson 2>/dev/null || echo "(no response captured)"
-          exit 1
-
-      - name: Auto-revert traffic to previous revision (smoke failed)
-        if: failure() && steps.smoke.outcome == 'failure' && steps.prev.outputs.rev != ''
-        run: |
-          echo "::error::Auto-reverting traffic to ${{ steps.prev.outputs.rev }} — the new revision failed the agent smoke. Runbook: genos-docs operations/ROLLBACK.md"
-          gcloud run services update-traffic genos-api \
-            --project "$GCP_PROJECT" --region "$GCP_REGION" \
-            --to-revisions "${{ steps.prev.outputs.rev }}=100" --quiet
-
-      # Cloud Run JOBS (the crons) pin their image DIGEST at deploy time and
-      # are NOT touched by `gcloud run deploy` (which moves only the SERVICE),
-      # and `terraform apply` is a no-op while var.images.api stays `:latest`
-      # (config == state == the tag). So without this, a merged fix that runs
-      # in a cron — cleanup_demo_users, opensearch_reindex, … — never reaches
-      # the jobs and they drift stale (genos-docs operations/GCP_DEPLOY.md
-      # §Scheduled jobs). Re-pin every job to the exact image we just built AND
-      # verified via the smoke, so the crons move in lockstep with the service.
-      # Guarded on smoke SUCCESS: a bad revision is auto-reverted above and must
-      # never be pinned onto the jobs. Uses the immutable `:${GITHUB_SHA}` tag,
-      # not `:latest`, so each job pins the verified digest deterministically.
-      - name: Re-pin cron jobs to the new image
-        if: steps.smoke.outcome == 'success'
-        run: |
-          for j in genos-reindexer genos-demo-cleanup genos-judge-sampler genos-os-maintenance; do
-            echo "re-pinning $j → api:${GITHUB_SHA}"
-            gcloud run jobs update "$j" \
-              --project "$GCP_PROJECT" --region "$GCP_REGION" \
-              --image "$AR/api:${GITHUB_SHA}"
-          done
+  # No deploy job. A Cloud Run deploy used to follow the evals on a push to main (gated on
+  # `DEPLOY_TO_GCP`, with a post-deploy smoke query and an automatic revert). MIP-1527 removed the
+  # push trigger, so it could not start, and the GCP environment was destroyed on 2026-07-30 (the app
+  # runs on Railway). MIP-1537 deleted it; `git log -- .github/workflows/agent-evals.yml` has the
+  # last version. To bring GCP hosting back: re-add `push: branches: [main]` and a deploy job, and
+  # note that a push run would then gate the deploy with a retrieval run that cannot see the agent.
