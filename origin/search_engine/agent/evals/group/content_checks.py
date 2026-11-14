@@ -202,7 +202,21 @@ _DANGLING_WORDS = frozenset(
     "a an the and or but of to in on at for with by from into onto as that which who whose if "
     "than then so is are was were be been will would can could should may might not no".split()
 )
-_DANGLING_PARTICLES = ("を", "に", "の", "は", "が", "と", "で", "や", "も", "へ", "から", "より", "ため")
+_DANGLING_PARTICLES = (
+    "を",
+    "に",
+    "の",
+    "は",
+    "が",
+    "と",
+    "で",
+    "や",
+    "も",
+    "へ",
+    "から",
+    "より",
+    "ため",
+)
 _OPENERS = {"(": ")", "（": "）", "[": "]", "「": "」", "『": "』", "{": "}"}
 
 

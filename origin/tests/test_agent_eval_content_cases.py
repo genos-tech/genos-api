@@ -318,8 +318,12 @@ class BodyKindTests(SimpleTestCase):
         kind = content_checks.body_kind
         self.assertEqual(kind("", "T"), "none")
         self.assertEqual(kind("  \n ", "T"), "none")
-        self.assertEqual(kind("### Summary\n\nDesign the filter UI", "Design the filter UI"), "skeleton")
-        self.assertEqual(kind("### Summary\n\nフィルターUIの設計", "フィルターUIの設計"), "skeleton")
+        self.assertEqual(
+            kind("### Summary\n\nDesign the filter UI", "Design the filter UI"), "skeleton"
+        )
+        self.assertEqual(
+            kind("### Summary\n\nフィルターUIの設計", "フィルターUIの設計"), "skeleton"
+        )
         self.assertEqual(kind("### Summary", "T"), "skeleton", "a heading and nothing else")
         self.assertEqual(kind("Design the filter UI", "design  the FILTER ui"), "skeleton")
         self.assertEqual(kind("### Summary\n\n**T**", "T"), "skeleton")
@@ -335,7 +339,11 @@ class BodyKindTests(SimpleTestCase):
     def test_a_skeleton_passes_the_floor_and_is_reported_as_one(self):
         ev = [plan("### Summary\n\nt0", "### Summary\n\nt1")]
         out = self.check(
-            {"tool": "create_task_plan", "each_body_kind_at_least": "skeleton", "not_cut_off": True},
+            {
+                "tool": "create_task_plan",
+                "each_body_kind_at_least": "skeleton",
+                "not_cut_off": True,
+            },
             ev,
         )
         self.assertTrue(all(c["ok"] for c in out.values()), out)
@@ -377,7 +385,6 @@ class BodyKindTests(SimpleTestCase):
             self.assertNotIn("each_body_chars_at_least", spec, c.id)
             self.assertEqual(spec["each_body_kind_at_least"], "skeleton", c.id)
             self.assertTrue(spec["report_body_kinds"], c.id)
-
 
     def test_answer_length_is_in_characters(self):
         checks = content_checks.check_answer_length(

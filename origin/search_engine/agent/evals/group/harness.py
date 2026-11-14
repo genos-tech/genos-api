@@ -909,9 +909,7 @@ def group_checks(
     if "facts_in_order" in expect:
         ignore = [re.compile(p, re.IGNORECASE) for p in expect.get("facts_ignore_lines") or []]
         kept = [
-            line
-            for line in (answer or "").splitlines()
-            if not any(p.search(line) for p in ignore)
+            line for line in (answer or "").splitlines() if not any(p.search(line) for p in ignore)
         ]
         text = _norm("\n".join(kept))
         last = -1

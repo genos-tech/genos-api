@@ -137,8 +137,7 @@ TIMELINE_WRONG_WITH_HEADER = [
     # the close really is listed first, a header or not
     "ステータス: Closed\n\n- **00:00** Chris Dev がタスクを `Closed` に変更。\n" + TIMELINE_EVENTS,
     # the header is the ONLY mention of the close: no closing event
-    "- **ステータス**: `Closed`\n\n"
-    + "".join(TIMELINE_EVENTS.splitlines(keepends=True)[:-1]),
+    "- **ステータス**: `Closed`\n\n" + "".join(TIMELINE_EVENTS.splitlines(keepends=True)[:-1]),
     # the close is announced in a sentence, not a header
     "このタスクは Closed 済みです。\n\n" + TIMELINE_EVENTS,
     # a header, then the events out of order
@@ -235,7 +234,9 @@ class FullTimelineCheckTests(SimpleTestCase):
         # "ステータスを `Closed` に変更" is an event: the ignore rule must not eat it
         for pattern in self.expect["facts_ignore_lines"]:
             self.assertIsNone(
-                re.search(pattern, "- **07:00** Chris Dev がステータスを `WIP` から `Closed` に変更。")
+                re.search(
+                    pattern, "- **07:00** Chris Dev がステータスを `WIP` から `Closed` に変更。"
+                )
             )
 
     def test_every_ignore_pattern_is_a_valid_regex(self):
