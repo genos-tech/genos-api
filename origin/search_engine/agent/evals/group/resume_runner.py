@@ -617,6 +617,12 @@ def _drive(case: dict[str, Any], world: World, controller: Any, result: dict[str
     checks: list[dict[str, Any]] = []
 
     with ExitStack() as stack:
+        # ONE capture and ONE binding around BOTH legs (MIP-1504). With the cost meter on, `/ask/`
+        # opens an `AiRequestCost` row under the request id it was bound to and `/decide/`
+        # REJOINS that id; bound only around the decision, the resumed leg's calls were charged
+        # to the ask's random id, landed in UNATTRIBUTED, and the row said calls=0.
+        usage = stack.enter_context(group_usage.capture_usage())
+        stack.enter_context(_bound_to(usage))
         _common_patches(stack, world)
         # ---- first leg: scripted, free, identical in every arm -------------------------
         payload: dict[str, Any] = {
@@ -653,52 +659,51 @@ def _drive(case: dict[str, Any], world: World, controller: Any, result: dict[str
         stack.enter_context(mock.patch.object(controller, "get_model_client", side_effect=factory))
         tools: list[str] = []
         answer = ""
-        with group_usage.capture_usage() as usage, _bound_to(usage):
-            body: dict[str, Any] = {
-                "run_id": pending["run_id"],
-                "approval_token": pending["approval_token"],
-                "decision": case.get("decision", "approve"),
-            }
-            if case.get("reason"):
-                body["reason"] = case["reason"]
-            if case.get("edited_args"):
-                body["edited_args"] = world.fill(case["edited_args"])
-            events = _events(client.post(DECIDE_URL, body, format="json"))
+        body: dict[str, Any] = {
+            "run_id": pending["run_id"],
+            "approval_token": pending["approval_token"],
+            "decision": case.get("decision", "approve"),
+        }
+        if case.get("reason"):
+            body["reason"] = case["reason"]
+        if case.get("edited_args"):
+            body["edited_args"] = world.fill(case["edited_args"])
+        events = _events(client.post(DECIDE_URL, body, format="json"))
+        tools += _tools(events)
+        answer = _answer(events)
+        resumed_calls = list(factory.calls)
+        resumed_prompt = prompt_text(resumed_calls[0]) if resumed_calls else ""
+        new_pending = _pending(events)
+        follow_up_prompt = ""
+        if case.get("undo"):
+            step = AgentStep.objects.get(run__run_id=run.run_id, tool_name=proposal["tool"])
+            try:
+                done = undo_apply.perform_undo(run=run, step_id=step.step_id, user=world.user)
+                checks.append(_check("undo_performed", True, str(done.get("action"))))
+            except Exception as exc:  # noqa: BLE001 - UndoRefused and friends
+                checks.append(
+                    _check("undo_performed", False, f"{type(exc).__name__}: {exc}"[:200])
+                )
+        if case.get("follow_up"):
+            before = len(factory.calls)
+            run.refresh_from_db()
+            events = _events(
+                client.post(
+                    ASK_URL,
+                    {
+                        "query": case["follow_up"],
+                        "team_id": str(world.team.team_id),
+                        "locale": _locale(case),
+                        "session_id": str(run.session_id),
+                    },
+                    format="json",
+                )
+            )
             tools += _tools(events)
             answer = _answer(events)
-            resumed_calls = list(factory.calls)
-            resumed_prompt = prompt_text(resumed_calls[0]) if resumed_calls else ""
-            new_pending = _pending(events)
-            follow_up_prompt = ""
-            if case.get("undo"):
-                step = AgentStep.objects.get(run__run_id=run.run_id, tool_name=proposal["tool"])
-                try:
-                    done = undo_apply.perform_undo(run=run, step_id=step.step_id, user=world.user)
-                    checks.append(_check("undo_performed", True, str(done.get("action"))))
-                except Exception as exc:  # noqa: BLE001 - UndoRefused and friends
-                    checks.append(
-                        _check("undo_performed", False, f"{type(exc).__name__}: {exc}"[:200])
-                    )
-            if case.get("follow_up"):
-                before = len(factory.calls)
-                run.refresh_from_db()
-                events = _events(
-                    client.post(
-                        ASK_URL,
-                        {
-                            "query": case["follow_up"],
-                            "team_id": str(world.team.team_id),
-                            "locale": _locale(case),
-                            "session_id": str(run.session_id),
-                        },
-                        format="json",
-                    )
-                )
-                tools += _tools(events)
-                answer = _answer(events)
-                new_pending = _pending(events) or new_pending
-                if len(factory.calls) > before:
-                    follow_up_prompt = prompt_text(factory.calls[before])
+            new_pending = _pending(events) or new_pending
+            if len(factory.calls) > before:
+                follow_up_prompt = prompt_text(factory.calls[before])
         final_prompt = prompt_text(factory.calls[-1]) if factory.calls else ""
 
     if new_pending is not None:
