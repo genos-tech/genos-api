@@ -135,6 +135,12 @@ class CallUsage:
     # then ends mid-sentence, and a tool call's arguments end mid-value: the controller
     # reads this to avoid putting a cut-off body on an approval card (MIP-905).
     truncated: bool = False
+    # True when the call ended cut off AND its LAST function call may be incomplete: the SDK
+    # hands back whatever JSON had arrived (Claude `max_tokens`, OpenAI `length` with arguments
+    # that do not parse). The controller then treats that call like a cut-off write, whatever
+    # tool it is, instead of running it with half its arguments (MIP-1479). Gemini hands function
+    # calls over whole, so it never sets this.
+    partial_call: bool = False
     # The output cap the call actually ran under (tokens), as the adapter sent it; 0 when it
     # sent none and the provider's own model maximum applied (Gemini without a cap). The
     # controller sizes a retry of a cut-off write from this, never below it.

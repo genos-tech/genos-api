@@ -241,6 +241,7 @@ class ClaudeClient:
             stream_kwargs["thinking"] = {"type": "adaptive"}
             stream_kwargs["output_config"] = {"effort": effort}
 
+        yielded_tool_use = False
         try:
             with _get_client().messages.stream(**stream_kwargs) as stream:
                 for event in stream:
@@ -262,6 +263,7 @@ class ClaudeClient:
                     if getattr(event, "type", None) == "content_block_stop":
                         block = getattr(event, "content_block", None)
                         if block is not None and getattr(block, "type", None) == "tool_use":
+                            yielded_tool_use = True
                             yield (
                                 None,
                                 FunctionCall(
@@ -304,10 +306,17 @@ class ClaudeClient:
                     )
                 if isinstance(stop_reason, str):
                     sink.stop_reason = stop_reason
+                if stop_reason == "model_context_window_exceeded":
+                    # The window filled before the reply ended: cut off like `max_tokens`, but
+                    # a larger output cap cannot help, so the controller never retries it.
+                    sink.truncated = True
+                    sink.partial_call = yielded_tool_use
                 if stop_reason == "max_tokens":
                     # The reply (a tool call's arguments included: the SDK hands back
                     # whatever JSON had arrived) ends mid-way; the controller reads this.
                     sink.truncated = True
+                    # A tool_use yielded before this stop may be the one that was cut off.
+                    sink.partial_call = yielded_tool_use
                     # Adaptive thinking spends from the same budget as the
                     # answer, so a small cap can end a turn before any text.
                     log.warning(

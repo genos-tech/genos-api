@@ -55,6 +55,7 @@ from origin.search_engine.llm.types import (
     CallUsage,
     FunctionCall,
     GenerationParams,
+    ModelRefusal,
     ToolDeclaration,
 )
 
@@ -257,6 +258,7 @@ class OpenAIClient:
         # sequence of partial JSON strings that only parse once joined.
         pending_calls: dict[int, dict[str, str]] = {}
         final_usage: Any = None
+        yielded_anything = False
 
         try:
             stream = _get_client().chat.completions.create(**create_kwargs)
@@ -281,6 +283,7 @@ class OpenAIClient:
 
                 text = getattr(delta, "content", None)
                 if text:
+                    yielded_anything = True
                     yield (text, None)
 
                 for tc in getattr(delta, "tool_calls", None) or []:
@@ -301,6 +304,11 @@ class OpenAIClient:
                 slot = pending_calls[idx]
                 if not slot["name"]:
                     continue
+                if sink.truncated and not _arguments_complete(slot["arguments"]):
+                    # Cut off at the cap: the arguments end mid-value, `_parse_args` turns them
+                    # into `{}`, and the controller must not run that (MIP-1479).
+                    sink.partial_call = True
+                yielded_anything = True
                 yield (None, FunctionCall(name=slot["name"], args=_parse_args(slot["arguments"])))
 
             # Usage telemetry. Observability only — never break generation.
@@ -309,6 +317,14 @@ class OpenAIClient:
                 _fill_usage_sink(sink, final_usage, model)
             except Exception:
                 log.debug("OpenAI usage logging failed", exc_info=True)
+            # The content filter ended a call that produced nothing: a refusal, as Claude's
+            # `refusal` is, not an "empty response". After a partial answer the text stays.
+            if sink.stop_reason == "content_filter" and not yielded_anything:
+                raise ModelRefusal("openai", model, "content_filter")
+        except ModelRefusal as exc:
+            call_error = f"refusal:{exc.category or 'n/a'}"
+            log.info("OpenAI declined a request: %s", exc)
+            raise
         except BaseException as exc:
             # BaseException so a client disconnect (GeneratorExit) is
             # recorded too — that call was billed like any other.
@@ -330,6 +346,14 @@ class OpenAIClient:
 # --------------------------------------------------------------------------- #
 # Translation helpers                                                         #
 # --------------------------------------------------------------------------- #
+
+
+def _arguments_complete(raw: str) -> bool:
+    """Whether accumulated tool-call argument text is a whole JSON object."""
+    try:
+        return isinstance(json.loads(raw), dict)
+    except (TypeError, ValueError):
+        return False
 
 
 def _parse_args(raw: str) -> dict[str, Any]:
