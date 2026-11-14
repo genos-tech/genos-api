@@ -558,9 +558,8 @@ CREATE_TASK = Tool(
                 "type": "ARRAY",
                 "items": {"type": "STRING"},
                 "description": (
-                    "Optional collaborator user ids (list_project_members); each must "
-                    "be a member of the project, as a collaborator is told about the "
-                    "task and has to be able to open it."
+                    "Optional collaborator user ids (get_team_members / "
+                    "list_project_members); each must be on the team or project."
                 ),
             },
             "custom_fields": CUSTOM_FIELDS_SCHEMA,
