@@ -17,7 +17,11 @@ from origin.models.common.member_event_models import (
 )
 from origin.models.common.user_models import CustomUser
 from origin.services import member_events
-from origin.views.utils.scope_guards import is_project_member, is_team_member
+from origin.views.utils.scope_guards import (
+    is_project_member,
+    is_team_member,
+    task_reader_ids,
+)
 
 
 def may_name_person(project, user_id) -> bool:
@@ -34,13 +38,62 @@ def may_name_person(project, user_id) -> bool:
     )
 
 
-def people_allowed_on(project, raw_ids):
+def may_collaborate(project, user_id, readers=()) -> bool:
+    """May this person be made a COLLABORATOR of a task in `project`?
+
+    Only someone who can open the task: a member (or the owner) of the project, or one of
+    `readers`, the ids that hold the task as its assignee or reporter. That is
+    `can_access_task`'s rule (MIP-1567). A collaborator joins the task's notification
+    audience, and a person told about a task they cannot open is told about something they
+    cannot follow (the activity feed already withholds it from them, MIP-1560). A teammate who
+    is not on the project is therefore not accepted here, although `may_name_person` lets them
+    be assigned. Adding them to the project first is what lets them in.
+    """
+    if user_id is None:
+        return False
+    if str(user_id) in {str(r) for r in readers if r}:
+        return True
+    return is_project_member(project.project_id, user_id)
+
+
+def people_allowed_on(project, raw_ids, readers=()):
     """`raw_ids` with everyone who may not be on a task in `project` left
     out. `None` stays `None`, which `sync_task_collaborators` reads as
-    "leave the set alone"."""
+    "leave the set alone". `readers` is the assignee and reporter the task has
+    (see `may_collaborate`)."""
     if raw_ids is None:
         return None
-    return [raw for raw in raw_ids if raw and may_name_person(project, raw)]
+    return [raw for raw in raw_ids if raw and may_collaborate(project, raw, readers)]
+
+
+def notifiable_collaborator_ids(task_id) -> set[str]:
+    """The task's collaborators who can open it, as strings: who a notice about the task may
+    reach (MIP-1567).
+
+    A collaborator told about a task they cannot open is told about something they cannot
+    follow, and the activity feed already withholds such a row from them (MIP-1560). People
+    listed before the rule held (a teammate who was never on the project, or who has left it)
+    stay in the list and are skipped here, at send time. Two queries for the task and its
+    collaborators plus two for the readers, however many collaborators there are.
+    """
+    from origin.models.task.task_models import TaskMaster
+
+    if task_id is None:
+        return set()
+    row = (
+        TaskMaster.objects.filter(task_id=task_id)
+        .values("project_id", "assignee_id", "reporter_id")
+        .first()
+    )
+    if row is None:
+        return set()
+    collaborators = {
+        str(pk)
+        for pk in TaskMaster.collaborators.through.objects.filter(
+            taskmaster_id=task_id
+        ).values_list("customuser_id", flat=True)
+    }
+    return task_reader_ids(row["project_id"], row["assignee_id"], row["reporter_id"], collaborators)
 
 
 def _canonical(raw):
@@ -54,20 +107,28 @@ def _canonical(raw):
 def refuse_unreachable_people(project, people) -> str | None:
     """Why the people named can't be put on something in `project`, or None.
 
-    `people` is `(label, raw ids as sent, ids already there)` triples. Someone
-    already there is not judged again (see `refuse_new_people`); anyone else
-    has to pass `may_name_person`, and a malformed id is refused rather than
-    dropped. The message names the label and the id.
+    `people` is `(label, raw ids as sent, ids already there)` triples, each with an
+    optional fourth item: the rule for that group, `(project, canonical id) -> bool`
+    (`may_name_person` when left out; a collaborator list passes `may_collaborate`).
+    Someone already there is not judged again (see `refuse_new_people`); anyone else
+    has to pass the rule, and a malformed id is refused rather than dropped. The message
+    names the label and the id.
     """
-    for label, raws, already in people:
+    for label, raws, already, *rule in people:
+        check = rule[0] if rule else may_name_person
         for raw in raws:
             if raw in (None, ""):
                 continue
             canon = _canonical(raw)
             if canon is not None and canon in already:
                 continue
-            if project is None or canon is None or not may_name_person(project, canon):
-                return f"{label}: {raw!r} is not a member of this project or its team."
+            if project is None or canon is None or not check(project, canon):
+                if check is may_name_person:
+                    return f"{label}: {raw!r} is not a member of this project or its team."
+                return (
+                    f"{label}: {raw!r} is not a member of this project, so they could not "
+                    "open the task. Add them to the project first."
+                )
     return None
 
 
@@ -76,8 +137,9 @@ def refuse_new_people(task, project, data) -> str | None:
 
     `assignee`, `reporter` and `collaborators` are each a grant: a collaborator
     joins the task's notification audience, and the assignee and the reporter
-    are read grants in `can_access_task`. The POST holds all three to
-    `may_name_person`; the PUT used to hold none of them to anything.
+    are read grants in `can_access_task`. The assignee and the reporter are held to
+    `may_name_person` (a member of the project or its team); a collaborator to
+    `may_collaborate`, which wants someone who can open the task (MIP-1567).
 
     Only people being ADDED are checked. The app re-sends the whole collaborator
     list (and the assignee and reporter) on every save, so refusing someone who
@@ -92,7 +154,16 @@ def refuse_new_people(task, project, data) -> str | None:
     raw_collaborators = data.get("collaborators")
     if isinstance(raw_collaborators, list):
         already = {str(pk) for pk in task.collaborators.values_list("id", flat=True)}
-        people.append(("`collaborators`", raw_collaborators, already))
+        # The assignee and the reporter the task will have once this save lands.
+        holders = [
+            data.get(key) or current
+            for key, current in (("assignee", task.assignee_id), ("reporter", task.reporter_id))
+        ]
+
+        def rule(project, canon):
+            return may_collaborate(project, canon, holders)
+
+        people.append(("`collaborators`", raw_collaborators, already, rule))
     return refuse_unreachable_people(project, people)
 
 
@@ -124,7 +195,8 @@ def refuse_new_milestone_people(milestone, project, data) -> str | None:
     if isinstance(assignees, list):
         people.append(("`assignee_ids`", assignees, already_assigned))
     if isinstance(collaborators, list):
-        people.append(("`collaborators`", collaborators, already_collaborating))
+        # A milestone's collaborators ride on its backing task: they have to be able to open it.
+        people.append(("`collaborators`", collaborators, already_collaborating, may_collaborate))
     return refuse_unreachable_people(project, people)
 
 

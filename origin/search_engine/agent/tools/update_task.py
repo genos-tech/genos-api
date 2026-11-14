@@ -379,7 +379,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             changed.append("custom_fields")
     if wants_collaborators:
         current_people = {str(uid) for uid in task.collaborators.values_list("id", flat=True)}
-        planned_people = plan_collaborators(args["collaborators"], task.project, current_people)
+        planned_people = plan_collaborators(
+            args["collaborators"],
+            task.project,
+            current_people,
+            readers=(task.assignee_id, task.reporter_id),
+        )
         if set(planned_people) != current_people:
             new_collaborators = planned_people
             changed.append("collaborators" if planned_people else "collaborators(cleared)")

@@ -309,7 +309,8 @@ def create_surface_mention_activities(
 
 def _task_stakeholders(task_id) -> set:
     """Assignee + collaborators of a task — who to tell about a comment
-    left on the task BODY (surface 5) even without an @-mention.
+    left on the task BODY (surface 5) even without an @-mention. A collaborator who cannot
+    open the task is not told (MIP-1567).
 
     Prior *task-comment* senders (the separate legacy task-comment feature)
     are intentionally NOT included: a BlockNote inline comment's own prior
@@ -318,6 +319,7 @@ def _task_stakeholders(task_id) -> set:
     "the task's assigned user plus stakeholders", exactly the report's ask.
     """
     from origin.models.task.task_models import TaskMaster
+    from origin.services.task_collaborators import notifiable_collaborator_ids
 
     out: set = set()
     if task_id is None:
@@ -327,13 +329,8 @@ def _task_stakeholders(task_id) -> set:
     )
     if assignee_id is not None:
         out.add(str(assignee_id))
-    for collab_id in (
-        TaskMaster.objects.filter(task_id=task_id)
-        .values_list("collaborators__id", flat=True)
-        .distinct()
-    ):
-        if collab_id is not None:
-            out.add(str(collab_id))
+    # Only the collaborators who can open the task (MIP-1567).
+    out |= notifiable_collaborator_ids(task_id)
     return out
 
 

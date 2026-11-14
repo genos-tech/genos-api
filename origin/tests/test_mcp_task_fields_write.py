@@ -13,7 +13,8 @@ from __future__ import annotations
 from datetime import date
 
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
-from origin.models.project.prj_models import ProjectCustomField, ProjectTags
+from origin.models.common.team_models import TeamMembers
+from origin.models.project.prj_models import ProjectCustomField, ProjectMembers, ProjectTags
 from origin.models.task.task_models import TaskMaster
 from origin.tests.test_mcp_endpoint import McpBase
 
@@ -40,6 +41,13 @@ class McpWriteFieldsBase(McpBase):
             tag_color="red",
             tag_text_color="white",
         )
+        # `user2` is a member of the project (MIP-1567): a collaborator has to be able to open
+        # the task. `self.teammate` is on the team only.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
+        self.teammate = type(self.user).objects.create_user(
+            username="teammate", email="mate@example.com", password="x"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.teammate)
         self._key(scope=SCOPE_WRITE)
 
     def _text(self, name, arguments):
@@ -180,6 +188,15 @@ class UpdateTaskOverMcpTests(McpWriteFieldsBase):
 
         self.assertTrue(is_error)
         self.assertIn("not a member", text)
+        self.assertEqual(self.task.collaborators.count(), 0)
+
+    def test_a_teammate_who_is_not_on_the_project_is_refused_as_a_collaborator(self):
+        text, is_error = self._text(
+            "update_task", {"task_id": "WRD-7", "collaborators": [str(self.teammate.id)]}
+        )
+
+        self.assertTrue(is_error)
+        self.assertIn("not a member of this project", text)
         self.assertEqual(self.task.collaborators.count(), 0)
 
     def test_a_read_key_cannot_write_them(self):

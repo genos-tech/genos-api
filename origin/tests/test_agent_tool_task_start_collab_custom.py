@@ -50,6 +50,14 @@ class WriteBase(ReadFieldsBase):
             username="guest", email="guest@example.com", password="x"
         )
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.guest)
+        # `user2` is on the project too (MIP-1567): a collaborator has to be able to open the
+        # task, so the tests that put them on one need them to be a member. `self.teammate` is
+        # the person who is on the team only.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
+        self.teammate = get_user_model().objects.create_user(
+            username="teammate", email="mate@example.com", password="x"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.teammate)
 
     def _set(self, task, **extra):
         return UPDATE_TASK.run({"task_id": task.task_id, **extra}, self.ctx)
@@ -248,12 +256,34 @@ class CollaboratorsTests(WriteBase):
         self.assertEqual(out["changed_fields"], ["collaborators"])
         self.assertIn("collaborators", out["__summary__"])
 
-    def test_a_team_member_a_project_member_and_the_caller_are_allowed(self):
+    def test_a_project_member_and_the_caller_are_allowed(self):
         task = self._task("t")
 
         self._set(task, collaborators=[str(self.user.id), str(self.user2.id), str(self.guest.id)])
 
         self.assertEqual(len(self._collaborators(task)), 3)
+
+    def test_a_teammate_who_is_not_on_the_project_is_refused_as_a_collaborator(self):
+        """They could not open the task, so they would be told about one they cannot follow
+        (MIP-1567). The same person may still be the assignee or fill a member field."""
+        task = self._task("t")
+
+        message = self._refused_and_unchanged(
+            task, "not a member of this project", collaborators=[str(self.teammate.id)]
+        )
+
+        self.assertIn(str(self.teammate.id), message)
+        self.assertEqual(self._collaborators(task), [])
+        self._set(task, custom_fields=[{"name": "QA owner", "value": str(self.teammate.id)}])
+        task.refresh_from_db()
+        self.assertEqual(task.custom_field_values[str(self.qa.field_id)], str(self.teammate.id))
+
+    def test_the_tasks_assignee_and_reporter_may_collaborate_as_they_can_open_it(self):
+        task = self._task("t", assignee=self.teammate, reporter=self.teammate)
+
+        self._set(task, collaborators=[str(self.teammate.id)])
+
+        self.assertEqual(self._collaborators(task), [str(self.teammate.id)])
 
     def test_someone_outside_the_team_and_project_is_refused_by_name(self):
         task = self._task("t")
@@ -296,15 +326,17 @@ class CollaboratorsTests(WriteBase):
             with self.subTest(label), self.assertRaises(ToolError) as caught:
                 self._set(task, collaborators=[uid])
             answers.add(str(caught.exception).replace(uid, "ID"))
-        with self.assertRaises(ToolError) as caught:
-            self._set(task, custom_fields=[{"name": "QA owner", "value": ids["outside"]}])
-        answers.add(
-            str(caught.exception)
-            .replace(ids["outside"], "ID")
-            .replace("`custom_fields`[0]", "`collaborators`")
-        )
 
         self.assertEqual(len(answers), 1, answers)
+
+        # A member field is judged by the other rule (a member of the team or the project), but
+        # it too gives one answer for an unknown, a deleted and an outside user.
+        field_answers = set()
+        for label, uid in ids.items():
+            with self.subTest(f"field {label}"), self.assertRaises(ToolError) as caught:
+                self._set(task, custom_fields=[{"name": "QA owner", "value": uid}])
+            field_answers.add(str(caught.exception).replace(uid, "ID"))
+        self.assertEqual(len(field_answers), 1, field_answers)
 
     def test_a_deleted_account_is_refused(self):
         get_user_model().objects.filter(pk=self.guest.pk).update(is_deleted=True)
@@ -370,13 +402,15 @@ class CollaboratorsTests(WriteBase):
 
         self._refused_and_unchanged(task, "in no project", collaborators=[str(self.user2.id)])
 
-    def test_the_team_membership_row_is_what_makes_a_team_member(self):
-        """A user with a team row and no project row is allowed; remove the row
-        and they are not."""
+    def test_the_project_membership_row_is_what_makes_a_collaborator(self):
+        """A user with a project row is allowed; remove the row and they are not, though
+        the team row stays (MIP-1567: a collaborator has to be able to open the task)."""
         task = self._task("t")
-        TeamMembers.objects.filter(attendee=self.user2).update(is_deleted=True)
+        ProjectMembers.objects.filter(attendee=self.user2).delete()
 
-        self._refused_and_unchanged(task, "not a member", collaborators=[str(self.user2.id)])
+        self._refused_and_unchanged(
+            task, "not a member of this project", collaborators=[str(self.user2.id)]
+        )
 
 
 class CustomFieldsTests(WriteBase):
@@ -579,6 +613,7 @@ class CustomFieldsTests(WriteBase):
         """The assignee can write the task without being on its project, and the
         project's fields are for its members. A real name and an invented one get
         the same answer, and it names no field."""
+        ProjectMembers.objects.filter(attendee=self.user2).delete()
         task = self._task("t", assignee=self.user2)
         outside = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user2.id))
         before = self._snapshot(task)
