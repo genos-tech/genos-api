@@ -19,6 +19,7 @@ from django.conf import settings
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 
+from apis import settings_test as test_settings
 from origin.search_engine.agent import content_length as cl
 from origin.search_engine.agent import tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
@@ -27,7 +28,6 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, flagged_tools, get_app_tool
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_agent_content_length_pins import SCENARIOS, LoopBase, transcript
-from apis import settings_test as test_settings
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
@@ -37,7 +37,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 ALL_ON_BUDGET_CHARS = 141_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
-# Turned on by default by MIP-1089 (grouped eval 2026-11-14). Everything else in ALL_ON is held.
+# Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
+# Japanese cases were re-read). Everything else in ALL_ON is held.
 SHIPPED_ON = frozenset(
     {
         "AGENT_RESUME_KEEPS_BLOCKS",
@@ -50,6 +51,7 @@ SHIPPED_ON = frozenset(
         "AGENT_TEAM_IN_CURRENT_USER",
         "AGENT_NOTE_THREADS_IN_GET_NOTE",
         "AGENT_CLOSED_ANCESTOR_RULE",
+        "AGENT_INAPP_TIMELINE_TOOL",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
@@ -91,7 +93,9 @@ class AllOnArmTests(SimpleTestCase):
                 want,
                 f"{key} must default to {'on' if want else 'off'}",
             )
-        self.assertEqual(set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION")))
+        self.assertEqual(
+            set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION"))
+        )
 
     def test_the_flags_the_stacks_added_are_all_in_the_union(self):
         expected = {
@@ -177,13 +181,12 @@ class AllOnDeclarationTests(SimpleTestCase):
             f"with the system prompt: off={off_total} on={on_total} budget={BUDGET_CHARS}"
         )
         self.assertGreater(delta, 0)
-        # FINDING: with EVERY flag on the prefix is over `test_agent_prefix_budget`'s BUDGET_CHARS
-        # (the budget is the production number; each flag alone fits). The flip PR that turns several
-        # on must raise it with its routing evidence. This pin only stops all-on growing unnoticed.
+        # With EVERY flag on the prefix was over `test_agent_prefix_budget`'s BUDGET_CHARS until the
+        # flips of 2026-11-14 raised it (140,000 with the timeline tool). Now even all-on fits it:
+        # a flag turned on later must keep that true or raise the budget with its routing evidence.
+        # `ALL_ON_BUDGET_CHARS` also stops all-on growing unnoticed.
         self.assertLessEqual(on_total, ALL_ON_BUDGET_CHARS)
-        self.assertGreater(
-            on_total, BUDGET_CHARS, "all-on now fits the production budget: tighten this"
-        )
+        self.assertLessEqual(on_total, BUDGET_CHARS, "all-on no longer fits the production budget")
 
     def test_only_the_reject_reason_flag_edits_the_system_prompt(self):
         # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; every other

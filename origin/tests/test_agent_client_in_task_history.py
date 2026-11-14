@@ -1,8 +1,9 @@
 """MIP-1090 (b): `get_task_history` shows which CLIENT made a change, behind AGENT_CLIENT_IN_TASK_HISTORY.
 
-Off (the default) `via` is returned as `origin/main` returns it (including, for a kind it knows, the
-whole dict: an API key's id, name and prefix, an app row's `undo_of`; that existing exposure is
-filed separately and is NOT changed here). On, `via` is `{"kind": ...}` plus, where safe, `client`:
+Off (the default) `via` keeps the shape it always had (for a kind it knows, the whole dict: an API
+key's id, name and prefix, an app row's `undo_of`), but since MIP-1470 only the row's actor (a key
+writes as its owner) reads that whole; everyone else reads the kind. That gate runs flag off and on.
+On, `via` is `{"kind": ...}` plus, where safe, `client`:
 
     app / agent    {"kind": "app" | "agent"}                       (an app row's `undo_of` is left out)
     api_key        {"kind": "api_key"}, plus `client` (the key's name, fenced) ONLY when the key is
@@ -16,8 +17,9 @@ read the task gets the kind.
 
 Never a key id, a key prefix, a connection id or an undo's run id.
 
-PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), where the flag does
-not exist:
+PINS. The off-state goldens were first recorded on PRISTINE `origin/main` (09f52388), where the flag
+does not exist; `history/*` were re-recorded for MIP-1470 (the gate), with the same recipe on the
+branch:
 
     git -C <genos-api> worktree add --detach <wt> origin/main
     cp origin/tests/test_agent_client_in_task_history.py <wt>/origin/tests/
@@ -58,8 +60,8 @@ from origin.tests.test_base import BaseAPITestCase
 FLAG = "AGENT_CLIENT_IN_TASK_HISTORY"
 
 GOLDEN: dict[str, str] = {
-    "history/owner": "003d4f5f95480fb759070179a10e00d22513c3d978205e229400f12a7566b4f6",
-    "history/other": "003d4f5f95480fb759070179a10e00d22513c3d978205e229400f12a7566b4f6",
+    "history/owner": "cd09758f9673188609a7bc18b280d490ddf6f55313b4829876d475b79971f0ed",
+    "history/other": "7ccc460a04cd7bfb98110d7083be017d3dedeb304b091be00b3b9c623a598e47",
     "declarations": "ef496d745cfc175a1a0e02e92e254e7f4304bab500d1ffd93d9016da2731832a",
 }
 
@@ -155,7 +157,9 @@ class HistoryBase(BaseAPITestCase):
             "none": None,
         }
         for n, (name, via) in enumerate(vias.items()):
-            self.rows[name] = self.activity(n, {"via": via} if via is not None else {})
+            # A key or a connected app writes as its owner: the other member's rows are theirs.
+            actor = self.user2 if name in ("other", "oauth_other") else self.user
+            self.rows[name] = self.activity(n, {"via": via} if via is not None else {}, actor)
         self.rows["pr"] = self.activity(20, {"closedByPrMerge": True, "prUrl": "https://x/pull/1"})
         self.rows["deps"] = self.activity(21, {"derivedFromDependencies": True})
 
@@ -197,12 +201,12 @@ class HistoryBase(BaseAPITestCase):
             "key_prefix": key.prefix,
         }
 
-    def activity(self, n, metadata):
+    def activity(self, n, metadata, actor=None):
         row = TaskActivity.objects.create(
             task=self.task,
             team=self.team,
             project=self.project,
-            actor=self.user,
+            actor=actor or self.user,
             action_type=TaskActivityActionType.STATUS,
             field_name="status",
             old_value="Open",
@@ -228,7 +232,8 @@ class HistoryBase(BaseAPITestCase):
 
 
 class FlagOffTests(HistoryBase):
-    """What the model is sent with the flag off: main's, byte for byte (hashes from main)."""
+    """What the model is sent with the flag off: the declarations are main's, byte for byte. The
+    history hashes were re-recorded for MIP-1470 (the owner-only gate runs flag off too)."""
 
     def pin(self, key, text):
         digest = digest_text(text)
@@ -245,11 +250,13 @@ class FlagOffTests(HistoryBase):
         text = json.dumps([asdict(d) for d in _build_tool_declarations()], sort_keys=True)
         self.pin("declarations", text)
 
-    def test_today_a_key_row_is_shown_whole_to_anyone_and_an_app_row_keeps_its_undo(self):
-        """The existing exposure, kept as it is with the flag off (filed as a question)."""
-        self.assertEqual(self.via_of("other", self.user)["key_id"], str(self.other_key.id))
-        self.assertEqual(self.via_of("other", self.user)["key_name"], "bobs-ci")
+    def test_a_key_row_is_whole_to_its_owner_only_and_an_app_row_keeps_its_undo_for_its_actor(self):
+        """MIP-1470: the flag off still shapes `via` as before, but the privacy gate is not behind it."""
+        self.assertEqual(self.via_of("other", self.user), {"kind": "api_key"})
+        self.assertEqual(self.via_of("other", self.user2)["key_id"], str(self.other_key.id))
+        self.assertEqual(self.via_of("other", self.user2)["key_name"], "bobs-ci")
         self.assertIn("undo_of", self.via_of("undo"))
+        self.assertEqual(self.via_of("undo", self.user2), {"kind": "app"})
 
 
 class FlagOnTests(HistoryBase):
@@ -270,7 +277,7 @@ class FlagOnTests(HistoryBase):
         with on():
             self.assertEqual(self.via_of("other"), {"kind": "api_key"})
 
-    def test_it_is_the_viewer_who_decides_not_the_actor(self):
+    def test_it_is_the_viewer_who_owns_the_credential_who_decides(self):
         with on():
             self.assertEqual(
                 self.via_of("other", self.user2)["client"], wrap_workspace_content("bobs-ci")
@@ -421,9 +428,8 @@ class SeedTests(HistoryBase):
             [r["via"]["kind"] for r in rows], ["app", "api_key", "api_key", "api_key", "app"]
         )
         self.assertIn("Claude", rows[1]["via"]["key_name"])  # a connected app, as an API key today
-        self.assertEqual(
-            rows[3]["via"]["key_name"], "Chris CI"
-        )  # another member's key: shown today
+        self.assertEqual(rows[3]["via"], {"kind": "api_key"})  # another member's key: its kind only
+        self.assertNotIn("Chris CI", json.dumps(rows))
 
     def test_with_the_flag_on_the_viewer_sees_their_own_key_and_no_one_elses(self):
         with on():
