@@ -225,17 +225,18 @@ class PruneDanglingOwnersTests(_Fixtures, CrossTeamTestCase):
         self.assertEqual(again.chats, 0)
         self.assertEqual(self.owner_of(self.gm), self.a_viewer.id)
 
-    def test_the_command_defaults_to_a_dry_run_and_prints_counts_only(self):
+    def test_the_memberships_command_defaults_to_a_dry_run_and_prints_counts_only(self):
         out = StringIO()
-        call_command("prune_deleted_account_channel_owners", stdout=out)
+        call_command("prune_deleted_account_memberships", stdout=out)
         text = out.getvalue()
         self.assertIn("DRY RUN", text)
-        self.assertIn("2 group / project chat(s)", text)
+        self.assertIn("would hand over 2 group / project chat(s)", text)
         self.assertNotIn("Secret title", text)
         self.assertEqual(self.owner_of(self.gm), self.dead.id)
 
         out = StringIO()
-        call_command("prune_deleted_account_channel_owners", "--apply", stdout=out)
+        call_command("prune_deleted_account_memberships", "--apply", stdout=out)
         self.assertIn("APPLY", out.getvalue())
         self.assertNotIn("Secret title", out.getvalue())
         self.assertEqual(self.owner_of(self.gm), self.a_viewer.id)
+        self.assertIsNone(self.owner_of(self.lonely))
