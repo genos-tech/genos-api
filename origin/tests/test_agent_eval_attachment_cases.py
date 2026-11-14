@@ -20,6 +20,7 @@ from django.test import SimpleTestCase, override_settings
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskAttachments, TaskMaster
 from origin.search_engine.agent import controller
+from origin.search_engine.agent.evals import runner
 from origin.search_engine.agent.evals.group import content_checks, harness, seeds, sequence
 from origin.search_engine.agent.tools import ToolContext
 
@@ -84,13 +85,23 @@ class CaseFileTests(SimpleTestCase):
             for pattern in (spec.get("args_match") or {}).values():
                 re.compile(pattern)
 
-    def test_a_negative_judges_the_answer_a_member_would_read(self):
-        # A delete proposal pauses the run and leaves no answer, so a minimum answer length is what
-        # fails a model that proposed one.
+    def test_every_case_that_must_not_delete_says_so_and_the_delete_case_does_not(self):
         for c in self.cases:
-            if c.id.split(".")[1] in NEGATIVES:
+            slug = c.id.split(".")[1]
+            excludes = c.raw["expect"].get("pending_tools_excludes")
+            if slug == "delete":
+                self.assertIsNone(excludes, c.id)
+            else:
+                self.assertEqual(excludes, ["delete_task_attachment"], c.id)
+            if slug in NEGATIVES:
                 self.assertGreaterEqual(c.raw["expect"]["answer_chars_at_least"], 20, c.id)
                 self.assertNotIn("pending_write", c.raw["expect"], c.id)
+
+    def test_every_case_names_the_task_by_its_display_id_too(self):
+        # The seed writes rows only, so no search index has seen the task: the display id is how a
+        # model reaches it without one.
+        for c in self.cases:
+            self.assertIn("(EAF-1)", c.raw["query"].replace("（", "(").replace("）", ")"), c.id)
 
     def test_the_cases_quote_files_and_a_task_the_seed_has(self):
         for c in self.cases:
@@ -154,6 +165,9 @@ class SeedAndCardTests(BaseAPITestCase):
         )
         self.assertIsNone(task.assignee_id)
 
+    def test_the_seeded_task_has_the_display_id_the_cases_quote(self):
+        self.assertEqual(self.seed().display_id, "EAF-1")
+
     def test_the_seeded_files_are_real_files_with_a_size(self):
         task = self.seed()
         sizes = [a.attached_file.size for a in TaskAttachments.objects.filter(task=task)]
@@ -179,3 +193,60 @@ class SeedAndCardTests(BaseAPITestCase):
         self.assertFalse(all(checks.values()))
         checks, _ = self.card("t1563.delete.en", {"attachment_id": 99})
         self.assertFalse(all(checks.values()))
+
+
+def _stream(*, answer: str, proposed: tuple[str, ...] = (), used: tuple[str, ...] = ()):
+    """The events of a run: the tools it ran, the write it proposed (a proposal pauses the run, but
+    the words before the call are streamed as the answer), and the answer."""
+    events = [{"type": "tool_call_start", "tool_name": name, "step": 0} for name in used]
+    events += [
+        {"type": "tool_call_pending_approval", "tool_name": name, "step": 1, "arguments": {}}
+        for name in proposed
+    ]
+    events.append({"type": "answer_delta", "text": answer})
+    return events
+
+
+class ProposalCheckTests(SimpleTestCase):
+    """A case that must not end in a delete has to FAIL on a model that says it will delete and
+    proposes one. The answer alone cannot tell: the words before a call are streamed as the answer."""
+
+    def test_the_runner_check_fails_a_proposal_and_passes_a_run_that_proposed_nothing(self):
+        expect = {"pending_tools_excludes": ["delete_task_attachment"]}
+        said = _stream(
+            answer="Sure, I'll delete kickoff-notes.pdf for you now.",
+            proposed=("delete_task_attachment",),
+        )
+        reasons = runner._check_behavior_expectations(said, expect)
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("pending_tools_excludes", reasons[0])
+        self.assertIn("delete_task_attachment", reasons[0])
+        self.assertEqual(
+            runner._check_behavior_expectations(_stream(answer="It is 2 KB."), expect), []
+        )
+        # another write's proposal is not this one
+        other = _stream(answer="Done.", proposed=("add_comment",))
+        self.assertEqual(runner._check_behavior_expectations(other, expect), [])
+
+    def test_every_case_that_must_not_delete_fails_on_a_run_that_proposed_one(self):
+        # Through each case's own `expect`, with an answer that would pass every other check.
+        said = "Sure, I'll delete it for you. budget-2026.xlsx kickoff-notes.pdf 予算2026.xlsx キックオフ議事録.pdf"
+        for c in cases():
+            if c.id.split(".")[1] == "delete":
+                continue
+            with self.subTest(case=c.id):
+                bad = _stream(
+                    answer=said, proposed=("delete_task_attachment",), used=("fetch_task",)
+                )
+                reasons = runner._check_behavior_expectations(bad, c.raw["expect"])
+                self.assertTrue(
+                    [r for r in reasons if r.startswith("pending_tools_excludes")], reasons
+                )
+                good = _stream(answer=said, used=("fetch_task",))
+                self.assertFalse(
+                    [
+                        r
+                        for r in runner._check_behavior_expectations(good, c.raw["expect"])
+                        if r.startswith("pending_tools_excludes")
+                    ]
+                )

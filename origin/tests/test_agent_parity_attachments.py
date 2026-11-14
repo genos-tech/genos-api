@@ -774,6 +774,11 @@ class CardTests(AttachmentsBase):
         )
         self.assertEqual(card["task_id"], self.task.display_id)
 
+    def test_a_long_type_is_cut_on_the_card(self):
+        attachment = self.attach(self.task, "n.txt", mime="x" * 400)
+        card = self.card({"task_id": self.task.task_id, "attachment_id": attachment.attachment_id})
+        self.assertEqual(len(card["current"]["type"]), 100)
+
     def test_a_number_from_another_task_shows_no_file(self):
         other = self.make_task("Other")
         self.attach(self.task, "mine.txt")
@@ -923,10 +928,32 @@ class ApproveTests(AttachmentsBase):
         events = self.approve(self.paused(attachment.attachment_id), **ON)
         result = [e for e in events if e["type"] == "tool_call_result"]
         self.assertEqual(len(result), 1)
+        # the browser is told which task's cached copy still lists the file
+        self.assertEqual(
+            result[0]["task_attachment"],
+            {
+                "task_id": self.task.task_id,
+                "attachment_id": attachment.attachment_id,
+                "deleted": True,
+            },
+        )
         self.assertFalse(TaskAttachments.objects.filter(pk=attachment.pk).exists())
         self.assertFalse(default_storage.exists(attachment.attached_file.name))
         # a hard delete has no pre-image, so no Undo is offered
         self.assertFalse(result[0].get("undo"))
+
+    def test_the_result_of_another_approved_tool_carries_no_such_ref(self):
+        # Only the delete names a task's file; a read or another write adds nothing to the event.
+        events = []
+        with mock.patch.object(controller, "_drive_loop", return_value=None):
+            run = self.paused(1)
+            run.steps.update(
+                tool_name="add_comment",
+                arguments_json={"task_id": self.task.task_id, "body_text": "hi"},
+            )
+            controller.resume_agent(run, "approve", self.ctx, events.append)
+        for event in events:
+            self.assertNotIn("task_attachment", event)
 
     def test_approving_after_the_flag_went_off_deletes_nothing(self):
         attachment = self.attach(self.task, "n.txt")

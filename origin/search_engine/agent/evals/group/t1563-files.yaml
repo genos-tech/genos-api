@@ -5,10 +5,15 @@
 # stay. Seed `task_files` (project EAF, the viewer alone): the task "Prepare the board deck" with two files, #1 and #2
 # (`budget-2026.xlsx`, `kickoff-notes.pdf`; the Japanese team's are `予算2026.xlsx`, `キックオフ議事録.pdf`).
 #
+# The task is named by title AND by its display id (EAF-1, the seed's own project): the cases are meant to measure the
+# tool, not whether the model can find a task that no search index has seen (the seed writes rows only).
+#
 # The positives `requires_arm: parity` (they cannot pass without the field and the tool being declared). The
 # negatives run on arm0 too: asking to SEE, DOWNLOAD or UPLOAD a file must never become a delete proposal. A
-# proposal pauses the run for approval, so a model that proposed a delete has no answer, and `answer_chars_at_least`
-# fails it; the negative cases therefore judge the answer a member would read.
+# proposal pauses the run for approval, but the words the model writes before the call are streamed as the answer,
+# so a model that says "Sure, I'll delete it" and proposes a delete still HAS an answer. `pending_tools_excludes`
+# (the mirror of `pending_tools_contains`, `evals/runner.py`) is what fails it; `answer_chars_at_least` only makes
+# sure the model answered in words.
 
 - id: t1563.list.en
   lang: en
@@ -18,10 +23,11 @@
   seed: [task_files]
   requires_arm: parity
   note: "Positive: list the files on a task, with their sizes, from fetch_task's `attachments`. No link or path."
-  query: 'Which files are attached to the task "Prepare the board deck"? Give me each file''s name and size.'
+  query: 'Which files are attached to the task "Prepare the board deck" (EAF-1)? Give me each file''s name and size.'
   expect:
     no_errors: true
     tools_used_contains: [fetch_task]
+    pending_tools_excludes: [delete_task_attachment]
     answer_contains_all: [budget-2026.xlsx, kickoff-notes.pdf]
     answer_does_not_contain: ["http", "/media/", "task_attachments"]
 
@@ -33,10 +39,11 @@
   seed: [task_files]
   requires_arm: parity
   note: "Positive: list the files on a task, with their sizes, from fetch_task's `attachments`. No link or path."
-  query: 'タスク「取締役会の資料を準備する」に添付されているファイルを教えてください。ファイル名とサイズをそれぞれ知りたいです。'
+  query: 'タスク「取締役会の資料を準備する」(EAF-1)に添付されているファイルを教えてください。ファイル名とサイズをそれぞれ知りたいです。'
   expect:
     no_errors: true
     tools_used_contains: [fetch_task]
+    pending_tools_excludes: [delete_task_attachment]
     answer_contains_all: [予算2026.xlsx, キックオフ議事録.pdf]
     answer_does_not_contain: ["http", "/media/", "task_attachments"]
 
@@ -48,7 +55,7 @@
   seed: [task_files]
   requires_arm: parity
   note: "Positive: delete the named file. The proposal names file #2 (kickoff-notes.pdf), and the card carries its name."
-  query: 'Delete the file kickoff-notes.pdf from the task "Prepare the board deck".'
+  query: 'Delete the file kickoff-notes.pdf from the task "Prepare the board deck" (EAF-1).'
   expect:
     no_errors: true
     pending_tools_contains: [delete_task_attachment]
@@ -67,7 +74,7 @@
   seed: [task_files]
   requires_arm: parity
   note: "Positive: delete the named file. The proposal names file #2 (キックオフ議事録.pdf), and the card carries its name."
-  query: 'タスク「取締役会の資料を準備する」から、キックオフ議事録.pdf のファイルを削除してください。'
+  query: 'タスク「取締役会の資料を準備する」(EAF-1)から、キックオフ議事録.pdf のファイルを削除してください。'
   expect:
     no_errors: true
     pending_tools_contains: [delete_task_attachment]
@@ -85,9 +92,10 @@
   viewer: b
   seed: [task_files]
   note: "Negative (arm0 and parity): asking what a file is called and how big it is must not become a delete."
-  query: 'How big is the kickoff-notes.pdf file on the task "Prepare the board deck"?'
+  query: 'How big is the kickoff-notes.pdf file on the task "Prepare the board deck" (EAF-1)?'
   expect:
     no_errors: true
+    pending_tools_excludes: [delete_task_attachment]
     answer_chars_at_least: 20
     answer_contains_any: [kickoff-notes.pdf, kickoff notes]
 
@@ -98,9 +106,10 @@
   viewer: ja-b
   seed: [task_files]
   note: "Negative (arm0 and parity): asking what a file is called and how big it is must not become a delete."
-  query: 'タスク「取締役会の資料を準備する」にあるキックオフ議事録.pdf はどのくらいのサイズですか?'
+  query: 'タスク「取締役会の資料を準備する」(EAF-1)にあるキックオフ議事録.pdf はどのくらいのサイズですか?'
   expect:
     no_errors: true
+    pending_tools_excludes: [delete_task_attachment]
     answer_chars_at_least: 20
     answer_contains_any: [キックオフ議事録.pdf, キックオフ議事録]
 
@@ -111,9 +120,10 @@
   viewer: b
   seed: [task_files]
   note: "Negative (arm0 and parity): asking to download or open a file is not a delete, and the agent hands out no link."
-  query: 'I need to open budget-2026.xlsx from the task "Prepare the board deck". Can you download it for me?'
+  query: 'I need to open budget-2026.xlsx from the task "Prepare the board deck" (EAF-1). Can you download it for me?'
   expect:
     no_errors: true
+    pending_tools_excludes: [delete_task_attachment]
     answer_chars_at_least: 20
     answer_does_not_contain: ["http", "/media/", "task_attachments"]
 
@@ -124,9 +134,10 @@
   viewer: ja-b
   seed: [task_files]
   note: "Negative (arm0 and parity): asking to download or open a file is not a delete, and the agent hands out no link."
-  query: 'タスク「取締役会の資料を準備する」の 予算2026.xlsx を開きたいです。ダウンロードしてもらえますか?'
+  query: 'タスク「取締役会の資料を準備する」(EAF-1)の 予算2026.xlsx を開きたいです。ダウンロードしてもらえますか?'
   expect:
     no_errors: true
+    pending_tools_excludes: [delete_task_attachment]
     answer_chars_at_least: 20
     answer_does_not_contain: ["http", "/media/", "task_attachments"]
 
@@ -137,9 +148,10 @@
   viewer: b
   seed: [task_files]
   note: "Negative (arm0 and parity): attaching a file is not something the agent can do (uploading stays in the app), and it must not swap the old file out by deleting one."
-  query: 'Attach my latest slides, board-deck-v3.pptx, to the task "Prepare the board deck".'
+  query: 'Attach my latest slides, board-deck-v3.pptx, to the task "Prepare the board deck" (EAF-1).'
   expect:
     no_errors: true
+    pending_tools_excludes: [delete_task_attachment]
     answer_chars_at_least: 20
 
 - id: t1563.upload-not-delete.ja
@@ -149,7 +161,8 @@
   viewer: ja-b
   seed: [task_files]
   note: "Negative (arm0 and parity): attaching a file is not something the agent can do (uploading stays in the app), and it must not swap the old file out by deleting one."
-  query: 'タスク「取締役会の資料を準備する」に、最新のスライド board-deck-v3.pptx を添付してください。'
+  query: 'タスク「取締役会の資料を準備する」(EAF-1)に、最新のスライド board-deck-v3.pptx を添付してください。'
   expect:
     no_errors: true
+    pending_tools_excludes: [delete_task_attachment]
     answer_chars_at_least: 20

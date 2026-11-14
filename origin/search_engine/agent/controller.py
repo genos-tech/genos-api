@@ -1184,6 +1184,7 @@ def _friendly_delete_task_attachment_arguments(
         find_attachment,
     )
     from origin.search_engine.agent.tools.task_attachments import (  # noqa: PLC0415
+        TYPE_CHARS,
         attachment_name,
         attachment_size,
     )
@@ -1198,7 +1199,8 @@ def _friendly_delete_task_attachment_arguments(
     out["current"] = {
         "name": attachment_name(attachment),
         "size_bytes": attachment_size(attachment),
-        "type": attachment.attached_type or None,
+        # What the uploading client sent as the type: cut, as the listing cuts it.
+        "type": (attachment.attached_type or "")[:TYPE_CHARS] or None,
     }
 
 
@@ -2694,6 +2696,15 @@ def resume_agent(
                 if call_name == "delete_project" and result.get("project_id") is not None:
                     result_event["project"] = {
                         "project_id": result["project_id"],
+                        "deleted": True,
+                    }
+                # A deleted task file (MIP-1563): the server has deleted it, and the browser's cached
+                # copy of the task still lists it. The ref names the task so the browser forgets that
+                # copy (a file delete does not move the task's `updated_at`). Additive.
+                if call_name == "delete_task_attachment" and result.get("task_id") is not None:
+                    result_event["task_attachment"] = {
+                        "task_id": result["task_id"],
+                        "attachment_id": result.get("attachment_id"),
                         "deleted": True,
                     }
                 # Approved note writes carry a compact `note` ref so the
