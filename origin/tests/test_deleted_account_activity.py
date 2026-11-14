@@ -44,6 +44,9 @@ class ActivityBase(BaseAPITestCase):
         self.channel = Channel.objects.create(
             team=self.team, kind=ChannelKind.GM, title="General", owner=self.user
         )
+        # Both are in the chat: the feed lists a row only for a member of its chat (MIP-1513).
+        for member in (self.user, self.user2):
+            ChannelMember.objects.create(channel=self.channel, user=member)
         self._seq = 0
 
     def message(self, sender):

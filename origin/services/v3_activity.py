@@ -54,7 +54,7 @@ from origin.models.chat.unified_models import (
     Message,
 )
 from origin.models.common.user_models import CustomUser
-from origin.services.channel_scope import chat_member_rows, is_chat_member
+from origin.services.channel_scope import can_read_chat, chat_member_rows
 
 logger = logging.getLogger(__name__)
 
@@ -671,9 +671,10 @@ def create_task_assign_activity(
     if recipient_id == str(actor.id):
         return []
     channel = message.channel
-    # Whoever the chat's own membership rule says may open it: a project chat is the project's
-    # people, so a stray channel-member row is not told (MIP-1495).
-    if not is_chat_member(channel.id, recipient_id):
+    # Whoever the chat's own rule says may read it, in its team: a project chat is the project's
+    # people (a stray channel-member row is not told, MIP-1495), and a deleted chat is nobody's
+    # (MIP-1513).
+    if not can_read_chat(channel, _team_id_for_channel(channel), recipient_id):
         return []
     if not _drop_deleted_accounts([recipient_id]):
         return []
