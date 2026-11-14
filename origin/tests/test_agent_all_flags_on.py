@@ -19,6 +19,7 @@ from django.conf import settings
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 
+from apis import settings_test as test_settings
 from origin.search_engine.agent import content_length as cl
 from origin.search_engine.agent import tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
@@ -27,7 +28,6 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, flagged_tools, get_app_tool
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_agent_content_length_pins import SCENARIOS, LoopBase, transcript
-from apis import settings_test as test_settings
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
@@ -93,7 +93,9 @@ class AllOnArmTests(SimpleTestCase):
                 want,
                 f"{key} must default to {'on' if want else 'off'}",
             )
-        self.assertEqual(set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION")))
+        self.assertEqual(
+            set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION"))
+        )
 
     def test_the_flags_the_stacks_added_are_all_in_the_union(self):
         expected = {
