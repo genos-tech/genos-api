@@ -42,6 +42,8 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine import quota
+from origin.services import demo_v2
+from origin.services.demo_seeder import create_demo_environment
 
 User = get_user_model()
 
@@ -253,6 +255,21 @@ class ApplyTests(TestCase):
 
         self.assertGreater(PersonalNoteMaster.objects.filter(team=self.team).count(), 0)
 
+    def test_content_quotes_the_reviewer_team_name(self):
+        # The name is given to the seeder, not patched on after: the group chat is
+        # titled after the team, and a rename afterwards left the pool name there.
+        titles = list(Channel.objects.filter(team=self.team).values_list("title", flat=True))
+        self.assertTrue(any("Genos Review" in (t or "") for t in titles), titles)
+        for pool_name in demo_v2.TEAM_NAMES["en"]:
+            self.assertFalse(any(pool_name in (t or "") for t in titles), titles)
+
+    def test_a_deleted_reviewer_team_still_marks_the_account(self):
+        TeamMaster.objects.filter(pk=self.team.pk).update(is_deleted=True)
+        out, _ = _run("--email", EMAIL, "--reset-password", "--apply", "--yes")
+        self.assertIn("team was deleted", out)
+        new_password = PASSWORD_LINE.search(out).group(1)
+        self.assertTrue(User.objects.get(pk=self.user.pk).check_password(new_password))
+
     def test_summary_names_ids_and_counts(self):
         self.assertIn(str(self.team.team_id), self.out)
         self.assertIn(str(self.user.id), self.out)
@@ -414,3 +431,12 @@ class ApplyTests(TestCase):
             (other.team_name, other.plan, other.owner_id), ("Other", "free", other_owner.id)
         )
         self.assertEqual(TeamMaster.objects.get(pk=self.team.pk).plan, "max")
+
+
+class SeederTeamNameTests(TestCase):
+    def test_team_name_is_refused_for_v1(self):
+        # v1 is the frozen eval corpus: it takes no caller-chosen name.
+        user = _normal_user(is_demo=True)
+        with self.assertRaises(ValueError):
+            create_demo_environment(user, team_name="Anything")
+        self.assertFalse(TeamMaster.objects.filter(owner=user).exists())

@@ -38,13 +38,19 @@ Only tiers that include MCP are accepted.
 **The password** is generated here, stored only as the normal password hash,
 and printed once, on the last line of an `--apply` run that created the
 account or ran `--reset-password`, after the transaction has committed. It is
-never logged and never written to the audit row. `--reset-password` replaces
-it; every session minted under the old one stops working (tokens are bound to
-the password, `SIMPLE_JWT["CHECK_REVOKE_TOKEN"]`).
+never logged and never written to the audit row. Run it from an interactive
+shell (`railway ssh`), never as a one-off job or cron, whose stdout lands in the
+platform's logs. `--reset-password` replaces it; every app session minted
+under the old one stops working (JWTs are bound to the password,
+`SIMPLE_JWT["CHECK_REVOKE_TOKEN"]`). MCP OAuth grants (the ChatGPT connection)
+and API keys are NOT tied to the password and keep working: to end all access
+after the review, use `operator_cutoff user <user_id>`.
 
 **Idempotent.** A second run finds the reviewer by its address and reports
 it; with `--apply` it re-asserts the plan (a no-op when it is right) and, only
-when asked, resets the password. It never seeds twice.
+when asked, resets the password. It never seeds twice. The seeded story is
+dated around the day it is seeded (due dates, sprints, "recent" activity), so
+create the account shortly before the review is submitted.
 
 **Audit.** Creating the account and resetting its password each write a
 `password.reset` SecurityEvent with source `operator`, the operator's OS
@@ -105,12 +111,14 @@ def reviewer_team(user) -> TeamMaster | None:
 
     A reviewer is a NON-demo user who owns a demo team; see the module
     docstring for why that shape is unforgeable and survives the demo sweep.
+    A soft-deleted team still marks its owner (so the password can still be
+    reset); the summary says it was deleted.
     """
     if user.is_demo:
         return None
     return (
-        TeamMaster.objects.filter(owner=user, is_demo=True, is_deleted=False)
-        .order_by("ts_created_at")
+        TeamMaster.objects.filter(owner=user, is_demo=True)
+        .order_by("is_deleted", "ts_created_at")
         .first()
     )
 
@@ -206,6 +214,10 @@ class Command(BaseCommand):
         )
         tasks = TaskMaster.objects.filter(team=team, is_deleted=False)
         statuses = Counter(tasks.filter(is_milestone=False).values_list("status", flat=True))
+        if team.is_deleted:
+            self.stdout.write(
+                "  WARNING: the reviewer team was deleted; the account has no workspace."
+            )
         channels = Channel.objects.filter(team=team)
         notes = (
             PersonalNoteMaster.objects.filter(team=team).count()
@@ -224,7 +236,7 @@ class Command(BaseCommand):
             self.stdout.write(f'  project:     {project_id} "{name}"')
         self.stdout.write(
             f"  counts:      {len(projects)} projects, "
-            f"{tasks.filter(is_milestone=False).count()} tasks, "
+            f"{sum(statuses.values())} tasks, "
             f"{MilestoneMaster.objects.filter(team=team).count()} milestones, "
             f"{TaskComments.objects.filter(task__team=team).count()} task comments, "
             f"{notes} notes, {channels.count()} chats, "
@@ -327,10 +339,10 @@ class Command(BaseCommand):
                     is_demo=False,
                     is_email_verified=True,
                 )
-                info = create_demo_environment(user, lang=LANG, version=demo_v2.VISITOR_VERSION)
+                info = create_demo_environment(
+                    user, lang=LANG, version=demo_v2.VISITOR_VERSION, team_name=team_name
+                )
                 team = TeamMaster.objects.get(team_id=info["team_id"])
-                team.team_name = team_name
-                team.save(update_fields=["team_name"])
                 stripe_billing._set_team_plan(
                     team,
                     plan,
@@ -338,11 +350,16 @@ class Command(BaseCommand):
                     source=TIER_SET_BY_OPERATOR,
                 )
                 self._record(user, "reviewer_account_created")
-        except IntegrityError:
+        except IntegrityError as exc:
+            # The database's own words (constraint and key; the email column is
+            # encrypted, and the password is never in a query): a race on the
+            # address or the team name, or a seeder bug, must be told apart.
+            detail = str(exc).strip().splitlines()[0][:300] if str(exc).strip() else ""
             raise CommandError(
-                "The account or team could not be created (a concurrent write took the "
-                "address or the team name). Nothing was changed; run it again."
-            ) from None
+                f"Nothing was changed: the database refused a write ({detail}). If another "
+                "run just took the address or the team name, pick another; otherwise this "
+                "is a seeder bug (re-run with --traceback)."
+            ) from exc
         team.refresh_from_db()
         self.stdout.write(f"Created reviewer account {mask_email(email)}.")
         self._summary(user, team)
