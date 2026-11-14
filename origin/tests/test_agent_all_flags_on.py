@@ -27,6 +27,7 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, flagged_tools, get_app_tool
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_agent_content_length_pins import SCENARIOS, LoopBase, transcript
+from apis import settings_test as test_settings
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
@@ -36,6 +37,21 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 ALL_ON_BUDGET_CHARS = 141_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
+# Turned on by default by MIP-1089 (grouped eval 2026-11-14). Everything else in ALL_ON is held.
+SHIPPED_ON = frozenset(
+    {
+        "AGENT_RESUME_KEEPS_BLOCKS",
+        "AGENT_RESUME_KEEPS_TURNS",
+        "AGENT_CLOSING_LINE_IN_ORIGIN_THREAD",
+        "AGENT_REJECT_REASON",
+        "AGENT_TELL_MODEL_UNDO",
+        "AGENT_FETCH_TASK_ANCHORS",
+        "AGENT_INBOX_REPORT_LABEL",
+        "AGENT_TEAM_IN_CURRENT_USER",
+        "AGENT_NOTE_THREADS_IN_GET_NOTE",
+        "AGENT_CLOSED_ANCESTOR_RULE",
+    }
+)
 # The neighbours that change what is declared and are not flags under test.
 QUIET = {"AGENT_DISABLED_TOOLS": frozenset(), "AGENT_CHEATSHEET_FROM_REGISTRY": False}
 
@@ -60,9 +76,22 @@ class AllOnArmTests(SimpleTestCase):
             self.assertIn(key, settings.SEARCH_ENGINE, key)
             self.assertIs(value, True, key)
 
-    def test_every_flag_is_off_by_default_on_this_stack(self):
+    def test_the_shipped_flags_are_on_by_default_and_the_held_ones_are_off(self):
+        # MIP-1089 flipped ten flags on by the 2026-11-14 grouped eval. The others stay dark until
+        # their own decision: the timeline tool (look at 3 JA cases first), the client name in task
+        # history, content length (tune first) and the body on the user model (empty bodies, MIP-1503).
+        # The PRODUCTION defaults: `apis.settings` itself. The test settings keep the shipped flags
+        # off (see `apis/settings_test.py`), so `django.conf.settings` would not tell.
+        from apis import settings as production  # noqa: PLC0415
+
         for key in ALL_ON:
-            self.assertFalse(settings.SEARCH_ENGINE.get(key), f"{key} must default to off")
+            want = key in SHIPPED_ON
+            self.assertIs(
+                bool(production.SEARCH_ENGINE.get(key)),
+                want,
+                f"{key} must default to {'on' if want else 'off'}",
+            )
+        self.assertEqual(set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION")))
 
     def test_the_flags_the_stacks_added_are_all_in_the_union(self):
         expected = {

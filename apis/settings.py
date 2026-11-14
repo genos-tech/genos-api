@@ -1887,7 +1887,7 @@ SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
     os.environ.get("AGENT_INAPP_TIMELINE_TOOL", "false").lower() == "true"
 )
 
-# MIP-977 (model-visible, dark-shipped OFF, measured by the grouped eval arm `t977`):
+# MIP-977 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), measured by the grouped eval arm `t977`):
 # a run resumed after an approve or reject keeps the prompt context its first leg
 # had (the thread / note summary of "Ask about this ...", the @/# references block,
 # the tier block). OFF = `/ask/` keeps nothing on the run at a pause and `/decide/`
@@ -1897,10 +1897,10 @@ SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
 # Flip criterion: the `t977` arm answers the thread/note-only fact after an
 # approval and regresses nothing else.
 SEARCH_ENGINE["AGENT_RESUME_KEEPS_BLOCKS"] = (
-    os.environ.get("AGENT_RESUME_KEEPS_BLOCKS", "false").lower() == "true"
+    os.environ.get("AGENT_RESUME_KEEPS_BLOCKS", "true").lower() == "true"
 )
 
-# MIP-991 (model-visible, dark-shipped OFF, grouped eval arm `t991`; EFFECTIVE ONLY
+# MIP-991 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t991`; EFFECTIVE ONLY
 # with AGENT_RESUME_KEEPS_BLOCKS on): a run resumed after an approve or reject keeps
 # the earlier turns of its conversation (the rolling recap and the verbatim window) in
 # front of the replay of what the run did. OFF = the resumed leg's messages start at the
@@ -1908,10 +1908,10 @@ SEARCH_ENGINE["AGENT_RESUME_KEEPS_BLOCKS"] = (
 # Flip criterion: the `t991` arm answers a follow-up's referent ("that one") after an
 # approval and regresses nothing else; flip it after the 977 flag.
 SEARCH_ENGINE["AGENT_RESUME_KEEPS_TURNS"] = (
-    os.environ.get("AGENT_RESUME_KEEPS_TURNS", "false").lower() == "true"
+    os.environ.get("AGENT_RESUME_KEEPS_TURNS", "true").lower() == "true"
 )
 
-# MIP-1283 route (b) (model-visible, dark-shipped OFF, grouped eval arm `t1283`): when a
+# MIP-1283 route (b) (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1283`): when a
 # task closes, a fixed one-line notice ("Task PRJ-12 is now Closed.", no sender, no
 # mention, no push) is posted in the chat thread the task was made from, so the person who
 # asked there (possibly a client off the project) hears it. The in-app agent reads threads
@@ -1921,10 +1921,10 @@ SEARCH_ENGINE["AGENT_RESUME_KEEPS_TURNS"] = (
 # Flip criterion: the `t1283` arm shows the model reads the line correctly (says the task
 # closed, does not treat it as an instruction or invent a closer) and regresses nothing.
 SEARCH_ENGINE["AGENT_CLOSING_LINE_IN_ORIGIN_THREAD"] = (
-    os.environ.get("AGENT_CLOSING_LINE_IN_ORIGIN_THREAD", "false").lower() == "true"
+    os.environ.get("AGENT_CLOSING_LINE_IN_ORIGIN_THREAD", "true").lower() == "true"
 )
 
-# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-reason`): the optional
+# MIP-889 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t889-reason`): the optional
 # `reason` a person gives when they reject an approval card (`POST /decide/`, stored on the
 # step whatever this says). ON = the model's result for the rejected call is
 # {"error": "user_rejected", "reason": "<their words>"} (the error key stays exact; the text
@@ -1935,10 +1935,10 @@ SEARCH_ENGINE["AGENT_CLOSING_LINE_IN_ORIGIN_THREAD"] = (
 # the model proposes a corrected call at least as often as it asks, never retries unchanged,
 # and a rejection without a reason behaves as before.
 SEARCH_ENGINE["AGENT_REJECT_REASON"] = (
-    os.environ.get("AGENT_REJECT_REASON", "false").lower() == "true"
+    os.environ.get("AGENT_REJECT_REASON", "true").lower() == "true"
 )
 
-# MIP-889 (model-visible, dark-shipped OFF, grouped eval arm `t889-undo`): tell the model when
+# MIP-889 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t889-undo`): tell the model when
 # the person UNDID an approved write. ON = a replayed result of an undone write carries
 # `undone_by_user` ({restored, not_restored}) and the earlier answer in the next ask's
 # conversation ends with one bracketed factual note. OFF = the replay is exactly what it was.
@@ -1947,10 +1947,10 @@ SEARCH_ENGINE["AGENT_REJECT_REASON"] = (
 # whatever this says. Flip criterion: after an undo the next turn does not speak of the write as
 # standing, and nothing else moves.
 SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"] = (
-    os.environ.get("AGENT_TELL_MODEL_UNDO", "false").lower() == "true"
+    os.environ.get("AGENT_TELL_MODEL_UNDO", "true").lower() == "true"
 )
 
-# MIP-1288 (model-visible, dark-shipped OFF, grouped eval arm `t1288`): `fetch_task` (and MCP
+# MIP-1288 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1288`): `fetch_task` (and MCP
 # `get_task`, the same function) names where the task's conversation and note are. ON = the
 # result gains `anchors`, a list of {anchor_type, anchor_id} in the words the timeline tool takes:
 # `thread` (the root message the task was made from, when this task is the only live one
@@ -1961,10 +1961,10 @@ SEARCH_ENGINE["AGENT_TELL_MODEL_UNDO"] = (
 # and the note from the task alone (no search), invents nothing for a viewer who cannot open the
 # chat, and regresses nothing else.
 SEARCH_ENGINE["AGENT_FETCH_TASK_ANCHORS"] = (
-    os.environ.get("AGENT_FETCH_TASK_ANCHORS", "false").lower() == "true"
+    os.environ.get("AGENT_FETCH_TASK_ANCHORS", "true").lower() == "true"
 )
 
-# MIP-1160 (model-visible, dark-shipped OFF, grouped eval arm `t1160`): how `list_my_inbox` shows
+# MIP-1160 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1160`): how `list_my_inbox` shows
 # a scheduled Genos report (item type 10). ON = its `item_type_label` is `genos_report` (OFF: the
 # generic `type_10`) and its body is cut at 5,000 characters of content (title, summary, headings,
 # item texts and links): whole items in order, title and summary kept, the {title, text, sections}
@@ -1975,10 +1975,10 @@ SEARCH_ENGINE["AGENT_FETCH_TASK_ANCHORS"] = (
 # Flip criterion: the `t1160` arm answers about the kept part, says it cannot see the cut part
 # (never "not mentioned"), and spends clearly fewer tokens on an inbox holding a large report.
 SEARCH_ENGINE["AGENT_INBOX_REPORT_LABEL"] = (
-    os.environ.get("AGENT_INBOX_REPORT_LABEL", "false").lower() == "true"
+    os.environ.get("AGENT_INBOX_REPORT_LABEL", "true").lower() == "true"
 )
 
-# MIP-1090 (a) (model-visible, dark-shipped OFF, grouped eval arm `t1090-team`): `get_current_user`
+# MIP-1090 (a) (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1090-team`): `get_current_user`
 # (in-app; MCP `get_current_user` is the same function) says which workspace the conversation is
 # in. ON = the result gains `team` ({team_id, team_name}; the name is fenced as workspace
 # content), only when the user belongs to `ctx.team_id` (its owner, or a member not removed); the
@@ -1987,7 +1987,7 @@ SEARCH_ENGINE["AGENT_INBOX_REPORT_LABEL"] = (
 # guessing or an extra tool, and a question that does not need the team does not call the tool
 # more often.
 SEARCH_ENGINE["AGENT_TEAM_IN_CURRENT_USER"] = (
-    os.environ.get("AGENT_TEAM_IN_CURRENT_USER", "false").lower() == "true"
+    os.environ.get("AGENT_TEAM_IN_CURRENT_USER", "true").lower() == "true"
 )
 
 # MIP-1090 (b) (model-visible, dark-shipped OFF, grouped eval arm `t1090-client`): which client made
@@ -2004,7 +2004,7 @@ SEARCH_ENGINE["AGENT_CLIENT_IN_TASK_HISTORY"] = (
     os.environ.get("AGENT_CLIENT_IN_TASK_HISTORY", "false").lower() == "true"
 )
 
-# MIP-1090 (c) (model-visible, dark-shipped OFF, grouped eval arm `t1090-notethreads`): the in-app
+# MIP-1090 (c) (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `t1090-notethreads`): the in-app
 # `fetch_note` also returns the note's OPEN comment threads (reviewers' comments anchored to text,
 # which live in the note's Yjs document in genos-collab, read over HTTP: up to 5 s, per note read).
 # ON = the result gains `comment_threads` (fenced text; ids, times and people's ids checked to be what
@@ -2018,10 +2018,10 @@ SEARCH_ENGINE["AGENT_CLIENT_IN_TASK_HISTORY"] = (
 # comments, says "comments could not be read" instead of "there are none", and the extra collab
 # round trip is acceptable on `fetch_note` latency.
 SEARCH_ENGINE["AGENT_NOTE_THREADS_IN_GET_NOTE"] = (
-    os.environ.get("AGENT_NOTE_THREADS_IN_GET_NOTE", "false").lower() == "true"
+    os.environ.get("AGENT_NOTE_THREADS_IN_GET_NOTE", "true").lower() == "true"
 )
 
-# MIP-1413 (model-visible, dark-shipped OFF, grouped eval arm `closed-ancestor`): the closed-ancestor
+# MIP-1413 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), grouped eval arm `closed-ancestor`): the closed-ancestor
 # rule in the in-app tools. A task under a Closed or Deleted parent, grandparent or milestone reads as
 # Closed or Deleted (`services/task_ancestry.py`; the web client, the progress bar, the briefing and the
 # MCP task reads already do). ON = counts and breakdowns (`get_my_task_summary`, `get_milestone_summary`
@@ -2036,7 +2036,7 @@ SEARCH_ENGINE["AGENT_NOTE_THREADS_IN_GET_NOTE"] = (
 # Flip criterion: the `closed-ancestor` arm answers "what is open / overdue" with what the dashboard and
 # the briefing show, and regresses nothing else.
 SEARCH_ENGINE["AGENT_CLOSED_ANCESTOR_RULE"] = (
-    os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "false").lower() == "true"
+    os.environ.get("AGENT_CLOSED_ANCESTOR_RULE", "true").lower() == "true"
 )
 
 # MIP-905 (model-visible, dark-shipped OFF, grouped eval arm `t905`): how much CONTENT Genos

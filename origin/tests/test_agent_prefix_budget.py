@@ -17,7 +17,9 @@ About 4.2 characters to a token, measured against Gemini's own count.
 from __future__ import annotations
 
 import json
+from unittest import mock
 
+from django.conf import settings
 from django.test import SimpleTestCase
 
 from origin.search_engine.agent.controller import _build_tool_declarations
@@ -32,8 +34,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # tools (129,821 measured with the tag and label tools, 130,993 with the join-request
 # ones), and to 137,000 for MIP-1424's `list_my_unread` (134,315 measured: the tool is 1,339
 # characters, about the size of `list_my_inbox`, 1,230, and `list_my_chats`, 1,470), each time
-# with the routing cases for them in both languages, as the rule above asks.
-BUDGET_CHARS = 137_000
+# with the routing cases for them in both languages, as the rule above asks. To 138,500 for the
+# ten flags MIP-1089 turned on by default (137,391 measured: +3,076 over the 134,315 of the same
+# tree with every flag off, all of it in tool descriptions and one prompt rule; the grouped eval of
+# 2026-11-14 measured each flag and the all-on arm, see the hub comment on MIP-1089).
+BUDGET_CHARS = 138_500
 
 
 def _declared_chars() -> int:
@@ -45,7 +50,12 @@ def _declared_chars() -> int:
 
 class PrefixBudgetTests(SimpleTestCase):
     def test_the_prefix_stays_inside_its_budget(self) -> None:
-        total = _declared_chars() + len(AGENT_SYSTEM_PROMPT)
+        # What PRODUCTION sends: the test settings keep the flags MIP-1089 turned on off, so lay the
+        # production defaults over them (`apis.settings` keeps them).
+        from apis import settings as production  # noqa: PLC0415
+
+        with mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE):
+            total = _declared_chars() + len(AGENT_SYSTEM_PROMPT)
         self.assertLessEqual(
             total,
             BUDGET_CHARS,
