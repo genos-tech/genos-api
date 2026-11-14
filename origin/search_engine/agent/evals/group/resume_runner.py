@@ -298,6 +298,12 @@ class World:
             from origin.models.chat.unified_models import Channel, Message  # noqa: PLC0415
             from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
 
+            # The ask and decision views wrote AgentRun / AgentSession rows, and their
+            # `team_id` is a bare string, not a foreign key: deleting the team leaves them
+            # (and their steps, which cascade from the run) behind forever (MIP-1471). Runs
+            # first: `AgentRun.session` is SET_NULL, but a session row outliving its runs is
+            # the same orphan.
+            delete_agent_rows(self.team.pk)
             # `Channel.team` and `Message.channel` are PROTECT: replies, then messages, then
             # channels go first.
             Message.objects.filter(channel__team=self.team, is_thread_reply=True).delete()
@@ -312,6 +318,26 @@ class World:
                 getattr(self.team, "pk", "?"),
                 exc_info=True,
             )
+
+
+def delete_agent_rows(team_id: Any) -> None:
+    """Delete the agent history rows an eval team's asks left (they name the team by string).
+
+    `AgentStep`, `AgentLlmCall`, `AgentRunJudgement` and `AgentRunFeedback` cascade from the
+    run; the thread / note summary caches carry the team as a bare string too. Accounting rows
+    (`AiSpendEvent`, `AiRequestCost`) are history and are kept."""
+    from origin.search_engine.models import (  # noqa: PLC0415
+        AgentRun,
+        AgentSession,
+        NoteSummary,
+        ThreadSummary,
+    )
+
+    team = str(team_id)
+    AgentRun.objects.filter(team_id=team).delete()
+    AgentSession.objects.filter(team_id=team).delete()
+    ThreadSummary.objects.filter(team_id=team).delete()
+    NoteSummary.objects.filter(team_id=team).delete()
 
 
 def _blocks(text: str) -> list[dict[str, Any]]:

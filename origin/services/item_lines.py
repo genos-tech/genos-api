@@ -89,7 +89,7 @@ from functools import reduce
 from operator import or_
 from typing import Any
 
-from django.db.models import CharField, Max, Q, Value
+from django.db.models import CharField, Exists, Max, OuterRef, Q, Value
 from django.db.models.functions import Cast, Coalesce, Concat
 from django.utils import timezone
 
@@ -123,7 +123,6 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
-from origin.search_engine.text_extraction import extract_text
 from origin.services import briefing, member_events
 from origin.services.channel_scope import channel_titles, readable_chats_qs
 from origin.services.description_edit_runs import (
@@ -132,6 +131,7 @@ from origin.services.description_edit_runs import (
     via_identity,
 )
 from origin.services.milestone_rollup import milestone_work_q
+from origin.services.plain_text import body_text, chip_task_ids, message_text
 from origin.services.user_time import zone_for_user_id
 
 DEFAULT_DAYS = 7
@@ -257,28 +257,6 @@ class Ev:
 
 def _snippet(text: str) -> str:
     return briefing._snippet(text)
-
-
-def chip_task_ids(body: Any) -> set[int]:
-    """Every task a body points at with a `#` task chip (by `taskId`), at any depth."""
-    found: set[int] = set()
-    stack = [body]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            if node.get("type") == "hashTask":
-                props = node.get("props")
-                raw = props.get("taskId") if isinstance(props, dict) else None
-                if isinstance(raw, bool):
-                    raw = None
-                if isinstance(raw, int) or (
-                    isinstance(raw, str) and raw.isascii() and raw.isdigit() and len(raw) < 19
-                ):
-                    found.add(int(raw))
-            stack.extend(node.values())
-        elif isinstance(node, list):
-            stack.extend(node)
-    return found
 
 
 def _chip_filter(qs, column: str, task_ids, table: str | None = None) -> Any:
@@ -508,7 +486,7 @@ def _read_comments(rd: _Reader) -> None:
                 what="comment",
                 summary="commented",
                 actor=c.sender_id,
-                text=_snippet(extract_text(c.comment_body)),
+                text=_snippet(body_text(c.comment_body)),
                 via="task",
                 mentions=comment_mentions.get((c.task_id, c.comment_id), []),
             ),
@@ -524,7 +502,7 @@ def _read_comments(rd: _Reader) -> None:
                     what="comment",
                     summary="commented on another task and pointed at this one",
                     actor=c.sender_id,
-                    text=_snippet(extract_text(c.comment_body)),
+                    text=_snippet(body_text(c.comment_body)),
                     via="chip",
                     mentions=comment_mentions.get((c.task_id, c.comment_id), []),
                     extra={"from_task": source_tasks[c.task_id].display_id},
@@ -534,9 +512,16 @@ def _read_comments(rd: _Reader) -> None:
 
 def _read_comment_reactions(rd: _Reader) -> None:
     """1. Reactions to the task's comments."""
+    # A reaction to a deleted comment is not told (the timeline's rule). The comment number is
+    # per task, so the check is correlated on the task as well; it is part of the query, so a dead
+    # reaction takes no slot of the pool and cannot tip its flag.
+    deleted_comment = TaskComments.objects.filter(
+        task_id=OuterRef("task_id"), comment_id=OuterRef("comment_id"), is_deleted=True
+    )
     for r in rd.pooled(
         "comment_reactions",
         TaskCommentReactionFact.objects.filter(
+            ~Exists(deleted_comment),
             task_id__in=rd.ids,
             ts_created_at__gte=rd.since,
             ts_created_at__lt=rd.until,
@@ -665,7 +650,7 @@ def _read_task_notes(rd: _Reader) -> None:
                     via=via,
                     # What the version says, bounded like a comment's text: read now, through
                     # the access check above, never stored. The renderer fences it.
-                    text=_snippet(extract_text(v.body)),
+                    text=_snippet(body_text(v.body)),
                     extra={
                         "note": wrap_workspace_content(note.title or ""),
                         "note_type": _NOTE_NAMES[v.note_type],
@@ -750,7 +735,7 @@ def _read_messages(rd: _Reader) -> None:
                     else "mentioned this task in a message"
                 ),
                 actor=m.sender_id,
-                text=_snippet(m.body_text),
+                text=_snippet(message_text(m)),
                 via=via,
                 mentions=message_mentions.get(m.pk, []),
                 extra={"chat": wrap_workspace_content(m.channel.title or "")}

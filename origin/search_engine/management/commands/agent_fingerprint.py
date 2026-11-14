@@ -5,6 +5,16 @@ equal, line by line. A line that differs names the surface that moved.
 
     python manage.py agent_fingerprint                 # one line per surface
     python manage.py agent_fingerprint --dump out_dir  # also write each surface's text (diff -r)
+    python manage.py agent_fingerprint --write-golden  # re-record the committed golden (see below)
+
+THE GOLDEN (MIP-1527). `origin/tests/golden/agent_fingerprint.json` holds every surface's sha256 and
+size, recorded twice: `production` (every flag at the default `apis/settings.py` ships, with no
+environment override: the ten flags MIP-1089 turned on are ON) and `flags_off` (every boolean
+`AGENT_*` flag off). `origin/tests/test_agent_fingerprint_golden.py` fails, in the normal required
+test run, when any line moves, and names the surface. A change that moves a line changes what the
+model sees: re-record with `--write-golden` IN THE SAME PR and say so in the PR body, so a reviewer
+knows an eval is owed (the grouped paid run). The record does not depend on the shell it is made in:
+the settings it needs are rebuilt from `apis/settings.py` with the model/flag environment removed.
 
 SELF-CONTAINED ON PURPOSE. It imports only modules that exist on `origin/main` (nothing from
 `agent/evals/group/`), so the same file can be copied into a main worktree and run there:
@@ -43,8 +53,10 @@ from __future__ import annotations
 import ast
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import logging
+import os
 import re
 import uuid
 from contextlib import contextmanager
@@ -85,6 +97,28 @@ READ_TOOLS = (
     "fetch_note",
     "get_team_members",
     "get_project_summary",
+)
+
+
+GOLDEN_PATH = Path(__file__).resolve().parents[3] / "tests" / "golden" / "agent_fingerprint.json"
+GOLDEN_STATES = ("production", "flags_off")
+GOLDEN_VERSION = 1
+
+# Environment that steers what the model is shown: removed while the production defaults are rebuilt,
+# so the golden is the same on a laptop, in the dev stack and in CI.
+_MODEL_ENV_PREFIXES = (
+    "AGENT_",
+    "AI_",
+    "CLAUDE_",
+    "COHERE_",
+    "EMBEDDING_",
+    "GEMINI_",
+    "LLM_",
+    "OPENAI_",
+    "RAG_",
+    "SEARCH_",
+    "TAVILY_",
+    "VERTEX_",
 )
 
 
@@ -545,6 +579,145 @@ def _result_surfaces() -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
+# the golden                                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def compute_surfaces(*, results: bool = True, only: list[str] | None = None) -> dict[str, str]:
+    """`surface name -> text` under the settings in force right now."""
+    surfaces: dict[str, str] = {}
+    surfaces.update(_tool_surfaces())
+    surfaces.update(_prompt_surfaces())
+    if results:
+        surfaces.update(_result_surfaces())
+    if only:
+        surfaces = {k: v for k, v in surfaces.items() if any(k.startswith(p) for p in only)}
+    return surfaces
+
+
+def _production_defaults() -> dict[str, Any]:
+    """The `SEARCH_ENGINE` dict and `AGENT_MAX_BODY_BYTES` of `apis/settings.py` with no environment
+    override: what the code ships. Loaded as a fresh copy of the module with the model/flag
+    environment removed, so a developer's shell, the dev stack's env file and CI all give the same
+    answer (the running process's own settings, loaded with that environment, would not)."""
+    import apis  # noqa: PLC0415
+
+    path = Path(apis.__file__).parent / "settings.py"
+    spec = importlib.util.spec_from_file_location("apis._pristine_settings", path)
+    if spec is None or spec.loader is None:
+        raise CommandError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    clean = {k: v for k, v in os.environ.items() if not k.startswith(_MODEL_ENV_PREFIXES)}
+    with mock.patch.dict(os.environ, clean, clear=True):
+        spec.loader.exec_module(module)
+    return {
+        "SEARCH_ENGINE": dict(module.SEARCH_ENGINE),
+        "AGENT_MAX_BODY_BYTES": module.AGENT_MAX_BODY_BYTES,
+    }
+
+
+@contextmanager
+def golden_state(state: str) -> Any:
+    """Settings for one golden state: `production` (the shipped flags) or `flags_off` (every
+    boolean `AGENT_*` flag off), over the production defaults."""
+    from django.test.utils import override_settings  # noqa: PLC0415
+
+    if state not in GOLDEN_STATES:
+        raise ValueError(state)
+    defaults = _production_defaults()
+    engine = dict(defaults["SEARCH_ENGINE"])
+    if state == "flags_off":
+        engine.update(
+            {k: False for k, v in engine.items() if k.startswith("AGENT_") and isinstance(v, bool)}
+        )
+    with override_settings(
+        SEARCH_ENGINE=engine, AGENT_MAX_BODY_BYTES=defaults["AGENT_MAX_BODY_BYTES"]
+    ):
+        yield
+
+
+def surface_digests(surfaces: dict[str, str]) -> dict[str, Any]:
+    """The golden's shape for one state."""
+    lines = {
+        name: {
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "bytes": len(text.encode("utf-8")),
+        }
+        for name, text in sorted(surfaces.items())
+    }
+    digest = hashlib.sha256()
+    for name, row in lines.items():
+        digest.update(f"{name} {row['sha256']}\n".encode())
+    return {"all": digest.hexdigest(), "surfaces": lines}
+
+
+def current_states() -> dict[str, Any]:
+    """Every golden state's digests, computed now from the code in this tree."""
+    states: dict[str, Any] = {}
+    for state in GOLDEN_STATES:
+        with golden_state(state):
+            states[state] = surface_digests(compute_surfaces())
+    return states
+
+
+def golden_diff(golden: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """One line per surface that moved, appeared or vanished, in each state; empty when equal."""
+    lines: list[str] = []
+    for state in GOLDEN_STATES:
+        recorded = (golden.get("states") or {}).get(state)
+        if recorded is None:
+            lines.append(f"[{state}] the golden has no such state")
+            continue
+        old, new = recorded.get("surfaces", {}), current[state]["surfaces"]
+        for name in sorted(set(old) | set(new)):
+            before, after = old.get(name), new.get(name)
+            if before == after:
+                continue
+            if before is None:
+                lines.append(
+                    f"[{state}] {name}: NEW surface {after['sha256'][:12]} ({after['bytes']} bytes),"
+                    " not in the golden"
+                )
+            elif after is None:
+                lines.append(f"[{state}] {name}: surface REMOVED (was {before['sha256'][:12]})")
+            else:
+                delta = after["bytes"] - before["bytes"]
+                lines.append(
+                    f"[{state}] {name}: {before['sha256'][:12]} -> {after['sha256'][:12]}"
+                    f" ({before['bytes']} -> {after['bytes']} bytes, {delta:+d})"
+                )
+    return lines
+
+
+def golden_failure_message(lines: list[str]) -> str:
+    """The text a failing golden test shows: which surfaces moved, and what to do about it."""
+    shown = "\n".join(f"  {line}" for line in lines)
+    return (
+        f"What the in-app model is shown changed: {len(lines)} surface line(s) differ from "
+        f"origin/tests/golden/agent_fingerprint.json.\n{shown}\n\n"
+        "This changes what the model sees: re-record with "
+        "`python manage.py agent_fingerprint --write-golden` and say so in the PR body (a change "
+        "to the model's input is owed an eval: the grouped paid run). If you did NOT mean to "
+        "change it, the diff above names the surface; see the text with "
+        "`python manage.py agent_fingerprint --dump <dir>` here and on origin/main, then `diff -r`."
+    )
+
+
+def golden_record() -> dict[str, Any]:
+    """What `--write-golden` writes: every surface, in each golden state."""
+    states = current_states()
+    return {
+        "version": GOLDEN_VERSION,
+        "about": (
+            "sha256 of every surface the in-app agent's model is shown. Re-record with "
+            "`python manage.py agent_fingerprint --write-golden` when a change is MEANT to move "
+            "one, in the same PR, and say so in the PR body."
+        ),
+        "states": states,
+    }
+
+
+# --------------------------------------------------------------------------- #
 
 
 class Command(BaseCommand):
@@ -565,17 +738,35 @@ class Command(BaseCommand):
             action="store_true",
             help="Skip the tool-result surfaces (they need the database).",
         )
+        parser.add_argument(
+            "--write-golden",
+            action="store_true",
+            help=(
+                "Re-record origin/tests/golden/agent_fingerprint.json (production defaults and "
+                "all-flags-off). Needs the database (rolled back). Commit it in the PR that "
+                "changed what the model sees, and say so in the PR body."
+            ),
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        surfaces: dict[str, str] = {}
-        surfaces.update(_tool_surfaces())
-        surfaces.update(_prompt_surfaces())
-        if not options["no_results"]:
-            surfaces.update(_result_surfaces())
-        if options["only"]:
-            surfaces = {
-                k: v for k, v in surfaces.items() if any(k.startswith(p) for p in options["only"])
-            }
+        if options["write_golden"]:
+            if options["only"] or options["no_results"] or options["dump"]:
+                raise CommandError(
+                    "--write-golden records everything: no --only/--no-results/--dump"
+                )
+            record = golden_record()
+            GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+            GOLDEN_PATH.write_text(
+                json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            for state in GOLDEN_STATES:
+                self.stdout.write(
+                    f"{state}: {len(record['states'][state]['surfaces'])} surfaces, "
+                    f"ALL {record['states'][state]['all']}"
+                )
+            self.stdout.write(f"wrote {GOLDEN_PATH}")
+            return
+        surfaces = compute_surfaces(results=not options["no_results"], only=options["only"])
         dump = Path(options["dump"]) if options.get("dump") else None
         if dump:
             dump.mkdir(parents=True, exist_ok=True)
