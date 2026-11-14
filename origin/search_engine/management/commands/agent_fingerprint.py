@@ -40,9 +40,20 @@ Surfaces (one line each):
   result.<tool>              the text a fixed set of read tools returns on a fixed fixture, built
                              inside a transaction that is ROLLED BACK (nothing persists), with the
                              clock frozen and ids pinned.
+  result.b.<tool>            (MIP-1478) the tools the first fixture cannot move, on a SECOND fixture
+                             (its own team and people, so the `result.<tool>` lines above are the
+                             same bytes as before): the inbox with a long scheduled report, the
+                             focus list, the counts, milestone and sprint tools, the team and
+                             workload rollups, the stale / blocker / schedule / throughput tools, all
+                             over a tree with a Closed parent, a Deleted parent and a Closed
+                             milestone; and `fetch_note` on a note whose comment threads come from a
+                             stub reader (collab is never asked). Auto-numbered ids (milestone,
+                             sprint, inbox item, backing task) are replaced by `<id>`: a sequence
+                             does not roll back, so two runs would never agree on them.
 
 NOT covered: prompts and declarations built by other entry points (summaries, digest, schedules),
-and tool results of tools not listed in READ_TOOLS. Add a line here when an item changes a new one.
+and tool results of tools not listed in READ_TOOLS / EXTRA_READ_TOOLS. Add a line here when an item
+changes a new one.
 
 No model call is made: the adapters' SDK clients and the loop's model client are recorders, and the
 spend recorder is detached so no ledger row is written.
@@ -60,7 +71,7 @@ import os
 import re
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -99,6 +110,74 @@ READ_TOOLS = (
     "get_project_summary",
 )
 
+
+#: The second fixture (MIP-1478): its own team and two people, so the first fixture's lines stay put.
+USER_C = uuid.UUID("00000000-0000-4000-8000-0000f1a60003")
+USER_D = uuid.UUID("00000000-0000-4000-8000-0000f1a60004")
+TEAM_B = uuid.UUID("00000000-0000-4000-8000-0000f1a6aa02")
+PROJECT_B_ID = _ID_BASE + 11
+NOTE_B_ID = _ID_BASE + 12
+_TASK_B = _ID_BASE + 20  # task ids _TASK_B + 0 .. 9
+
+#: Read tools fingerprinted on the second fixture, as `result.b.<name>`. `fetch_note_threads` is
+#: `fetch_note` with the comment-thread reader stubbed.
+EXTRA_READ_TOOLS = (
+    "list_my_inbox",
+    "get_my_focus_tasks",
+    "get_my_task_summary",
+    "list_milestones",
+    "list_my_milestones",
+    "get_milestone_summary",
+    "get_sprint_summary",
+    "list_tasks",
+    "fetch_task",
+    "get_project_summary",
+    "get_team_task_summary",
+    "get_workload_distribution",
+    "get_stale_tasks",
+    "get_my_blockers",
+    "get_task_blockers",
+    "get_my_schedule",
+    "get_task_throughput_stats",
+    "get_milestone_assignee_counts",
+    "fetch_note_threads",
+)
+
+#: What the stub reader hands `fetch_note` (a thread as genos-collab answers it).
+_THREADS = [
+    {
+        "id": "thread-open-1",
+        "resolved": False,
+        "anchorText": "staging permission",
+        "createdAt": "2026-11-01T09:00:00.000Z",
+        "comments": [
+            {
+                "id": "c1",
+                "userId": str(USER_D),
+                "createdAt": "2026-11-01T09:00:00.000Z",
+                "updatedAt": "2026-11-01T09:00:00.000Z",
+                "deleted": False,
+                "body": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {"type": "text", "text": "Is this the final cause?", "styles": {}}
+                        ],
+                    }
+                ],
+            }
+        ],
+    },
+    {
+        "id": "thread-done-2",
+        "resolved": True,
+        "resolvedBy": str(USER_C),
+        "resolvedAt": "2026-11-02T09:00:00.000Z",
+        "anchorText": "Typo",
+        "createdAt": "2026-11-01T10:00:00.000Z",
+        "comments": [],
+    },
+]
 
 GOLDEN_PATH = Path(__file__).resolve().parents[3] / "tests" / "golden" / "agent_fingerprint.json"
 GOLDEN_STATES = ("production", "flags_off")
@@ -578,6 +657,265 @@ def _result_surfaces() -> dict[str, str]:
     return out
 
 
+def _report_body() -> dict[str, Any]:
+    """A scheduled report (item type 10) well over the in-app cap of 5,000 characters of content."""
+    return {
+        "version": 1,
+        "title": "Weekly report",
+        "text": "Two things need you.",
+        "sections": [
+            {
+                "heading": f"Section {section}",
+                "key": "overdue",
+                "emoji": "x",
+                "items": [
+                    {
+                        "text": f"Fingerprint item {section}.{n}: " + "x" * 50,
+                        "link": f"/workspace/tasks/FPB-{n}",
+                        "kind": "task",
+                        "project": "Fingerprint B",
+                        "status": "WIP",
+                    }
+                    for n in range(14)
+                ],
+            }
+            for section in range(6)
+        ],
+    }
+
+
+def _build_fixture_b() -> None:
+    """The second fixture: one project with a Closed parent, a Deleted parent, a Closed milestone, a
+    sprint, an overdue and a stale task under a Closed parent, a dependency, a long report in the
+    inbox, and a note. Everything is created inside the caller's rolled-back transaction."""
+    from django.contrib.auth import get_user_model  # noqa: PLC0415
+
+    from origin.models.common.inbox_models import InboxItems  # noqa: PLC0415
+    from origin.models.common.team_models import TeamMaster, TeamMembers  # noqa: PLC0415
+    from origin.models.note.common_note_models import NotePermissionMaster  # noqa: PLC0415
+    from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
+    from origin.models.project.prj_models import ProjectMaster, ProjectMembers  # noqa: PLC0415
+    from origin.models.task.milestone_models import (  # noqa: PLC0415
+        MilestoneAssignees,
+        MilestoneMaster,
+    )
+    from origin.models.task.sprint_models import Sprint  # noqa: PLC0415
+    from origin.models.task.task_models import TaskDependency, TaskMaster  # noqa: PLC0415
+    from origin.services.milestone_service import ensure_backing_task  # noqa: PLC0415
+
+    user_model = get_user_model()
+    if TeamMaster.objects.filter(team_id=TEAM_B).exists():
+        raise CommandError("the fingerprint fixture ids are already in use in this database")
+    c = user_model.objects.create_user(
+        email="fingerprint-c@genos.app",
+        username="Cara Fingerprint",
+        password="x",
+        id=USER_C,
+        is_demo=True,
+        timezone="UTC",
+    )
+    d = user_model.objects.create_user(
+        email="fingerprint-d@genos.app",
+        username="Dan Fingerprint",
+        password="x",
+        id=USER_D,
+        is_demo=True,
+        timezone="UTC",
+    )
+    team = TeamMaster.objects.create(
+        team_id=TEAM_B,
+        team_name="Fingerprint Team B",
+        team_email="fingerprint-team-b@genos.app",
+        owner=c,
+        is_demo=True,
+    )
+    for member in (c, d):
+        TeamMembers.objects.create(team=team, attendee=member)
+    project = ProjectMaster.objects.create(
+        project_id=PROJECT_B_ID,
+        team=team,
+        project_name="Fingerprint B",
+        code="FPB",
+        owner=c,
+        project_system_user=c,
+    )
+    for member in (c, d):
+        ProjectMembers.objects.create(team=team, project=project, attendee=member)
+
+    past, soon = date(2026, 10, 20), date(2026, 11, 6)
+    milestone = MilestoneMaster.objects.create(
+        team=team, project=project, reporter=c, title="Launch", status="Open"
+    )
+    ensure_backing_task(milestone)
+    shipped = MilestoneMaster.objects.create(
+        team=team, project=project, reporter=c, title="Shipped", status="Open"
+    )
+    shipped_backing = ensure_backing_task(shipped)
+    TaskMaster.objects.filter(pk=shipped_backing.pk).update(status="Closed")
+    shipped.refresh_from_db()
+    # the milestones' backing rows took the first numbers
+    number = iter(range(1000, 1100))
+
+    def task(offset: int, title: str, **fields: Any) -> Any:
+        fields.setdefault("status", "Open")
+        fields.setdefault("assignee", c)
+        return TaskMaster.objects.create(
+            task_id=_TASK_B + offset,
+            team=team,
+            project=project,
+            reporter=d,
+            title=title,
+            project_task_number=next(number),
+            **fields,
+        )
+
+    closed_parent = task(0, "Closed parent", status="Closed")
+    child = task(1, "Child under closed", parent_task_id=closed_parent.task_id, status="WIP")
+    grandchild = task(2, "Grandchild overdue", parent_task_id=child.task_id, due_date=past)
+    deleted_parent = task(3, "Deleted parent", status="Deleted")
+    task(4, "Child under deleted", parent_task_id=deleted_parent.task_id, status="WIP")
+    task(5, "Plain overdue", due_date=past)
+    plain = task(6, "Plain WIP due soon", status="WIP", due_date=soon, assignee=d)
+    in_milestone = task(7, "In the milestone", milestone=milestone, due_date=date(2026, 11, 5))
+    task(
+        8,
+        "Milestone task under closed parent",
+        milestone=milestone,
+        parent_task_id=closed_parent.task_id,
+    )
+    task(9, "In the closed milestone", milestone=shipped)
+    for m in (milestone, shipped):
+        MilestoneAssignees.objects.create(milestone=m, user=c, team=team)
+    sprint = Sprint.objects.create(
+        team=team,
+        project=project,
+        name="Sprint B",
+        sequence_number=1,
+        start_date=date(2026, 10, 27),
+        end_date=date(2026, 11, 9),
+    )
+    TaskMaster.objects.filter(pk__in=[grandchild.pk, child.pk, in_milestone.pk, plain.pk]).update(
+        sprint=sprint
+    )
+    # Every row gets its own times, in the order of its id: all of them were made under the frozen
+    # clock, so `order_by("-ts_updated_at")` (the focus list, `list_tasks`) would otherwise tie and
+    # come back in whatever order the database fancies, and the golden must be the same in every
+    # database (a sequence is not rolled back, so ids themselves never reach a line).
+    stamp = datetime(2026, 10, 1, 9, 0, 0, tzinfo=UTC)
+    for minute, pk in enumerate(
+        TaskMaster.objects.filter(team=team).order_by("task_id").values_list("pk", flat=True)
+    ):
+        at = stamp + timedelta(minutes=minute)
+        TaskMaster.objects.filter(pk=pk).update(ts_created_at=at, ts_updated_at=at)
+    for minute, pk in enumerate(
+        MilestoneMaster.objects.filter(team=team).order_by("pk").values_list("pk", flat=True)
+    ):
+        at = stamp + timedelta(minutes=minute)
+        MilestoneMaster.objects.filter(pk=pk).update(ts_created_at=at, ts_updated_at=at)
+    # stale: untouched for weeks, one of them under the Closed parent
+    # (two different days: the list is ordered by it, and a tie would be ordered by the database)
+    TaskMaster.objects.filter(pk=child.pk).update(
+        ts_updated_at=datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
+    )
+    TaskMaster.objects.filter(pk=grandchild.pk).update(
+        ts_updated_at=datetime(2026, 9, 2, 0, 0, 0, tzinfo=UTC)
+    )
+    # a dependency: the plain task waits on the child under the Closed parent
+    TaskDependency.objects.create(blocker_task=child, blocked_task=plain, team=team, created_by=c)
+    # Built, not filed through a producer's helper: this is a fixture row in a rolled-back
+    # transaction, not an inbox producer (`test_inbox_ai` inventories those).
+    InboxItems(team=team, receiver=c, item_type=10, item_body=_report_body()).save()
+    note = PersonalNoteMaster.objects.create(
+        note_id=NOTE_B_ID,
+        team=team,
+        owner=c,
+        title="Release review",
+        body=[
+            {
+                "id": "b1",
+                "type": "paragraph",
+                "props": {},
+                "content": [{"type": "text", "text": "Check the staging permission", "styles": {}}],
+                "children": [],
+            }
+        ],
+    )
+    NotePermissionMaster.objects.create(
+        team=team, user=c, note_id=note.note_id, note_type=1, role_id=1
+    )
+
+
+_AUTO_ID = re.compile(r'("(?:\w*_)?id": )(\d+)')
+
+
+def _normalise_b(text: str) -> str:
+    """`_normalise`, and the auto-numbered ids of the second fixture become `<id>`: a sequence is not
+    rolled back, so two runs in one database would otherwise never agree on them."""
+
+    def scrub(match: "re.Match[str]") -> str:
+        number = int(match.group(2))
+        return match.group(0) if _ID_BASE <= number < _ID_BASE + 1000 else f'{match.group(1)}"<id>"'
+
+    return _normalise(_AUTO_ID.sub(scrub, text))
+
+
+def _extra_result_surfaces() -> dict[str, str]:
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+    from origin.models.task.sprint_models import Sprint  # noqa: PLC0415
+    from origin.search_engine.agent.tools import REGISTRY, ToolContext  # noqa: PLC0415
+    from origin.search_engine.agent.tools.base import ToolError  # noqa: PLC0415
+
+    out: dict[str, str] = {}
+    with transaction.atomic():
+        try:
+            with (
+                mock.patch("django.utils.timezone.now", return_value=FROZEN),
+                _quiet(),
+                _no_ledger(),
+            ):
+                _build_fixture_b()
+                ctx = ToolContext(team_id=str(TEAM_B), user_id=str(USER_C))
+                milestone = MilestoneMaster.objects.get(team_id=TEAM_B, title="Launch")
+                shipped = MilestoneMaster.objects.get(team_id=TEAM_B, title="Shipped")
+                sprint = Sprint.objects.get(team_id=TEAM_B)
+                args = {
+                    "list_my_inbox": {"include_read": True, "limit": 20},
+                    "get_my_focus_tasks": {"limit": 20},
+                    "list_tasks": {"limit": 50},
+                    "fetch_task": {"task_id": _TASK_B + 2},
+                    "get_milestone_summary": {"milestone_id": milestone.milestone_id},
+                    "get_sprint_summary": {"sprint_id": sprint.sprint_id},
+                    "get_project_summary": {"project_id": PROJECT_B_ID},
+                    "get_stale_tasks": {"stale_days": 7},
+                    "get_task_blockers": {"task_id": _TASK_B + 6},
+                    "get_task_throughput_stats": {"days": 30},
+                    "get_milestone_assignee_counts": {},
+                    "fetch_note": {"note_type": "personal", "note_id": NOTE_B_ID},
+                }
+                del shipped  # kept in the fixture: the Closed milestone the counts must read
+                for name in EXTRA_READ_TOOLS:
+                    real = "fetch_note" if name == "fetch_note_threads" else name
+                    tool = REGISTRY.get(real)
+                    if tool is None:
+                        out[f"result.b.{name}"] = "(tool not registered)"
+                        continue
+                    run_args = args.get(real, {})
+                    try:
+                        with mock.patch(
+                            "origin.services.note_comments.read_note_threads",
+                            return_value=list(_THREADS),
+                        ):
+                            text = _canon(tool.run(run_args, ctx))
+                    except ToolError as exc:
+                        text = f"ToolError: {exc}"
+                    except Exception as exc:  # noqa: BLE001 — recorded as the surface's text
+                        text = f"{type(exc).__name__}: {exc}"
+                    out[f"result.b.{name}"] = _normalise_b(text)
+        finally:
+            transaction.set_rollback(True)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # the golden                                                                  #
 # --------------------------------------------------------------------------- #
@@ -590,6 +928,7 @@ def compute_surfaces(*, results: bool = True, only: list[str] | None = None) -> 
     surfaces.update(_prompt_surfaces())
     if results:
         surfaces.update(_result_surfaces())
+        surfaces.update(_extra_result_surfaces())
     if only:
         surfaces = {k: v for k, v in surfaces.items() if any(k.startswith(p) for p in only)}
     return surfaces
