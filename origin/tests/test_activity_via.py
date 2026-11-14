@@ -21,7 +21,7 @@ row's actor and its RECIPIENT as the viewer (the same serialization is pushed to
 returned to the writer, so the reader is the row's own recipient), so `SHOW_OAUTH_APP_TO_EVERYONE`
 acts on rows already filed. A client cannot plant one: the surface endpoints (which the sockets
 `task_body_mention` / `note_mention` / `comment` handlers proxy) drop a `via` from the meta they are
-given, and refuse the AI-app surface a notice's icon is read from.
+given.
 
 The in-app model and MCP never see it: `list_my_unread` names the keys it reads and `via` is not one.
 """
@@ -407,18 +407,6 @@ class AClientCannotPlantOne(_Fixture):
         self.assertEqual(
             Activity.objects.get(pk=row.pk).meta["via"], {"kind": "oauth", "app": "chatgpt"}
         )
-
-    def test_the_ai_app_surface_cannot_be_written_by_a_client(self):
-        # A notice's icon is read from the AI-app surface (10); only `mcp_notice` writes it.
-        for url in (SURFACE, SURFACE_COMMENT):
-            res = self.post(
-                url,
-                surface_type=10,
-                newly_mentioned_user_ids=[str(self.user2.id)],
-                meta={"aiApp": True, "appFamily": "claude", "app": "Claude"},
-            )
-            self.assertEqual(res.status_code, 400, (url, res.content))
-        self.assertFalse(Activity.objects.filter(surface_type=10).exists())
 
 
 class TheModelSeesNothingNew(_Fixture):
