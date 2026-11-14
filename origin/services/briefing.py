@@ -554,9 +554,20 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
     A task note the caller does not own is shown only when the caller can open it now (the
     rule `get_note` applies, per note)."""
     me, team = ctx.user_id, ctx.team_id
+    # A task note's author who left its project is a stranger to it (MIP-1511): the notes they
+    # wrote and can still open, through the project or a grant (the set rule `_may_read_note`
+    # applies to a task note).
+    own_task_notes = TaskNoteMaster.objects.filter(owner_id=me, team_id=team).filter(
+        Q(project_id__in=ProjectMembers.objects.filter(attendee_id=me).values("project_id"))
+        | Q(
+            note_id__in=NotePermissionMaster.objects.filter(user_id=me, note_type=2).values(
+                "note_id"
+            )
+        )
+    )
     owned = {
         1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team),
-        2: TaskNoteMaster.objects.filter(owner_id=me, team_id=team),
+        2: own_task_notes,
         # A chat note has no author exception (MIP-1492): the ones the caller wrote and can
         # still open, through their chat or a grant, by the rule `get_effective_role` applies.
         3: ChatNoteMaster.objects.filter(owner_id=me, team_id=team).filter(
@@ -585,12 +596,13 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
         .exclude(editor_id=me)
         .order_by("-ts_updated_at")[:EVENT_POOL]
     )
-    # Task notes the caller does not own: asked once per note, newest activity first.
+    # Task notes the caller does not own (or no longer can open as their author): asked once per
+    # note, newest activity first.
     foreign = {
         n.note_id: n
         for n in TaskNoteMaster.objects.filter(
             note_id__in={v.note_id for v in versions if v.note_type == 2}
-        ).exclude(owner_id=me)
+        ).exclude(note_id__in=own_task_notes.values("note_id"))
     }
     may_read: dict[int, bool] = {}
     notes: dict[tuple[int, int], dict[str, Any]] = {}
@@ -906,7 +918,8 @@ def _may_read_note(ctx: ToolContext, note_type: int, note: Any) -> bool:
     grant, a Team Notes folder, a chat note's chat by `channel_scope.chat_note_member_q`): one
     rule with the per-note resolver, where the chat branch used to be the index's set of user
     ids and disagreed with it in four edge cases (MIP-1474). A task note keeps the set rule
-    (owner, project members, grants), which `test_timeline_note_rule` pins equal to it: asking
+    (project members, grants: its author is one of the members, or no longer a reader, MIP-1511),
+    which `test_timeline_note_rule` pins equal to it: asking
     `may_read_note` would cost a query more per line, and `test_item_lines_pin` counts them."""
     if str(note.team_id or "") != str(ctx.team_id):
         return False

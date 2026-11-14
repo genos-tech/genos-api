@@ -191,12 +191,41 @@ def note_exists(note_type, note_id):
     return False
 
 
+def note_team_id(note_type, note_id):
+    """The team a note belongs to, or None if there is no such note."""
+    model = {
+        NOTE_TYPE_PERSONAL: PersonalNoteMaster,
+        NOTE_TYPE_TASK: TaskNoteMaster,
+        NOTE_TYPE_CHAT: ChatNoteMaster,
+    }.get(note_type)
+    if model is None:
+        return None
+    return model.objects.filter(note_id=note_id).values_list("team_id", flat=True).first()
+
+
+def _note_not_found():
+    return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
 def require_read_role(user_id, note_type, note_id, team_id=None):
-    """Return a 403/404 Response if the user can't read; else None."""
-    if not note_exists(note_type, note_id):
-        return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+    """Return a 403/404 Response if the user can't read; else None.
+
+    A caller with no role gets 403 ONLY when the note is in a team they belong to: the frontend's
+    access-request panel (`NoteOpenFailure`, `chatListItemForActivity`) reads that 403 as "the note
+    exists and you have no role on it", which is the teammate it is for (MIP-1512). For a caller
+    outside the note's own team (the team named in the request is ignored; the note's row decides)
+    the answer is the 404 a missing note gets, so the id space of other teams cannot be walked.
+    """
+    note_team = note_team_id(note_type, note_id)
+    if note_team is None:
+        return _note_not_found()
     role = get_effective_role(user_id, note_type, note_id, team_id)
     if role is None:
+        # Local import: note_folder_role imports the ROLE_* constants from this module.
+        from origin.views.utils.note_folder_role import is_team_member  # noqa: PLC0415
+
+        if not is_team_member(note_team, user_id):
+            return _note_not_found()
         return Response(
             {"error": "You do not have access to this note."},
             status=status.HTTP_403_FORBIDDEN,
@@ -205,11 +234,18 @@ def require_read_role(user_id, note_type, note_id, team_id=None):
 
 
 def require_write_role(user_id, note_type, note_id, team_id=None):
-    """Return a 403/404 Response if the user can't edit/delete; else None."""
+    """Return a 403/404 Response if the user can't edit/delete; else None.
+
+    A caller with NO role on the note answers 404 like a missing note (same body), so a write
+    cannot be used to find which note ids exist; a caller who can read it but not write it gets
+    403, since they already know it is there (MIP-1512).
+    """
     if not note_exists(note_type, note_id):
-        return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
+        return _note_not_found()
     role = get_effective_role(user_id, note_type, note_id, team_id)
-    if role is None or role > ROLE_EDITOR:
+    if role is None:
+        return _note_not_found()
+    if role > ROLE_EDITOR:
         return Response(
             {"error": "You do not have permission to modify this note."},
             status=status.HTTP_403_FORBIDDEN,

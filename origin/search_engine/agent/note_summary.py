@@ -107,6 +107,23 @@ class NoteSummaryError(Exception):
     """Raised when summary generation can't proceed (ACL denied, empty body, LLM fail)."""
 
 
+NOTE_NOT_FOUND = "Note not found."
+
+
+class NoteNotFoundError(NoteSummaryError):
+    """The ONE answer to every kind of "no" on a note: missing, in another team than the request
+    names, or here and not readable by the caller (MIP-1516). The words never differ, so a guessed
+    id confirms nothing about the notes of other teams or other people's private spaces."""
+
+    def __init__(self) -> None:
+        super().__init__(NOTE_NOT_FOUND)
+
+
+def _in_team(note, team_id: str | None) -> bool:
+    """The tenant check: with a team named, the note must live in it."""
+    return team_id is None or str(getattr(note, "team_id", "") or "") == str(team_id)
+
+
 # --------------------------------------------------------------------------- #
 # Fingerprint                                                                 #
 # --------------------------------------------------------------------------- #
@@ -129,15 +146,17 @@ def compute_fingerprint(record: NoteRecord) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _fetch_personal(note_id: int, user_id: str) -> NoteRecord:
+def _fetch_personal(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
     try:
         note = PersonalNoteMaster.objects.get(note_id=note_id)
     except PersonalNoteMaster.DoesNotExist:
-        raise NoteSummaryError(f"Personal note {note_id} not found.")
+        raise NoteNotFoundError()
+    if not _in_team(note, team_id):
+        raise NoteNotFoundError()
     owner_id = str(getattr(note, "owner_id", "") or "")
     # `may_read_note`, not the search-index set: a note in a public Team Notes
     # folder holds a `team:<id>` sentinel there, not user ids (MIP-869). This
-    # path has no tenant check of its own; the folder role checks membership
+    # path's tenant check is `_in_team` above; the folder role checks membership
     # of the folder's own team.
     if not may_read_note(
         user_id=user_id,
@@ -145,7 +164,7 @@ def _fetch_personal(note_id: int, user_id: str) -> NoteRecord:
         note_id=note_id,
         owner_id=owner_id or None,
     ):
-        raise NoteSummaryError("Not authorized to read this note.")
+        raise NoteNotFoundError()
     return NoteRecord(
         note_type=NOTE_TYPE_PERSONAL,
         note_id=note_id,
@@ -157,11 +176,13 @@ def _fetch_personal(note_id: int, user_id: str) -> NoteRecord:
     )
 
 
-def _fetch_task_note(note_id: int, user_id: str) -> NoteRecord:
+def _fetch_task_note(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
     try:
         note = TaskNoteMaster.objects.get(note_id=note_id)
     except TaskNoteMaster.DoesNotExist:
-        raise NoteSummaryError(f"Task note {note_id} not found.")
+        raise NoteNotFoundError()
+    if not _in_team(note, team_id):
+        raise NoteNotFoundError()
     owner_id = str(getattr(note, "owner_id", "") or "")
     project_id = getattr(note, "project_id", None)
     task_id = getattr(note, "task_id", None)
@@ -170,10 +191,8 @@ def _fetch_task_note(note_id: int, user_id: str) -> NoteRecord:
         project_id=project_id,
         note_id=note_id,
     )
-    if not allowed:
-        raise NoteSummaryError("Note not found or has no readers.")
-    if user_id not in allowed:
-        raise NoteSummaryError("Not authorized to read this note.")
+    if not allowed or user_id not in allowed:
+        raise NoteNotFoundError()
     return NoteRecord(
         note_type=NOTE_TYPE_TASK,
         note_id=note_id,
@@ -187,11 +206,13 @@ def _fetch_task_note(note_id: int, user_id: str) -> NoteRecord:
     )
 
 
-def _fetch_chat_note(note_id: int, user_id: str) -> NoteRecord:
+def _fetch_chat_note(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
     try:
         note = ChatNoteMaster.objects.get(note_id=note_id)
     except ChatNoteMaster.DoesNotExist:
-        raise NoteSummaryError(f"Chat note {note_id} not found.")
+        raise NoteNotFoundError()
+    if not _in_team(note, team_id):
+        raise NoteNotFoundError()
     owner_id = str(getattr(note, "owner_id", "") or "")
     chat_type_code = note.chat_type
     channel_id = note.channel_id
@@ -201,10 +222,8 @@ def _fetch_chat_note(note_id: int, user_id: str) -> NoteRecord:
         channel_id=channel_id,
         note_id=note_id,
     )
-    if not allowed:
-        raise NoteSummaryError("Note not found or has no readers.")
-    if user_id not in allowed:
-        raise NoteSummaryError("Not authorized to read this note.")
+    if not allowed or user_id not in allowed:
+        raise NoteNotFoundError()
     # NoteRecord KEY names chat_id / thread_id are opaque deep-link feed-
     # through; the source values are now the v3 channel / thread-root UUID.
     return NoteRecord(
@@ -226,19 +245,22 @@ def fetch_note_for_agent(
     note_type: int,
     note_id: int,
     user_id: str,
+    team_id: str | None = None,
 ) -> NoteRecord:
     """Load a note + enforce ACL. Dispatches by `note_type`.
 
-    Raises `NoteSummaryError` if the user is not in the note's ACL set.
+    Raises `NoteNotFoundError` (a `NoteSummaryError`) for a note that is missing, is not in
+    `team_id` (when one is named: the tenant check), or that the user may not read: one answer,
+    one wording, for all three (MIP-1516).
     Empty body (vs error) is allowed — the caller may want to render a
     "nothing to summarise yet" hint rather than a hard failure.
     """
     if note_type == NOTE_TYPE_PERSONAL:
-        return _fetch_personal(note_id, user_id)
+        return _fetch_personal(note_id, user_id, team_id)
     if note_type == NOTE_TYPE_TASK:
-        return _fetch_task_note(note_id, user_id)
+        return _fetch_task_note(note_id, user_id, team_id)
     if note_type == NOTE_TYPE_CHAT:
-        return _fetch_chat_note(note_id, user_id)
+        return _fetch_chat_note(note_id, user_id, team_id)
     raise NoteSummaryError(f"Unsupported note_type {note_type!r}.")
 
 
@@ -345,6 +367,7 @@ def peek_cached_summary(
     note_type: int,
     note_id: int,
     user_id: str,
+    team_id: str | None = None,
 ) -> tuple[NoteSummaryResult | None, NoteRecord, str]:
     """Cache check WITHOUT calling the LLM.
 
@@ -355,9 +378,11 @@ def peek_cached_summary(
     the live fingerprint so the client can detect future invalidation
     without re-fetching the body.
 
-    Raises `NoteSummaryError` for ACL denial or note-not-found.
+    Raises `NoteNotFoundError` for ACL denial, another team, or a missing note.
     """
-    record = fetch_note_for_agent(note_type=note_type, note_id=note_id, user_id=user_id)
+    record = fetch_note_for_agent(
+        note_type=note_type, note_id=note_id, user_id=user_id, team_id=team_id
+    )
     if not record.body_text.strip() and not record.title.strip():
         raise NoteSummaryError("Note is empty — nothing to summarise yet.")
 
@@ -426,6 +451,7 @@ def get_or_generate_note_summary(
     note_id: int,
     user_id: str,
     force_regenerate: bool = False,
+    team_id: str | None = None,
 ) -> NoteSummaryResult:
     """Convenience orchestrator: cache-aware fetch + lazy regenerate.
 
@@ -436,7 +462,9 @@ def get_or_generate_note_summary(
     and we just want "get me a summary, generate if missing".
     """
     if force_regenerate:
-        record = fetch_note_for_agent(note_type=note_type, note_id=note_id, user_id=user_id)
+        record = fetch_note_for_agent(
+            note_type=note_type, note_id=note_id, user_id=user_id, team_id=team_id
+        )
         if not record.body_text.strip() and not record.title.strip():
             raise NoteSummaryError("Note is empty — nothing to summarise yet.")
         return regenerate_summary(
@@ -450,6 +478,7 @@ def get_or_generate_note_summary(
         note_type=note_type,
         note_id=note_id,
         user_id=user_id,
+        team_id=team_id,
     )
     if cached is not None:
         return cached
@@ -473,6 +502,7 @@ def load_or_generate_for_ask(
     note_id: int,
     user_id: str,
     model_override: str | None = None,
+    team_id: str | None = None,
 ) -> tuple[str, NoteRecord]:
     """Helper used by AgentAskView's note-context branch.
 
@@ -487,6 +517,7 @@ def load_or_generate_for_ask(
         note_type=note_type,
         note_id=note_id,
         user_id=user_id,
+        team_id=team_id,
     )
     if cached is not None:
         return cached.summary, record

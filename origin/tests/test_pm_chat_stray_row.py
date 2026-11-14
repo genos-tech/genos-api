@@ -14,6 +14,7 @@ missing chat (no existence oracle).
 
 from __future__ import annotations
 
+import re
 import uuid
 from unittest import mock
 
@@ -105,6 +106,25 @@ class PmChatStrayRow(McpBase):
             lambda cid: self.client.get(f"/api/v3/channels/{cid}/members/")
         )
 
+    def test_mcp_list_channel_members_refuses_the_stray_row_like_a_missing_chat(self):
+        """MIP-1501: the registry tool shared by the in-app agent and MCP uses the same rule."""
+        self._key(user=self.outsider)
+        got = self._tool_text(self._call("list_channel_members", {"channel_id": str(self.chat.id)}))
+        missing = self._tool_text(
+            self._call("list_channel_members", {"channel_id": str(self.missing_chat_id())})
+        )
+        self.assertTrue(got[1] and missing[1], (got, missing))
+        uuid_re = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        self.assertEqual(uuid_re.sub("<id>", got[0]), uuid_re.sub("<id>", missing[0]))
+        self.assertNotIn("insider", got[0])
+        self._key(user=self.insider)
+        ok, is_error = self._tool_text(
+            self._call("list_channel_members", {"channel_id": str(self.chat.id)})
+        )
+        self.assertFalse(is_error, ok)
+        self.assertIn("insider", ok)
+        self.assertNotIn("outsider", ok)
+
     def test_message_delta_is_a_404_like_a_missing_chat(self):
         self.as_user(self.outsider)
         self.assert_404_like_missing(
@@ -158,15 +178,21 @@ class PmChatStrayRow(McpBase):
         )
         self.assertEqual(res.status_code, 404, res.content)
 
-    def test_task_card_sync_is_a_404(self):
+    def test_task_card_sync_answers_a_stray_row_like_a_task_with_no_card(self):
+        """MIP-1494: not a 404 (that told a non-member the task has a card); the sentinel."""
         Message.objects.filter(pk=self.message.pk).update(task=self.task)
+        self.message.refresh_from_db()
+        body_before = self.message.body
         self.as_user(self.outsider)
         res = self.client.patch(
             f"/api/v3/tasks/{self.task.pk}/card-message/",
-            {"body": [{"type": "paragraph", "content": []}]},
+            {"body": [{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]},
             format="json",
         )
-        self.assertEqual(res.status_code, 404, res.content)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json(), {"updated": False})
+        self.message.refresh_from_db()
+        self.assertEqual(self.message.body, body_before)
         self.as_user(self.insider)
         res = self.client.patch(
             f"/api/v3/tasks/{self.task.pk}/card-message/",

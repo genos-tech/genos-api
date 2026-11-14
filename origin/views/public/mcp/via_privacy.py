@@ -10,11 +10,11 @@ actor is the key's owner: on a row the viewer made, `via` is left whole; on anyo
 reduced to its kind (`api_key`, `oauth`, `app`, or any kind not known to be public). Nothing else
 about the row changes.
 
-`via_for_viewer` is that rule, for every surface: MCP `get_task_history` (`with_via_owner_only`,
-below), the web client's task activity and progress feeds (`task_activity_views`), and the comment
-list. The MCP hook runs AFTER the registry tool, like the closed-ancestor fields, so it changes what
-a connected client reads and nothing the in-app agent sees (what that model sees waits for the
-grouped eval, flag `AGENT_CLIENT_IN_TASK_HISTORY`).
+`via_for_viewer` is that rule, for every surface: the in-app agent's `get_task_history` (MIP-1470,
+unconditionally: it is a privacy fix, so it does not wait on the flag `AGENT_CLIENT_IN_TASK_HISTORY`,
+which only picks the shape of the `via` the viewer may read), MCP `get_task_history` and
+`get_progress_history` (`with_via_owner_only`, below, which also covers the progress feed), the web
+client's task activity and progress feeds (`task_activity_views`), and the comment list.
 """
 
 from __future__ import annotations

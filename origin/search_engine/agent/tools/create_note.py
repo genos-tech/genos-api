@@ -251,7 +251,10 @@ def _create_task_note(
         raise ToolError(f"Project {project_id} not found.")
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
-        raise ToolForbidden("Not authorized: project belongs to a different team.")
+        # The words of a missing project, so a guessed id does not say which projects exist in
+        # other teams (MIP-1516). Only the class differs: this one counts toward the MCP refusal
+        # alarm. Same pattern as `milestone_access.load_project`.
+        raise ToolForbidden(f"Project {project_id} not found.")
 
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:

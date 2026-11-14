@@ -19,6 +19,7 @@ from django.conf import settings
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 
+from apis import settings_test as test_settings
 from origin.search_engine.agent import content_length as cl
 from origin.search_engine.agent import tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
@@ -36,6 +37,23 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 ALL_ON_BUDGET_CHARS = 141_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
+# Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
+# Japanese cases were re-read). Everything else in ALL_ON is held.
+SHIPPED_ON = frozenset(
+    {
+        "AGENT_RESUME_KEEPS_BLOCKS",
+        "AGENT_RESUME_KEEPS_TURNS",
+        "AGENT_CLOSING_LINE_IN_ORIGIN_THREAD",
+        "AGENT_REJECT_REASON",
+        "AGENT_TELL_MODEL_UNDO",
+        "AGENT_FETCH_TASK_ANCHORS",
+        "AGENT_INBOX_REPORT_LABEL",
+        "AGENT_TEAM_IN_CURRENT_USER",
+        "AGENT_NOTE_THREADS_IN_GET_NOTE",
+        "AGENT_CLOSED_ANCESTOR_RULE",
+        "AGENT_INAPP_TIMELINE_TOOL",
+    }
+)
 # The neighbours that change what is declared and are not flags under test.
 QUIET = {"AGENT_DISABLED_TOOLS": frozenset(), "AGENT_CHEATSHEET_FROM_REGISTRY": False}
 
@@ -60,9 +78,24 @@ class AllOnArmTests(SimpleTestCase):
             self.assertIn(key, settings.SEARCH_ENGINE, key)
             self.assertIs(value, True, key)
 
-    def test_every_flag_is_off_by_default_on_this_stack(self):
+    def test_the_shipped_flags_are_on_by_default_and_the_held_ones_are_off(self):
+        # MIP-1089 flipped ten flags on by the 2026-11-14 grouped eval. The others stay dark until
+        # their own decision: the timeline tool (look at 3 JA cases first), the client name in task
+        # history, content length (tune first) and the body on the user model (empty bodies, MIP-1503).
+        # The PRODUCTION defaults: `apis.settings` itself. The test settings keep the shipped flags
+        # off (see `apis/settings_test.py`), so `django.conf.settings` would not tell.
+        from apis import settings as production  # noqa: PLC0415
+
         for key in ALL_ON:
-            self.assertFalse(settings.SEARCH_ENGINE.get(key), f"{key} must default to off")
+            want = key in SHIPPED_ON
+            self.assertIs(
+                bool(production.SEARCH_ENGINE.get(key)),
+                want,
+                f"{key} must default to {'on' if want else 'off'}",
+            )
+        self.assertEqual(
+            set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION"))
+        )
 
     def test_the_flags_the_stacks_added_are_all_in_the_union(self):
         expected = {
@@ -148,13 +181,12 @@ class AllOnDeclarationTests(SimpleTestCase):
             f"with the system prompt: off={off_total} on={on_total} budget={BUDGET_CHARS}"
         )
         self.assertGreater(delta, 0)
-        # FINDING: with EVERY flag on the prefix is over `test_agent_prefix_budget`'s BUDGET_CHARS
-        # (the budget is the production number; each flag alone fits). The flip PR that turns several
-        # on must raise it with its routing evidence. This pin only stops all-on growing unnoticed.
+        # With EVERY flag on the prefix was over `test_agent_prefix_budget`'s BUDGET_CHARS until the
+        # flips of 2026-11-14 raised it (140,000 with the timeline tool). Now even all-on fits it:
+        # a flag turned on later must keep that true or raise the budget with its routing evidence.
+        # `ALL_ON_BUDGET_CHARS` also stops all-on growing unnoticed.
         self.assertLessEqual(on_total, ALL_ON_BUDGET_CHARS)
-        self.assertGreater(
-            on_total, BUDGET_CHARS, "all-on now fits the production budget: tighten this"
-        )
+        self.assertLessEqual(on_total, BUDGET_CHARS, "all-on no longer fits the production budget")
 
     def test_only_the_reject_reason_flag_edits_the_system_prompt(self):
         # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; every other

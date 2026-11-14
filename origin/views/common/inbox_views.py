@@ -723,7 +723,8 @@ def _note_and_owner(note_type, note_id):
     The owner is the explicit `NotePermissionMaster` ROLE_OWNER row when
     one exists (the canonical "note owner" the role-management UI shows),
     falling back to the master row's `owner` FK for notes created before
-    the permission table was backfilled.
+    the permission table was backfilled. A TASK note's FK owner counts only while they are on its
+    project (MIP-1511): one who left is nobody to ask, and cannot approve a request.
     """
     from origin.models.note.common_note_models import NotePermissionMaster
     from origin.views.utils.note_role import ROLE_OWNER
@@ -741,7 +742,17 @@ def _note_and_owner(note_type, note_id):
         .values_list("user_id", flat=True)
         .first()
     )
-    return note, owner_id or getattr(note, "owner_id", None)
+    if owner_id:
+        return note, owner_id
+    fallback = getattr(note, "owner_id", None)
+    if note_type == 2 and fallback is not None:
+        from origin.models.project.prj_models import ProjectMembers
+
+        if not ProjectMembers.objects.filter(
+            project_id=note.project_id, attendee_id=fallback
+        ).exists():
+            fallback = None
+    return note, fallback
 
 
 class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):
@@ -769,6 +780,13 @@ class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):
             return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         from origin.views.utils.note_role import get_effective_role
+        from origin.views.utils.scope_guards import is_team_member
+
+        # The caller must belong to the team the request names, or a stranger who knows a team id
+        # could tell a note that exists from one that does not (the request would be filed and
+        # the note's title handed back). The answer is the one a missing note gets.
+        if not is_team_member(team_id, request.user.id):
+            return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
 
         note, owner_id = _note_and_owner(note_type, note_id)
         if note is None or owner_id is None:

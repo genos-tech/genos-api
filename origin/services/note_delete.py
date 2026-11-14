@@ -26,11 +26,13 @@ from django.db import transaction
 from origin.models.chat.unified_models import Activity
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.favorite_note_models import NoteFavoriteMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note, purge_note_folders
+from origin.services.note_satellites import batched_note_cleanup
 from origin.views.utils.note_acl_resync import (
     collect_folder_subtree_ids,
     collect_note_ids_in_folders,
@@ -65,21 +67,33 @@ class DeleteRefused(Exception):
         self.extra = extra or {}
 
 
+_FORGET_BATCH = 500
+
+
 def forget_deleted_notes(code: int, note_ids) -> None:
-    """Drop what other people still hold about notes that are gone (MIP-1489): their "recently
-    opened" rows, and the @mention / comment `Activity` rows the notes wrote for them (surface
-    types 6/7/8, `meta.noteId`), which a full resync of the feed would otherwise bring back,
-    pointing at a note that no longer exists. `code` is the `NOTE_TYPE_*` of the family."""
+    """Drop what other people still hold about notes that are gone (MIP-1489, MIP-1514): their
+    "recently opened" and favorite rows, and the @mention / comment `Activity` rows the notes
+    wrote for them (surface types 6/7/8, `meta.noteId`), which a full resync of the feed would
+    otherwise bring back, pointing at a note that no longer exists. `code` is the `NOTE_TYPE_*`
+    of the family.
+
+    EVERY path that removes note rows calls this with the ids it removed: the page and agent
+    deletes here, a project or a task delete (the notes cascade), the account erasure and the
+    demo team's cleanup. A path that deletes note rows and does not is the bug."""
+    ids = sorted({int(n) for n in note_ids})
+    for start in range(0, len(ids), _FORGET_BATCH):
+        _forget_batch(code, ids[start : start + _FORGET_BATCH])
+
+
+def _forget_batch(code: int, ids: list[int]) -> None:
     from origin.services.v3_activity import (
         SURFACE_CHAT_NOTE,
         SURFACE_PERSONAL_NOTE,
         SURFACE_TASK_NOTE,
     )
 
-    ids = [int(n) for n in note_ids]
-    if not ids:
-        return
     NoteRecentMaster.objects.filter(note_type=code, note_id__in=ids).delete()
+    NoteFavoriteMaster.objects.filter(note_type=code, note_id__in=ids).delete()
     surface = {
         NOTE_TYPE_PERSONAL: SURFACE_PERSONAL_NOTE,
         NOTE_TYPE_TASK: SURFACE_TASK_NOTE,
@@ -175,7 +189,8 @@ def _owned_personal_folder(team_id, owner_id, folder_id) -> PersonalNoteFolder:
 
 
 def _hard_delete(note_ids: set, folder_ids: set) -> None:
-    PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
+    with batched_note_cleanup():  # the receiver's pass over the satellites, once (MIP-1517)
+        PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
     NotePermissionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
     NoteVersionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
     forget_deleted_notes(NOTE_TYPE_PERSONAL, note_ids)

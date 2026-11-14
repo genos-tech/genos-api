@@ -11,12 +11,16 @@ ACL contract:
   * Tenant guard: channel.team_id must equal ctx.team_id. Stricter than
     the chat list (`list_my_chats`, `fetch_chat_thread`): a chat another team
     shared with this one is refused here.
-  * Membership guard: the requester must hold a non-deleted
-    ChannelMember row on the channel — non-members may not enumerate a
-    private channel's roster.
+  * Membership guard: the requester must be a member by the product's one
+    rule, `channel_scope.is_chat_member` (MIP-1501): a live ChannelMember row
+    on a direct message, group or multi-person DM; a ProjectMembers row on a
+    project chat, whose channel row only mirrors it. Non-members may not
+    enumerate a private channel's roster, and a stray row opens nothing.
   * A missing channel, another team's and a non-member's get the same
     message.
-  * Soft-deleted memberships and system/deleted users are excluded.
+  * The roster is `channel_scope.chat_member_rows`: soft-deleted memberships,
+    people who are not on a project chat's project, and system/deleted users
+    are excluded.
 """
 
 from __future__ import annotations
@@ -24,13 +28,14 @@ from __future__ import annotations
 import uuid as uuid_mod
 from typing import Any
 
-from origin.models.chat.unified_models import Channel, ChannelMember
+from origin.models.chat.unified_models import Channel
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
     ToolError,
     ToolForbidden,
 )
+from origin.services.channel_scope import chat_member_rows, is_chat_member
 
 _KIND_LABELS = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}
 
@@ -54,14 +59,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if str(getattr(channel, "team_id", "") or "") != ctx.team_id:
         raise ToolForbidden(unreadable)
 
-    memberships = ChannelMember.objects.filter(channel=channel, is_deleted=False).select_related(
-        "user"
-    )
-    if not any(str(m.user_id) == ctx.user_id for m in memberships):
+    if not is_chat_member(channel.id, ctx.user_id):
         raise ToolForbidden(unreadable)
 
     members = []
-    for m in memberships:
+    for m in chat_member_rows(channel).select_related("user"):
         u = m.user
         if u is None or u.is_deleted or u.is_system_user:
             continue

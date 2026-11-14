@@ -15,7 +15,7 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.acl import may_read_note
-from origin.search_engine.agent.tools.base import ToolContext, ToolError
+from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.note_targets import PERSONAL_FAMILY, normalize_note_type
 from origin.search_engine.agent.tools.task_access import as_int
 from origin.views.utils.note_role import (
@@ -38,6 +38,15 @@ class NoteRef:
     note: Any
 
 
+def note_not_found(note_id: int, *, exists: bool = False) -> ToolError:
+    """The ONE answer to every kind of "no" on a note: missing, in another team, or here and not
+    readable by the caller (MIP-1512). Only the class differs: a note that exists and is refused
+    is a `ToolForbidden`, which counts toward the MCP refusal alarm; the words the model reads
+    never differ, so a guessed id confirms nothing."""
+    message = f"Note {note_id} not found. Find its id with a search or `list_note_folders`."
+    return ToolForbidden(message) if exists else ToolError(message)
+
+
 def load_readable_note(args: dict[str, Any], ctx: ToolContext) -> NoteRef:
     note_type = normalize_note_type(args.get("note_type"))
     family = "personal" if note_type in PERSONAL_FAMILY else note_type
@@ -53,9 +62,7 @@ def load_readable_note(args: dict[str, Any], ctx: ToolContext) -> NoteRef:
             owner_id=getattr(note, "owner_id", None),
         )
     ):
-        raise ToolError(
-            f"Note {note_id} not found. Find its id with a search or `list_note_folders`."
-        )
+        raise note_not_found(note_id)
     return NoteRef(family=family, code=_CODES[family], note_id=note_id, note=note)
 
 
@@ -63,14 +70,15 @@ def has_write_permission(*, owner_id, note_id: int, note_type_code: int, ctx: To
     """True if ctx.user_id may edit the note.
 
     Check 1: owner, who always has write permission (covers legacy personal notes
-             created before role rows existed). Not for a CHAT note (MIP-1492): its author
-             who left the chat, the project or the team is resolved by Check 2 like anyone.
+             created before role rows existed). Only for a PERSONAL note: a chat note's author
+             (MIP-1492) or a task note's (MIP-1511) who left the chat, the project or the team
+             is resolved by Check 2 like anyone.
     Check 2: effective role is Editor or stronger, the same resolution the REST layer's
              `require_write_role` uses: an explicit NotePermissionMaster row wins;
              otherwise task-note project members and chat members are implicit Editors,
              and a personal note's Team Notes folder grants what it grants.
     """
-    if note_type_code != NOTE_TYPE_CHAT and str(owner_id or "") == ctx.user_id:
+    if note_type_code == NOTE_TYPE_PERSONAL and str(owner_id or "") == ctx.user_id:
         return True
     role = get_effective_role(ctx.user_id, note_type_code, note_id)
     return role is not None and role <= ROLE_EDITOR

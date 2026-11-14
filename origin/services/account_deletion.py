@@ -188,16 +188,29 @@ def _delete_personal_data(user) -> None:
     # content rather than team content. Folders cascade nothing (the
     # tree is plain integer columns), so both go explicitly.
     from origin.models.note.common_note_models import NotePermissionMaster
+    from origin.models.note.favorite_note_models import NoteFavoriteMaster
     from origin.models.note.personal_note_models import (
         PersonalNoteFolder,
         PersonalNoteMaster,
     )
+    from origin.models.note.recent_note_models import NoteRecentMaster
+    from origin.services.note_delete import forget_deleted_notes
+    from origin.services.note_satellites import batched_note_cleanup
 
     note_ids = list(PersonalNoteMaster.objects.filter(owner=user).values_list("note_id", flat=True))
     if note_ids:
         NotePermissionMaster.objects.filter(note_id__in=note_ids, note_type=1).delete()
-        PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
+        # The note rows' versions and summaries (which hold their text) go with them in one
+        # pass, through the post_delete receiver (MIP-1517).
+        with batched_note_cleanup():
+            PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
+        # What other people hold about those notes: recents, favorites, mention rows (MIP-1514).
+        forget_deleted_notes(1, note_ids)
     PersonalNoteFolder.objects.filter(owner=user).delete()
+    # The person's own lists of notes they opened or starred: the account is soft-deleted, so
+    # the user FK (SET_NULL) never fires and the rows would stay, pointing at their id.
+    NoteRecentMaster.objects.filter(user=user).delete()
+    NoteFavoriteMaster.objects.filter(user=user).delete()
 
 
 def _delete_avatar_file(path: str, user_id: str) -> None:

@@ -67,11 +67,30 @@ if _test_db_name:
 # MCP suites do for `mcp_enabled`. The unchanged table stays available for the gate's own tests
 # (`origin/tests/test_schedule_plan_gate.py`).
 PRODUCTION_TIER_QUOTAS = SEARCH_ENGINE["TIER_QUOTAS"]  # noqa: F405
+# MIP-1089 turned ten agent flags ON by default in production. The suite keeps them OFF here:
+# every flag's tests (and the "flag off is byte-identical to main" pins) turn the flag on or off
+# EXPLICITLY, and the many tests that are about something else assume the unflagged behaviour.
+# `apis.settings.SEARCH_ENGINE` (not this copy) keeps the production defaults, and
+# `origin/tests/test_agent_all_flags_on.py` pins them.
+AGENT_FLAGS_ON_IN_PRODUCTION = (
+    "AGENT_RESUME_KEEPS_BLOCKS",
+    "AGENT_RESUME_KEEPS_TURNS",
+    "AGENT_CLOSING_LINE_IN_ORIGIN_THREAD",
+    "AGENT_REJECT_REASON",
+    "AGENT_TELL_MODEL_UNDO",
+    "AGENT_FETCH_TASK_ANCHORS",
+    "AGENT_INBOX_REPORT_LABEL",
+    "AGENT_TEAM_IN_CURRENT_USER",
+    "AGENT_NOTE_THREADS_IN_GET_NOTE",
+    "AGENT_CLOSED_ANCESTOR_RULE",
+    "AGENT_INAPP_TIMELINE_TOOL",
+)
 SEARCH_ENGINE = {  # noqa: F405
     **SEARCH_ENGINE,  # noqa: F405
     "TIER_QUOTAS": {
         tier: {**cfg, "schedules_enabled": True} for tier, cfg in PRODUCTION_TIER_QUOTAS.items()
     },
+    **{flag: False for flag in AGENT_FLAGS_ON_IN_PRODUCTION},
 }
 
 # Speed up user-creation-heavy tests.

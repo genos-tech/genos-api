@@ -346,7 +346,9 @@ class LeavingTheTeam(Base):
         for note in (gm_note, pm_note):
             self.assertIsNone(get_effective_role(self.reader.id, CHAT, note.note_id))
             self.assertEqual(readable_note_ids(self.reader.id, CHAT, [note.note_id]), set())
-            self.assertEqual(self.rest_single(note).status_code, 403)
+            # off the team altogether: a stranger to it, so the 404 a missing note gets
+            # (MIP-1512; a teammate with no role still gets the 403 the access panel reads)
+            self.assertEqual(self.rest_single(note).status_code, 404)
 
     def test_the_sidebar_stops_listing_the_notes(self):
         gm = self.owned_gm(self.reader)
