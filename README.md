@@ -142,7 +142,8 @@ change to them is checked by the free tests and, for behaviour, by the grouped p
   or on the workflow file itself (an edit of the workflow alone skips the Vertex steps);
 - weekly on `main` (Tuesday 02:00 JST), which covers what no path rule does (`origin/models/**`,
   `apis/settings.py`, a model behaving differently);
-- by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`.
+- by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`
+  (the numbers a run must reach are in `scripts/retrieval_gate.py`, summarised below).
 
 Five retrieval cases that were red in 88-99 of the 99 successful runs of 2026-11-02..14 carry
 `documented_red: "<evidence>"` in `retrieval_cases.yaml`: they still run and show as `RED`, but they cannot
