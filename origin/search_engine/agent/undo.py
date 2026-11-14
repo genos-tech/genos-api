@@ -176,7 +176,15 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
         UNSUPPORTED_FIELDS,
         "a folder move is not covered; title and body are put back from the note's versions",
     ),
-    "update_comment": (NO_SNAPSHOT, "the comment's previous text is not kept"),
+    # MIP-1562 (flag `AGENT_PARITY_TOOLS`): a reaction or a flag is not undone either. The card
+    # predicts from the tool name, so one code covers all three; the tool's own result says it
+    # changed nothing when it already held, and the opposite call (`remove_reaction`, `flag:
+    # "unflag"`) puts either back by hand.
+    "update_comment": (
+        NO_SNAPSHOT,
+        "the comment's previous text is not kept; a reaction or a flag is put back with the "
+        "opposite call, an undo of it is not built",
+    ),
     "delete_comment": (
         NOT_YET,
         "a soft delete, so recoverable in principle; the restore is not built",

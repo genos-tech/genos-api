@@ -1,7 +1,8 @@
 # MIP-578 parity batch (MIP-1561 first): the in-app agent and MCP take what the app's own forms set,
 # as parameters on tools they already have (create_task: status, template, links, reporter_id and the
 # project's default body template; update_task: links, reporter_id; create_task_plan tasks: status,
-# template). Later parity tasks add their parameters behind the same flag. Model-visible: the
+# template; MIP-1562: update_comment: reaction, remove_reaction, flag; create_todo_item: task_id,
+# comment_id). Later parity tasks add their parameters behind the same flag. Model-visible: the
 # declarations grow by the parameters and one sentence per tool.
 arm: parity
 overrides:
