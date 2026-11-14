@@ -50,7 +50,6 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -89,9 +88,8 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
 from origin.search_engine.text_extraction import extract_text
-from origin.services import briefing, item_lines, member_events
+from origin.services import briefing, item_lines, member_events, note_scope
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
-from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, readable_note_ids
 
 # --------------------------------------------------------------------------- #
 # The contract's constants                                                     #
@@ -791,35 +789,7 @@ def _deliveries(
 # -- notes --------------------------------------------------------------------------------- #
 
 
-def readable_notes(ctx: ToolContext, keys) -> set[tuple[int, int]]:
-    """The `(note_type, note_id)` among `keys` the member can open now: ONE rule, the one
-    `get_note` applies (`load_readable_note`: the note is in this team, and the member owns it or
-    holds a role on it: `may_read_note` / `get_effective_role`), in a fixed number of queries
-    however many notes. A test pins it equal to the per-note rule over a generated matrix.
-    (The briefing's `_may_read_note` is a second, narrower rule for chat notes: see MIP-1281.)"""
-    me = str(ctx.user_id)
-    by_type: dict[int, set[int]] = defaultdict(set)
-    for note_type, note_id in keys:
-        if note_type in _NOTE_MODELS:
-            by_type[note_type].add(int(note_id))
-    out: set[tuple[int, int]] = set()
-    for note_type, ids in by_type.items():
-        rows = list(
-            _NOTE_MODELS[note_type]
-            .objects.filter(note_id__in=ids, team_id=ctx.team_id)
-            .values_list("note_id", "owner_id")
-        )
-        # Only a personal note has an author exception: a chat note's (MIP-1492) or a task note's
-        # (MIP-1511) author who left is a stranger.
-        owned = (
-            {nid for nid, owner in rows if owner and str(owner) == me}
-            if note_type == NOTE_TYPE_PERSONAL
-            else set()
-        )
-        others = {nid for nid, _o in rows} - owned
-        out |= {(note_type, n) for n in owned}
-        out |= {(note_type, n) for n in readable_note_ids(me, note_type, others)}
-    return out
+readable_notes = note_scope.readable_notes
 
 
 def _version_event(sc: Scope, v: NoteVersionMaster, title: str, family: str, own: bool) -> TEv:

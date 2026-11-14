@@ -46,7 +46,8 @@ latest events are real ones, and `last_opened_at` says when the member last open
 
 **Access.** An event is shown only when the member can open BOTH the item and the event's own
 container, now: the task (`LabelAccess`), the chat the message is in (`readable_chats_qs`),
-the task a referencing comment sits on, the note a version belongs to (`briefing._may_read_note`).
+the task a referencing comment sits on, the note a version belongs to
+(`note_scope.readable_note_rows`, the batch form of `get_note`'s rule).
 A milestone's neighbours appear only when the member can open the milestone itself
 (`LabelAccess.milestone`, the rule of `get_milestone_summary`). Every count (`events_total`,
 `related_total`, `people`) is over what the member may open: a number never gives away
@@ -83,7 +84,7 @@ from functools import reduce
 from operator import or_
 from typing import Any
 
-from django.db.models import CharField, Max, Q, Value
+from django.db.models import CharField, Exists, Max, OuterRef, Q, Value
 from django.db.models.functions import Cast, Coalesce, Concat
 from django.utils import timezone
 
@@ -118,7 +119,7 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
-from origin.services import briefing, member_events
+from origin.services import briefing, member_events, note_scope
 from origin.services.channel_scope import channel_titles, readable_chats_qs
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import zone_for_user_id
@@ -320,7 +321,8 @@ def readable_task_q(ctx: ToolContext, prefix: str = "") -> Q:
 
 def _readable_notes(ctx: ToolContext, candidates: list[tuple[int, int]], exceeded: bool):
     """`(notes, capped)`: the notes among `candidates` (newest version first) the member can
-    open now (the rule `get_note` applies), at most `MAX_NOTES_CHECKED` of them.
+    open now (the rule `get_note` applies: `note_scope.readable_note_rows`, the one batch rule the
+    timeline uses too), at most `MAX_NOTES_CHECKED` of them.
 
     The cap is on notes they may open: a note they may not is looked up and skipped, and never
     counts, so it cannot tip `capped`. `capped` is True when a note they may open was left out,
@@ -328,20 +330,11 @@ def _readable_notes(ctx: ToolContext, candidates: list[tuple[int, int]], exceede
     says there were more than the caller could list): then nobody knows, and "may be cut" is
     the honest answer."""
     candidates = [k for k in candidates[:MAX_NOTES_SCANNED] if k[0] in _NOTE_MODELS]
-    rows: dict[tuple[int, int], Any] = {}
-    for note_type in {t for t, _i in candidates}:
-        wanted = [i for t, i in candidates if t == note_type]
-        for row in _NOTE_MODELS[note_type].objects.filter(note_id__in=wanted):
-            rows[(note_type, row.note_id)] = row
-    notes: dict[tuple[int, int], Any] = {}
-    for key in candidates:
-        note = rows.get(key)
-        if note is None or not briefing._may_read_note(ctx, key[0], note):
-            continue
-        if len(notes) >= MAX_NOTES_CHECKED:
-            return notes, True
-        notes[key] = note
-    return notes, exceeded
+    allowed = note_scope.readable_note_rows(ctx, candidates)
+    kept = [k for k in candidates if k in allowed]
+    return {k: allowed[k] for k in kept[:MAX_NOTES_CHECKED]}, len(
+        kept
+    ) > MAX_NOTES_CHECKED or exceeded
 
 
 def _claims(team_id: str, thread_ids: list[str]) -> dict[str, list[int]]:
@@ -515,9 +508,16 @@ def _read_comments(rd: _Reader) -> None:
 
 def _read_comment_reactions(rd: _Reader) -> None:
     """1. Reactions to the task's comments."""
+    # A reaction to a deleted comment is not told (the timeline's rule). The comment number is
+    # per task, so the check is correlated on the task as well; it is part of the query, so a dead
+    # reaction takes no slot of the pool and cannot tip its flag.
+    deleted_comment = TaskComments.objects.filter(
+        task_id=OuterRef("task_id"), comment_id=OuterRef("comment_id"), is_deleted=True
+    )
     for r in rd.pooled(
         "comment_reactions",
         TaskCommentReactionFact.objects.filter(
+            ~Exists(deleted_comment),
             task_id__in=rd.ids,
             ts_created_at__gte=rd.since,
             ts_created_at__lt=rd.until,

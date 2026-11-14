@@ -1405,6 +1405,77 @@ class TestPoolFlags(LineBase):
         self.assertEqual(len(events[self.task.task_id]), 3)
 
 
+class TestReactionsToADeletedCommentAreNotTold(LineBase):
+    """The timeline leaves out a reaction whose comment was deleted; the line reader did not
+    (MIP-1475). A `comment_id` is numbered per task, so the check is per task: a deleted comment
+    on one task must not hide a reaction on the same number of another."""
+
+    def react(self, task, comment, reaction_id=1, minutes=25):
+        row = TaskCommentReactionFact.objects.create(
+            team=self.team,
+            task=task,
+            comment_id=comment.comment_id,
+            reaction_id=reaction_id,
+            reaction_emoji="\U0001f44d",
+            sender=self.user2,
+        )
+        TaskCommentReactionFact.objects.filter(pk=row.pk).update(ts_created_at=self.at(minutes))
+
+    def reactions(self, tasks):
+        events, _capped = item_lines.read_events(
+            self.ctx,
+            item_lines.LabelAccess(self.ctx),
+            {t.task_id: t for t in tasks},
+            self.since,
+            self.until,
+        )
+        return {tid: [e for e in evs if e.what == "reaction"] for tid, evs in events.items()}
+
+    def test_a_reaction_to_a_deleted_comment_is_not_told(self):
+        task = self.make_task()
+        kept = self.comment(task, self.user2, 10, text="kept")
+        gone = self.comment(task, self.user2, 11, text="gone", deleted=True)
+        self.react(task, kept, 1)
+        self.react(task, gone, 2)
+        events = self.events(task)
+        self.assertEqual([e["what"] for e in events], ["comment", "reaction"])
+        self.assertEqual(self.line(task)["line"]["events_total"], 2)
+
+    def test_the_check_is_per_task_not_by_comment_number_alone(self):
+        a, b = self.make_task("A"), self.make_task("B")
+        alive = self.comment(a, self.user2, 10)
+        dead = self.comment(b, self.user2, 11, deleted=True)
+        # the same comment number on both tasks
+        TaskComments.objects.filter(pk=alive.pk).update(comment_id=7)
+        TaskComments.objects.filter(pk=dead.pk).update(comment_id=7)
+        alive.comment_id = dead.comment_id = 7
+        self.react(a, alive, 1)
+        self.react(b, dead, 1)
+        found = self.reactions([a, b])
+        self.assertEqual(len(found[a.task_id]), 1)
+        self.assertEqual(found[b.task_id], [])
+
+    def test_a_dead_reaction_takes_no_slot_of_the_pool_and_tips_no_flag(self):
+        task = self.make_task()
+        kept = self.comment(task, self.user2, 10)
+        gone = self.comment(task, self.user2, 11, deleted=True)
+        self.react(task, kept, 1, minutes=20)
+        for n in range(2, 5):
+            self.react(task, gone, n, minutes=30 + n)  # newer than the live one
+        with mock.patch.object(item_lines, "POOL", 2):
+            events, capped = item_lines.read_events(
+                self.ctx,
+                item_lines.LabelAccess(self.ctx),
+                {task.task_id: task},
+                self.since,
+                self.until,
+            )
+        self.assertFalse(capped)
+        self.assertEqual(
+            [e.what for e in events[task.task_id] if e.what == "reaction"], ["reaction"]
+        )
+
+
 class TestFlagsAreSetAfterTheAccessFilter(LineBase):
     """MIP-1195: a row the member cannot open must never tip a truncation flag."""
 
