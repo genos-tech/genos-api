@@ -19,12 +19,16 @@ from origin.models.chat.unified_models import (
     ActivityType,
     Channel,
     ChannelKind,
+    ChannelMember,
     Message,
 )
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.task_models import TaskMaster
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.services import account_export
 from origin.services import deleted_account_activity as gone
+from origin.services import v3_activity as va
 from origin.services.account_deletion import DELETED_USERNAME, delete_account
 from origin.services.v3_activity import SURFACE_AI_APP
 from origin.tests.test_base import BaseAPITestCase
@@ -368,3 +372,153 @@ class PruneCommandTests(PruneBase):
         text = self.run_command("--apply")
         self.assertIn("deleted 0", text)
         self.assertIn("0 deleted account", text)
+
+
+class NoNewRowsForADeletedAccountTests(ActivityBase):
+    """The rows must not grow back: a deleted account is still a channel member and still the
+    sender of old messages, so every producer must skip it (MIP-1542)."""
+
+    def setUp(self):
+        super().setUp()
+        self.dm = Channel.objects.create(
+            team=self.team, kind=ChannelKind.DM, title="dm", owner=self.user
+        )
+        for u in (self.user, self.user2):
+            ChannelMember.objects.create(channel=self.dm, user=u)
+        self.old = Message.objects.create(
+            channel=self.channel, sender=self.user2, seq=500, body={"t": 1}, body_text="old"
+        )
+        self.old_dm = Message.objects.create(
+            channel=self.dm, sender=self.user2, seq=501, body={"t": 1}, body_text="old dm"
+        )
+        delete_account(self.user2)
+
+    def fresh(self, channel, seq, **kw):
+        return Message.objects.create(
+            channel=channel, sender=self.user, seq=seq, body={"t": 1}, body_text="x", **kw
+        )
+
+    def assert_nothing_for_deleted(self):
+        self.assertFalse(Activity.objects.filter(recipient=self.user2).exists())
+
+    def test_a_reaction_to_their_old_message(self):
+        va.create_reaction_activity(message=self.old, emoji="x", actor=self.user)
+        self.assert_nothing_for_deleted()
+
+    def test_a_thread_reply_under_their_old_message(self):
+        reply = self.fresh(self.channel, 600, thread_root=self.old, is_thread_reply=True)
+        va.create_thread_reply_activity(reply=reply, parent=self.old, actor=self.user)
+        self.assert_nothing_for_deleted()
+
+    def test_a_thread_reply_in_a_dm_they_are_still_a_member_of(self):
+        reply = self.fresh(self.dm, 601, thread_root=self.old_dm, is_thread_reply=True)
+        va.create_thread_reply_activity(reply=reply, parent=self.old_dm, actor=self.user)
+        self.assert_nothing_for_deleted()
+
+    def test_a_dm_message(self):
+        message = self.fresh(self.dm, 602)
+        va.create_message_activities(
+            message=message, recipient_ids=[str(self.user2.id)], actor=self.user
+        )
+        self.assert_nothing_for_deleted()
+
+    def test_a_mention(self):
+        message = self.fresh(self.channel, 603)
+        va.create_mention_activities(
+            message=message, mentioned_user_ids=[str(self.user2.id)], actor=self.user
+        )
+        self.assert_nothing_for_deleted()
+
+    def test_a_task_comment_participant_notice(self):
+        message = self.fresh(self.channel, 604)
+        va.create_comment_participant_activities(
+            message=message, recipient_ids=[str(self.user2.id)], actor=self.user
+        )
+        self.assert_nothing_for_deleted()
+
+    def test_a_task_assignment(self):
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P",
+            code="P",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        task = TaskMaster.objects.create(
+            team=self.team,
+            project=project,
+            title="t",
+            status="Open",
+            assignee=self.user2,
+            reporter=self.user,
+        )
+        message = self.fresh(self.dm, 605, task=task)
+        va.create_task_assign_activity(message=message, recipient_id=self.user2.id, actor=self.user)
+        self.assert_nothing_for_deleted()
+
+    def test_live_members_still_get_every_kind(self):
+        """The guard drops only deleted accounts: a live member is still told."""
+        user3 = User.objects.create_user(username="third", email="third@example.com", password="x")
+        ChannelMember.objects.create(channel=self.dm, user=user3)
+        va.create_mention_activities(
+            message=self.fresh(self.channel, 700),
+            mentioned_user_ids=[str(user3.id), str(self.user2.id)],
+            actor=self.user,
+        )
+        va.create_message_activities(
+            message=self.fresh(self.dm, 701),
+            recipient_ids=[str(user3.id), str(self.user2.id)],
+            actor=self.user,
+        )
+        mine = Message.objects.create(
+            channel=self.channel, sender=user3, seq=702, body={"t": 1}, body_text="m"
+        )
+        va.create_reaction_activity(message=mine, emoji="x", actor=self.user)
+        self.assertEqual(
+            sorted(
+                Activity.objects.filter(recipient=user3).values_list("activity_type", flat=True)
+            ),
+            sorted([ActivityType.MENTION, ActivityType.MESSAGE, ActivityType.REACTION]),
+        )
+        self.assert_nothing_for_deleted()
+
+    def test_a_task_body_mention_is_covered_by_the_ended_team_membership(self):
+        # No `_drop_deleted_accounts` here: the surface producers keep only live
+        # `TeamMembers`, and account deletion ends the membership. Pinned so it stays so.
+        va.create_surface_mention_activities(
+            team_id=self.team.team_id,
+            actor=self.user,
+            surface_type=va.SURFACE_TASK_BODY,
+            entity_key="task:42",
+            newly_mentioned_user_ids=[str(self.user2.id)],
+        )
+        self.assert_nothing_for_deleted()
+
+    def test_a_surface_comment_notice_is_covered_the_same_way(self):
+        # The deleted member is still the task's assignee. A live member as assignee is the
+        # control: the same call does write a row for them.
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P2",
+            code="P2",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        for assignee in (self.user2, self.user):
+            task = TaskMaster.objects.create(
+                team=self.team,
+                project=project,
+                title="t",
+                status="Open",
+                assignee=assignee,
+                reporter=self.user,
+            )
+            va.create_surface_comment_activities(
+                team_id=self.team.team_id,
+                actor=None,
+                surface_type=va.SURFACE_TASK_BODY,
+                entity_key=f"task:{task.task_id}",
+                meta={"taskId": task.task_id},
+            )
+        self.assertTrue(Activity.objects.filter(recipient=self.user).exists())  # control
+        self.assert_nothing_for_deleted()

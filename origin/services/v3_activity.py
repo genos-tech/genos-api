@@ -138,6 +138,26 @@ def message_surface(message: Message) -> str:
     return ""
 
 
+def _drop_deleted_accounts(recipient_ids: Iterable[str]) -> List[str]:
+    """`recipient_ids` minus accounts that are deleted (MIP-1542).
+
+    A deleted account is anonymised, not removed: it is still a channel member, still the
+    sender of its old messages and still the assignee of its tasks, so every fan-out below
+    would otherwise write a fresh feed row for it, with a preview of the message, after
+    `account_deletion` removed the feed. Its feed is gone for good, so nothing is written.
+    """
+    ids = [str(uid) for uid in recipient_ids]
+    if not ids:
+        return ids
+    gone = {
+        str(uid)
+        for uid in CustomUser.objects.filter(id__in=ids, is_deleted=True).values_list(
+            "id", flat=True
+        )
+    }
+    return [uid for uid in ids if uid not in gone] if gone else ids
+
+
 def _drop_active_viewers(recipient_ids: Iterable[str], surface: str, *, kind: str) -> List[str]:
     """`recipient_ids` minus whoever is looking at `surface` right now."""
     from origin.services import presence
@@ -554,6 +574,7 @@ def create_mention_activities(
     targets = [
         str(uid) for uid in mentioned_user_ids if uid and (not skip_actor or str(uid) != actor_id)
     ]
+    targets = _drop_deleted_accounts(targets)
     if not targets:
         return []
     # A bot @-mention is an assignment, not a conversation — see the
@@ -654,6 +675,8 @@ def create_task_assign_activity(
     # people, so a stray channel-member row is not told (MIP-1495).
     if not is_chat_member(channel.id, recipient_id):
         return []
+    if not _drop_deleted_accounts([recipient_id]):
+        return []
     if not getattr(message.sender, "is_system_user", False):
         if not _drop_active_viewers([recipient_id], message_surface(message), kind="mention"):
             return []
@@ -736,6 +759,7 @@ def create_thread_reply_activity(
             str(s) for s in participant_ids if str(s) != actor_id and str(s) not in excluded
         }
 
+    recipients = set(_drop_deleted_accounts(recipients))
     if not recipients:
         logger.info("[v3_activity] thread_reply skipped: no other participants")
         return []
@@ -809,6 +833,7 @@ def create_message_activities(
             continue
         seen.add(s)
         targets.append(s)
+    targets = _drop_deleted_accounts(targets)
     targets = _drop_active_viewers(targets, channel_surface(channel.id), kind="message")
     if not targets:
         return []
@@ -862,6 +887,7 @@ def create_comment_participant_activities(
             continue
         seen.add(s)
         targets.append(s)
+    targets = _drop_deleted_accounts(targets)
     # The comment's own surface is the task preview it renders in, so the
     # token is the task rather than the PM mirror channel — a project
     # member with the PM chat open is not reading this task's comments.
@@ -901,6 +927,8 @@ def create_reaction_activity(*, message: Message, emoji: str, actor: CustomUser)
     actor_id = str(actor.id)
     sender_id = str(message.sender_id)
     if sender_id == actor_id:
+        return []
+    if not _drop_deleted_accounts([sender_id]):
         return []
     still_unaware = _drop_active_viewers([sender_id], message_surface(message), kind="reaction")
     if not still_unaware:
