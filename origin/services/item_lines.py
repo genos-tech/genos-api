@@ -116,11 +116,10 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
-from origin.search_engine.agent.tools.list_my_chats import _titles as chat_titles
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.search_engine.text_extraction import extract_text
 from origin.services import briefing, member_events
-from origin.services.channel_scope import readable_chats_qs
+from origin.services.channel_scope import channel_titles, readable_chats_qs
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import zone_for_user_id
 
@@ -1201,7 +1200,7 @@ def _name_chats(lost: list[Message], me: str) -> dict[str, Any]:
     ranked = sorted(seen.items(), key=lambda kv: (kv[1][1], str(kv[0])), reverse=True)
     named = ranked[:UNATTACHED_CHATS_MAX]
     channels = list(Channel.objects.filter(id__in=[cid for cid, _row in named]))
-    titles = chat_titles(channels, me) if channels else {}
+    titles = channel_titles(channels, me) if channels else {}
     by_id = {c.id: c for c in channels}
     chats = []
     for cid, (count, latest) in named:

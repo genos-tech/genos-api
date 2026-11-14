@@ -39,15 +39,12 @@ from origin.models.chat.unified_models import ChannelKind, ChannelMember, Messag
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
-from origin.services.channel_scope import team_scope_q, user_channels_qs
+from origin.services.channel_scope import channel_titles, team_scope_q, user_channels_qs
 
 _MAX_LIMIT = 50
 _DEFAULT_LIMIT = 20
 # A name filter is a word or two; the rest is not worth a LIKE over.
 _MAX_QUERY_CHARS = 100
-# How many other people's names a multi-person DM's title lists.
-_MDM_NAMES = 5
-
 _LABEL_TO_CODE: dict[str, int] = {v: k for k, v in CHAT_TYPE_LABEL.items()}
 
 
@@ -89,39 +86,6 @@ def _name_filter(query: str, user_id: str) -> Q:
     if own_name and query.lower() in own_name.lower():
         match |= Q(kind=ChannelKind.DM) & ~Exists(others)
     return match
-
-
-def _titles(channels: list, user_id: str) -> dict[Any, str]:
-    """Readable name per channel id. A stored title wins; a DM or multi-person
-    DM has none and is named after the other people, as the app does."""
-    unnamed = [
-        c.id for c in channels if not c.title and c.kind in (ChannelKind.DM, ChannelKind.MDM)
-    ]
-    people: dict[Any, list[tuple[Any, str]]] = {}
-    if unnamed:
-        for m in (
-            ChannelMember.objects.filter(channel_id__in=unnamed, is_deleted=False)
-            .select_related("user")
-            .order_by("ts_joined_at")
-        ):
-            people.setdefault(m.channel_id, []).append((m.user_id, (m.user.username or "")))
-    out: dict[Any, str] = {}
-    for c in channels:
-        if c.title:
-            out[c.id] = c.title
-            continue
-        members = people.get(c.id, [])
-        others = [name for uid, name in members if str(uid) != user_id and name]
-        if c.kind == ChannelKind.DM:
-            # The partner; in a chat with yourself, you.
-            out[c.id] = others[0] if others else (members[0][1] if members else "")
-        elif c.kind == ChannelKind.MDM:
-            shown = ", ".join(others[:_MDM_NAMES])
-            more = len(others) - _MDM_NAMES
-            out[c.id] = f"{shown} +{more} more" if more > 0 else shown
-        else:
-            out[c.id] = ""
-    return out
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -190,7 +154,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     has_more = len(rows) > limit
     rows = rows[:limit]
 
-    titles = _titles(rows, ctx.user_id)
+    titles = channel_titles(rows, ctx.user_id)
     chats = []
     for c in rows:
         row: dict[str, Any] = {
