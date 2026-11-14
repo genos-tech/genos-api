@@ -228,5 +228,8 @@ def resolve_gm_role(channel, user_id, member_row_role: str | None = None) -> str
         return channel_role_to_member_role(member_row_role)
     from origin.models.chat.unified_models import ChannelMember
 
+    # The raw row is the role of a GM, and only a GM gets here: every caller in `channel_views`
+    # answers a DM or a project chat (whose roles come from the project, and whose channel row
+    # only mirrors it) before it asks, so a stray project-chat row is never read (MIP-1523).
     row = ChannelMember.objects.filter(channel=channel, user_id=user_id, is_deleted=False).first()
     return channel_role_to_member_role(row.role) if row else VIEWER

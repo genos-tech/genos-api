@@ -561,6 +561,8 @@ class JoinGMFromInboxView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         # The approver must be the GM owner or an active member (the
+        # raw `ChannelMember` row IS a group chat's membership; `_gm_channel_by_uuid` only
+        # resolves a GM, so a project chat's mirror rows never reach this: MIP-1523).
         # request is delivered to the GM owner; the owner-id check also
         # covers any GM whose owner lacks an explicit member row). 404 —
         # don't leak existence.
