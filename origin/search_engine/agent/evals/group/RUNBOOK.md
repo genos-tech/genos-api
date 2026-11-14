@@ -59,10 +59,10 @@ equals the current one (check the environment: the flag is already on, so arm0 i
 `origin/tests/test_agent_prefix_budget.py` holds the system prompt plus the tool declarations to
 `BUDGET_CHARS` (137,000 characters). Each flag fits alone; the **all-on arm does not**. Measured on
 the merged stack (`origin/tests/test_agent_all_flags_on.py` prints it): all flags off 134,315
-characters; all on 139,303 (+4,842 in tool descriptions and the `get_timeline` declaration, +146 for
-the reject-reason rule in the system prompt; about 1,150 tokens); a Long member adds the MIP-905
+characters; all on 139,012 (+4,551 in tool descriptions and the `get_timeline` declaration, +146 for
+the reject-reason rule in the system prompt; about 1,084 tokens); a Long member adds the MIP-905
 content block on top (1,453 characters, Short 952; appended to the system instruction by the loop,
-so it is not in the budget test's number), 140,758 in all. That is expected for an arm that turns
+so it is not in the budget test's number), 140,467 in all. That is expected for an arm that turns
 every flag on, and the all-on run measures what the extra prefix costs and whether it changes
 answers. It is not a reason to raise the budget now. The flip PR that turns several flags on in
 production must raise `BUDGET_CHARS` in the same PR with this session's routing and behaviour
