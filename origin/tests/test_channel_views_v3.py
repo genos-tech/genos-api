@@ -449,9 +449,15 @@ class ChannelJoinViewTests(BaseAPITestCase):
         mdm = Channel.objects.create(team=self.team, kind=ChannelKind.MDM, owner=self.user)
         ChannelMember.objects.create(channel=mdm, user=self.user, role="owner")
         url = reverse("v3_channel_join", args=[mdm.id])
+        # A member of the chat reads the reason; a teammate who is not in it reads the same 404 a
+        # missing chat gets (MIP-1502: no existence oracle).
+        self.authenticate(self.user)
+        self.assertEqual(
+            self.client.post(url, {}, format="json").status_code, status.HTTP_400_BAD_REQUEST
+        )
         self.authenticate(self.user2)
         resp = self.client.post(url, {}, format="json")
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         self.assertFalse(ChannelMember.objects.filter(channel=mdm, user=self.user2).exists())
 
     def test_non_team_member_gets_404(self):

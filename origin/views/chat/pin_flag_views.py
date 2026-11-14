@@ -33,6 +33,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
+    Channel,
     Flag,
     Pin,
 )
@@ -42,6 +43,7 @@ from origin.serializers.chat.unified_serializers import (
     PinSerializer,
 )
 from origin.services import message_reminders
+from origin.services.channel_scope import chat_member_q
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -164,7 +166,15 @@ class FlagListView(AuthenticatedAPIView):
 
     def get(self, request):
         status_param = request.GET.get("status", "active")
-        qs = Flag.objects.filter(user=request.user).select_related("message", "message__sender")
+        # Only the flags on messages of chats the caller is in NOW (MIP-1502): a flag outlives
+        # the membership, and a stray channel row on a project chat opens nothing
+        # (`chat_member_q`, the rule the message endpoints apply).
+        qs = Flag.objects.filter(
+            user=request.user,
+            message__channel_id__in=Channel.objects.filter(chat_member_q(request.user.id)).values(
+                "id"
+            ),
+        ).select_related("message", "message__sender")
         if status_param == "completed":
             qs = qs.filter(completed_at__isnull=False).order_by("-completed_at")
         else:
