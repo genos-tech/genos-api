@@ -359,8 +359,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             }
         )
 
-    if ancestor_rule.enabled():
+    if ancestor_rule.enabled() and ctx.surface != "mcp":
         # MIP-1413: the rows keep their own `status`; each says what it READS as (the MCP's fields).
+        # Not on MCP, whose augment adds the same fields after this tool (MIP-1478).
         fields = ancestor_rule.row_fields([t["task_id"] for t in tasks], ctx)
         tasks = [{**t, **fields.get(t["task_id"], {})} for t in tasks]
 

@@ -88,8 +88,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
-from origin.search_engine.text_extraction import extract_text
-from origin.services import briefing, item_lines, member_events, note_scope
+from origin.services import briefing, item_lines, member_events, note_scope, plain_text
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
 
 # --------------------------------------------------------------------------- #
@@ -125,7 +124,9 @@ BUDGET_CHARS = 24_000
 # Room kept for `next_cursor`, which is signed after the page is chosen.
 CURSOR_RESERVE = 700
 CURSOR_MAX_AGE = 3600
-CURSOR_SALT = "genos.timeline.cursor.v1"
+# v2: a task reaction's tie-break is `(comment_id, reaction_id)`, no longer its `uid` text, so a
+# cursor signed by v1 is refused cleanly instead of being read as the wrong shape.
+CURSOR_SALT = "genos.timeline.cursor.v2"
 WINDOW_DAYS = 31
 DEFAULT_WINDOW_DAYS = 7
 # Notes that point at a task with a chip are looked at through this many candidates.
@@ -229,24 +230,8 @@ def _cut(text: str, chars: int) -> str:
     return text if len(text) <= chars else text[: max(chars - 1, 1)] + "…"
 
 
-def _plain_body(node: Any, depth: int = 0) -> Any:
-    """A rich-text body with every `#` task chip turned into `#<numeric target id>`: the chip's own
-    label (its display id, its stored title) is text somebody could have written and is never
-    copied."""
-    if depth > 40:
-        return None
-    if isinstance(node, list):
-        return [_plain_body(n, depth + 1) for n in node]
-    if isinstance(node, dict):
-        if node.get("type") == "hashTask":
-            ids = item_lines.chip_task_ids(node)
-            return {"type": "text", "text": f"#{min(ids)}" if ids else "#task", "styles": {}}
-        return {k: _plain_body(v, depth + 1) for k, v in node.items()}
-    return node
-
-
-def _body_text(body: Any) -> str:
-    return extract_text(_plain_body(body))
+_plain_body = plain_text.plain_body
+_body_text = plain_text.body_text
 
 
 def _is_notice(message: Message) -> bool:
@@ -401,7 +386,7 @@ def _open_thread(ctx: ToolContext, ref: Any) -> Anchor:
     return Anchor(
         "thread",
         str(message.id),
-        _cut(message.body_text or "", TEXT_DEFAULT),
+        _cut(plain_text.message_text(message), TEXT_DEFAULT),
         start=message.ts_sent_at,
         channel=channel,
         root=message,
@@ -746,14 +731,20 @@ def _comment_reactions(sc: Scope, kinds: frozenset[str], count: bool, *, task: T
         TEv(
             at=r.ts_created_at,
             rank=RANK_TASK_REACTION,
-            tie=(str(r.pk),),
+            tie=(r.comment_id, r.reaction_id),
             kind="reaction",
             key=f"r{r.comment_id}.{r.reaction_id}",
             actor=str(r.sender_id) if r.sender_id else None,
             text=sc.snippet(str(r.reaction_emoji or "")),
             ident=f"tr:{r.pk}",
         )
-        for r in _page_rows(sc, qs, time="ts_created_at", tie=("uid",), rank=RANK_TASK_REACTION)
+        for r in _page_rows(
+            sc,
+            qs,
+            time="ts_created_at",
+            tie=("comment_id", "reaction_id"),
+            rank=RANK_TASK_REACTION,
+        )
     ]
 
 
@@ -840,20 +831,27 @@ def _task_notes(sc: Scope, kinds: frozenset[str], count: bool, *, task: TaskMast
         for n in TaskNoteMaster.objects.filter(team_id=sc.team, task_id=task.task_id)
     }
     own_keys = set(keys)
-    # Notes anywhere that point at the task with a chip. Candidates are the notes with a version that
-    # has such a chip, newest first (at most `CHIP_NOTE_SCAN` looked at). The member's note rule is
-    # applied BEFORE the cap, so a note they cannot open can neither take one of the
-    # `CHIP_NOTE_CANDIDATES` places nor tip `capped.notes`.
-    chipped = item_lines._chip_filter(
-        NoteVersionMaster.objects.filter(team_id=sc.team, editor__isnull=False),
-        "body",
-        [task.task_id],
-    )
+    # Notes anywhere that point at the task with a chip. Candidates are the notes with a version
+    # that has such a chip INSIDE THE WINDOW asked for (not the cursor: every page and the count
+    # must see the same candidates), newest first, at most `CHIP_NOTE_SCAN` looked at. The member's
+    # note rule is applied BEFORE the cap, so a note they cannot open can neither take one of the
+    # `CHIP_NOTE_CANDIDATES` places nor tip `capped.notes`. The scan runs before that rule (it is
+    # not a filter), so when it ran out `capped.notes` says "may be cut", as `item_lines`'s scan
+    # does: a note beyond it could be one they can open.
+    versions = NoteVersionMaster.objects.filter(team_id=sc.team, editor__isnull=False)
+    if sc.since is not None:
+        versions = versions.filter(ts_updated_at__gte=sc.since)
+    if sc.until is not None:
+        versions = versions.filter(ts_updated_at__lt=sc.until)
+    chipped = item_lines._chip_filter(versions, "body", [task.task_id])
     listed = list(
         chipped.values("note_type", "note_id")
         .annotate(last=Max("ts_updated_at"))
-        .order_by("-last")[:CHIP_NOTE_SCAN]
+        .order_by("-last")[: CHIP_NOTE_SCAN + 1]
     )
+    if len(listed) > CHIP_NOTE_SCAN:
+        sc.capped.add("notes")
+        listed = listed[:CHIP_NOTE_SCAN]
     found = [
         (row["note_type"], row["note_id"])
         for row in listed
@@ -929,7 +927,7 @@ def _message_event(sc: Scope, m: Message, *, via: str | None, in_chat: str | Non
         label="system" if notice else None,
         text=SYSTEM_NOTICES[m.metadata["systemNotice"]]
         if notice
-        else sc.snippet(_body_text(m.body) or m.body_text),
+        else sc.snippet(plain_text.message_text(m)),
         via=via,
         ref=None if notice else ("m", m.id),
         ident=f"m:{m.id}",

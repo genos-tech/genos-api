@@ -333,7 +333,7 @@ class UpdateProjectTests(ProjectToolBase):
         ctx = ToolContext(team_id=str(other_team.team_id), user_id=str(self.user.id))
         with self.assertRaises(ToolForbidden) as caught:
             self.update(ctx=ctx, name="Wrong team")
-        self.assertIn("different team", str(caught.exception))
+        self.assertIn("not found", str(caught.exception))
 
     def test_a_deleted_or_unknown_project_is_not_found(self):
         ProjectMaster.objects.filter(pk=self.project.pk).update(is_deleted=True)

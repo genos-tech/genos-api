@@ -125,12 +125,11 @@ def fetch_thread_messages_for_agent(
     the user has access but the thread is empty.
     """
     allowed = chat_acl_user_ids(chat_type, chat_id)
-    if not allowed:
-        # Either an invalid chat or a chat with no resolvable members.
-        # Treat both as not-found to avoid leaking the distinction.
+    # Either an invalid chat, a chat with no resolvable members, or a chat the caller is not
+    # in: ONE answer, in the words of a missing chat, so a guessed id does not say which chats
+    # exist (MIP-1519, as the note summary did in MIP-1516). The HTTP status stays 403.
+    if not allowed or user_id not in allowed:
         raise ThreadSummaryError("Chat not found or has no members.")
-    if user_id not in allowed:
-        raise ThreadSummaryError("Not authorized to read this thread.")
 
     # Resolve the channel + thread root by UUID, then pull the thread's
     # replies from the unified `Message` table. `thread_id` IS the

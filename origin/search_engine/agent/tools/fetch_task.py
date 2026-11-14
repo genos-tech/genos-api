@@ -262,8 +262,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Flag off: no key at all, the result is what it always was.
     anchors = {"anchors": task_anchors(task, ctx)} if anchors_enabled() else {}
     # What the task READS as when an ancestor is Closed or Deleted (MIP-1413); flag off: nothing.
+    # Not on MCP: its augment (`mcp.ancestry`) adds the same fields after this tool, and always
+    # (MIP-1478: the rule was computed twice there).
     effective = (
-        ancestor_rule.row_fields([task_id], ctx).get(task_id, {}) if ancestor_rule.enabled() else {}
+        ancestor_rule.row_fields([task_id], ctx).get(task_id, {})
+        if ancestor_rule.enabled() and ctx.surface != "mcp"
+        else {}
     )
 
     return {
