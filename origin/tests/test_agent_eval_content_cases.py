@@ -269,16 +269,115 @@ class CheckTests(SimpleTestCase):
             "### 見出し",
             "| a | b |",
             "終わり。",
+            # MIP-1532: short deliberate bodies end without a full stop; none of these is cut off
+            "### Summary\n\nDesign the filter UI",
+            "### Summary\n\nRoll out to 10% of users",
+            "### Summary\n\nフィルターUIの設計",
+            "### Summary\n\nユーザーの10%への展開",
+            "Write the tests",
+            "テストの作成",
+            "概要を書く",
         ]
-        cut = ["The first par", "```py\nx = 1", "", "- Do the th\n\nAnd then the", "概要を書"]
+        cut = [
+            "The first paragraph of the",
+            "```py\nx = 1",
+            "",
+            "- Do the th\n\nAnd then the",
+            "概要を書き、",
+            "Steps (see the",
+            "「概要を",
+            "Build the API and",
+            "フィルターUIの",
+            "Roll out to 10% of users,",
+        ]
         for body in fine:
             self.assertFalse(content_checks.looks_cut_off(body), body)
         for body in cut:
             self.assertTrue(content_checks.looks_cut_off(body), body)
-        ev = [plan("Whole one.", "The second one stops mi")]
+        ev = [plan("Whole one.", "The second one stops and")]
         out = self.check({"tool": "create_task_plan", "not_cut_off": True}, ev)
         self.assertFalse(out["pending_write.not_cut_off"]["ok"])
         self.assertIn("[1]", out["pending_write.not_cut_off"]["detail"])
+
+    def test_the_old_heuristic_flagged_every_plain_body(self):
+        def old(body):  # the pre-MIP-1532 rule, kept here to show what it did
+            text = body.rstrip()
+            last = text.splitlines()[-1]
+            return last[-1].isalnum()
+
+        for body in ["### Summary\n\nDesign the filter UI", "### Summary\n\nテストの作成"]:
+            self.assertTrue(old(body))
+            self.assertFalse(content_checks.looks_cut_off(body))
+
+
+class BodyKindTests(SimpleTestCase):
+    def check(self, spec, events):
+        return {c["name"]: c for c in content_checks.check_pending(spec, events)}
+
+    def test_kinds(self):
+        kind = content_checks.body_kind
+        self.assertEqual(kind("", "T"), "none")
+        self.assertEqual(kind("  \n ", "T"), "none")
+        self.assertEqual(kind("### Summary\n\nDesign the filter UI", "Design the filter UI"), "skeleton")
+        self.assertEqual(kind("### Summary\n\nフィルターUIの設計", "フィルターUIの設計"), "skeleton")
+        self.assertEqual(kind("### Summary", "T"), "skeleton", "a heading and nothing else")
+        self.assertEqual(kind("Design the filter UI", "design  the FILTER ui"), "skeleton")
+        self.assertEqual(kind("### Summary\n\n**T**", "T"), "skeleton")
+        self.assertEqual(
+            kind("### Summary\n\nT\n\n### Acceptance criteria\n\n- [ ]\n- \n", "T"), "skeleton"
+        )
+        self.assertEqual(kind("### Summary\n\nT\n\n<!-- fill in -->", "T"), "skeleton")
+        self.assertEqual(kind("### Summary\n\nBuild it for the new API.", "T"), "content")
+        self.assertEqual(kind("### Summary\n\nT\n\n- [ ] Cover the empty state", "T"), "content")
+        self.assertEqual(kind("### Summary\n\nT is more than a title", "T"), "content")
+        self.assertEqual(kind("### Summary\n\nsomething", ""), "content")
+
+    def test_a_skeleton_passes_the_floor_and_is_reported_as_one(self):
+        ev = [plan("### Summary\n\nt0", "### Summary\n\nt1")]
+        out = self.check(
+            {"tool": "create_task_plan", "each_body_kind_at_least": "skeleton", "not_cut_off": True},
+            ev,
+        )
+        self.assertTrue(all(c["ok"] for c in out.values()), out)
+        self.assertIn("skeleton 2", out["pending_write.body_kinds"]["detail"])
+        self.assertIn("content 0", out["pending_write.body_kinds"]["detail"])
+
+    def test_no_body_fails_the_floor_and_content_floor_separates_the_two(self):
+        ev = [plan("### Summary\n\nt0", "")]
+        out = self.check({"tool": "create_task_plan", "each_body_kind_at_least": "skeleton"}, ev)
+        self.assertFalse(out["pending_write.each_body_kind_at_least"]["ok"])
+        self.assertIn("[1]", out["pending_write.each_body_kind_at_least"]["detail"])
+        ev = [plan("### Summary\n\nt0", "### Summary\n\nt1\n\nReal prose.")]
+        out = self.check({"tool": "create_task_plan", "each_body_kind_at_least": "content"}, ev)
+        self.assertFalse(out["pending_write.each_body_kind_at_least"]["ok"])
+        self.assertIn("[0]", out["pending_write.each_body_kind_at_least"]["detail"])
+        self.assertIn("skeleton 1, content 1", out["pending_write.body_kinds"]["detail"])
+
+    def test_a_body_that_is_the_title_of_another_task_is_content(self):
+        ev = [plan("### Summary\n\nt1", "### Summary\n\nt1")]  # tasks are named t0, t1
+        out = self.check({"tool": "create_task_plan", "report_body_kinds": True}, ev)
+        self.assertIn("skeleton 1, content 1", out["pending_write.body_kinds"]["detail"])
+
+    def test_report_only_never_fails(self):
+        out = self.check({"tool": "create_task_plan", "report_body_kinds": True}, [plan("")])
+        self.assertTrue(out["pending_write.body_kinds"]["ok"])
+        self.assertIn("none 1", out["pending_write.body_kinds"]["detail"])
+
+    def test_an_empty_plan_has_no_bodies_and_fails_the_floor(self):
+        ev = [pending("create_task_plan", {"tasks": []})]
+        out = self.check({"tool": "create_task_plan", "each_body_kind_at_least": "skeleton"}, ev)
+        self.assertFalse(out["pending_write.each_body_kind_at_least"]["ok"])
+
+    def test_t1510_cases_use_the_kind_checks(self):
+        cases = [c for c in harness.load_cases(include_legacy=False) if "t1510" in c.tags]
+        write = [c for c in cases if "single-task" not in c.id]
+        self.assertEqual(len(write), 4)
+        for c in write:
+            spec = c.raw["expect"]["pending_write"]
+            self.assertNotIn("each_body_chars_at_least", spec, c.id)
+            self.assertEqual(spec["each_body_kind_at_least"], "skeleton", c.id)
+            self.assertTrue(spec["report_body_kinds"], c.id)
+
 
     def test_answer_length_is_in_characters(self):
         checks = content_checks.check_answer_length(
