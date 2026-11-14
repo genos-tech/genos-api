@@ -68,18 +68,20 @@ class Command(CronCommand):
         if not apply:
             self.stdout.write(
                 f"would hand over {owned.chats} group / project chat(s) owned by {owned.accounts} "
-                "deleted account(s) to a live owner"
+                "deleted account(s) to a live owner (a project may give the team owner a new project seat)"
             )
             return
         self.stdout.write(
             f"handed {owned.transferred} group(s) to a remaining member, "
-            f"{owned.projects_transferred} project(s) to the team owner; left {owned.ownerless} "
+            f"{owned.projects_transferred} project(s) to the team owner ({owned.seats_added} of them "
+            f"gave the team owner a new project seat); left {owned.ownerless} "
             f"group(s) ownerless and {owned.left} project chat(s) unchanged"
         )
         log.info(
-            "prune_deleted_account_memberships owners: groups=%d projects=%d ownerless=%d left=%d",
+            "prune_deleted_account_memberships owners: groups=%d projects=%d seats=%d ownerless=%d left=%d",
             owned.transferred,
             owned.projects_transferred,
+            owned.seats_added,
             owned.ownerless,
             owned.left,
         )

@@ -170,15 +170,82 @@ class ProjectChatOwnerFollowsDeletionTests(_Fixtures, CrossTeamTestCase):
         self.assertEqual(self._chat(project).owner_id, self.a_owner.id)
         self.assertFalse(self._chat(project).is_deleted)
 
-    def test_a_team_owner_who_is_not_on_the_project_is_not_put_on_it(self):
+    def test_a_team_owner_who_is_not_on_the_project_is_added_and_takes_it(self):
+        """Ken's decision (MIP-1550): the team owner gets a seat AND the project; the chat
+        mirror follows through the existing ProjectMembers signal."""
         project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
-        delete_account(self.leaver)
-        project.refresh_from_db()
-        self.assertEqual(project.owner_id, self.leaver.id)  # unchanged: a product decision
         self.assertFalse(
             ProjectMembers.objects.filter(project=project, attendee=self.a_owner).exists()
         )
-        self.assertFalse(self._chat(project).is_deleted)
+        delete_account(self.leaver)
+        project.refresh_from_db()
+        self.assertEqual(project.owner_id, self.a_owner.id)
+        self.assertEqual(
+            ProjectMembers.objects.filter(project=project, attendee=self.a_owner).count(), 1
+        )
+        chat = self._chat(project)
+        self.assertEqual(chat.owner_id, self.a_owner.id)
+        self.assertFalse(chat.is_deleted)
+        self.assertTrue(
+            ChannelMember.objects.filter(channel=chat, user=self.a_owner, is_deleted=False).exists()
+        )
+
+    def test_the_hand_over_leaves_the_owner_transferred_event(self):
+        from origin.models.common.security_event_models import SecurityAction, SecurityEvent
+
+        project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
+        delete_account(self.leaver)
+        event = SecurityEvent.objects.filter(
+            action=SecurityAction.OWNER_TRANSFERRED, target_id=str(project.project_id)
+        ).get()
+        self.assertEqual(event.metadata["to_user_id"], str(self.a_owner.id))
+
+    def test_a_team_owner_already_on_the_project_gets_no_second_row(self):
+        project = self.make_project(self.leaver, [self.leaver, self.a_owner])
+        delete_account(self.leaver)
+        self.assertEqual(
+            ProjectMembers.objects.filter(project=project, attendee=self.a_owner).count(), 1
+        )
+
+    def test_an_inactive_or_deleted_team_owner_is_never_chosen_or_added(self):
+        project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
+        CustomUser.objects.filter(pk=self.a_owner.pk).update(is_active=False)
+        delete_account(self.leaver)
+        project.refresh_from_db()
+        self.assertEqual(project.owner_id, self.leaver.id)
+        self.assertFalse(
+            ProjectMembers.objects.filter(project=project, attendee=self.a_owner).exists()
+        )
+
+    def test_a_team_owner_flagged_deleted_is_never_chosen_or_added(self):
+        project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
+        CustomUser.objects.filter(pk=self.a_owner.pk).update(is_deleted=True)
+        delete_account(self.leaver)
+        project.refresh_from_db()
+        self.assertEqual(project.owner_id, self.leaver.id)
+        self.assertFalse(
+            ProjectMembers.objects.filter(project=project, attendee=self.a_owner).exists()
+        )
+
+    def test_a_team_owner_who_left_the_team_is_never_chosen_or_added(self):
+        project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
+        TeamMembers.objects.filter(team=self.team_a, attendee=self.a_owner).update(is_deleted=True)
+        delete_account(self.leaver)
+        project.refresh_from_db()
+        self.assertEqual(project.owner_id, self.leaver.id)
+        self.assertFalse(
+            ProjectMembers.objects.filter(project=project, attendee=self.a_owner).exists()
+        )
+
+    def test_prune_reports_the_seat_it_added(self):
+        project = self.make_project(self.leaver, [self.leaver, self.a_viewer])
+        other = self.make_project(self.leaver, [self.leaver, self.a_owner], name="Has seat")
+        CustomUser.objects.filter(pk=self.leaver.pk).update(is_deleted=True)
+        result = service.prune(apply=True)
+        self.assertEqual((result.projects_transferred, result.seats_added, result.left), (2, 1, 0))
+        project.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual((project.owner_id, other.owner_id), (self.a_owner.id, self.a_owner.id))
 
     def test_a_project_someone_else_owns_is_untouched(self):
         project = self.make_project(self.a_viewer, [self.a_viewer, self.leaver, self.a_owner])

@@ -17,9 +17,10 @@ The rule, per kind. A chat is NEVER deleted.
   of the chat who is also on the chat's own team acts as its owner, so a group never strands.
 * **PM (project chat)**: the chat MIRRORS the project (`pm_channel_signals` writes
   `owner_id` from `ProjectMaster.owner` on every project save), so the chat's owner can only be
-  changed by changing the project's. The project goes to the team owner, and only when the team
-  owner is ALREADY on the project (`ProjectMembers`): they become its owner, nobody gains a seat.
-  If they are not, the project and its chat are left as they are and counted.
+  changed by changing the project's. The project goes to the team owner (an active, non-deleted
+  account that is still on the team). Ken's decision: when they are not on the project they are
+  ADDED (a `ProjectMembers` row; its signal mirrors them into the chat), so the team owner gains
+  a seat there; one already on it gets no second row. No live team owner: left as is, counted.
 * **DM and MDM**: not touched (they have no owner role).
 
 Only chats whose owner is the one deleted account are selected, and only that owner's own role
@@ -53,6 +54,7 @@ class OwnerCounts:
     chats: int = 0  # group / project chats looked at
     transferred: int = 0  # a group handed to a remaining member
     projects_transferred: int = 0  # a project (and so its chat) handed to the team owner
+    seats_added: int = 0  # of those, how many gave the team owner a new project seat
     ownerless: int = 0  # a group with nobody to hand it to: owner cleared
     left: int = 0  # a project chat whose team owner is not on the project: unchanged
 
@@ -91,27 +93,36 @@ def _reassign_group(channel: Channel, dead_id) -> str:
 
 
 def _reassign_project_chat(channel: Channel, dead_id) -> str:
-    """Hand the project (whose chat mirrors it) to the team owner already on it.
+    """Hand the project (whose chat mirrors it) to the team owner, adding them to it if needed.
 
-    Returns `projects_transferred` or `left`."""
+    Returns `projects_transferred`, `projects_transferred+seat` (the team owner was not on the
+    project and got a `ProjectMembers` row, whose signal mirrors them into the chat) or `left`
+    (no live team owner to hand it to)."""
     project = ProjectMaster.objects.filter(project_id=channel.project_id).first()
     team = TeamMaster.objects.filter(team_id=channel.team_id).first()
     if project is None or team is None or str(project.owner_id) != str(dead_id):
         return "left"
     new_id = team.owner_id
+    # A live team owner only: an active, non-deleted account that is still a team member.
     live_owner = (
         new_id is not None
         and str(new_id) != str(dead_id)
-        and TeamMembers.objects.filter(team_id=team.team_id, attendee_id=new_id, is_deleted=False)
-        .filter(attendee__is_deleted=False)
-        .exists()
-        and ProjectMembers.objects.filter(
-            project_id=project.project_id, attendee_id=new_id
+        and TeamMembers.objects.filter(
+            team_id=team.team_id,
+            attendee_id=new_id,
+            is_deleted=False,
+            attendee__is_deleted=False,
+            attendee__is_active=True,
         ).exists()
     )
     if not live_owner:
         return "left"
+    seat = False
     with transaction.atomic():
+        # Ken's decision: the team owner gets a seat when they have none (no duplicate row).
+        _, seat = ProjectMembers.objects.get_or_create(
+            project_id=project.project_id, attendee_id=new_id, defaults={"team_id": team.team_id}
+        )
         project.owner_id = new_id
         # The post_save receiver writes the new owner onto the project chat.
         project.save(update_fields=["owner", "ts_updated_at"])
@@ -130,7 +141,7 @@ def _reassign_project_chat(channel: Channel, dead_id) -> str:
                 "via": "account_deleted",
             },
         )
-    return "projects_transferred"
+    return "projects_transferred+seat" if seat else "projects_transferred"
 
 
 def _reassign(channel: Channel, dead_id) -> str:
@@ -150,7 +161,8 @@ def _tally(results: list[str], accounts: int) -> OwnerCounts:
         accounts=accounts,
         chats=len(results),
         transferred=results.count("transferred"),
-        projects_transferred=results.count("projects_transferred"),
+        projects_transferred=sum(r.startswith("projects_transferred") for r in results),
+        seats_added=results.count("projects_transferred+seat"),
         ownerless=results.count("ownerless"),
         left=results.count("left"),
     )
