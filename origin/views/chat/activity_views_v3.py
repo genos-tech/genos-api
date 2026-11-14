@@ -37,11 +37,12 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import Activity
+from origin.models.chat.unified_models import Activity, Channel
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.chat.unified_serializers import ActivitySerializer
+from origin.services.channel_scope import chat_member_q
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
 from origin.views.utils.request_validators import (
@@ -54,6 +55,9 @@ from origin.views.utils.scope_guards import is_team_member
 
 _DEFAULT_SINCE_DAYS = 30
 _MAX_ROWS = 200
+# The most ids one response lists as tombstones (newest first). Ids only, so this is ~80 KB; a
+# member with more rows than this in chats they lost gets the rest on the next full reload.
+_MAX_TOMBSTONES = 2000
 
 
 def _unreadable_note(user, team_id, surface_type, meta) -> Response | None:
@@ -165,6 +169,20 @@ class ActivityListView(AuthenticatedAPIView):
     older page; `next_cursor` is the position to pass back as `?cursor=` to
     get it. A request with no `cursor` is unchanged, so an old client keeps
     working and still gets the newest page (MIP-740).
+
+    **A row of a chat the caller can no longer read carries no content (MIP-1513).** An
+    activity row embeds the message (body, sender, attachments). Once the recipient has left
+    the chat, been taken off a project's chat, or the chat was deleted, that is content of a
+    chat they cannot open, so such a row is not listed. Dropping it alone would break the
+    client's incremental sync (`since` only returns newer rows and the client never re-fetches
+    an older one, so a row it already cached would stay on screen), so the response also says
+    `tombstones`: the ids of the caller's rows in lost chats within the 30-day window,
+    whatever `since` is, newest first, capped at `_MAX_TOMBSTONES`. Ids only, no content. They
+    ride on a request with no `cursor` (the first page of a sync); a `cursor` page is a later
+    page of the same sync and carries `[]`. The rule is the chat-membership one
+    (`channel_scope.chat_member_q`, the rule `can_read_chat` applies, on a live chat): an
+    `Activity.team` is its channel's team, so `can_read_chat`'s team scoping is always met.
+    Channel-less surface rows (task body, notes) are not chat rows and are unchanged.
     """
 
     def get(self, request):
@@ -191,6 +209,7 @@ class ActivityListView(AuthenticatedAPIView):
                 return Response(
                     {
                         "activities": [],
+                        "tombstones": [],
                         "since": since.isoformat(),
                         "server_time": server_time.isoformat(),
                     }
@@ -198,8 +217,13 @@ class ActivityListView(AuthenticatedAPIView):
         # The team narrowing has to land BEFORE the `[:_MAX_ROWS]` slice
         # below — a filter on a sliced queryset raises.
         narrowing = {"team_id": team_id} if team_id else {}
+        # The chats the caller may read now (MIP-1513): a row of any other chat is a tombstone.
+        readable = Channel.objects.filter(chat_member_q(request.user.id), is_deleted=False).values(
+            "id"
+        )
         qs = (
             Activity.objects.filter(
+                Q(channel_id__isnull=True) | Q(channel_id__in=readable),
                 recipient=request.user,
                 ts_created_at__gte=since,
                 **narrowing,
@@ -231,9 +255,27 @@ class ActivityListView(AuthenticatedAPIView):
         rows = list(qs[: _MAX_ROWS + 1])
         has_more = len(rows) > _MAX_ROWS
         rows = rows[:_MAX_ROWS]
+        tombstones = []
+        if position is None:
+            # Over the whole retention window, not just `since`: the rows the client already
+            # holds are older than `since`, and they are the ones to drop.
+            window = min(since, timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS))
+            tombstones = [
+                str(row_id)
+                for row_id in Activity.objects.filter(
+                    ~Q(channel_id__in=readable),
+                    channel_id__isnull=False,
+                    recipient=request.user,
+                    ts_created_at__gte=window,
+                    **narrowing,
+                )
+                .order_by("-ts_created_at", "-id")
+                .values_list("id", flat=True)[:_MAX_TOMBSTONES]
+            ]
         return Response(
             {
                 "activities": ActivitySerializer(rows, many=True).data,
+                "tombstones": tombstones,
                 "since": since.isoformat(),
                 "server_time": server_time.isoformat(),
                 "has_more": has_more,

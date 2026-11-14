@@ -9,7 +9,13 @@ team A's mentions showed up while team B was on screen.
 
 import uuid
 
-from origin.models.chat.unified_models import Activity, ActivityType, Channel, ChannelKind
+from origin.models.chat.unified_models import (
+    Activity,
+    ActivityType,
+    Channel,
+    ChannelKind,
+    ChannelMember,
+)
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.tests.test_base import BaseAPITestCase
 
@@ -41,6 +47,9 @@ class ActivityListTeamScopeTests(BaseAPITestCase):
             title=f"{team.team_name} chat",
             owner=self.user2,
         )
+        # The recipient is in the chat: a row of a chat they are not in is a tombstone, not a
+        # row (MIP-1513).
+        ChannelMember.objects.create(channel=channel, user=self.user)
         return Activity.objects.create(
             team=team,
             recipient=self.user,
@@ -153,6 +162,7 @@ class ActivityListPagingTests(BaseAPITestCase):
         self.channel = Channel.objects.create(
             team=self.team, kind=ChannelKind.GM, title="chat", owner=self.user2
         )
+        ChannelMember.objects.create(channel=self.channel, user=self.user)
         self.authenticate()
 
     def _make(self, count, *, same_instant=False):
@@ -294,6 +304,7 @@ class ActivityServerTimeIsTakenBeforeTheQueryTests(BaseAPITestCase):
         self.channel = Channel.objects.create(
             team=self.team, kind=ChannelKind.GM, title="chat", owner=self.user2
         )
+        ChannelMember.objects.create(channel=self.channel, user=self.user)
         self.authenticate()
 
     def _activity(self):
