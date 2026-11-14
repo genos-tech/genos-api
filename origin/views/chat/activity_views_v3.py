@@ -47,6 +47,7 @@ from origin.services.activity_surface_access import (
     unreadable_surface_activity_ids,
 )
 from origin.services.channel_scope import chat_member_q
+from origin.services.v3_activity import SURFACE_AI_APP
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
 from origin.views.utils.request_validators import (
@@ -62,6 +63,19 @@ _MAX_ROWS = 200
 # The most ids one response lists as tombstones (newest first). Ids only, so this is ~80 KB; a
 # member with more rows than this in chats they lost gets the rest on the next full reload.
 _MAX_TOMBSTONES = 2000
+
+
+def _ai_app_surface_refusal() -> Response:
+    """400 for the "your AI app did X" surface (10): only `mcp_notice` writes it (MIP-1573).
+
+    The client reads that notice's app icon (`meta.appFamily`) from rows of this surface, so a
+    client that could file one through these endpoints could put an official Claude / ChatGPT
+    icon on text of its own, in a colleague's feed. The producers only serve 5 (task body) and
+    6/7/8 (the notes); anything else is refused rather than stored."""
+    return Response(
+        {"error": "surface_type is not one a client may write."},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 def _unreadable_note(user, team_id, surface_type, meta) -> Response | None:
@@ -483,6 +497,8 @@ class ActivitySurfaceView(AuthenticatedAPIView):
                 {"error": "surface_type must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if surface_type == SURFACE_AI_APP:
+            return _ai_app_surface_refusal()
         # The caller (the mentioner / `actor`) must belong to the team
         # they're creating activities in — otherwise an authenticated user
         # could fabricate sidebar entries for any member of any team whose
@@ -557,6 +573,8 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
                 {"error": "surface_type must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if surface_type == SURFACE_AI_APP:
+            return _ai_app_surface_refusal()
         # Same actor-membership guard as the mention endpoint: the commenter
         # must belong to the team, so an authenticated user can't fabricate
         # activities in a team they're not in. (Recipients are separately

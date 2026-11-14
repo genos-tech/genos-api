@@ -108,3 +108,19 @@ def app_family(application: Any) -> str | None:
         if all(_is_callback_of(family, uri) for uri in uris):
             return family
     return None
+
+
+def credential_family(credential: Any) -> str | None:
+    """`claude` or `chatgpt` when `credential` is a connected app of that official family, else None.
+
+    What `McpOAuthCredential.via` stamped from the client's registered redirect URIs (never its
+    name), read from the credential in hand; an API key, any other kind of credential, one that
+    cannot say, and a family that is not one of `APP_FAMILIES` all answer None."""
+    if getattr(credential, "kind", None) != "oauth":
+        return None
+    try:
+        via = credential.via()
+    except Exception:  # noqa: BLE001 - a credential that cannot describe itself has no family
+        return None
+    app = via.get("app") if isinstance(via, dict) else None
+    return app if isinstance(app, str) and app in APP_FAMILIES else None
