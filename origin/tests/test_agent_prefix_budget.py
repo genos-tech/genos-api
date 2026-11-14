@@ -17,7 +17,9 @@ About 4.2 characters to a token, measured against Gemini's own count.
 from __future__ import annotations
 
 import json
+from unittest import mock
 
+from django.conf import settings
 from django.test import SimpleTestCase
 
 from origin.search_engine.agent.controller import _build_tool_declarations
@@ -48,7 +50,12 @@ def _declared_chars() -> int:
 
 class PrefixBudgetTests(SimpleTestCase):
     def test_the_prefix_stays_inside_its_budget(self) -> None:
-        total = _declared_chars() + len(AGENT_SYSTEM_PROMPT)
+        # What PRODUCTION sends: the test settings keep the flags MIP-1089 turned on off, so lay the
+        # production defaults over them (`apis.settings` keeps them).
+        from apis import settings as production  # noqa: PLC0415
+
+        with mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE):
+            total = _declared_chars() + len(AGENT_SYSTEM_PROMPT)
         self.assertLessEqual(
             total,
             BUDGET_CHARS,

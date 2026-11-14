@@ -27,6 +27,7 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, flagged_tools, get_app_tool
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_agent_content_length_pins import SCENARIOS, LoopBase, transcript
+from apis import settings_test as test_settings
 from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
@@ -79,13 +80,18 @@ class AllOnArmTests(SimpleTestCase):
         # MIP-1089 flipped ten flags on by the 2026-11-14 grouped eval. The others stay dark until
         # their own decision: the timeline tool (look at 3 JA cases first), the client name in task
         # history, content length (tune first) and the body on the user model (empty bodies, MIP-1503).
+        # The PRODUCTION defaults: `apis.settings` itself. The test settings keep the shipped flags
+        # off (see `apis/settings_test.py`), so `django.conf.settings` would not tell.
+        from apis import settings as production  # noqa: PLC0415
+
         for key in ALL_ON:
             want = key in SHIPPED_ON
             self.assertIs(
-                bool(settings.SEARCH_ENGINE.get(key)),
+                bool(production.SEARCH_ENGINE.get(key)),
                 want,
                 f"{key} must default to {'on' if want else 'off'}",
             )
+        self.assertEqual(set(SHIPPED_ON), set(getattr(test_settings, "AGENT_FLAGS_ON_IN_PRODUCTION")))
 
     def test_the_flags_the_stacks_added_are_all_in_the_union(self):
         expected = {
