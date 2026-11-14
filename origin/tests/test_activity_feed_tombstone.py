@@ -143,14 +143,35 @@ class FeedKeepsNoContentOfALostChat(FeedBase):
         self.assertEqual(self.ids(data), {str(row.id)})
         self.assertEqual(data["tombstones"], [])
 
-    def test_a_surface_row_with_no_channel_is_not_touched(self):
+    def test_a_surface_row_with_no_channel_is_judged_by_its_task_not_its_chat(self):
+        # MIP-1560: no channel to ask, so the task / note it points at decides. Here the
+        # recipient is the assignee of the task, so the row is listed and not a tombstone.
+        from origin.models.project.prj_models import ProjectMaster
+        from origin.models.task.task_models import TaskMaster
+
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P",
+            code="SRF",
+            owner=self.user2,
+            project_system_user=self.user2,
+        )
+        task = TaskMaster.objects.create(
+            team=self.team,
+            project=project,
+            reporter=self.user2,
+            assignee=self.user,
+            title="T",
+            status="Open",
+            project_task_number=1,
+        )
         row = Activity.objects.create(
             team=self.team,
             recipient=self.user,
             actor=self.user2,
             activity_type=ActivityType.MENTION,
             surface_type=5,
-            meta={"taskId": 1},
+            meta={"taskId": task.task_id},
         )
         data = self.get()
         self.assertEqual(self.ids(data), {str(row.id)})
