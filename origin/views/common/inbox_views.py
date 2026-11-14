@@ -723,7 +723,8 @@ def _note_and_owner(note_type, note_id):
     The owner is the explicit `NotePermissionMaster` ROLE_OWNER row when
     one exists (the canonical "note owner" the role-management UI shows),
     falling back to the master row's `owner` FK for notes created before
-    the permission table was backfilled.
+    the permission table was backfilled. A TASK note's FK owner counts only while they are on its
+    project (MIP-1511): one who left is nobody to ask, and cannot approve a request.
     """
     from origin.models.note.common_note_models import NotePermissionMaster
     from origin.views.utils.note_role import ROLE_OWNER
@@ -741,7 +742,17 @@ def _note_and_owner(note_type, note_id):
         .values_list("user_id", flat=True)
         .first()
     )
-    return note, owner_id or getattr(note, "owner_id", None)
+    if owner_id:
+        return note, owner_id
+    fallback = getattr(note, "owner_id", None)
+    if note_type == 2 and fallback is not None:
+        from origin.models.project.prj_models import ProjectMembers
+
+        if not ProjectMembers.objects.filter(
+            project_id=note.project_id, attendee_id=fallback
+        ).exists():
+            fallback = None
+    return note, fallback
 
 
 class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):

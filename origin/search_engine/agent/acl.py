@@ -44,9 +44,10 @@ def may_read_note(*, user_id, note_type_code: int, note_id: int, owner_id) -> bo
     authorizes with, and the one the approval card's `LabelAccess.note_title`
     labels with.
 
-    A CHAT note has no owner exception (MIP-1492): it belongs to its chat, so
-    its author who left the chat, the project or the team reads it only through
-    a grant, like anyone else. Personal and task notes keep theirs.
+    Only a PERSONAL note has an owner exception: its owner is the note's whole
+    ACL (My Notes). A chat note (MIP-1492) belongs to its chat and a task note
+    (MIP-1511) to its project, so their author who left reads them only through
+    a grant, like anyone else; while they are a member, membership carries them.
 
     Prefer this to `user_id in personal_note_acl_user_ids(...)` for a read
     decision. That set is built for the search index, so a note in a PUBLIC
@@ -58,7 +59,7 @@ def may_read_note(*, user_id, note_type_code: int, note_id: int, owner_id) -> bo
     """
     if not user_id:
         return False
-    if note_type_code != NOTE_TYPE_CHAT and owner_id and str(owner_id) == str(user_id):
+    if note_type_code == NOTE_TYPE_PERSONAL and owner_id and str(owner_id) == str(user_id):
         return True
     return get_effective_role(user_id, note_type_code, note_id) is not None
 
@@ -211,10 +212,14 @@ def chat_note_acl_user_ids(*, owner_id, chat_type_code: int, channel_id, note_id
 
 
 def task_note_acl_user_ids(*, owner_id, project_id: int | None, note_id: int) -> set[str]:
-    """Task-note ACL: owner + project members + explicit grants."""
+    """Task-note ACL: project members + explicit grants.
+
+    The note's author is NOT added (MIP-1511): a task note belongs to its project, so an author
+    who left it is no longer in this set; while they are a member they are in it as one, and
+    their own Owner row is among the grants. `owner_id` stays in the signature for the callers
+    that hold it; it no longer widens the set.
+    """
     out: set[str] = set()
-    if owner_id:
-        out.add(str(owner_id))
     if project_id:
         out.update(
             str(uid)

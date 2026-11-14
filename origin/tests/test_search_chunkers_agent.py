@@ -228,6 +228,12 @@ class TestAclHelpers(BaseAPITestCase):
         out = acl_mod.task_note_acl_user_ids(
             owner_id=self.user.id, project_id=project.project_id, note_id=9
         )
+        # The author is not added (MIP-1511): `self.user` is not on the project, so not a reader.
+        self.assertEqual(out, {str(self.user2.id)})
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        out = acl_mod.task_note_acl_user_ids(
+            owner_id=self.user.id, project_id=project.project_id, note_id=9
+        )
         self.assertEqual(out, {str(self.user.id), str(self.user2.id)})
 
     def test_chat_note_acl_owner_plus_channel_members(self):
@@ -854,7 +860,8 @@ class TestNoteChunker(BaseAPITestCase):
         self.assertEqual(c.note_type, "task")
         self.assertEqual(c.task_id, str(task.task_id))
         self.assertEqual(c.project_id, str(project.project_id))
-        self.assertEqual(set(c.acl_user_ids), {str(self.user.id), str(self.user2.id)})
+        # the author (`self.user`) is not on the project: not a reader (MIP-1511)
+        self.assertEqual(set(c.acl_user_ids), {str(self.user2.id)})
         self.assertIn(f"task:{task.task_id}", c.related_entity_ids)
 
 
