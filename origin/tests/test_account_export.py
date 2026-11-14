@@ -11,10 +11,12 @@ import json
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
+from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services.account_export import EXPORT_FORMAT_VERSION, build_export
+from origin.services.v3_activity import SURFACE_AI_APP
 from origin.tests.test_base import BaseAPITestCase
 
 URL = "/api/v2/user/account/export/"
@@ -91,6 +93,82 @@ class ExportContentTests(BaseAPITestCase):
         # It goes out through JsonResponse — anything non-serializable
         # (a UUID, a date) has to have been stringified already.
         json.dumps(build_export(self.user))
+
+
+class AiAppNoticeExportTests(BaseAPITestCase):
+    """MIP-1541: the member's AI-app notices (up to five item titles each) are their own
+    content, so they are in the export; another member's never are."""
+
+    def notice(self, recipient, title, **kw):
+        return Activity.objects.create(
+            team=self.team,
+            recipient=recipient,
+            actor=recipient,
+            activity_type=ActivityType.AI_APP,
+            surface_type=SURFACE_AI_APP,
+            meta={
+                "aiApp": True,
+                "app": "Claude Code",
+                "tool": "create_task_plan",
+                "verb": "created",
+                "kind": "task",
+                "count": 2,
+                "items": [{"kind": "task", "id": 7, "displayId": "WEB-7", "title": title}],
+            },
+            **kw,
+        )
+
+    def titles(self, doc):
+        return [n["notice"]["items"][0]["title"] for n in doc["ai_app_notices"]]
+
+    def test_the_members_notices_are_exported_with_their_titles(self):
+        self.notice(self.user, "Plan the launch", is_read=True)
+        doc = build_export(self.user)
+        self.assertEqual(doc["counts"]["ai_app_notices"], 1)
+        (n,) = doc["ai_app_notices"]
+        self.assertEqual(n["team_id"], str(self.team.team_id))
+        self.assertTrue(n["is_read"])
+        self.assertTrue(n["created_at"])
+        self.assertEqual(n["notice"]["app"], "Claude Code")
+        self.assertEqual(n["notice"]["verb"], "created")
+        self.assertEqual(n["notice"]["count"], 2)
+        self.assertEqual(n["notice"]["items"][0]["title"], "Plan the launch")
+        json.dumps(doc)
+
+    def test_oldest_first(self):
+        a = self.notice(self.user, "first")
+        b = self.notice(self.user, "second")
+        Activity.objects.filter(pk=a.pk).update(ts_created_at="2026-01-01T00:00:00Z")
+        Activity.objects.filter(pk=b.pk).update(ts_created_at="2026-02-01T00:00:00Z")
+        self.assertEqual(self.titles(build_export(self.user)), ["first", "second"])
+
+    def test_another_members_notices_are_never_exported(self):
+        self.notice(self.user2, "someone else's secret")
+        doc = build_export(self.user)
+        self.assertEqual(doc["ai_app_notices"], [])
+        self.assertEqual(doc["counts"]["ai_app_notices"], 0)
+        self.assertNotIn("someone else's secret", json.dumps(doc))
+
+    def test_other_activity_kinds_are_not_listed_as_notices(self):
+        Activity.objects.create(
+            team=self.team,
+            recipient=self.user,
+            actor=self.user2,
+            activity_type=ActivityType.MENTION,
+            surface_type=5,
+            meta={"items": [{"title": "not an AI notice"}]},
+        )
+        self.assertEqual(build_export(self.user)["ai_app_notices"], [])
+
+    def test_the_endpoint_returns_only_the_callers_notices(self):
+        self.notice(self.user, "mine")
+        self.notice(self.user2, "theirs")
+        self.authenticate()
+        resp = self.client.get(URL)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        body = json.loads(resp.content)
+        self.assertEqual(self.titles(body), ["mine"])
+        self.assertNotIn("theirs", json.dumps(body))
 
 
 class ExportEndpointTests(BaseAPITestCase):
