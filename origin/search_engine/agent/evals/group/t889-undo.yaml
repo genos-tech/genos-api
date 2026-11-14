@@ -15,6 +15,7 @@
   tags: [eval-group, t889-undo]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "Create a task called 'Ship it' in the project."
   proposal:
     tool: create_task
@@ -32,6 +33,7 @@
   tags: [eval-group, t889-undo]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "プロジェクトに「出荷する」というタスクを作成してください。"
   proposal:
     tool: create_task
@@ -49,6 +51,7 @@
   tags: [eval-group, t889-undo]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "Create a task called 'Ship it' in the project."
   proposal:
     tool: create_task
@@ -66,6 +69,7 @@
   tags: [eval-group, t889-undo]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "プロジェクトに「出荷する」というタスクを作成してください。"
   proposal:
     tool: create_task

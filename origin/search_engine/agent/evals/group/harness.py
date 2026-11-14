@@ -76,6 +76,8 @@ GROUP_ONLY_KEYS = frozenset(
         "member_prefs",
         "llm",
         "needs_env",
+        # MIP-1504: the result the case is EXPECTED to give on an arm (see GroupCase.expected).
+        "expect_baseline",
     }
 )
 # `expect:` keys evaluated by the harness (runner.py does not know them).
@@ -85,6 +87,8 @@ GROUP_EXPECT_KEYS = frozenset(
         "tools_in_order",
         "max_calls",
         "no_tool_results_contain",
+        # MIP-1518: regexes the answer must NOT match (forbid a claim, not a word)
+        "answer_does_not_match",
         # MIP-905 (group/content_checks.py): what the model proposed, and the answer's length
         "pending_write",
         "answer_chars_at_most",
@@ -162,6 +166,11 @@ class GroupCase:
     source: str
     reps: int | None = None
     requires_arm: str | None = None
+    #: `{arm name: "pass"|"fail"}` from the case's `expect_baseline` (MIP-1504). A string value
+    #: is the BASELINE (arm0); a mapping names arms. Only shown in the report and the JSONL row:
+    #: it never changes what runs, what passes or the regression arithmetic. A positive case
+    #: fails on arm0 BY DESIGN, and a FAIL there must not read as breakage.
+    expected: dict[str, str] = field(default_factory=dict)
 
     @property
     def base_id(self) -> str:
@@ -198,6 +207,27 @@ def _check_resume_entry(entry: dict[str, Any], *, source: str, cid: str) -> None
     polarity = entry.get("polarity")
     if polarity is not None and polarity not in POLARITIES:
         raise HarnessError(f"{source}: case {cid}: polarity must be one of {POLARITIES}")
+
+
+EXPECTED_RESULTS = ("pass", "fail")
+
+
+def _parse_expected(entry: dict[str, Any], *, source: str, cid: str) -> dict[str, str]:
+    """`expect_baseline: fail` (arm0) or `expect_baseline: {arm0: fail, t977: pass}`."""
+    raw = entry.get("expect_baseline")
+    if raw in (None, ""):
+        return {}
+    pairs = raw if isinstance(raw, dict) else {ARM0: raw}
+    out: dict[str, str] = {}
+    for arm_name, value in pairs.items():
+        word = str(value).strip().lower()
+        if word not in EXPECTED_RESULTS:
+            raise HarnessError(
+                f"{source}: case {cid}: expect_baseline for {arm_name!r} must be one of "
+                f"{EXPECTED_RESULTS}, got {value!r}"
+            )
+        out[str(arm_name)] = word
+    return out
 
 
 def _detect_lang(text: str) -> str:
@@ -238,6 +268,7 @@ def _case_from_entry(entry: dict[str, Any], *, source: str, group_file: bool) ->
         source=source,
         reps=int(reps) if reps else None,
         requires_arm=entry.get("requires_arm") or None,
+        expected=_parse_expected(entry, source=source, cid=cid),
     )
 
 
@@ -817,6 +848,82 @@ def guarded_llm(guard: SessionSpend) -> Iterator[None]:
 
 
 # --------------------------------------------------------------------------- #
+# The run environment (MIP-1504)                                              #
+# --------------------------------------------------------------------------- #
+
+#: The host name the DRF/Django test client sends. Production settings do not list it, so a
+#: `kind: resume` case (which drives the real views through `APIClient`) died with
+#: `DisallowedHost: testserver` outside the test runner, which adds it by itself.
+TEST_HOST = "testserver"
+
+
+@contextmanager
+def allow_test_host() -> Iterator[None]:
+    """Make `testserver` an allowed host for the block; the list is restored afterwards."""
+    before = list(settings.ALLOWED_HOSTS)
+    if TEST_HOST not in before:
+        settings.ALLOWED_HOSTS = [*before, TEST_HOST]
+    try:
+        yield
+    finally:
+        settings.ALLOWED_HOSTS = before
+
+
+def plan_needs_search(plan: Plan) -> bool:
+    """Whether any run of the plan reads the OpenSearch index (behaviour and resume cases run the
+    agent, whose search tools do; routing cases make one model call and touch nothing)."""
+    return any(i.case.kind != "routing" for i in plan.runnable())
+
+
+def opensearch_preflight(client: Any = None, *, alias: str | None = None) -> list[str]:
+    """Problems with the OpenSearch alias the run would search; `[]` = fine.
+
+    The dev compose alias `knowledge_chunks_current` can be a PLAIN auto-created index with no
+    vector mapping: every vector search then 400s, the agent finds nothing, and a paid run
+    measures an agent with no retrieval (the first paid session lost about $0.2 to it). So a real
+    run needs an ALIAS whose index maps `embedding` as `knn_vector`: set `OPENSEARCH_INDEX` and
+    `OPENSEARCH_ALIAS` to names of the run's own, then `opensearch_setup` and a reindex.
+
+    `client` is injectable (a test passes a fake); by default the production client is used.
+    """
+    cfg = settings.SEARCH_ENGINE
+    alias = alias or str(cfg.get("OPENSEARCH_ALIAS") or "")
+    fix = (
+        "set OPENSEARCH_INDEX and OPENSEARCH_ALIAS to names of the run's own, then run "
+        "`python manage.py opensearch_setup` and reindex"
+    )
+    try:
+        if client is None:
+            from origin.search_engine.opensearch_client import get_client  # noqa: PLC0415
+
+            client = get_client()
+        is_alias = bool(client.indices.exists_alias(name=alias))
+        exists = is_alias or bool(client.indices.exists(index=alias))
+        mapping = client.indices.get_mapping(index=alias) if exists else {}
+    except Exception as exc:  # noqa: BLE001 - any failure here means the run cannot search
+        return [f"cannot read OpenSearch for {alias!r} ({type(exc).__name__}: {str(exc)[:200]})"]
+    problems: list[str] = []
+    if not exists:
+        return [f"OpenSearch has no alias or index named {alias!r}: {fix}"]
+    if not is_alias:
+        problems.append(
+            f"{alias!r} is a plain index, not an alias (the dev compose default is created by the "
+            f"first write, with no vector mapping): {fix}"
+        )
+    for index, body in sorted((mapping or {}).items()):
+        props = ((body or {}).get("mappings") or {}).get("properties") or {}
+        kind = (props.get("embedding") or {}).get("type")
+        if kind != "knn_vector":
+            problems.append(
+                f"index {index!r} (behind {alias!r}) maps `embedding` as {kind!r}, not "
+                f"'knn_vector': vector search returns nothing. {fix}"
+            )
+    if not mapping:
+        problems.append(f"{alias!r} resolved to no index mapping: {fix}")
+    return problems
+
+
+# --------------------------------------------------------------------------- #
 # Group-level checks on an answer (the part runner.py cannot express)         #
 # --------------------------------------------------------------------------- #
 
@@ -844,6 +951,10 @@ def group_checks(
     max_calls             model calls <= N
     no_tool_results_contain  strings that must NOT appear in any tool result (a viewer who may
                           not see something must not even be handed it)
+    answer_does_not_match regexes (case-insensitive, searched in the answer); none may match. For a
+                          forbidden CLAIM rather than a forbidden word: a correct answer can use
+                          the word negated ("返信待ちはありません"), which the plain-substring
+                          `answer_does_not_contain` cannot tell from the claim. (MIP-1518)
     pending_write         (MIP-905) checks on the write the model PROPOSED, from the
                           `tool_call_pending_approval` events: tool, task counts, body lengths
                           in characters, headings, not cut off. See `content_checks`.
@@ -886,6 +997,19 @@ def group_checks(
                     + ([f"out of order: {misordered}"] if misordered else [])
                 )
                 or "all facts present, in order",
+            }
+        )
+    if "answer_does_not_match" in expect:
+        hits = [
+            p for p in expect["answer_does_not_match"] if re.search(p, answer or "", re.IGNORECASE)
+        ]
+        checks.append(
+            {
+                "name": "answer_does_not_match",
+                "ok": not hits,
+                "detail": f"answer matched forbidden pattern(s): {hits}"
+                if hits
+                else "none matched",
             }
         )
     if "tools_in_order" in expect:
@@ -1017,6 +1141,8 @@ def _run_arm(arm, todo, runner, guard, options, report, record, say) -> None:
         finally:
             guard.release_case(reserved)
         result["arm"] = arm.name
+        if arm.name in item.case.expected:
+            result["expected"] = item.case.expected[arm.name]
         result["case_id"] = item.case.id
         result["lang"] = item.case.lang
         result["rep"] = item.rep
@@ -1079,6 +1205,19 @@ def _verdict(rows: list[CaseResult]) -> tuple[str, float | None]:
     if len(ran) == 1:
         return ("PASS" if passed else "FAIL"), rate
     return f"{passed}/{len(ran)}", rate
+
+
+def _cell(rows: list[CaseResult], expected: str | None) -> str:
+    """The matrix cell: the verdict, plus what the case expected on this arm when it said so.
+
+    `FAIL (expected)` is a baseline that fails by design; `PASS (expected FAIL)` is the
+    interesting one. A crashed run (`ERR`) is never called expected."""
+    verdict, rate = _verdict(rows)
+    if not expected or rate is None or verdict == "ERR":
+        return verdict
+    if rate == (1.0 if expected == "pass" else 0.0):
+        return f"{verdict} (expected)"
+    return f"{verdict} (expected {expected.upper()})"
 
 
 def _by_case_arm(results: list[CaseResult]) -> dict[tuple[str, str], list[CaseResult]]:
@@ -1219,6 +1358,46 @@ def usd(value: float) -> str:
     return f"${value:.2f}" if abs(value) >= 1 else f"${value:.4f}"
 
 
+def _proposed_note(ran: list[CaseResult]) -> str:
+    """For a run that failed or said nothing: what the model proposed (MIP-1504), so the row
+    explains itself. Passing rows with an answer stay as they were."""
+    for r in ran:
+        proposed = r.get("proposed")
+        if proposed and (not r["passed"] or not r.get("answer")):
+            return "; proposed " + " | ".join(
+                f"{p['tool']}({p['args']})".replace("|", "/").replace("\n", " ")
+                for p in proposed[:2]
+            )
+    return ""
+
+
+def _expectation_lines(
+    grouped: dict[tuple[str, str], list[CaseResult]],
+    expected_of: dict[str, dict[str, str]],
+    names: list[str],
+) -> list[str]:
+    """One line on `expect_baseline` (MIP-1504), only when some case declares one: how many ran
+    as expected, and which did not. A mismatch is the finding: a case that fails by design on
+    arm0 and passes, or a control that fails."""
+    total, differs = 0, []
+    for cid, wanted in expected_of.items():
+        for arm, expected in wanted.items():
+            if arm not in names:
+                continue
+            verdict, rate = _verdict(grouped.get((cid, arm), []))
+            if rate is None or verdict == "ERR":
+                continue
+            total += 1
+            if rate != (1.0 if expected == "pass" else 0.0):
+                differs.append(f"{cid} on {arm}: expected {expected.upper()}, got {verdict}")
+    if not total:
+        return []
+    head = f"Expected results (`expect_baseline`): {total - len(differs)} of {total} as expected"
+    if not differs:
+        return [head + ".", ""]
+    return [head + "; DIFFERENT:", *[f"- {d}" for d in differs], ""]
+
+
 def render_markdown(
     results: list[CaseResult],
     plan: Plan,
@@ -1259,10 +1438,12 @@ def render_markdown(
     lines.append("| case | lang | " + " | ".join(names) + " |")
     lines.append("|---|---|" + "|".join("---" for _ in names) + "|")
     lang_of = {c.id: c.lang for c in plan.cases}
+    expected_of = {c.id: c.expected for c in plan.cases}
     for cid in case_ids:
-        cells = [(_verdict(grouped.get((cid, n), []))[0] or "") for n in names]
+        cells = [_cell(grouped.get((cid, n), []), expected_of.get(cid, {}).get(n)) for n in names]
         lines.append(f"| {cid} | {lang_of.get(cid, '')} | " + " | ".join(cells) + " |")
     lines.append("")
+    lines.extend(_expectation_lines(grouped, expected_of, names))
     lines.append("## Detail (per case and arm, summed over repetitions)\n")
     lines.append(
         "| case | arm | verdict | tools in order (first rep) | calls | in / out tokens (cached) | cost | note |"
@@ -1283,6 +1464,7 @@ def render_markdown(
                     f"{c['name']}: {c['detail']}" for r in ran for c in r["checks"] if not c["ok"]
                 )[:160]
             )
+            note += _proposed_note(ran)
             lines.append(
                 f"| {cid} | {n} | {verdict} | {_fmt_tools((ran[0]['tools'] if ran else []))} | {int(u['calls'])} | "
                 f"{int(u['input_tokens'])} / {int(u['output_tokens'])} ({int(u['cached_tokens'])}) | {_money(u['cost_usd'])} | {note} |"

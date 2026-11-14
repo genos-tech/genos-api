@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from django.db.models import Q
 from rest_framework import status
@@ -85,6 +86,20 @@ def _serialize_activity(row: TaskActivity, viewer_id) -> dict:
     }
 
 
+def _via_identity(row: TaskActivity) -> tuple[Any, Any, Any]:
+    """How a write arrived, as far as the feed's chip tells it apart: the kind, and
+    which key or connection for the kinds that name one (MIP-1487).
+
+    `undo_of` and the like are left out on purpose: an Undo click and an autosave
+    are both `app` and show the same (no) chip, so they may still fold. Rows with
+    no `via` at all (older rows, webhooks) are all `(None, None, None)`.
+    """
+    via = (row.metadata or {}).get("via")
+    if not isinstance(via, dict):
+        return (None, None, None)
+    return (via.get("kind"), via.get("key_id"), via.get("connection_id"))
+
+
 def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
     """Merge consecutive `description_edited` rows by the same actor that
     sit within `DESCRIPTION_EDIT_GROUP_WINDOW` of each other into a
@@ -99,7 +114,11 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
         run (handy for "edited 4 times between X and Y" UIs)
 
     Non-description rows always pass through verbatim, and any change
-    in actor / action / a >window gap closes the active run.
+    in actor / action / how the write arrived / a >window gap closes the
+    active run. A run keeps the newest row's `via`, so folding rows that
+    arrived differently (a connected app's rewrite, the owner's autosave
+    after it) would show one chip for all of them and hide the MCP chip
+    (MIP-1487).
 
     A description row that **kept the previous body** (`previousBodyKept`, an
     agent or API-key rewrite, MIP-738) is never folded into a run and never
@@ -115,6 +134,7 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
     # run) lives at `out[-1]`; we never re-walk the list to find it.
     run_count = 0
     run_actor_id: int | None = None
+    run_via: tuple[Any, Any, Any] = (None, None, None)
     run_first_ts = None  # oldest ts seen in the run so far
     run_prev_ts = None  # ts of the most recent row added to the run
 
@@ -137,6 +157,7 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
             out.append(r)
             run_count = 0
             run_actor_id = None
+            run_via = (None, None, None)
             run_first_ts = None
             run_prev_ts = None
             continue
@@ -144,7 +165,7 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
         # run of anonymous edits (rare but possible — actor FK is
         # SET_NULL) merges sensibly without merging into a named-actor
         # run.
-        same_actor = is_desc and r.actor_id == run_actor_id
+        same_actor = is_desc and r.actor_id == run_actor_id and _via_identity(r) == run_via
         within_window = (
             run_prev_ts is not None
             and (run_prev_ts - r.ts_created_at) <= DESCRIPTION_EDIT_GROUP_WINDOW
@@ -162,11 +183,13 @@ def _collapse_description_edits(rows: list[TaskActivity]) -> list[TaskActivity]:
         if is_desc:
             run_count = 1
             run_actor_id = r.actor_id
+            run_via = _via_identity(r)
             run_first_ts = r.ts_created_at
             run_prev_ts = r.ts_created_at
         else:
             run_count = 0
             run_actor_id = None
+            run_via = (None, None, None)
             run_first_ts = None
             run_prev_ts = None
 

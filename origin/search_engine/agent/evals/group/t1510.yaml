@@ -1,0 +1,126 @@
+# MIP-1510: a plan's tasks carry a body. The in-app `create_task_plan` often proposed tasks with a
+# title and NO body (4 of 4 probe runs on t905-a2.plan.ja), so the approval card was empty and the
+# tasks were created without a description. The fix is server-side and has no flag: a task proposed
+# without a body gets the project's default task template (or a one-line `### Summary` + title) on the
+# card and when it is created. No declaration or prompt changes.
+# There is no arm: it is measured as before/after on the same stack (arm0 of origin/main against
+# arm0 of the PR), at least 3 reps per language, because the model's own behaviour is noisy.
+#
+# What the checks read: `pending_write` judges the proposal as the member's approval card shows it
+# (the `tool_call_pending_approval` event), so with the server default a plan can no longer reach the
+# card without a body. These cases therefore pin the END STATE (every task has a body on the card),
+# and the regression cases pin the routing (no declaration changed, so it must not move). The
+# model's own bodies are compared in `answer` ("[proposed create_task_plan] ..."): a body that is
+# only `### Summary` + the title is the server's fill, a longer one is the model's.
+#
+# Per language: a positive (new milestone + five tasks, the case that failed), an edge (tasks only,
+# under an EXISTING milestone: the other attach mode), and a negative (ONE ad-hoc task still routes
+# to create_task, not to a one-task plan). The v1 fixture is read, never written.
+
+- id: t1510.plan.en
+  lang: en
+  tags: [eval-group, t1510]
+  fixture: v1
+  note: "Positive: the case that failed (Medium two-tier), every task of the plan has a body on the card."
+  llm:
+    provider: gemini
+    effort: medium
+  needs_env:
+    AGENT_EFFORT_LEVELS: true
+    AGENT_TWO_TIER_LOOP: true
+  est:
+    calls: 5
+    input_tokens: 40000
+    cached_tokens: 22000
+    output_tokens: 3500
+  query: 'In the Website Redesign project, create a milestone "Search filters beta" due 2026-12-15 with
+    these five tasks: "Design the filter UI", "Build the filter API", "Wire the UI to the API", "Write
+    the tests", "Roll out to 10% of users". Everything you need is in this message, so do not search.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      each_body_chars_at_least: 20
+      not_cut_off: true
+
+- id: t1510.plan.ja
+  lang: ja
+  tags: [eval-group, t1510]
+  fixture: v1
+  note: "Positive: the case that failed (Medium two-tier), every task of the plan has a body on the card."
+  llm:
+    provider: gemini
+    effort: medium
+  needs_env:
+    AGENT_EFFORT_LEVELS: true
+    AGENT_TWO_TIER_LOOP: true
+  est:
+    calls: 5
+    input_tokens: 40000
+    cached_tokens: 22000
+    output_tokens: 3500
+  query: Website Redesign プロジェクトに、期限 2026-12-15 のマイルストーン「検索フィルターベータ」を作り、次の5つのタスクを入れてください:「フィルターUIの設計」「フィルターAPIの実装」「UIとAPIの接続」「テストの作成」「ユーザーの10%への展開」。必要な情報はこのメッセージにすべてあるので、検索はしないでください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 5
+      each_body_chars_at_least: 20
+      not_cut_off: true
+
+- id: t1510.existing-milestone.en
+  lang: en
+  tags: [eval-group, t1510]
+  fixture: v1
+  note: "Edge: tasks only, under an existing milestone (the other attach mode); the model must still look the milestone up."
+  query: >-
+    Add two follow-up tasks to the "v1.0 Public Launch" milestone in the Website Redesign project:
+    "Post-launch analytics review" and "Collect early user feedback".
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    tools_used_excludes: [create_task]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 2
+      each_body_chars_at_least: 20
+
+- id: t1510.existing-milestone.ja
+  lang: ja
+  tags: [eval-group, t1510]
+  fixture: v1
+  note: "Edge: tasks only, under an existing milestone (the other attach mode); the model must still look the milestone up."
+  query: Website Redesign プロジェクトの「v1.0 Public Launch」マイルストーンに、フォローアップのタスクを2つ追加してください:「リリース後の分析レビュー」と「初期ユーザーのフィードバック収集」。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    tools_used_excludes: [create_task]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 2
+      each_body_chars_at_least: 20
+
+- id: t1510.single-task.en
+  lang: en
+  tags: [eval-group, t1510]
+  fixture: v1
+  note: "Negative: ONE ad-hoc task stays a create_task, it must not be inflated into a plan."
+  query: "Add a task to the Website Redesign project to buy more coffee for the office."
+  expect:
+    no_errors: true
+    tools_used_excludes: [create_task_plan]
+    pending_tools_contains: [create_task]
+
+- id: t1510.single-task.ja
+  lang: ja
+  tags: [eval-group, t1510]
+  fixture: v1
+  note: "Negative: ONE ad-hoc task stays a create_task, it must not be inflated into a plan."
+  query: Website Redesign プロジェクトに、オフィスのコーヒーを買い足すタスクを1つ追加してください。
+  expect:
+    no_errors: true
+    tools_used_excludes: [create_task_plan]
+    pending_tools_contains: [create_task]

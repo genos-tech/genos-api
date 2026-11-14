@@ -126,7 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
-from origin.search_engine.agent.tools import get_mcp_tool
+from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import (
@@ -232,6 +232,12 @@ class McpTool:
     # Their schemas are added to the published schema; the values are taken out of
     # the call before the registry tool runs, and handed to `augment` instead.
     mcp_only_args: dict[str, Any] = field(default_factory=dict)
+    # Arguments published on MCP that the registry tool does not declare but READS, only when
+    # the call came through MCP (`ctx.surface == "mcp"`). Unlike `mcp_only_args` they are NOT
+    # taken out of the call, because they have to reach the registry tool itself (a search
+    # window goes into the query, `augment` runs too late). Keeping them out of the registry
+    # schema is what leaves the in-app model's tool declaration as it was (MIP-1379).
+    surface_args: dict[str, Any] = field(default_factory=dict)
     # `(payload, args, mcp_args, ctx) -> payload`: adds to a read's result AFTER the
     # registry tool has run, so access has been checked and the in-app agent, which
     # shares the registry tool, sees none of it.
@@ -511,8 +517,22 @@ CATALOG: tuple[McpTool, ...] = (
             "hit carries `milestone_id`, for `get_milestone_summary`) and "
             "`note_folder` (find a folder by name: its hit carries "
             "`folder_id`, for `create_note` / `update_note`; folders are only "
-            "returned when asked for)."
+            "returned when asked for). To ask what changed lately, pass "
+            "`updated_after` and/or `updated_before` (an ISO date or date-time, UTC "
+            "unless it carries an offset): the window is applied inside the search, so "
+            "the limit is filled from it. Each hit's `updated_at` is when its "
+            "best-matching part (task, comment, message or note) last changed. "
+            '`order: "newest"` lists the matches by `updated_at`, most recent first, '
+            "instead of by relevance; it re-orders what was found, so pair it with "
+            '`updated_after`. Example: `{"query": "payment retries", '
+            '"updated_after": "2026-11-07", "order": "newest"}`. A query is normally '
+            "expanded into a few rephrasings by a language model first (about 1.5 to 2.5 "
+            "seconds); `rewrite: false` skips that and searches your exact words, so "
+            "rephrase a vague query yourself."
         ),
+        # Published here and not on the shared tool: its declaration is what the in-app model
+        # reads. `search_kb._run` honours them only for an MCP call (MIP-1379).
+        surface_args=dict(search_window.SCHEMA),
     ),
     McpTool(
         name="get_note",
@@ -1755,8 +1775,10 @@ CATALOG: tuple[McpTool, ...] = (
             "over their last seven complete days, each with `days` (seven daily totals, "
             "oldest first), `week` (counts by kind: mine, others, notes, chat, prs), `trend` "
             "(rising, cooling or steady) and `last_seen_at`, the last time their AI app "
-            "opened or changed it; counts of saved actions, never time spent, so say it as "
-            "how busy an item has been, not how long they worked); and `suggested_next`, the top "
+            "opened or changed it, and `seen_capped: true` on the section when that time may "
+            "be missing or older than it was for some item; counts of saved actions, never "
+            "time spent, so say it as how busy an item has been, not how long they worked); "
+            "and `suggested_next`, the top "
             "three with the reasons. The reasons come from activity and dates, and priority "
             "is only a hint: say them, and let the member disagree. Once a week of activity is "
             "recorded (or the member has tuned or marked something) the top three is ranked by "
@@ -1869,7 +1891,8 @@ CATALOG: tuple[McpTool, ...] = (
             "made from it still sees that it was created and its status changes (nothing "
             "else about it): that is deliberate. `capped` is empty unless events were really "
             "left out of what you can read (`size`: the call was shortened to fit, "
-            "`next_cursor` has the rest). Everything is the member's own view; a thing that "
+            "`next_cursor` has the rest) or, on a task, the markers behind `last_seen_at` were "
+            "cut (`seen_capped`: that time may be missing or older than it was). Everything is the member's own view; a thing that "
             "does not exist and one they may not open get the same answer."
         ),
         augment=_canonical_anchor,
@@ -2130,9 +2153,10 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
-    if tool.mcp_only_args:
+    if tool.mcp_only_args or tool.surface_args:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.mcp_only_args)
+        properties.update(tool.surface_args)
         schema = {**schema, "properties": properties}
     for arg in tool.milestone_ref_args:
         properties = dict(schema.get("properties") or {})
@@ -2463,6 +2487,12 @@ _ARGUMENT_ALIASES = {
     # milestone in it takes `milestone_folder_id`, so it can't be mistaken for a
     # note folder (MIP-879). Ignored by any tool that does not accept it.
     "folder_id": "milestone_folder_id",
+    # `search_workspace`'s window and order (MIP-1379), by the names a person reaches for.
+    "since": "updated_after",
+    "after": "updated_after",
+    "until": "updated_before",
+    "before": "updated_before",
+    "sort": "order",
 }
 
 

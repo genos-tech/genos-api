@@ -251,3 +251,80 @@ class CollapseAroundABodyKeepingRowTests(SimpleTestCase):
 
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0].metadata["previousBodyKept"])
+
+
+class CollapseKeepsTheViaOfEachRowTests(SimpleTestCase):
+    """A run folds into its NEWEST row, so folding rows that arrived differently
+    would show the newest row's chip for all of them (MIP-1487): an autosave
+    after a connected app's rewrite would hide the MCP chip, and an app write
+    after autosaves would stamp MCP on edits the person typed."""
+
+    DESC = TaskActivityActionType.DESCRIPTION
+    OAUTH = {"kind": "oauth", "connection_id": "c-1", "client_name": "Claude"}
+
+    def setUp(self):
+        self.now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _desc(self, minutes_ago, via, activity_id):
+        row = _row(
+            action_type=self.DESC,
+            ts=self.now - timedelta(minutes=minutes_ago),
+            activity_id=activity_id,
+        )
+        row.metadata = {} if via is None else {"via": via}
+        return row
+
+    def test_an_autosave_after_an_app_write_does_not_fold_it(self):
+        rows = [self._desc(1, {"kind": "app"}, 2), self._desc(2, self.OAUTH, 1)]
+
+        out = _collapse_description_edits(rows)
+
+        self.assertEqual([r.activity_id for r in out], [2, 1])
+        self.assertEqual(out[1].metadata["via"], self.OAUTH)
+        for r in out:
+            self.assertNotIn("grouped_count", r.metadata)
+
+    def test_an_app_write_after_autosaves_does_not_fold_them(self):
+        rows = [
+            self._desc(1, self.OAUTH, 3),
+            self._desc(2, {"kind": "app"}, 2),
+            self._desc(3, {"kind": "app"}, 1),
+        ]
+
+        out = _collapse_description_edits(rows)
+
+        self.assertEqual([r.activity_id for r in out], [3, 2])
+        self.assertEqual(out[0].metadata["via"], self.OAUTH)
+        self.assertNotIn("grouped_count", out[0].metadata)
+        self.assertEqual(out[1].metadata["grouped_count"], 2)
+
+    def test_an_api_key_and_an_app_do_not_fold(self):
+        key = {"kind": "api_key", "key_id": "k", "key_name": "bot"}
+        rows = [self._desc(1, {"kind": "app"}, 2), self._desc(2, key, 1)]
+
+        self.assertEqual([r.activity_id for r in _collapse_description_edits(rows)], [2, 1])
+
+    def test_two_different_connections_do_not_fold(self):
+        other = {**self.OAUTH, "connection_id": "c-2", "client_name": "Other"}
+        rows = [self._desc(1, other, 2), self._desc(2, self.OAUTH, 1)]
+
+        self.assertEqual([r.activity_id for r in _collapse_description_edits(rows)], [2, 1])
+
+    def test_the_same_connection_still_folds(self):
+        rows = [self._desc(1, self.OAUTH, 2), self._desc(2, self.OAUTH, 1)]
+
+        out = _collapse_description_edits(rows)
+
+        self.assertEqual([r.activity_id for r in out], [2])
+        self.assertEqual(out[0].metadata["grouped_count"], 2)
+
+    def test_autosaves_with_and_without_an_undo_marker_still_fold(self):
+        undo = {"kind": "app", "undo_of": {"run_id": "r", "step": 1}}
+        rows = [self._desc(1, {"kind": "app"}, 2), self._desc(2, undo, 1)]
+
+        self.assertEqual([r.activity_id for r in _collapse_description_edits(rows)], [2])
+
+    def test_rows_with_no_via_fold_as_before(self):
+        rows = [self._desc(1, None, 2), self._desc(2, None, 1)]
+
+        self.assertEqual([r.activity_id for r in _collapse_description_edits(rows)], [2])
