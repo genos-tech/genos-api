@@ -126,7 +126,9 @@ BUDGET_CHARS = 24_000
 # Room kept for `next_cursor`, which is signed after the page is chosen.
 CURSOR_RESERVE = 700
 CURSOR_MAX_AGE = 3600
-CURSOR_SALT = "genos.timeline.cursor.v1"
+# v2: a task reaction's tie-break is `(comment_id, reaction_id)`, no longer its `uid` text, so a
+# cursor signed by v1 is refused cleanly instead of being read as the wrong shape.
+CURSOR_SALT = "genos.timeline.cursor.v2"
 WINDOW_DAYS = 31
 DEFAULT_WINDOW_DAYS = 7
 # Notes that point at a task with a chip are looked at through this many candidates.
@@ -746,14 +748,20 @@ def _comment_reactions(sc: Scope, kinds: frozenset[str], count: bool, *, task: T
         TEv(
             at=r.ts_created_at,
             rank=RANK_TASK_REACTION,
-            tie=(str(r.pk),),
+            tie=(r.comment_id, r.reaction_id),
             kind="reaction",
             key=f"r{r.comment_id}.{r.reaction_id}",
             actor=str(r.sender_id) if r.sender_id else None,
             text=sc.snippet(str(r.reaction_emoji or "")),
             ident=f"tr:{r.pk}",
         )
-        for r in _page_rows(sc, qs, time="ts_created_at", tie=("uid",), rank=RANK_TASK_REACTION)
+        for r in _page_rows(
+            sc,
+            qs,
+            time="ts_created_at",
+            tie=("comment_id", "reaction_id"),
+            rank=RANK_TASK_REACTION,
+        )
     ]
 
 
