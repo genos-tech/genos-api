@@ -23,9 +23,11 @@ from __future__ import annotations
 
 from django.db import transaction
 
+from origin.models.chat.unified_models import Activity
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note, purge_note_folders
@@ -63,6 +65,32 @@ class DeleteRefused(Exception):
         self.extra = extra or {}
 
 
+def forget_deleted_notes(code: int, note_ids) -> None:
+    """Drop what other people still hold about notes that are gone (MIP-1489): their "recently
+    opened" rows, and the @mention / comment `Activity` rows the notes wrote for them (surface
+    types 6/7/8, `meta.noteId`), which a full resync of the feed would otherwise bring back,
+    pointing at a note that no longer exists. `code` is the `NOTE_TYPE_*` of the family."""
+    from origin.services.v3_activity import (
+        SURFACE_CHAT_NOTE,
+        SURFACE_PERSONAL_NOTE,
+        SURFACE_TASK_NOTE,
+    )
+
+    ids = [int(n) for n in note_ids]
+    if not ids:
+        return
+    NoteRecentMaster.objects.filter(note_type=code, note_id__in=ids).delete()
+    surface = {
+        NOTE_TYPE_PERSONAL: SURFACE_PERSONAL_NOTE,
+        NOTE_TYPE_TASK: SURFACE_TASK_NOTE,
+        NOTE_TYPE_CHAT: SURFACE_CHAT_NOTE,
+    }[code]
+    # The id is routing data the client wrote: a number, or the same number as text.
+    Activity.objects.filter(
+        surface_type=surface, meta__noteId__in=ids + [str(n) for n in ids]
+    ).delete()
+
+
 def delete_note(*, team_id, family: str, note_id) -> None:
     """Hard-delete one note of `family` ("personal", "task" or "chat")."""
     model, code = FAMILIES[family]
@@ -74,6 +102,7 @@ def delete_note(*, team_id, family: str, note_id) -> None:
         note.delete()
         delete_note_permissions(code, note_id)
         delete_note_versions(code, note_id)
+        forget_deleted_notes(code, [note_id])
     # Best-effort, after the commit: chunkers never revisit deleted rows, and the
     # orphan sweep in the reindex cron retries if this fails.
     purge_note(family, note_id)
@@ -149,6 +178,7 @@ def _hard_delete(note_ids: set, folder_ids: set) -> None:
     PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
     NotePermissionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
     NoteVersionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
+    forget_deleted_notes(NOTE_TYPE_PERSONAL, note_ids)
     # NoteFolderPermission and NoteFolderTagLink cascade on the folder FK.
     PersonalNoteFolder.objects.filter(folder_id__in=folder_ids).delete()
 
