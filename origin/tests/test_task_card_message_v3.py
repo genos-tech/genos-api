@@ -142,15 +142,39 @@ class TaskCardMessageViewTests(BaseAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data, {"updated": False})
 
-    def test_non_member_is_404(self):
-        # user2 is not a member of this PM channel → existence-hiding 404.
+    def test_non_member_gets_the_answer_a_missing_card_gets(self):
+        """MIP-1494: a non-member must not learn whether a task id has a chat card.
+
+        Before, a card the caller cannot read answered 404 and a task with no card answered
+        200 `{"updated": false}`, so any member of the team could probe task ids for cards
+        (which projects have chat, which tasks were announced). Now both answer the
+        sentinel the socket proxy already treats as "nothing to sync", and nothing is written.
+        """
+        orphan = TaskMaster.objects.create(
+            team=self.team, project=self.project, title="No card", status="Open"
+        )
+        self.authenticate(self.user2)  # not on the project, not in the PM chat
+        payload = {"body": self._new_body("New title"), "body_text": "New title"}
+        refused = self.client.patch(self.url, payload, format="json")
+        missing = self.client.patch(
+            reverse("v3_task_card_message", args=[orphan.task_id]), payload, format="json"
+        )
+        self.assertEqual(refused.status_code, status.HTTP_200_OK, refused.content)
+        self.assertEqual(missing.status_code, status.HTTP_200_OK, missing.content)
+        self.assertEqual(refused.content, missing.content)
+        self.assertEqual(refused.json(), {"updated": False})
+        self.header.refresh_from_db()
+        self.assertEqual(self.header.body_text, "Old title")
+
+    def test_a_stray_channel_row_is_not_a_member_either(self):
+        ChannelMember.objects.get_or_create(
+            channel=self.channel, user=self.user2, defaults={"role": "member"}
+        )
         self.authenticate(self.user2)
         resp = self.client.patch(
-            self.url,
-            {"body": self._new_body("New title"), "body_text": "New title"},
-            format="json",
+            self.url, {"body": self._new_body("Hijack"), "body_text": "Hijack"}, format="json"
         )
-        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(resp.json(), {"updated": False})
         self.header.refresh_from_db()
         self.assertEqual(self.header.body_text, "Old title")
 
