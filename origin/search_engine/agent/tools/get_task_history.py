@@ -3,8 +3,9 @@
 Reads `TaskActivity`, which the task signals already write for every
 change (`origin/signals/task_signals.py`). Each entry says what changed,
 from what to what, who did it, when, and **how it arrived** — the app,
-the in-app agent, or an API key (named), so an unattended MCP write can
-be told apart from a UI edit by the same person. Changes nobody made by
+the in-app agent, or an API key (named on the asking user's own writes only:
+another member's key shows by its kind), so an unattended MCP write
+can be told apart from a UI edit by the same person. Changes nobody made by
 hand are labelled too: a PR-merge auto-close (no actor, the webhook is
 unauthenticated) and the dependency-derived Open↔Blocked flip.
 
@@ -329,8 +330,9 @@ GET_TASK_HISTORY = Tool(
     description=(
         "One task's change history, newest first: each entry's action and "
         "field, old and new value, who made the change, when, and `via` — "
-        "how it arrived (`app`, `agent` for Spotlight, `api_key` with the "
-        "key's name, `pr_merge`, `dependencies` for an automatic Blocked "
+        "how it arrived (`app`, `agent` for Spotlight, `api_key` (with the "
+        "key's name and prefix on your own writes; on other people's writes only "
+        "the kind), `pr_merge`, `dependencies` for an automatic Blocked "
         "flip, `github` for a linked PR or PR comment, or `unknown` for "
         "older rows). An entry with `cascade` was carried along by a change "
         "to another row — a milestone or project move, a milestone delete or "
