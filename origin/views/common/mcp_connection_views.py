@@ -25,7 +25,7 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
 from origin.services import mcp_connections, mcp_oauth
-from origin.services.member_roles import can_remove_member, resolve_team_role
+from origin.services.member_roles import OWNER, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.api_key_views import _managed_team
@@ -148,13 +148,14 @@ class McpConnectionDetailView(_Base):
 # --- The team's own view of the connected AI apps in it (MIP-1371) -----------------------
 
 
-def _team_connection_row(connection: McpConnection, team_id: str, revocable: bool) -> dict:
+def _team_connection_row(
+    connection: McpConnection, team_id: str, revocable: bool, *, show_email: bool = False
+) -> dict:
     user = connection.user
-    return {
+    row = {
         "id": str(connection.id),
         "userId": str(user.id),
         "userName": user.username,
-        "userEmail": user.email,
         "client": mcp_oauth.client_summary(connection.application),
         "scope": connection.scope,
         "allowDestructive": connection.allow_destructive,
@@ -164,11 +165,18 @@ def _team_connection_row(connection: McpConnection, team_id: str, revocable: boo
         "createdAt": connection.ts_created_at,
         "revocable": revocable,
     }
+    # A member's address is the owner's to see, not an editor's: an editor may end an app's
+    # access, and needs the app and the person's name for that, not a way to contact them.
+    # The key is absent (not null, not "") for an editor, so there is nothing to render.
+    if show_email:
+        row["userEmail"] = user.email
+    return row
 
 
 class TeamMcpConnectionListView(_Base):
     """GET /api/v2/team/mcp-connections/?team_id= — every connected AI app that can work in
-    the team, whoever connected it (owner or editor). Who may END each is `revocable`."""
+    the team, whoever connected it (owner or editor). Who may END each is `revocable`.
+    `userEmail` is in a row only for the team's owner."""
 
     def get(self, request):
         team, role = _managed_team(request)
@@ -194,6 +202,7 @@ class TeamMcpConnectionListView(_Base):
                         team_id,
                         str(c.user_id) == str(request.user.id)
                         or can_remove_member(role, resolve_team_role(team, c.user_id)),
+                        show_email=role == OWNER,
                     )
                     for c in rows
                     if str(c.user_id) in live
