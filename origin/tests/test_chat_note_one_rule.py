@@ -223,10 +223,10 @@ class OneChatNoteRule(ChatNoteFixtures):
         ChannelMember.objects.filter(channel=chat, user=self.reader).update(is_deleted=False)
         self.assertEveryoneSays(note, False)
 
-    def test_the_note_owner_reads_their_own_note_through_the_briefing(self):
-        """Owner and explicit grants are the notes' own ACL, not the chat's."""
+    def test_the_note_owner_not_in_the_chat_does_not_read_it_through_the_briefing(self):
+        """Flipped by MIP-1492: an author outside the chat has no exception (a grant opens it)."""
         note = self.note_on(self.gm(self.owner), owner=self.reader)
-        self.assertTrue(briefing._may_read_note(self.ctx(), CHAT, note))
+        self.assertFalse(briefing._may_read_note(self.ctx(), CHAT, note))
 
     def test_an_explicit_grant_opens_a_chat_note_the_reader_is_not_in_the_chat_of(self):
         note = self.note_on(self.gm(self.owner))
@@ -240,15 +240,16 @@ class OneChatNoteRule(ChatNoteFixtures):
     def test_a_note_whose_chat_type_differs_from_its_channels_kind_opens_for_no_one_but_acl(self):
         """`chat_type` is the kind the note was filed under; the search index (`chat_acl_user_ids`),
         `get_note` over MCP and the in-app agent all look the channel up BY that kind and find
-        nothing when it differs, so such a note opens through its owner and explicit grants only.
+        nothing when it differs, so such a note opens through explicit grants only (its owner is no exception: MIP-1492).
         REST used to open it to every member row: it no longer does (one rule)."""
         gm = self.gm(self.reader, self.owner)
         self.assertEveryoneSays(self.note_on(gm, chat_type=ChannelKind.DM), False)
 
-    def test_a_drifted_chat_type_still_opens_to_the_owner_and_to_a_grant(self):
+    def test_a_drifted_chat_type_opens_to_a_grant_but_not_to_the_owner(self):
+        """The owner half flipped by MIP-1492: the author is no exception."""
         gm = self.gm(self.owner)
         mine = self.note_on(gm, chat_type=ChannelKind.DM, owner=self.reader)
-        self.assertTrue(briefing._may_read_note(self.ctx(), CHAT, mine))
+        self.assertFalse(briefing._may_read_note(self.ctx(), CHAT, mine))
         granted = self.note_on(gm, chat_type=ChannelKind.DM)
         NotePermissionMaster.objects.create(
             team=self.team, user=self.reader, note_type=CHAT, note_id=granted.note_id, role_id=3

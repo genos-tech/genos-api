@@ -38,6 +38,7 @@ from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
@@ -59,7 +60,7 @@ from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import member_events
-from origin.services.channel_scope import readable_chats_qs
+from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
 from origin.services.user_time import zone_for_user_id
 
 log = logging.getLogger(__name__)
@@ -556,7 +557,16 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
     owned = {
         1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team),
         2: TaskNoteMaster.objects.filter(owner_id=me, team_id=team),
-        3: ChatNoteMaster.objects.filter(owner_id=me, team_id=team),
+        # A chat note has no author exception (MIP-1492): the ones the caller wrote and can
+        # still open, through their chat or a grant, by the rule `get_effective_role` applies.
+        3: ChatNoteMaster.objects.filter(owner_id=me, team_id=team).filter(
+            chat_note_member_q(me)
+            | Q(
+                note_id__in=NotePermissionMaster.objects.filter(user_id=me, note_type=3).values(
+                    "note_id"
+                )
+            )
+        ),
     }
     held_tasks = TaskMaster.objects.filter(team_id=team, is_deleted=False).filter(
         Q(assignee_id=me) | Q(reporter_id=me) | Q(collaborators__id=me)
