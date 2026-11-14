@@ -906,6 +906,45 @@ class TestSeen(ActivityBase):
         self.assertIsNone(items[quiet.task_id]["last_seen_at"])
 
 
+class TestSeenCutOnTheWeek(ActivityBase):
+    """MIP-1499: the briefing's `activity` shows `last_seen_at` per item from one look-up for
+    the items it shows. When that look-up was cut, the section says `seen_capped` (once, never
+    per item: the look-up is one read for all of them)."""
+
+    def pool(self, n):
+        return mock.patch.object(item_lines, "SEEN_POOL", n)
+
+    def week(self):
+        return briefing.build_briefing(self.ctx, now=self.now)["activity"]
+
+    def test_a_cut_look_up_is_told_on_the_section(self):
+        task = self.make_task()
+        self.comment(task, self.user2, self.day_minutes(2, 10))
+        self.crowded_thread_markers(task, 3)
+        with self.pool(2):
+            section = self.week()
+        self.assertIs(section["seen_capped"], True)
+        self.assertIsNone(section["items"][0]["last_seen_at"])
+        self.assertFalse({k for k in section["items"][0] if "capped" in k} - {"capped"})
+
+    def test_nothing_cut_adds_nothing_to_the_section(self):
+        task = self.make_task()
+        self.comment(task, self.user2, self.day_minutes(2, 10))
+        self.crowded_thread_markers(task, 2)
+        with self.pool(2):
+            section = self.week()
+        self.assertNotIn("seen_capped", section)
+        self.assertEqual(sorted(section), ["from", "items", "through", "total_items", "truncated"])
+
+    def test_markers_of_other_items_cut_nothing(self):
+        task = self.make_task()
+        self.comment(task, self.user2, self.day_minutes(2, 10))
+        self.unrelated(6)
+        with self.pool(2):
+            section = self.week()
+        self.assertNotIn("seen_capped", section)
+
+
 class TestSinceSeen(ActivityBase):
     def line(self, task, **kw):
         return item_lines.line_for_item(self.ctx, task.task_id, self.since, self.until, **kw)[

@@ -22,7 +22,7 @@ from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.base import ToolError
-from origin.services import timeline
+from origin.services import item_lines, timeline
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_item_lines import LineBase, body_with, chip, text_inline
 from origin.views.public.mcp import tools as mcp_tools
@@ -1366,3 +1366,57 @@ class TestFromTheReview(TimelineBase):
         out = self.tl("task", task.task_id)
         self.assertEqual(sorted(e["kind"] for e in out["events"]), ["comment", "reaction"])
         self.assertEqual(out["events_total"], 2)
+
+
+# --------------------------------------------------------------------------- #
+# MIP-1499: a cut look-up of `last_seen_at` says so                            #
+# --------------------------------------------------------------------------- #
+
+
+class TestSeenCut(TimelineBase):
+    """A task timeline tells `last_seen_at`; when the markers behind it were cut (more of the
+    task's own milestone, note and thread markers than `SEEN_POOL`) the time may be missing or
+    older, and `capped.seen_capped` says so, the same flag `get_item_line` has."""
+
+    def pool(self, n):
+        return mock.patch.object(item_lines, "SEEN_POOL", n)
+
+    def test_a_cut_look_up_sets_the_flag_next_to_the_time(self):
+        task = self.make_task("Export")
+        self.crowded_thread_markers(task, 3)
+        with self.pool(2):
+            out = self.tl("task", task.task_id)
+        self.assertIsNone(out["last_seen_at"])
+        self.assertTrue(out["capped"]["seen_capped"])
+
+    def test_nothing_cut_adds_nothing(self):
+        task = self.make_task("Export")
+        self.crowded_thread_markers(task, 2)
+        with self.pool(2):
+            out = self.tl("task", task.task_id)
+        self.assertNotIn("seen_capped", out["capped"])
+        self.assertEqual(out["capped"], {})
+
+    def test_markers_of_other_items_cut_nothing(self):
+        task = self.make_task("Export")
+        self.unrelated(6)
+        with self.pool(2):
+            out = self.tl("task", task.task_id)
+        self.assertNotIn("seen_capped", out["capped"])
+
+    def test_the_flag_is_there_on_every_page(self):
+        task = self.make_task("Export")
+        for i in range(4):
+            self.comment(task, self.user2, 10 + i)
+        self.crowded_thread_markers(task, 3)
+        with self.pool(2):
+            first = self.tl("task", task.task_id, limit=2)
+            second = self.tl("task", task.task_id, cursor=first["next_cursor"], limit=2)
+        self.assertTrue(first["capped"]["seen_capped"])
+        self.assertTrue(second["capped"]["seen_capped"])
+
+    def test_a_thread_has_neither_the_time_nor_the_flag(self):
+        root = self.thread(replies=1)
+        out = self.tl("thread", str(root.id))
+        self.assertNotIn("last_seen_at", out)
+        self.assertNotIn("seen_capped", out["capped"])
