@@ -118,6 +118,8 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "list_note_access": ("note", "note_id"),
     "update_note": ("note", "note_id"),
     "restore_note_version": ("note", "note_id"),
+    "reply_to_note_comment": ("note", "note_id"),
+    "resolve_note_comment": ("note", "note_id"),
     "manage_note_sharing": ("note", "note_id"),
     "delete_note": ("note", "note_id"),
     # chat

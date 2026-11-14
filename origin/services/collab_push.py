@@ -201,3 +201,127 @@ def read_note_threads(
         logger.warning("collab thread read failed doc=%s: %s", document_name, exc)
         return None
     return threads if isinstance(threads, list) else None
+
+
+REPLY_THREAD_PATH = "/internal/documents/reply-thread"
+RESOLVE_THREAD_PATH = "/internal/documents/resolve-thread"
+
+
+class ThreadWriteError(Exception):
+    """A comment-thread write that did not happen (or whose outcome is not known).
+
+    `kind` says what the caller should tell the person:
+    - `unavailable`: collab is not configured, not reachable, or answered 5xx. Nothing was written.
+    - `unsupported`: collab answered something that is not this endpoint's JSON (an older collab
+      answers every unknown path "200 OK"): the comment endpoints are not deployed there yet.
+    - `not_found`: no such open thread on that note.
+    - `forbidden`: collab refused the actor (only the thread's author or the note's owner may resolve).
+    - `refused`: collab rejected the request (a malformed field).
+    - `unknown`: the request went out and the answer did not come back, so a reply may or may not
+      have been added. Never retried here: a second POST would be a second reply.
+    """
+
+    def __init__(self, kind: str, message: str = ""):
+        super().__init__(message or kind)
+        self.kind = kind
+
+
+def _write_thread(path: str, payload: dict[str, Any], expect: str) -> dict[str, Any]:
+    """One synchronous POST to a collab thread-write endpoint; the JSON answer when collab
+    confirms (HTTP 200 with `ok: true` and the `expect` key), else a `ThreadWriteError`.
+
+    Synchronous on purpose (the caller reports what happened) and never retried (a reply is not
+    idempotent). The 200 is not trusted by itself: Hocuspocus answers any unknown path with a
+    plain-text "OK", which is what an older collab does to this request.
+    """
+    if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
+        raise ThreadWriteError("unavailable", "collab is not configured")
+    document = payload.get("documentName")
+    try:
+        resp = requests.post(
+            f"{settings.COLLAB_INTERNAL_URL}{path}",
+            json=payload,
+            headers={"Authorization": f"Bearer {_internal_token()}"},
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    except requests.ConnectTimeout as exc:
+        logger.warning("collab thread write not sent doc=%s: %s", document, exc)
+        raise ThreadWriteError("unavailable", "collab could not be reached") from exc
+    except requests.RequestException as exc:
+        logger.warning("collab thread write outcome unknown doc=%s: %s", document, exc)
+        raise ThreadWriteError("unknown", "no answer from collab") from exc
+
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    status = resp.status_code
+    if status == 200:
+        if isinstance(body, dict) and body.get("ok") is True and expect in body:
+            return body
+        logger.warning("collab thread write path=%s answered 200 without ok doc=%s", path, document)
+        raise ThreadWriteError("unsupported", "collab does not have this endpoint yet")
+    logger.warning("collab thread write refused path=%s doc=%s status=%s", path, document, status)
+    if status == 404 and error:
+        raise ThreadWriteError("not_found", str(error))
+    if status == 403 and error:
+        raise ThreadWriteError("forbidden", str(error))
+    if status == 400 and error:
+        raise ThreadWriteError("refused", str(error))
+    if status in (404, 405):
+        raise ThreadWriteError("unsupported", "collab does not have this endpoint yet")
+    raise ThreadWriteError("unavailable", f"collab answered {status}")
+
+
+def reply_note_thread(
+    note_type: str,
+    note_id: int,
+    *,
+    thread_id: str,
+    user_id: str,
+    text: str,
+    via: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add a comment to a note's comment thread (MIP-1100), as `user_id`.
+
+    The answer is collab's: `commentId`, `commentCount`, `threadResolved`. `via` is how the
+    reply arrived, ALREADY reduced to what any reader of the note may know (the doc goes to
+    every reader, so a key's name or a connection id must never get here); it is stored on the
+    comment's `metadata`.
+    """
+    payload: dict[str, Any] = {
+        "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
+        "threadId": thread_id,
+        "userId": user_id,
+        "text": text,
+    }
+    if via:
+        payload["metadata"] = {"via": via}
+    return _write_thread(REPLY_THREAD_PATH, payload, "commentId")
+
+
+def resolve_note_thread(
+    note_type: str,
+    note_id: int,
+    *,
+    thread_id: str,
+    user_id: str,
+    may_resolve_any: bool,
+) -> dict[str, Any]:
+    """Mark a note's comment thread resolved (MIP-1100), as `user_id`.
+
+    collab resolves it when `user_id` wrote the thread's first comment, or `may_resolve_any` is
+    true (the caller is the note's owner), and changes nothing if it is already resolved.
+    """
+    return _write_thread(
+        RESOLVE_THREAD_PATH,
+        {
+            "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
+            "threadId": thread_id,
+            "userId": user_id,
+            "mayResolveAny": bool(may_resolve_any),
+        },
+        "resolved",
+    )
