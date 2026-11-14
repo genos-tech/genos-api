@@ -165,6 +165,28 @@ def object_display_name(object_type, object_id) -> str:
     return ""
 
 
+def _channel_shareable_or_raise(channel_id) -> None:
+    """Only a group chat (GM) or a multi-person DM (MDM) can be lent out by a channel grant.
+
+    A channel grant admits people by writing a `ChannelMember` row, which is the membership of
+    a group chat and of nothing else (MIP-1496):
+
+      * a project chat is the PROJECT's people (`channel_scope.chat_member_q`); its channel row
+        only mirrors that, so the guest got a share that opens nothing and a stray row. A
+        project is shared by a PROJECT grant, which writes the real `ProjectMembers` row.
+      * a direct message is fixed to its pair; a guest row put a third person (an outside
+        team's) into a two-person private conversation and let them read all of it.
+
+    The add-members endpoint already refuses both kinds; the share path must obey the same rule.
+    Answers `bad_object`, like an object that does not exist.
+    """
+    from origin.models.chat.unified_models import Channel, ChannelKind
+
+    kind = Channel.objects.filter(id=channel_id).values_list("kind", flat=True).first()
+    if kind not in (ChannelKind.GM, ChannelKind.MDM):
+        raise ExternalGrantError("bad_object")
+
+
 def _note_folder_shareable_or_raise(folder_id) -> None:
     """A folder may only be lent out if it is explicitly PRIVATE.
 
@@ -252,6 +274,8 @@ def offer_grant(
     if actual_owner != str(owner_team_id):
         raise ExternalGrantError("not_owned")
 
+    if object_type == ExternalGrant.ObjectType.CHANNEL:
+        _channel_shareable_or_raise(object_id)
     if object_type == ExternalGrant.ObjectType.NOTE_FOLDER:
         _note_folder_shareable_or_raise(object_id)
 
