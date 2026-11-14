@@ -49,13 +49,13 @@ from origin.search_engine.llm.types import AgentMessage, FunctionCall
 # MIP-1533: the plan-bearing scenarios (all but `digest-like`) were re-recorded after the
 # `create_task_plan` declaration gained its body nudge (tool description + `content_markdown`).
 GOLDEN: dict[str, str] = {
-    "plain": "a9bd9ea5956c8bc3e085f265a2edb76d68b1e2969f34687e9caa86b6b515fe73",
-    "plain-ja": "71d95b436680e8e5c4c87cf22e0445adf550669838cd67bfbb97311b598c1da3",
-    "effort-low/gemini": "27b7f2291b728ece715a8289bee238c893d6b5765a58822b53adf1fedf736691",
-    "effort-low-thinking/gemini": "70a0f4486ddbce0ebd895fecbe486c389061257ec3c20f49f113311bc28d7e58",
-    "effort-medium/gemini": "a9bd9ea5956c8bc3e085f265a2edb76d68b1e2969f34687e9caa86b6b515fe73",
-    "digest-like": "51165627a20fb67843691d61cef8c60d6cae25a4946ba628c94c6688d063a10f",
-    "two-tier-write": "c2cd52a905110867893b98d6bf3694927596b58ab6ad7a2e552eb36456b06eda",
+    "plain": "686a8bf3ffe810cb56eae326ba8ebea4804024392a9e058bf6b56071046358bb",
+    "plain-ja": "a6737ba19e81b7a233d008f34ee6635de1f7479b389fa76291afdc7a016319e6",
+    "effort-low/gemini": "0ea5dac2b5b81ba6330a598b1e3c27e380ee69b7b918d234cc000c489d6dee44",
+    "effort-low-thinking/gemini": "4e3ab24144dbad4bb5f3e9141fbd861cb7601ced68b22e884f90f65b0f3f187d",
+    "effort-medium/gemini": "686a8bf3ffe810cb56eae326ba8ebea4804024392a9e058bf6b56071046358bb",
+    "digest-like": "264c650056a9a57553446df29282232cb5d8aeb714ecdc197d82bef074f6f6cd",
+    "two-tier-write": "8cd611641eb86bb62e567112953e4359da58e949db4289fd20aa366a026f6ea6",
 }
 
 PLAN_BODY = "### Summary\nShip it.\n\n### Acceptance criteria\n- done\n"
