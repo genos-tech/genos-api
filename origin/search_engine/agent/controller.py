@@ -124,6 +124,7 @@ from origin.search_engine.llm.choice import (
     get_llm_choice,
 )
 from origin.search_engine.llm.spend import spend_purpose
+from origin.search_engine.llm.types import REFUSAL_STOP_REASONS, empty_stop_kind
 from origin.search_engine.models import AgentLlmCall, AgentRun, AgentStep
 from origin.services.user_time import resolve_zone, zone_for_user_id
 
@@ -186,6 +187,73 @@ ANSWER_CUT_OFF_NOTICE = (
     "\n\n*(This reply was cut off because it reached the length limit. Ask me to continue, "
     "or, if you asked me to write something, ask for it in smaller parts.)*"
 )
+
+# Stops that used to end as "Model returned an empty response" (MIP-1525). Each has its own
+# message so the member and the logs can tell them apart; `agent_views` classifies the run's
+# outcome from them like the messages above (prompt blocked: not billable; thinking used the cap:
+# ours, the call was paid and nothing came back; the other two: the provider's).
+#
+# Gemini wrote a function call it could not complete (`MALFORMED_FUNCTION_CALL`), twice.
+MODEL_BAD_CALL_MESSAGE = (
+    "The AI model could not put together the request it needed in order to answer, "
+    "even after a second try. Please try again, or ask in a simpler or narrower way."
+)
+# The provider stopped without giving a reason it explains (Gemini `OTHER`), twice.
+MODEL_STOPPED_MESSAGE = (
+    "The AI model stopped without giving an answer, even after a second try. "
+    "This is usually temporary: please try again in a moment."
+)
+# The provider's safety check blocked the PROMPT before any answer began
+# (`prompt_feedback.block_reason`). Not retried: the same prompt is blocked again.
+MODEL_PROMPT_BLOCKED_MESSAGE = (
+    "The AI model's safety check blocked this request before it could be answered. "
+    "Try rephrasing it or asking about something more specific."
+)
+# The call used its whole output cap on thinking and wrote nothing, twice (or no larger cap
+# could be asked for).
+MODEL_THINKING_CAP_MESSAGE = (
+    "The AI model used up its length limit thinking about this and did not write an answer. "
+    "Ask for a smaller part of it, or a narrower question."
+)
+
+# Claude's context window filled before it wrote anything (`model_context_window_exceeded`):
+# a longer output cap cannot help, so there is no retry.
+MODEL_CONTEXT_FULL_MESSAGE = (
+    "This conversation has grown too long for the AI model to answer in. "
+    "Start a new conversation, or ask about a smaller part of it."
+)
+
+#: kind (`empty_stop_kind`) -> (message, the step error recorded in the run's log)
+EMPTY_STOP_ERRORS = {
+    "malformed_call": (MODEL_BAD_CALL_MESSAGE, "malformed_function_call"),
+    "other_stop": (MODEL_STOPPED_MESSAGE, "model_other_stop"),
+    "prompt_blocked": (MODEL_PROMPT_BLOCKED_MESSAGE, "prompt_blocked"),
+    "thinking_cap": (MODEL_THINKING_CAP_MESSAGE, "thinking_used_cap"),
+    "context_full": (MODEL_CONTEXT_FULL_MESSAGE, "context_window_full"),
+}
+#: Retried once, where a second try is cheap and can differ. A blocked prompt is not retried.
+EMPTY_STOP_RETRIED = frozenset({"malformed_call", "other_stop", "thinking_cap"})
+
+_REFUSAL_STOP_LABELS = {
+    "SAFETY": "safety check",
+    "RECITATION": "check against repeating existing text",
+    "BLOCKLIST": "blocked-terms check",
+    "PROHIBITED_CONTENT": "content policy",
+    "SPII": "personal-data check",
+    "content_filter": "content filter",
+}
+
+
+def answer_stopped_notice(stop_reason: str) -> str:
+    """Appended to a text reply the provider's safety layer stopped part-way (Gemini SAFETY,
+    RECITATION, ...; OpenAI `content_filter`), as `ANSWER_CUT_OFF_NOTICE` is for the length
+    limit (MIP-1525): the text so far stays, and the member is told why it ends."""
+    label = _REFUSAL_STOP_LABELS.get(stop_reason, "safety check")
+    return (
+        f"\n\n*(This reply was stopped early by the AI model's {label}, so it may be incomplete. "
+        "Try rephrasing, or ask me to continue.)*"
+    )
+
 
 #: A cut-off write is retried once with more room: twice the cap the call ran under (or twice what
 #: it produced, thinking included, if that is more), at least FLOOR and at most CEILING tokens. No
@@ -3092,7 +3160,12 @@ def _drive_loop(
 
     # The latest model call's end state (MIP-905: was it cut off at the output cap?), filled by
     # `_collect_and_record`. Read by the step logic right after the call.
-    last_call: dict[str, Any] = {"truncated": False, "partial_call": False}
+    last_call: dict[str, Any] = {
+        "truncated": False,
+        "partial_call": False,
+        "stop_reason": "",
+        "block_reason": "",
+    }
 
     def _collect_and_record(
         step_index: int,
@@ -3144,6 +3217,7 @@ def _drive_loop(
             # The last function call may be incomplete (MIP-1479), and why the call ended.
             partial_call=bool(getattr(sink, "partial_call", False)),
             stop_reason=str(getattr(sink, "stop_reason", "") or ""),
+            block_reason=str(getattr(sink, "block_reason", "") or ""),
             purpose=purpose,
             model_override=model_override,
             emit_deltas=emit_deltas,
@@ -3234,6 +3308,51 @@ def _drive_loop(
         if last_call["truncated"] or not calls:
             return None, "too_long"
         return calls, "ok"
+
+    def _retry_empty_step(step_index: int, kind: str) -> tuple[list[str], list[FunctionCall], str]:
+        """Run the step whose call ended with nothing (`kind`: see `empty_stop_kind`) ONCE more.
+
+        Same model, messages and tools. A malformed call or an unexplained stop is asked again
+        as it was; a call that spent its whole cap on thinking is asked again with more room,
+        sized as a cut-off write's retry is (a blocked prompt and a full context window are not
+        retried: the same call would end the same way). Returns `(text parts, calls, outcome)`:
+
+          "ok"     the retry ran; what it returned (possibly nothing again) is in the first two
+          "skip"   no retry was possible (no larger cap to ask for): the caller says why
+          "ended"  the run is over and already told the client (cancelled, cost ceiling, credits,
+                   or the retry itself failed or was declined)
+        """
+        params = gen_params
+        if kind == "thinking_cap":
+            ran_under = int(last_call.get("output_cap") or 0)
+            produced = int(last_call.get("produced") or 0)
+            if ran_under <= 0:
+                return [], [], "skip"  # no cap was sent: the model's own maximum applied
+            cap = min(
+                max(2 * ran_under, 2 * produced, TRUNCATION_RETRY_FLOOR), TRUNCATION_RETRY_CEILING
+            )
+            if cap <= ran_under:
+                return [], [], "skip"
+            params = GenerationParams(
+                max_output_tokens=cap,
+                thinking_budget=gen_params.thinking_budget if gen_params is not None else None,
+            )
+        # The same guards the loop runs before every model call (a retry is one).
+        if _stop_before_call(step_index):
+            return [], [], "ended"
+        try:
+            parts, calls = _collect_and_record(
+                step_index,
+                f"{last_call['purpose']}_retry",
+                model_override=last_call.get("model_override"),
+                emit_deltas=last_call.get("emit_deltas", True),
+                tools_override=last_call.get("tools_override"),
+                params_override=params,
+            )
+        except Exception as exc:  # noqa: BLE001 — surfaced exactly as the step's own failure is
+            _report_model_error(exc, step_index)
+            return [], [], "ended"
+        return parts, calls, "ok"
 
     def _stop_before_call(step_index: int) -> bool:
         """The checks that run before EVERY model call: cancelled, per-request cost ceiling, the
@@ -3388,6 +3507,65 @@ def _drive_loop(
         except Exception as e:  # noqa: BLE001 — surface as stream error (a refusal too)
             _report_model_error(e, step)
             return None
+
+        # ---- A call that ended with nothing, and why (MIP-1525) ----
+        # No text and no function call: the provider stopped for a reason it reports. Each is
+        # told as what it was, not as an "empty response": a malformed call, an unexplained stop
+        # and thinking that used the whole cap are retried once (the same call, or with more room
+        # for the last); a blocked prompt is not (it would be blocked again). The retry's result
+        # replaces this one and flows on as any call's does. A plain empty end ("STOP" with
+        # nothing) is not classified and is reported below as before.
+        if not accumulated_function_calls and not accumulated_text_parts:
+            kind = empty_stop_kind(
+                last_call["stop_reason"], last_call["block_reason"], last_call["truncated"]
+            )
+            if kind:
+                log.warning(
+                    "Agent run %s step %d: the call ended with nothing (%s; finish reason %r, "
+                    "prompt block %r)",
+                    run_id,
+                    step,
+                    kind,
+                    last_call["stop_reason"],
+                    last_call["block_reason"],
+                )
+                if kind in EMPTY_STOP_RETRIED:
+                    retry_text, retry_calls, outcome = _retry_empty_step(step, kind)
+                    if outcome == "ended":
+                        return None
+                    if outcome == "ok":
+                        accumulated_text_parts, accumulated_function_calls = retry_text, retry_calls
+                        if retry_text or retry_calls:
+                            kind = ""
+                        else:
+                            # Empty again: told as what it was, never as the generic empty
+                            # response, even if this time it ended with a plain "STOP".
+                            kind = (
+                                empty_stop_kind(
+                                    last_call["stop_reason"],
+                                    last_call["block_reason"],
+                                    last_call["truncated"],
+                                )
+                                or kind
+                            )
+                if kind and not (accumulated_text_parts or accumulated_function_calls):
+                    message, step_error = EMPTY_STOP_ERRORS[kind]
+                    emit({"type": "error", "message": message})
+                    _persist_step(run_id, step_index=step, error=step_error)
+                    return None
+
+        # A refusal-type stop AFTER some text (Gemini SAFETY, RECITATION, ...; OpenAI
+        # `content_filter`): the text stays, as it always did, and now ends with a notice like a
+        # cut-off answer does, instead of just stopping. With nothing produced the adapter raised
+        # `ModelRefusal`; a function call alongside is left to the tool flow.
+        if (
+            accumulated_text_parts
+            and not accumulated_function_calls
+            and last_call["stop_reason"] in REFUSAL_STOP_REASONS
+        ):
+            stopped = answer_stopped_notice(last_call["stop_reason"])
+            accumulated_text_parts = [*accumulated_text_parts, stopped]
+            emit({"type": "answer_delta", "text": stopped})
 
         # ---- Output cut off at the cap (MIP-905) ----
         # A call the provider ended at its output cap has half-written whatever it was writing. A
@@ -3826,6 +4004,10 @@ def _drive_loop(
             if last_call["truncated"] and wrapup_parts:
                 wrapup_parts = [*wrapup_parts, ANSWER_CUT_OFF_NOTICE]
                 emit({"type": "answer_delta", "text": ANSWER_CUT_OFF_NOTICE})
+            elif wrapup_parts and last_call["stop_reason"] in REFUSAL_STOP_REASONS:
+                stopped = answer_stopped_notice(last_call["stop_reason"])
+                wrapup_parts = [*wrapup_parts, stopped]
+                emit({"type": "answer_delta", "text": stopped})
             wrapup_answer = "".join(wrapup_parts).strip()
         except Exception:  # noqa: BLE001 — degrade to the historical error
             log.exception("Step-cap wrap-up call failed for run %s", run_id)

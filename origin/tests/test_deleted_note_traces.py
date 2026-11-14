@@ -77,6 +77,11 @@ class DeletingOneNote(Base):
             )
             self.recent(self.author, 1, n.note_id)
             self.recent(self.reader, 1, n.note_id)
+            # The reader was shared the note: a row of a note the reader cannot open is not
+            # listed (MIP-1560), so without a grant the feed would hide it for that reason.
+            NotePermissionMaster.objects.create(
+                team=self.team, user=self.reader, note_id=n.note_id, note_type=1, role_id=3
+            )
             self.mention(self.reader, 6, n.note_id)
 
     def delete_via_rest(self):
