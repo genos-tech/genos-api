@@ -547,6 +547,28 @@ export default defineRailway(() => {
       limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
     },
   });
+  const aiAppNoticePrune = service("ai-app-notice-prune", {
+    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
+    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      ALLOWED_HOSTS: preserve(),
+      BLIND_INDEX_KEYS: preserve(),
+      DATABASE_URL: preserve(),
+      DJANGO_DEBUG: preserve(),
+      DJANGO_SECRET_KEY: preserve(),
+      FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+    },
+    deploy: {
+      // MIP-1541: 04:30 UTC, between schedule-report-prune (04:15) and opensearch-maintenance (05:00).
+      cronSchedule: "30 4 * * *",
+      startCommand: "python /app/manage.py prune_ai_app_notices --apply --heartbeat ai-app-notice-prune",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
   const webhookDeliver = service("webhook-deliver", {
     source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
@@ -568,5 +590,5 @@ export default defineRailway(() => {
     },
   });
 
-  return project("genos", { resources: [agentDigest, agentJudgeSampler, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
+  return project("genos", { resources: [agentDigest, agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
 });
