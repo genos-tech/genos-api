@@ -142,14 +142,25 @@ change to them is checked by the free tests and, for behaviour, by the grouped p
   or on the workflow file itself (an edit of the workflow alone skips the Vertex steps);
 - weekly on `main` (Tuesday 02:00 JST), which covers what no path rule does (`origin/models/**`,
   `apis/settings.py`, a model behaving differently);
-- by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`.
+- by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`
+  (the numbers a run must reach are in `scripts/retrieval_gate.py`, summarised below).
 
-There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `surface`
-job (no secrets, no Vertex) still hashes what the model sees (`scripts/agent_surface_hash.py`) and
-`scripts/agent_eval_gate.py` combines the hash, the changed files and the labels; any failure in it
-fails open (the evals run). Scheduled and manual runs need the repo variable `RUN_AGENT_EVALS` (or
-`DEPLOY_TO_GCP`) to be `true`.
+Five retrieval cases that were red in 88-99 of the 99 successful runs of 2026-11-02..14 carry
+`documented_red: "<evidence>"` in `retrieval_cases.yaml`: they still run and show as `RED`, but they cannot
+fail the command and are left out of the `Gated` pass count and metrics that the gate reads (58 of the
+70 other cases, mrr 0.78, recall 0.84; the derivation is in `scripts/retrieval_gate.py`). Mark a case only
+with that kind of evidence; `origin.tests.test_retrieval_documented_red` pins the exact set.
 
-The pass / mrr / recall floors (58 of 75, 0.75, 0.80) live only in `scripts/retrieval_gate.py`.
-Tests: `origin.tests.test_agent_surface_hash`, `origin.tests.test_retrieval_gate`. To see what the hash
-covers locally: `python scripts/agent_surface_hash.py`.
+There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `gate` job
+(no secrets, no Vertex, no Python dependencies) lists the PR's changed files and runs
+`scripts/agent_eval_gate.py`: a changed retrieval file, the `run-evals` label, a dispatch or the weekly
+run start the billed steps; a PR that only edits the workflow does not (that is how the workflow is
+tested for free). Any failure in the gate fails open (the evals run). Scheduled and manual runs need the
+repo variable `RUN_AGENT_EVALS` (or `DEPLOY_TO_GCP`) to be `true`.
+
+What the model reads (prompts, tool declarations, tool results) is guarded by a free test in the normal
+CI run instead: `origin.tests.test_agent_fingerprint_golden` fails when any of it changes (re-record
+with `manage.py agent_fingerprint --write-golden`).
+
+The pass / mrr / recall floors live only in `scripts/retrieval_gate.py`.
+Tests: `origin.tests.test_agent_eval_gate`, `origin.tests.test_retrieval_gate`.

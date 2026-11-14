@@ -169,7 +169,7 @@ UNDO_SUPPORT: dict[str, str] = {
 UNDO_REASONS: dict[str, tuple[str, str]] = {
     "update_task": (
         UNSUPPORTED_FIELDS,
-        "a call that touches collaborators, custom fields, or a move to another "
+        "a call that touches collaborators, custom fields, links, the reporter, or a move to another "
         "project, parent or milestone (or a milestone's own task) has no stored old value",
     ),
     "update_note": (
@@ -261,8 +261,19 @@ UPDATE_TASK_RESTORABLE_ARGS = frozenset(
         "tags",
     }
 )
+# `links` and `reporter_id` (MIP-1561, published by `AGENT_PARITY_TOOLS`) are here although the flag
+# may be off: a call that carries one is not undoable whenever it arrives. The links are not among the
+# columns a pre-image keeps, and putting a reporter back is not built.
 UPDATE_TASK_UNRESTORABLE_ARGS = frozenset(
-    {"collaborators", "custom_fields", "milestone_id", "parent_task_id", "project_id"}
+    {
+        "collaborators",
+        "custom_fields",
+        "milestone_id",
+        "parent_task_id",
+        "project_id",
+        "links",
+        "reporter_id",
+    }
 )
 UPDATE_NOTE_RESTORABLE_ARGS = frozenset({"note_id", "note_type", "title", "content_text"})
 UPDATE_NOTE_UNRESTORABLE_ARGS = frozenset({"folder_id"})

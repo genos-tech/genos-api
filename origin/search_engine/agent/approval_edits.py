@@ -70,6 +70,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.model_fence import escape_user_arguments, unfence_arguments
+from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size, max_body_bytes
 from origin.services.reminder_input import ReminderInputError, resolve_remind_at
@@ -142,6 +143,10 @@ EDITABLE_FIELDS: dict[str, dict[str, Field]] = {
         # `''` is "no date" here: the tool skips an empty one.
         "due_date": Field(DATE, "Due date", allow_empty=True),
         "start_date": Field(DATE, "Start date", allow_empty=True),
+        # Present only while `AGENT_PARITY_TOOLS` publishes it (MIP-1561); its enum already leaves
+        # "Deleted" out. Not `template`, `links` or `reporter_id`: a template name needs the
+        # project's list, a link set is a list of objects and a person is an id.
+        "status": Field(ENUM, "Status"),
     },
     "update_task": {
         "title": _title(_TASK_TITLE),
@@ -314,10 +319,12 @@ class EditRejected(Exception):
 
 
 def _schema_node(tool_name: str, template: str) -> dict[str, Any] | None:
-    """The tool's own `parameters_schema` entry for `template`, or None."""
+    """The tool's own `parameters_schema` entry for `template`, or None. The schema is the one the
+    model is shown: with `AGENT_PARITY_TOOLS` on it carries the parameters that flag adds."""
     schema = getattr(REGISTRY.get(tool_name), "parameters_schema", None)
     if not isinstance(schema, dict):
         return None
+    schema = with_flagged_params(tool_name, schema)
     properties = schema.get("properties") or {}
     if "[*]." not in template:
         node = properties.get(template)

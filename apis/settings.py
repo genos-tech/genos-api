@@ -2073,6 +2073,22 @@ SEARCH_ENGINE["AGENT_UNDO_NOTE_IN_MEMORY"] = (
     os.environ.get("AGENT_UNDO_NOTE_IN_MEMORY", "false").lower() == "true"
 )
 
+# MIP-578 parity batch (MIP-1561 first; the other parity tasks add their parameters to this
+# same flag). Model-visible, dark-shipped OFF, measured in the ONE grouped paid run (arm
+# `parity`). ON = the in-app agent and MCP can set what the app's own forms set, as parameters
+# on tools they already have: `create_task` takes `status`, `template`, `links` and
+# `reporter_id` (and fills the project's default body template when it gets no body),
+# `update_task` takes `links` and `reporter_id`, and each `create_task_plan` task takes `status`
+# and `template`. The declarations grow by the parameters and one sentence per tool, on every
+# call (`origin/search_engine/agent/tool_flag_params.py`). OFF = the registry, the declarations
+# (in-app and MCP) and the tools' own behaviour are what they were: the parameters are not
+# declared, and a call that sends one anyway has it ignored. Rollback: `AGENT_PARITY_TOOLS=false`.
+# Flip criterion: the `parity` arm shows a plain "create a task" still sends none of them
+# unasked, and each case that asks for one sends it right.
+SEARCH_ENGINE["AGENT_PARITY_TOOLS"] = (
+    os.environ.get("AGENT_PARITY_TOOLS", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

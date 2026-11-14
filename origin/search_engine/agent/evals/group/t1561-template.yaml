@@ -1,0 +1,102 @@
+# MIP-1561 (flag AGENT_PARITY_TOOLS, arm `parity`): a task made through the agent starts from a body
+# template, as one made in the app does. Two things are measured:
+#   * `template` named by the person ("a bug report", "from our Design doc template") is sent by name;
+#   * with no template asked for, the model sends NO `template` (the server fills the project's
+#     default; sending one unasked would pick a structure nobody chose).
+# The fill itself is server-side and is pinned by the free tests (test_agent_parity_*); these cases
+# only judge what the model PROPOSES, as the approval card shows it (`pending_write` reads the
+# `tool_call_pending_approval` event, whose arguments are the card's: with a template the card carries
+# the filled body in `content_text`; test_agent_eval_parity_cases pins each case against that shape).
+# A template the server does not know ("バグ報告") is refused by the tool, so the cases name only the ids
+# and labels it accepts: a model that translates the name has missed. The v1 fixture is read, never written.
+# Positives `requires_arm: parity`; the negative runs on arm0 too.
+
+- id: t1561.template-bug.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: 'as a bug report' picks the built-in bug template. The proposal is judged as the approval card shows it, and the card carries the body the server fills in, so the body check is that the bug headings are THERE (a model that wrote its own body and no template fails it)."
+  query: 'In the Website Redesign project, file "Search filter drops the last selected tag" as a bug report, using the bug report template. Leave the details for me to fill in.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_match:
+        template: "^(bug|bug report)$"
+        content_text: "^### 🐞 Summary"
+
+- id: t1561.template-bug.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: 'as a bug report' picks the built-in bug template. The proposal is judged as the approval card shows it, and the card carries the body the server fills in, so the body check is that the bug headings are THERE (a model that wrote its own body and no template fails it)."
+  query: Website Redesign プロジェクトに「検索フィルターが最後に選んだタグを落とす」をバグ報告として登録してください。バグ報告テンプレートを使い、詳細は私が後で書きます。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_match:
+        template: "^(bug|bug report)$"
+        content_text: "^### 🐞 Summary"
+
+- id: t1561.template-plan.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Edge: in a plan, the research task names the spike template."
+  query: 'In the Website Redesign project create two tasks: "Investigate search latency" as a research spike (use the spike template) and "Fix the pagination bug".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 2
+      task_args_match:
+        template: "^(spike|research / spike)$"
+
+- id: t1561.template-plan.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Edge: in a plan, the research task names the spike template."
+  query: Website Redesign プロジェクトに2つのタスクを作ってください:「検索の遅延を調査する」(調査スパイクとして、spike テンプレートを使う)と「ページネーションのバグを直す」。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 2
+      task_args_match:
+        template: "^(spike|research / spike)$"
+
+- id: t1561.template-none.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): no template asked for, none sent; the server fills the project's default."
+  query: "Add a task to the Website Redesign project to book the team offsite venue."
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_absent: [template]
+
+- id: t1561.template-none.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): no template asked for, none sent; the server fills the project's default."
+  query: Website Redesign プロジェクトに、チームのオフサイト会場を予約するタスクを追加してください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_absent: [template]

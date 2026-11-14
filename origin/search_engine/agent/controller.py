@@ -84,6 +84,7 @@ from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.model_fence import fence_for_model
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
@@ -91,6 +92,7 @@ from origin.search_engine.agent.prompts import (
     agent_system_prompt,
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
+from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import declared_description
 from origin.search_engine.agent.tools import (
     MCP_ONLY_REGISTRY,
@@ -100,7 +102,10 @@ from origin.search_engine.agent.tools import (
     flagged_tool,
     flagged_tools,
 )
-from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies_for_caller
+from origin.search_engine.agent.tools.plan_task_bodies import (
+    fill_plan_task_bodies_for_caller,
+    new_task_body_for_caller,
+)
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -411,7 +416,9 @@ def _build_tool_declarations(
         ToolDeclaration(
             name=t.name,
             description=declared_description(t),
-            parameters_schema=declared_schema(t.name, t.parameters_schema),
+            parameters_schema=declared_schema(
+                t.name, with_flagged_params(t.name, t.parameters_schema)
+            ),
         )
         for t in (*REGISTRY.values(), *flagged_tools())
         if t.name not in disabled
@@ -805,7 +812,12 @@ def _friendly_update_task_arguments(
     planning = [
         k for k in ("start_date", "collaborators", "custom_fields") if args.get(k) is not None
     ]
-    if not moving and not planning:
+    # `reporter_id` and `links` (MIP-1561): shown old -> new like the fields above, only while the
+    # flag that publishes them is on.
+    parity_fields = (
+        [k for k in ("reporter_id", "links") if args.get(k) is not None] if parity_on() else []
+    )
+    if not moving and not planning and not parity_fields:
         return
     task = access.task(args.get("task_id"))
     if planning:
@@ -823,6 +835,18 @@ def _friendly_update_task_arguments(
     if "project_id" in moving:
         name = access.project_name(task.project_id)
         current["project_id"] = name if name is not None else task.project_id
+    if "reporter_id" in parity_fields:
+        # The present reporter by name, for a person the caller may name; else the raw id.
+        names = access.usernames([str(task.reporter_id)]) if task.reporter_id else {}
+        current["reporter_id"] = (
+            names.get(str(task.reporter_id), str(task.reporter_id)) if task.reporter_id else None
+        )
+    if "links" in parity_fields:
+        current["links"] = [
+            {"title": link.get("title") or None, "url": link.get("url")}
+            for link in (task.links if isinstance(task.links, list) else [])
+            if isinstance(link, dict) and isinstance(link.get("url"), str)
+        ]
     if current:
         out["current"] = current
 
@@ -832,7 +856,15 @@ def _friendly_create_task_arguments(
 ) -> None:
     """In-place nested enrichment for `create_task` arguments: the proposed
     `collaborators` and member-field values as usernames. There is no present
-    value to show, so no `current`."""
+    value to show, so no `current`.
+
+    With the parity flag on (MIP-1561) a task sent without a body shows, and gets, the template
+    body `create_task` fills in when it runs (the one `template` names, else the project's
+    default): the card equals what is created, as a plan's does (MIP-1510)."""
+    if parity_on():
+        body = new_task_body_for_caller(args, access.team_id, access.user_id)
+        if body is not None:
+            out["content_text"] = body
     if args.get("collaborators") is None and args.get("custom_fields") is None:
         return
     _friendly_task_fields(out, args, access, args.get("project_id"), None)

@@ -8,7 +8,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
-from origin.services import inbox_ai
+from origin.services import inbox_ai, inbox_via
 from origin.services.deleted_account_channel_owners import join_request_receiver
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
@@ -346,7 +346,10 @@ class InboxItemView(AuthenticatedAPIView):
                 # Request routing payload (e.g. note-access items carry
                 # note_type/note_id/note_title so the client can open the
                 # referenced note). Null for plain activity items.
-                "itemOptionals": item.item_optionals,
+                # The connected app's `via`, if any, as this reader may see it (MIP-1569).
+                "itemOptionals": inbox_via.optionals_for_viewer(
+                    item.item_optionals, sender_id=item.sender_id, viewer_id=request.user.id
+                ),
             }
             if item.item_id in ai_sources:
                 entry["aiSource"] = ai_sources[item.item_id]

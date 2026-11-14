@@ -25,6 +25,7 @@ from django.db import transaction
 
 from origin.models.common.inbox_models import InboxItems
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services import inbox_via
 from origin.services.member_roles import can_manage, resolve_project_role
 from origin.services.project_manage import record_member_added
 from origin.views.utils.inbox_approval import (
@@ -134,7 +135,9 @@ def _answer(user, item: InboxItems, project: ProjectMaster, *, approved: bool) -
         item_type=0,
         # Only an approval carries the project: the requester is a member now, so the
         # link resolves. A rejection names a project they can't open.
-        item_optionals=(
+        # A connected app's write also says which app (kind + official family only, MIP-1569),
+        # for the requester's card to draw its icon; anyone else's write adds nothing.
+        item_optionals=inbox_via.stamped(
             {"project_id": project.project_id, "project_name": project.project_name}
             if approved
             else None

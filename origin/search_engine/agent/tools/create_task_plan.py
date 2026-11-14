@@ -21,6 +21,11 @@ Semantics mirror the UI paths exactly:
   * Tasks are created in array order, parents first, so the
     `root_task_id` post_save signal resolves each child in O(1).
 
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF): a task may take `status` (default Open; not
+Deleted) and `template` (its body, when it has none: `plan_task_bodies`). A blocker still wins over
+an active status, as it does in the app: an Open, WIP or Pending task with an open blocker is
+Blocked once the plan's edges exist, a Closed one stays Closed (`task_blocking`).
+
 Everything runs inside one transaction: any failure rolls the whole
 plan back — the user approved a specific plan, so a partially-created
 one is worse than a clean error the model can retry.
@@ -46,6 +51,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
+from origin.search_engine.agent.parity import ignore_unless_parity, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_sizes
@@ -57,6 +63,7 @@ from origin.search_engine.agent.tools.task_enums import (
     PRIORITY_ENUM,
     VALID_EFFORTS,
     VALID_PRIORITIES,
+    VALID_STATUSES,
 )
 from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.quota import (
@@ -92,6 +99,23 @@ def _check_enum(raw: Any, valid: set[str], where: str, field: str, errors: list[
         errors.append(f"{where}: `{field}` must be one of {sorted(valid)} (got {raw!r}).")
         return None
     return raw
+
+
+def _check_status(raw: Any, where: str, errors: list[str]) -> None:
+    """A plan task's starting status (MIP-1561): one the app has, Deleted refused."""
+    if raw in (None, ""):
+        return
+    if raw == "Deleted":
+        errors.append(
+            f"{where}: a task is not created as Deleted (use `update_task` with status Deleted)."
+        )
+    elif raw not in VALID_STATUSES:
+        errors.append(f"{where}: `status` must be one of {sorted(VALID_STATUSES)} (got {raw!r}).")
+
+
+def _blank_body(spec: Any) -> bool:
+    body = spec.get("content_markdown") if isinstance(spec, dict) else None
+    return body is None or (isinstance(body, str) and not body.strip())
 
 
 def _find_dependency_cycle(edges_by_node: dict[int, list[int]]) -> list[int] | None:
@@ -175,6 +199,8 @@ def _plan_bodies(args: dict[str, Any]) -> list[tuple[str, Any]]:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    args = ignore_unless_parity(args, (), rows=("tasks", PARITY_ROW_PROPERTIES))
+    parity = parity_on()
     check_body_sizes(_plan_bodies(args))
     # ---- project + ACL (same layering as create_task) ----
     raw_project_id = args.get("project_id")
@@ -198,6 +224,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     # A task proposed without a body gets the project's template (MIP-1510): the same text the
     # approval card showed. After the size check and the ACL gate, on a copy.
+    # (`own_args` keeps what the model sent: after the fill every task has a body, and "a template AND
+    # a body" is judged on what it wrote.)
+    own_args = args
     args = fill_plan_task_bodies(args, project)
 
     # ---- attach-mode resolution (new milestone XOR existing milestone
@@ -313,6 +342,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # not silently hand its owner new work.
     milestone_default = milestone_assignees[0] if len(milestone_assignees) == 1 else None
 
+    own_tasks = own_args.get("tasks") if isinstance(own_args.get("tasks"), list) else []
     edges_by_node: dict[int, list[int]] = {i: [] for i in range(len(tasks))}
     # Each task's stored tags, resolved against the project's catalogue
     # (MIP-707). An unknown name is a validation error like any other.
@@ -326,6 +356,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             errors.append(f"{where}: `title` is required.")
         _check_enum(spec.get("priority"), VALID_PRIORITIES, where, "priority", errors)
         _check_enum(spec.get("effort_level"), VALID_EFFORTS, where, "effort_level", errors)
+        if parity:
+            _check_status(spec.get("status"), where, errors)
+            if spec.get("template") not in (None, "") and not _blank_body(own_tasks[i]):
+                errors.append(
+                    f"{where}: send `content_markdown` or `template`, not both: the template "
+                    "IS the body."
+                )
         _parse_date(spec.get("start_date"), f"{where}.start_date", errors)
         _parse_date(spec.get("due_date"), f"{where}.due_date", errors)
         if spec.get("assignee_id"):
@@ -467,7 +504,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         content=task_body_blocks(
                             spec.get("content_markdown") or "", entity_chip_resolver=chips
                         ),
-                        status="Open",
+                        status=(spec.get("status") or "Open") if parity else "Open",
                         priority=spec.get("priority") or None,
                         effort_level=spec.get("effort_level") or None,
                         start_date=spec.get("start_date") or None,
@@ -541,6 +578,18 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "tags": [tag["tagName"] for tag in milestone_tags],
         }
 
+    # What the rows hold now: a blocker moves an Open, WIP or Pending task to Blocked after it is
+    # made (`sync_blocked_status`), and a status the plan asked for is only worth reporting as it
+    # ended up.
+    statuses = (
+        dict(
+            TaskMaster.objects.filter(task_id__in=[t.task_id for t in created]).values_list(
+                "task_id", "status"
+            )
+        )
+        if parity
+        else {}
+    )
     tasks_out = [
         {
             "index": i,
@@ -550,6 +599,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "parent_task_id": t.parent_task_id,
             "tags": [tag["tagName"] for tag in tags_by_index.get(i) or []],
             "assignee_id": str(t.assignee_id) if t.assignee_id else None,
+            **({"status": statuses.get(t.task_id)} if parity else {}),
         }
         for i, t in enumerate(created)
     ]
@@ -651,6 +701,26 @@ _TASK_ITEM_SCHEMA: dict[str, Any] = {
     },
     "required": ["title"],
 }
+
+#: What `AGENT_PARITY_TOOLS` adds to each task of a plan (`tool_flag_params`): the starting status
+#: and a body template. The tool reads them only while the flag is on.
+PARITY_ROW_PROPERTIES: dict[str, dict[str, Any]] = {
+    "status": {
+        "type": "STRING",
+        "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
+        "description": "Optional starting status. Default Open.",
+    },
+    "template": {
+        "type": "STRING",
+        "description": (
+            "Optional body template when no content_markdown: default, bug, spike, milestone, "
+            "or a project template's name."
+        ),
+    },
+}
+
+#: The sentence the flag adds to the description (`tool_flag_text`).
+DESCRIPTION_ADDITION = " A task may also take `status` and `template` (as create_task)."
 
 CREATE_TASK_PLAN = Tool(
     name="create_task_plan",
