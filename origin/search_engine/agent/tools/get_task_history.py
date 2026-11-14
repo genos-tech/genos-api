@@ -51,6 +51,7 @@ from origin.search_engine.agent.tools.task_enums import (
     VALID_PRIORITIES,
     VALID_STATUSES,
 )
+from origin.views.public.mcp.via_privacy import via_for_viewer
 
 _DEFAULT_LIMIT = 30
 _MAX_LIMIT = 100
@@ -284,7 +285,10 @@ def _field(row: TaskActivity) -> Any:
 
 
 def _entry(
-    row: TaskActivity, usernames: dict[str, str], own: set[tuple[str, str]] | None = None
+    row: TaskActivity,
+    usernames: dict[str, str],
+    own: set[tuple[str, str]] | None = None,
+    viewer_id: Any = None,
 ) -> dict[str, Any]:
     actor = row.actor
     entry: dict[str, Any] = {
@@ -296,7 +300,9 @@ def _entry(
         "actor": (
             {"user_id": str(actor.id), "username": actor.username} if actor is not None else None
         ),
-        "via": _via(row, own),
+        # A key or a connected app writes as its owner, so the row's actor is the owner: anyone
+        # else reads the kind only (MIP-1470). After the flag's shape, so the flag cannot widen it.
+        "via": via_for_viewer(_via(row, own), row.actor_id, viewer_id),
     }
     if row.action_type in (
         TaskActivityActionType.COMMENT_ADDED,
@@ -388,7 +394,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         else {}
     )
     own = _own_credentials(rows, ctx) if client_enabled() else None
-    history = [_entry(r, usernames, own) for r in rows]
+    history = [_entry(r, usernames, own, ctx.user_id) for r in rows]
 
     return {
         "task_id": task.task_id,
