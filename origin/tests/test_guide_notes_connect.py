@@ -251,6 +251,17 @@ class PreviousTextPinTests(SimpleTestCase):
         # ids at every level are ignored
         self.assertEqual(guide_notes.body_fingerprint(_with_ids(_strip(body))), base)
 
+    def test_ids_are_ignored_at_every_depth(self):
+        # The shipped bodies have no nested blocks, so this is what pins the recursion.
+        child = {"type": "paragraph", "props": {}, "content": [], "children": []}
+        parent = {"type": "paragraph", "props": {}, "content": [], "children": [child]}
+        with_ids = copy.deepcopy(parent)
+        with_ids.update(id="a")
+        with_ids["children"][0].update(id="b")
+        self.assertEqual(
+            guide_notes.body_fingerprint([parent]), guide_notes.body_fingerprint([with_ids])
+        )
+
 
 def _strip(body):
     return guide_notes._strip_block_ids(body)
