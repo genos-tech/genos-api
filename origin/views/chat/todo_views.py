@@ -42,6 +42,12 @@ def _parse_date(value, default=None):
 _recompute_group_completion = todo_items.recompute_group_completion
 
 
+def _viewer(request):
+    """Serializer context naming the reader, so a to-do's `via` is reduced for anyone but its
+    owner (`ToDoItemSerializer.get_via`)."""
+    return {"viewer_id": request.user.id}
+
+
 def _get_owned_item(request, item_id):
     """The to-do, or None when it isn't the caller's.
 
@@ -113,7 +119,10 @@ class ToDoGroupListView(AuthenticatedAPIView):
             .prefetch_related("items", "items__category")
             .order_by("-local_date")
         )
-        return Response(ToDoGroupSerializer(groups, many=True).data, status=status.HTTP_200_OK)
+        return Response(
+            ToDoGroupSerializer(groups, many=True, context=_viewer(request)).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class ToDoItemListView(AuthenticatedAPIView):
@@ -182,7 +191,9 @@ class ToDoItemListView(AuthenticatedAPIView):
             )
             _recompute_group_completion(group.group_id)
 
-        return Response(ToDoItemSerializer(item).data, status=status.HTTP_201_CREATED)
+        return Response(
+            ToDoItemSerializer(item, context=_viewer(request)).data, status=status.HTTP_201_CREATED
+        )
 
 
 class ToDoItemDetailView(AuthenticatedAPIView):
@@ -259,7 +270,9 @@ class ToDoItemDetailView(AuthenticatedAPIView):
         # A moved row's search chunk is indexed under a date it is no longer
         # on, and so are its children's.
         saved.purge_stale_chunks()
-        return Response(ToDoItemSerializer(item).data, status=status.HTTP_200_OK)
+        return Response(
+            ToDoItemSerializer(item, context=_viewer(request)).data, status=status.HTTP_200_OK
+        )
 
     def delete(self, request, item_id):
         item = _get_owned_item(request, item_id)
