@@ -83,8 +83,8 @@ from functools import reduce
 from operator import or_
 from typing import Any
 
-from django.db.models import CharField, Max, Q
-from django.db.models.functions import Cast, Coalesce
+from django.db.models import CharField, Max, Q, Value
+from django.db.models.functions import Cast, Coalesce, Concat
 from django.utils import timezone
 
 from origin.models.chat.unified_models import (
@@ -845,17 +845,27 @@ def _own_markers_of(
         task_id__in=ids, team_id=team, is_deleted=False
     ).values_list("milestone_id", flat=True)
     threads = sorted({th for t in tasks.values() if (th := _uuid_text(t.thread_id))})
-    named = Q(object_type="task", object_id__in=[str(i) for i in ids])
-    named |= Q(object_type="milestone", object_id__in=[str(m) for m in milestones])
-    if task_notes:
-        named |= Q(object_type="note", object_id__in=[f"task:{n}" for n in task_notes])
-    if threads:
-        on_thread = reduce(or_, (Q(object_id__endswith=f":{th}") for th in threads))
-        named |= Q(object_type="chat_thread") & (Q(object_id__in=threads) | on_thread)
+    named = Q(object_type="task", object_id__in=[str(i) for i in ids]) | _other_items_q(
+        [str(m) for m in milestones], [f"task:{n}" for n in task_notes], threads
+    )
     floor = timezone.now() - member_events.RETENTION
     return MemberEvent.objects.filter(
         named, user_id=me, team_id=team, ts__gte=max(since, floor), ts__lt=until
     ).order_by("-ts", "-event_id")
+
+
+def _other_items_q(milestone_oids: Any, note_oids: Any, threads: list[str]) -> Q:
+    """The markers that can name an item through its milestone row (`milestone_oids`: the
+    marker's `object_id` of each), its task notes (`note_oids`: `task:<id>`) or its linked
+    thread (`threads`: a UUID text, alone or as `<chat>:<thread>`). Each of the first two is a
+    list or a subquery of texts; an empty list matches nothing. The rule `_own_markers_of`
+    and `seen_at_checked` share, so the two cannot disagree on which markers name an item."""
+    named = Q(object_type="milestone", object_id__in=milestone_oids)
+    named |= Q(object_type="note", object_id__in=note_oids)
+    if threads:
+        on_thread = reduce(or_, (Q(object_id__endswith=f":{th}") for th in threads))
+        named |= Q(object_type="chat_thread") & (Q(object_id__in=threads) | on_thread)
+    return named
 
 
 def _resolve_markers(team: str, markers: list) -> dict[Any, int | None]:
@@ -1088,8 +1098,27 @@ def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime
         .annotate(last=Max("ts"))
     ):
         out[int(row["object_id"])] = row["last"]
+    # ONLY the markers that can name one of these tasks, by the id of its milestone row, of
+    # its task notes and of its linked thread (MIP-1499): "the member's newest 300 of any
+    # milestone, note or thread" was full of other items' markers and flagged a task that had
+    # none of its own. The milestone and note ids are subqueries, the thread ids one read.
+    threads = sorted(
+        {
+            text
+            for raw in TaskMaster.objects.filter(team_id=team, task_id__in=wanted)
+            .exclude(thread_id__isnull=True)
+            .values_list("thread_id", flat=True)
+            if (text := _uuid_text(raw))
+        }
+    )
+    milestone_oids = MilestoneMaster.objects.filter(
+        team_id=team, task_id__in=wanted, is_deleted=False
+    ).values(oid=Cast("milestone_id", CharField()))
+    note_oids = TaskNoteMaster.objects.filter(team_id=team, task_id__in=wanted).values(
+        oid=Concat(Value("task:"), Cast("note_id", CharField()))
+    )
     others = list(
-        base.filter(object_type__in=("milestone", "note", "chat_thread")).order_by(
+        base.filter(_other_items_q(milestone_oids, note_oids, threads)).order_by(
             "-ts", "-event_id"
         )[: SEEN_POOL + 1]
     )
