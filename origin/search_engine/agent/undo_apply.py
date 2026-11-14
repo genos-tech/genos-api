@@ -67,7 +67,12 @@ from origin.services.note_delete import DeleteRefused, child_note_count, delete_
 from origin.services.note_version_restore import RestoreRefused, restore_note_version
 from origin.services.task_body_restore import put_back_task_body
 from origin.services.task_comment_manage import soft_delete_comment
-from origin.views.utils.note_role import ROLE_EDITOR, ROLE_OWNER, get_effective_role
+from origin.views.utils.note_role import (
+    NOTE_TYPE_PERSONAL,
+    ROLE_EDITOR,
+    ROLE_OWNER,
+    get_effective_role,
+)
 from origin.views.utils.scope_guards import can_access_task, participates_in_team
 
 log = logging.getLogger(__name__)
@@ -328,12 +333,19 @@ def _locked_note(undoing: Undoing, family: str, note_id: int):
 def _may_delete_note(user_id: str, code: int, note: Any) -> bool:
     """Who may delete a note, as the agent's `delete_note` decides it (stricter than
     the page, on purpose): the Owner, or the author unless a grant has since made
-    them a mere reader of their own note."""
+    them a mere reader of their own note.
+
+    The author with NO role counts only for a PERSONAL note (a private note has no implicit
+    access: its author is its owner, as in `has_write_permission`). A chat note's author who left
+    the chat (MIP-1492) or a task note's who left the project (MIP-1511) holds no role on the
+    note on any other gate and must not delete it here either (MIP-1551)."""
     role = get_effective_role(user_id, code, note.note_id)
     if role == ROLE_OWNER:
         return True
     wrote_it = str(getattr(note, "owner_id", "") or "") == user_id
-    return wrote_it and (role is None or role <= ROLE_EDITOR)
+    if role is None:
+        return wrote_it and code == NOTE_TYPE_PERSONAL
+    return wrote_it and role <= ROLE_EDITOR
 
 
 def undo_create_note(undoing: Undoing, image: dict[str, Any]) -> Outcome:
