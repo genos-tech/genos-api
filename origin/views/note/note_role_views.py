@@ -130,17 +130,18 @@ class NoteRoleCheckView(AuthenticatedAPIView):
         if note_type not in VALID_NOTE_TYPES:
             return Response({"error": "Invalid note_type."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not note_exists(note_type, note_id):
+        # A note the caller cannot read answers as a note that does not exist (MIP-1497): the
+        # 403/404 split let any signed-in user probe which note ids exist. genos-collab treats
+        # 403 and 404 alike, and nothing in the app calls this route.
+        role = (
+            get_effective_role(request_user_id, note_type, note_id)
+            if note_exists(note_type, note_id)
+            else None
+        )
+        if role is None:
             return Response(
                 {"error": "Note not found."},
                 status=status.HTTP_404_NOT_FOUND,
-            )
-
-        role = get_effective_role(request_user_id, note_type, note_id)
-        if role is None:
-            return Response(
-                {"error": "You do not have access to this note."},
-                status=status.HTTP_403_FORBIDDEN,
             )
 
         return Response({"role_id": role}, status=status.HTTP_200_OK)

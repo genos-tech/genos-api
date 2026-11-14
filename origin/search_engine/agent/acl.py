@@ -44,6 +44,10 @@ def may_read_note(*, user_id, note_type_code: int, note_id: int, owner_id) -> bo
     authorizes with, and the one the approval card's `LabelAccess.note_title`
     labels with.
 
+    A CHAT note has no owner exception (MIP-1492): it belongs to its chat, so
+    its author who left the chat, the project or the team reads it only through
+    a grant, like anyone else. Personal and task notes keep theirs.
+
     Prefer this to `user_id in personal_note_acl_user_ids(...)` for a read
     decision. That set is built for the search index, so a note in a PUBLIC
     team folder contributes a single ``team:<id>`` sentinel instead of user
@@ -54,7 +58,7 @@ def may_read_note(*, user_id, note_type_code: int, note_id: int, owner_id) -> bo
     """
     if not user_id:
         return False
-    if owner_id and str(owner_id) == str(user_id):
+    if note_type_code != NOTE_TYPE_CHAT and owner_id and str(owner_id) == str(user_id):
         return True
     return get_effective_role(user_id, note_type_code, note_id) is not None
 
@@ -188,16 +192,19 @@ def note_grants_user_ids(note_type_code: int, note_id: int) -> set[str]:
 
 
 def chat_note_acl_user_ids(*, owner_id, chat_type_code: int, channel_id, note_id: int) -> set[str]:
-    """Chat-note ACL: owner + channel members + explicit grants.
+    """Chat-note ACL: channel members + explicit grants.
 
     Chat notes (`ChatNoteMaster`) are keyed on the v3 `Channel` UUID
     (`channel_id`), so membership resolves via the UUID-native
     `chat_acl_user_ids` (DM/GM/MDM via `ChannelMember`; PM via the
     channel's `project_id`).
+
+    The note's author is NOT added (MIP-1492): a chat note belongs to its chat, so an author
+    who left it (or the project, or the team) is no longer in this set; while they are in the
+    chat they are in it as a member, and their own Owner row is among the grants. `owner_id`
+    stays in the signature for the callers that hold it; it no longer widens the set.
     """
     out: set[str] = set()
-    if owner_id:
-        out.add(str(owner_id))
     out |= chat_acl_user_ids(chat_type_code, channel_id)
     out |= note_grants_user_ids(NOTE_TYPE_CHAT, note_id)
     return out

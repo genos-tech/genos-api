@@ -84,9 +84,10 @@ def iter_chat_note_chunks(
         if not note.team_id:
             continue
         team_id = str(note.team_id)
+        # Members of the chat plus explicit grants, by `chat_note_acl_user_ids`'s rule. The author
+        # is not added: one who left the chat, the project or the team is no longer a reader
+        # (MIP-1492).
         acl = set()
-        if note.owner_id:
-            acl.add(str(note.owner_id))
         acl.update(acl_by_chat.get(note.channel_id, []))
         acl.update(grants_by_note.get(note.note_id, []))
 

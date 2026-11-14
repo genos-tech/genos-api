@@ -149,12 +149,22 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
     # behind disappears from both projects' trees while still being
     # reachable from the task it hangs off.
     notes = TaskNoteMaster.objects.filter(task_id__in=task_ids)
-    moved = list(notes.values_list("note_id", "team_id"))
-    moved_note_ids = [note_id for note_id, _ in moved]
+    moved = list(notes.values_list("note_id", "team_id", "project_id"))
+    moved_note_ids = [note_id for note_id, _, _ in moved]
     notes.update(project_id=project_id, team_id=team_id)
+    # The Owner row of an author who is not on the project the note now lives in ends with it
+    # (MIP-1493); the notes are in the new project's search scope, whose ACL is refreshed.
+    from origin.search_engine.acl_dirty import mark_projects_dirty
+    from origin.services.note_role_revoke import revoke_task_roles_on_move
+
+    if revoke_task_roles_on_move(
+        moves=[(note_id, old_project) for note_id, _, old_project in moved],
+        target_project_id=project_id,
+    ):
+        mark_projects_dirty([project_id])
     # The `.update()` fires no `post_save`: tell the change feed by hand
     # (MIP-970), for the team the notes left and the one they joined.
-    for old_team_id in {old for _, old in moved} | {team_id}:
+    for old_team_id in {old for _, old, _ in moved} | {team_id}:
         change_feed.bump_notes(old_team_id, task=True)
     _settle_dependencies(task_ids, team_id=team_id)
     # A move is the one thing in the product that changes which team an

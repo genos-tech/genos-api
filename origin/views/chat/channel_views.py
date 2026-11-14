@@ -45,7 +45,12 @@ from origin.serializers.chat.unified_serializers import (
     ChannelSerializer,
     MessageSerializer,
 )
-from origin.services.channel_scope import chat_member_rows, team_scope_q, user_channels_qs
+from origin.services.channel_scope import (
+    chat_member_rows,
+    is_chat_member,
+    team_scope_q,
+    user_channels_qs,
+)
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.external_grants import (
     ExternalGrantError,
@@ -1171,6 +1176,10 @@ class ChannelJoinView(AuthenticatedAPIView):
         _verify_team_member(request.user, channel.team_id)
 
         if channel.kind != ChannelKind.GM:
+            # A chat the caller is not in answers as a missing one (MIP-1502): a different
+            # answer for a real PM / DM / MDM id would tell any teammate which ids exist.
+            if not is_chat_member(channel.id, request.user.id):
+                raise Http404("Channel not found.")
             return Response(
                 {"error": "Only group messages support self-join."},
                 status=status.HTTP_400_BAD_REQUEST,
