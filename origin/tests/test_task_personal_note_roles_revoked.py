@@ -193,7 +193,9 @@ class LeavingAProject(TaskNoteBase):
         self.share(self.note, NOTE_TYPE_TASK, self.stranger, ROLE_VIEWER)
         ProjectMembers.objects.filter(attendee=self.author).delete()
         self.assertEqual(self.explicit(self.stranger, NOTE_TYPE_TASK, self.note), ROLE_VIEWER)
-        self.assertIsNotNone(get_effective_role(self.stranger.id, NOTE_TYPE_TASK, self.note.note_id))
+        self.assertIsNotNone(
+            get_effective_role(self.stranger.id, NOTE_TYPE_TASK, self.note.note_id)
+        )
 
     def test_a_share_held_by_the_leaver_stays_when_they_leave_the_project(self):
         """A grant the owner made on purpose to a member is the note's own ACL, not the author
