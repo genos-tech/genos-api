@@ -216,6 +216,32 @@ class LineBase(McpBase):
             **extra,
         )
 
+    def crowded_thread_markers(self, task, n, user=None):
+        """`n` AI-app markers (minutes 10..) on `task`'s own chat thread, which a second task
+        claims too: they are markers of the asked item, so `seen_at` reads them, but they name
+        no task, so they never give it a time. (A marker of some OTHER item is not read at
+        all since MIP-1499: see `unrelated`.)"""
+        noisy = self.__dict__.setdefault("_crowded", {})
+        if task.task_id not in noisy:
+            channel = self.channel([self.user, self.user2])
+            root = self.message(channel, self.user2, 1)
+            self.link_thread(task, root)
+            self.link_thread(self.make_task("Claims the same thread"), root)
+            noisy[task.task_id] = str(root.id)
+        for i in range(n):
+            self.marker(user or self.user, 10 + i, "chat_thread", noisy[task.task_id])
+
+    def unrelated(self, n, user=None):
+        """`n` markers on milestones, notes and threads that are none of the asked tasks'."""
+        for i in range(n):
+            kind = i % 3
+            if kind == 0:
+                self.marker(user or self.user, 10 + i, "milestone", 900 + i)
+            elif kind == 1:
+                self.marker(user or self.user, 10 + i, "note", f"task:{900 + i}")
+            else:
+                self.marker(user or self.user, 10 + i, "chat_thread", uuid.uuid4())
+
     def task_note(self, task, owner=None, project=None, title="Notes"):
         return TaskNoteMaster.objects.create(
             team=self.team,
@@ -2261,35 +2287,12 @@ class TestSeenAtSaysWhenItMayBeMissingALook(LineBase):
     def setUp(self):
         super().setUp()
         self.task = self.make_task()
-        self.noisy = {}
 
     def pool(self, n):
         return mock.patch.object(item_lines, "SEEN_POOL", n)
 
     def others(self, n, user=None, task=None):
-        """`n` markers (minutes 10..) on a chat thread that two tasks claim: they are read as
-        markers of `task`'s own thread, but name no task, so they never give it a time. (A
-        marker of some OTHER item is not read at all since MIP-1499: `unrelated`.)"""
-        task = task or self.task
-        if task.task_id not in self.noisy:
-            channel = self.channel([self.user, self.user2])
-            root = self.message(channel, self.user2, 1)
-            self.link_thread(task, root)
-            self.link_thread(self.make_task("Claims the same thread"), root)
-            self.noisy[task.task_id] = str(root.id)
-        for i in range(n):
-            self.marker(user or self.user, 10 + i, "chat_thread", self.noisy[task.task_id])
-
-    def unrelated(self, n, user=None):
-        """`n` markers on milestones, notes and threads that are none of the asked tasks'."""
-        for i in range(n):
-            kind = i % 3
-            if kind == 0:
-                self.marker(user or self.user, 10 + i, "milestone", 900 + i)
-            elif kind == 1:
-                self.marker(user or self.user, 10 + i, "note", f"task:{900 + i}")
-            else:
-                self.marker(user or self.user, 10 + i, "chat_thread", uuid.uuid4())
+        return self.crowded_thread_markers(task or self.task, n, user)
 
     def test_a_pool_exactly_full_cut_nothing(self):
         self.others(2)

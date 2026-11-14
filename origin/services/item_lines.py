@@ -68,8 +68,8 @@ out: the neighbours of a line (milestone work `SIBLING_POOL`, dependency neighbo
 `NEIGHBOUR_POOL`, subtasks `CHILD_POOL`: filtered to what the member may open in the query,
 flag `related_capped`), the member's own markers and chat messages behind `unattached` (`POOL`
 each: `capped.unattached_capped` and `unattached_sources`; the counts are then a floor) and the
-markers on milestones, task notes and chat threads behind `last_seen_at` (`SEEN_POOL`:
-`capped.seen_capped`; the time may be missing or older).
+markers on the asked items' own milestones, task notes and chat threads behind `last_seen_at`
+(`SEEN_POOL`: `capped.seen_capped`; the time may be missing or older).
 """
 
 from __future__ import annotations
@@ -1056,7 +1056,8 @@ def _fold_app_runs(events: list[Ev]) -> list[Ev]:
 # --------------------------------------------------------------------------- #
 
 # Markers on a milestone, a task note or a chat thread are resolved to their task from the
-# newest of them only.
+# newest of them only, and only of the milestone rows, notes and threads of the tasks asked
+# about (MIP-1499): the member's markers of any other item are never read.
 SEEN_POOL = POOL
 
 
@@ -1075,8 +1076,9 @@ def seen_at(ctx: ToolContext, task_ids: Any) -> dict[int, datetime]:
 def seen_at_checked(ctx: ToolContext, task_ids: Any) -> tuple[dict[int, datetime], bool]:
     """`seen_at`, and whether a look of one of these tasks may really be missing.
 
-    Markers on milestones, task notes and chat threads are read newest first, `SEEN_POOL` of
-    them (one more is asked for). The flag is True only when a row was left out AND it could
+    Markers on the asked tasks' own milestone rows, task notes and chat threads are read
+    newest first, `SEEN_POOL` of them (one more is asked for); markers of any other item are
+    not read, so they can neither fill the pool nor tip the flag. The flag is True only when a row was left out AND it could
     still matter: some task asked about has no time, or an older one than the extra row's
     (every row left out is no newer than that one, and a look only replaces a strictly older
     time). A member who works in an AI app all day has more markers than the pool but, for
