@@ -97,7 +97,10 @@ def _current_event(account: ConnectedAccount, args: dict[str, Any]) -> dict[str,
     if not resp.ok:
         log.warning("calendar card read failed: %s", describe_upstream(resp))
         return None
-    raw = resp.json() or {}
+    try:
+        raw = resp.json() or {}
+    except ValueError:
+        return None
     start, end = raw.get("start") or {}, raw.get("end") or {}
     attendees = [
         a["email"]

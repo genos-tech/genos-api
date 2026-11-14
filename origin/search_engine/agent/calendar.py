@@ -319,8 +319,10 @@ def calendar_api_error(resp: requests.Response, context: str) -> ToolError:
 EVENT_SOURCE = "calendar_event"
 
 #: What an event id may hold to be written into a token: Google's own alphabet (base32hex) plus the
-#: `_` and the time of a recurring instance. Anything else gets no token and no chip.
-_TOKEN_SAFE = re.compile(r"^[A-Za-z0-9_-]{1,1024}$")
+#: `_` and the time of a recurring instance (`T`, `Z`). No `-`: the citation scanner strips a token's
+#: trailing `-` and `:`, so an id ending in one would never match its chip. Anything else gets no token and
+#: no chip.
+_TOKEN_SAFE = re.compile(r"^[A-Za-z0-9_]{1,1024}$")
 
 
 def event_cite(account_id: Any, event_id: Any) -> str | None:

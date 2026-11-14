@@ -195,6 +195,11 @@ class WhatTheCardNeverDoesTests(CardBase):
             out = self.card("update_calendar_event", args_for(self.home))
         self.assert_card_without_the_event(out)
 
+    def test_an_unreadable_answer_leaves_the_card_without_the_event(self):
+        self.google.unreadable.add(token_for(self.home))
+        out = self.card("update_calendar_event", args_for(self.home))
+        self.assert_card_without_the_event(out)
+
     def test_a_sign_in_google_no_longer_honours_leaves_the_card_without_the_event(self):
         with mock.patch(
             "origin.search_engine.agent.calendar.get_valid_access_token",

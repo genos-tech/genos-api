@@ -104,6 +104,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         params["conferenceDataVersion"] = 1
 
     if not body:
+        if account_ref:
+            # Nothing is sent, but a foreign or made-up account is refused as it is on a real change.
+            resolve_google_calendar_account(ctx.user_id, account_ref)
         return {
             "event_id": event_id,
             "calendar_id": calendar_id,

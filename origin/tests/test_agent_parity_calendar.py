@@ -631,3 +631,60 @@ class DeclarationTests(CalendarBase):
     def test_the_registry_generated_prompt_gets_the_same_line(self):
         with mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_CHEATSHEET_FROM_REGISTRY": True}):
             self.assertIn('"calendar_event:<account_id>:<event_id>"', agent_system_prompt())
+
+
+# --------------------------------------------------------------------------- #
+# What the review of this change found                                         #
+# --------------------------------------------------------------------------- #
+
+
+class ReviewFindingsTests(CalendarBase):
+    def test_an_event_id_ending_in_a_hyphen_gets_no_token_the_scanner_would_cut(self):
+        # `extract_citation_tokens` strips a token's trailing `-` and `:`; an id ending in one would
+        # never match its own chip. Google's ids (base32hex) have none.
+        self.assertIsNone(event_cite(self.work.id, "abc-"))
+        self.assertIsNone(event_cite(self.work.id, "a-b"))
+        self.assertIsNotNone(event_cite(self.work.id, "abc_20261201T010000Z"))
+
+    def test_a_calendarlist_item_that_is_not_an_object_does_not_crash_the_listing(self):
+        self.google.add_calendar(self.work, "me@work.example", primary=True)
+        self.google.calendars[token_for(self.home)] = ["junk", None, {"id": "me@home.example"}]
+        out = LIST_CALENDARS.run({}, self.ctx)
+        self.assertEqual(
+            {c["id"] for c in out["calendars"]}, {"me@work.example", "me@home.example"}
+        )
+
+    def test_an_account_that_answers_with_an_unreadable_body_is_reported_not_a_crash(self):
+        self.google.add_calendar(self.work, "me@work.example", primary=True)
+        self.google.unreadable.add(token_for(self.home))
+        out = LIST_CALENDARS.run({}, self.ctx)
+        self.assertEqual(
+            [c["account_id"] for c in out["calendars"]], [str(self.work.id)] * len(out["calendars"])
+        )
+        self.assertEqual([f["account_id"] for f in out["failed_accounts"]], [str(self.home.id)])
+
+    def test_a_no_op_update_still_refuses_an_account_that_is_not_the_members(self):
+        for account in (str(self.stranger.id), "not-a-uuid", str(uuid.uuid4())):
+            with self.subTest(account=account):
+                with self.assertRaises(ToolError):
+                    UPDATE_CALENDAR_EVENT.run({"event_id": "e1", "account": account}, self.ctx)
+        # and a good one is a plain "no changes", with nothing sent
+        out = UPDATE_CALENDAR_EVENT.run({"event_id": "e1", "account": str(self.home.id)}, self.ctx)
+        self.assertEqual(out["changed_fields"], [])
+        self.assertEqual(self.google.calls, [])
+
+    def test_a_delete_that_finds_nothing_says_where_else_to_look_only_when_there_is_somewhere(self):
+        out = DELETE_CALENDAR_EVENT.run({"event_id": "nope"}, self.ctx)
+        self.assertTrue(out["already_gone"])
+        self.assertIn("another one", out["note"])
+        self.assertIn("`account`", out["note"])
+        named = DELETE_CALENDAR_EVENT.run(
+            {"event_id": "nope", "account": str(self.home.id)}, self.ctx
+        )
+        self.assertNotIn("note", named)  # the member named the account: nothing to second-guess
+        self.home.delete()
+        alone = DELETE_CALENDAR_EVENT.run({"event_id": "nope"}, self.ctx)
+        self.assertNotIn("note", alone)
+        self.google.add_event(self.work, "primary", "real", summary="x")
+        deleted = DELETE_CALENDAR_EVENT.run({"event_id": "real"}, self.ctx)
+        self.assertNotIn("note", deleted)

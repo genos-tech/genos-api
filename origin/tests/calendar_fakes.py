@@ -71,6 +71,8 @@ class FakeGoogle:
     calendars: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     #: tokens whose every call answers `status`
     failing: dict[str, int] = field(default_factory=dict)
+    #: tokens whose every call answers 200 with a body that is not JSON (an HTML error page)
+    unreadable: set[str] = field(default_factory=set)
     calls: list[Call] = field(default_factory=list)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
 
@@ -115,6 +117,10 @@ class FakeGoogle:
             timeout=kwargs.get("timeout"),
         )
         self.calls.append(call)
+        if token in self.unreadable:
+            html = response({}, 200)
+            html.json.side_effect = ValueError("not json")
+            return html
         if token in self.failing:
             # Google quotes the request back in an error body, and the response knows its url: both carry
             # the calendar id, which is usually an address (MIP-622). Nothing may log either.

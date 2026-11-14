@@ -12,15 +12,16 @@ from __future__ import annotations
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
-    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
-)
-from origin.search_engine.agent.calendar import (
+    NOT_FOUND_ACCOUNT_HINT,
     account_arg,
     account_fields,
     calendar_api_error,
     google_calendar_request,
     resolve_google_calendar_account,
     segment,
+)
+from origin.search_engine.agent.calendar import (
+    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
 )
 from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
@@ -65,6 +66,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
     if parity_on():
         result.update(account_fields(account, defaulted=not account_ref))
+        if result["already_gone"] and result.get("other_accounts"):
+            # Google's 404 is also what the wrong account says (the app's delete reads it as success too).
+            result["note"] = NOT_FOUND_ACCOUNT_HINT.strip()
     return result
 
 

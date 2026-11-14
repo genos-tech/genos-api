@@ -83,8 +83,15 @@ def _run_accounts(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 }
             )
             continue
-        for c in (resp.json() or {}).get("items", []):
-            if c.get("id"):
+        try:
+            items = (resp.json() or {}).get("items", [])
+        except ValueError:
+            failed.append(
+                {"account_id": str(account.id), "reason": "Google sent an unreadable reply"}
+            )
+            continue
+        for c in items:
+            if isinstance(c, dict) and c.get("id"):
                 calendars.append(_calendar_row(c, str(account.id)))
     if failed and not calendars:
         raise ToolError(f"No calendar could be read: {failed[0]['reason']}.")
