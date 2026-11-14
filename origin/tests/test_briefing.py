@@ -1147,6 +1147,16 @@ class TestAnswersInChatsTheMemberWroteIn(BriefingBase):
         )  # the newest three, oldest of them first
         self.assertTrue(all(len(m["text"]) <= briefing.SNIPPET_CHARS + 80 for m in row["messages"]))
 
+    def test_the_apps_own_posts_are_not_answers(self):
+        bot = User.objects.create_user(
+            username="appbot", email="appbot@example.com", password="x", is_system_user=True
+        )
+        chat = self.chat_of(self.user, self.user2)
+        ChannelMember.objects.create(channel=chat, user=bot)
+        self.message(chat, self.user, "Q", at=self.ago(hours=3))
+        self.message(chat, bot, "Automated notice", at=self.ago(hours=2))
+        self.assertEqual(self.answers()["chats"], [])
+
     def test_a_long_message_is_cut_like_the_other_snippets(self):
         chat = self.chat_of(self.user, self.user2)
         self.message(chat, self.user, "Q", at=self.ago(hours=3))
