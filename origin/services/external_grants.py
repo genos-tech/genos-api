@@ -780,6 +780,10 @@ def _objects_held_by(object_type, object_ids: list[str], user_id) -> set[str]:
     if object_type == ExternalGrant.ObjectType.CHANNEL:
         from origin.models.chat.unified_models import ChannelMember
 
+        # Raw on purpose (MIP-1523): a channel grant is on a GM/MDM, whose row IS the
+        # membership. A legacy grant on a project chat can only put its channel into the
+        # list's `team_scope_q`, which `chat_member_q` narrows again, so a stray row opens
+        # nothing here.
         rows = ChannelMember.objects.filter(
             channel_id__in=object_ids, user_id=user_id, is_deleted=False
         ).values_list("channel_id", flat=True)
@@ -845,6 +849,10 @@ def rows_for_grant(grant: ExternalGrant) -> list:
     if grant.object_type == ExternalGrant.ObjectType.CHANNEL:
         from origin.models.chat.unified_models import ChannelMember
 
+        # The rows the grant WROTE, so raw on purpose (MIP-1523): `revoke_grant` and
+        # `set_role_ceiling` walk this through `participant_ids` and must see a stray row
+        # on a legacy project-chat grant to delete it. Reads of "who is on the object"
+        # go through `rosters_of_held_objects`, which does apply the project-chat rule.
         return list(
             ChannelMember.objects.filter(channel_id=grant.object_id, is_deleted=False).values_list(
                 "user_id", flat=True
@@ -911,9 +919,9 @@ def rosters_of_held_objects(grants, user_id) -> dict:
     has always swallowed that per grant. Grants of a type this does not know
     are ignored.
     """
-    from django.db.models import Exists, OuterRef
+    from django.db.models import Exists, OuterRef, Q
 
-    from origin.models.chat.unified_models import ChannelMember
+    from origin.models.chat.unified_models import ChannelKind, ChannelMember
     from origin.models.note.common_note_models import NoteFolderPermission
     from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 
@@ -943,11 +951,25 @@ def rosters_of_held_objects(grants, user_id) -> dict:
 
     keys = keyed(ExternalGrant.ObjectType.CHANNEL)
     if keys:
+        # A channel grant is on a group chat or a multi-person DM, where the row IS the
+        # membership. A legacy one on a PROJECT chat (`_channel_shareable_or_raise` refuses new
+        # ones) is read by the project's people, not by its mirror rows (MIP-1523): a stray row
+        # there is on nothing, so it neither places its holder on the object nor appears in the
+        # roster. `rows_for_grant` / `participant_ids` stay raw: revoking must delete every row
+        # the grant wrote.
+        def counts(outer_user):
+            return ~Q(channel__kind=ChannelKind.PM) | Exists(
+                ProjectMembers.objects.filter(
+                    project_id=OuterRef("channel__project_id"), attendee_id=outer_user
+                )
+            )
+
         mine = ChannelMember.objects.filter(
             channel_id=OuterRef("channel_id"), user_id=user_id, is_deleted=False
-        )
+        ).filter(counts(user_id))
         rows = (
             ChannelMember.objects.filter(channel_id__in=set(keys.values()), is_deleted=False)
+            .filter(counts(OuterRef("user_id")))
             .filter(Exists(mine))
             .values_list("channel_id", "user_id")
         )

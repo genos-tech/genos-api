@@ -9,7 +9,8 @@
 # a negative (a plain ask: nothing to keep, nothing may change), and an edge (an @/# reference).
 # Prompt checks come first (did the block reach the resumed leg?), then the answer.
 # `polarity` is read by the case-shape test only (pos: arm0 must fail the prompt check, the arm
-# pass it; neg: the same in both arms).
+# pass it; neg: the same in both arms). `expect_baseline: fail` (MIP-1504) says the same to the
+# report: a positive case FAILS on arm0 by design, and the matrix prints `FAIL (expected)`.
 
 - id: t977.thread-facts.approve.en
   kind: resume
@@ -17,6 +18,7 @@
   tags: [eval-group, t977]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   thread:
     messages:
       - "Ann: Can we ship the export fix this month?"
@@ -38,6 +40,7 @@
   tags: [eval-group, t977]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   thread:
     messages:
       - "山田: エクスポートの修正は今月中にリリースできますか?"
@@ -59,6 +62,7 @@
   tags: [eval-group, t977]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   note:
     title: "Q3 plan"
     body: "Data migration first, then the redesign. Code freeze: 5 December."
@@ -78,6 +82,7 @@
   tags: [eval-group, t977]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   note:
     title: "第3四半期の計画"
     body: "データ移行が先、その後にリデザイン。コードフリーズは12月5日。"
@@ -129,6 +134,7 @@
   tags: [eval-group, t977]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   tasks:
     - {key: login, title: "Fix login flow", priority: Critical}
   mentions:
@@ -148,6 +154,7 @@
   tags: [eval-group, t977]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   tasks:
     - {key: login, title: "ログイン画面の修正", priority: Critical}
   mentions:

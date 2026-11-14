@@ -128,3 +128,28 @@ arrived. Every row above has a numbered section in the runbook:
 - **backend-django** (required) — system check, migration-drift check, and
   `coverage run manage.py test origin.tests` against a Postgres 15 service.
 - **backend-django-lint** (report-only) — `ruff check origin apis`.
+
+### agent-evals: the retrieval gate, and when its billed Vertex run starts
+
+`.github/workflows/agent-evals.yml` runs the **retrieval** suite only (`agent_eval --retrieval`: re-index
+the seeded fixture, 75 `search()` cases, one query-rewrite call each; about 5 minutes, a few cents). It
+cannot see the agent's prompts, tool declarations, tool results or loop, so those do not start it (a
+change to them is checked by the free tests and, for behaviour, by the grouped paid run). It starts:
+
+- on a PR that changes a retrieval file (the list is `RETRIEVAL_PATHS` in `scripts/agent_eval_gate.py`,
+  mirrored by the workflow's `paths:`: search, the rewriter, reranker, chunkers, embeddings, ingestion,
+  the model client the rewriter calls, the retrieval cases / fixture / runner, `demo_seeder`, `Pipfile*`)
+  or on the workflow file itself (an edit of the workflow alone skips the Vertex steps);
+- weekly on `main` (Tuesday 02:00 JST), which covers what no path rule does (`origin/models/**`,
+  `apis/settings.py`, a model behaving differently);
+- by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`.
+
+There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `surface`
+job (no secrets, no Vertex) still hashes what the model sees (`scripts/agent_surface_hash.py`) and
+`scripts/agent_eval_gate.py` combines the hash, the changed files and the labels; any failure in it
+fails open (the evals run). Scheduled and manual runs need the repo variable `RUN_AGENT_EVALS` (or
+`DEPLOY_TO_GCP`) to be `true`.
+
+The pass / mrr / recall floors (58 of 75, 0.75, 0.80) live only in `scripts/retrieval_gate.py`.
+Tests: `origin.tests.test_agent_surface_hash`, `origin.tests.test_retrieval_gate`. To see what the hash
+covers locally: `python scripts/agent_surface_hash.py`.

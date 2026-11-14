@@ -345,7 +345,7 @@ def _comment_recipients(surface_type: int, meta: dict) -> set:
     (a client can't redirect a comment's fan-out to an arbitrary project).
 
       - 5 task body   -> task assignee + collaborators
-      - 6 personal    -> note owner + explicit grants
+      - 6 personal    -> note owner + explicit grants + its team folder's readers
       - 7 task note   -> its project's members + explicit grants
       - 8 chat note   -> the people who can read it: explicit grants (the owner
                          holds one) + its chat's readers (`chat_acl_user_ids`)
@@ -365,8 +365,19 @@ def _comment_recipients(surface_type: int, meta: dict) -> set:
         return set()
 
     if surface_type == SURFACE_PERSONAL_NOTE:
-        # owner + explicit grants (personal notes have no implicit path).
-        return _grantees_of_personal_note(note_id)
+        # owner + explicit grants, plus the readers of the TEAM folder the note is filed in
+        # (MIP-1523): the comment gate honours the folder's role (`get_effective_role`), so the
+        # fan-out must reach the people that role lets open it. A personal folder or none adds
+        # nobody: there the note has no implicit access path.
+        from origin.models.note.personal_note_models import PersonalNoteMaster
+        from origin.views.utils.note_folder_role import team_folder_reader_user_ids
+
+        folder_id = (
+            PersonalNoteMaster.objects.filter(note_id=note_id)
+            .values_list("folder_id", flat=True)
+            .first()
+        )
+        return _grantees_of_personal_note(note_id) | team_folder_reader_user_ids(folder_id)
 
     if surface_type == SURFACE_TASK_NOTE:
         from origin.models.note.task_note_models import TaskNoteMaster

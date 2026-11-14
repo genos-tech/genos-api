@@ -25,6 +25,11 @@ Compare baseline vs query-rewrite on, behavior suite with judge:
 
 Notes
 -----
+* A key that is not in `SEARCH_ENGINE` is refused (exit 2) before anything runs, with the
+  closest names: a mistyped flag would otherwise change nothing and report "no difference".
+* Tokens and cost are printed per run and as an A/B delta whether or not `AI_COST_METER` is on
+  (from the provider usage metadata, priced from the model catalog), so a paid compare is never
+  invisible.
 * Overrides are applied to `django.conf.settings.SEARCH_ENGINE` in
   place. The command restores the original values on exit (even on
   error) so a partial run can't poison subsequent commands in the
@@ -36,6 +41,7 @@ Notes
 
 from __future__ import annotations
 
+import difflib
 import json
 import sys
 from typing import Any
@@ -129,6 +135,25 @@ class Command(BaseCommand):
             self.stderr.write(self.style.ERROR(f"Invalid --b-overrides: {exc}"))
             sys.exit(2)
 
+        problems = unknown_override_keys(overrides)
+        if problems:
+            self.stderr.write(
+                self.style.ERROR(
+                    "Invalid --b-overrides: "
+                    + "; ".join(problems)
+                    + ". Nothing was run (a mistyped flag compares the baseline with itself)."
+                )
+            )
+            sys.exit(2)
+        for key, value in overrides.items():
+            if settings.SEARCH_ENGINE.get(key) == value:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"note: {key} is already {value!r} in this environment, so it changes "
+                        "nothing between A and B (is the flag already on in the env?)"
+                    )
+                )
+
         provider = (options.get("provider") or "").strip() or None
         effort = (options.get("effort") or "").strip() or None
         if bool(provider) != bool(effort):
@@ -139,9 +164,7 @@ class Command(BaseCommand):
             try:
                 model = settings.LLM_CATALOG.model_for_effort(provider, effort)
             except Exception as exc:  # noqa: BLE001 — bad CLI input, not a bug
-                self.stderr.write(
-                    self.style.ERROR(f"Cannot resolve {provider}/{effort}: {exc}")
-                )
+                self.stderr.write(self.style.ERROR(f"Cannot resolve {provider}/{effort}: {exc}"))
                 sys.exit(2)
             choice = LlmChoice(provider=provider, model=model, effort=effort)
 
@@ -217,7 +240,13 @@ class Command(BaseCommand):
                     )
             results.append(r)
             self.stdout.write(
-                f"  {'PASS' if r.passed else 'FAIL'}  {r.case_id:<48} ({r.duration_ms} ms)"
+                f"  {'PASS' if r.passed else 'FAIL'}  {r.case_id:<48} ({r.duration_ms} ms"
+                + (
+                    f", {r.total_tokens / 1000:.1f}k tok, ${r.cost_usd_micro / 1_000_000:.4f}"
+                    if r.llm_calls
+                    else ""
+                )
+                + ")"
             )
         return results
 
@@ -268,6 +297,23 @@ class Command(BaseCommand):
             f"  Mean latency: A={dur_a:.0f} ms  B={dur_b:.0f} ms  ({delta_pct:+.0f}%)"
         )
 
+        # Cost: tokens and dollars per arm (MIP-1468). `CaseResult` carries them whether the
+        # ledger meter is on (ledger rows) or off (the in-process capture).
+        calls_a, calls_b = sum(r.llm_calls for r in a), sum(r.llm_calls for r in b)
+        if calls_a or calls_b:
+            tok_a, tok_b = sum(r.total_tokens for r in a), sum(r.total_tokens for r in b)
+            usd_a = sum(r.cost_usd_micro for r in a) / 1_000_000
+            usd_b = sum(r.cost_usd_micro for r in b) / 1_000_000
+            pct = f" ({(usd_b - usd_a) / usd_a * 100:+.0f}%)" if usd_a else ""
+            self.stdout.write(f"  LLM calls: A={calls_a}  B={calls_b}")
+            self.stdout.write(
+                f"  Tokens: A={tok_a:,}  B={tok_b:,}  delta {tok_b - tok_a:+,}"
+                f"  ({tok_a // max(1, len(a)):,} vs {tok_b // max(1, len(b)):,} per case)"
+            )
+            self.stdout.write(
+                f"  Cost: A=${usd_a:.4f}  B=${usd_b:.4f}  delta ${usd_b - usd_a:+.4f}{pct}"
+            )
+
         # Continuous-metric deltas (mrr / recall_at_n for retrieval;
         # tool_recall / tool_excl_ok for tool selection). The payoff of
         # the metrics: surfaces gains that DON'T cross the binary
@@ -314,12 +360,28 @@ class Command(BaseCommand):
                         self.style.SUCCESS(f"{delta:+.2f}")
                         if delta > 0.005
                         else (
-                            self.style.ERROR(f"{delta:+.2f}")
-                            if delta < -0.005
-                            else f"{delta:+.2f}"
+                            self.style.ERROR(f"{delta:+.2f}") if delta < -0.005 else f"{delta:+.2f}"
                         )
                     )
                     self.stdout.write(f"  judge.{k:<20} A={av:.2f}  B={bv:.2f}  delta {arrow}")
+
+
+def unknown_override_keys(overrides: dict[str, Any]) -> list[str]:
+    """One problem per override key that is not in `SEARCH_ENGINE`, with the closest names.
+
+    `_override_search_engine` would apply such a key anyway (and pop it on exit), which changes
+    nothing: a typo'd flag made A and B identical and the diff said "no difference"."""
+    cfg = settings.SEARCH_ENGINE
+    problems = []
+    for key in overrides:
+        if key in cfg:
+            continue
+        close = difflib.get_close_matches(str(key), [str(k) for k in cfg], n=3, cutoff=0.6)
+        problems.append(
+            f"unknown SEARCH_ENGINE key {key!r}"
+            + (f" (did you mean {', '.join(close)}?)" if close else "")
+        )
+    return problems
 
 
 class _override_search_engine:

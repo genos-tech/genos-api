@@ -17,6 +17,7 @@
   tags: [eval-group, t1283]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   thread:
     first_sender: other
     messages:
@@ -36,6 +37,7 @@
   tags: [eval-group, t1283]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   thread:
     first_sender: other
     messages:
@@ -93,6 +95,7 @@
   tags: [eval-group, t1283]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   reopen_and_close_again: true
   thread:
     first_sender: other
@@ -112,6 +115,7 @@
   tags: [eval-group, t1283]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   reopen_and_close_again: true
   thread:
     first_sender: other
