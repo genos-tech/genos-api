@@ -553,6 +553,58 @@ class TestOwnerOversightOfTeamKeys(ApiKeyBase):
         viewers.refresh_from_db()
         self.assertIsNotNone(viewers.revoked_at)
 
+    def test_the_owner_sees_every_keyholders_email_and_an_editor_sees_none(self):
+        """The address is the owner's alone (same rule as the connected-apps list, #825);
+        the key, the name, the holder's name and the action stay with the editor."""
+        self._create_key(user=self.user, team=self.team, name="owner's bot")
+        viewer = User.objects.create_user(
+            username="keyviewer3", email="keyviewer3@example.com", password="pw"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=viewer)
+        self._create_key(user=viewer, team=self.team, name="viewer's bot")
+        holders = {
+            "owner's bot": self.user,
+            "editor's bot": self.user2,
+            "viewer's bot": viewer,
+        }
+
+        self.authenticate(self.user)
+        rows = {r["name"]: r for r in self._list().json()["api_keys"]}
+        self.assertEqual(set(rows), set(holders))
+        for name, user in holders.items():
+            self.assertEqual(rows[name]["userEmail"], user.email)
+
+        # The editor's own key included: absent, not null or "".
+        self.authenticate(self.user2)
+        res = self._list()
+        self.assertEqual(res.status_code, 200)
+        rows = {r["name"]: r for r in res.json()["api_keys"]}
+        self.assertEqual(set(rows), set(holders))
+        for name, user in holders.items():
+            row = rows[name]
+            self.assertNotIn("userEmail", row)
+            self.assertEqual(row["userName"], user.username)
+            self.assertEqual(row["userId"], str(user.id))
+            self.assertTrue(row["prefix"])
+            self.assertIn(row["scope"], (SCOPE_READ, SCOPE_WRITE))
+            self.assertIn("revocable", row)
+        body = res.content.decode()
+        for user in (self.user, self.user2, viewer):
+            self.assertNotIn(user.email, body)
+
+    def test_an_editor_keeps_the_revoke_action_without_the_email(self):
+        viewer = User.objects.create_user(
+            username="keyviewer4", email="keyviewer4@example.com", password="pw"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=viewer)
+        viewers = self._create_key(user=viewer, team=self.team, name="viewer's bot")[0]
+        self.authenticate(self.user2)
+        rows = {r["name"]: r for r in self._list().json()["api_keys"]}
+        self.assertTrue(rows["viewer's bot"]["revocable"])
+        res = self._revoke(viewers)
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn(viewer.email, res.content.decode())
+
     def test_a_plain_member_still_cannot_list_the_teams_keys(self):
         viewer = User.objects.create_user(
             username="keyviewer2", email="keyviewer2@example.com", password="pw"
