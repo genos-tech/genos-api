@@ -765,3 +765,51 @@ class MovePeopleTwinTests(TwinBase):
                 **extra,
             }
         )
+
+
+class SharedMoveCodeTests(TwinBase):
+    """The move now lives in `update_milestone(project_move=...)`, which the PATCH and the tool share.
+    What only a cross-team move shows (the tool refuses that destination, the PATCH allows it) is
+    pinned through the PATCH, so a break in the shared code is caught where only one path reaches."""
+
+    def test_a_cross_team_patch_move_takes_the_assignee_rows_to_the_new_team(self):
+        guest_team = TeamMaster.objects.create(
+            team_name="Partner", team_email="partner2@test.com", owner=self.owner
+        )
+        TeamMembers.objects.create(team=guest_team, attendee=self.owner)
+        shared = ProjectMaster.objects.create(
+            team=guest_team,
+            project_name="Shared",
+            code="SH2",
+            owner=self.owner,
+            project_system_user=self.owner,
+        )
+        ProjectMembers.objects.create(team=guest_team, project=shared, attendee=self.owner)
+        ms = self.milestone("Crossing", assignees=(self.owner,))
+        self.auth(self.owner)
+
+        response = self.client.patch(
+            f"{MILESTONE_URL}{ms.milestone_id}/", {"project_id": shared.project_id}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        rows = MilestoneAssignees.objects.filter(milestone=ms)
+        self.assertEqual({str(r.team_id) for r in rows}, {str(guest_team.team_id)})
+        ms.refresh_from_db()
+        self.assertEqual(str(ms.team_id), str(guest_team.team_id))
+
+    def test_the_tool_drops_the_source_task_list_as_well_as_the_destinations(self):
+        from origin.search_engine.agent.tools import manage_milestone as module  # noqa: PLC0415
+
+        ms = self.milestone_world(TOOL)
+        with mock.patch.object(module, "invalidate_project_tasks_cache") as dropped:
+            self.tool(
+                {
+                    "action": "update",
+                    "milestone_id": ms.milestone_id,
+                    "project_id": self.dest.project_id,
+                }
+            )
+        called = {tuple(map(str, c.args)) for c in dropped.call_args_list}
+        self.assertIn((str(self.team.team_id), str(self.project.project_id)), called)
+        self.assertIn((str(self.team.team_id), str(self.dest.project_id)), called)
