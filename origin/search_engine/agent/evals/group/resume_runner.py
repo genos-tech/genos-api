@@ -28,7 +28,7 @@ WHAT IS CONTROLLED
 THE RESULT is `usage.CaseResult` (`case_id, arm, lang, passed, checks, tools, answer, usage`),
 plus `resumed_prompt` (the system instruction and messages of the resumed leg's first model
 call, which the prompt checks read), `pending` (a corrected proposal, if the model made one)
-and `proposal_args`. Deterministic checks first; no judge.
+and `proposed` (that proposal's tool and truncated arguments, as in every result row). Deterministic checks first; no judge.
 
 CASE SCHEMA (`origin/search_engine/agent/evals/group/<tag>.yaml`, `kind: resume`)
 
@@ -681,9 +681,7 @@ def _drive(case: dict[str, Any], world: World, controller: Any, result: dict[str
                 done = undo_apply.perform_undo(run=run, step_id=step.step_id, user=world.user)
                 checks.append(_check("undo_performed", True, str(done.get("action"))))
             except Exception as exc:  # noqa: BLE001 - UndoRefused and friends
-                checks.append(
-                    _check("undo_performed", False, f"{type(exc).__name__}: {exc}"[:200])
-                )
+                checks.append(_check("undo_performed", False, f"{type(exc).__name__}: {exc}"[:200]))
         if case.get("follow_up"):
             before = len(factory.calls)
             run.refresh_from_db()
@@ -735,6 +733,12 @@ def _drive(case: dict[str, Any], world: World, controller: Any, result: dict[str
     result["usage"] = usage.as_dict()
     result["resumed_prompt"] = resumed_prompt
     result["pending"] = new_pending
+    if new_pending is not None:
+        from origin.search_engine.agent.evals.group import content_checks  # noqa: PLC0415
+
+        result["proposed"] = content_checks.summarize_proposals(
+            [new_pending], group_usage.PROPOSED_ARGS_CHARS
+        )
     result["kept_context"] = bool(resume_context)
     result["passed"] = all(c["ok"] for c in checks)
 

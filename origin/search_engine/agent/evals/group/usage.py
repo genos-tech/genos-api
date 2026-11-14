@@ -85,6 +85,12 @@ class CaseResult(TypedDict, total=False):
       duration_ms  wall time
       judge        judge scores when --judge was given
       unpriced_calls  calls whose model has no catalog price (cost is a lower bound)
+      proposed     (MIP-1504) the writes the model PROPOSED (a write never runs in an eval):
+                   `[{"tool", "args"}]`, the arguments as JSON cut to PROPOSED_ARGS_CHARS, so a
+                   failed write case explains itself even when the answer is empty. Absent when
+                   nothing was proposed.
+      expected     (MIP-1504) the case's `expect_baseline` for this arm (`pass`/`fail`), when it
+                   has one: a FAIL that was expected is not breakage. Absent otherwise.
     """
 
     case_id: str
@@ -101,6 +107,12 @@ class CaseResult(TypedDict, total=False):
     duration_ms: int
     judge: dict[str, Any]
     unpriced_calls: int
+    proposed: list[dict[str, str]]
+    expected: str
+
+
+#: How much of a proposal's arguments a result row keeps.
+PROPOSED_ARGS_CHARS = 300
 
 
 def blank_usage() -> UsageDict:

@@ -29,6 +29,7 @@ patch in `case_runner`), so `runner.py` is not edited.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 from collections.abc import Iterator
@@ -299,6 +300,19 @@ def check_pending(
             f"bodies that look cut off: {cut}" if cut else f"{len(bodies)} bodies end cleanly",
         )
     return checks
+
+
+def summarize_proposals(events: list[dict[str, Any]], limit: int = 300) -> list[dict[str, str]]:
+    """What the model proposed, for a result row (MIP-1504): `[{"tool", "args"}]`, the arguments
+    as JSON cut to `limit` characters (an ellipsis marks the cut). `render_pending` shows only the
+    BODIES, so a proposal with empty bodies (or none) was invisible in the row."""
+    out = []
+    for event in events or []:
+        text = json.dumps(event.get("arguments"), ensure_ascii=False, default=str, sort_keys=True)
+        if len(text) > limit:
+            text = text[:limit] + "…"
+        out.append({"tool": str(event.get("tool_name")), "args": text})
+    return out
 
 
 def render_pending(events: list[dict[str, Any]]) -> str:
