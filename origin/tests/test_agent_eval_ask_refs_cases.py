@@ -16,7 +16,7 @@ from unittest import mock
 from django.conf import settings
 from django.test import SimpleTestCase
 
-from origin.models.chat.unified_models import Channel, Message
+from origin.models.chat.unified_models import Channel, ChannelMember, Message, ReadCursor
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.ask_refs import read_message
@@ -200,17 +200,15 @@ class SeedTests(BaseAPITestCase):
                     - {seeds.CHAT_MESSAGES[lang]["group"]},
                 )
 
-    def test_the_viewer_reads_the_group_messages_and_not_the_direct_one_and_the_client_does(self):
+    def test_the_viewer_reads_the_group_messages_and_not_the_direct_one(self):
         for label, lang in (("v1", "en"), ("ja", "ja")):
             with self.subTest(label), mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: True}):
                 team, people, info = self.world(label)
                 seeds.apply(["chat_messages"], info)
                 spec = seeds.CHAT_MESSAGES[lang]
-                self.assertEqual(self.read(spec["demo"], team, people["b"]).sender, "Chris Dev")
+                self.assertEqual(self.read(spec["demo"], team, people["b"]).sender, "Dana Eval")
                 self.assertIsNotNone(self.read(spec["inject"], team, people["b"]))
                 self.assertIsNone(self.read(spec["secret"], team, people["b"]))
-                self.assertIsNotNone(self.read(spec["secret"], team, people["a"]))
-                self.assertIsNotNone(self.read(spec["secret"], team, people["c"]))
 
     def test_every_lookup_a_case_makes_finds_exactly_the_message_it_means(self):
         for label, lang in (("v1", "en"), ("ja", "ja")):
@@ -238,11 +236,54 @@ class SeedTests(BaseAPITestCase):
                         self.assertEqual(found[0].body_text, spec[wanted])
 
     def test_the_seed_does_not_touch_the_story_it_runs_beside(self):
-        """A message desk of its own: nobody outside it gains a chat."""
+        """The sequence teams are shared with every other item's cases, and one seeded message tells the model to
+        delete things. So no story person but the viewer is in a seeded chat, the colleagues who are in them belong
+        to no team, and the viewer's read pointer is on the last message."""
         team, people, info = self.world("v1")
+        members_before = TeamMembers.objects.filter(team=team).count()
+        users_before = CustomUser.objects.count()
+        seeds.apply(["chat_messages"], info)
         seeds.apply(["chat_messages"], info)
         titles = set(Channel.objects.filter(team=team).values_list("title", flat=True))
         self.assertEqual(titles, {"Eval message desk", "Eval message desk (direct)"})
+        story = [people["a"].id, people["c"].id]
+        self.assertFalse(ChannelMember.objects.filter(user_id__in=story).exists())
+        self.assertFalse(Message.objects.filter(sender_id__in=story).exists())
+        self.assertEqual(TeamMembers.objects.filter(team=team).count(), members_before)
+        self.assertEqual(CustomUser.objects.count(), users_before + 2)  # the two colleagues, once
+        names = set(
+            CustomUser.objects.filter(channel_memberships__channel__team=team).values_list(
+                "username", flat=True
+            )
+        )
+        self.assertEqual(names - {"Ben Manager"}, set(seeds.CHAT_MESSAGE_PEOPLE))
+        for person in story:
+            for text in seeds.seed_texts("chat_messages", "en"):
+                message = Message.objects.filter(channel__team=team, body_text=text).first()
+                if message is not None:
+                    self.assertIsNone(read_message(str(message.id), str(team.team_id), str(person)))
+        desk = Channel.objects.get(team=team, title="Eval message desk")
+        cursor = ReadCursor.objects.get(user=people["b"], channel=desk)
+        self.assertEqual(
+            cursor.last_read_message_id, Message.objects.filter(channel=desk).order_by("-seq")[0].id
+        )
+
+    def test_a_chat_list_and_the_unread_list_of_the_story_people_are_unchanged(self):
+        from origin.search_engine.agent.tools import ToolContext  # noqa: PLC0415
+        from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS  # noqa: PLC0415
+        from origin.search_engine.agent.tools.list_my_unread import LIST_MY_UNREAD  # noqa: PLC0415
+
+        team, people, info = self.world("v1")
+        ctxs = {p: ToolContext(team_id=str(team.team_id), user_id=str(people[p].id)) for p in "abc"}
+        before = {p: LIST_MY_CHATS.run({}, ctxs[p]) for p in "ac"}
+        seeds.apply(["chat_messages"], info)
+        for p in "ac":
+            self.assertEqual(LIST_MY_CHATS.run({}, ctxs[p]), before[p], p)
+        for p in "abc":
+            self.assertEqual(LIST_MY_UNREAD.run({}, ctxs[p])["items"], [], p)
+        # The viewer does see its own chat, which is the point of the seed.
+        titles = [c["title"] for c in LIST_MY_CHATS.run({}, ctxs["b"])["chats"]]
+        self.assertIn("Eval message desk", " ".join(titles))
 
 
 class RunnerTests(BaseAPITestCase):

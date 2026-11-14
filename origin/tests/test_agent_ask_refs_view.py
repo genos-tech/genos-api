@@ -284,7 +284,7 @@ class SelectionAskTests(TaskMixin, AskRefWorld):
                 self.assertEqual(captured["stream"]["dropped_references"], [])
 
     def test_text_with_nothing_readable_in_it_is_dropped_and_said(self):
-        _, captured = self.ask(selected_text="​‮\x00\x07")
+        _, captured = self.ask(selected_text="\u200b\u202e\x00\x07")
         self.assertIsNone(captured["kwargs"]["system_extra"])
         self.assertEqual(captured["stream"]["dropped_references"], ["selection"])
         self.assertEqual(AgentRun.objects.latest("started_at").mentions, [])

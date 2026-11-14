@@ -26,8 +26,13 @@ notice that the text was cut is server text OUTSIDE the fence, so the text canno
 **What is dropped from the text, and why.** Control characters other than newline and tab; every
 Unicode "format" character (zero-width, bidirectional overrides and isolates, the invisible "tag"
 block) except the two joiners emoji and several scripts need; surrogates and private-use code
-points; line and paragraph separators become newlines. A model reads invisible text, and a person
-reviewing the same string does not.
+points; line and paragraph separators become newlines; and the characters that draw nothing but are
+not "format" (variation selectors, the combining grapheme joiner, the Hangul and braille blanks, and
+the two joiners themselves) where they sit between two ASCII characters, which is how a tag name is
+split. Text that only becomes a fence tag under compatibility normalisation (a full-width "<") is
+normalised, and no other text is. A model reads invisible text, and a person reviewing the same
+string does not. The same cleaning applies to the sender's name and the chat's name, which anyone
+in the chat chose.
 
 **The cap.** `MAX_TEXT_CHARS` (4,000 characters) for the selection and for each message, at most
 `MAX_MESSAGE_REFS` messages: no ask can put more than 4 x 4,000 characters of someone's words into the
@@ -46,6 +51,7 @@ the same code path with the same number of queries, and nothing else is logged.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 import uuid
 from collections.abc import Sequence
@@ -55,7 +61,7 @@ from typing import Any
 
 from django.utils import timezone
 
-from origin.search_engine.agent.fence import WORKSPACE_TAG, wrap
+from origin.search_engine.agent.fence import WORKSPACE_TAG, has_fence_tag, wrap
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 
 #: The most characters of one message, or of the selection, a prompt gets.
@@ -65,13 +71,27 @@ MAX_TEXT_CHARS = 4_000
 MAX_MESSAGE_REFS = 3
 
 #: How much of a raw string is looked at before it is cleaned: a text padded with invisible
-#: characters cannot dilute the cap, and a huge body costs a slice, not a scan. Anything past it
+#: characters cannot dilute the cap, and the cleaning reads a slice, not the whole body. Anything past it
 #: counts as cut.
 RAW_WINDOW = MAX_TEXT_CHARS * 4
 
 # Format characters kept: the joiners emoji sequences and Persian, Indic and Arabic text need.
-_KEEP_FORMAT = frozenset({"‌", "‍"})
-_NEWLINES = ("\r\n", "\r", " ", " ", "\x85")
+_KEEP_FORMAT = frozenset({"\u200c", "\u200d"})
+_NEWLINES = ("\r\n", "\r", "\u2028", "\u2029", "\x85")
+
+# Characters that draw nothing but are not removed by category: the two joiners, the combining grapheme joiner,
+# the variation selectors, the Hangul and braille "blanks", the Mongolian free variation selectors. Between two
+# ASCII characters they have no use at all (a keycap emoji is "1", U+FE0F, U+20E3: the next character is not
+# ASCII), and they are exactly how a tag name is split so that nothing reads it as one: a closing tag with a
+# joiner in the middle of its name. Removed there, and only there, so emoji and scripts that need them keep them.
+_INVISIBLE_BETWEEN_ASCII = re.compile(
+    "(?<=[\x00-\x7f])[\u034f\u115f\u1160\u180b-\u180f\u200c\u200d\u2800\u3164\ufe00-\ufe0f\uffa0"
+    "\U000e0100-\U000e01ef]+(?=[\x00-\x7f])"
+)
+
+# How long a name a person chose may be in a block (a username is 50 characters, a chat title 255, and a direct
+# message is named after up to five other people).
+MAX_LABEL_CHARS = 300
 
 
 def clean_text(text: str) -> str:
@@ -89,7 +109,18 @@ def clean_text(text: str) -> str:
         if category == "Cf" and ch not in _KEEP_FORMAT:
             continue
         out.append(ch)
-    return "".join(out)
+    text = _INVISIBLE_BETWEEN_ASCII.sub("", "".join(out))
+    # A look-alike of a fence tag (a full-width "<", a compatibility letter) is not one to the fence's escape,
+    # and may not be one to a model either. Only text that BECOMES a tag under compatibility normalisation is
+    # normalised, so ordinary full-width Japanese text is left as it was written.
+    normalised = unicodedata.normalize("NFKC", text)
+    return normalised if has_fence_tag(normalised) and not has_fence_tag(text) else text
+
+
+def clean_label(value: Any) -> str:
+    """A name a person chose (a sender's username, a chat's title) for a block: cleaned like the text, on one
+    line, and short."""
+    return clean_text(str(value or "")).replace("\n", " ").strip()[:MAX_LABEL_CHARS].rstrip()
 
 
 def cap_text(raw: str) -> tuple[str, bool]:
@@ -179,8 +210,8 @@ def read_message(message_id: str, team_id: str, user_id: str) -> MessageRead | N
         chat_type=CHAT_TYPE_LABEL[channel.kind],
         chat_id=str(channel.id),
         thread_id=str(message.thread_root_id) if message.is_thread_reply else None,
-        sender=(message.sender.username or "") if message.sender_id and message.sender else "",
-        chat_title=names.get(channel.id, ""),
+        sender=clean_label(message.sender.username) if message.sender_id and message.sender else "",
+        chat_title=clean_label(names.get(channel.id, "")),
         sent_at=message.ts_sent_at.isoformat() if message.ts_sent_at else "",
         text=text,
         truncated=cut,
@@ -308,7 +339,7 @@ def rebuild_block(refs: Any, *, team_id: str, user_id: str) -> str | None:
     read: list[MessageRead] = []
     for raw in ids if isinstance(ids, list) else ():
         message_id = valid_message_id(raw)
-        if message_id is None or len(read) >= MAX_MESSAGE_REFS:
+        if message_id is None or len(read) > MAX_MESSAGE_REFS:
             continue
         message = read_message(message_id, team_id, user_id)
         if message is not None:

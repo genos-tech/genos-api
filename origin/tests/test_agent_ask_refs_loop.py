@@ -216,6 +216,21 @@ class AResumedRunTests(LoopBase):
         self.decide_to_the_end(run_id, token, "reject")
         self.assertIn(SECRET, self.legs[1])
 
+    def test_three_messages_and_the_source_of_a_selection_are_all_replayed(self):
+        """Up to three messages are mentioned and a selection's source may add a fourth."""
+        messages = [
+            self.chat_with(self.user, self.other, text=f"message number {i}")[1] for i in range(4)
+        ]
+        run_id, token = self.ask(
+            mentions=[self.mention(m) for m in messages[:3]],
+            selected_text="a passage",
+            selected_from={"type": "message", "message_id": str(messages[3].id)},
+        )
+        self.decide_to_the_end(run_id, token)
+        first, resumed = self.legs
+        self.assertEqual(first.count("MESSAGE THE USER POINTED AT"), 4)
+        self.assertEqual(resumed, first)
+
     def test_the_selection_is_replayed_as_the_person_sent_it_even_without_its_message(self):
         _, message = self.chat_with(self.user, self.other, text=SECRET)
         run_id, token = self.ask(
