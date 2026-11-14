@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import logging
 
+from origin.services import inbox_via
+
 logger = logging.getLogger(__name__)
 
 ITEM_TYPE_TEAM_CONNECTION = 7
@@ -130,7 +132,9 @@ def notice_for(item) -> dict:
             "isRead": item.is_read,
             "requestStatus": item.request_status,
             "tsSent": item.ts_created_at.isoformat(),
-            "itemOptionals": item.item_optionals,
+            "itemOptionals": inbox_via.optionals_for_viewer(
+                item.item_optionals, sender_id=item.sender_id, viewer_id=item.receiver_id
+            ),
         },
     }
 
