@@ -11,6 +11,7 @@ edit. The sizes are printed (`-v 2`) so the session's prefix cost can be quoted.
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 from unittest import mock
@@ -21,7 +22,7 @@ from django.test import SimpleTestCase, TestCase
 
 from apis import settings_test as test_settings
 from origin.search_engine.agent import content_length as cl
-from origin.search_engine.agent import tool_flag_text
+from origin.search_engine.agent import tool_flag_params, tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
 from origin.search_engine.agent.evals.group import harness
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system_prompt
@@ -32,10 +33,12 @@ from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
 # All-on prefix measured 139,012 (off 134,315: +4,551 declarations, +146 prompt rule): same headroom
-# the budget keeps.
+# the budget keeps. 140,982 with the parity batch's parameters (AGENT_PARITY_TOOLS, MIP-1561: +1,898
+# characters over the three task tools), so 143,500 here: a Long member adds the 1,453-character
+# content block on top (142,437) and the same ~1,000 characters of headroom stay.
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
-ALL_ON_BUDGET_CHARS = 141_000
+ALL_ON_BUDGET_CHARS = 143_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.
@@ -113,6 +116,7 @@ class AllOnArmTests(SimpleTestCase):
             "AGENT_INAPP_TIMELINE_TOOL",
             "AGENT_CONTENT_LENGTH",
             "AGENT_BODY_ON_USER_MODEL",
+            "AGENT_PARITY_TOOLS",
         }
         self.assertLessEqual(expected, set(ALL_ON))
 
@@ -132,11 +136,34 @@ class AllOnDeclarationTests(SimpleTestCase):
         self.assertEqual(extra, ["get_timeline"])
         self.assertEqual(len({d.name for d in on}), len(on), "a tool is declared twice")
 
-    def test_schemas_do_not_move_only_descriptions_grow(self):
+    def test_schemas_only_gain_the_declared_parameters_and_descriptions_only_grow(self):
+        # The parity flag (MIP-1561) is the one flag that adds PARAMETERS (`tool_flag_params`).
+        # Take the declared ones back out of the all-on schema and it must be the all-off schema
+        # exactly: every parameter a tool had is kept as it was. Every other tool's schema does
+        # not move at all, and a description only grows (the one sentence a flag REPLACES is
+        # swapped in place, `tool_flag_text.REPLACEMENTS`).
+        added = {a.tool: a for a in tool_flag_params.ADDITIONS}
+        replaced = {name: (old, new) for name, _flag, old, new in tool_flag_text.REPLACEMENTS}
         off, on = self._off_and_on()
         for before, after in zip(off, on, strict=False):
-            self.assertEqual(before.parameters_schema, after.parameters_schema, before.name)
-            self.assertTrue(after.description.startswith(before.description), before.name)
+            addition = added.get(before.name)
+            if addition is None:
+                self.assertEqual(before.parameters_schema, after.parameters_schema, before.name)
+            else:
+                stripped = copy.deepcopy(after.parameters_schema)
+                for name in addition.properties:
+                    self.assertIn(name, stripped["properties"], before.name)
+                    del stripped["properties"][name]
+                for array_name, row_props in addition.nested:
+                    rows = stripped["properties"][array_name]["items"]["properties"]
+                    for name in row_props:
+                        self.assertIn(name, rows, before.name)
+                        del rows[name]
+                self.assertEqual(before.parameters_schema, stripped, before.name)
+            base = before.description
+            if before.name in replaced:
+                base = base.replace(*replaced[before.name], 1)
+            self.assertTrue(after.description.startswith(base), before.name)
 
     def test_each_flag_addition_is_in_its_tool_and_in_the_declared_order(self):
         _, on = self._off_and_on()

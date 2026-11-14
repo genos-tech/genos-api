@@ -37,6 +37,15 @@ an unknown name is refused, never created — see `task_tags`.
 other fields the UI's create form sets (MIP-878). They are checked before the
 row exists, so a refused one creates nothing; see `task_custom_fields` and
 `task_people` for the rules.
+
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF; with it off none of this exists, see
+`parity.ignore_unless_parity`): the rest of what the create form sets. `status` (Open, WIP,
+Blocked, Pending or Closed; Deleted is refused: a task is deleted with `update_task`),
+`reporter_id` (default the caller; the same rule as `assignee_id`), `links` (`task_links`) and
+`template`. A task sent with no `content_text` gets a body from a template, as one made in the app
+does: the one `template` names (a built-in or one of the project's own, by name), else the
+project's default (`plan_task_bodies.new_task_body`, the same text a plan's task gets). Both a
+body and a `template` is refused: the template is the body.
 """
 
 from __future__ import annotations
@@ -50,19 +59,27 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
+from origin.search_engine.agent.parity import ignore_unless_parity, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
+from origin.search_engine.agent.tools.plan_task_bodies import new_task_body
 from origin.search_engine.agent.tools.task_custom_fields import (
     CUSTOM_FIELDS_SCHEMA,
     parse_iso_date,
     plan_custom_fields,
     project_fields,
 )
+from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
+from origin.search_engine.agent.tools.task_links import (
+    LINKS_SCHEMA,
+    plan_links,
+    register_pr_webhooks,
+)
 from origin.search_engine.agent.tools.task_parent import require_readable_parent
-from origin.search_engine.agent.tools.task_people import plan_collaborators
+from origin.search_engine.agent.tools.task_people import canonical_user_id, plan_collaborators
 from origin.search_engine.agent.tools.task_tags import resolve_tags
 from origin.search_engine.agent.undo import UNDO_KEY, created_task_capture
 from origin.search_engine.quota import (
@@ -109,8 +126,8 @@ def _resolve_milestone(raw_id: Any, project_id: int, ctx: ToolContext) -> Milest
 
 
 def _resolve_assignee(raw_id: Any, project_acl: set[str], ctx: ToolContext) -> CustomUser:
-    """The new task's assignee; same guard as `assign_task`. Both sets are
-    scoped to this team, so a UUID from another tenant is refused."""
+    """The new task's assignee, or (`reporter_id`, MIP-1561) its reporter; same guard as
+    `assign_task`. Both sets are scoped to this team, so a UUID from another tenant is refused."""
     if not (str(raw_id) in project_acl or is_team_member(ctx.team_id, raw_id)):
         raise ToolError(
             f"User {raw_id!r} is not an active member of this team, and is not "
@@ -144,7 +161,26 @@ def _resolve_parent(raw_id: Any, project_id: int, ctx: ToolContext) -> TaskMaste
     return parent
 
 
+def _parity_status(raw: Any) -> str:
+    """The status a new task starts in (MIP-1561): Open unless one is named. Deleted is refused,
+    in words that point at the tool that deletes; so is anything else outside the app's list."""
+    if raw in (None, ""):
+        return _DEFAULT_STATUS
+    if raw == "Deleted":
+        raise ToolError(
+            "A task is not created as Deleted. Create it, then use `update_task` with "
+            "status Deleted if it should go. Nothing was created."
+        )
+    if raw not in VALID_STATUSES:
+        raise ToolError(
+            f"`status` must be one of {sorted(VALID_STATUSES)} (got {raw!r}). Nothing was created."
+        )
+    return raw
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    args = ignore_unless_parity(args, PARITY_PROPERTIES)
+    parity = parity_on()
     check_body_size(args.get("content_text"), "content_text")
     title = (args.get("title") or "").strip()
     if not title:
@@ -198,6 +234,33 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     tags = resolve_tags(args["tags"], project_id) if args.get("tags") is not None else []
 
     content_text = args.get("content_text") or ""
+    status = _DEFAULT_STATUS
+    reporter_id: str = ctx.user_id
+    reporter = None
+    links: list[dict[str, Any]] | None = None
+    template = None
+    if parity:
+        status = _parity_status(args.get("status"))
+        if args.get("reporter_id") not in (None, "", "null"):
+            reporter = _resolve_assignee(
+                canonical_user_id(args["reporter_id"], "`reporter_id`"), allowed, ctx
+            )
+            reporter_id = str(reporter.id)
+        if args.get("links") is not None:
+            links = plan_links(args["links"], None)
+        template = args.get("template")
+        if template == "":
+            template = None
+        has_body = bool(str(content_text).strip())
+        if template is not None and has_body:
+            raise ToolError(
+                "Send `content_text` or `template`, not both: the template IS the body. "
+                "Nothing was created."
+            )
+        if not has_body:
+            # The body a task made in the app starts with: the template named, else the
+            # project's default (see `plan_task_bodies`).
+            content_text = new_task_body(project, title, template)
     priority = args.get("priority")
     if priority is not None and priority not in _VALID_PRIORITIES:
         raise ToolError(
@@ -232,9 +295,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     create_kwargs: dict[str, Any] = {
         "team_id": ctx.team_id,
         "project_id": project_id,
-        "reporter_id": ctx.user_id,
+        "reporter_id": reporter_id,
         "title": title,
-        "status": _DEFAULT_STATUS,
+        "status": status,
         "content": task_body_blocks(
             content_text,
             entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
@@ -254,6 +317,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         create_kwargs["start_date"] = start_date
     if custom_values:
         create_kwargs["custom_field_values"] = custom_values
+    if links is not None:
+        create_kwargs["links"] = links
 
     # Tier quota: monthly task-creation cap. Pre-flight (fail-open on
     # infra errors); charged after the row exists so a failed create
@@ -297,6 +362,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     increment_usage(ctx.user_id, TASK_CREATE_KEY)
     # An `@` chip in the body pings the person, as a typed one does.
     notify_task_body_mentions(task, actor_id=ctx.user_id)
+    if links:
+        # As the app's save does: a GitHub PR link gets the repo's webhook, best effort (it
+        # needs the writer's own GitHub connection, and most writers have none).
+        register_pr_webhooks(ctx.user_id, links)
     # No browser is here to post the "task created" card, so its assignee is told and the
     # task reaches the project chat from the server (MIP-1450).
     post_task_created_card(task, actor_id=ctx.user_id)
@@ -310,6 +379,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if assignee is not None:
         assignee_username = assignee.username or str(assignee.id)
         summary += f", assigned to {assignee_username}"
+    if parity and status != _DEFAULT_STATUS:
+        summary += f", status {status}"
     # `due_date` is still the raw input string on the instance `create()`
     # returned (`2026-6-30`, a datetime), so read what was stored back: the
     # response shows what the row holds, not an echo of what was sent (MIP-828).
@@ -344,12 +415,52 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "collaborators": collaborator_ids,
         "__summary__": summary,
     }
+    if parity:
+        if reporter is not None:
+            result["reporter_id"] = str(reporter.id)
+        if links is not None:
+            result["links"] = [{"title": link["title"], "url": link["url"]} for link in links]
     # Undo (`agent/undo.py`): a stamp of the task as made, taken last, once every
     # post-save write (collaborators, root, mentions) has landed.
     if ctx.capture_undo and (image := created_task_capture(task)):
         result[UNDO_KEY] = image
     return result
 
+
+#: What `AGENT_PARITY_TOOLS` adds to this tool's schema (`tool_flag_params`); the tool takes
+#: these only while the flag is on (`parity.ignore_unless_parity`). Kept terse: every character is
+#: billed on every call.
+PARITY_PROPERTIES: dict[str, dict[str, Any]] = {
+    "status": {
+        "type": "STRING",
+        "enum": ["Open", "WIP", "Blocked", "Pending", "Closed"],
+        "description": "Optional starting status. Default Open.",
+    },
+    "reporter_id": {
+        "type": "STRING",
+        "description": "Optional reporter user id. Default: you. Same rule as assignee_id.",
+    },
+    "links": LINKS_SCHEMA,
+    "template": {
+        "type": "STRING",
+        "description": (
+            "Optional body template, used when you send no content_text: default, bug, "
+            "spike, milestone, or a project template's name."
+        ),
+    },
+}
+
+#: The sentence the flag adds to the description (`tool_flag_text`).
+DESCRIPTION_ADDITION = (
+    " Also `status` (not Deleted), `reporter_id`, `links` ([{url, title}], http(s) only) and "
+    "`template`. With no content_text the body is the project's default template (or "
+    "`template`), as in the app; not both."
+)
+
+#: The base sentence this one contradicts, and what it says while the flag is on
+#: (`tool_flag_text.REPLACEMENTS`).
+STATUS_SENTENCE = "Status is always created as 'Open' — users change it via the UI. "
+STATUS_SENTENCE_ON = "Status starts as 'Open' unless you pass `status`. "
 
 CREATE_TASK = Tool(
     name="create_task",

@@ -18,7 +18,9 @@ Differences from the MCP tool, all in what is DECLARED, none in what is read:
     channel page and for a period) and a `chat` anchor is refused here; the declaration stays
     small, because it is paid for on every call of every run;
   * the fences stay: over MCP the layer takes them off, in the app the model reads them like it
-    does in every other in-app tool.
+    does in every other in-app tool, so the size budget is counted WITH them (`in_app=True`,
+    MIP-1477);
+  * `last_seen_at` is not told: it is the member's own AI-app opens (`in_app=True`, MIP-1477).
 
 Published ONLY while `SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"]` is on (default off): see
 `tools/base.py::FLAGGED_REGISTRY`. Not in `REGISTRY`, so it is neither declared nor runnable
@@ -51,6 +53,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         cursor=args.get("cursor"),
         lead_in=args.get("lead_in"),
         text_chars=args.get("text_chars"),
+        in_app=True,
     )
 
 

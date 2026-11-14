@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from origin.models.common.mcp_connection_models import McpConnection
+from origin.services.mcp_client_family import app_family
 
 
 class McpOAuthCredential:
@@ -48,8 +49,13 @@ class McpOAuthCredential:
         return f"oauth:{self.id}"
 
     def via(self) -> dict[str, Any]:
-        return {
+        via: dict[str, Any] = {
             "kind": "oauth",
             "connection_id": str(self.id),
             "client_name": self.label,
         }
+        # The official family (MIP-1568), from the client's registered redirect URIs and never
+        # from its name; stamped with the write, so a row keeps the family of that moment.
+        if family := app_family(self.connection.application):
+            via["app"] = family
+        return via
