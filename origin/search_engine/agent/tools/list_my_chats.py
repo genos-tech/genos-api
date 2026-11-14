@@ -123,8 +123,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         .order_by("-seq")
         .values("ts_sent_at")[:1]
     )
+    # A deleted account does not count: its row is KEPT on a direct message and a multi-person
+    # DM (the others keep the conversation), but the person no longer exists (MIP-1550).
     member_count = (
-        ChannelMember.objects.filter(channel=OuterRef("pk"), is_deleted=False)
+        ChannelMember.objects.filter(
+            channel=OuterRef("pk"), is_deleted=False, user__is_deleted=False
+        )
         .order_by()
         .values("channel")
         .annotate(c=Count("pk"))
