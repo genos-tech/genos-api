@@ -34,7 +34,7 @@ from origin.models.common.api_key_models import (
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.services.api_keys import key_label, revoke_api_key
-from origin.services.member_roles import can_manage, can_remove_member, resolve_team_role
+from origin.services.member_roles import OWNER, can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_team_member
@@ -251,7 +251,8 @@ class TeamApiKeyListView(AuthenticatedAPIView):
     which acts on the team for up to a year — was invisible to the person
     answerable for it. Expired keys are left out alongside revoked ones:
     they authenticate nothing, and listing them would bury the ones that
-    do. Each row says whether THIS caller may revoke it (`revocable`).
+    do. Each row says whether THIS caller may revoke it (`revocable`). `userEmail` is in a row
+    only for the team's owner.
     """
 
     authentication_classes = [JWTAuthentication]
@@ -266,20 +267,25 @@ class TeamApiKeyListView(AuthenticatedAPIView):
             .select_related("user")
         )
         return Response(
-            {
-                "api_keys": [
-                    {
-                        **_serialize(k),
-                        "userId": str(k.user_id),
-                        "userName": k.user.username,
-                        "userEmail": k.user.email,
-                        "revocable": _may_revoke(request, team, role, k),
-                    }
-                    for k in keys
-                ]
-            },
+            {"api_keys": [_team_key_row(request, team, role, k) for k in keys]},
             status=status.HTTP_200_OK,
         )
+
+
+def _team_key_row(request, team, role, key: ApiKey) -> dict:
+    row = {
+        **_serialize(key),
+        "userId": str(key.user_id),
+        "userName": key.user.username,
+        "revocable": _may_revoke(request, team, role, key),
+    }
+    # The holder's address is the owner's to see, not an editor's (same rule as the connected
+    # AI apps list): an editor needs the key's name, prefix and the holder's name to judge and
+    # revoke it, not a way to contact the person. The key is ABSENT (not null, not "") for an
+    # editor, their own rows included, so there is nothing to render by accident.
+    if role == OWNER:
+        row["userEmail"] = key.user.email
+    return row
 
 
 def _may_revoke(request, team, role, key: ApiKey) -> bool:
