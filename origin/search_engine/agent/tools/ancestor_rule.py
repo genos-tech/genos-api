@@ -16,7 +16,8 @@ THE DESIGN, one rule for two kinds of tool:
     same reading as `milestone_work_counts(ancestor_rule=True)`, the progress bar's; a test pins the two
     equal. Done as an annotation on the queryset (`eff_status`), so the aggregates keep their shape.
   * LISTS (`get_my_focus_tasks`, "what should I work on"): tasks that read as Closed or Deleted are left
-    OUT, the briefing's rule. A generic list the model filters itself (`list_tasks`) and the single task
+    OUT, the briefing's rule. (MIP-1478 adds `get_project_summary` and `get_team_task_summary` to the
+    counts, and `get_workload_distribution`, `get_stale_tasks` and `get_my_schedule` to the lists.) A generic list the model filters itself (`list_tasks`) and the single task
     (`fetch_task`) keep every row and CARRY `effective_status` (and `closed_by_ancestor`), exactly what the
     MCP `list_tasks` / `get_task` show: dropping a row the model asked for by an explicit status would
     read as "the task does not exist".
