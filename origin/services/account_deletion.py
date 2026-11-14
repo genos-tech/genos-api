@@ -338,6 +338,17 @@ def delete_account(user) -> dict:
                 metadata={"via": "account_deleted"},
             )
 
+        # What the guest teams' rosters wrote for this person on OTHER teams' objects (a shared
+        # project, chat or note folder, MIP-1550). Leaving a team through `remove_team_member`
+        # withdraws these; deleting the account is the other way out of a team and used to leave
+        # them. Nothing re-checks a grant at read time, so a row left here is access nobody sees.
+        from origin.services.external_grants import drop_team_member_participation
+
+        withdrawn = sum(
+            drop_team_member_participation(team_id, user.pk)
+            for team_id in {*solo_team_ids, *left_team_ids}
+        )
+
         _delete_personal_data(user)
         _purge_search_engine_rows(user_id)
         # Both read the identity that is overwritten just below, so they run first.
@@ -385,4 +396,5 @@ def delete_account(user) -> dict:
         "user_id": user_id,
         "solo_teams_closed": len(solo_team_ids),
         "invites_removed": invites_removed,
+        "external_participation_withdrawn": withdrawn,
     }
