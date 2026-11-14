@@ -1082,6 +1082,7 @@ class TestTheCatalogContract(McpBase):
             "activity_id": "get_task_history",
             "sprint_id": "list_sprints",
             "user_id": ("get_team_members", "list_project_members"),
+            "thread_id": "get_note",  # a note's comment threads (MIP-1100)
         }
         published = {t.name for t in tools.CATALOG}
         undrivable = []

@@ -139,6 +139,7 @@ from origin.services.security_events import (
 )
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
+    note_threads,
     progress,
     secretary,
     via_privacy,
@@ -551,7 +552,8 @@ CATALOG: tuple[McpTool, ...] = (
             "`anchor_text` it sits on, its replies (`author`, `ts`, "
             "`markdown`) and whether it is `resolved`. Open threads come "
             "first; resolved ones are left out unless `include_resolved` is "
-            "true."
+            "true. Answer a thread with `reply_to_note_comment`, settle it with "
+            "`resolve_note_comment`; both take its `thread_id`."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -1683,6 +1685,39 @@ CATALOG: tuple[McpTool, ...] = (
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
     McpTool(
+        name="reply_to_note_comment",
+        registry_name="reply_to_note_comment",
+        description=(
+            "Reply to a comment thread on a note, as the caller: it shows in the "
+            "note's editor next to the other replies, marked as written through a "
+            "connected app. Take `thread_id` from `comment_threads` in `get_note`. "
+            "`text` is plain text, one paragraph per line; no formatting, no "
+            "@-mentions, and it cannot start a new thread on a passage. Anyone who "
+            "can open the note may reply, viewers included. Returns `comment_id`, "
+            "`comment_count` and `thread_resolved`. Name the note by its Genos URL, "
+            "or by its numeric id with `note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="resolve_note_comment",
+        registry_name="resolve_note_comment",
+        description=(
+            "Mark a comment thread on a note resolved. Stricter than the editor: only "
+            "the thread's author or the note's owner can; anyone else is refused (use "
+            "`reply_to_note_comment` instead). Resolving a resolved thread changes "
+            "nothing. Take `thread_id` from `comment_threads` in `get_note`. Returns "
+            "`resolved`, `already_resolved` and `resolved_by` (a user id). Reopening a "
+            "thread is done in the editor. Name the note by its Genos URL, or by its "
+            "numeric id with `note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
         name="delete_note",
         registry_name="delete_note",
         description=(
@@ -2337,6 +2372,7 @@ OVERWRITE_TOOLS = frozenset(
         "update_tasks_bulk",
         "update_todo_item",
         "update_my_schedule",
+        "resolve_note_comment",  # settles a thread; the editor can reopen it
         "set_item_importance",  # replaces the member's mark on one task
         "tune_my_importance",  # replaces how a signal counts
     }
@@ -2356,6 +2392,7 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "create_todo_item",
         "favorite_note",
         "manage_project_labels",
+        "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
     }
 )
