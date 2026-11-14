@@ -67,17 +67,18 @@ LINES = (
 
 @contextmanager
 def read_only():
-    """A transaction Postgres itself refuses to write in."""
-    postgres = connection.vendor == "postgresql"
+    """A transaction Postgres itself refuses to write in (`SET LOCAL`, gone at commit).
+
+    Skipped when the caller already holds a transaction (the test runner's, or an outer
+    `atomic`): Postgres cannot switch such a transaction back to read-write afterwards. A
+    management command run from a shell never is, so the production dry run is enforced.
+    """
+    enforce = connection.vendor == "postgresql" and not connection.in_atomic_block
     with transaction.atomic():
-        if postgres:
+        if enforce:
             with connection.cursor() as cursor:
                 cursor.execute("SET LOCAL transaction_read_only = on")
         yield
-        if postgres:
-            # The savepoint inside an outer transaction (tests) does not undo SET LOCAL.
-            with connection.cursor() as cursor:
-                cursor.execute("SET LOCAL transaction_read_only = off")
 
 
 class Command(BaseCommand):

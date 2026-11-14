@@ -93,7 +93,9 @@ class Report:
         return sum(self.total(v) for v in REVOKE)
 
     def as_dict(self) -> dict:
-        kinds = sorted(self.by_kind, key=lambda n: ChannelKind[n].value if n in ChannelKind.__members__ else 99)
+        kinds = sorted(
+            self.by_kind, key=lambda n: ChannelKind[n].value if n in ChannelKind.__members__ else 99
+        )
         return {
             "scanned_rows": self.scanned,
             "limited": self.limited,
@@ -174,7 +176,9 @@ def _classify(rows):
             continue
         member = members.get((cid, uid))
         if channel["kind"] == ChannelKind.PM:
-            current = bool(channel["project_id"]) and (str(channel["project_id"]), uid) in on_project
+            current = (
+                bool(channel["project_id"]) and (str(channel["project_id"]), uid) in on_project
+            )
         else:
             current = member is not None and not member[0]
         joined = member[1] if member else None
@@ -248,7 +252,11 @@ def apply(pks, *, batch_size=200) -> int:
                     "pk", "user_id", "note_id", "ts_created_at"
                 )
             )
-            still = [r for r, verdict, _k, _c, _j in _classify(rows) if verdict in REVOKE] if rows else []
+            still = (
+                [r for r, verdict, _k, _c, _j in _classify(rows) if verdict in REVOKE]
+                if rows
+                else []
+            )
             if not still:
                 continue
             channels = {
@@ -263,6 +271,8 @@ def apply(pks, *, batch_size=200) -> int:
                 _mark_search(channels)
             deleted_total += deleted
             log.info(
-                "cleanup_stale_chat_note_roles: batch deleted=%d channels=%d", deleted, len(channels)
+                "cleanup_stale_chat_note_roles: batch deleted=%d channels=%d",
+                deleted,
+                len(channels),
             )
     return deleted_total

@@ -18,6 +18,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from origin.management.commands.cleanup_stale_chat_note_roles import read_only
@@ -38,6 +39,7 @@ DAY = timedelta(days=1)
 
 class Base(ChatNoteFixtures):
     def person(self, name, *, team=True):
+        name = f"{name}-{uuid.uuid4().hex[:6]}"
         user = get_user_model().objects.create_user(
             username=name, email=f"{name}@example.com", password="x"
         )
@@ -66,13 +68,13 @@ class Base(ChatNoteFixtures):
     def chat(self, kind=ChannelKind.GM):
         return Channel.objects.create(team=self.team, kind=kind, title="c", owner=self.owner)
 
-    def run(self, *args):
+    def cmd(self, *args):
         out = io.StringIO()
         call_command("cleanup_stale_chat_note_roles", *args, stdout=out)
         return out.getvalue()
 
     def report(self, *args):
-        return json.loads(self.run("--json", *args))
+        return json.loads(self.cmd("--json", *args))
 
     def alive(self, row):
         return NotePermissionMaster.objects.filter(pk=row.pk).exists()
@@ -87,7 +89,7 @@ class Classification(Base):
         got = self.report()
         self.assertEqual(got["would_revoke"], 1)
         self.assertEqual(got["by_chat_kind"]["GM"][stale.REVOKE_MEMBERSHIP], 1)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertFalse(self.alive(row))
 
     def test_left_a_project_membership_row_is_revoked(self):
@@ -102,7 +104,7 @@ class Classification(Base):
         row = self.role(self.reader, note, T0 + 2 * DAY)
         got = self.report()
         self.assertEqual(got["by_chat_kind"]["PM"][stale.REVOKE_MEMBERSHIP], 1)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertFalse(self.alive(row))
 
     def test_a_pm_stray_channel_row_is_not_membership(self):
@@ -115,7 +117,7 @@ class Classification(Base):
         self.member(pm, self.reader, T0 + DAY)  # live row, but not on the project
         row = self.role(self.reader, note, T0 + 2 * DAY)
         self.assertEqual(self.report()["would_revoke"], 1)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertFalse(self.alive(row))
 
     def test_removed_from_the_team_loses_even_a_share(self):
@@ -126,7 +128,7 @@ class Classification(Base):
         got = self.report()
         self.assertEqual(got["would_revoke_team_left"], 1)
         self.assertEqual(got["kept_deliberate_shares"], 0)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertFalse(self.alive(share))
 
     def test_a_share_before_the_join_is_kept(self):
@@ -137,7 +139,7 @@ class Classification(Base):
         got = self.report()
         self.assertEqual(got["kept_deliberate_shares"], 1)
         self.assertEqual(got["would_revoke"], 0)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(share))
 
     def test_a_share_to_someone_who_never_was_a_member_is_kept(self):
@@ -145,7 +147,7 @@ class Classification(Base):
         note = self.note(gm)
         share = self.role(who, note, T0 + DAY, ROLE_VIEWER)
         self.assertEqual(self.report()["kept_deliberate_shares"], 1)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(share))
 
     def test_a_current_member_is_never_touched(self):
@@ -157,7 +159,7 @@ class Classification(Base):
         got = self.report()
         self.assertEqual(got["current_members_untouched"], 2)
         self.assertEqual(got["would_revoke"], 0)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(all(self.alive(r) for r in rows))
 
     def test_an_external_guest_of_a_shared_chat_is_a_current_member(self):
@@ -168,7 +170,7 @@ class Classification(Base):
         row = self.role(guest, note, T0 + 2 * DAY)
         got = self.report()
         self.assertEqual(got["current_members_untouched"], 1)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(row))
 
     def test_a_withdrawn_guest_takes_the_membership_rule_not_the_team_rule(self):
@@ -179,7 +181,7 @@ class Classification(Base):
         got = self.report()
         self.assertEqual(got["would_revoke_membership"], 1)
         self.assertEqual(got["would_revoke_team_left"], 0)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertFalse(self.alive(mine))
 
     def test_an_old_membership_row_is_counted_ambiguous_and_kept(self):
@@ -195,7 +197,7 @@ class Classification(Base):
         self.assertEqual(got["would_revoke"], 0)
         self.assertEqual(got["ambiguous_sample"][0]["role_row_id"], row.pk)
         self.assertEqual(got["ambiguous_sample"][0]["chat_kind"], "GM")
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(row))
 
     def test_counts_by_chat_kind_cover_dm_mdm_gm_pm(self):
@@ -211,8 +213,10 @@ class Classification(Base):
         )
         self.role(self.reader, self.note(pm), T0 + 2 * DAY)
         got = self.report()["by_chat_kind"]
-        self.assertEqual({k: v[stale.REVOKE_MEMBERSHIP] for k, v in got.items()},
-                         {"DM": 1, "GM": 1, "PM": 1, "MDM": 1})
+        self.assertEqual(
+            {k: v[stale.REVOKE_MEMBERSHIP] for k, v in got.items()},
+            {"DM": 1, "GM": 1, "PM": 1, "MDM": 1},
+        )
 
     def test_a_deleted_chat_and_a_mismatched_note_are_skipped(self):
         dead, who = self.chat(), self.person("deadchat")
@@ -227,7 +231,7 @@ class Classification(Base):
         r2 = self.role(who, n2, T0 + 2 * DAY)
         got = self.report()
         self.assertEqual((got["skipped"], got["would_revoke"]), (2, 0))
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(r1) and self.alive(r2))
 
     def test_task_and_personal_notes_and_ownerless_rows_are_out_of_scope(self):
@@ -237,7 +241,7 @@ class Classification(Base):
             team=self.team, user=who, note_type=2, note_id=999, role_id=ROLE_EDITOR
         )
         self.assertEqual(self.report()["scanned_rows"], 0)
-        self.run("--apply", "--yes")
+        self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(task_row))
 
 
@@ -264,6 +268,7 @@ class SameRuleAsTheLiveRevoke(Base):
     def test_scan_chooses_exactly_what_the_live_revoke_would_delete(self):
         gm, who = self.chat(), self.person("same")
         member = self.member(gm, who, T0 + 3 * DAY, left=True)
+        member.refresh_from_db()
         rows = [
             self.role(who, self.note(gm, "a"), T0 + 4 * DAY),  # membership
             self.role(who, self.note(gm, "b"), T0 + DAY),  # share
@@ -290,17 +295,23 @@ class DryRunIsReadOnly(Base):
         writes = []
 
         def spy(execute, sql, params, many, context):
-            if sql.lstrip().split(None, 1)[0].upper() not in {"SELECT", "SET", "SAVEPOINT", "RELEASE"}:
+            if sql.lstrip().split(None, 1)[0].upper() not in {
+                "SELECT",
+                "SET",
+                "SAVEPOINT",
+                "RELEASE",
+            }:
                 writes.append(sql)
             return execute(sql, params, many, context)
 
         events = SecurityEvent.objects.count()
         before = list(NotePermissionMaster.objects.values_list("pk", "ts_updated_at"))
-        with mock.patch(
-            "origin.search_engine.acl_dirty.mark_channels_dirty"
-        ) as dirty, connection.execute_wrapper(spy):
-            out = self.run()
-            self.run("--json", "--limit", "1")
+        with (
+            mock.patch("origin.search_engine.acl_dirty.mark_channels_dirty") as dirty,
+            connection.execute_wrapper(spy),
+        ):
+            out = self.cmd()
+            self.cmd("--json", "--limit", "1")
         self.assertEqual(writes, [])
         dirty.assert_not_called()
         self.assertEqual(SecurityEvent.objects.count(), events)
@@ -311,24 +322,37 @@ class DryRunIsReadOnly(Base):
         self.assertIn("Nothing was written", out)
         self.assertTrue(self.alive(self.stale))
 
-    def test_the_database_itself_refuses_a_write_inside_the_dry_run(self):
-        from django.db import ProgrammingError
-
-        if connection.vendor != "postgresql":
-            self.skipTest("postgres only")
-        with self.assertRaises(ProgrammingError):
-            with read_only():
-                NotePermissionMaster.objects.filter(pk=self.stale.pk).delete()
-        self.assertTrue(self.alive(self.stale))
-
     def test_the_connection_is_writable_again_afterwards(self):
-        self.run()
+        self.cmd()
         NotePermissionMaster.objects.filter(pk=self.stale.pk).delete()  # must not raise
 
     def test_json_is_one_parseable_document(self):
-        got = json.loads(self.run("--json"))
+        got = json.loads(self.cmd("--json"))
         self.assertEqual(got["mode"], "dry-run")
         self.assertEqual(got["would_revoke"], 1)
+
+
+class TheDatabaseHoldsTheDryRunReadOnly(TransactionTestCase):
+    """Outside the test runner's own transaction, `read_only` makes Postgres refuse any write."""
+
+    def test_a_write_inside_the_dry_run_is_refused_by_the_database(self):
+        if connection.vendor != "postgresql":
+            self.skipTest("postgres only")
+        row = NotePermissionMaster.objects.create(note_type=CHAT, note_id=1, role_id=ROLE_EDITOR)
+        try:
+            with self.assertRaises(Exception) as caught:
+                with read_only():
+                    NotePermissionMaster.objects.filter(pk=row.pk).delete()
+            self.assertIn("read-only", str(caught.exception))
+            self.assertTrue(NotePermissionMaster.objects.filter(pk=row.pk).exists())
+            NotePermissionMaster.objects.filter(pk=row.pk).delete()  # writable again afterwards
+        finally:
+            NotePermissionMaster.objects.filter(note_id=1, note_type=CHAT).delete()
+
+    def test_a_dry_run_command_works_there_too(self):
+        out = io.StringIO()
+        call_command("cleanup_stale_chat_note_roles", "--json", stdout=out)
+        self.assertEqual(json.loads(out.getvalue())["mode"], "dry-run")
 
 
 class Apply(Base):
@@ -343,7 +367,7 @@ class Apply(Base):
     def test_apply_needs_yes(self):
         rows = self.stale_rows(1)
         with self.assertRaises(CommandError):
-            self.run("--apply")
+            self.cmd("--apply")
         self.assertTrue(self.alive(rows[0]))
 
     def test_apply_matches_the_dry_run_and_is_idempotent(self):
@@ -360,7 +384,7 @@ class Apply(Base):
     def test_apply_marks_the_search_acl_dirty(self):
         self.stale_rows(2)
         with mock.patch("origin.services.chat_note_stale_roles._mark_search") as marked:
-            self.run("--apply", "--yes")
+            self.cmd("--apply", "--yes")
         self.assertEqual(marked.call_count, 1)
         self.assertEqual(len(marked.call_args.args[0]), 2)
 
@@ -398,9 +422,9 @@ class Apply(Base):
 
         with mock.patch("origin.services.chat_note_stale_roles._mark_search", boom):
             with self.assertRaises(RuntimeError):
-                self.run("--apply", "--yes", "--batch-size", "2")
+                self.cmd("--apply", "--yes", "--batch-size", "2")
         self.assertEqual(sum(self.alive(r) for r in rows), 3)  # first batch committed
-        self.run("--apply", "--yes")  # a rerun finishes the job
+        self.cmd("--apply", "--yes")  # a rerun finishes the job
         self.assertFalse(any(self.alive(r) for r in rows))
 
     def test_a_person_re_added_after_the_scan_is_not_hit(self):
