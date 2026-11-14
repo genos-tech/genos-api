@@ -45,6 +45,10 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # over the shipped flags, 140,982 with EVERY flag on, the arm the grouped run measures; the later
 # parity tasks add to the same flag and raise this again). The routing numbers come from that one
 # grouped run, not from this PR: the flag ships off, so production sends what it sent (138,938).
+# MIP-1562 adds two tools' parameters to the same flag (`update_comment`: reaction, remove_reaction,
+# flag; `create_todo_item`: task_id, comment_id): +984 characters, 141,820 measured with the flag on
+# over the shipped flags (141,966 with EVERY flag on). It still fits, so the constant stays; 180
+# characters are left, so the next parity task raises it with its own measurement.
 BUDGET_CHARS = 142_000
 
 

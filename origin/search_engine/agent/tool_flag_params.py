@@ -29,6 +29,9 @@ from typing import Any
 from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
 from origin.search_engine.agent.tools.create_task import PARITY_PROPERTIES as _CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import PARITY_ROW_PROPERTIES as _PLAN_ROWS
+from origin.search_engine.agent.tools.todo_source import PARITY_PROPERTIES as _CREATE_TODO
+from origin.search_engine.agent.tools.update_comment import PARITY_OPTIONAL as _COMMENT_OPTIONAL
+from origin.search_engine.agent.tools.update_comment import PARITY_PROPERTIES as _UPDATE_COMMENT
 from origin.search_engine.agent.tools.update_task import PARITY_PROPERTIES as _UPDATE_TASK
 
 
@@ -40,6 +43,9 @@ class ParamAddition:
     properties: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: `(array property, row properties)`: properties added to each row of an array.
     nested: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = ()
+    #: Top-level parameters that stop being `required` while the flag is on: the new parameters
+    #: are an alternative to them (a reaction has no `body_text`).
+    optional: tuple[str, ...] = ()
 
 
 #: Append, never reorder: a tool's added properties follow the order of the rows.
@@ -47,6 +53,11 @@ ADDITIONS: tuple[ParamAddition, ...] = (
     ParamAddition("create_task", PARITY_FLAG, properties=_CREATE_TASK),
     ParamAddition("update_task", PARITY_FLAG, properties=_UPDATE_TASK),
     ParamAddition("create_task_plan", PARITY_FLAG, nested=(("tasks", _PLAN_ROWS),)),
+    # MIP-1562: the comment bubble's reaction and flag, and "Add to To-Do" from a task or comment.
+    ParamAddition(
+        "update_comment", PARITY_FLAG, properties=_UPDATE_COMMENT, optional=_COMMENT_OPTIONAL
+    ),
+    ParamAddition("create_todo_item", PARITY_FLAG, properties=_CREATE_TODO),
 )
 
 
@@ -65,4 +76,6 @@ def with_flagged_params(tool: str, schema: dict[str, Any]) -> dict[str, Any]:
             row_schema = (props.get(array_name) or {}).get("items")
             if isinstance(row_schema, dict):
                 row_schema.setdefault("properties", {}).update(copy.deepcopy(row_props))
+        if addition.optional and "required" in out:
+            out["required"] = [r for r in out["required"] if r not in addition.optional]
     return out

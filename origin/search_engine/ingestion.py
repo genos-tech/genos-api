@@ -52,6 +52,7 @@ from origin.search_engine.chunkers.chat_chunker import iter_all_chat_chunks
 from origin.search_engine.chunkers.conversation_chunker import (
     conversation_chunks_for_run,
     iter_conversation_chunks,
+    undone_steps_for_run,
 )
 from origin.search_engine.chunkers.milestone_chunker import iter_milestone_chunks
 from origin.search_engine.chunkers.note_chunker import iter_all_note_chunks
@@ -253,7 +254,9 @@ def ingest_conversation_run(run) -> bool:
     "recall what we discussed a minute ago" case would silently wait
     for the next cron pass.
     """
-    entity = conversation_chunks_for_run(run)
+    # MIP-1530: with `AGENT_UNDO_NOTE_IN_MEMORY` on, the run's undone writes are noted in its
+    # chunk (one query for this run; none with the flag off).
+    entity = conversation_chunks_for_run(run, undone_steps_for_run(run))
     if entity is None:
         return False
     stats = IngestionStats()
@@ -649,9 +652,7 @@ def _delete_stale(
     if not stale_ids:
         return
 
-    actions = [
-        {"_op_type": "delete", "_index": get_index_alias(), "_id": cid} for cid in stale_ids
-    ]
+    actions = [{"_op_type": "delete", "_index": get_index_alias(), "_id": cid} for cid in stale_ids]
     client = get_client()
     # Same deferred-refresh policy as `_bulk_index` — defers to the
     # end-of-run refresh in `ingest_all` unless RAG_BULK_REFRESH=true.

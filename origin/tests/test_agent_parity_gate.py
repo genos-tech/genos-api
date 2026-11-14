@@ -46,6 +46,8 @@ from .test_mcp_endpoint import McpBase
 ON = {PARITY_FLAG: True}
 OFF = {PARITY_FLAG: False}
 THREE = ("create_task", "update_task", "create_task_plan")
+# The tools MIP-1562 added to the same flag, pinned in `test_agent_parity_comment_gate`.
+COMMENT_TOOLS = ("update_comment", "create_todo_item")
 CREATE_NEW = {"status", "reporter_id", "links", "template"}
 UPDATE_NEW = {"links", "reporter_id"}
 ROW_NEW = {"status", "template"}
@@ -124,7 +126,7 @@ class OffIsByteIdenticalTests(SimpleTestCase):
         off, on = declared(**OFF), declared(**ON)
         self.assertEqual(list(off), list(on))
         for name in off:
-            if name in THREE:
+            if name in THREE + COMMENT_TOOLS:
                 continue
             with self.subTest(tool=name):
                 self.assertEqual(canon(off[name]), canon(on[name]))

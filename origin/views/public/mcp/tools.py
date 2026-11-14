@@ -127,7 +127,7 @@ from django.conf import settings
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
-from origin.search_engine.agent.tool_flag_text import ADDITIONS
+from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
@@ -2444,12 +2444,22 @@ def shared_flag_text(tool: McpTool) -> str:
     return _rewrite_refs(text)
 
 
+def _replaced(tool: McpTool) -> str:
+    """The catalog text with the sentences a default-off flag rewrites swapped for their new
+    wording while it is on (`tool_flag_text.MCP_REPLACEMENTS`); the catalog's own text otherwise."""
+    text = tool.description
+    for name, flag, old, new in MCP_REPLACEMENTS:
+        if name == tool.registry_name and settings.SEARCH_ENGINE.get(flag):
+            text = text.replace(old, new, 1)
+    return text
+
+
 def description_for(tool: McpTool, credential_kind: str = "api_key") -> str:
     """The description as the holder of THIS credential should read it. The text is written
     for an API key ("Requires a write-scoped API key"); a person who connected an app has no
     key, and OpenAI's review asks that descriptions match behaviour, so they are told what
     they actually need: write access in their connection (MIP-1110)."""
-    text = tool.description + shared_flag_text(tool)
+    text = _replaced(tool) + shared_flag_text(tool)
     if credential_kind == "api_key":
         return text
     text = text.replace(
