@@ -42,6 +42,59 @@ class ModelRefusal(Exception):
         super().__init__(f"{provider}/{model} declined the request (category={category or 'n/a'})")
 
 
+#: Gemini finish reasons by which its safety layer ends a call (as opposed to the model
+#: finishing). With nothing produced the Gemini adapter raises `ModelRefusal`; after some text the
+#: text stays and the loop adds a notice (MIP-1525).
+GEMINI_REFUSAL_FINISHES = frozenset(
+    {
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "IMAGE_SAFETY",
+        "IMAGE_PROHIBITED_CONTENT",
+    }
+)
+
+#: Every provider's refusal-type stop reason, as it lands in `CallUsage.stop_reason`: Gemini's
+#: above and OpenAI's `content_filter`. (Claude's `refusal` always raises `ModelRefusal`.)
+REFUSAL_STOP_REASONS = GEMINI_REFUSAL_FINISHES | {"content_filter"}
+
+#: Gemini finish reasons for a function call the model wrote wrongly (or should not have made).
+_MALFORMED_CALL_FINISHES = frozenset(
+    {"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE"}
+)
+
+
+def empty_stop_kind(stop_reason: str, block_reason: str, truncated: bool) -> str:
+    """Why a call that produced no text and no function call ended, as one of
+
+      "prompt_blocked"  the prompt was blocked before an answer began (never retried)
+      "context_full"    Claude `model_context_window_exceeded`: the window is full, not the output
+      "thinking_cap"    cut off at the output cap with nothing written: thinking used it up
+      "malformed_call"  the model wrote a function call that could not be used
+      "other_stop"      the provider stopped for a reason it does not explain (Gemini `OTHER`, ...)
+      ""                nothing specific: a plain empty end ("STOP", "end_turn", ...), or a
+                        refusal-type stop (the adapter raised `ModelRefusal` for that)
+
+    Called only for a call that yielded nothing (MIP-1525): before this each of them read as
+    "Model returned an empty response". Gemini names its finish reasons in capitals; Claude's and
+    OpenAI's are lower case, and only Gemini has stops of the last two kinds.
+    """
+    if block_reason:
+        return "prompt_blocked"
+    if stop_reason == "model_context_window_exceeded":
+        return "context_full"
+    if truncated:
+        return "thinking_cap"
+    if stop_reason in _MALFORMED_CALL_FINISHES:
+        return "malformed_call"
+    if stop_reason.isupper() and stop_reason not in REFUSAL_STOP_REASONS | {"STOP"}:
+        return "other_stop"
+    return ""
+
+
 @dataclass(frozen=True)
 class FunctionCall:
     """A function call the model wants to make.
@@ -141,6 +194,11 @@ class CallUsage:
     # tool it is, instead of running it with half its arguments (MIP-1479). Gemini hands function
     # calls over whole, so it never sets this.
     partial_call: bool = False
+    # Why the PROMPT was blocked before any answer began (Gemini `prompt_feedback.block_reason`:
+    # "SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "OTHER", ...); "" when it was not. The call
+    # then has no candidates, so `stop_reason` is empty and the loop would have called it an
+    # empty response (MIP-1525).
+    block_reason: str = ""
     # The output cap the call actually ran under (tokens), as the adapter sent it; 0 when it
     # sent none and the provider's own model maximum applied (Gemini without a cap). The
     # controller sizes a retry of a cut-off write from this, never below it.
