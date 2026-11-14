@@ -20,6 +20,13 @@ ACL contract:
     `redacted_count` reports how many were hidden so the LLM can tell
     the user the graph is partial without enumerating inaccessible
     task identities.
+
+CLOSED-ANCESTOR RULE (MIP-1544, behind `AGENT_CLOSED_ANCESTOR_RULE`): an edge whose OTHER endpoint sits
+under a Closed or Deleted parent, grandparent or milestone (it reads as Closed, `services/task_ancestry.py`)
+is left out of `blocked_by` / `blocking`: a blocker like that holds nothing up. A blocker whose OWN status
+is Closed is still listed (as before); only the ancestor-closed ones are dropped. The auto-Blocked flip
+(`services/task_blocking.py`) reads the same rule, so the board and this tool agree. The target itself is
+answered whatever it reads as (it was named). One extra query per call; flag off: nothing here runs.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from typing import Any
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -87,6 +95,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ).values_list("project_id", flat=True)
     )
 
+    # None = flag off. Only the projects the caller is in: an edge into any other project is redacted
+    # (and counted) whatever the task there reads as, so the rule never tells what a hidden task is.
+    rule = (
+        ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
+        if ancestor_rule.enabled()
+        else None
+    )
+    not_open = rule.not_open if rule is not None else frozenset()
+
     # blocking[] = rows where target IS the blocker; "other" is blocked.
     # blocked_by[] = rows where target IS the blocked; "other" is blocker.
     # Mirrors TaskDependencyView.get logic; soft-deleted endpoints are dropped
@@ -113,6 +130,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if other.project_id and other.project_id not in member_project_ids:
             redacted_count += 1
             continue
+        if other.task_id in not_open:
+            continue
         blocking.append(_hydrate_ref(dep.id, other))
 
     for dep in blocked_by_rows:
@@ -121,6 +140,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             continue
         if other.project_id and other.project_id not in member_project_ids:
             redacted_count += 1
+            continue
+        if other.task_id in not_open:
             continue
         blocked_by.append(_hydrate_ref(dep.id, other))
 
