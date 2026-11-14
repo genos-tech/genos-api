@@ -15,6 +15,8 @@ import re
 from datetime import timedelta
 from unittest import mock
 
+from django.core import signing
+
 from origin.models.chat.unified_models import ChannelKind, Message, MessageReaction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -1490,3 +1492,55 @@ class TestSeenCut(TimelineBase):
         out = self.tl("thread", str(root.id))
         self.assertNotIn("last_seen_at", out)
         self.assertNotIn("seen_capped", out["capped"])
+
+
+class TestReactionsWithTheSameInstantKeepTheirOrder(TimelineBase):
+    """`TaskCommentReactionFact.uid` is `<task>-<comment>-<reaction>` text, which the database
+    (en_US collation ignores the dashes) and Python order differently. The tie-break is the two
+    numbers now, so a page boundary between reactions of one instant loses and repeats none
+    (MIP-1475)."""
+
+    PAIRS = [(1, 2), (11, 1), (2, 1), (1, 10), (10, 1), (3, 3)]
+
+    def make_reactions(self, task):
+        from origin.models.task.task_models import TaskCommentReactionFact  # noqa: PLC0415
+
+        for comment_id, reaction_id in self.PAIRS:
+            TaskCommentReactionFact.objects.create(
+                team=self.team,
+                task=task,
+                comment_id=comment_id,
+                reaction_id=reaction_id,
+                reaction_emoji="\U0001f44d",
+                sender=self.user2,
+            )
+        TaskCommentReactionFact.objects.filter(task=task).update(ts_created_at=self.at(30))
+
+    def pages(self, task, limit):
+        seen, cursor = [], None
+        for _ in range(len(self.PAIRS) + 2):
+            out = self.tl("task", task.task_id, kinds=["reaction"], limit=limit, cursor=cursor)
+            seen += [e["key"] for e in out["events"]]
+            cursor = out["next_cursor"]
+            if not cursor:
+                break
+        return seen
+
+    def test_every_reaction_of_one_instant_is_told_once_across_pages(self):
+        task = self.make_task("Export")
+        self.make_reactions(task)
+        for limit in (1, 2, 4):
+            seen = self.pages(task, limit)
+            self.assertEqual(
+                sorted(seen), sorted(f"r{c}.{r}" for c, r in self.PAIRS), f"limit {limit}"
+            )
+
+    def test_a_cursor_from_before_the_change_is_refused_not_a_server_error(self):
+        task = self.make_task("Export")
+        self.make_reactions(task)
+        first = self.tl("task", task.task_id, kinds=["reaction"], limit=2)
+        state = timeline._unsign(first["next_cursor"])
+        state["p"][2] = [f"{task.task_id}-1-2"]  # the old tie: the uid text
+        old = signing.dumps(state, salt="genos.timeline.cursor.v1", compress=True)
+        with self.assertRaises(ToolError):
+            self.tl("task", task.task_id, kinds=["reaction"], limit=2, cursor=old)
