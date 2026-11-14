@@ -770,7 +770,13 @@ def _build_fixture_b() -> None:
         )
 
     closed_parent = task(0, "Closed parent", status="Closed")
-    child = task(1, "Child under closed", parent_task_id=closed_parent.task_id, status="WIP")
+    child = task(
+        1,
+        "Child under closed",
+        parent_task_id=closed_parent.task_id,
+        status="WIP",
+        due_date=date(2026, 11, 4),
+    )
     grandchild = task(2, "Grandchild overdue", parent_task_id=child.task_id, due_date=past)
     deleted_parent = task(3, "Deleted parent", status="Deleted")
     task(4, "Child under deleted", parent_task_id=deleted_parent.task_id, status="WIP")

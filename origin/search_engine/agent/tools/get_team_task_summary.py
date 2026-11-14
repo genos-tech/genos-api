@@ -29,6 +29,7 @@ from django.db.models import Count, Q
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext
 from origin.services.user_time import today_for_user_id
 
@@ -56,17 +57,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         is_init_task=False,
     )
 
+    # MIP-1478: with the flag, each task is read by its effective status (see `ancestor_rule`). One that
+    # reads as Deleted is counted in `Deleted`, where a task whose own status is Deleted already is.
+    sf = "status"
+    if ancestor_rule.enabled():
+        rule = ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
+        base_qs, sf = ancestor_rule.with_effective_status(base_qs, rule), "eff_status"
+
     today = today_for_user_id(ctx.user_id)
     annotations: dict[str, Any] = {
         "total_tasks": Count("task_id", distinct=True),
         "overdue_count": Count(
             "task_id",
             distinct=True,
-            filter=Q(due_date__isnull=False, due_date__lt=today) & ~Q(status__in=_CLOSED_STATUSES),
+            filter=Q(due_date__isnull=False, due_date__lt=today)
+            & ~Q(**{f"{sf}__in": _CLOSED_STATUSES}),
         ),
     }
     for label in _STATUS_LABELS:
-        annotations[f"_status_{label}"] = Count("task_id", distinct=True, filter=Q(status=label))
+        annotations[f"_status_{label}"] = Count("task_id", distinct=True, filter=Q(**{sf: label}))
     for label in _PRIORITY_LABELS:
         annotations[f"_priority_{label}"] = Count(
             "task_id", distinct=True, filter=Q(priority=label)
@@ -84,12 +93,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         base_qs.values("project_id")
         .annotate(
             total=Count("task_id", distinct=True),
-            open_n=Count("task_id", distinct=True, filter=Q(status="Open")),
+            open_n=Count("task_id", distinct=True, filter=Q(**{sf: "Open"})),
             overdue=Count(
                 "task_id",
                 distinct=True,
                 filter=Q(due_date__isnull=False, due_date__lt=today)
-                & ~Q(status__in=_CLOSED_STATUSES),
+                & ~Q(**{f"{sf}__in": _CLOSED_STATUSES}),
             ),
         )
         .order_by("-total")[:_PER_PROJECT_LIMIT]

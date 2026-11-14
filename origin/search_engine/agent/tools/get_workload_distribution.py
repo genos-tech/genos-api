@@ -26,6 +26,7 @@ from django.db.models import Case, Count, Q, When
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.services.user_time import today_for_user_id
 
@@ -58,18 +59,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     today = today_for_user_id(ctx.user_id)
 
-    qs = (
-        TaskMaster.objects.filter(
-            team_id=ctx.team_id,
-            project_id__in=scoped_project_ids,
-            is_deleted=False,
-            is_init_task=False,
-            assignee_id__isnull=False,
-            assignee__is_deleted=False,
-            assignee__is_system_user=False,
+    open_qs = TaskMaster.objects.filter(
+        team_id=ctx.team_id,
+        project_id__in=scoped_project_ids,
+        is_deleted=False,
+        is_init_task=False,
+        assignee_id__isnull=False,
+        assignee__is_deleted=False,
+        assignee__is_system_user=False,
+    )
+    if ancestor_rule.enabled():
+        # MIP-1478: a task under a Closed or Deleted ancestor reads as Closed: not workload.
+        rule = ancestor_rule.rule_for_projects(scoped_project_ids, ctx.team_id)
+        open_qs = ancestor_rule.with_effective_status(open_qs, rule).exclude(
+            eff_status__in=["Closed", "Deleted"]
         )
-        .exclude(status__in=["Closed", "Deleted"])
-        .values("assignee_id", "assignee__username")
+    else:
+        open_qs = open_qs.exclude(status__in=["Closed", "Deleted"])
+    qs = (
+        open_qs.values("assignee_id", "assignee__username")
         .annotate(
             open_count=Count(Case(When(status="Open", then=1))),
             wip_count=Count(Case(When(status="WIP", then=1))),
