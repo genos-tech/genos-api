@@ -635,6 +635,24 @@ class AskShapeTests(TaskWorld):
         self.assertNotIn("FORGED TITLE", extra)
         self.assertNotIn("FORGED TITLE", json.dumps(captured["kwargs"]["seed_sources"]))
 
+    def test_a_task_conversation_is_never_collected_into_the_team_answers(self):
+        # The block holds the task's title and the start of its description, which are not what the
+        # answer's other sources say about who may read them: like a thread's or a note's, no run of a
+        # task's session is collected into the team "Previous answer" lane (MIP-978).
+        from origin.search_engine import shared_answers
+
+        task = self.make_task("Fix the login flow")
+        self.ask(task_context=self.ctx(task))
+        session = AgentSession.objects.get()
+        self.assertTrue(shared_answers.is_scoped_session(session))
+        run = AgentRun.objects.get()
+        self.assertTrue(
+            AgentRun.objects.filter(shared_answers.scoped_session_q(), pk=run.pk).exists()
+        )
+        self.assertFalse(
+            shared_answers.still_shareable(AgentRun.objects.filter(pk=run.pk)).exists()
+        )
+
     def test_the_stream_the_view_builds_has_no_new_field(self):
         task = self.make_task()
         _, with_ctx = self.ask(task_context=self.ctx(task))
