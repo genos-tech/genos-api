@@ -178,11 +178,7 @@ class LeavingAProject(TaskNoteBase):
         self.authenticate(self.owner)
         res = self.client.post(
             "/api/v2/project/member/remove/",
-            {
-                "team_id": str(self.team.team_id),
-                "project_id": self.project.project_id,
-                "attendee_id": str(self.author.id),
-            },
+            {"project_id": self.project.project_id, "user_id": str(self.author.id)},
             format="json",
         )
         self.assertIn(res.status_code, (200, 204), res.content)
