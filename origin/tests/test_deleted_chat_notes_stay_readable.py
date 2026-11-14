@@ -287,7 +287,7 @@ class DeletedDirectMessage(DeletedChatBase):
 
     def test_a_dm_reopened_after_a_delete_reads_by_membership_again(self):
         """No code soft-deletes a DM today; a deleted one is reopened by the same pair starting
-        it again (`DirectMessageCreateView`), which turns `is_deleted` back off."""
+        it again (`ChannelListView`, the DM branch of its POST), which turns `is_deleted` back off."""
         NotePermissionMaster.objects.filter(
             note_type=CHAT, note_id=self.note.note_id, user=self.owner
         ).delete()  # the other person holds no row: membership alone
