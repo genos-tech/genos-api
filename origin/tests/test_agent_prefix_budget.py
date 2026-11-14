@@ -41,10 +41,10 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # To 140,000 for `get_timeline` published to the in-app agent (138,866 measured: +1,475 characters,
 # one declaration), flipped on by default after the t1281 cases were re-read (2026-11-14).
 # To 142,000 for the parity batch's parameters (MIP-1561, AGENT_PARITY_TOOLS, default OFF): +1,898
-# characters over `create_task`, `update_task` and `create_task_plan` (140,764 measured with it on
-# over the shipped flags, 140,910 with EVERY flag on, the arm the grouped run measures; the later
+# characters over `create_task`, `update_task` and `create_task_plan` (140,836 measured with it on
+# over the shipped flags, 140,982 with EVERY flag on, the arm the grouped run measures; the later
 # parity tasks add to the same flag and raise this again). The routing numbers come from that one
-# grouped run, not from this PR: the flag ships off, so production sends the 138,866 it sent.
+# grouped run, not from this PR: the flag ships off, so production sends what it sent (138,938).
 BUDGET_CHARS = 142_000
 
 

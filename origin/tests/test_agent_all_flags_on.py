@@ -33,9 +33,9 @@ from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
 # All-on prefix measured 139,012 (off 134,315: +4,551 declarations, +146 prompt rule): same headroom
-# the budget keeps. 140,910 with the parity batch's parameters (AGENT_PARITY_TOOLS, MIP-1561: +1,898
+# the budget keeps. 140,982 with the parity batch's parameters (AGENT_PARITY_TOOLS, MIP-1561: +1,898
 # characters over the three task tools), so 143,500 here: a Long member adds the 1,453-character
-# content block on top (142,365) and the same ~1,100 characters of headroom stay.
+# content block on top (142,437) and the same ~1,000 characters of headroom stay.
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 ALL_ON_BUDGET_CHARS = 143_500
