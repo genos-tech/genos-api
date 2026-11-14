@@ -1489,6 +1489,8 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="manage_milestone",
         milestone_ref_args=("milestone_id",),
         parity_task_ref_args=("task_id",),
+        # '' is "not sent" for a convert (a model filling an optional slot), so it is not resolved.
+        clearable_task_ref_args=("task_id",),
         description=(
             "Create or change a milestone, or manage a project's milestone "
             "folders; `action` says which. 'create' makes a milestone with no "

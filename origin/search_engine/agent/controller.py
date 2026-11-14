@@ -1178,11 +1178,21 @@ def _milestone_move_facts(
     raw = args.get("project_id")
     if not parity_on() or raw in (None, "") or access.project_name(raw) is None:
         return None
-    if _label_key(raw) == milestone.project_id:
+    # The tool's own refusals (`manage_milestone._destination`): the caller is not on the project the
+    # milestone is in, or the call also sets what a move clears.
+    from_project = access.project_name(milestone.project_id)
+    if from_project is None or _label_key(raw) == milestone.project_id:
         return None
+    if any(args.get(key) is not None for key in ("sprint_id", "milestone_folder_id", "tags")):
+        return None
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
     return {
-        "from_project": access.project_name(milestone.project_id) or milestone.project_id,
-        "tasks": len(milestone_subtree_task_ids(milestone) - {milestone.task_id}),
+        "from_project": from_project,
+        "tasks": TaskMaster.objects.filter(
+            task_id__in=milestone_subtree_task_ids(milestone) - {milestone.task_id},
+            is_deleted=False,
+        ).count(),
         "sprint": (
             (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
             if milestone.sprint_id
@@ -1212,8 +1222,13 @@ def _friendly_convert_arguments(
     Only for an object the caller may read, so an id they can't see shows nothing; `direction` says
     which of the two it is. A call with both or neither id (the tool refuses it) gets nothing."""
     from origin.models.task.milestone_models import MilestoneAssignees  # noqa: PLC0415
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
     from origin.services.task_project_move import collect_descendant_task_ids  # noqa: PLC0415
 
+    # The action exists only while the flag is on: with it off a (made-up) convert is refused when
+    # it runs, and its card says nothing of the conversion.
+    if not parity_on():
+        return
     has_task = args.get("task_id") not in (None, "")
     has_milestone = args.get("milestone_id") not in (None, "")
     if has_task == has_milestone:

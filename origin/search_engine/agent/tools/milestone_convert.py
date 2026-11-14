@@ -90,8 +90,7 @@ _NEXT: dict[str, str] = {
         "Take it out of the milestone first (`update_task` with `milestone_id` ''), then convert it."
     ),
     "already_a_milestone": (
-        "To turn it back into a task, call `convert` with its `milestone_id` instead "
-        "(`list_milestones` shows it)."
+        "To turn it back into a task, call `convert` with its `milestone_id` instead ({milestone})."
     ),
     "task_deleted": "Nothing to convert; find the task you mean with `list_tasks`.",
     "task_not_saved": "It is an empty draft, not a task yet; pick a saved task with `list_tasks`.",
@@ -101,12 +100,31 @@ _NEXT: dict[str, str] = {
 }
 
 
-def refusal_sentence(code: str, message: str) -> str:
+def refusal_sentence(code: str, message: str, *, milestone_id: int | None = None) -> str:
     """The sentence a model gets for a conversion the service refused: the service's own message,
-    what to try next when there is something to try, and that nothing was changed."""
+    what to try next when there is something to try, and that nothing was changed. `milestone_id`
+    is the milestone a task row stands for, when it is one: `already_a_milestone` names it."""
     text = (message or "").strip() or "The conversion was refused."
     nxt = _NEXT.get(code)
+    if nxt is not None:
+        nxt = nxt.format(
+            milestone=f"it is milestone {milestone_id}"
+            if milestone_id is not None
+            else "`list_milestones` shows it"
+        )
     return f"{text} {nxt + ' ' if nxt else ''}Nothing was changed."
+
+
+def whole_number(raw: Any, name: str) -> Any:
+    """`raw` as the caller sent it, unless it is a boolean or a fraction: `true` would read as id 1
+    and `1.5` as id 1, so a model that filled a slot carelessly would act on someone's task 1. The
+    REST endpoints refuse a boolean for the same reason. Strings (a display id, a URL, digits) and
+    whole numbers go on to the lookup that says what they name."""
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        from origin.search_engine.agent.tools.base import ToolError  # noqa: PLC0415
+
+        raise ToolError(f"`{name}` must be an id (a number or a reference), got {raw!r}.")
+    return raw
 
 
 def converted_hint(display_id: str | None, task_id: int, still_milestone_id: int | None) -> str:

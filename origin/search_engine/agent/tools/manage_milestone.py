@@ -56,6 +56,7 @@ from origin.search_engine.agent.tools.milestone_access import (
 from origin.search_engine.agent.tools.milestone_convert import (
     converted_hint,
     refusal_sentence,
+    whole_number,
 )
 from origin.search_engine.agent.tools.task_access import load_task
 from origin.search_engine.agent.tools.task_enums import (
@@ -427,7 +428,7 @@ def _destination(args: dict[str, Any], milestone: MilestoneMaster, ctx: ToolCont
     raw = args.get("project_id")
     if not parity_on() or raw in (None, ""):
         return None
-    destination = load_project(raw, ctx)
+    destination = load_project(whole_number(raw, "project_id"), ctx)
     if destination.project_id == milestone.project_id:
         return None
     given = [key for key in _CLEARED_BY_A_MOVE if args.get(key) is not None]
@@ -500,8 +501,12 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     moved_tasks = 0
     if destination is not None:
         changed.insert(0, "project")
-        # The tasks that go with it: not the milestone's own row, which is the milestone.
-        moved_tasks = len(milestone_subtree_task_ids(milestone) - {milestone.task_id})
+        # The tasks that go with it that a person still sees (a deleted one moves too, silently):
+        # not the milestone's own row, which is the milestone.
+        moved_tasks = TaskMaster.objects.filter(
+            task_id__in=milestone_subtree_task_ids(milestone) - {milestone.task_id},
+            is_deleted=False,
+        ).count()
 
     if not changed:
         payload = _milestone_payload(milestone.milestone_id)
@@ -515,6 +520,17 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     added_assignees: list[str] = []
     try:
         with transaction.atomic():
+            if destination is not None and not (
+                MilestoneMaster.objects.select_for_update()
+                .filter(pk=milestone.pk, is_deleted=False, project_id=source[1])
+                .exists()
+            ):
+                # Locked until this commits, so a convert or a second move waits: the full save
+                # below would otherwise write the stale copy of the row back over theirs.
+                raise ToolError(
+                    f"Milestone {milestone.milestone_id} was changed while this was being applied "
+                    "(converted, deleted or moved by someone else). Nothing was changed."
+                )
             added_assignees = update_milestone(
                 milestone,
                 fields=fields,
@@ -590,11 +606,13 @@ def _convert(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "`convert` needs exactly one of `task_id` (a root task to turn into a milestone) or "
             "`milestone_id` (a milestone to turn into a task). Nothing was changed."
         )
-    return _task_to_milestone(task_ref, ctx) if has_task else _milestone_to_task(milestone_ref, ctx)
+    if has_task:
+        return _task_to_milestone(whole_number(task_ref, "task_id"), ctx)
+    return _milestone_to_task(whole_number(milestone_ref, "milestone_id"), ctx)
 
 
-def _refused(refusal: ConversionRefused) -> ToolError:
-    return ToolError(refusal_sentence(refusal.code, refusal.message))
+def _refused(refusal: ConversionRefused, *, milestone_id: int | None = None) -> ToolError:
+    return ToolError(refusal_sentence(refusal.code, refusal.message, milestone_id=milestone_id))
 
 
 def _task_to_milestone(raw_task_id: Any, ctx: ToolContext) -> dict[str, Any]:
@@ -610,7 +628,7 @@ def _task_to_milestone(raw_task_id: Any, ctx: ToolContext) -> dict[str, Any]:
     try:
         milestone = convert_task_to_milestone(task.task_id)
     except ConversionRefused as refusal:
-        raise _refused(refusal) from None
+        raise _refused(refusal, milestone_id=task.milestone_id) from None
     except Exception as e:  # noqa: BLE001
         ref = log_failure("manage_milestone convert failed", e)
         raise ToolError(f"Failed to convert the task (nothing was changed) (ref {ref}).")

@@ -1478,3 +1478,164 @@ class UpdateTaskRedirectFlagOffTests(ToolBase):
             str(caught.exception),
             f"Task {m.task.display_id} {OLD_ROW_REFUSAL}",
         )
+
+
+# --------------------------------------------------------------------------------------------
+# from the review: ids that are not ids, the lock, the live counts, the cards' mirror of the tool
+# --------------------------------------------------------------------------------------------
+
+
+class IdHygieneTests(ToolBase):
+    def test_a_boolean_or_a_fraction_is_not_an_id_and_changes_nothing(self):
+        first = self.task("Task one")  # what `true` would have meant
+        m = self.milestone("Milestone")
+        for args in (
+            {"action": "convert", "task_id": True},
+            {"action": "convert", "task_id": 1.5},
+            {"action": "convert", "milestone_id": True},
+            {"action": "convert", "milestone_id": 2.5},
+            {"action": "update", "milestone_id": m.milestone_id, "project_id": True},
+            {"action": "update", "milestone_id": m.milestone_id, "project_id": 1.5},
+        ):
+            with self.subTest(args=args), self.assertRaisesRegex(ToolError, "must be an id"):
+                self.call(args)
+        self.assertFalse(self.fresh(first).is_milestone)
+        self.assertFalse(MilestoneMaster.objects.get(pk=m.pk).is_deleted)
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
+
+    def test_a_whole_number_as_a_float_or_a_string_is_still_an_id(self):
+        t = self.task("Plain")
+        out = self.call({"action": "convert", "task_id": float(t.task_id)})
+        self.assertEqual(out["task_id"], t.task_id)
+        m = self.milestone("By string")
+        out = self.call({"action": "convert", "milestone_id": str(m.milestone_id)})
+        self.assertEqual(out["converted_milestone_id"], m.milestone_id)
+
+
+class AlreadyAMilestoneTests(ToolBase):
+    def test_the_refusal_names_the_milestone_a_task_row_stands_for(self):
+        m = self.milestone("Named")
+        with self.assertRaises(ToolError) as caught:
+            self.to_milestone_tool(m.task)
+        self.assertIn(
+            f"`milestone_id` instead (it is milestone {m.milestone_id})", str(caught.exception)
+        )
+
+
+class LiveCountTests(ToolBase):
+    def test_a_deleted_task_that_goes_with_a_move_is_not_counted(self):
+        m = self.roadmap_milestone()
+        TaskMaster.objects.filter(title="Second").update(is_deleted=True, status="Deleted")
+        out = self.move_tool(m)
+        self.assertEqual(out["moved"]["tasks_moved"], 2)
+        # it still moved: the count is what a person sees, not what is stored
+        self.assertEqual(TaskMaster.objects.get(title="Second").project_id, self.dest.project_id)
+
+
+class MoveLockTests(ToolBase):
+    def test_a_milestone_converted_while_the_move_was_being_applied_is_not_revived(self):
+        from origin.search_engine.agent.tools import manage_milestone as module  # noqa: PLC0415
+        from origin.services.task_milestone_conversion import convert_milestone_to_task  # noqa: PLC0415
+
+        m = self.roadmap_milestone()
+        real = module._destination
+
+        def converted_in_between(*args, **kwargs):
+            destination = real(*args, **kwargs)
+            convert_milestone_to_task(m.milestone_id)  # someone else, after the lookup
+            return destination
+
+        with mock.patch.object(module, "_destination", side_effect=converted_in_between):
+            with self.assertRaisesRegex(ToolError, "was changed while this was being applied"):
+                self.move_tool(m)
+        retired = MilestoneMaster.objects.get(pk=m.pk)
+        self.assertTrue(retired.is_deleted)  # not written back as a live milestone
+        self.assertEqual(retired.converted_to_task_id, m.task_id)
+        self.assertEqual(
+            TaskMaster.objects.get(task_id=m.task_id).project_id, self.project.project_id
+        )
+
+    def test_a_milestone_moved_by_someone_else_in_between_is_not_moved_again(self):
+        from origin.search_engine.agent.tools import manage_milestone as module  # noqa: PLC0415
+
+        m = self.roadmap_milestone()
+        real = module._destination
+        third = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Third",
+            code="THR",
+            owner=self.owner,
+            project_system_user=self.owner,
+        )
+
+        def moved_in_between(*args, **kwargs):
+            destination = real(*args, **kwargs)
+            MilestoneMaster.objects.filter(pk=m.pk).update(project=third)
+            return destination
+
+        with mock.patch.object(module, "_destination", side_effect=moved_in_between):
+            with self.assertRaisesRegex(ToolError, "was changed while this was being applied"):
+                self.move_tool(m)
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, third.project_id)
+
+
+class CardMirrorTests(ToolBase):
+    def card(self, args, ctx=None):
+        from origin.search_engine.agent import controller  # noqa: PLC0415
+
+        return controller._friendly_arguments(args, "manage_milestone", ctx=ctx or self.ctx())
+
+    def test_a_convert_card_says_nothing_with_the_flag_off(self):
+        t = self.task("T")
+        with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
+            out = self.card({"action": "convert", "task_id": t.task_id})
+        self.assertNotIn("current", out)
+
+    def test_a_call_that_also_sets_what_a_move_clears_is_not_promised_as_a_move(self):
+        m = self.roadmap_milestone()
+        for extra in ({"sprint_id": "5"}, {"milestone_folder_id": "3"}, {"tags": ["x"]}):
+            with self.subTest(extra=extra):
+                out = self.card(
+                    {
+                        "action": "update",
+                        "milestone_id": m.milestone_id,
+                        "project_id": self.dest.project_id,
+                        "title": "X",
+                        **extra,
+                    }
+                )
+                self.assertNotIn("move", out["current"])
+
+    def test_a_person_who_is_not_on_the_milestones_project_gets_no_move_card(self):
+        m = self.roadmap_milestone()
+        ProjectMembers.objects.create(team=self.team, project=self.dest, attendee=self.bob)
+        # bob is on both projects of the team here; take him off the source and he may not move it
+        ProjectMembers.objects.filter(project=self.project, attendee=self.bob).delete()
+        out = self.card(
+            {
+                "action": "update",
+                "milestone_id": m.milestone_id,
+                "project_id": self.dest.project_id,
+            },
+            ctx=self.ctx(self.bob),
+        )
+        self.assertNotIn("move", out.get("current", {}))
+
+    def test_the_move_card_counts_the_tasks_a_person_still_sees(self):
+        m = self.roadmap_milestone()
+        TaskMaster.objects.filter(title="Second").update(is_deleted=True, status="Deleted")
+        out = self.card(
+            {"action": "update", "milestone_id": m.milestone_id, "project_id": self.dest.project_id}
+        )
+        self.assertEqual(out["current"]["move"]["tasks"], 2)
+
+
+class McpEmptyTaskIdTests(McpMilestoneBase):
+    def test_an_empty_task_id_beside_a_milestone_id_is_an_unsent_one(self):
+        self._key(scope=SCOPE_WRITE)
+        text, is_error = self.text(
+            "manage_milestone",
+            {"action": "convert", "milestone_id": self.milestone.milestone_id, "task_id": ""},
+        )
+        self.assertFalse(is_error, text)
+        self.assertIn("milestone_to_task", text)
