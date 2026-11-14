@@ -81,7 +81,7 @@ def rule_for_projects(project_ids, team_id) -> Rule:
     rows = list(
         TaskMaster.objects.filter(
             project_id__in=ids, team_id=team_id, is_deleted=False, is_init_task=False
-        ).values_list(*task_ancestry._COLUMNS)
+        ).values_list(*task_ancestry.COLUMNS)
     )
     verdicts = task_ancestry.ancestor_verdicts(rows)
     own = {r[0]: r[4] for r in rows}
@@ -120,9 +120,6 @@ def read_by_rule(qs: QuerySet, rule: Rule | None) -> tuple[QuerySet, str]:
 
 def row_fields(task_ids: list[Any], ctx) -> dict[int, dict[str, Any]]:
     """`{task_id: {effective_status, closed_by_ancestor?}}` for rows a list tool is returning: the
-    fields the MCP `list_tasks` / `get_task` already carry (one shared implementation, so the ancestor's
-    display id is shown only to a caller who may read it)."""
-    # Imported here: the MCP layer imports the agent tools.
-    from origin.views.public.mcp.ancestry import _fields  # noqa: PLC0415
-
-    return _fields(task_ids, ctx)
+    fields the MCP `list_tasks` / `get_task` already carry (one shared implementation in the service,
+    so the ancestor's display id is shown only to a caller who may read it)."""
+    return task_ancestry.effective_fields(task_ids, ctx)
