@@ -791,6 +791,18 @@ CATALOG: tuple[McpTool, ...] = (
             "calendar."
         ),
     ),
+    McpTool(
+        name="get_calendar_event",
+        registry_name="get_calendar_event",
+        description=(
+            "One Google Calendar event by its `event_id`: title, description, start/end, "
+            "attendees, links. Use it to confirm an event before `update_calendar_event` or "
+            "`delete_calendar_event`, passing the `event_id`, `calendar_id` and `account` that "
+            "`list_calendar_events` or `list_calendars` returned (omit `account` for the default "
+            "one). Needs Google connected under Integrations."
+        ),
+        flag=PARITY_FLAG,
+    ),
     # ---- numbers about the caller and the team (MIP-930) ----
     # Reads the in-app assistant has always had and this surface held back on a
     # fear of context cost that measured small (see the module docstring). Each

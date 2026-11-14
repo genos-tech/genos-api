@@ -184,6 +184,13 @@ def source_acl_user_ids(
             note_id=nid,
         )
 
+    if etype == "calendar_event":
+        # MIP-1059, decided and pinned (`test_calendar_event_source`): an event is the member's own
+        # Google data (its title, guests and notes are a third party's too), and a collected answer is
+        # indexed text shown to teammates. An answer built on one is NEVER collected, not even for its
+        # asker alone as a to-do's is: nothing about a calendar needs to resurface in a typeahead.
+        return None
+
     if etype == "team_directory":
         # Not a chip: what a @user / @group mention stands for (MIP-980). A
         # person's name and a mention group are team-visible, but a guest has

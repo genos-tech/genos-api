@@ -26,6 +26,9 @@ from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
+from origin.search_engine.agent.tools import delete_calendar_event as _delete_calendar_event
+from origin.search_engine.agent.tools import list_calendar_events as _list_calendar_events
+from origin.search_engine.agent.tools import list_calendars as _list_calendars
 from origin.search_engine.agent.tools import milestone_convert as _milestone_convert
 from origin.search_engine.agent.tools import task_attachments as _task_attachments
 from origin.search_engine.agent.tools import todo_source as _todo_source
@@ -62,6 +65,11 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("fetch_task", PARITY_FLAG, _task_attachments.DESCRIPTION_ADDITION),
     # MIP-1564 has no row here: `manage_milestone`'s sentence REPLACES the one that said a move is not
     # supported (`REPLACEMENTS` below), so it sits where that one was.
+    # MIP-1059: several Google accounts. The parameter says the rest; these say what a read covers and
+    # what an unknown event on the wrong account looks like.
+    ("list_calendars", PARITY_FLAG, _list_calendars.DESCRIPTION_ADDITION),
+    ("list_calendar_events", PARITY_FLAG, _list_calendar_events.DESCRIPTION_ADDITION),
+    ("delete_calendar_event", PARITY_FLAG, _delete_calendar_event.DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`

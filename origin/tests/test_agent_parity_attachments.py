@@ -1162,7 +1162,8 @@ class McpFlagOffTests(McpFilesBase):
 
     def test_the_published_tools_are_what_they_were(self):
         flagged = {t.name for t in mcp.CATALOG if t.flag}
-        self.assertEqual(flagged, {"delete_task_attachment"})
+        # MIP-1059 adds the calendar read `get_calendar_event` behind the same flag.
+        self.assertEqual(flagged, {"delete_task_attachment", "get_calendar_event"})
         with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
             visible = {t.name for t in mcp.visible_tools(SCOPE_WRITE, allow_destructive=True)}
         self.assertFalse(flagged & visible)
