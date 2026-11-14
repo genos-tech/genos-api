@@ -40,8 +40,12 @@ Runbook (owner), production, read-only first:
   1. Read `would_revoke` against `kept_deliberate_shares` and, above all, `ambiguous_kept`
      (`ambiguous_sample` lists the first 20 rows, ids only). A large ambiguous count means the
      recorded join dates cannot be trusted: stop and re-judge the heuristic.
-  2. Try a small write first: `--apply --yes --limit 5`, then re-run the dry run: the count must
-     drop by exactly 5 and `current_members_untouched` must not change.
+     `kept_without_any_join_record` counts kept rows whose holder has no member row at all (a
+     project chat whose channel mirror is gone): those are kept as shares by the rule, and a
+     large number means the rule is blind there.
+  2. Try a small write first: `--apply --yes --limit 5`, then re-run the dry run: `would_revoke`
+     must drop by exactly 5 (compare full dry runs, NOT a `--limit` one, whose other counts cover
+     only the rows examined up to the cap).
   3. Then `--apply --yes`. Rerunning is safe and reports 0.
   A person who loses a row only falls back to what the chat itself grants (a current member reads
   the note through the chat); the owner can re-share anything removed wrongly.
@@ -81,7 +85,7 @@ def read_only():
         if enforce:
             with connection.cursor() as cursor:
                 cursor.execute("SET LOCAL transaction_read_only = on")
-        yield
+        yield enforce
 
 
 class Command(BaseCommand):
@@ -114,10 +118,11 @@ class Command(BaseCommand):
                 uuid.UUID(str(opts["team"]))
             except ValueError:
                 raise CommandError("--team must be a team id (a UUID).")
-        with read_only():
+        with read_only() as enforced:
             report = stale.scan(team_id=opts["team"], limit=opts["limit"])
         data = report.as_dict()
         data["mode"] = "apply" if opts["apply"] else "dry-run"
+        data["database_enforced_read_only_scan"] = enforced
         if opts["apply"]:
             data["revoked"] = stale.apply(report.revoke_pks, batch_size=opts["batch_size"])
         if opts["json"]:
@@ -143,6 +148,8 @@ class Command(BaseCommand):
             )
         if d["mode"] == "dry-run":
             out.append("  Nothing was written. Re-run with --apply --yes to delete.")
+            if not d["database_enforced_read_only_scan"]:
+                out.append("  (the database was not asked to enforce read-only for this run)")
         else:
             out.append(f"  DELETED: {d['revoked']} rows.")
         return "\n".join(out)

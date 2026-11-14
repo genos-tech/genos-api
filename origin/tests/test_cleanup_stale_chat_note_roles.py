@@ -200,6 +200,21 @@ class Classification(Base):
         self.cmd("--apply", "--yes")
         self.assertTrue(self.alive(row))
 
+    def test_a_row_older_than_the_note_is_not_a_fan_out_row(self):
+        gm, who = self.chat(), self.person("early")
+        note = self.note(gm)
+        self.member(gm, who, T0 + 2 * DAY, left=True)
+        self.role(who, note, T0 - timedelta(seconds=5))
+        got = self.report()
+        self.assertEqual((got["ambiguous_kept"], got["kept_deliberate_shares"]), (0, 1))
+
+    def test_kept_rows_with_no_member_row_at_all_are_counted_apart(self):
+        gm, who = self.chat(), self.person("nojoin")
+        self.role(who, self.note(gm), T0 + DAY)
+        self.role(self.person("nojoin2"), self.note(gm), T0 + timedelta(seconds=3))
+        got = self.report()
+        self.assertEqual(got["kept_without_any_join_record"], 2)
+
     def test_counts_by_chat_kind_cover_dm_mdm_gm_pm(self):
         for kind in (ChannelKind.DM, ChannelKind.MDM, ChannelKind.GM):
             ch, who = self.chat(kind), self.person(f"k{int(kind)}")
@@ -384,6 +399,9 @@ class TheDatabaseHoldsTheDryRunReadOnly(TransactionTestCase):
                 with read_only():
                     NotePermissionMaster.objects.filter(pk=row.pk).delete()
             self.assertIn("read-only", str(caught.exception))
+            out = io.StringIO()
+            call_command("cleanup_stale_chat_note_roles", "--json", stdout=out)
+            self.assertIs(json.loads(out.getvalue())["database_enforced_read_only_scan"], True)
             self.assertTrue(NotePermissionMaster.objects.filter(pk=row.pk).exists())
             NotePermissionMaster.objects.filter(pk=row.pk).delete()  # writable again afterwards
         finally:

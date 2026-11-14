@@ -86,6 +86,7 @@ class Report:
     # {kind name: {verdict: rows}}
     by_kind: dict = field(default_factory=lambda: defaultdict(Counter))
     people_to_revoke: set = field(default_factory=set)
+    no_join_record: int = 0
     chats_to_revoke: set = field(default_factory=set)
     ambiguous_sample: list = field(default_factory=list)
     revoke_pks: list = field(default_factory=list)
@@ -111,6 +112,7 @@ class Report:
             "ambiguous_kept": self.total(KEPT_AMBIGUOUS),
             "current_members_untouched": self.total(CURRENT_MEMBER),
             "skipped": self.total(SKIPPED),
+            "kept_without_any_join_record": self.no_join_record,
             "people_affected": len(self.people_to_revoke),
             "chats_affected": len(self.chats_to_revoke),
             "by_chat_kind": {n: {v: self.by_kind[n][v] for v in VERDICTS} for n in kinds},
@@ -142,7 +144,7 @@ def _classify(rows):
         str(c["id"]): c
         for c in Channel.objects.filter(
             id__in={n["channel_id"] for n in notes.values() if n["channel_id"]}
-        ).values("id", "kind", "project_id", "is_deleted")
+        ).values("id", "kind", "project_id")
     }
     users = {r[1] for r in rows}
     members = {
@@ -193,7 +195,7 @@ def _classify(rows):
             verdict = REVOKE_TEAM_LEFT
         elif row_is_membership_derived(created, joined):
             verdict = REVOKE_MEMBERSHIP
-        elif abs(created - note["ts_created_at"]) <= FANOUT_WINDOW:
+        elif timedelta(0) <= created - note["ts_created_at"] <= FANOUT_WINDOW:
             verdict = KEPT_AMBIGUOUS
         else:
             verdict = KEPT_SHARE
@@ -224,6 +226,8 @@ def scan(*, team_id=None, limit=None) -> Report:
                 return report
             report.scanned += 1
             report.by_kind[kind][verdict] += 1
+            if verdict in (KEPT_SHARE, KEPT_AMBIGUOUS) and joined is None:
+                report.no_join_record += 1
             if verdict in REVOKE:
                 report.revoke_pks.append(row[0])
                 report.people_to_revoke.add(str(row[1]))
@@ -253,9 +257,9 @@ def apply(pks, *, batch_size=200) -> int:
         batch = pks[start : start + batch_size]
         with transaction.atomic():
             rows = list(
-                NotePermissionMaster.objects.filter(pk__in=batch).values_list(
-                    "pk", "user_id", "note_id", "ts_created_at"
-                )
+                NotePermissionMaster.objects.select_for_update()
+                .filter(pk__in=batch)
+                .values_list("pk", "user_id", "note_id", "ts_created_at")
             )
             still = (
                 [r for r, verdict, _k, _c, _j in _classify(rows) if verdict in REVOKE]
