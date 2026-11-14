@@ -371,6 +371,9 @@ class FlagOnTests(Tree):
             team=self.team,
             created_by=self.user,
         )
+        # The auto-Blocked flip reads the same rule since MIP-1544, so it no longer flips M1 itself: a
+        # task blocked by hand (or before the rule) is what the tool's ready/blocked order is shown.
+        TaskMaster.objects.filter(pk=self.t["M1"].pk).update(status="Blocked")
 
         def blockers(out):
             (row,) = [r for r in out["blocked"] if r["task_id"] == self.t["M1"].task_id]
