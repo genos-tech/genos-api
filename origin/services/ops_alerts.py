@@ -82,6 +82,7 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     "security-event-prune": timedelta(hours=26),
     "oauth-client-prune": timedelta(hours=26),
     "schedule-report-prune": timedelta(hours=26),
+    "ai-app-notice-prune": timedelta(hours=26),
     "retention-purge": timedelta(hours=26),
     # weekly, monthly
     "ai-cost-dashboard-weekly": timedelta(days=7, hours=3),
