@@ -232,6 +232,12 @@ class McpTool:
     # Their schemas are added to the published schema; the values are taken out of
     # the call before the registry tool runs, and handed to `augment` instead.
     mcp_only_args: dict[str, Any] = field(default_factory=dict)
+    # Arguments published on MCP that the registry tool does not declare but READS, only when
+    # the call came through MCP (`ctx.surface == "mcp"`). Unlike `mcp_only_args` they are NOT
+    # taken out of the call, because they have to reach the registry tool itself (a search
+    # window goes into the query, `augment` runs too late). Keeping them out of the registry
+    # schema is what leaves the in-app model's tool declaration as it was (MIP-1379).
+    surface_args: dict[str, Any] = field(default_factory=dict)
     # `(payload, args, mcp_args, ctx) -> payload`: adds to a read's result AFTER the
     # registry tool has run, so access has been checked and the in-app agent, which
     # shares the registry tool, sees none of it.
@@ -523,7 +529,7 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         # Published here and not on the shared tool: its declaration is what the in-app model
         # reads. `search_kb._run` honours them only for an MCP call (MIP-1379).
-        schema_overrides=dict(search_window.SCHEMA),
+        surface_args=dict(search_window.SCHEMA),
     ),
     McpTool(
         name="get_note",
@@ -2144,9 +2150,10 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
-    if tool.mcp_only_args:
+    if tool.mcp_only_args or tool.surface_args:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.mcp_only_args)
+        properties.update(tool.surface_args)
         schema = {**schema, "properties": properties}
     for arg in tool.milestone_ref_args:
         properties = dict(schema.get("properties") or {})
