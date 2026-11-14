@@ -83,7 +83,7 @@ from functools import reduce
 from operator import or_
 from typing import Any
 
-from django.db.models import CharField, Max, Q, Value
+from django.db.models import CharField, Exists, Max, OuterRef, Q, Value
 from django.db.models.functions import Cast, Coalesce, Concat
 from django.utils import timezone
 
@@ -493,9 +493,16 @@ def _read_comments(rd: _Reader) -> None:
 
 def _read_comment_reactions(rd: _Reader) -> None:
     """1. Reactions to the task's comments."""
+    # A reaction to a deleted comment is not told (the timeline's rule). The comment number is
+    # per task, so the check is correlated on the task as well; it is part of the query, so a dead
+    # reaction takes no slot of the pool and cannot tip its flag.
+    deleted_comment = TaskComments.objects.filter(
+        task_id=OuterRef("task_id"), comment_id=OuterRef("comment_id"), is_deleted=True
+    )
     for r in rd.pooled(
         "comment_reactions",
         TaskCommentReactionFact.objects.filter(
+            ~Exists(deleted_comment),
             task_id__in=rd.ids,
             ts_created_at__gte=rd.since,
             ts_created_at__lt=rd.until,
