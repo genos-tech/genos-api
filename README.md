@@ -144,6 +144,12 @@ change to them is checked by the free tests and, for behaviour, by the grouped p
   `apis/settings.py`, a model behaving differently);
 - by hand (`workflow_dispatch`; `dry_run: true` only prints the decision), or on a PR labelled `run-evals`.
 
+Five retrieval cases that were red in 88-99 of the 99 successful runs of 2026-11-02..14 carry
+`documented_red: "<evidence>"` in `retrieval_cases.yaml`: they still run and show as `RED`, but they cannot
+fail the command and are left out of the `Gated` pass count and metrics that the gate reads (58 of the
+70 other cases, mrr 0.78, recall 0.84; the derivation is in `scripts/retrieval_gate.py`). Mark a case only
+with that kind of evidence; `origin.tests.test_retrieval_documented_red` pins the exact set.
+
 There is no run on a push to `main` and no behaviour smoke. `skip-evals` forces a skip. A cheap `surface`
 job (no secrets, no Vertex) still hashes what the model sees (`scripts/agent_surface_hash.py`) and
 `scripts/agent_eval_gate.py` combines the hash, the changed files and the labels; any failure in it

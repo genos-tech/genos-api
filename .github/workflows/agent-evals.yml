@@ -11,9 +11,10 @@
 # tool declarations, tool results or loop, so an edit to those cannot move one number of this run
 # (the audit: #772 and #782 turned agent flags on and the run passed 66/75 unchanged). They are not
 # triggers any more. What covers them: the free tests (flag pins, the prefix budget, tool-registry /
-# approval tests; a committed `agent_fingerprint` golden is the next PR) on every PR, and the grouped paid run
+# approval tests, the committed `agent_fingerprint` golden) on every PR, and the grouped paid run
 # (`agent_eval_group`, lead-run, with a cost cap) per batch. There is NO live behaviour eval in CI:
-# the one-case "behaviour + judge smoke" and the nightly / trajectory workflows are gone or off.
+# the one-case "behaviour + judge smoke" is gone, and so are the nightly and trajectory-diff workflows
+# (disabled by hand since July / November; deleted in MIP-1537, `git log` has them).
 #
 # WHEN IT RUNS (the single list of retrieval files is `RETRIEVAL_PATHS` in scripts/agent_eval_gate.py,
 # mirrored by `pull_request: paths:` below; a test pins that they agree):

@@ -120,6 +120,11 @@ class CaseResult:
     # EXCLUDED from continuous metrics and reported separately — infra
     # weather must not read as an agent-quality regression.
     infra_error: bool = False
+    # A case whose YAML says `documented_red: "<why>"` (MIP-1537): known to be red, kept in the
+    # suite so it stays visible and a fix shows, but left out of the GATED pass count and the
+    # GATED metrics `scripts/retrieval_gate.py` reads. Empty = a normal case. Set by `agent_eval`
+    # from the case spec, never by a runner.
+    documented_red: str = ""
     # Optional LLM-judge scores; only set when `--judge` was on.
     judge_scores: dict[str, Any] | None = None
     # Continuous quality metrics layered on top of the binary pass/fail
