@@ -1135,7 +1135,7 @@ def _delegated(ctx: ToolContext, names: _Names) -> tuple[list[dict[str, Any]], i
     not deleted, not an init scaffold, not Closed or Deleted, and not under a Closed or Deleted
     ancestor (`task_ancestry`, the one statement of that rule). Tasks with nobody assigned, or
     assigned to the caller, are not "waiting on others". The total counts what is left after
-    those rules, over the newest-bounded pool of `DELEGATED_POOL` rows."""
+    those rules, over the pool of the `DELEGATED_POOL` longest-quiet rows."""
     member_projects = ProjectMembers.objects.filter(
         attendee_id=ctx.user_id, project__team_id=ctx.team_id, project__is_deleted=False
     ).values("project_id")
