@@ -128,10 +128,11 @@ class TestTaskDependencyBatchListView(TestCase):
         self.assertIn(resp.status_code, (401, 403))
 
     def test_query_count_is_flat_regardless_of_task_count(self):
-        # 1 auth-user fetch + 1 blocking query + 1 blockedBy query —
+        # 1 auth-user fetch + 1 blocking + 1 blockedBy query + 2 for the ancestor reading
+        # (`effectiveStatus`, MIP-1549; constant per team) —
         # the whole point of the batch. Would be 2N+1 via the single
         # view.
         ids = f"{self.task_a.task_id},{self.task_b.task_id},{self.task_c.task_id}"
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(5):
             resp = self._get(ids)
         self.assertEqual(resp.status_code, 200)
