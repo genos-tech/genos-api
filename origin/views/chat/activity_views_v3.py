@@ -42,6 +42,10 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.chat.unified_serializers import ActivitySerializer
+from origin.services.activity_surface_access import (
+    COVERED_SURFACES,
+    unreadable_surface_activity_ids,
+)
 from origin.services.channel_scope import chat_member_q
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
@@ -221,6 +225,28 @@ class ActivityListView(AuthenticatedAPIView):
         readable = Channel.objects.filter(chat_member_q(request.user.id), is_deleted=False).values(
             "id"
         )
+        position = _decode_cursor(request.GET.get("cursor"))
+        # Over the whole retention window on a first page (the rows the client already holds are
+        # older than `since`, and they are the ones to drop), from `since` on a later page.
+        window = (
+            since
+            if position is not None
+            else min(since, timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS))
+        )
+        # The task / note rows the caller can no longer open (MIP-1560): `{id: ts_created_at}`.
+        # (A tuple, not `list(...)`: a test pins the page query by patching `list` here.)
+        surface_rows = tuple(
+            Activity.objects.filter(
+                surface_type__in=COVERED_SURFACES,
+                recipient=request.user,
+                ts_created_at__gte=window,
+                **narrowing,
+            ).values_list("id", "ts_created_at", "surface_type", "meta")
+        )
+        lost_ids = unreadable_surface_activity_ids(
+            request.user.id, [(i, surface, meta) for i, _, surface, meta in surface_rows]
+        )
+        lost_surface = {i: ts for i, ts, _, _ in surface_rows if i in lost_ids}
         qs = (
             Activity.objects.filter(
                 Q(channel_id__isnull=True) | Q(channel_id__in=readable),
@@ -228,6 +254,7 @@ class ActivityListView(AuthenticatedAPIView):
                 ts_created_at__gte=since,
                 **narrowing,
             )
+            .exclude(id__in=lost_ids)
             .select_related(
                 "actor",
                 "channel",
@@ -246,7 +273,6 @@ class ActivityListView(AuthenticatedAPIView):
             )
             .order_by("-ts_created_at", "-id")
         )
-        position = _decode_cursor(request.GET.get("cursor"))
         if position is not None:
             when, row_id = position
             # Strictly older in the (ts_created_at, id) order.
@@ -257,12 +283,9 @@ class ActivityListView(AuthenticatedAPIView):
         rows = rows[:_MAX_ROWS]
         tombstones = []
         if position is None:
-            # Over the whole retention window, not just `since`: the rows the client already
-            # holds are older than `since`, and they are the ones to drop.
-            window = min(since, timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS))
-            tombstones = [
-                str(row_id)
-                for row_id in Activity.objects.filter(
+            lost = dict(lost_surface)
+            lost.update(
+                Activity.objects.filter(
                     ~Q(channel_id__in=readable),
                     channel_id__isnull=False,
                     recipient=request.user,
@@ -270,8 +293,10 @@ class ActivityListView(AuthenticatedAPIView):
                     **narrowing,
                 )
                 .order_by("-ts_created_at", "-id")
-                .values_list("id", flat=True)[:_MAX_TOMBSTONES]
-            ]
+                .values_list("id", "ts_created_at")[:_MAX_TOMBSTONES]
+            )
+            newest_first = sorted(lost.items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
+            tombstones = [str(row_id) for row_id, _ in newest_first[:_MAX_TOMBSTONES]]
         return Response(
             {
                 "activities": ActivitySerializer(rows, many=True).data,
