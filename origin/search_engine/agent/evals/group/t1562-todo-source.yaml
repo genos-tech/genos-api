@@ -1,0 +1,124 @@
+# MIP-1562 (flag AGENT_PARITY_TOOLS, arm `parity`): "Add to To-Do" from a task comment. `create_todo_item` made
+# the to-do and the reminder but could not say which task or comment it came from, so the app's link back
+# ("From task comment: <link>") was missing. Judged on what the model PROPOSES (`pending_write.args_*`).
+# The positives `requires_arm: parity`; the negatives (a plain to-do, a reminder with no source) run on arm0
+# too: they are the baseline for "a to-do the person typed does not start carrying a task unasked". Same
+# fixture and viewers as t1562-reactions.yaml.
+
+- id: t1562.todo-comment.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: a to-do made from a colleague's comment carries its task and comment (the app's Add to To-Do)."
+  query: 'Add Chris''s comment "Progress: reproduced Y, the cause is a missing permission" on the task "Fix the export that fails (Y)" to my to-do list, titled "Follow up on the missing permission".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_present: [task_id, comment_id]
+
+- id: t1562.todo-comment.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: a to-do made from a colleague's comment carries its task and comment (the app's Add to To-Do)."
+  query: 'タスク「Fix the export that fails (Y)」のクリスのコメント「進捗: Yを再現しました。原因は権限の不足です」を、「権限不足の件をフォローする」というタイトルで私のToDoに追加してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_present: [task_id, comment_id]
+
+- id: t1562.todo-task.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: a to-do made from the task itself carries the task, and no comment."
+  query: 'Add the task "Fix the export that fails (Y)" to my to-do list as "Review the export fix", linked to the task.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_present: [task_id]
+      args_absent: [comment_id]
+
+- id: t1562.todo-task.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: a to-do made from the task itself carries the task, and no comment."
+  query: 'タスク「Fix the export that fails (Y)」を「エクスポートの修正をレビューする」としてToDoに追加し、そのタスクにリンクしてください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_present: [task_id]
+      args_absent: [comment_id]
+
+- id: t1562.todo-plain.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  note: "Negative (arm0 and parity): a to-do the person typed carries no task or comment."
+  query: 'Add a to-do "Buy more coffee for the office" for today.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_absent: [task_id, comment_id]
+
+- id: t1562.todo-plain.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  note: "Negative (arm0 and parity): a to-do the person typed carries no task or comment."
+  query: '今日のToDoに「オフィス用のコーヒーを買い足す」を追加してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_absent: [task_id, comment_id]
+
+- id: t1562.todo-reminder-plain.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  note: "Negative (arm0 and parity): 'remind me' about something said in passing carries no task or comment."
+  query: 'Remind me tomorrow at 9am to follow up with Chris.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_absent: [task_id, comment_id]
+
+- id: t1562.todo-reminder-plain.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  note: "Negative (arm0 and parity): 'remind me' about something said in passing carries no task or comment."
+  query: '明日の朝9時に、クリスにフォローアップするようリマインドしてください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_todo_item]
+    pending_write:
+      tool: create_todo_item
+      args_absent: [task_id, comment_id]

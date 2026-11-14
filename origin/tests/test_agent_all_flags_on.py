@@ -38,6 +38,7 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # content block on top (142,437) and the same ~1,000 characters of headroom stay.
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
+# MIP-1562: +984 more (141,966 all-on, 143,421 with a Long member's block): 79 characters left.
 ALL_ON_BUDGET_CHARS = 143_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
@@ -143,7 +144,9 @@ class AllOnDeclarationTests(SimpleTestCase):
         # not move at all, and a description only grows (the one sentence a flag REPLACES is
         # swapped in place, `tool_flag_text.REPLACEMENTS`).
         added = {a.tool: a for a in tool_flag_params.ADDITIONS}
-        replaced = {name: (old, new) for name, _flag, old, new in tool_flag_text.REPLACEMENTS}
+        replaced: dict[str, list[tuple[str, str]]] = {}
+        for name, _flag, old, new in tool_flag_text.REPLACEMENTS:
+            replaced.setdefault(name, []).append((old, new))
         off, on = self._off_and_on()
         for before, after in zip(off, on, strict=False):
             addition = added.get(before.name)
@@ -159,10 +162,19 @@ class AllOnDeclarationTests(SimpleTestCase):
                     for name in row_props:
                         self.assertIn(name, rows, before.name)
                         del rows[name]
+                # A parameter the new ones are an alternative to (`update_comment`'s `body_text`) is
+                # `required` only while the flag is off.
+                if addition.optional:
+                    self.assertEqual(
+                        set(before.parameters_schema["required"]) - set(stripped["required"]),
+                        set(addition.optional),
+                        before.name,
+                    )
+                    stripped["required"] = before.parameters_schema["required"]
                 self.assertEqual(before.parameters_schema, stripped, before.name)
             base = before.description
-            if before.name in replaced:
-                base = base.replace(*replaced[before.name], 1)
+            for old, new in replaced.get(before.name, []):
+                base = base.replace(old, new, 1)
             self.assertTrue(after.description.startswith(base), before.name)
 
     def test_each_flag_addition_is_in_its_tool_and_in_the_declared_order(self):

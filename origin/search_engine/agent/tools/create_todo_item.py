@@ -19,6 +19,7 @@ from typing import Any
 from django.db import transaction
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
+from origin.search_engine.agent.parity import ignore_unless_parity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.todo_args import (
@@ -28,6 +29,11 @@ from origin.search_engine.agent.tools.todo_args import (
     local_iso,
     notes_blocks,
     reminder_from_args,
+)
+from origin.search_engine.agent.tools.todo_source import (
+    PARITY_PROPERTIES,
+    source_block,
+    source_from,
 )
 from origin.services import todo_reminders
 from origin.services.user_time import today_for_user_id, zone_for_user_id
@@ -45,6 +51,7 @@ def _parse_date(value, default):
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    args = ignore_unless_parity(args, PARITY_PROPERTIES)
     check_body_size(args.get("notes_text"), "notes_text")
     title = (args.get("title") or "").strip()
     if not title:
@@ -57,6 +64,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     remind_at = reminder_from_args(args, zone)
     notes_text = (args.get("notes_text") or "").strip()
     category_name = (args.get("category") or "").strip()
+    # Checked before the first write, like the reminder: a comment the caller cannot open leaves no
+    # to-do behind.
+    source = source_from(args, ctx)
+    notes = notes_blocks(notes_text, ctx)
+    if source is not None:
+        notes = [source_block(source), *(notes or [])]
 
     with transaction.atomic():
         group, _ = ToDoGroup.objects.get_or_create(
@@ -76,7 +89,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             group=group,
             category=category,
             title=title,
-            notes=notes_blocks(notes_text, ctx),
+            notes=notes,
         )
         # Newly created incomplete item flips the group's completion
         # back to False if it had been all-done before.
@@ -97,6 +110,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         out["reminder_at"] = local_iso(remind_at, zone)
         out["reminder_time_zone"] = zone.key
         summary += f" (reminder set for {out['reminder_at']})"
+    if source is not None:
+        out["source"] = {
+            "task_id": source.task.task_id,
+            "display_id": source.task.display_id,
+            "comment_id": source.comment.comment_id if source.comment is not None else None,
+        }
+        summary += f" ({source.label.lower()} on {source.task.display_id})"
     out["__summary__"] = summary
     return out
 
