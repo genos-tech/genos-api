@@ -258,7 +258,34 @@ class AllOnFingerprintTests(TestCase):
                 "result.get_current_user",
                 "result.fetch_note",
                 "result.fetch_task",
+                # the second fixture (MIP-1478): the inbox report, the focus list, the counts, the
+                # milestone and sprint tools, the rows and the note's threads
+                "result.b.fetch_note_threads",
+                "result.b.fetch_task",
+                "result.b.get_milestone_summary",
+                "result.b.get_my_focus_tasks",
+                "result.b.get_my_schedule",
+                "result.b.get_my_task_summary",
+                "result.b.get_project_summary",
+                "result.b.get_sprint_summary",
+                "result.b.get_stale_tasks",
+                "result.b.get_team_task_summary",
+                "result.b.get_workload_distribution",
+                "result.b.list_milestones",
+                "result.b.list_my_inbox",
+                "result.b.list_my_milestones",
+                "result.b.list_tasks",
             },
+        )
+        # and these do NOT move: the closed-ancestor rule does not reach them (MIP-1478: a decision is open for
+        # each, see the PR). When one is covered its line moves, and moves from here to the set above.
+        self.assertTrue(
+            {
+                "result.b.get_my_blockers",
+                "result.b.get_task_blockers",
+                "result.b.get_task_throughput_stats",
+                "result.b.get_milestone_assignee_counts",
+            }.isdisjoint(moved)
         )
 
 

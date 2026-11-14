@@ -30,6 +30,7 @@ from django.utils import timezone
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 
@@ -80,17 +81,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     now = timezone.now()
     cutoff = now - timedelta(days=stale_days)
 
-    qs = (
-        TaskMaster.objects.filter(
-            team_id=ctx.team_id,
-            project_id__in=scoped_project_ids,
-            is_deleted=False,
-            is_init_task=False,
-            ts_updated_at__lt=cutoff,
+    stale_qs = TaskMaster.objects.filter(
+        team_id=ctx.team_id,
+        project_id__in=scoped_project_ids,
+        is_deleted=False,
+        is_init_task=False,
+        ts_updated_at__lt=cutoff,
+    ).filter(Q(last_progress_at__isnull=True) | Q(last_progress_at__lt=cutoff))
+    if ancestor_rule.enabled():
+        # MIP-1478: a task under a Closed or Deleted ancestor reads as Closed: not stale work.
+        rule = ancestor_rule.rule_for_projects(scoped_project_ids, ctx.team_id)
+        stale_qs = ancestor_rule.with_effective_status(stale_qs, rule).exclude(
+            eff_status__in=["Closed", "Deleted"]
         )
-        .filter(Q(last_progress_at__isnull=True) | Q(last_progress_at__lt=cutoff))
-        .exclude(status__in=["Closed", "Deleted"])
-        .select_related("project")
+    else:
+        stale_qs = stale_qs.exclude(status__in=["Closed", "Deleted"])
+    qs = (
+        stale_qs.select_related("project")
         # The later of the task's own edit and the progress under it; the oldest
         # of those first. Greatest ignores a NULL on PostgreSQL, but a Coalesce
         # keeps it true on any database.

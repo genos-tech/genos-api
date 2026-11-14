@@ -2,7 +2,7 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py agent_fingerprint --write-golden` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "603d32d5c659d3c8b6abf9d80b8f4eb4ff199e9be10a203dfd1a840d6e2bb83b",
+      "all": "4169819650b66c27d312f29fbab99ab3899c23081b3ec59aee6b68aa5bce72ec",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27254,
@@ -35,6 +35,82 @@
         "prompt.thread_ask.template": {
           "bytes": 1114,
           "sha256": "9f785759077ea05a06ccb0b178a69a08203140bba1eb010bc704065025d26183"
+        },
+        "result.b.fetch_note_threads": {
+          "bytes": 500,
+          "sha256": "2354e27d842398026c1f6c1f4a91a93028da0049c0ac7ebeea23d9984908fbd2"
+        },
+        "result.b.fetch_task": {
+          "bytes": 776,
+          "sha256": "658b210709c95d83bda86fc22bad09ec21c8e99b8c324401e0b41f7ae05c1242"
+        },
+        "result.b.get_milestone_assignee_counts": {
+          "bytes": 271,
+          "sha256": "5f5a8611b10d3db8878a34a24bcba69396b3acef8f7a700bc1becb1111fc361f"
+        },
+        "result.b.get_milestone_summary": {
+          "bytes": 1609,
+          "sha256": "e79d6dc11438e0f65d15c29672ba4d50c276cb60f0fc697ee66ae75598050cca"
+        },
+        "result.b.get_my_blockers": {
+          "bytes": 685,
+          "sha256": "985cab6fd2852b5821aaa88054eee55b031d367c3abafd48e73eb4abd0bed995"
+        },
+        "result.b.get_my_focus_tasks": {
+          "bytes": 2304,
+          "sha256": "e9163dc79a60bf628b2768555f6bb243bd360a593554faa3f58cab6a22872a6d"
+        },
+        "result.b.get_my_schedule": {
+          "bytes": 816,
+          "sha256": "7a8bc9b86c4ad67da75112e18bc44c585460ac7428d2e74d11459b0c0706552f"
+        },
+        "result.b.get_my_task_summary": {
+          "bytes": 553,
+          "sha256": "2943fbec26c2464f8786b73244e334f974220f4cdcff1603278850d5b319beb1"
+        },
+        "result.b.get_project_summary": {
+          "bytes": 282,
+          "sha256": "41f98f8d7a31d656dcbd4cf17c75abe09fa8a423b613662beb1176bf57dbebb7"
+        },
+        "result.b.get_sprint_summary": {
+          "bytes": 609,
+          "sha256": "50186d4bd7f510c7bd7629765f0ec5395b4e35d64cda80d84aa56784c37f7e4a"
+        },
+        "result.b.get_stale_tasks": {
+          "bytes": 2903,
+          "sha256": "8421e0d9ad1c3908c4f091a3941bfc4fb5a9ea396cf8c2afcfa70af9aec061f8"
+        },
+        "result.b.get_task_blockers": {
+          "bytes": 497,
+          "sha256": "15a2df8f89b6d119b70c499e7c85265af442a4cc39c705260ed400689c33740a"
+        },
+        "result.b.get_task_throughput_stats": {
+          "bytes": 144,
+          "sha256": "c2e187c3bac948013bb93a92b5a1ac3cc3386dc62d90853321421dde118ae6ab"
+        },
+        "result.b.get_team_task_summary": {
+          "bytes": 558,
+          "sha256": "cb70fb27e7007457196d014e5b18fb75ecc03d10fc0e73a28d95a6d8d54b7c0e"
+        },
+        "result.b.get_workload_distribution": {
+          "bytes": 579,
+          "sha256": "41ea5734a38076975159983667865e9ab4bb7ea4ebb43127acb27850cfce5897"
+        },
+        "result.b.list_milestones": {
+          "bytes": 1101,
+          "sha256": "4854f5c76501dab7b46ec34870f76d2a298cf87a550537eb90b89ae666a5225d"
+        },
+        "result.b.list_my_inbox": {
+          "bytes": 13670,
+          "sha256": "5bffae746773deb4beb4900d7ee43601ddc203a0d581291e733720a792aac448"
+        },
+        "result.b.list_my_milestones": {
+          "bytes": 697,
+          "sha256": "4a17610e0fe9b28d8206ed84f1ca74aad2ae983f8dea42c85366932b95aac4c5"
+        },
+        "result.b.list_tasks": {
+          "bytes": 4438,
+          "sha256": "2a689f17afc59943b1d88e7741c942c79acb684d202ea1c39e9505d5588007ca"
         },
         "result.fetch_chat_thread": {
           "bytes": 610,
@@ -111,7 +187,7 @@
       }
     },
     "production": {
-      "all": "1f44b0d999929b7608833e7ed6c1bcf90c48abc9f0c159a6bd400accc9dd43a2",
+      "all": "5f1f55ea87429c4b9c95761dab82df66aafc83874d37312d6715be9bb6d87976",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27482,
@@ -144,6 +220,82 @@
         "prompt.thread_ask.template": {
           "bytes": 1114,
           "sha256": "9f785759077ea05a06ccb0b178a69a08203140bba1eb010bc704065025d26183"
+        },
+        "result.b.fetch_note_threads": {
+          "bytes": 1066,
+          "sha256": "8201be5c73c3e75be6014df44db613fe7564a592a7c803b4a90c9c9a88611ff7"
+        },
+        "result.b.fetch_task": {
+          "bytes": 900,
+          "sha256": "cd3c2ad622c01ac31ae94a0599c8a80540a4b7f3f1281d10d3f773ea809c64cd"
+        },
+        "result.b.get_milestone_assignee_counts": {
+          "bytes": 271,
+          "sha256": "5f5a8611b10d3db8878a34a24bcba69396b3acef8f7a700bc1becb1111fc361f"
+        },
+        "result.b.get_milestone_summary": {
+          "bytes": 1346,
+          "sha256": "0d5b1d792cfd534e7920dd3f8022275b3a22d31255778fef13a3da025361adb6"
+        },
+        "result.b.get_my_blockers": {
+          "bytes": 685,
+          "sha256": "985cab6fd2852b5821aaa88054eee55b031d367c3abafd48e73eb4abd0bed995"
+        },
+        "result.b.get_my_focus_tasks": {
+          "bytes": 912,
+          "sha256": "5e6dfb166dde5721526c868b6cbb80cfb9f394ac12756037ba82f226908a0b4c"
+        },
+        "result.b.get_my_schedule": {
+          "bytes": 592,
+          "sha256": "e6c7ebb076ee50a498ba3d39f41f4f51b1e18a5a5cb6e2ed0038a6558eae8f27"
+        },
+        "result.b.get_my_task_summary": {
+          "bytes": 550,
+          "sha256": "02a6e7ffaa4eee6188c00b1dbb2139ed8209dd1b36e9f0a2170758811850de1c"
+        },
+        "result.b.get_project_summary": {
+          "bytes": 282,
+          "sha256": "2db230b9117c24d1e269b4d4b81d643e776f7558d76f9a42a1ac30dc762d7d49"
+        },
+        "result.b.get_sprint_summary": {
+          "bytes": 609,
+          "sha256": "ab12e49c3a433ff362cec47b228d4087c9895429358357eb3117a3e8db7028d4"
+        },
+        "result.b.get_stale_tasks": {
+          "bytes": 1158,
+          "sha256": "9cf2a483ce344d402b14f81112a4f5da4c1fe06b0560d57002c9c0cb7cc6f6ad"
+        },
+        "result.b.get_task_blockers": {
+          "bytes": 497,
+          "sha256": "15a2df8f89b6d119b70c499e7c85265af442a4cc39c705260ed400689c33740a"
+        },
+        "result.b.get_task_throughput_stats": {
+          "bytes": 144,
+          "sha256": "c2e187c3bac948013bb93a92b5a1ac3cc3386dc62d90853321421dde118ae6ab"
+        },
+        "result.b.get_team_task_summary": {
+          "bytes": 558,
+          "sha256": "054ad29054905afbc99bcf5ebd70c6cd730356639c8c0ecfbc0d7d318c215c34"
+        },
+        "result.b.get_workload_distribution": {
+          "bytes": 579,
+          "sha256": "d119368c95688154b4b8d54dd8b6104727413c23b6e785ed56be5848bbb2a023"
+        },
+        "result.b.list_milestones": {
+          "bytes": 1101,
+          "sha256": "5fbf1b27f7a5ba34c8faabc2455ebffb40bca61feaf828b9e305a07b0041c981"
+        },
+        "result.b.list_my_inbox": {
+          "bytes": 8814,
+          "sha256": "3c9f6365a6a3bf2540f2d313861ef22df80d2d3f586c96948d4f9e92ca065af3"
+        },
+        "result.b.list_my_milestones": {
+          "bytes": 697,
+          "sha256": "f0257ba0fa5870cf9f981f55cb2002b401053ce05b3bf4f25f41956565f12a56"
+        },
+        "result.b.list_tasks": {
+          "bytes": 5219,
+          "sha256": "89caf55733e471933afa01f619ae82c85692ef49775027e29a5e6717a25d3408"
         },
         "result.fetch_chat_thread": {
           "bytes": 610,

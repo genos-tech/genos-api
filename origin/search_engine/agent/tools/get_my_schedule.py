@@ -35,6 +35,7 @@ from origin.search_engine.agent.calendar import (
     resolve_google_calendar_account,
     shape_event,
 )
+from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.services.user_time import zone_for_user_id
@@ -97,21 +98,25 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ).values_list("project_id", flat=True)
     )
 
-    tasks_qs = (
-        TaskMaster.objects.filter(
-            team_id=ctx.team_id,
-            assignee_id=ctx.user_id,
-            project_id__in=member_project_ids,
-            is_deleted=False,
-            is_init_task=False,
-            due_date__isnull=False,
-            due_date__gte=from_date,
-            due_date__lte=to_date,
-        )
-        .exclude(status__in=["Closed", "Deleted"])
-        .select_related("project")
-        .order_by("due_date", "-ts_updated_at")[:_MAX_TASKS]
+    due_qs = TaskMaster.objects.filter(
+        team_id=ctx.team_id,
+        assignee_id=ctx.user_id,
+        project_id__in=member_project_ids,
+        is_deleted=False,
+        is_init_task=False,
+        due_date__isnull=False,
+        due_date__gte=from_date,
+        due_date__lte=to_date,
     )
+    if ancestor_rule.enabled():
+        # MIP-1478: a task under a Closed or Deleted ancestor reads as Closed: nothing is due.
+        rule = ancestor_rule.rule_for_projects(member_project_ids, ctx.team_id)
+        due_qs = ancestor_rule.with_effective_status(due_qs, rule).exclude(
+            eff_status__in=["Closed", "Deleted"]
+        )
+    else:
+        due_qs = due_qs.exclude(status__in=["Closed", "Deleted"])
+    tasks_qs = due_qs.select_related("project").order_by("due_date", "-ts_updated_at")[:_MAX_TASKS]
 
     tasks_due: list[dict[str, Any]] = []
     for t in tasks_qs:

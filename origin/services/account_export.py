@@ -41,7 +41,7 @@ def _iso(value):
 def build_export(user) -> dict:
     """The full export document for `user`. Read-only."""
     from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
-    from origin.models.chat.unified_models import Message
+    from origin.models.chat.unified_models import Activity, ActivityType, Message
     from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
     from origin.models.common.member_event_models import ACTIVITY_KINDS, MCP_KINDS, MemberEvent
     from origin.models.common.notification_models import NotificationPreference
@@ -191,6 +191,21 @@ def build_export(user) -> dict:
         )
     ]
 
+    # What their AI apps told them they did (MIP-1541): the member's own AI-app notices, with
+    # the item titles each names. Only rows addressed to them; they expire after
+    # `AI_APP_NOTICE_RETENTION_DAYS`, so this is the window that is still held.
+    ai_app_notices = [
+        {
+            "team_id": str(a.team_id),
+            "is_read": a.is_read,
+            "created_at": _iso(a.ts_created_at),
+            "notice": a.meta,
+        }
+        for a in Activity.objects.filter(
+            recipient=user, activity_type=ActivityType.AI_APP
+        ).order_by("ts_created_at", "id")
+    ]
+
     # The per-day activity table (MIP-1084): counts by kind per task and day, no title.
     item_activity_days = item_activity.export_rows(str(user.id))
     # What the member marked and tuned (MIP-1087): their own corrections, ids and words only.
@@ -298,6 +313,7 @@ def build_export(user) -> dict:
         "schedule_reports": schedule_reports,
         "mcp_use": mcp_use,
         "activity": activity,
+        "ai_app_notices": ai_app_notices,
         "item_activity": item_activity_days,
         "importance": importance_data,
         "tasks": tasks,
@@ -312,6 +328,7 @@ def build_export(user) -> dict:
             "schedule_reports": len(schedule_reports),
             "mcp_use": len(mcp_use),
             "activity": len(activity),
+            "ai_app_notices": len(ai_app_notices),
             "item_activity": len(item_activity_days),
             "importance_marks": len(importance_data["marks"]),
             "tasks": len(tasks),

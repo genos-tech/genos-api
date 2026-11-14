@@ -81,6 +81,7 @@ class GoldenTests(TestCase):
             "prompt.thread_ask.template",
             "prompt.note_ask.template",
             *(f"result.{t}" for t in fp.READ_TOOLS),
+            *(f"result.b.{t}" for t in fp.EXTRA_READ_TOOLS),
         }
         for state, body in record["states"].items():
             self.assertEqual(set(body["surfaces"]), expected, state)

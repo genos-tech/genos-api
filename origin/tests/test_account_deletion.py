@@ -23,6 +23,7 @@ from django.utils import timezone
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
+from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.common.team_models import TeamMembers
@@ -42,6 +43,7 @@ from origin.services.account_deletion import (
     blocking_owned_teams,
     delete_account,
 )
+from origin.services.v3_activity import SURFACE_AI_APP
 from origin.tests.test_base import BaseAPITestCase
 
 URL = "/api/v2/user/account/"
@@ -431,3 +433,47 @@ class AvatarAndInviteErasureTests(BaseAPITestCase):
 
     def test_no_invites_is_zero_removed(self):
         self.assertEqual(delete_account(self.user2)["invites_removed"], 0)
+
+
+class AiAppNoticeErasureTests(BaseAPITestCase):
+    """MIP-1541: an AI-app notice names up to five item titles the member's app touched. It
+    is the member's own Inbox content and goes with the account; nobody else's does."""
+
+    def notice(self, recipient, **kw):
+        return Activity.objects.create(
+            team=self.team,
+            recipient=recipient,
+            actor=recipient,
+            activity_type=ActivityType.AI_APP,
+            surface_type=SURFACE_AI_APP,
+            meta={"aiApp": True, "items": [{"title": "secret plan"}]},
+            **kw,
+        )
+
+    def test_the_members_notices_are_deleted_with_the_account(self):
+        mine = [self.notice(self.user2), self.notice(self.user2, is_read=True)]
+        delete_account(self.user2)
+        self.assertFalse(Activity.objects.filter(pk__in=[a.pk for a in mine]).exists())
+        self.assertFalse(
+            Activity.objects.filter(
+                recipient=self.user2, activity_type=ActivityType.AI_APP
+            ).exists()
+        )
+
+    def test_another_members_notices_are_untouched(self):
+        theirs = self.notice(self.user)
+        delete_account(self.user2)
+        self.assertTrue(Activity.objects.filter(pk=theirs.pk).exists())
+
+    def test_it_does_not_reach_other_activity_of_the_member(self):
+        # Only the AI-app kind is in scope of this task; a mention of the member stays.
+        mention = Activity.objects.create(
+            team=self.team,
+            recipient=self.user2,
+            actor=self.user,
+            activity_type=ActivityType.MENTION,
+            surface_type=5,
+            meta={},
+        )
+        delete_account(self.user2)
+        self.assertTrue(Activity.objects.filter(pk=mention.pk).exists())
