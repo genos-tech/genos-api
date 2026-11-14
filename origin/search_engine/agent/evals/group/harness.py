@@ -85,6 +85,8 @@ GROUP_EXPECT_KEYS = frozenset(
         "tools_in_order",
         "max_calls",
         "no_tool_results_contain",
+        # MIP-1518: regexes the answer must NOT match (forbid a claim, not a word)
+        "answer_does_not_match",
         # MIP-905 (group/content_checks.py): what the model proposed, and the answer's length
         "pending_write",
         "answer_chars_at_most",
@@ -770,6 +772,10 @@ def group_checks(
     max_calls             model calls <= N
     no_tool_results_contain  strings that must NOT appear in any tool result (a viewer who may
                           not see something must not even be handed it)
+    answer_does_not_match regexes (case-insensitive, searched in the answer); none may match. For a
+                          forbidden CLAIM rather than a forbidden word: a correct answer can use
+                          the word negated ("返信待ちはありません"), which the plain-substring
+                          `answer_does_not_contain` cannot tell from the claim. (MIP-1518)
     pending_write         (MIP-905) checks on the write the model PROPOSED, from the
                           `tool_call_pending_approval` events: tool, task counts, body lengths
                           in characters, headings, not cut off. See `content_checks`.
@@ -812,6 +818,19 @@ def group_checks(
                     + ([f"out of order: {misordered}"] if misordered else [])
                 )
                 or "all facts present, in order",
+            }
+        )
+    if "answer_does_not_match" in expect:
+        hits = [
+            p for p in expect["answer_does_not_match"] if re.search(p, answer or "", re.IGNORECASE)
+        ]
+        checks.append(
+            {
+                "name": "answer_does_not_match",
+                "ok": not hits,
+                "detail": f"answer matched forbidden pattern(s): {hits}"
+                if hits
+                else "none matched",
             }
         )
     if "tools_in_order" in expect:
