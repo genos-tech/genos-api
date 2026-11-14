@@ -30,12 +30,19 @@ editions is a deliberate `force=True` support action.
 Content rule: everything below describes SHIPPED behavior in plain
 instructional prose. When the product changes, change the guide — new
 users seed the new text (existing copies are the user's own notes and
-are deliberately never rewritten).
+are deliberately never rewritten). The one exception is `refresh_unedited_
+connect_notes` (MIP-1558, bottom of this file): a copy whose text is still
+byte for byte a text we shipped is replaced; an edited copy never is.
 """
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
+import uuid
+from dataclasses import dataclass, field
 
 from django.db import transaction
 from django.utils import timezone
@@ -43,14 +50,17 @@ from django.utils import timezone
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
-from origin.services import start_here_note
+from origin.services import mcp_oauth, start_here_note
+from origin.services.collab_push import push_note_body_now
 from origin.services.demo_seeder import _body
+from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 
 log = logging.getLogger(__name__)
 
 GUIDE_FOLDER_NAME = "Genos Guide"
 
 _B = "bullet"
+NOTE_TYPE_PERSONAL = 1
 
 GUIDE_NOTES: list[tuple[str, list]] = [
     (
@@ -1900,6 +1910,14 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                 ],
             ),
             (
+                "Scripts and automation (API key)",
+                [
+                    "Everything from here to the end of this page is the "
+                    "API-key way: it is for a script, another app, or an AI "
+                    "agent that cannot sign in to Genos.",
+                ],
+            ),
+            (
                 "Getting a key",
                 [
                     (
@@ -1949,8 +1967,8 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                         _B,
                         "MCP (Model Context Protocol) — when you want an AI "
                         "coding agent to work your tasks directly instead of "
-                        "you pasting descriptions into it. Add Genos to an "
-                        "MCP client as an HTTP server at "
+                        "you pasting descriptions into it. With an API key, "
+                        "add Genos to an MCP client as an HTTP server at "
                         "https://api.genosai.dev/api/public/v1/mcp"
                         "?team_id=<your team's id> — no trailing slash "
                         "before the question mark — sending the header "
@@ -2092,11 +2110,11 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                 ],
             ),
             (
-                "MCP, for AI coding agents",
+                "Scripts and automation (API key)",
                 [
-                    "On Pro and above, point an AI coding agent at Genos and "
-                    "it can work your tasks directly. Add it as an HTTP MCP "
-                    "server at https://api.genosai.dev/api/public/v1/mcp"
+                    "On Core and above, an AI coding agent that cannot sign "
+                    "in can work your tasks directly with an API key. Add it "
+                    "as an HTTP MCP server at https://api.genosai.dev/api/public/v1/mcp"
                     "?team_id=<your team's id> — no trailing slash before the "
                     "question mark — with the same ApiKey header as above. The "
                     "agent gets tools for reading tasks and "
@@ -3422,6 +3440,12 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                 ],
             ),
             (
+                "スクリプトと自動化（APIキー）",
+                [
+                    "このページのここから先は、APIキーを使う方法です。スクリプトや他のアプリ、Genosにサインインできない AIコーディングエージェント向けです。",
+                ],
+            ),
+            (
                 "APIキーを取得する",
                 [
                     (
@@ -3451,7 +3475,7 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                     ),
                     (
                         _B,
-                        "MCP（Model Context Protocol）：説明文を貼り付けるのではなく、AIコーディングエージェントに直接タスクを実行させたい場合。https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けない）で、GenosをHTTPサーバーとしてMCPクライアントに追加し、ヘッダー「Authorization: ApiKey <your key>」を送信します。スキームは「Bearer」ではなく、文字通りの「ApiKey」です。これにより、エージェントはタスクを自ら読み取り、書き込みキーを使用してタスクを更新し、コメントを返すことができます。",
+                        "MCP（Model Context Protocol）：説明文を貼り付けるのではなく、AIコーディングエージェントに直接タスクを実行させたい場合。APIキーを使う場合は、https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けない）で、GenosをHTTPサーバーとしてMCPクライアントに追加し、ヘッダー「Authorization: ApiKey <your key>」を送信します。スキームは「Bearer」ではなく、文字通りの「ApiKey」です。これにより、エージェントはタスクを自ら読み取り、書き込みキーを使用してタスクを更新し、コメントを返すことができます。",
                     ),
                     (
                         _B,
@@ -3536,9 +3560,9 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                 ],
             ),
             (
-                "AIコーディングエージェント向けMCP",
+                "スクリプトと自動化（APIキー）",
                 [
-                    "Proプラン以上では、AIコーディングエージェントをGenosに割り当てると、タスクを直接処理できるようになります。https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けないでください）に、上記と同じApiKeyヘッダーを指定して、HTTP MCPサーバーとして追加してください。このエージェントは、タスクやノートを読み取り、ワークスペースを検索するためのツールを備えています。また、書き込みキーがあれば、タスクの作成、更新、コメントの返信も可能です。検索ツールでは、キーワード検索よりも自然言語によるクエリの方が精度が高く、これはユーザーが直接検索する場合と同様です。",
+                    "Core以上のプランでは、サインインできないAIコーディングエージェントも、APIキーを使ってGenosのタスクを直接処理できます。https://api.genosai.dev/api/public/v1/mcp?team_id=<your team's id>（疑問符の前にスラッシュは付けないでください）に、上記と同じApiKeyヘッダーを指定して、HTTP MCPサーバーとして追加してください。このエージェントは、タスクやノートを読み取り、ワークスペースを検索するためのツールを備えています。また、書き込みキーがあれば、タスクの作成、更新、コメントの返信も可能です。検索ツールでは、キーワード検索よりも自然言語によるクエリの方が精度が高く、これはユーザーが直接検索する場合と同様です。",
                 ],
             ),
             (
@@ -3567,6 +3591,247 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
         ),
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# "Connect an AI app (no API key)" (MIP-1558)
+#
+# Two notes teach MCP: the "Connecting Genos to other tools" note and the "API keys
+# and webhooks" note. They used to show only the API-key way. They now LEAD with the
+# OAuth way (the app signs in as the person; no key), and keep the key way under
+# "Scripts and automation (API key)".
+#
+# The OAuth section holds the MCP address, which is the deployment's own API origin
+# (`start_here_note.mcp_url()` -> `mcp_oauth.resource_identifier()`, the same function the
+# "Start here" note and the OAuth metadata use), so it is built when notes are
+# seeded or refreshed (`current_guide_notes`), never at import time and never hard-coded.
+# The module-level `GUIDE_NOTES` / `JAPANESE_GUIDE_NOTES` are the part of the text that
+# does not depend on settings. The words come from `start_here_note._COPY`, which
+# takes its menu names from the frontend dictionaries; only the two headings are new.
+# ---------------------------------------------------------------------------
+
+_CONNECT_HEADING = {
+    "en": "Connect an AI app (no API key)",
+    "ja": "AIアプリを接続する（APIキー不要）",
+}
+_COLON = {"en": ":", "ja": "："}
+
+# note title -> the heading the section goes in front of.
+_CONNECT_ANCHORS: dict[str, dict[str, str]] = {
+    "en": {
+        "Connecting Genos to other tools: API, MCP, and realtime": "Who this page is for",
+        "API keys and webhooks, step by step": "Scripts and automation (API key)",
+    },
+    "ja": {
+        "Genosと他のツールを接続する：API、MCP、リアルタイム": "このページの対象者",
+        "APIキーとWebhook：手順ガイド": "スクリプトと自動化（APIキー）",
+    },
+}
+_EDITIONS = {
+    "en": (GUIDE_FOLDER_NAME, GUIDE_NOTES),
+    "ja": (JAPANESE_GUIDE_FOLDER_NAME, JAPANESE_GUIDE_NOTES),
+}
+
+# sha256 (see `body_fingerprint`) of every text these notes have shipped before the
+# OAuth section, per title: a copy matching one of these has not been edited since it
+# was seeded. Taken from git history of this file (each distinct body of the two notes;
+# the "Connecting" notes never changed before this, the "API keys" notes changed on
+# 2026-10-18, MIP-718). The bodies themselves are in
+# `origin/tests/fixtures/guide_notes_previous.json`, and a test pins that they hash to these.
+PREVIOUS_BODY_SHA256: dict[str, frozenset[str]] = {
+    "Connecting Genos to other tools: API, MCP, and realtime": frozenset(
+        {"b1a57876feef411031d8152e7b26162db0524277eaa5c28141f03feb14efec64"}
+    ),
+    "API keys and webhooks, step by step": frozenset(
+        {
+            "5beb8dd7454262c7a9b1c1d67ac37fb83cc7b785945db52876b744a71dd2aedf",
+            "0304c2e8dbd04d9e62e8a13c44be716c7e4c56ef0e523f6307aafb4058836c20",
+        }
+    ),
+    "Genosと他のツールを接続する：API、MCP、リアルタイム": frozenset(
+        {"ffa3b0f12f8c855a07ebf6afdaf8af00138de4eab8f282b0dffc2cfd9f61c1df"}
+    ),
+    "APIキーとWebhook：手順ガイド": frozenset(
+        {
+            "56eb165a2f1c5fc20b3a8a1c19f649cf7986b258204ce849c8c9db7c2453ceee",
+            "1f6c0cc8306c0505eb6b13906a6588bec45178b6bda3f166dbed2a323f417e26",
+        }
+    ),
+}
+
+
+def _strip_block_ids(node):
+    """The body without BlockNote's per-block `id` (a fresh uuid on every seeding)."""
+    if isinstance(node, dict):
+        return {k: _strip_block_ids(v) for k, v in node.items() if k != "id"}
+    if isinstance(node, list):
+        return [_strip_block_ids(v) for v in node]
+    return node
+
+
+def body_fingerprint(body) -> str:
+    """sha256 of a note body, ignoring block ids and key order. Two bodies with the
+    same text, structure and styles have the same fingerprint; any edit changes it."""
+    canonical = json.dumps(
+        _strip_block_ids(body), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _with_fresh_ids(node):
+    if isinstance(node, dict):
+        return {
+            k: (str(uuid.uuid4()) if k == "id" else _with_fresh_ids(v)) for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [_with_fresh_ids(v) for v in node]
+    return node
+
+
+def _connect_section(locale: str):
+    """`(heading, items)` for `_body`, or None when the OAuth way is not on here
+    (`MCP_OAUTH_ENABLED` and `API_PUBLIC_BASE_URL`): the steps would be false."""
+    url = start_here_note.mcp_url() if mcp_oauth.enabled() else ""
+    if not url:
+        return None
+    c = start_here_note._COPY[locale]
+    colon = _COLON[locale]
+    menu = c["menu"].replace(" > ", " → ")  # the frontend writes the path with arrows
+    items: list = [
+        c["connect_intro"],
+        c["url_label"],
+        url,
+        c["url_hint"],
+        f"{c['h_claude']}{colon}",
+        *((_B, step) for step in c["claude_steps"]),
+        f"{c['h_code']}{colon}",
+        c["code_run"],
+        f"claude mcp add --transport http genos {url}",
+        c["code_signin"],
+        c["plan"],
+        c["revoke"].format(menu=menu),
+    ]
+    return _CONNECT_HEADING[locale], items
+
+
+def _insert_before_heading(body: list, anchor: str, blocks: list) -> list:
+    for index, block in enumerate(body):
+        if block.get("type") == "heading":
+            text = "".join(item.get("text", "") for item in block.get("content") or [])
+            if text == anchor:
+                return [*body[:index], *blocks, *body[index:]]
+    raise ValueError(f"guide note has no heading {anchor!r}")
+
+
+def current_guide_notes(locale: str) -> list[tuple[str, list]]:
+    """The notes of one edition ("en" or "ja") as they are written today: the static
+    lists, with the OAuth section in front of the key way in the two MCP notes when the
+    OAuth way is on. Fresh block ids on the notes that got the section."""
+    section_cache = None
+    notes = []
+    for title, body in _EDITIONS[locale][1]:
+        anchor = _CONNECT_ANCHORS[locale].get(title)
+        if anchor is not None:
+            if section_cache is None:
+                section_cache = _connect_section(locale) or ()
+            if section_cache:
+                body = _insert_before_heading(body, anchor, _body(section_cache))
+        notes.append((title, body))
+    return notes
+
+
+@dataclass
+class RefreshReport:
+    """What `refresh_unedited_connect_notes` found (and, with `apply`, did)."""
+
+    replaced: list[int] = field(default_factory=list)  # unedited: replaced (or would be)
+    already_current: list[int] = field(default_factory=list)
+    left_alone: list[int] = field(default_factory=list)  # text is not one we shipped: edited
+    changed_underneath: list[int] = field(default_factory=list)  # edited between scan and write
+    pushes: dict[str, int] = field(default_factory=dict)  # PushOutcome value -> count
+
+
+def refresh_unedited_connect_notes(*, apply: bool = False, team_id=None) -> RefreshReport:
+    """Give teams that already have the two MCP notes the new text (MIP-1558).
+
+    A copy is replaced ONLY when its body is still byte for byte (ignoring block ids)
+    one of the texts we shipped (`PREVIOUS_BODY_SHA256`): nobody has edited it. An edited
+    copy is never touched, and neither is a note that is already the new text. Without
+    `apply` nothing is written. Raises ValueError when the OAuth way is not on here:
+    the new text would have no OAuth section, so there is nothing to refresh to.
+
+    A replaced note is written like any agent edit: the text it had is kept as a
+    version first (so it can be restored), the new text is saved and versioned, and,
+    after the commit, pushed into the editor's collaborative document (a note that
+    was ever opened renders that document, whose next autosave would otherwise write
+    the old text back).
+    """
+    if _connect_section("en") is None:
+        raise ValueError("MCP OAuth is not enabled here (MCP_OAUTH_ENABLED, API_PUBLIC_BASE_URL)")
+    report = RefreshReport()
+    pushes: list[tuple[int, list]] = []
+    for locale in _EDITIONS:
+        new_body_by_title = dict(current_guide_notes(locale))
+        for title in _CONNECT_ANCHORS[locale]:
+            new_body = new_body_by_title[title]
+            new_fingerprint = body_fingerprint(new_body)
+            previous = PREVIOUS_BODY_SHA256[title]
+            notes = PersonalNoteMaster.objects.filter(title=title, team__isnull=False)
+            if team_id:
+                notes = notes.filter(team_id=team_id)
+            for note_id, body in list(notes.values_list("note_id", "body")):
+                fingerprint = body_fingerprint(body)
+                if fingerprint == new_fingerprint:
+                    report.already_current.append(note_id)
+                elif fingerprint not in previous:
+                    report.left_alone.append(note_id)
+                elif not apply:
+                    report.replaced.append(note_id)
+                else:
+                    fresh = _with_fresh_ids(copy.deepcopy(new_body))
+                    if _replace_if_unedited(note_id, title, previous, fresh):
+                        report.replaced.append(note_id)
+                        pushes.append((note_id, fresh))
+                    else:
+                        report.changed_underneath.append(note_id)
+    # After every write has committed, never inside a transaction.
+    for note_id, fresh in pushes:
+        outcome = push_note_body_now("personal", note_id, fresh)
+        report.pushes[outcome.value] = report.pushes.get(outcome.value, 0) + 1
+    return report
+
+
+def _replace_if_unedited(note_id: int, title: str, previous: frozenset, body: list) -> bool:
+    with transaction.atomic():
+        # Under the row lock, so an autosave cannot land between the check and the write.
+        note = (
+            PersonalNoteMaster.objects.select_for_update()
+            .filter(note_id=note_id, title=title)
+            .first()
+        )
+        if note is None or body_fingerprint(note.body) not in previous:
+            return False
+        keep_current_state(
+            team=note.team,
+            note_type=NOTE_TYPE_PERSONAL,
+            note_id=note.note_id,
+            title=note.title,
+            body=note.body,
+        )
+        note.body = body
+        # Instance save, with the timestamp: the incremental search index and the
+        # browser's change feed both key on `ts_updated_at`.
+        note.save(update_fields=["body", "ts_updated_at"])
+        snapshot_note_version(
+            team=note.team,
+            editor=None,
+            note_type=NOTE_TYPE_PERSONAL,
+            note_id=note.note_id,
+            title=note.title,
+            body=body,
+            force_new=True,
+        )
+    return True
 
 
 def seed_guide_notes(user, team, *, force: bool = False) -> bool:
@@ -3605,13 +3870,10 @@ def seed_guide_notes(user, team, *, force: bool = False) -> bool:
         ):
             return False
 
-        guide_editions = (
-            (GUIDE_FOLDER_NAME, GUIDE_NOTES),
-            (JAPANESE_GUIDE_FOLDER_NAME, JAPANESE_GUIDE_NOTES),
-        )
-        for folder_name, guide_notes in guide_editions:
+        for locale, (folder_name, _) in _EDITIONS.items():
             if folder_name in existing_folder_names:
                 continue
+            guide_notes = current_guide_notes(locale)
 
             folder = PersonalNoteFolder.objects.create(team=team, owner=user, name=folder_name)
             for title, body in guide_notes:
