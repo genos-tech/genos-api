@@ -173,7 +173,10 @@ class ContentTests(TestCase):
 
     def test_the_address_is_canonical_whatever_the_base_looks_like(self):
         for base in (BASE, BASE + "/", BASE + "//", "http://localhost:8890", "http://a.test/"):
-            with self.subTest(base=base), override_settings(MCP_OAUTH_ENABLED=True, API_PUBLIC_BASE_URL=base):
+            with (
+                self.subTest(base=base),
+                override_settings(MCP_OAUTH_ENABLED=True, API_PUBLIC_BASE_URL=base),
+            ):
                 _, text = self._text_for()
                 expected = f"{base.rstrip('/')}/api/public/v1/mcp"
                 self.assertIn(expected, text)
@@ -247,8 +250,12 @@ class ContentTests(TestCase):
         resolve = start_here_note.resolve_locale
         self.assertEqual(resolve(User(language="ja"), request), "ja")
         self.assertEqual(resolve(User(language=None), request), "fr")
-        self.assertEqual(resolve(None, mock.Mock(META={"HTTP_ACCEPT_LANGUAGE": "de,pt;q=0.5"})), "en")
-        self.assertEqual(resolve(None, mock.Mock(META={"HTTP_ACCEPT_LANGUAGE": "sv, ZH-hans"})), "zh")
+        self.assertEqual(
+            resolve(None, mock.Mock(META={"HTTP_ACCEPT_LANGUAGE": "de,pt;q=0.5"})), "en"
+        )
+        self.assertEqual(
+            resolve(None, mock.Mock(META={"HTTP_ACCEPT_LANGUAGE": "sv, ZH-hans"})), "zh"
+        )
         self.assertEqual(resolve(None, None), "en")
         self.assertEqual(resolve(None, mock.Mock(META=None)), "en")  # malformed: no raise
 
@@ -294,7 +301,9 @@ class EmailSignupTests(TestCase):
     def test_a_refused_signup_creates_no_note(self):
         res = self.client.post(SIGNUP, _body(accepted_terms=False), format="json")
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(PersonalNoteMaster.objects.filter(title__in=start_here_note.TITLES).count(), 0)
+        self.assertEqual(
+            PersonalNoteMaster.objects.filter(title__in=start_here_note.TITLES).count(), 0
+        )
 
     def test_a_note_failure_does_not_fail_the_signup(self):
         with mock.patch.object(
@@ -387,7 +396,9 @@ class OAuthSignupTests(TestCase):
     def test_a_refused_new_account_creates_no_note(self):
         res = self._callback(self._initiate())
         self.assertIn("error=terms_required", res["Location"])
-        self.assertEqual(PersonalNoteMaster.objects.filter(title__in=start_here_note.TITLES).count(), 0)
+        self.assertEqual(
+            PersonalNoteMaster.objects.filter(title__in=start_here_note.TITLES).count(), 0
+        )
 
     def test_a_database_error_in_the_note_does_not_fail_the_callback(self):
         # The callback is one atomic block: the account is written in it. A DB error in
@@ -464,7 +475,9 @@ class ExistingAccountsAndAdoptionTests(TestCase):
         start_here_note.create_for(new)
         mine = TeamMaster.objects.create(team_name="Mine", team_email="m2@example.com", owner=new)
         with mock.patch.object(
-            start_here_note.PersonalNoteMaster.objects, "select_for_update", side_effect=RuntimeError
+            start_here_note.PersonalNoteMaster.objects,
+            "select_for_update",
+            side_effect=RuntimeError,
         ):
             self.assertEqual(self._join(new, mine).status_code, 201)
 
