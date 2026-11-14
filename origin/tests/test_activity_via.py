@@ -114,19 +114,19 @@ class _Fixture(BaseAPITestCase):
         return rows.order_by("ts_created_at")
 
     def mention(self, who, via=None):
-        with (via_override(via) if via is not None else nullcontext()):
+        with via_override(via) if via is not None else nullcontext():
             return v3_activity.create_mention_activities(
                 message=self.card, mentioned_user_ids=[str(who.id)], actor=self.user
             )
 
     def participants(self, who, via=None):
-        with (via_override(via) if via is not None else nullcontext()):
+        with via_override(via) if via is not None else nullcontext():
             return v3_activity.create_comment_participant_activities(
                 message=self.card, recipient_ids=[str(who.id)], actor=self.user
             )
 
     def assign(self, who, via=None):
-        with (via_override(via) if via is not None else nullcontext()):
+        with via_override(via) if via is not None else nullcontext():
             return ASSIGN_TASK.run(
                 {"task_id": self.task.task_id, "assignee_id": str(who.id)}, self.ctx
             )
@@ -420,7 +420,9 @@ class TheModelSeesNothingNew(_Fixture):
     @staticmethod
     def stable(result):
         """The result as text, minus the clock (`window` is "now" when the tool ran)."""
-        return json.dumps({k: v for k, v in result.items() if k != "window"}, sort_keys=True, default=str)
+        return json.dumps(
+            {k: v for k, v in result.items() if k != "window"}, sort_keys=True, default=str
+        )
 
     def fill(self, via):
         self.mention(self.user2, via)
@@ -478,9 +480,7 @@ class ThroughTheRealConnector(FlowBase):
 
     def told(self):
         return list(
-            Activity.objects.filter(recipient=self.user2).exclude(
-                activity_type=ActivityType.AI_APP
-            )
+            Activity.objects.filter(recipient=self.user2).exclude(activity_type=ActivityType.AI_APP)
         )
 
     def test_a_comment_from_claude_tells_the_assignee_with_the_family(self):
@@ -496,7 +496,9 @@ class ThroughTheRealConnector(FlowBase):
     def test_an_assignment_from_chatgpt_tells_the_new_assignee_with_the_family(self):
         TaskMaster.objects.filter(pk=self.task.pk).update(assignee=self.user)
         token = self.connect("ChatGPT", CHATGPT_CB)
-        res = self.call(token, "assign_task", {"task_id": "WRD-7", "assignee_id": str(self.user2.id)})
+        res = self.call(
+            token, "assign_task", {"task_id": "WRD-7", "assignee_id": str(self.user2.id)}
+        )
         self.assertEqual(res.status_code, 200, res.content)
         self.assertFalse(res.json()["result"].get("isError"), res.content)
         (row,) = self.told()
