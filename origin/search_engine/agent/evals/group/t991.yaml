@@ -12,6 +12,7 @@
   tags: [eval-group, t991]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   earlier_turns:
     - {q: "Who owns the billing migration?", a: "Hana Sato owns the billing migration."}
   query: "Create a task called 'Billing migration kickoff' in the project, then remind me who owns the billing migration, as you told me before."
@@ -29,6 +30,7 @@
   tags: [eval-group, t991]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   earlier_turns:
     - {q: "請求システム移行の担当者は誰ですか?", a: "請求システム移行の担当者は佐藤花子さんです。"}
   query: "プロジェクトに「請求システム移行キックオフ」というタスクを作成して、先ほどお伝えした請求システム移行の担当者をもう一度教えてください。"
@@ -46,6 +48,7 @@
   tags: [eval-group, t991]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   earlier_turns:
     - {q: "What was Atlas called before?", a: "Atlas was called Borealis before the rename."}
   query: "Create a task called 'Rename Atlas docs'. If I decline it, just repeat the old name you gave me earlier."
@@ -63,6 +66,7 @@
   tags: [eval-group, t991]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   earlier_turns:
     - {q: "アトラスの以前の名前は何でしたか?", a: "アトラスは名称変更の前は「ボレアリス」と呼ばれていました。"}
   query: "「アトラスのドキュメント名変更」というタスクを作成してください。却下した場合は、先ほど教えた以前の名前をもう一度言ってください。"

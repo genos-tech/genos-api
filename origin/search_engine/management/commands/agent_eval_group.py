@@ -41,6 +41,8 @@ class Command(BaseCommand):
 
     #: injectable for tests: `(judge: bool) -> CaseRunner`
     runner_factory = staticmethod(lambda judge: DefaultCaseRunner(judge=judge))
+    #: injectable for tests: `() -> list[str]` problems with the OpenSearch alias (MIP-1504)
+    preflight = staticmethod(lambda: harness.opensearch_preflight())
 
     def add_arguments(self, parser: Any) -> None:
         parser.add_argument(
@@ -126,6 +128,14 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--preflight-only",
+            action="store_true",
+            help=(
+                "Check the run environment (the OpenSearch alias: an alias, with a knn_vector "
+                "`embedding`) and exit; status 1 when it is not usable. No model call."
+            ),
+        )
+        parser.add_argument(
             "--stop-file",
             default="",
             help="If this file exists, stop cleanly before the next case.",
@@ -147,6 +157,14 @@ class Command(BaseCommand):
         if options["dry_run"]:
             self._print_plan(plan, model, judge, options)
             return
+        if options["preflight_only"]:
+            problems = self.preflight()
+            for problem in problems:
+                self.stderr.write(self.style.ERROR(f"PREFLIGHT: {problem}"))
+            if problems:
+                sys.exit(1)
+            self.stdout.write("preflight ok: the OpenSearch alias is an alias with a knn_vector.")
+            return
 
         if options.get("cost_cap_usd") is None:
             raise CommandError(
@@ -165,6 +183,16 @@ class Command(BaseCommand):
         runner = self.runner_factory(judge)
         if isinstance(runner, DefaultCaseRunner):
             runner.apply_locale = not options["no_locale"]
+            # Refuse BEFORE the first paid call (MIP-1504). Only for the real runner: a test
+            # that injects a fake one has no index to check.
+            if harness.plan_needs_search(plan):
+                problems = self.preflight()
+                if problems:
+                    raise CommandError(
+                        "PREFLIGHT failed, nothing was run (no override: fix the environment, "
+                        "or use --tag/--case to select only routing cases):\n  - "
+                        + "\n  - ".join(problems)
+                    )
 
         if options["measure_one"]:
             self._measure_one(plan, runner, guard, model, judge, choice, options)
@@ -298,6 +326,11 @@ class Command(BaseCommand):
         w(
             "The projection uses round per-case token guesses; run --measure-one to replace them with a measurement."
         )
+        if harness.plan_needs_search(plan):
+            w(
+                "A real run first checks the OpenSearch alias (an alias, with a knn_vector "
+                "`embedding`) and refuses otherwise; `--preflight-only` runs that check alone."
+            )
         w("")
         w("| case | lang | kind | tags | fixture | reps | runs on |")
         w("|---|---|---|---|---|---|---|")
@@ -422,7 +455,12 @@ class Command(BaseCommand):
             bind=bind,
         )
         try:
-            with group_usage.listen(guard.on_record), harness.guarded_llm(guard):
+            # `kind: resume` cases drive the real views through the test client, host `testserver`
+            with (
+                group_usage.listen(guard.on_record),
+                harness.guarded_llm(guard),
+                harness.allow_test_host(),
+            ):
                 return harness.run_plan(plan, runner, guard, opts)
         finally:
             if sink is not None:

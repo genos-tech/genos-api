@@ -13,6 +13,7 @@
   tags: [eval-group, t889-reason]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "Create a task called 'Fix login' in the project."
   proposal:
     tool: create_task
@@ -30,6 +31,7 @@
   tags: [eval-group, t889-reason]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "プロジェクトに「ログイン修正」というタスクを作成してください。"
   proposal:
     tool: create_task
@@ -79,6 +81,7 @@
   tags: [eval-group, t889-reason]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "Create a task called 'Fix login' in the project."
   proposal:
     tool: create_task
@@ -96,6 +99,7 @@
   tags: [eval-group, t889-reason]
   fixture: false
   polarity: pos
+  expect_baseline: fail
   query: "プロジェクトに「ログイン修正」というタスクを作成してください。"
   proposal:
     tool: create_task
