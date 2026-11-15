@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from django.conf import settings
 
-from origin.search_engine.agent.parity import PARITY_FLAG
+from origin.search_engine.agent.parity import FOLLOWUPS_FLAG, PARITY_FLAG
 from origin.search_engine.agent.tool_flag_params import (
     ON_IT_CLEAR_SENTENCE,
     ON_IT_CLEAR_SENTENCE_ON,
@@ -34,6 +34,7 @@ from origin.search_engine.agent.tools import create_task_plan as _create_task_pl
 from origin.search_engine.agent.tools import delete_calendar_event as _delete_calendar_event
 from origin.search_engine.agent.tools import list_calendar_events as _list_calendar_events
 from origin.search_engine.agent.tools import list_calendars as _list_calendars
+from origin.search_engine.agent.tools import list_project_tags as _list_project_tags
 from origin.search_engine.agent.tools import milestone_convert as _milestone_convert
 from origin.search_engine.agent.tools import task_attachments as _task_attachments
 from origin.search_engine.agent.tools import todo_source as _todo_source
@@ -79,6 +80,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # and a delete have found their event first.
     ("create_calendar_event", PARITY_FLAG, _create_calendar_event.DESCRIPTION_ADDITION),
     ("delete_calendar_event", PARITY_FLAG, _delete_calendar_event.DESCRIPTION_ADDITION),
+    # MIP-1589 (the follow-ups flag): a project's required fields and the names of its templates.
+    ("list_project_tags", FOLLOWUPS_FLAG, _list_project_tags.DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`

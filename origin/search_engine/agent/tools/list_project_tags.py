@@ -35,6 +35,7 @@ from origin.models.project.prj_models import (
     ProjectMembers,
     ProjectSavedTaskFilter,
 )
+from origin.search_engine.agent.parity import followups_on
 from origin.search_engine.agent.tools.base import (
     Tool,
     ToolContext,
@@ -42,6 +43,7 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.project_field_rules import rules_block, templates_block
 from origin.search_engine.agent.tools.task_custom_fields import field_definitions, project_fields
 from origin.search_engine.agent.tools.task_enums import VALID_EFFORTS, VALID_PRIORITIES
 from origin.search_engine.agent.tools.task_tags import project_tag_catalogue
@@ -186,19 +188,38 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     custom_fields = field_definitions(project_fields(project_id))
     filters = saved_filters(project_id, ctx.team_id, {tag["tagName"] for tag in catalogue})
     labels = _team_labels(project)
-    return {
+    result = {
         "project_id": project_id,
         "project_name": project.project_name,
         "tags": tags,
         "labels": labels,
         "custom_fields": custom_fields,
         "saved_filters": filters,
+    }
+    if followups_on():
+        # MIP-1589: what a new task here must carry, and the templates it can start from (names only).
+        # Member-gated above, as the app's own reads of both are.
+        rules = rules_block(project)
+        if rules["required"] or rules["defaults"]:
+            result["task_field_rules"] = rules
+        templates = templates_block(project)
+        if templates["names"] or templates.get("default"):
+            result["task_templates"] = templates
+    return {
+        **result,
         "__summary__": (
             f"{len(tags)} tag(s), {len(labels)} label(s), {len(custom_fields)} custom field(s) "
             f"and {len(filters)} saved filter(s) on {project.project_name}"
         ),
     }
 
+
+#: Appended to the description while `AGENT_PARITY_FOLLOWUPS` is on (`tool_flag_text`). The fields are
+#: only there when the project sets them.
+DESCRIPTION_ADDITION = (
+    " May also return `task_field_rules` (`required`: fields a new task here must have; `defaults`) "
+    "and `task_templates` (names to pass as `template`)."
+)
 
 LIST_PROJECT_TAGS = Tool(
     name="list_project_tags",

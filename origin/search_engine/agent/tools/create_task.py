@@ -59,7 +59,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.parity import ignore_unless_parity, parity_on
+from origin.search_engine.agent.parity import followups_on, ignore_unless_parity, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -67,6 +67,7 @@ from origin.search_engine.agent.tools.body_mentions import notify_task_body_ment
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.field_limits import TASK_TITLE_MAX, check_text_length
 from origin.search_engine.agent.tools.plan_task_bodies import new_task_body
+from origin.search_engine.agent.tools.project_field_rules import create_refusal
 from origin.search_engine.agent.tools.task_custom_fields import (
     CUSTOM_FIELDS_SCHEMA,
     parse_iso_date,
@@ -216,6 +217,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create tasks in project {project_id}.")
+
+    # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): a task the app's own form would refuse because a field the
+    # project requires is missing is refused here too (`project_field_rules`).
+    if followups_on() and (message := create_refusal(project, args)):
+        raise ToolError(message)
 
     milestone = None
     if args.get("milestone_id") is not None:
