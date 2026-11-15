@@ -26,7 +26,7 @@ LINE = re.compile(
     r"db_n=\d+ db_ms=\d+ inflight=\d+ bytes=(?P<bytes>\d+|-)"
     r"(?: tool=(?P<tool>[A-Za-z0-9_.-]+) result_chars=(?P<chars>\d+))?$"
 )
-SECRET = "SECRET-ARGUMENT-4c1e"
+SECRET = "marker-argument-value"
 
 
 def _lines(cm):
