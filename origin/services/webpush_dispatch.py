@@ -24,10 +24,12 @@ from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT
 from origin.models.common.notification_models import PushSubscription
 from origin.services import presence
 from origin.services.activity_minimal_card import (
-    MINIMAL_URL,
     minimal_card_ids_failing_closed,
     minimal_title,
+    minimal_url,
+    task_links_failing_open,
 )
+from origin.services.mcp_client_family import APP_FAMILIES
 from origin.services.unread_badge import unread_badge_total
 from origin.services.v3_activity import (
     SURFACE_CHAT_NOTE,
@@ -37,6 +39,7 @@ from origin.services.v3_activity import (
 )
 from origin.services.webpush_gating import is_activity_muted, is_chat_muted, should_push
 from origin.services.webpush_sender import send_web_push, vapid_configured
+from origin.views.public.mcp.via_privacy import via_for_viewer
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,39 @@ def _avatar_url(actor) -> str | None:
     return None
 
 
+# The mark of each official connected app (MIP-1600), as ROOT-RELATIVE paths of static files the web
+# app serves (genos-frontend `public/ai-apps/`). The service worker hands `icon` / `badge` to
+# `showNotification`, which resolves a relative URL against the worker's own URL, i.e. the web app's
+# origin, so no host setting is involved and there is no base that can be missing. `icon` is the
+# large picture (192 px PNG; iOS Safari ignores it and uses the app icon), `badge` the monochrome
+# 96 px glyph Android shows in the status bar. Keyed by the exact family whitelist.
+APP_MARKS: dict[str, dict[str, str]] = {
+    "claude": {"icon": "/ai-apps/claude-192.png", "badge": "/ai-apps/claude-badge-96.png"},
+    "chatgpt": {"icon": "/ai-apps/chatgpt-192.png", "badge": "/ai-apps/chatgpt-badge-96.png"},
+}
+
+
+def _app_family(act) -> str | None:
+    """The official connected app (`claude` | `chatgpt`) whose change this row reports, else None.
+
+    A member row (mention, comment participant, assignment) says it in `meta["via"]`, read as the
+    row's recipient may read it (`via_for_viewer`, so `SHOW_OAUTH_APP_TO_EVERYONE` governs the push
+    as it governs the in-app card). The AI-app notice says it in `meta["appFamily"]`. Either way
+    the value must be exactly one of `APP_FAMILIES`: anything else, or any other kind of `via`, is
+    None and the card keeps the sender's avatar."""
+    meta = getattr(act, "meta", None)
+    if not isinstance(meta, dict):
+        return None
+    if act.activity_type == ActivityType.AI_APP:
+        family = meta.get("appFamily")
+    else:
+        via = via_for_viewer(
+            meta.get("via"), getattr(act, "actor_id", None), getattr(act, "recipient_id", None)
+        )
+        family = via.get("app") if isinstance(via, dict) and via.get("kind") == "oauth" else None
+    return family if isinstance(family, str) and family in APP_FAMILIES else None
+
+
 def _task_url(meta: dict) -> str:
     """Deep-link for a task-body surface mention. Best-effort: a precise
     project/task link when `meta` carries both ids, else the task
@@ -108,20 +144,26 @@ def _note_url(meta: dict, surface_type: int) -> str:
     return "/workspace/notes"
 
 
-def _push_spec(act, *, minimal: bool = False) -> dict | None:
-    """`_full_push_spec`, and for an @mention of a task the recipient cannot open
-    (`minimal`, decided in batch by `activity_minimal_card`) the minimal card: the same
-    category (so the same preferences and mute apply), a title that says so, no display id and
-    no link into the project. A comment's own text, which the sender wrote to them, stays."""
+def _push_spec(act, *, minimal: bool = False, task_link: str | None = None) -> dict | None:
+    """`_full_push_spec`, and for an @mention of a task or task note the recipient cannot open
+    (`minimal`, decided in batch by `activity_minimal_card`) the minimal card: the same category
+    (so the same preferences and mute apply), a title that says so, no display id and no link
+    into the project or the note. A comment's own text, which the sender wrote to them, stays.
+
+    `task_link`: a comment mention of someone who can open the task but not the project chat it
+    sits in (MIP-1598): the link is the task's, not the chat's."""
     spec = _full_push_spec(act)
-    if minimal and spec is not None and act.activity_type == ActivityType.MENTION:
-        actor_name = getattr(act.actor, "username", None) or "Someone"
-        spec = {
-            **spec,
-            "title": minimal_title(actor_name),
-            "body": "" if act.surface_type is not None else spec["body"],
-            "url": MINIMAL_URL,
-        }
+    if spec is not None and act.activity_type == ActivityType.MENTION:
+        if minimal:
+            actor_name = getattr(act.actor, "username", None) or "Someone"
+            spec = {
+                **spec,
+                "title": minimal_title(actor_name, act.surface_type),
+                "body": "" if act.surface_type is not None else spec["body"],
+                "url": minimal_url(act.surface_type),
+            }
+        elif task_link:
+            spec = {**spec, "url": task_link}
     return spec
 
 
@@ -263,6 +305,7 @@ def _queue_push(
     actor=None,
     presence_scope="device",
     team_id=None,
+    app_family=None,
 ) -> bool:
     """Core fan-out for ONE recipient: preference gate + presence skip +
     active-subscription lookup + queue the HTTP send. Returns True when at
@@ -297,6 +340,10 @@ def _queue_push(
     A caller with no team to name passes None and gets the count across all
     of the recipient's teams, an upper bound the app corrects when it opens.
     It never affects WHO is pushed.
+
+    `app_family` (`claude` | `chatgpt`, from `_app_family`) puts that app's mark on the card in
+    place of the sender's avatar (`icon`) and as the status-bar glyph (`badge`); None, and any
+    value that is not an official family, leaves the card as it was.
     """
     recipient_id = str(recipient_id)
     if not should_push(recipient_id, category):
@@ -319,15 +366,18 @@ def _queue_push(
     # closed, which is exactly when the icon badge matters. Omitted when
     # unavailable; the client then increments locally.
     badge_count = unread_badge_total(recipient_id, team_id=team_id)
+    mark = APP_MARKS.get(app_family) if isinstance(app_family, str) else None
     payload = {
         "title": title,
         "body": body,
         "url": url,
         "tag": tag,
         **({"badge_count": badge_count} if badge_count is not None else {}),
-        # Card customizations (SW reads these). icon = sender avatar when
-        # WEBPUSH_MEDIA_BASE_URL is set, else app icon.
-        "icon": _avatar_url(actor),
+        # Card customizations (SW reads these). icon = the connected app's mark when the change
+        # came from one (MIP-1600), else the sender's avatar when WEBPUSH_MEDIA_BASE_URL is set,
+        # else None (the SW falls back to the app icon). `badge` only with a mark.
+        "icon": mark["icon"] if mark else _avatar_url(actor),
+        **({"badge": mark["badge"]} if mark else {}),
         "requireInteraction": True,
         "actions": [{"action": "open", "title": "Open"}],
     }
@@ -360,9 +410,10 @@ def dispatch_push_for_activities(activities) -> None:
         [(a.activity_type, str(getattr(a, "message_id", ""))[:8]) for a in activities],
     )
     minimal = minimal_card_ids_failing_closed(activities)
+    links = task_links_failing_open(activities, skip=minimal)
     for act in activities:
         try:
-            spec = _push_spec(act, minimal=act.id in minimal)
+            spec = _push_spec(act, minimal=act.id in minimal, task_link=links.get(act.id))
             if spec is None:
                 continue
             # Mute, coarse per-chat AND fine per-object. Without this, muting
@@ -383,6 +434,8 @@ def dispatch_push_for_activities(activities) -> None:
                 tag=f"{spec['category']}:{act.id}",
                 actor=act.actor,
                 team_id=getattr(act, "team_id", None),
+                # A minimal card (a task or note the recipient cannot open) shows nothing new.
+                app_family=None if act.id in minimal else _app_family(act),
             )
         except Exception as exc:  # noqa: BLE001 — never break the caller
             logger.warning(

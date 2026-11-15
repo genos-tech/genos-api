@@ -57,7 +57,12 @@ from origin.services.task_progress import progress_at
 from origin.services.task_project_move import (
     collect_descendant_task_ids as _collect_descendant_task_ids,
 )
-from origin.services.task_project_move import relocate_task_satellites, relocate_tasks
+from origin.services.task_project_move import (
+    relocate_task_satellites,
+    relocate_tasks,
+    reporters_outside_destination,
+    task_move_assignee_problem,
+)
 from origin.services.task_reparent import is_nested_task as _is_nested_task
 from origin.services.task_reparent import normalize_task_id as _normalize_task_id
 from origin.services.task_reparent import parent_implied_milestone as _parent_implied_milestone
@@ -116,8 +121,9 @@ TASK_SERVER_OWNED_FIELDS = (
 )
 
 
-def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
-    """Move a task's descendants into `project_id` alongside it.
+def _cascade_project_to_subtasks(root_task_id, project_id, team_id) -> int:
+    """Move a task's descendants into `project_id` alongside it. Returns how many task notes lost
+    their author's Owner row to it (`relocate_tasks`).
 
     A task's identity is project-scoped — its `<CODE>-<n>` display id,
     the per-project task list, milestone rollups — so children left
@@ -133,7 +139,7 @@ def _cascade_project_to_subtasks(root_task_id, project_id, team_id):
     that parent stays behind and the cross-project edge survives — see
     the caller.
     """
-    relocate_tasks(
+    return relocate_tasks(
         _collect_descendant_task_ids(root_task_id),
         project_id=project_id,
         team_id=team_id,
@@ -814,6 +820,19 @@ class TaskMasterView(AuthenticatedAPIView):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Who is already assigned is judged against the destination too (MIP-1597), as the
+            # milestone PATCH does (MIP-1583): an assignee reads the task they hold, so one who is
+            # on neither the destination nor its team would keep opening a task that is no longer
+            # theirs to see. Refused, not cleared, before anything is written. After the 404s
+            # above, so a stranger learns nothing; the assignee this save sets is the one judged
+            # (a null is dropped from the save, so the stored one stays).
+            if message := task_move_assignee_problem(
+                task, dest_project, assignee=request.data.get("assignee")
+            ):
+                return Response(
+                    {"error": message, "code": "assignee_not_on_destination"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             # The row's team follows its project. An externally shared
             # project is owned by the HOST team, and `GetProjectTasksView`
             # filters on `team` AND `project` — a moved row that kept its
@@ -1041,13 +1060,17 @@ class TaskMasterView(AuthenticatedAPIView):
                         task.root_task_id = task.task_id
                         task.save(update_fields=["parent_task_id", "root_task_id", "ts_updated_at"])
                         _cascade_tree_position_to_subtasks(task)
-                _cascade_project_to_subtasks(task.task_id, task.project_id, task.team_id)
+                notes_narrowed = _cascade_project_to_subtasks(
+                    task.task_id, task.project_id, task.team_id
+                )
                 # The moved row's own columns were written by the serializer
                 # above; this carries the rows keyed to it (its notes, its
                 # dependency edges) across the same boundary.
-                relocate_task_satellites(
+                notes_narrowed += relocate_task_satellites(
                     {task.task_id}, project_id=task.project_id, team_id=task.team_id
                 )
+                moved_ids = {task.task_id} | _collect_descendant_task_ids(task.task_id)
+                reporters_outside = reporters_outside_destination(moved_ids, dest_project)
 
             # Drop the project-tasks cache so the next sidebar fetch
             # reflects the update. `task` carries the post-save project, so
@@ -1065,8 +1088,21 @@ class TaskMasterView(AuthenticatedAPIView):
                     task, actor_id=request.user.id, previous_assignee_id=previous_assignee_id
                 )
 
+            # What a move did that the person who made it is told (MIP-1583, MIP-1597), on a move
+            # only: the task notes whose author lost their Owner role because they are not on the
+            # destination (a move back writes it again), and how many people who filed a task that
+            # moved are not on the destination or its team (they keep reading what they filed).
+            move_report = (
+                {
+                    "notesNarrowed": notes_narrowed,
+                    "reportersOutsideDestination": reporters_outside,
+                }
+                if project_changed
+                else {}
+            )
             return Response(
                 {
+                    **move_report,
                     # Surface the computed `display_id` ("<code>-<n>")
                     # alongside the serialized fields. TaskMasterSerializer
                     # uses `fields="__all__"` on a ModelSerializer so it

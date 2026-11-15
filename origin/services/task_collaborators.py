@@ -89,12 +89,18 @@ def task_readers_among(task_id, candidates) -> set[str]:
         return set()
     row = (
         TaskMaster.objects.filter(task_id=task_id)
-        .values("project_id", "assignee_id", "reporter_id")
+        .values("project_id", "team_id", "assignee_id", "reporter_id")
         .first()
     )
     if row is None:
         return set()
-    return task_reader_ids(row["project_id"], row["assignee_id"], row["reporter_id"], candidates)
+    return task_reader_ids(
+        row["project_id"],
+        row["assignee_id"],
+        row["reporter_id"],
+        candidates,
+        team_id=row["team_id"],
+    )
 
 
 def notifiable_collaborator_ids(task_id) -> set[str]:
