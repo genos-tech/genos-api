@@ -28,7 +28,7 @@ from django.test import override_settings
 from django.utils import timezone
 from django_redis.exceptions import ConnectionInterrupted
 
-from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
+from origin.models.chat.unified_models import Message
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
 from origin.search_engine import quota
 from origin.services import mcp_tier_limits as limits
@@ -840,6 +840,26 @@ class TestPageSize(LimitsBase):
         spy.assert_called_once()
         self.assertTrue(self._result(self._call("list_tasks", {"limit": 1}))["isError"])
 
+    def test_the_lists_and_their_default_are_phase_twos_not_a_copy(self):
+        from origin.views.public.mcp import list_paging
+
+        spy = self.stub()
+        real = tools.input_schema
+
+        def with_limit(tool):
+            schema = real(tool)
+            return {**schema, "properties": {**schema.get("properties", {}), "limit": {}}}
+
+        self.rig(mcp_list_page_max=100)
+        with mock.patch.object(tools, "input_schema", side_effect=with_limit):
+            self._call("list_projects", {})
+            self.assertEqual(spy.call_args.args[1], {})  # 100 is not below the default of 100
+            with mock.patch.object(list_paging, "DEFAULT_LIMIT", 150):
+                self._call("list_projects", {})
+                self.assertEqual(spy.call_args.args[1], {"limit": 100})
+        for name in list_paging.SPECS:
+            self.assertIn(name, tools.BY_NAME)
+
     def test_the_plan_with_a_page_of_100_or_none_is_never_given_one(self):
         spy = self.stub()
         real = tools.input_schema
@@ -924,6 +944,24 @@ class TestACallNothingLimitsCostsNothing(LimitsBase):
         plan.assert_not_called()
 
 
+class TestUnexpectedErrorInsideTheCounters(LimitsBase):
+    def test_counters_already_charged_are_given_back_when_a_later_one_blows_up(self):
+        self.rig(mcp_calls_per_min=5, mcp_calls_per_day=5)
+        plan = limits.plan_for(str(self.user.id), limits.ENFORCE)
+        with mock.patch.object(limits, "_bump", side_effect=[(1, False), RuntimeError("redis")]):
+            with mock.patch.object(limits, "_give_back") as back:
+                with self.assertRaises(RuntimeError):
+                    limits.admit_call(plan, user_id="u", credential_ident="c", tool="get_task")
+        self.assertEqual(back.call_count, 1)
+
+    def test_giving_back_in_the_local_store_never_creates_an_entry(self):
+        limits._give_back("mcp_tl:e:min:nobody:1", 5, True)  # noqa: SLF001
+        self.assertNotIn("mcp_tl:e:min:nobody:1", limits._local)  # noqa: SLF001
+        limits._local_bump("k", 3, 60)  # noqa: SLF001
+        limits._give_back("k", 5, True)  # noqa: SLF001
+        self.assertEqual(limits._local["k"][1], 0)  # noqa: SLF001
+
+
 class TestFailurePolicy(LimitsBase):
     tier = "pro"
 
@@ -949,7 +987,7 @@ class TestFailurePolicy(LimitsBase):
             self.assertEqual(self.call_ok().status_code, 200)
             self.assertEqual(self.call_ok().status_code, 429)
 
-    def test_the_plan_gate_itself_is_not_touched_by_a_lookup_failure_in_the_limits(self):
+    def test_the_plan_for_a_failed_lookup_is_cores(self):
         with mock.patch.object(quota, "get_effective_tier", side_effect=RuntimeError("db")):
             plan = limits.plan_for(str(self.user.id), limits.ENFORCE)
         self.assertEqual(plan.tier, "core")
@@ -1130,6 +1168,17 @@ class TestHistoryOnGetChatThread(McpChatBase):
         text = self.call("get_chat_thread", {"chat_type": "GM", "chat_id": str(self.gm.id)})[1]
         self.assertIn("history window is the last 365 days", text)
 
+    def test_a_threads_summary_keeps_saying_only_the_first_100_replies(self):
+        from origin.views.public.mcp.history_window import _summary
+
+        text = _summary(
+            {"chat_type": "GM", "chat_id": "c", "thread_id": "t", "has_more": True}, 4, 365
+        )
+        self.assertIn("only the first 100 replies", text)
+        self.assertNotIn(
+            "100 replies", _summary({"chat_type": "GM", "chat_id": "c", "thread_id": "t"}, 4, 365)
+        )
+
     def test_when_nothing_is_left_it_says_so(self):
         Message.objects.filter(pk=self.new.pk).update(
             ts_sent_at=timezone.now() - timedelta(days=500)
@@ -1289,10 +1338,6 @@ class TestHistoryByArgument(LimitsBase):
         from origin.services import briefing
 
         self.assertLess(briefing.MAX_LOOKBACK, timedelta(days=365))
-        self.assertLess(
-            briefing.MAX_LOOKBACK,
-            timedelta(days=limits.MCP_TIER_LIMITS_PROPOSED and 365),
-        )
         # Core's message window is the shortest the plans use (Free's is longer, 180 days).
         core_days = settings.SEARCH_ENGINE["TIER_QUOTAS"]["core"]["message_retention_days"]
         self.assertGreater(timedelta(days=core_days), briefing.MAX_LOOKBACK)
@@ -1315,9 +1360,3 @@ class TestExistingThrottleIsUntouched(LimitsBase):
                 res = self._rpc("ping")
         self.assertEqual(res.status_code, 429)
         self.assertEqual(set(res.json()), {"detail"})
-
-
-class TestChannelFixtureSanity(McpChatBase):
-    def test_the_fixture_is_a_channel_both_users_are_in(self):
-        self.assertTrue(Channel.objects.filter(kind=ChannelKind.GM).exists())
-        self.assertEqual(ChannelMember.objects.filter(channel=self.gm).count(), 2)

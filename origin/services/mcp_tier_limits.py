@@ -198,11 +198,6 @@ def _live_row(tier: str) -> dict[str, Any]:
     return table.get(tier) or table.get(FALLBACK_TIER) or {}
 
 
-def _row_value(row: dict[str, Any], key: str) -> Any:
-    # A MISSING key is None (permissive), as for every other capability.
-    return row.get(key)
-
-
 @dataclass(frozen=True)
 class Plan:
     """The limits of one person's effective tier for one call."""
@@ -215,7 +210,8 @@ class Plan:
             row = MCP_TIER_LIMITS_PROPOSED.get(tier) or MCP_TIER_LIMITS_PROPOSED[FALLBACK_TIER]
         else:
             row = _live_row(tier)
-        return _row_value(row, key)
+        # A MISSING key is None (permissive), as for every other capability.
+        return row.get(key)
 
     def value(self, key: str) -> Any:
         """The limit for `key`: an int (or True/False for `HISTORY`), or None = unlimited."""
@@ -261,13 +257,13 @@ def _quiet_once(kind: str, ident: str, window: int) -> bool:
     would otherwise write one line per call. A cache failure logs rather than hides."""
     try:
         return bool(throttle_cache().add(f"mcp_tl:logged:{kind}:{ident}:{window}", 1, 120))
-    except CACHE_ERRORS:
-        return True
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - a cache failure logs rather than hides
         return True
 
 
-def note_would_limit(plan: Plan, category: str, limit: Any, used: Any, tool: Any, ident: str):
+def note_would_limit(
+    plan: Plan, category: str, limit: Any, used: Any, tool: Any, ident: str
+) -> None:
     if _quiet_once(category, ident, int(_now() // 60)):
         _log_line("mcp.tier_would_limit", plan, category, limit, used, tool)
 
@@ -334,7 +330,10 @@ def _bump(key: str, cost: int, ttl: int, *, local_fallback: bool) -> tuple[int, 
 def _give_back(key: str, cost: int, degraded: bool) -> None:
     try:
         if degraded:
-            _local_bump(key, -cost, 1)
+            with _local_lock:
+                if key in _local:
+                    expires, count = _local[key]
+                    _local[key] = (expires, max(0, count - cost))
         else:
             throttle_cache().incr(key, -cost)
     except Exception:  # noqa: BLE001 - a refund that fails only leaves the count slightly high
@@ -412,6 +411,17 @@ def admit_call(plan: Plan, *, user_id: Any, credential_ident: str, tool: Any) ->
         )
 
     done: list[tuple[str, int, bool]] = []
+    try:
+        return _admit_steps(plan, steps, tool, shadow, done)
+    except Exception:
+        # Something unexpected after some counters were charged: give them back, so the call
+        # (which the caller lets through) is not also counted against the person.
+        for b, c, d in done:
+            _give_back(b, c, d)
+        raise
+
+
+def _admit_steps(plan, steps, tool, shadow, done) -> Refusal | None:
     for key, bucket, ttl, retry, step_cost, ident in steps:
         counted = _bump(bucket, step_cost, ttl, local_fallback=not shadow)
         if counted is None:
@@ -445,12 +455,10 @@ class CapHit:
     tier: str
 
 
-def check_cap(
-    user_id: Any, key: str, *, size: int, used: int | None = None, tool: Any = None
-) -> CapHit | None:
+def check_cap(user_id: Any, key: str, *, size: int, tool: Any = None) -> CapHit | None:
     """`size` against the person's limit for `key`. `off`: None without looking anything up.
     `shadow`: logs when it would have refused and returns None. `enforce`: a `CapHit` when
-    `size` is over the limit. `used` is what a client is told it has (defaults to `size`)."""
+    `size` is over the limit."""
     active = mode()
     if active == OFF:
         return None
@@ -458,7 +466,7 @@ def check_cap(
     limit = plan.value(key)
     if limit is None or size <= limit:
         return None
-    shown = size if used is None else used
+    shown = size
     if active == SHADOW:
         note_would_limit(plan, CATEGORY[key], limit, shown, tool, f"u:{user_id}")
         return None
