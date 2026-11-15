@@ -6,7 +6,13 @@ import time
 
 from django.test import SimpleTestCase
 
-from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
+from origin.search_engine.agent.tools.blocknote_md import (
+    EXTRA_CODE_LANGUAGE_ALIASES,
+    PICKER_CODE_LANGUAGE_ALIASES,
+    SUPPORTED_CODE_LANGUAGE_IDS,
+    markdown_to_blocks,
+    resolve_code_language,
+)
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.text_extraction import extract_sections, extract_text
 
@@ -578,3 +584,109 @@ class TestMathRoundTrip(SimpleTestCase):
         self.assertEqual([b["type"] for b in saved], ["mathBlock", "paragraph", "diagram"])
         self.assertEqual(saved[0]["content"], [_text("E=mc^2")])
         self.assertEqual(saved[2]["content"], [_text(_DIAGRAM_SOURCE)])
+
+
+class TestCodeBlockLanguage(SimpleTestCase):
+    """The language of an imported fence is always an id the editor can render
+    (MIP-1604, the api half of MIP-1601): BlockNote's code block throws
+    "Language X is not supported" for any other, so an unknown name falls back
+    to `text`. Same alias map as the frontend's `codeBlockLanguage.ts`."""
+
+    @staticmethod
+    def _language(fence_info, source="code"):
+        [block] = markdown_to_blocks(f"```{fence_info}\n{source}\n```")
+        assert block["type"] == "codeBlock", block["type"]
+        return block["props"]["language"]
+
+    def test_aliases_resolve_to_the_editor_ids(self):
+        for fence, expected in {
+            "ts": "typescript",
+            "js": "javascript",
+            "bash": "shellscript",
+            "sh": "shellscript",
+            "yml": "yaml",
+            "py": "python",
+            "c++": "cpp",
+            "c#": "csharp",
+            "tsx": "tsx",
+            "TS": "typescript",
+            "Python": "python",
+            "node": "javascript",
+            "console": "shellscript",
+            "svg": "xml",
+            "golang": "text",
+        }.items():
+            with self.subTest(fence=fence):
+                self.assertEqual(self._language(fence), expected)
+
+    def test_supported_ids_pass_through(self):
+        for language in sorted(SUPPORTED_CODE_LANGUAGE_IDS):
+            if language in ("mermaid",):
+                continue  # a ```mermaid fence is a diagram block, see below
+            with self.subTest(language=language):
+                self.assertEqual(self._language(language), language)
+
+    def test_unknown_language_falls_back_to_text(self):
+        for fence in ["go", "dockerfile", "toml", "brainfuck", "not-a-language", "{r}"]:
+            with self.subTest(fence=fence):
+                self.assertEqual(self._language(fence), "text")
+
+    def test_no_language_is_text(self):
+        self.assertEqual(self._language(""), "text")
+
+    def test_content_is_preserved_exactly(self):
+        source = "def f(x):\n    return x  # 日本語 `tick` <b>&amp;</b>\n\n\n  indented"
+        for fence in ["go", "ts", ""]:
+            with self.subTest(fence=fence):
+                [block] = markdown_to_blocks(f"```{fence}\n{source}\n```")
+                self.assertEqual(block["content"], [_text(source)])
+
+    def test_tilde_fence_and_nested_fence_resolve_too(self):
+        [block] = markdown_to_blocks("~~~go\nx := 1\n~~~")
+        self.assertEqual(block["props"]["language"], "text")
+        _item, code = markdown_to_blocks("- step\n  ```ts\n  let a = 1\n  ```")
+        self.assertEqual(code["props"]["language"], "typescript")
+        self.assertEqual(code["content"], [_text("let a = 1")])
+
+    def test_math_and_mermaid_fences_are_not_code_blocks(self):
+        blocks = markdown_to_blocks("```math\nx^2\n```\n\n```mermaid\ngraph TD; A-->B\n```")
+        self.assertEqual([b["type"] for b in blocks], ["mathBlock", "diagram"])
+        self.assertEqual([b["props"] for b in blocks], [{}, {}])
+
+    def test_every_alias_target_is_a_supported_id(self):
+        # Keep SUPPORTED_CODE_LANGUAGE_IDS and the maps in step with the frontend
+        # (`src/components/editors/codeBlockLanguage.ts`, BlockNote's
+        # `supportedLanguages`): a target outside the list would reintroduce the throw.
+        for alias, target in {
+            **PICKER_CODE_LANGUAGE_ALIASES,
+            **EXTRA_CODE_LANGUAGE_ALIASES,
+        }.items():
+            with self.subTest(alias=alias):
+                self.assertIn(target, SUPPORTED_CODE_LANGUAGE_IDS)
+                self.assertEqual(alias, alias.lower())
+        self.assertIn("typescript", SUPPORTED_CODE_LANGUAGE_IDS)
+        self.assertIn("text", SUPPORTED_CODE_LANGUAGE_IDS)
+        self.assertNotIn("ts", SUPPORTED_CODE_LANGUAGE_IDS)
+
+    def test_resolver_handles_odd_input(self):
+        for raw, expected in {
+            None: "text",
+            42: "text",
+            "": "text",
+            "  ts  ": "typescript",
+            ".ts": "typescript",
+            "language-ts": "typescript",
+            "ts title=a.ts": "typescript",
+            "js{1,3}": "javascript",
+            "{r}": "text",
+        }.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(resolve_code_language(raw), expected)
+
+    def test_supported_language_reads_back_byte_identical(self):
+        # The agent's read-back of a note written with a supported fence does not change.
+        md = "```typescript\nconst a: number = 1\n```"
+        self.assertEqual(blocks_to_markdown(markdown_to_blocks(md)), md)
+        self.assertEqual(
+            blocks_to_markdown(markdown_to_blocks("```ts\nx\n```")), "```typescript\nx\n```"
+        )
