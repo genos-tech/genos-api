@@ -302,6 +302,6 @@ class MilestoneMoveTests(ToolBase):
         self.assertIn("1 task note", out["__summary__"])
         self.assertIsNone(self.bobs_role())
         back = self.move_tool(self.m, project=self.project)
-        self.assertEqual(back["moved"]["notes_narrowed"], 0)
+        self.assertNotIn("notes_narrowed", back["moved"])  # nothing narrowed: the result as before
         self.assertNotIn("task note", back["__summary__"])
         self.assertEqual(self.bobs_role(), ROLE_OWNER)
