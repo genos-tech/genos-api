@@ -36,13 +36,13 @@ from origin.services.v3_activity import (
     SURFACE_TASK_BODY,
     SURFACE_TASK_NOTE,
 )
-from origin.views.utils.scope_guards import active_team_ids
 from origin.views.utils.note_role import (
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
     readable_note_ids,
 )
+from origin.views.utils.scope_guards import active_team_ids
 
 # The surfaces this module judges, and the note type each note surface is.
 COVERED_SURFACES = (SURFACE_TASK_BODY, SURFACE_PERSONAL_NOTE, SURFACE_TASK_NOTE, SURFACE_CHAT_NOTE)
@@ -91,7 +91,8 @@ def _readable_tasks(user_id, task_ids: set[int]) -> set[int]:
     held = [
         t
         for t in tasks
-        if t["project_id"] not in on_project and me in {str(t["assignee_id"]), str(t["reporter_id"])}
+        if t["project_id"] not in on_project
+        and me in {str(t["assignee_id"]), str(t["reporter_id"])}
     ]
     on_team = active_team_ids(user_id, {team_of(t) for t in held})
     return {t["task_id"] for t in tasks if t["project_id"] in on_project} | {

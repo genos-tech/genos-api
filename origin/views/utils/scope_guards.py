@@ -603,12 +603,9 @@ def _project_readers_and_team(project_id, wanted):
                 project=project_id, attendee__in=wanted
             ).values_list("attendee_id", flat=True)
         }
-        owner, team = (
-            ProjectMaster.objects.filter(project_id=project_id)
-            .values_list("owner_id", "team_id")
-            .first()
-            or (None, None)
-        )
+        owner, team = ProjectMaster.objects.filter(project_id=project_id).values_list(
+            "owner_id", "team_id"
+        ).first() or (None, None)
         if owner is not None and str(owner) in wanted:
             found.add(str(owner))
         return found, team
