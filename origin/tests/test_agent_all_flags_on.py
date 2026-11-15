@@ -51,10 +51,14 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # 397 characters left.
 # The calendar account hint (follow-up to MIP-1059): +221 more (one sentence on `create_calendar_event`;
 # 145,869 all-on, 147,324 with a Long member's block): 176 characters left, the constant stays.
+# THE FLIP (2026-11-15): `AGENT_PARITY_TOOLS` is on by default, so production sends the 145,869 above
+# (re-measured on the merged tree). Nothing is raised: 147,324 with a Long member's block fits the
+# 147,500 constant, and `BUDGET_CHARS` (146,000) holds the production number.
 ALL_ON_BUDGET_CHARS = 147_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
-# Japanese cases were re-read). Everything else in ALL_ON is held.
+# Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
+# paid run). Everything else in ALL_ON is held.
 SHIPPED_ON = frozenset(
     {
         "AGENT_RESUME_KEEPS_BLOCKS",
@@ -69,6 +73,7 @@ SHIPPED_ON = frozenset(
         "AGENT_CLOSED_ANCESTOR_RULE",
         "AGENT_INAPP_TIMELINE_TOOL",
         "AGENT_CONTENT_LENGTH",
+        "AGENT_PARITY_TOOLS",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
@@ -96,9 +101,9 @@ class AllOnArmTests(SimpleTestCase):
             self.assertIs(value, True, key)
 
     def test_the_shipped_flags_are_on_by_default_and_the_held_ones_are_off(self):
-        # MIP-1089 flipped ten flags on by the 2026-11-14 grouped eval. The others stay dark until
-        # their own decision: content length (tune first) and the body on the user model (empty
-        # bodies, MIP-1503). (The client name in task history was dropped instead, MIP-1089.)
+        # MIP-1089 flipped ten flags on by the 2026-11-14 grouped eval; the timeline tool, content length
+        # and the parity batch followed. What stays dark until its own decision: the body on the user
+        # model (empty bodies, MIP-1503). (The client name in task history was dropped instead, MIP-1089.)
         # The PRODUCTION defaults: `apis.settings` itself. The test settings keep the shipped flags
         # off (see `apis/settings_test.py`), so `django.conf.settings` would not tell.
         from apis import settings as production  # noqa: PLC0415

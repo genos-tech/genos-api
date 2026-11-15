@@ -12,7 +12,7 @@ blocks `add_comment` writes, with the same chip syntax.
 Approval flow: `requires_approval=True`. The user sees the new text before it
 replaces the old.
 
-MIP-1562 (flag `AGENT_PARITY_TOOLS`, default OFF; with it off none of this exists, see
+MIP-1562 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with it off none of this exists, see
 `parity.py`): the comment bubble's two other actions go through the same tool instead of a new one,
 because a write tool cannot be flag-gated and every parameter is one fewer declaration.
 

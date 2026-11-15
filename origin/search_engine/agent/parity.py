@@ -1,6 +1,6 @@
 """The flag the MIP-578 parity batch shares, and the one thing a tool does with it (MIP-1561).
 
-`SEARCH_ENGINE["AGENT_PARITY_TOOLS"]` (default OFF, `apis/settings.py`) publishes parameters the
+`SEARCH_ENGINE["AGENT_PARITY_TOOLS"]` (default ON since the 2026-11-15 flip, `apis/settings.py`; env `false` is the rollback) publishes parameters the
 app's own forms already have to the in-app agent and to MCP: see `tool_flag_params` for what the
 model is shown. This module is the other half, and imports no tool, so a tool can import it:
 the tool itself ignores a parameter while the flag is off.

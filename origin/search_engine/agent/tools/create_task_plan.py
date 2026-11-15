@@ -21,7 +21,7 @@ Semantics mirror the UI paths exactly:
   * Tasks are created in array order, parents first, so the
     `root_task_id` post_save signal resolves each child in O(1).
 
-MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF): a task may take `status` (default Open; not
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip): a task may take `status` (default Open; not
 Deleted) and `template` (its body, when it has none: `plan_task_bodies`). A blocker still wins over
 an active status, as it does in the app: an Open, WIP or Pending task with an open blocker is
 Blocked once the plan's edges exist, a Closed one stays Closed (`task_blocking`).

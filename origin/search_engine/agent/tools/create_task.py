@@ -38,7 +38,7 @@ other fields the UI's create form sets (MIP-878). They are checked before the
 row exists, so a refused one creates nothing; see `task_custom_fields` and
 `task_people` for the rules.
 
-MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF; with it off none of this exists, see
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with it off none of this exists, see
 `parity.ignore_unless_parity`): the rest of what the create form sets. `status` (Open, WIP,
 Blocked, Pending or Closed; Deleted is refused: a task is deleted with `update_task`),
 `reporter_id` (default the caller; the same rule as `assignee_id`), `links` (`task_links`) and

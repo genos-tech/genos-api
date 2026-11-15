@@ -79,6 +79,12 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # proposes before it reads), +221, 145,869 measured with the flag on over the shipped flags. The constant
 # stays: 131 characters are left, so the next parity task raises it with its own measurement. With the flag
 # off production still sends 139,147.
+# THE FLIP (2026-11-15, `AGENT_PARITY_TOOLS` on by default): production now sends the flag-on prefix,
+# 145,869 characters (the number above, re-measured on the tree with every other change merged), +6,722
+# over the 139,147 of the flag-off rollback (about +1,380 input tokens at 4.2 characters per token per
+# call: +4.2% of the prompt, +6% per ask in the grouped paid run of 2026-11-15, gemini-3.6-flash). Nothing
+# needs raising: the constant stays 146,000 (131 characters left), and `ALL_ON_BUDGET_CHARS` (147,500; 147,324
+# with a Long member's content block) holds too. The next parity task raises both with its own measurement.
 BUDGET_CHARS = 146_000
 
 
@@ -92,7 +98,9 @@ def _declared_chars() -> int:
 class PrefixBudgetTests(SimpleTestCase):
     def test_the_prefix_stays_inside_its_budget(self) -> None:
         # What PRODUCTION sends: the test settings keep the flags MIP-1089 turned on off, so lay the
-        # production defaults over them (`apis.settings` keeps them).
+        # production defaults over them (`apis.settings` keeps them). Since the flip that includes the
+        # parity flag's declarations (the constant prompt, not `agent_system_prompt()`: the next test
+        # measures the prompt with its flagged lines).
         from apis import settings as production  # noqa: PLC0415
 
         with mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE):
@@ -106,8 +114,8 @@ class PrefixBudgetTests(SimpleTestCase):
         )
 
     def test_the_prefix_with_the_parity_flag_on_stays_inside_its_budget(self) -> None:
-        # The flag ships off, so production does not pay this yet; the day it is flipped it must
-        # already fit, or the flip is also a budget decision nobody made.
+        # Production pays this since the flip (the flag is on by default). Held separately, with the
+        # prompt as the loop builds it (the event citation line and the reject-reason rule).
         from apis import settings as production  # noqa: PLC0415
 
         with mock.patch.dict(

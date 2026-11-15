@@ -12,21 +12,29 @@ the same PR. Same idea as `BUDGET_CHARS` in `test_agent_prefix_budget`.
 
 from __future__ import annotations
 
+from unittest import mock
+
+from django.conf import settings
 from django.test import SimpleTestCase
 
+from apis import settings as production
 from origin.search_engine.agent.tools import FLAGGED_REGISTRY, MCP_ONLY_REGISTRY, REGISTRY
-from origin.views.public.mcp.tools import CATALOG
+from origin.views.public.mcp.tools import CATALOG, published
 
 # What the doc says. Update both together.
 # `PUBLISHED` is what a client is offered while every flag is off (the catalog minus `FLAGGED`).
 # MIP-1563 added one flag-gated WRITE tool (`delete_task_attachment`, flag `AGENT_PARITY_TOOLS`),
-# which is in `CATALOG` but published only while its flag is on: the number a client sees today did
-# not move, and `FLAGGED_WRITES` is the one that will be added to it on the flip. MIP-1059 added one
-# flag-gated READ (`get_calendar_event`, the same flag): `FLAGGED_READS`.
+# which is in `CATALOG` but published only while its flag is on. MIP-1059 added one flag-gated READ
+# (`get_calendar_event`, the same flag): `FLAGGED_READS`. The flag has been ON by default in production
+# since the 2026-11-15 flip, so a client is offered `OFFERED` = `PUBLISHED` + `FLAGGED` = 101 (55 reads,
+# 46 writes) by default and `PUBLISHED` = 99 with `AGENT_PARITY_TOOLS=false` (the rollback).
 PUBLISHED = 99
 FLAGGED = 2
 FLAGGED_WRITES = 1
 FLAGGED_READS = 1
+OFFERED = 101
+OFFERED_READS = 55
+OFFERED_WRITES = 46
 FROM_REGISTRY = (
     83  # published tools backed by a tool in the agent registry (some under another name)
 )
@@ -90,3 +98,17 @@ class McpToolCountTests(SimpleTestCase):
         published = {t.registry_name for t in self.shared}
         self.assertEqual(set(REGISTRY) - published, LEFT_OUT, HOW)
         self.assertEqual(len(REGISTRY) - len(published), 5, HOW)
+
+    def test_what_a_client_is_offered_by_default_and_after_the_rollback(self):
+        # The production default (`apis.settings`; the test settings keep the flag off) and the rollback.
+        with mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE):
+            offered = [t for t in CATALOG if published(t)]
+        self.assertEqual(len(offered), OFFERED, HOW)
+        self.assertEqual(sum(1 for t in offered if not t.write), OFFERED_READS, HOW)
+        self.assertEqual(sum(1 for t in offered if t.write), OFFERED_WRITES, HOW)
+        self.assertEqual(OFFERED, PUBLISHED + FLAGGED)
+        with mock.patch.dict(
+            settings.SEARCH_ENGINE, {**production.SEARCH_ENGINE, "AGENT_PARITY_TOOLS": False}
+        ):
+            rolled_back = [t for t in CATALOG if published(t)]
+        self.assertEqual(len(rolled_back), PUBLISHED, HOW)
