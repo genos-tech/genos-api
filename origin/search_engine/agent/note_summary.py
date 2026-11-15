@@ -108,6 +108,7 @@ class NoteSummaryError(Exception):
 
 
 NOTE_NOT_FOUND = "Note not found."
+NOTE_EMPTY = "Note is empty — nothing to summarise yet."
 
 
 class NoteNotFoundError(NoteSummaryError):
@@ -146,9 +147,16 @@ def compute_fingerprint(record: NoteRecord) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _fetch_personal(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
+def _readable_personal(
+    note_id: int, user_id: str, team_id: str | None, *, without_body: bool = False
+):
+    """The personal note, or `NoteNotFoundError`: the access rule alone, so `note_readable` (history
+    lists, which must not load every body) and `_fetch_personal` cannot drift apart."""
     try:
-        note = PersonalNoteMaster.objects.get(note_id=note_id)
+        rows = (
+            PersonalNoteMaster.objects.defer("body") if without_body else PersonalNoteMaster.objects
+        )
+        note = rows.get(note_id=note_id)
     except PersonalNoteMaster.DoesNotExist:
         raise NoteNotFoundError()
     if not _in_team(note, team_id):
@@ -165,6 +173,12 @@ def _fetch_personal(note_id: int, user_id: str, team_id: str | None) -> NoteReco
         owner_id=owner_id or None,
     ):
         raise NoteNotFoundError()
+    return note
+
+
+def _fetch_personal(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
+    note = _readable_personal(note_id, user_id, team_id)
+    owner_id = str(getattr(note, "owner_id", "") or "")
     return NoteRecord(
         note_type=NOTE_TYPE_PERSONAL,
         note_id=note_id,
@@ -176,9 +190,13 @@ def _fetch_personal(note_id: int, user_id: str, team_id: str | None) -> NoteReco
     )
 
 
-def _fetch_task_note(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
+def _readable_task_note(
+    note_id: int, user_id: str, team_id: str | None, *, without_body: bool = False
+):
+    """The task note, or `NoteNotFoundError` (see `_readable_personal`)."""
     try:
-        note = TaskNoteMaster.objects.get(note_id=note_id)
+        rows = TaskNoteMaster.objects.defer("body") if without_body else TaskNoteMaster.objects
+        note = rows.get(note_id=note_id)
     except TaskNoteMaster.DoesNotExist:
         raise NoteNotFoundError()
     if not _in_team(note, team_id):
@@ -193,6 +211,14 @@ def _fetch_task_note(note_id: int, user_id: str, team_id: str | None) -> NoteRec
     )
     if not allowed or user_id not in allowed:
         raise NoteNotFoundError()
+    return note
+
+
+def _fetch_task_note(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
+    note = _readable_task_note(note_id, user_id, team_id)
+    owner_id = str(getattr(note, "owner_id", "") or "")
+    project_id = getattr(note, "project_id", None)
+    task_id = getattr(note, "task_id", None)
     return NoteRecord(
         note_type=NOTE_TYPE_TASK,
         note_id=note_id,
@@ -206,9 +232,13 @@ def _fetch_task_note(note_id: int, user_id: str, team_id: str | None) -> NoteRec
     )
 
 
-def _fetch_chat_note(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
+def _readable_chat_note(
+    note_id: int, user_id: str, team_id: str | None, *, without_body: bool = False
+):
+    """The chat note, or `NoteNotFoundError` (see `_readable_personal`)."""
     try:
-        note = ChatNoteMaster.objects.get(note_id=note_id)
+        rows = ChatNoteMaster.objects.defer("body") if without_body else ChatNoteMaster.objects
+        note = rows.get(note_id=note_id)
     except ChatNoteMaster.DoesNotExist:
         raise NoteNotFoundError()
     if not _in_team(note, team_id):
@@ -224,6 +254,14 @@ def _fetch_chat_note(note_id: int, user_id: str, team_id: str | None) -> NoteRec
     )
     if not allowed or user_id not in allowed:
         raise NoteNotFoundError()
+    return note
+
+
+def _fetch_chat_note(note_id: int, user_id: str, team_id: str | None) -> NoteRecord:
+    note = _readable_chat_note(note_id, user_id, team_id)
+    owner_id = str(getattr(note, "owner_id", "") or "")
+    chat_type_code = note.chat_type
+    channel_id = note.channel_id
     # NoteRecord KEY names chat_id / thread_id are opaque deep-link feed-
     # through; the source values are now the v3 channel / thread-root UUID.
     return NoteRecord(
@@ -262,6 +300,44 @@ def fetch_note_for_agent(
     if note_type == NOTE_TYPE_CHAT:
         return _fetch_chat_note(note_id, user_id, team_id)
     raise NoteSummaryError(f"Unsupported note_type {note_type!r}.")
+
+
+def note_readable(
+    *, note_type: int, note_id: int, user_id: str, team_id: str | None = None
+) -> bool:
+    """Whether `fetch_note_for_agent` would let `user_id` in: the same rule, without the body.
+
+    For a list of past conversations (one answer per note, never loads a note's text). A note that
+    is missing, in another team or not readable, and a type this code does not know, are all False.
+    """
+    try:
+        if note_type == NOTE_TYPE_PERSONAL:
+            _readable_personal(note_id, user_id, team_id, without_body=True)
+        elif note_type == NOTE_TYPE_TASK:
+            _readable_task_note(note_id, user_id, team_id, without_body=True)
+        elif note_type == NOTE_TYPE_CHAT:
+            _readable_chat_note(note_id, user_id, team_id, without_body=True)
+        else:
+            return False
+    except NoteSummaryError:
+        return False
+    return True
+
+
+def check_note_for_ask(
+    *, note_type: int, note_id: int, user_id: str, team_id: str | None = None
+) -> None:
+    """What `peek_cached_summary` refuses an ask from this note with, before anything is written.
+
+    Raises `NoteNotFoundError` (missing, another team, not readable) or `NoteSummaryError` (empty,
+    or a note type this code does not know): the same two errors, in the same words, the ask's
+    summary step raises later, so the view can answer them first and open no session or run.
+    """
+    record = fetch_note_for_agent(
+        note_type=note_type, note_id=note_id, user_id=user_id, team_id=team_id
+    )
+    if not record.body_text.strip() and not record.title.strip():
+        raise NoteSummaryError(NOTE_EMPTY)
 
 
 # --------------------------------------------------------------------------- #
@@ -308,9 +384,7 @@ def _format_note_for_prompt(record: NoteRecord) -> str:
 
 
 @spend_purpose("summary")
-def summarise_note(
-    record: NoteRecord, *, model_override: str | None = None
-) -> tuple[str, str]:
+def summarise_note(record: NoteRecord, *, model_override: str | None = None) -> tuple[str, str]:
     """One LLM call. Returns `(summary_text, model_label)`.
 
     `model_override` is the effort-level "summaries" pin — see
@@ -384,7 +458,7 @@ def peek_cached_summary(
         note_type=note_type, note_id=note_id, user_id=user_id, team_id=team_id
     )
     if not record.body_text.strip() and not record.title.strip():
-        raise NoteSummaryError("Note is empty — nothing to summarise yet.")
+        raise NoteSummaryError(NOTE_EMPTY)
 
     fingerprint = compute_fingerprint(record)
     existing = NoteSummary.objects.filter(note_type=note_type, note_id=note_id).first()
@@ -466,7 +540,7 @@ def get_or_generate_note_summary(
             note_type=note_type, note_id=note_id, user_id=user_id, team_id=team_id
         )
         if not record.body_text.strip() and not record.title.strip():
-            raise NoteSummaryError("Note is empty — nothing to summarise yet.")
+            raise NoteSummaryError(NOTE_EMPTY)
         return regenerate_summary(
             note_type=note_type,
             note_id=note_id,

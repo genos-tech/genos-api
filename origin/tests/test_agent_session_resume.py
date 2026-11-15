@@ -134,7 +134,12 @@ class ExplicitResumeTests(TestCase):
             ),
             minutes=60,
         )
-        got = self._resolve(session.session_id, allow_expired=False)
+        # The chat is made up: continuing a thread session by id alone re-checks that the person can
+        # still open it (MIP-1590), which is not what this test is about.
+        with mock.patch(
+            "origin.search_engine.agent_views.session_scope.object_readable", return_value=True
+        ):
+            got = self._resolve(session.session_id, allow_expired=False)
         self.assertEqual(got.session_id, session.session_id)
 
     def test_retention_lookup_skipped_when_flag_absent(self):
