@@ -132,7 +132,7 @@ def _exact_fence(text: str) -> tuple[str, str, str] | None:
     return None
 
 
-_TRAILING_MARKER = re.compile(r"\n\[… (\d+) more characters not shown …\]\Z")
+_TRAILING_MARKER = re.compile(r"\n\[… (\d{1,9}) more characters not shown …\]\Z")
 
 
 def _split_marker(text: str) -> tuple[str, int]:
