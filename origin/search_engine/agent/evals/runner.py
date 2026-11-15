@@ -399,6 +399,10 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
         # (Multi-turn cases don't support mentions yet.)
         mention_extra: str | None = None
         mention_seeds: list[dict[str, Any]] | None = None
+        # MIP-1585: the question the model reads. With the parity flag on, the visible `#label` / `@label` token of a
+        # mention is replaced by the item's bracketed id, by the production code (`agent/mention_tokens.py`), so a case
+        # whose `query` carries the token measures what the ask view sends. Unchanged for every other case.
+        run_query = query
         # MIP-1058: a case may also point at chat messages (`{type: message, lookup_text: ...}`, the ids
         # being dynamic) and carry `selected_text`. Both build their block with the production code
         # (`agent/ask_refs.py`), in the order the ask view puts them: BEFORE the references. A case whose
@@ -423,6 +427,13 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
 
             mention_extra = build_mention_system_extra(resolved)
             mention_seeds = build_mention_seed_sources(resolved)
+            if parity_on():
+                from origin.search_engine.agent.mention_tokens import (  # noqa: PLC0415
+                    replace_tokens,
+                    slots_for_resolved,
+                )
+
+                run_query = replace_tokens(query, slots_for_resolved(resolved))
             ref_extra = build_reference_block(
                 [m.message_read for m in resolved if m.kind == "message" and m.message_read],
                 parse_selection(case.get("selected_text")) if parity_on() else None,
@@ -478,7 +489,7 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
                 attempt_traces.append({"tool_name": name, "arguments": args, "result": result})
 
             run_agent(
-                query,
+                run_query,
                 ctx,
                 _ts_emit,
                 run_id=None,
@@ -1892,6 +1903,20 @@ def _resolve_mention_specs(
     for spec in specs:
         entry = dict(spec)
         kind = entry.get("type")
+        # The client always sends a `label` (what its token in the question says), and the question of a case carries that
+        # token. A spec that names no label is given its lookup (a title, a username, a name), which is what the picker
+        # writes, so a case from before MIP-1585 reads as the client would send it. A message has no such text: it keeps
+        # the label it says, or none. Read only while the parity flag is on (`mention_tokens`).
+        lookup = next(
+            (
+                entry[key]
+                for key in ("lookup_title", "lookup_username", "lookup_name")
+                if isinstance(entry.get(key), str)
+            ),
+            None,
+        )
+        if lookup and "label" not in entry:
+            entry["label"] = lookup
         if kind == "task" and "lookup_title" in entry:
             from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 

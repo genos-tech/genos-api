@@ -355,25 +355,38 @@ def resume_refs(messages: Sequence[MessageRead], selection: Selection | None) ->
     }
 
 
-def rebuild_block(refs: Any, *, team_id: str, user_id: str) -> str | None:
-    """The block for the leg resumed after an approval.
+def rebuild(refs: Any, *, team_id: str, user_id: str) -> tuple[str | None, list[str]]:
+    """`(block, dropped)` for the leg resumed after an approval.
 
     The messages are read AGAIN, by the same query as the ask: one the person can no longer read
     (deleted, or they left the chat, or the history window moved) is simply not there, and a copy
     of a private message never sits on the run row. The selection is the person's own text and is
     kept as sent. Nothing while the flag is off, so a rollback takes effect on a run already paused.
-    """
+
+    `dropped` is `["message"]` when at least one message the paused run pointed at could not be read again
+    (MIP-1585), else empty: the same kind, and the same word, whether it was deleted, lost to the person or
+    never valid, so the answer says nothing about which. Empty while the flag is off (no signal at all)."""
     from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
 
     if not parity_on() or not isinstance(refs, dict):
-        return None
+        return None, []
     ids = refs.get("messages")
     read: list[MessageRead] = []
+    lost = False
     for raw in ids if isinstance(ids, list) else ():
         message_id = valid_message_id(raw)
         if message_id is None or len(read) > MAX_MESSAGE_REFS:
+            lost = True
             continue
         message = read_message(message_id, team_id, user_id)
-        if message is not None:
-            read.append(message)
-    return build_reference_block(read, Selection.from_json(refs.get("selection")))
+        if message is None:
+            lost = True
+            continue
+        read.append(message)
+    block = build_reference_block(read, Selection.from_json(refs.get("selection")))
+    return block, ["message"] if lost else []
+
+
+def rebuild_block(refs: Any, *, team_id: str, user_id: str) -> str | None:
+    """The block for the leg resumed after an approval (`rebuild` without what it dropped)."""
+    return rebuild(refs, team_id=team_id, user_id=user_id)[0]

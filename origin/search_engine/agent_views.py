@@ -87,10 +87,10 @@ from origin.search_engine.agent.ask_refs import (
     Selection,
     build_reference_block,
     parse_selection,
-    rebuild_block,
     resume_refs,
     valid_message_id,
 )
+from origin.search_engine.agent.ask_refs import rebuild as rebuild_refs
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -107,6 +107,7 @@ from origin.search_engine.agent.controller import (
     run_agent,
 )
 from origin.search_engine.agent.languages import normalize_locale
+from origin.search_engine.agent.mention_tokens import model_query_of, neutral_query
 from origin.search_engine.agent.mentions import (
     MentionParseError,
     ResolvedMention,
@@ -485,7 +486,9 @@ def _turns_of(runs: Iterable[AgentRun]) -> list[tuple[str, str]]:
         )
     )
     runs = list(runs)
-    turns = [(r.query, r.final_answer_text[:max_chars]) for r in runs]
+    # The question as the model reads it (MIP-1585): with the flag on, a mention token is its bracketed id here
+    # too, so a hostile label does not come back as an earlier turn of every later ask of the session.
+    turns = [(model_query_of(r), r.final_answer_text[:max_chars]) for r in runs]
     # MIP-1530 `AGENT_UNDO_NOTE_IN_MEMORY`: the SAME line the memory chunk carries, after MIP-889's
     # bracketed note when that flag is on too (the line is short; the note says what was put back).
     # It needs no other flag.
@@ -1529,6 +1532,14 @@ class AgentAskView(AuthenticatedAPIView):
         ):
             task_read = task_context.read_task(session.task_id, team_id, user_id)
 
+        # The question the MODEL reads (MIP-1585): while the parity flag is on, each visible mention token the
+        # member's question holds (`#Title `, `@Name `: its label is text somebody else chose) is replaced by the
+        # item's bracketed id, before any model sees the question; `query` stays what the member typed, for the
+        # history and for "Ask again". Flag off: the same string, so nothing moves. `mention_tokens` has the rules.
+        model_query = (
+            neutral_query(query, data.get("mentions"), resolved_mentions) if parity_on() else query
+        )
+
         # Persist one AgentRun row per /ask/ call. Failures here are
         # logged but never break the user-facing response.
         run: AgentRun | None = None
@@ -1537,6 +1548,9 @@ class AgentAskView(AuthenticatedAPIView):
                 team_id=str(team_id),
                 user_id=user_id,
                 query=query,
+                # Kept only when something was replaced: the leg after an approval and the later turns of the
+                # session read it back (`model_query_of`).
+                model_query=model_query if model_query != query else None,
                 session=session,
                 # A selection leaves a marker with no text in it (`selection_marker`): the audit of a collected
                 # answer must know it may quote a passage nobody can classify.
@@ -1829,6 +1843,7 @@ class AgentAskView(AuthenticatedAPIView):
                 mention_extra=mention_extra,
                 tier_extra=tier_extra,
                 refs=resume_refs(ref_messages, selection),
+                dropped=dropped_references,
                 # The task's id, never its text: `/decide/` reads it again (MIP-1057).
                 object_ref=task_context.resume_object(task_read) if task_read is not None else None,
                 # The earlier turns ride on the second flag (`AGENT_RESUME_KEEPS_TURNS`).
@@ -1860,7 +1875,7 @@ class AgentAskView(AuthenticatedAPIView):
                         # under the provisional binding (so the router's
                         # client is the user's provider adapter). Fails
                         # open to medium — exactly the provisional choice.
-                        routed = route_effort(query, chosen.provider)
+                        routed = route_effort(model_query, chosen.provider)
                         effective = resolve_user_effort(
                             chosen.provider,
                             routed,
@@ -1870,7 +1885,7 @@ class AgentAskView(AuthenticatedAPIView):
                         reset_llm_choice(token)
                         token = set_llm_choice(effective)
                     return run_agent(
-                        query,
+                        model_query,
                         ctx,
                         emit,
                         cancel_event=cancel_event,
@@ -1986,6 +2001,7 @@ def _resume_context_for(
     object_ref: dict[str, Any] | None = None,
     prior_summary: str | None = None,
     prior_run_ids: Iterable[uuid.UUID] = (),
+    dropped: Iterable[str] = (),
 ) -> dict[str, Any] | None:
     """What `/decide/` needs to hand a resumed leg the context its first leg had
     (MIP-977 the `system_extra`, MIP-991 the earlier turns), or None when that was
@@ -2036,6 +2052,10 @@ def _resume_context_for(
 
     A first-turn ask has neither, and keeps no `prior`.
 
+    `dropped` (MIP-1585) is the kinds the ask could not use (`dropped_references`: words, never a count or an id),
+    kept so the `done` of the resumed leg can say them again beside what was lost while the card waited. Absent
+    from the row when nothing was dropped.
+
     `object_ref` (MIP-1057) is the task or milestone the conversation is about: its ID alone
     (`task_context.resume_object`), never its text. `/decide/` reads the task again as the person may
     read it by then, so one deleted or lost to them while the card waited is not replayed, a change
@@ -2053,13 +2073,23 @@ def _resume_context_for(
     prior = (
         {"summary": prior_summary or None, "run_ids": run_ids} if prior_summary or run_ids else None
     )
-    if not scoped_extra and not rest and prior is None and not refs and not object_ref:
+    dropped = list(dropped)
+    if (
+        not scoped_extra
+        and not rest
+        and prior is None
+        and not refs
+        and not object_ref
+        and not dropped
+    ):
         return None
     kept: dict[str, Any] = {
         "scope": scope if scoped_extra else None,
         "scoped": scoped_extra or None,
         "rest": rest,
     }
+    if dropped:
+        kept["dropped"] = dropped
     if refs:
         kept["refs"] = refs
     if object_ref:
@@ -2103,11 +2133,30 @@ def _scope_still_readable(scope: Any, user_id: str) -> bool:
     return False
 
 
-def _resumed_system_extra(run: AgentRun) -> str | None:
-    """The `system_extra` for the leg resumed after `run`'s approval: what its
-    first leg had (`_resume_context_for`), minus a summary the person can no
-    longer read. None for a run with nothing kept (a plain ask, or one paused
-    before this column existed), which is what every resume received before.
+# The kinds `dropped_references` may carry (MIP-1058, MIP-1585). `"message"`, `"selection"` and `"selected_from"` are what an
+# ask could not use; `"task"` is the task or milestone a conversation is about, read again at the decision and no longer
+# readable. Words only, never a count or an id, and the same word whether the thing was missing, deleted, lost to the
+# person or malformed.
+DROPPED_REFERENCE_KINDS = ("message", "selection", "selected_from", "task")
+
+
+def _kept_drops(kept: dict[str, Any]) -> list[str]:
+    """The kinds the ask leg could not use, as the paused run kept them: only words this code knows."""
+    raw = kept.get("dropped")
+    return [k for k in DROPPED_REFERENCE_KINDS if isinstance(raw, list) and k in raw]
+
+
+def _resumed_context(run: AgentRun) -> tuple[str | None, list[str]]:
+    """`(system_extra, dropped_references)` for the leg resumed after `run`'s approval.
+
+    The `system_extra` is what its first leg had (`_resume_context_for`), minus a summary the person can no
+    longer read. None for a run with nothing kept (a plain ask, or one paused before this column existed),
+    which is what every resume received before.
+
+    `dropped_references` (MIP-1585) is what the first leg could not use (`kept["dropped"]`) followed by what
+    the decision could not read AGAIN: a message or the task the conversation is about that was deleted, or
+    lost to the person, while the card waited. The same words as at the ask, and for the same causes alike.
+    Empty while the parity flag is off, and for a run with nothing kept.
 
     Never raises, and is called after the approval has been spent: whatever goes
     wrong here (an unexpected shape, a database hiccup in the re-check) costs the
@@ -2115,7 +2164,8 @@ def _resumed_system_extra(run: AgentRun) -> str | None:
     """
     kept = run.resume_context
     if not isinstance(kept, dict):
-        return None
+        return None, []
+    dropped = _kept_drops(kept) if parity_on() else []
     try:
         parts: list[str] = []
         scoped, rest = kept.get("scoped"), kept.get("rest")
@@ -2127,24 +2177,30 @@ def _resumed_system_extra(run: AgentRun) -> str | None:
             parts.append(scoped)
         # The task or milestone the conversation is about (MIP-1057), in the same place as at the ask: read
         # again with the person's access now, so one that is gone or no longer theirs is not replayed.
-        object_block = task_context.rebuild_block(
+        object_block, object_lost = task_context.rebuild(
             kept.get("object"), team_id=str(run.team_id or ""), user_id=str(run.user_id or "")
         )
         if object_block:
             parts.append(object_block)
         # The messages and the selected passage, between the two as at the ask (MIP-1058): rebuilt, with
         # each message read again by the person's own access, not replayed.
-        refs_block = rebuild_block(
+        refs_block, refs_lost = rebuild_refs(
             kept.get("refs"), team_id=str(run.team_id or ""), user_id=str(run.user_id or "")
         )
         if refs_block:
             parts.append(refs_block)
         if isinstance(rest, str) and rest:
             parts.append(rest)
-        return "\n\n".join(parts) or None
+        dropped += [kind for kind in (*object_lost, *refs_lost) if kind not in dropped]
+        return "\n\n".join(parts) or None, dropped
     except Exception:  # noqa: BLE001 — see the docstring
         log.exception("Could not rebuild the system prompt context of run %s", run.run_id)
-        return None
+        return None, dropped
+
+
+def _resumed_system_extra(run: AgentRun) -> str | None:
+    """The `system_extra` for the leg resumed after `run`'s approval (`_resumed_context`, without what it dropped)."""
+    return _resumed_context(run)[0]
 
 
 def _resumed_prior_context(run: AgentRun) -> PriorContext:
@@ -2201,7 +2257,7 @@ def _resumed_prior_context(run: AgentRun) -> PriorContext:
                     run_id__in=list(run_ids), session_id=run.session_id, user_id=run.user_id
                 )
                 .exclude(final_answer_text="")
-                .only("run_id", "query", "final_answer_text")
+                .only("run_id", "query", "model_query", "final_answer_text")
             }
             turns = _turns_of(rows[run_id] for run_id in run_ids if run_id in rows)
         return PriorContext(verbatim=turns, summary=summary)
@@ -2457,7 +2513,9 @@ class AgentDecideView(AuthenticatedAPIView):
         # decision stripped them for the rest of the run.
         # Flag off (`AGENT_RESUME_KEEPS_BLOCKS`): None, which is what every resume got
         # before MIP-977, whatever a row holds.
-        resumed_extra = _resumed_system_extra(run) if _resume_keeps_blocks() else None
+        resumed_extra, resumed_dropped = (
+            _resumed_context(run) if _resume_keeps_blocks() else (None, [])
+        )
         # ...and the earlier turns of its conversation, which sit in the messages and
         # not the system prompt (MIP-991). Without them every decision finished a
         # follow-up ask as if it were the first question of the conversation.
@@ -2496,6 +2554,9 @@ class AgentDecideView(AuthenticatedAPIView):
             spend_kwargs=spend_kwargs,
             acting_user=request.user,
             request_id=current_request_id(),
+            # What the first leg could not use, and what the decision could not read again (MIP-1585): on the
+            # `done` of this leg, and on the card if it pauses again.
+            dropped_references=resumed_dropped,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -2933,6 +2994,11 @@ def _stream_ndjson(
                     _charge_once()
             elif event_type in ("tool_call_start", "tool_call_pending_approval"):
                 _charge_once()
+                # A run that pauses sends no `done` until the person decides, so what the ask could not use
+                # rides the card's own event too (MIP-1585): the same field, the same kinds, additive, absent
+                # unless something was dropped. `/decide/` repeats it on the `done` of the resumed leg.
+                if event_type == "tool_call_pending_approval" and dropped_references:
+                    event = {**event, "dropped_references": list(dropped_references)}
             elif event_type == "done":
                 final_status = "done"
                 # Inject session_id so the frontend can thread the next ask.
