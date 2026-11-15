@@ -2843,18 +2843,22 @@ def call(
     mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
     # MIP-1367: the paging arguments (`offset`, `max_chars`, `limit`, `cursor`) belong to this layer,
     # not to the registry tool, so they are taken out here; checked in words before anything runs.
+    limits = result_limits.limits_on()
     limit_args: dict[str, Any] = {}
-    if result_limits.limits_on():
+    caller = page = None
+    if limits:
         limit_args = {
             k: args.pop(k) for k in result_limits.paging_arg_names(tool.name) if k in args
         }
+        caller = result_limits.Caller(ctx.user_id, ctx.team_id, dict(args))
         try:
-            result_limits.check_args(tool.name, limit_args)
+            page = result_limits.check_args(tool.name, limit_args, caller)
         except ToolError as exc:
             return _text_result(str(exc), is_error=True)
     try:
         args = resolve_references(tool, args, ctx.team_id)
-        payload = _registered(tool).run(args, ctx)
+        runner = result_limits.run_override(tool.registry_name) if limits else None
+        payload = runner(args, ctx) if runner else _registered(tool).run(args, ctx)
         if tool.augment is not None:
             payload = tool.augment(dict(payload or {}), args, mcp_args, ctx)
     except ToolError as exc:
@@ -2917,9 +2921,11 @@ def call(
     # is what it was, byte for byte). Per-item caps, then one cap on the whole text; what is cut is
     # said in a `truncated` block and in `_meta`.
     truncated = False
-    if result_limits.limits_on():
+    if limits:
         try:
-            payload, truncated = result_limits.apply(tool.name, payload, render, args=limit_args)
+            payload, truncated = result_limits.apply(
+                tool.name, payload, render, args=limit_args, caller=caller, page=page
+            )
         except ToolError as exc:
             # After the tool's own access checks, so it says the same for a note that is missing
             # and one that is not the caller's.
