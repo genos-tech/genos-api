@@ -179,11 +179,13 @@ def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
 
         # `skip_actor=False`: tagging yourself in a comment still pings,
         # consistent with task-body and note mentions.
-        # Only the mentioned who can open the task are told; `mentioned_user_ids` above stays
-        # whole, because the non-member-mention report names the ones who cannot (MIP-1579).
+        # NOT filtered by the read rule, on purpose: a direct @mention reaches a person of the
+        # team who is not on the project (`test_direct_mention_recipients`), and the sender is
+        # told so by the non-member-mention report so they can add them (MIP-1579). What the
+        # recipient is then shown of the task is the activity feed's gate (MIP-1560).
         mention_acts = v3_activity.create_mention_activities(
             message=mirror,
-            mentioned_user_ids=sorted(task_readers_among(task_id, result.mentioned_user_ids)),
+            mentioned_user_ids=result.mentioned_user_ids,
             actor=mirror.sender,
             skip_actor=False,
         )

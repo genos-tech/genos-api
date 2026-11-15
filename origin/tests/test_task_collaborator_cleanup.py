@@ -6,8 +6,9 @@ MIP-1567 stopped a collaborator who cannot open a task from being added or notif
     them (dry run first);
   * a task moved to another project keeps collaborators who are not on the destination: the move
     prunes them (every path runs `relocate_task_satellites`);
-  * the task-comment fan-out reached a prior commenter who left the project, and a person
-    @-mentioned who cannot open the task: every recipient now passes `task_reader_ids`;
+  * the task-comment fan-out reached a prior commenter who left the project: the participants
+    (assignee, collaborators, prior commenters) now pass `task_reader_ids`. A direct @mention is
+    kept as it was: it reaches a teammate who is not on the project on purpose;
   * `can_access_task` (REST) and `task_acl_user_ids` (search) are two rules: the exact
     difference is pinned here.
 """
@@ -338,17 +339,14 @@ class CommentFanoutTests(Base):
             self._prior_comment(_user(f"c{i}"))
         self.assertEqual(count(), one)
 
-    def test_a_mention_of_someone_who_cannot_open_the_task_notifies_nobody(self):
+    def test_a_direct_mention_still_reaches_a_teammate_who_is_not_on_the_project(self):
+        # Kept on purpose (`test_direct_mention_recipients`): a mention is the sender's explicit
+        # act, and the non-member-mention report tells them to add the person.
         self.assertEqual(self._comment(self.teammate.id, self.member.id).status_code, 201)
 
         got = self._recipients(ActivityType.MENTION)
         self.assertIn(self.member.id, got)
-        self.assertNotIn(self.teammate.id, got)
-
-    def test_a_mentioned_assignee_who_is_not_on_the_project_is_still_told(self):
-        self._comment(self.assignee.id)
-
-        self.assertIn(self.assignee.id, self._recipients(ActivityType.MENTION))
+        self.assertIn(self.teammate.id, got)
 
     def test_the_non_member_mention_report_still_names_the_unreachable_person(self):
         res = self._comment(self.teammate.id)
