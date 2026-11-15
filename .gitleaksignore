@@ -39,3 +39,7 @@ cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:g
 # with, set through override_settings; the same fixture value as the two GitHub
 # webhook tests above (MIP-755).
 6147f10b67c2c8ccef5d7b476360f2ee45a2eb79:origin/tests/test_github_register_repo.py:generic-api-key:41
+
+# A made-up marker the MIP-1367 result-log test puts in an argument to prove it never reaches
+# the log (renamed afterwards; the first commit of that branch still carries the old value).
+179956be6292c6f82b6e5f7a233d0223809f1648:origin/tests/test_mcp_result_log.py:generic-api-key:29

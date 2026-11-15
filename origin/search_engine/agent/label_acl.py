@@ -40,7 +40,11 @@ from origin.models.task.milestone_models import (
 )
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.acl import may_read_note, owns_personal_folder
+from origin.search_engine.agent.acl import (
+    active_project_owners,
+    may_read_note,
+    owns_personal_folder,
+)
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services.channel_scope import can_read_chat
 from origin.views.utils.note_folder_role import get_folder_role
@@ -71,6 +75,10 @@ class LabelAccess:
         self.team_id = str(ctx.team_id or "")
         self.user_id = str(ctx.user_id or "")
         self._member_project_ids: set[int] | None = None
+        # `project_id -> the caller owns it and is still on its team`, and `the caller is on the
+        # run's team`: asked once per project / per run, never per row.
+        self._owns: dict[int, bool] = {}
+        self._on_team: bool | None = None
 
     @property
     def usable(self) -> bool:
@@ -87,11 +95,35 @@ class LabelAccess:
             )
         return self._member_project_ids
 
+    def _owns_project(self, project: Any) -> bool:
+        """The caller is the project's owner, with no member row, and still on its team: the
+        owner `acl.active_project_owners` lists (an owner who left the team is not one; REST
+        lets them in, search does not, and neither does this). MIP-1609.
+
+        `project` is the row the caller already holds (`select_related("project")`): a person who
+        is not its owner is refused with no query, so a denied read costs what it did."""
+        if project is None or str(project.owner_id or "") != self.user_id:
+            return False
+        if project.project_id not in self._owns:
+            self._owns[project.project_id] = (
+                active_project_owners([project.project_id]).get(project.project_id) == self.user_id
+            )
+        return self._owns[project.project_id]
+
+    def _on_run_team(self) -> bool:
+        """The caller is still on the run's team (a live member row, or its owner)."""
+        if self._on_team is None:
+            from origin.services.member_removal import active_team_member_ids  # noqa: PLC0415
+
+            self._on_team = self.user_id in active_team_member_ids(self.team_id, {self.user_id})
+        return self._on_team
+
     # ---- tasks ---------------------------------------------------------
 
     def task_readable(self, task: TaskMaster) -> bool:
-        """`fetch_task`'s rule: tenant guard, then `task_acl_user_ids`
-        (project member, assignee or reporter)."""
+        """`fetch_task`'s rule: tenant guard, then `task_acl_user_ids` (project member, the
+        project's owner while on the team, assignee or reporter). `item_lines.readable_task_q` is
+        this rule in SQL; a test pins the two equal."""
         if not self.usable or task.is_deleted:
             return False
         if str(getattr(task, "team_id", "") or "") != self.team_id:
@@ -100,6 +132,7 @@ class LabelAccess:
             task.project_id in self._projects()
             or str(task.assignee_id or "") == self.user_id
             or str(task.reporter_id or "") == self.user_id
+            or self._owns_project(task.project)
         )
 
     def tasks(self, raw_ids: Iterable[Any]) -> dict[int, TaskMaster]:
@@ -126,13 +159,16 @@ class LabelAccess:
     # ---- milestones ----------------------------------------------------
 
     def milestone_readable(self, milestone: MilestoneMaster) -> bool:
-        """`milestone_acl_user_ids`: project member or milestone assignee,
-        inside the caller's team."""
+        """`milestone_acl_user_ids`: project member, the project's owner or the milestone's
+        reporter while on the team (MIP-1609), or a milestone assignee, inside the caller's
+        team."""
         if not self.usable:
             return False
         if str(getattr(milestone, "team_id", "") or "") != self.team_id:
             return False
-        if milestone.project_id in self._projects():
+        if milestone.project_id in self._projects() or self._owns_project(milestone.project):
+            return True
+        if str(milestone.reporter_id or "") == self.user_id and self._on_run_team():
             return True
         return MilestoneAssignees.objects.filter(
             milestone_id=milestone.milestone_id, user_id=self.user_id
@@ -145,7 +181,7 @@ class LabelAccess:
             return {}
         return {
             m.milestone_id: m.title
-            for m in MilestoneMaster.objects.filter(milestone_id__in=ids)
+            for m in MilestoneMaster.objects.select_related("project").filter(milestone_id__in=ids)
             if self.milestone_readable(m)
         }
 
@@ -224,7 +260,7 @@ class LabelAccess:
     # ---- join requests --------------------------------------------------
 
     def join_request_label(self, raw: Any) -> str | None:
-        """"Sam -> Website", for a project join request addressed to the caller.
+        """ "Sam -> Website", for a project join request addressed to the caller.
 
         Both names come from the database, never from the request's `item_optionals`:
         the requester wrote that, and a card is where the user decides. The rule is the

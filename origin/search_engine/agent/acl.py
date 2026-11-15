@@ -21,7 +21,7 @@ from origin.models.chat.unified_models import Channel, ChannelMember
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.models.task.milestone_models import MilestoneAssignees
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.views.utils.note_role import get_effective_role
 
 # Distinguishes "caller didn't say" (look it up) from an explicit
@@ -197,9 +197,13 @@ def task_acl_user_ids(project_id: int | None, assignee_id, reporter_id) -> set[s
 
 def milestone_acl_user_ids(project_id: int | None, milestone_id: int) -> set[str]:
     """Users allowed to read a milestone — project members + the project's owner + milestone
-    assignees. Mirrors `milestone_chunker`'s `acl_user_ids` derivation so
-    a back-filled citation chip is only surfaced to users search would
-    have surfaced it to."""
+    assignees + the milestone's reporter. Mirrors `milestone_chunker`'s `acl_user_ids`
+    derivation so a back-filled citation chip is only surfaced to users search would have
+    surfaced it to.
+
+    The reporter rides on the milestone's backing task, where they read it like any task's
+    reporter, so they are listed only while they are on the team (MIP-1609, as for a task:
+    MIP-1371). The owner is on `active_project_owners`' terms (MIP-1591)."""
     out: set[str] = set()
     if project_id:
         out.update(
@@ -219,6 +223,15 @@ def milestone_acl_user_ids(project_id: int | None, milestone_id: int) -> set[str
         )
         if uid
     )
+    row = (
+        MilestoneMaster.objects.filter(milestone_id=milestone_id)
+        .values_list("team_id", "reporter_id")
+        .first()
+    )
+    if row is not None and row[0] is not None and row[1] is not None:
+        from origin.services.member_removal import active_team_member_ids
+
+        out |= active_team_member_ids(row[0], {row[1]})
     return out
 
 
