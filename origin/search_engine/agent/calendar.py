@@ -260,7 +260,7 @@ def is_naive_datetime(value: Any) -> bool:
 
 
 def effective_time_zone(time_zone: str | None, values: tuple[Any, ...], user_id: str) -> str | None:
-    """The `timeZone` a calendar write sends (MIP-1059, only while `AGENT_PARITY_TOOLS` is on).
+    """The `timeZone` a calendar write sends (MIP-1059; with `AGENT_PARITY_TOOLS` on or off).
 
     Google's rule (events.insert / events.patch, `start.dateTime`): "A time zone offset is required
     unless a time zone is explicitly specified in `timeZone`". The tools were told to pass a naive
@@ -269,9 +269,10 @@ def effective_time_zone(time_zone: str | None, values: tuple[Any, ...], user_id:
     the local time into an instant with `toISOString()`), so there is nothing to mirror: the member's own
     zone is the reading the approval card states (`member_time_zone`), and it is what is sent.
 
-    A zone the model named wins; a value with an offset needs none; with the flag off the call is what
-    it always was."""
-    if time_zone or not parity_on():
+    A zone the model named wins; a value with an offset needs none. It was behind the flag at first
+    (api #869/#894); with the flag off the same call was rejected with HTTP 400, so since 2026-11-15 it is
+    not: the fill is the one part of MIP-1059 every member gets."""
+    if time_zone:
         return time_zone
     if any(is_naive_datetime(v) for v in values):
         return zone_for_user_id(user_id).key
