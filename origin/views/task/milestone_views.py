@@ -583,6 +583,7 @@ class MilestoneView(AuthenticatedAPIView):
                     )
 
         added_assignee_ids: list[str] = []
+        move_report: dict = {}
         with transaction.atomic():
             # The copy above is a moment old: lock the row and write from what is stored, so a
             # milestone converted, deleted or moved by another tab in that moment is not written
@@ -629,6 +630,7 @@ class MilestoneView(AuthenticatedAPIView):
                 ),
                 after_sync=_backing_only_writes,
                 project_move=project_move,
+                report=move_report,
             )
 
         # Whoever was just added to an existing milestone is told (MIP-1464). After the commit.
@@ -684,6 +686,10 @@ class MilestoneView(AuthenticatedAPIView):
                 backing.save(update_fields=["mentioned_user_ids", "ts_updated_at"])
 
         response_data = {"milestone": _serialize_milestone(milestone)}
+        if project_move is not None:
+            # How many task notes lost their author's Owner role because the author is not on the
+            # destination (MIP-1583). It is not silent, and a move back writes the roles again.
+            response_data["notesNarrowed"] = move_report.get("notes_narrowed", 0)
         if newly_mentioned or removed_mentioned:
             response_data["newly_mentioned_user_ids"] = newly_mentioned
             response_data["all_mentioned_user_ids"] = all_mentioned
