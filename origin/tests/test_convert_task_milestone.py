@@ -432,6 +432,18 @@ class MilestoneToTaskTests(ConversionBase):
         # The retired milestone keeps no assignees: they are on the task now.
         self.assertFalse(MilestoneAssignees.objects.filter(milestone=m).exists())
 
+    def test_a_teammate_off_the_project_does_not_become_a_collaborator(self):
+        # A milestone's assignee may be a teammate who is not on the project (MIP-915). They
+        # could not open the task they would now collaborate on, so they are left off (MIP-1567).
+        mate = User.objects.create_user(username="mate", email="mate@test.com", password="pw123456")
+        TeamMembers.objects.create(team=self.team, attendee=mate)
+        m = self.milestone("Launch", assignees=[self.alice, mate, self.bob])
+        self.to_task(m)
+
+        row = self.fresh(m.task)
+        self.assertEqual(row.assignee_id, self.alice.id)
+        self.assertEqual(list(row.collaborators.values_list("id", flat=True)), [self.bob.id])
+
     def test_the_oldest_assignee_wins_whatever_the_row_currently_says(self):
         # The row's own assignee column can lag the milestone's assignees; the
         # milestone's first (oldest) one is the answer.
