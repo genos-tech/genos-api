@@ -276,6 +276,28 @@ def _rewrite(request, team_id: str) -> None:
                 return
 
 
+def aligned_team(kind: str, object_id, claimed_team, user_id, note_type: int = _NOTE_PERSONAL):
+    """The team a request that names this object and claims `claimed_team` should run in.
+
+    The decision `align_team_to_object` makes for the object a request names at the top level, for a caller that names
+    the object another way (the agent's ask nests a task id in `task_context`, which that rewrite does not read):
+
+      * the object's owning team, when it differs from `claimed_team` and the caller reaches the object on its own terms
+        (`_may_reach`: the object's own access rule, never a team rule);
+      * `claimed_team`, as it came, in every other case: the object does not exist, belongs to the claimed team already,
+        is malformed, or the caller may not reach it. So a person who cannot reach an object learns nothing from the
+        team it is in, and the answer for an object they cannot open stays the one a missing object gets.
+
+    A substitution, never a grant: the caller's access to the object is checked again by whatever the team is used for.
+    """
+    owner = _owning_team(kind, object_id, note_type)
+    if owner is None or owner == str(claimed_team):
+        return claimed_team
+    if _may_reach(kind, object_id, note_type, user_id):
+        return owner
+    return claimed_team
+
+
 def align_team_to_object(request) -> None:
     """Point `team_id` at the team that owns the object being named.
 
@@ -303,9 +325,7 @@ def align_team_to_object(request) -> None:
             continue
         if note_type is None:
             note_type = _note_type(request)
-        owner = _owning_team(kind, object_id, note_type)
-        if owner is None or owner == str(claimed):
-            return
-        if _may_reach(kind, object_id, note_type, user_id):
-            _rewrite(request, owner)
+        aligned = aligned_team(kind, object_id, claimed, user_id, note_type)
+        if aligned != claimed:
+            _rewrite(request, aligned)
         return

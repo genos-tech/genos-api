@@ -198,6 +198,7 @@ from origin.services.throttles import (
 )
 from origin.services.webpush_dispatch import schedule_push_to_user
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.foreign_team_scope import aligned_team
 from origin.views.utils.request_validators import body_object, refuse_non_string_fields
 from origin.views.utils.scope_guards import participates_in_team
 
@@ -1163,12 +1164,28 @@ class AgentAskView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # A task of a project shared with another team belongs to the HOST team, and the person asks from their
+        # CURRENT team. `AuthenticatedAPIView` rewrites a top-level `team_id` to the team that owns an object the
+        # caller reaches (`foreign_team_scope`), which is why the restore route finds the task; the ask names it
+        # nested in `task_context`, which that rewrite does not read, so it answered "Task not found." for a task
+        # the person can open. The same decision, by the same helper, here: only for a task they reach on its own
+        # terms (a substitution, never a grant), and so before the team is checked and anything is read, made or
+        # spent. The session, the run and the cost rollup then sit with the task's own team, as the restore finds
+        # them. Only while the parity flag is on (`task_ctx` is None otherwise), so with it off nothing moves.
+        claimed_team = team_id
+        if task_ctx is not None:
+            team_id = aligned_team("task", task_ctx["task_id"], team_id, user_id)
+
         # Every tool docstring describes `ctx.team_id` as "server-trusted".
         # It reaches us in the request body, so until this check that was
         # an aspiration rather than a fact — and the agent surface reads
         # far more than the REST one, through tools whose own ACL notes
         # assume the team is already established.
         if not participates_in_team(team_id, user_id):
+            if str(team_id) != str(claimed_team):
+                # The team was substituted, not named: refusing it by name would tell the person about a team they
+                # never sent. The restore route answers the task's own words here, and so does this.
+                return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # The task or milestone the ask is about (MIP-1057), read by the asker's own access BEFORE
