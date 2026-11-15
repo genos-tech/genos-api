@@ -398,3 +398,32 @@ class MoveCountsLiveTasksTests(ToolBase):
         self.assertEqual(out["current"]["tasks"], 2)
 
 
+# --------------------------------------------------------------------------------------------
+# item 5: a convert makes no AI-app notice
+# --------------------------------------------------------------------------------------------
+
+
+class ConvertMakesNoAiAppNoticeTests(ToolBase):
+    """Decided (MIP-1597): a conversion is the app's own structural act and the member sees its
+    result in the tool's answer, so `mcp_notice` has no rule for it and no notification switch is
+    added. A rule for a convert would need one, so this pins the absence."""
+
+    def test_neither_direction_makes_a_notice(self):
+        t = self.task("Plan the launch")
+        up = self.to_milestone_tool(t)
+        self.assertEqual(up["action"], "convert")
+        self.assertIsNone(build_notice("manage_milestone", {"action": "convert"}, up))
+        m = self.milestone("Ship")
+        down = self.to_task_tool(m)
+        self.assertIsNone(build_notice("manage_milestone", {"action": "convert"}, down))
+
+    def test_the_milestone_rule_has_no_convert_branch(self):
+        self.assertIn("manage_milestone", RULES)
+        for action in ("convert", "move"):
+            self.assertIsNone(
+                build_notice(
+                    "manage_milestone",
+                    {"action": action},
+                    {"action": action, "milestone_id": 1, "changed_fields": ["project"]},
+                )
+            )
