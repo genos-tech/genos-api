@@ -427,6 +427,27 @@ class PartialWrites(McpBase):
         self.assertIn("Nothing was changed", text)
         self.assertEqual(self.note_markdown(), before)
 
+    def test_a_part_read_as_personal_cannot_be_written_back_as_team_or_shared(self):
+        # `update_note` takes all three names for a note of the personal family
+        before = self.note_markdown()
+        self.call("get_note", self.note_args)
+        for family in ("team", "shared", "Team", " personal "):
+            result = self.call(
+                "update_note",
+                {"note_id": self.long_note.note_id, "note_type": family, "content_text": "x"},
+            )
+            self.assertTrue(result["isError"], family)
+            self.assertIn("read only part of this note", text_of(result), family)
+        self.assertEqual(self.note_markdown(), before)
+        self.assertEqual(
+            bp._ident("get_note", {"note_type": "personal", "note_id": 5}),
+            bp._ident("update_note", {"note_type": "shared", "note_id": 5}),
+        )
+        self.assertNotEqual(
+            bp._ident("get_note", {"note_type": "personal", "note_id": 5}),
+            bp._ident("get_note", {"note_type": "task", "note_id": 5}),
+        )
+
     def test_a_title_change_is_not_a_replacement_of_the_body(self):
         self.call("get_note", self.note_args)
         result = self.call("update_note", {**self.note_args, "title": "Renamed"})

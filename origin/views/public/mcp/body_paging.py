@@ -35,6 +35,7 @@ from typing import Any, Callable
 from django.core.cache import cache
 
 from origin.search_engine.agent.tools.base import ToolError
+from origin.search_engine.agent.tools.note_targets import PERSONAL_FAMILY
 from origin.views.public.mcp.result_limits import (
     BODY_FIELDS,
     MCP_RESULT_MAX_CHARS,
@@ -244,7 +245,13 @@ def _ident(tool: str, args: dict[str, Any]) -> str | None:
     if tool in ("get_task", "update_task"):
         return f"task:{args.get('task_id')}"
     if tool in ("get_note", "update_note"):
-        return f"note:{str(args.get('note_type') or '').lower()}:{args.get('note_id')}"
+        # `update_note` takes `team` and `shared` for a note of the personal family (the same table
+        # and ids as `personal`), and `get_note` only `personal`: one family, or a part read as
+        # `personal` could be written back as `team`.
+        note_type = str(args.get("note_type") or "").lower().strip()
+        if note_type in PERSONAL_FAMILY:
+            note_type = "personal"
+        return f"note:{note_type}:{args.get('note_id')}"
     return None
 
 
