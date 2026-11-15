@@ -94,7 +94,9 @@ class NoteVersionListView(AuthenticatedAPIView):
         )
 
         return Response(
-            NoteVersionListItemSerializer(versions, many=True).data,
+            NoteVersionListItemSerializer(
+                versions, many=True, context={"viewer_id": request_user_id}
+            ).data,
             status=status.HTTP_200_OK,
         )
 
@@ -129,7 +131,10 @@ class NoteVersionDetailView(AuthenticatedAPIView):
         except NoteVersionMaster.DoesNotExist:
             return Response({"error": "Version not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response(NoteVersionDetailSerializer(version).data, status=status.HTTP_200_OK)
+        return Response(
+            NoteVersionDetailSerializer(version, context={"viewer_id": request_user_id}).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class NoteVersionRestoreView(AuthenticatedAPIView):
@@ -178,6 +183,6 @@ class NoteVersionRestoreView(AuthenticatedAPIView):
             )
 
         return Response(
-            NoteVersionDetailSerializer(new_version).data,
+            NoteVersionDetailSerializer(new_version, context={"viewer_id": request_user_id}).data,
             status=status.HTTP_200_OK,
         )

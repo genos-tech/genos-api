@@ -42,6 +42,7 @@ from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.notification_models import NotificationPreference
 from origin.models.task.task_models import TaskMaster
 from origin.services import ai_app_switches as switches
+from origin.services.mcp_client_family import credential_family
 from origin.services.v3_activity import SURFACE_AI_APP
 
 log = logging.getLogger(__name__)
@@ -394,6 +395,12 @@ def notify_owner(
             "count": notice.count,
             "items": notice.items[:MAX_ITEMS],
         }
+        # The official family of the connected app (`claude` | `chatgpt`), for its icon on the
+        # notice (MIP-1571); absent for any other app, an API key, and every older notice. The
+        # notice is the owner's alone (recipient == actor), who is also the one reader of the
+        # app's name above, so `via_privacy.SHOW_OAUTH_APP_TO_EVERYONE` has nothing to decide.
+        if family := credential_family(credential):
+            meta["appFamily"] = family
         if notice.status:
             meta["status"] = notice.status
         if notice.task_count is not None:
