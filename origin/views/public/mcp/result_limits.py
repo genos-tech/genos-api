@@ -385,6 +385,12 @@ HINTS: dict[str, str] = {
 GENERIC_HINT = "Ask for less: a smaller `limit` or a narrower filter on the same tool."
 
 
+def _paged_lists() -> frozenset[str]:
+    from origin.views.public.mcp import list_paging  # noqa: PLC0415
+
+    return frozenset(list_paging.SPECS)
+
+
 def paging_arg_names(tool: str) -> tuple[str, ...]:
     """The arguments `tool` takes only while the switch is on (taken out of the call before the
     registry tool runs: it does not have them)."""
@@ -755,7 +761,11 @@ def apply(
         from origin.views.public.mcp import body_paging  # noqa: PLC0415
 
         body_paging.page_body(tool, payload, args or {}, render, cuts, cap)
-    elif page is not None and caller is not None:
+    elif tool in _paged_lists():
+        if page is None or caller is None:
+            # A caller that forgot them would get the old cut-at-the-end answer with no cursor,
+            # presented as the new behaviour. Loud instead.
+            raise RuntimeError(f"`apply` needs `page` and `caller` for the paged tool {tool}")
         from origin.views.public.mcp import list_paging  # noqa: PLC0415
 
         limit, offset = page

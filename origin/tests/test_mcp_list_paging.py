@@ -106,7 +106,7 @@ class Cursor(SimpleTestCase):
         self.assertEqual(lp.validate("list_projects", {"limit": 500}, "u", "t", {})[0], 200)
         self.assertEqual(lp.validate("list_projects", {"limit": 0}, "u", "t", {})[0], 1)
         self.assertEqual(lp.validate("list_projects", {"limit": "25"}, "u", "t", {})[0], 25)
-        for bad in ("abc", True, [1]):
+        for bad in ("abc", True, [1], float("inf"), 2.5):
             with self.assertRaises(ToolError):
                 lp.validate("list_projects", {"limit": bad}, "u", "t", {})
 
@@ -191,6 +191,56 @@ class PageLists(SimpleTestCase):
         self.assertEqual(cuts.omitted, {"tags": 30, "saved_filters": 1})
         self.assertTrue(cuts.has_more)
         self.assertEqual(payload["project_id"], 1)
+
+    def test_a_middle_page_counts_the_rows_still_to_come_not_the_ones_already_seen(self):
+        payload = {"projects": [{"id": i} for i in range(250)]}
+        cuts = self.page("list_projects", payload, offset=100)
+        self.assertEqual(cuts.omitted, {"projects": 50})
+        self.assertEqual(cuts.next_call.split(". ")[0], "Showing 101-200 of 250 projects")
+
+    def test_a_cursor_past_the_end_of_a_list_that_shrank_is_refused_in_words(self):
+        payload = {"projects": [{"id": i} for i in range(90)]}
+        with self.assertRaises(ToolError) as cm:
+            self.page("list_projects", payload, offset=100)
+        self.assertIn("the list has 90 rows now", str(cm.exception))
+        self.assertIn("without `cursor`", str(cm.exception))
+
+    def test_a_list_the_tool_leaves_unordered_gets_a_stable_order_while_it_is_paged(self):
+        import random  # noqa: PLC0415
+
+        people = [{"user_id": f"id{i:03d}", "username": f"user{i % 40:02d}"} for i in range(250)]
+        seen, offset = [], 0
+        while True:
+            shuffled = list(people)
+            random.Random(offset).shuffle(shuffled)  # the database may answer in any order
+            payload = {"members": shuffled}
+            cuts = self.page("list_project_members", payload, limit=60, offset=offset)
+            seen += [m["user_id"] for m in payload["members"]]
+            if not cuts.has_more:
+                break
+            offset = lp.decode_cursor(cuts.next_cursor, "list_project_members", "u", "t", {})
+        self.assertEqual(sorted(seen), sorted(m["user_id"] for m in people))
+        self.assertEqual(len(seen), len(set(seen)), "no row twice, none missed")
+
+    def test_a_list_that_fits_one_page_keeps_the_tools_own_order(self):
+        people = [{"user_id": f"id{i}", "username": f"z{9 - i}"} for i in range(10)]
+        payload = {"members": list(people)}
+        self.assertFalse(self.page("list_project_members", payload))
+        self.assertEqual(payload["members"], people)
+
+    def test_a_multi_list_answer_names_the_longest_list(self):
+        payload = {
+            "tags": [{"n": i} for i in range(5)],
+            "saved_filters": [{"n": i} for i in range(300)],
+        }
+        cuts = self.page("list_project_tags", payload)
+        self.assertTrue(cuts.next_call.startswith("Showing 1-100 of 300 saved filters"))
+        self.assertIn("paged by the same cursor", cuts.next_call)
+        self.assertEqual(len(payload["tags"]), 5)
+
+    def test_a_paged_tool_without_its_page_is_a_loud_mistake(self):
+        with self.assertRaises(RuntimeError):
+            rl.apply("list_projects", {"projects": []}, self.render)
 
     def test_an_answer_without_the_list_is_left_alone(self):
         payload = {"projects": None}
@@ -322,6 +372,14 @@ class Pages(McpBase):
             result = self.call(tool, cursor=cursor, **args)
             self.assertTrue(result["isError"], tool)
             self.assertIn("not valid for this call", text_of(result))
+
+    def test_a_valid_cursor_past_the_end_says_the_list_is_shorter_now(self):
+        stale = lp.encode_cursor(
+            "list_projects", str(self.user.id), str(self.team.team_id), {}, 10_000
+        )
+        result = self.call(cursor=stale)
+        self.assertTrue(result["isError"])
+        self.assertIn("the list has 251 rows now", text_of(result))
 
     def test_a_cursor_does_not_work_for_another_person(self):
         cursor = self.call(limit=50)["structuredContent"]["truncated"]["next_cursor"]

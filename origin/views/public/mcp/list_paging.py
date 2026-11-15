@@ -35,6 +35,7 @@ from typing import Any, Callable
 from django.core import signing
 
 from origin.search_engine.agent.tools.base import ToolError
+from origin.views.public.mcp.body_paging import _int_arg
 from origin.views.public.mcp.result_limits import MCP_RESULT_MAX_CHARS, Cuts, _env_int
 
 DEFAULT_LIMIT = _env_int("MCP_LIST_DEFAULT_LIMIT", 100)
@@ -49,33 +50,54 @@ PAGE_ARGS = ("limit", "cursor")
 
 
 class Spec:
-    """One paged tool: the lists of its answer, what a row is called, and how to narrow."""
+    """One paged tool: the lists of its answer, what a row is called, how to narrow (None when
+    nothing narrows it), and how to order a list that the tool leaves unordered."""
 
-    def __init__(self, keys: tuple[str, ...], noun: str, narrow: str):
+    def __init__(
+        self,
+        keys: tuple[str, ...],
+        noun: str,
+        narrow: str | None,
+        nouns: dict[str, str] | None = None,
+        sort: Callable[[Any], Any] | None = None,
+    ):
         self.keys, self.noun, self.narrow = keys, noun, narrow
+        self.nouns = nouns or {}
+        self.sort = sort
+
+
+def _by_person(row: Any) -> tuple[str, str]:
+    """A person's row ordered by name, then id: what makes a page boundary stable for a list the
+    tool reads without an `order_by`."""
+    if not isinstance(row, dict):
+        return ("", "")
+    return (str(row.get("username") or "").lower(), str(row.get("user_id") or ""))
 
 
 SPECS: dict[str, Spec] = {
-    "list_projects": Spec(("projects",), "projects", "with `name_filter`"),
+    "list_projects": Spec(("projects",), "projects", "or narrow with `name_filter`"),
     "get_team_members": Spec(
-        ("members",), "team members", "by asking for one project's people with list_project_members"
+        ("members",),
+        "team members",
+        "or ask for one project's people with list_project_members",
+        sort=_by_person,
     ),
-    "list_project_members": Spec(
-        ("members",), "project members", "by naming the person you look for with get_team_members"
-    ),
-    "list_channel_members": Spec(
-        ("members",), "channel members", "by naming the person you look for with get_team_members"
-    ),
-    "list_note_access": Spec(
-        ("people",), "people with access", "by naming the person you look for with get_team_members"
-    ),
+    "list_project_members": Spec(("members",), "project members", None, sort=_by_person),
+    "list_channel_members": Spec(("members",), "channel members", None, sort=_by_person),
+    "list_note_access": Spec(("people",), "people with access", None),
     "list_today_todos": Spec(
-        ("items",), "to-dos", "with list_uncompleted_todos and its date range"
+        ("items",), "to-dos", "or read older ones with list_uncompleted_todos and its date range"
     ),
     "list_project_tags": Spec(
         ("tags", "labels", "custom_fields", "saved_filters"),
-        "tags (labels, custom fields and saved filters are paged the same way)",
-        "by reading one thing at a time from the project's own settings",
+        "tags",
+        None,
+        nouns={
+            "tags": "tags",
+            "labels": "labels",
+            "custom_fields": "custom fields",
+            "saved_filters": "saved filters",
+        },
     ),
 }
 
@@ -105,7 +127,8 @@ def schema_properties() -> dict[str, dict[str, Any]]:
 
 _BAD_CURSOR = (
     "That `cursor` is not valid for this call (it is malformed, expired, or came from a different "
-    "call). Call again without `cursor` to start from the top."
+    "call or different arguments: pass the same arguments as the call that gave it). Call again "
+    "without `cursor` to start from the top."
 )
 
 
@@ -158,16 +181,8 @@ def validate(
     tool: str, args: dict[str, Any], user_id: str, team_id: str, other_args: dict[str, Any]
 ) -> tuple[int, int]:
     """`(limit, offset)` from the call's paging arguments, or a `ToolError`."""
-    raw = args.get("limit")
-    limit = DEFAULT_LIMIT
-    if raw is not None and raw != "":
-        if isinstance(raw, bool):
-            raise ToolError(f"`limit` must be a whole number (got {raw!r}).")
-        try:
-            limit = int(raw)
-        except (TypeError, ValueError):
-            raise ToolError(f"`limit` must be a whole number (got {raw!r}).") from None
-        limit = max(1, min(limit, MAX_LIMIT))
+    # A limit out of range is clamped, as every other `limit` here is; a non-number is refused.
+    limit = max(1, min(_int_arg(args, "limit", DEFAULT_LIMIT, -(10**12)), MAX_LIMIT))
     cursor = args.get("cursor")
     offset = 0
     if cursor is not None and cursor != "":
@@ -198,9 +213,20 @@ def page_lists(
     lists = {k: payload[k] for k in spec.keys if isinstance(payload.get(k), list)}
     if not lists:
         return
-    primary = lists[spec.keys[0]] if spec.keys[0] in lists else next(iter(lists.values()))
-    total = len(primary)
-    more_somewhere = lambda end: any(len(v) > end for v in lists.values())  # noqa: E731
+    longest_key = max(lists, key=lambda k: len(lists[k]))
+    total = len(lists[longest_key])
+    if offset and offset >= total:
+        # The list shrank since the cursor was made (a person left, a project was deleted).
+        raise ToolError(
+            f"That `cursor` is past the end: the list has {total} rows now. Call again without "
+            "`cursor` to start from the top."
+        )
+
+    # A list the tool reads without an order gets one while it is paged, or two pages could
+    # overlap or miss a row. A list that fits one page keeps the tool's own order.
+    if spec.sort is not None and (offset or total > limit):
+        for key in lists:
+            lists[key] = sorted(lists[key], key=spec.sort)
 
     # The page the caller asked for, shortened until the answer fits the cap WITH its notice: a
     # row the generic guard would drop later is a row the cursor would skip.
@@ -213,24 +239,30 @@ def page_lists(
         shorter = int(n * (cap - NOTICE_ROOM) / size * 0.95)
         n = max(1, min(n - 1, shorter))
     end = offset + n
-    more = more_somewhere(end)
+    more = any(len(v) > end for v in lists.values())
     if offset == 0 and not more:
         return
     for key, rows in lists.items():
         payload[key] = rows[offset:end]
         cuts.field(key)
-        cuts.drop(key, len(rows) - len(payload[key]))
-    shown_from = min(offset + 1, total) if total else 0
+        # Rows after this page, not the ones before it (those were on earlier pages).
+        cuts.drop(key, max(len(rows) - end, 0))
+    noun = spec.nouns.get(longest_key, spec.noun)
+    shown_from = offset + 1
     shown_to = min(end, total)
     cuts.has_more = more
+    together = " (every list in this answer is paged by the same cursor)" if len(lists) > 1 else ""
     if more:
         cuts.next_cursor = encode_cursor(tool, user_id, team_id, other_args, end)
+        narrow = f", {spec.narrow}" if spec.narrow else ""
         cuts.next_call = (
-            f"Showing {shown_from}-{shown_to} of {total} {spec.noun}. Pass cursor=<next_cursor> "
-            f"for the next page, or narrow {spec.narrow}."
+            f"Showing {shown_from}-{shown_to} of {total} {noun}{together}. Pass "
+            f"cursor=<next_cursor> for the next page{narrow}."
         )
     else:
-        cuts.next_call = f"Showing {shown_from}-{shown_to} of {total} {spec.noun}: the last page."
+        cuts.next_call = (
+            f"Showing {shown_from}-{shown_to} of {total} {noun}{together}: the last page."
+        )
 
 
 # --------------------------------------------------------------------------
