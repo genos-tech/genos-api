@@ -84,9 +84,11 @@ class RefusedAskTests(TaskWorld):
         self.assertEqual(rows(), before)
 
     def test_a_team_the_asker_is_not_in_is_refused_before_the_task_is_looked_at(self):
-        task = self.make_task()
+        # A task the asker cannot reach: the team they name is the team that is checked, and they are not in it. The
+        # ask's own answer for a team nobody may enter: it says nothing about any task. (For a task they CAN reach the
+        # named team is replaced by the task's own, as the restore route does: `test_agent_task_ask_team`.)
+        task = self.make_task(project=self.private_project())
         resp, _ = self.ask(task_context=self.ctx(task), team_id=str(self.team_c.team_id))
-        # The ask's own answer for a team nobody may enter: it says nothing about any task.
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json(), {"error": "Team not found."})
 
@@ -101,17 +103,17 @@ class RefusedAskTests(TaskWorld):
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json(), {"error": task_context.NOT_FOUND})
 
-    def test_a_task_of_one_team_is_not_read_through_another_team_the_asker_also_belongs_to(self):
-        # The tenant check on its own: the asker may read the task (a member of its project) and belongs to
-        # team B too, so neither the team gate nor the access rule refuses. Naming team B for a team A task
-        # would hand the model team A's words under team B's context.
+    def test_a_task_of_one_team_is_not_read_under_another_team_the_asker_also_belongs_to(self):
+        # The tenant check on its own: the asker may read the task (a member of its project) and belongs to team B
+        # too. Naming team B for a team A task must not hand the model team A's words under team B's context, and it
+        # does not: the team is replaced by the task's own, as the restore route does (the ask ran in team B's
+        # context before MIP-1057's follow-up, and answered 404 for a task they can open).
         TeamMembers.objects.get_or_create(team=self.team_b, attendee=self.a_owner)
         task = self.make_task("Fix the login flow")
-        before = rows()
         resp, captured = self.ask(task_context=self.ctx(task), team_id=str(self.team_b.team_id))
-        self.assertEqual((resp.status_code, resp.json()), (404, {"error": task_context.NOT_FOUND}))
-        self.assertNotIn("kwargs", captured)
-        self.assertEqual(rows(), before)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["ctx"].team_id, str(self.team_a.team_id))
+        self.assertEqual(AgentSession.objects.get().team_id, str(self.team_a.team_id))
 
 
 class WhoMayAskTests(TaskWorld):
