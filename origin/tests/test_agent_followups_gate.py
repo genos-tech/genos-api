@@ -57,4 +57,7 @@ class ArmTests(SimpleTestCase):
 
     def test_the_arm_changes_something_against_the_baseline(self):
         # The baseline (arm0) is what production runs: the flag off.
-        self.assertEqual(harness.validate_overrides(harness.load_arms()["followups"], production.SEARCH_ENGINE), [])
+        self.assertEqual(
+            harness.validate_overrides(harness.load_arms()["followups"], production.SEARCH_ENGINE),
+            [],
+        )
