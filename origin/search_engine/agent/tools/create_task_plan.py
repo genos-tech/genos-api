@@ -57,6 +57,11 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_sizes
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
+from origin.search_engine.agent.tools.field_limits import (
+    MILESTONE_TITLE_MAX,
+    TASK_TITLE_MAX,
+    too_long_message,
+)
 from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
@@ -99,6 +104,19 @@ def _check_enum(raw: Any, valid: set[str], where: str, field: str, errors: list[
         errors.append(f"{where}: `{field}` must be one of {sorted(valid)} (got {raw!r}).")
         return None
     return raw
+
+
+def _check_title_length(raw: Any, where: str, limit: int, errors: list[str]) -> None:
+    """A title the column cannot hold fails the whole plan as an item of its validation list,
+    with the same words as everywhere else, instead of "Failed to create the plan (ref ...)"."""
+    title = str(raw).strip()
+    if len(title) > limit:
+        errors.append(
+            f"{where}: "
+            + too_long_message(
+                len(title), "title", limit, nothing="Nothing was created.", body="content_text"
+            )
+        )
 
 
 def _check_status(raw: Any, where: str, errors: list[str]) -> None:
@@ -293,6 +311,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             raise ToolError("`milestone` must be an object.")
         if not (milestone_spec.get("title") or "").strip():
             errors.append("milestone: `title` is required.")
+        else:
+            _check_title_length(milestone_spec["title"], "milestone", MILESTONE_TITLE_MAX, errors)
         _check_enum(
             milestone_spec.get("priority"), VALID_PRIORITIES, "milestone", "priority", errors
         )
@@ -354,6 +374,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             continue
         if not (spec.get("title") or "").strip():
             errors.append(f"{where}: `title` is required.")
+        else:
+            _check_title_length(spec["title"], where, TASK_TITLE_MAX, errors)
         _check_enum(spec.get("priority"), VALID_PRIORITIES, where, "priority", errors)
         _check_enum(spec.get("effort_level"), VALID_EFFORTS, where, "effort_level", errors)
         if parity:
