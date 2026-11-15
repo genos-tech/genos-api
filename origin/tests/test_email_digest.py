@@ -18,6 +18,8 @@ from origin.models.common.notification_models import (
     EmailSuppression,
     NotificationPreference,
 )
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.task_models import TaskMaster
 from origin.services.email_suppression import suppress
 from origin.services.v3_activity import SURFACE_TASK_BODY
 from origin.tests.test_base import BaseAPITestCase
@@ -37,6 +39,24 @@ class DigestTestBase(BaseAPITestCase):
         self.user.timezone = "Asia/Tokyo"
         self.user.save(update_fields=["timezone"])
         self.local_hour = timezone.now().astimezone(ZoneInfo("Asia/Tokyo")).hour
+        # The task the mentions are about, which `self.user` (its reporter) can open: a recipient
+        # who cannot gets the minimal line (`test_nonmember_mention_card`, MIP-1593).
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P",
+            code="WRD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.task = TaskMaster.objects.create(
+            team=self.team,
+            project=project,
+            reporter=self.user,
+            assignee=self.user,
+            title="T",
+            status="WIP",
+        )
+        self.task_path = f"/workspace/tasks/project/{project.project_id}/task/{self.task.task_id}"
 
     def _unread_mention(self, recipient=None, title_id="WRD-7"):
         return Activity.objects.create(
@@ -45,7 +65,11 @@ class DigestTestBase(BaseAPITestCase):
             actor=self.user2,
             activity_type=ActivityType.MENTION,
             surface_type=SURFACE_TASK_BODY,
-            meta={"displayId": title_id, "projectId": "p1", "taskId": "t1"},
+            meta={
+                "displayId": title_id,
+                "projectId": self.task.project_id,
+                "taskId": self.task.task_id,
+            },
         )
 
     def _tick(self, at_hour=None, **kwargs):
@@ -74,7 +98,7 @@ class SelectionTests(DigestTestBase):
         msg = mail.outbox[0]
         self.assertEqual(msg.to, [self.user.email])
         self.assertIn("mentioned you in a task", msg.body)
-        self.assertIn("https://app.genos.test/workspace/tasks/project/p1/task/t1", msg.body)
+        self.assertIn(f"https://app.genos.test{self.task_path}", msg.body)
         self.assertIn("List-Unsubscribe", msg.extra_headers)
         self.user.refresh_from_db()
         self.assertIsNotNone(self.user.email_digest_last_sent_at)

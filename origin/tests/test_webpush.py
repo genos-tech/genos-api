@@ -634,9 +634,7 @@ class DispatchTests(BaseAPITestCase):
         self._sub(self.user2)
         send = self._run([self._activity(self.user2, ActivityType.THREAD_REPLY)])
         send.assert_called_once()
-        self.assertEqual(
-            send.call_args.kwargs["payload"]["title"], "Alice replied in a thread"
-        )
+        self.assertEqual(send.call_args.kwargs["payload"]["title"], "Alice replied in a thread")
 
     def test_task_comment_reply_routes_to_task_comments_category(self):
         # A THREAD_REPLY whose mirror message carries metadata.taskCommentId
@@ -653,24 +651,48 @@ class DispatchTests(BaseAPITestCase):
             ]
         )
         send.assert_called_once()
-        self.assertEqual(
-            send.call_args.kwargs["payload"]["title"], "Alice commented on a task"
-        )
+        self.assertEqual(send.call_args.kwargs["payload"]["title"], "Alice commented on a task")
 
     def test_task_body_surface_mention_pushes(self):
+        # A recipient who can open the task (here its reporter) gets the full card; one who
+        # cannot gets the minimal one (`test_nonmember_mention_card`, MIP-1593).
+        from origin.models.project.prj_models import ProjectMaster
+        from origin.models.task.task_models import TaskMaster
+
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P",
+            code="PRG",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        task = TaskMaster.objects.create(
+            team=self.team,
+            project=project,
+            reporter=self.user2,
+            assignee=self.user2,
+            title="T",
+            status="WIP",
+        )
         self._sub(self.user2)
         act = self._activity(
             self.user2,
             ActivityType.MENTION,
             surface_type=5,  # SURFACE_TASK_BODY
-            meta={"displayId": "PRG-12", "projectId": 3, "taskId": 12},
+            meta={
+                "displayId": task.display_id,
+                "projectId": project.project_id,
+                "taskId": task.task_id,
+            },
             channel=False,
         )
         send = self._run([act])
         send.assert_called_once()
         payload = send.call_args.kwargs["payload"]
         self.assertEqual(payload["title"], "Alice mentioned you in a task")
-        self.assertEqual(payload["url"], "/workspace/tasks/project/3/task/12")
+        self.assertEqual(
+            payload["url"], f"/workspace/tasks/project/{project.project_id}/task/{task.task_id}"
+        )
 
     def test_note_surface_mention_pushes(self):
         self._sub(self.user2)
@@ -699,7 +721,12 @@ class DispatchTests(BaseAPITestCase):
             self.user2,
             ActivityType.THREAD_REPLY,
             surface_type=5,  # SURFACE_TASK_BODY
-            meta={"isCommentParticipant": True, "displayId": "PRG-12", "projectId": 3, "taskId": 12},
+            meta={
+                "isCommentParticipant": True,
+                "displayId": "PRG-12",
+                "projectId": 3,
+                "taskId": 12,
+            },
             channel=False,
         )
         send = self._run([act])
@@ -741,9 +768,7 @@ class DispatchTests(BaseAPITestCase):
         )
         send = self._run([act])
         send.assert_called_once()
-        self.assertEqual(
-            send.call_args.kwargs["payload"]["title"], "Alice replied in a thread"
-        )
+        self.assertEqual(send.call_args.kwargs["payload"]["title"], "Alice replied in a thread")
 
     def test_category_override_suppresses_per_type(self):
         # Turning off only the reactions fine-category blocks reaction

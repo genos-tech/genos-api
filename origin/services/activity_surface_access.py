@@ -28,8 +28,7 @@ from collections import defaultdict
 from typing import Iterable
 
 from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.task.task_models import TaskMaster
+from origin.services.activity_minimal_card import task_reader_pairs
 from origin.services.v3_activity import (
     SURFACE_CHAT_NOTE,
     SURFACE_PERSONAL_NOTE,
@@ -65,28 +64,9 @@ def _as_int(value):
 def _readable_tasks(user_id, task_ids: set[int]) -> set[int]:
     """The subset of `task_ids` `can_access_task(task_id, user_id)` says yes to: the assignee,
     the reporter, the project's owner, or a project member, and not soft-deleted (MIP-1566; the
-    same rule as `can_access_task`'s since MIP-1572). Three queries."""
-    me = str(user_id)
-    tasks = list(
-        TaskMaster.objects.filter(task_id__in=task_ids, is_deleted=False).values(
-            "task_id", "project_id", "assignee_id", "reporter_id"
-        )
-    )
-    projects = {t["project_id"] for t in tasks if t["project_id"] is not None}
-    on_project = set(
-        ProjectMembers.objects.filter(attendee=user_id, project_id__in=projects).values_list(
-            "project_id", flat=True
-        )
-    ) | set(
-        ProjectMaster.objects.filter(owner=user_id, project_id__in=projects).values_list(
-            "project_id", flat=True
-        )
-    )
-    return {
-        t["task_id"]
-        for t in tasks
-        if me in {str(t["assignee_id"]), str(t["reporter_id"])} or t["project_id"] in on_project
-    }
+    same rule as `can_access_task`'s since MIP-1572). Three queries (the rule is
+    `activity_minimal_card.task_reader_pairs`, which the live card shares)."""
+    return {task for _, task in task_reader_pairs([user_id], task_ids)}
 
 
 def _readable_notes(user_id, surface: int, note_ids: set[int]) -> set[int]:

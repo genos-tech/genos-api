@@ -30,6 +30,7 @@ from django.conf import settings
 
 from origin.models.chat.unified_models import ActivityType, ChannelKind
 from origin.models.common.notification_models import EmailNotificationEvent
+from origin.services.activity_minimal_card import minimal_card_ids_failing_closed
 from origin.services.email_gating import should_email
 from origin.services.webpush_dispatch import (
     _chat_url,
@@ -47,9 +48,10 @@ def _enabled() -> bool:
     return bool(getattr(settings, "EMAIL_NOTIFICATIONS_ENABLED", False))
 
 
-def _email_spec(act) -> dict | None:
+def _email_spec(act, *, minimal: bool = False) -> dict | None:
     """Map an Activity to its email (category, title, body, url).
 
+    `minimal`: the recipient cannot open the task this @mention is in (`activity_minimal_card`).
     Reuses `_push_spec` wholesale, plus the one branch push deliberately
     lacks: `ActivityType.TASK_ASSIGN`. Nothing PRODUCES task_assign rows
     yet (`create_self_assign_activity` deliberately emits MENTION so the
@@ -69,17 +71,18 @@ def _email_spec(act) -> dict | None:
             "body": (act.meta or {}).get("displayId", ""),
             "url": _task_url(act.meta),
         }
-    return _push_spec(act)
+    return _push_spec(act, minimal=minimal)
 
 
 def enqueue_email_for_activities(activities) -> None:
     """Outbox rows for freshly-committed Activity rows. Never raises."""
     if not _enabled() or not activities:
         return
+    minimal = minimal_card_ids_failing_closed(activities)
     rows = []
     for act in activities:
         try:
-            spec = _email_spec(act)
+            spec = _email_spec(act, minimal=act.id in minimal)
             if spec is None:
                 continue
             recipient_id = str(act.recipient_id)
