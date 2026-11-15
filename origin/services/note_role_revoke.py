@@ -28,6 +28,13 @@ away included, is never touched. A task note's author who is NOT on its project 
 nothing through `owner_id` any more (the agent, search, briefing and timeline gates ask the same
 role rule the app does); nobody else is made a manager of such an orphan note.
 
+Moving back (MIP-1583): the Owner row a MOVE ends is recorded (`TaskNoteRoleRevoke`), and a move
+to a project the author is on writes it back (`restore_task_roles_on_move`), exactly the rows that
+were recorded and only for a member of the project the note is in now. The record is consumed when
+it is applied, when the person joins a project the note is in (`restore_task_author_roles`, which
+so leaves none for a member), and when they leave the team, so it can only ever give back what a
+move took, never an access something else ended.
+
 Chat notes are `chat_note_access`, a separate module.
 """
 
@@ -38,7 +45,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
-from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.common_note_models import NotePermissionMaster, TaskNoteRoleRevoke
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMembers
@@ -103,6 +110,11 @@ def restore_task_author_roles(*, user_id, project_id) -> int:
     rows it wrote."""
     if not user_id or not project_id:
         return 0
+    # The person is on the project again: what a move recorded is superseded by this rule.
+    TaskNoteRoleRevoke.objects.filter(
+        user_id=user_id,
+        note_id__in=TaskNoteMaster.objects.filter(project_id=project_id).values("note_id"),
+    ).delete()
     held = NotePermissionMaster.objects.filter(user_id=user_id, note_type=NOTE_TYPE_TASK)
     missing = list(
         TaskNoteMaster.objects.filter(project_id=project_id, owner_id=user_id)
@@ -130,19 +142,79 @@ def restore_task_author_roles(*, user_id, project_id) -> int:
 
 def revoke_task_roles_on_move(*, moves, target_project_id) -> int:
     """Task notes moved to `target_project_id`: delete the Owner row of everyone who is not on
-    that project. `moves` is `[(note_id, old_project_id), ...]`, read before the notes were
-    re-filed; notes that did not change project are skipped. Whoever is on the target project
-    keeps their row (their membership carries on), and shares stay."""
+    that project, and record each one (MIP-1583). `moves` is `[(note_id, old_project_id), ...]`,
+    read before the notes were re-filed; notes that did not change project are skipped. Whoever is
+    on the target project keeps their row (their membership carries on), and shares stay.
+
+    Returns how many NOTES lost an Owner row (what the caller tells the person who moved them)."""
+    old_project = {n: old for n, old in moves if old != target_project_id}
+    if not old_project or not target_project_id:
+        return 0
+    members = ProjectMembers.objects.filter(project_id=target_project_id).values("attendee_id")
+    rows = NotePermissionMaster.objects.filter(
+        note_type=NOTE_TYPE_TASK, role_id=ROLE_OWNER, note_id__in=old_project
+    ).exclude(user_id__in=members)
+    with transaction.atomic():
+        held = list(rows.values_list("user_id", "note_id"))
+        if not held:
+            return 0
+        # `ignore_conflicts`: an older record of the same grant stays as it is.
+        TaskNoteRoleRevoke.objects.bulk_create(
+            [
+                TaskNoteRoleRevoke(
+                    user_id=user_id, note_id=note_id, from_project_id=old_project[note_id]
+                )
+                for user_id, note_id in held
+            ],
+            ignore_conflicts=True,
+        )
+        _delete_rows(rows, "task")
+    return len({note_id for _, note_id in held})
+
+
+def restore_task_roles_on_move(*, moves, target_project_id) -> int:
+    """Task notes moved to `target_project_id`: write back the Owner row a move once ended for each
+    person who is on that project now (MIP-1583). Only a recorded row is written, never one the
+    person did not hold, and never for someone who is not a member of the project the note is in.
+    A person who holds any row on the note by now (a share they were handed while away included)
+    keeps it as it is; their record is consumed either way. Returns how many rows it wrote."""
     note_ids = {n for n, old in moves if old != target_project_id}
     if not note_ids or not target_project_id:
         return 0
     members = ProjectMembers.objects.filter(project_id=target_project_id).values("attendee_id")
-    return _delete_rows(
-        NotePermissionMaster.objects.filter(
-            note_type=NOTE_TYPE_TASK, role_id=ROLE_OWNER, note_id__in=note_ids
-        ).exclude(user_id__in=members),
-        "task",
-    )
+    records = TaskNoteRoleRevoke.objects.filter(note_id__in=note_ids, user_id__in=members)
+    with transaction.atomic():
+        pairs = list(records.values_list("user_id", "note_id"))
+        if not pairs:
+            return 0
+        held = set(
+            NotePermissionMaster.objects.filter(
+                note_type=NOTE_TYPE_TASK,
+                note_id__in={n for _, n in pairs},
+                user_id__in={u for u, _ in pairs},
+            ).values_list("user_id", "note_id")
+        )
+        teams = dict(
+            TaskNoteMaster.objects.filter(note_id__in={n for _, n in pairs}).values_list(
+                "note_id", "team_id"
+            )
+        )
+        missing = [(u, n) for u, n in pairs if (u, n) not in held and n in teams]
+        NotePermissionMaster.objects.bulk_create(
+            [
+                NotePermissionMaster(
+                    team_id=teams[n],
+                    user_id=u,
+                    note_type=NOTE_TYPE_TASK,
+                    note_id=n,
+                    role_id=ROLE_OWNER,
+                )
+                for u, n in missing
+            ],
+            ignore_conflicts=True,
+        )
+        records.delete()
+    return len(missing)
 
 
 def _team_folder_note_ids(team_id) -> set[int]:
@@ -165,6 +237,11 @@ def revoke_team_roles(*, user_id, team_id) -> int:
     if not user_id or not team_id:
         return 0
     with transaction.atomic():
+        # A record of a move's removed row goes with the membership it stood for (MIP-1583).
+        TaskNoteRoleRevoke.objects.filter(
+            user_id=user_id,
+            note_id__in=TaskNoteMaster.objects.filter(team_id=team_id).values("note_id"),
+        ).delete()
         deleted = _delete_rows(
             NotePermissionMaster.objects.filter(
                 user_id=user_id,
