@@ -76,6 +76,8 @@ from origin.services.milestone_manage import (
     clean_folder_name,
     create_folder,
     folder_name_taken,
+    lock_live_milestone,
+    move_assignee_problem,
     update_milestone,
 )
 from origin.services.milestone_service import create_milestone
@@ -449,6 +451,15 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     parsed, errors = _parse_fields(args, destination or milestone.project, ctx, creating=False)
     if errors:
         raise _refuse(errors, "Nothing was changed")
+    # The people already on the milestone and its tasks are judged against the destination too, as
+    # the PATCH judges them (MIP-1583): a task must not stay open to an assignee who is not on the
+    # project it now lives in.
+    if destination is not None and (
+        problem := move_assignee_problem(
+            milestone, destination, assignee_ids=parsed.get("assignee_ids", UNSET)
+        )
+    ):
+        raise ToolError(problem)
 
     fields: dict[str, Any] = {}
     changed: list[str] = []
@@ -518,15 +529,13 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
 
     added_assignees: list[str] = []
+    report: dict[str, Any] = {}
     try:
         with transaction.atomic():
-            if destination is not None and not (
-                MilestoneMaster.objects.select_for_update()
-                .filter(pk=milestone.pk, is_deleted=False, project_id=source[1])
-                .exists()
-            ):
+            if lock_live_milestone(milestone, project_id=source[1]) is None:
                 # Locked until this commits, so a convert or a second move waits: the full save
-                # below would otherwise write the stale copy of the row back over theirs.
+                # below would otherwise write the stale copy of the row back over theirs (a move
+                # since MIP-1564, every update since MIP-1583, as the app's PATCH does).
                 raise ToolError(
                     f"Milestone {milestone.milestone_id} was changed while this was being applied "
                     "(converted, deleted or moved by someone else). Nothing was changed."
@@ -540,6 +549,7 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 folder=folder,
                 assignee_ids=assignee_ids,
                 project_move=destination,
+                report=report,
             )
     except ToolError:
         raise
@@ -582,10 +592,22 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "cleared": ["sprint", "folder", "tags"],
             "display_ids_changed": True,
         }
+        # Task notes whose author is not on the destination lost their Owner role with the move
+        # (recorded: a move to a project they are on writes it back, MIP-1583). Said only when it
+        # happened, so the result of a move that narrowed nothing is what it always was.
+        narrowed = report.get("notes_narrowed", 0)
+        if narrowed:
+            result["moved"]["notes_narrowed"] = narrowed
         result["__summary__"] = (
             f"Moved {_label(payload)} from {source[2]} to {destination.project_name} with "
             f"{moved_tasks} task(s); new display ids, sprint, folder and tags cleared"
             + (f"; also changed: {', '.join(changed[1:])}" if len(changed) > 1 else "")
+            + (
+                f"; {narrowed} task note(s) lost their author's Owner role, as the author is not "
+                f"on {destination.project_name}"
+                if narrowed
+                else ""
+            )
         )
     return result
 

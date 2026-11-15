@@ -290,6 +290,16 @@ def subjects(tool_name: str, args: dict[str, Any]) -> list[tuple[str, str]]:
         ident = _int_id(args.get("task_id"))
         if ident:
             found.append((OBJECT_TASK, ident))
+        # ... and a milestone it turns into a task by `milestone_id`: that milestone is retired, and
+        # the row that changed is the task it became (MIP-1583). Read from the milestone the
+        # caller named, not from the result.
+        if args.get("action") == "convert" and (
+            milestone_ident := _int_id(args.get("milestone_id"))
+        ):
+            became = _converted_task_id(milestone_ident)
+            if became is not None:
+                found = [item for item in found if item != ("milestone", milestone_ident)]
+                found.append((OBJECT_TASK, str(became)))
     seen: set[tuple[str, str]] = set()
     unique = []
     for item in found:
@@ -297,6 +307,17 @@ def subjects(tool_name: str, args: dict[str, Any]) -> list[tuple[str, str]]:
             seen.add(item)
             unique.append(item)
     return unique[:MAX_ITEMS_PER_CALL]
+
+
+def _converted_task_id(milestone_id: str) -> int | None:
+    """The task a retired milestone became, or None when it was not converted."""
+    from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
+
+    return (
+        MilestoneMaster.objects.filter(milestone_id=milestone_id, converted_to_task__isnull=False)
+        .values_list("converted_to_task_id", flat=True)
+        .first()
+    )
 
 
 def kind_of(write: bool) -> str:
