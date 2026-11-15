@@ -524,7 +524,12 @@ class DeclarationTests(FollowupsBase):
         rows = [a for a in tool_flag_params.ADDITIONS if a.flag == FOLLOWUPS_FLAG]
         self.assertEqual([a.tool for a in rows], ["list_calendar_events"])
         self.assertEqual(rows[0].properties, {})
-        sentences = [t for t, f, _s in tool_flag_text.ADDITIONS if f == FOLLOWUPS_FLAG]
+        # (Other follow-ups file their own sentence on their own tool, e.g. MIP-1589's `list_project_tags`.)
+        sentences = [
+            t
+            for t, f, _s in tool_flag_text.ADDITIONS
+            if f == FOLLOWUPS_FLAG and t.endswith("events")
+        ]
         self.assertEqual(sentences, ["list_calendar_events"])
 
     def test_the_account_is_still_never_required(self):

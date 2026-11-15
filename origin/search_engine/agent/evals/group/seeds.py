@@ -758,6 +758,28 @@ def seed_chat_messages(info: dict[str, Any]) -> None:
     say(direct, colleague, spec["secret"])
 
 
+# --------------------------------------------------------------------------- #
+# t1589: a project whose owner made two fields required                         #
+# --------------------------------------------------------------------------- #
+
+#: The project the field-rule cases create tasks in. Its rules (`ProjectMaster.task_field_rules`): priority and
+#: due date are REQUIRED, with no default (so a model has no value to fill in and must ask). Nobody but the viewer
+#: is a member, so the story's people never see it.
+FIELD_RULES_PROJECT = {"en": "Eval field rules", "ja": "評価フィールドルール"}
+FIELD_RULES = {"priority": {"required": True}, "dueDate": {"required": True}}
+
+
+def seed_project_field_rules(info: dict[str, Any]) -> None:
+    """The viewer's own project with required priority and due date (MIP-1589): what "add a task to it" runs
+    into. Looked for by its code, and the rules are written only while they differ, so a finished seed
+    writes nothing."""
+    lang = "ja" if info["team"] == "ja" else "en"
+    project = _isolated_project(info, FIELD_RULES_PROJECT[lang], "EFR", [info["user_id"]])
+    if project.task_field_rules != FIELD_RULES:
+        project.task_field_rules = FIELD_RULES
+        project.save(update_fields=["task_field_rules"])
+
+
 #: The story's people (`a` client, `b` PM, `c` developer) who can read a seed's rows: the guard
 #: `test_agent_eval_group_seeds` checks only their cases against the seed's text.
 VISIBLE_TO: dict[str, frozenset[str]] = {
@@ -770,6 +792,7 @@ VISIBLE_TO: dict[str, frozenset[str]] = {
     "calendar_one_account": frozenset({"a", "c"}),  # the viewer's own Google account
     # The group chat is the PM's and a seed colleague's; the direct message is between two seed colleagues.
     "chat_messages": frozenset({"b"}),
+    "project_field_rules": frozenset({"b"}),  # project EFR: the viewer alone
 }
 
 
@@ -810,6 +833,8 @@ def seed_texts(name: str, lang: str) -> list[str]:
         ]
     if name == "chat_messages":
         return list(CHAT_MESSAGES[lang].values())
+    if name == "project_field_rules":
+        return [FIELD_RULES_PROJECT[lang]]
     if name == "note_threads_stub":
         t = NOTE_THREAD_TEXT[lang]
         return [*NOTE_TITLES[lang].values(), NOTE_BODY[lang], *t.values()]
@@ -825,6 +850,7 @@ SEEDS: dict[str, Callable[[dict[str, Any]], None]] = {
     "calendar_two_accounts": seed_calendar_two_accounts,
     "calendar_one_account": seed_calendar_one_account,
     "chat_messages": seed_chat_messages,
+    "project_field_rules": seed_project_field_rules,
 }
 
 

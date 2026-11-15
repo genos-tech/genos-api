@@ -90,6 +90,8 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # worded for "all"): 146,026 with every flag on, so the constant is raised to 146,500 (next 500). What production
 # sends today (the flag is off) is still the 145,869 above, byte for byte (the fingerprint golden); the
 # measure of the flag-on prefix is `test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget`.
+# MIP-1589 (same flag): `list_project_tags` gains one more description sentence (+146). Both together: 146,172 with the
+# flag on over the production flags, still inside the 146,500 above.
 BUDGET_CHARS = 146_500
 
 

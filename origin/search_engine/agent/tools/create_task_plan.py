@@ -51,13 +51,14 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.parity import ignore_unless_parity, parity_on
+from origin.search_engine.agent.parity import followups_on, ignore_unless_parity, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_sizes
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies
+from origin.search_engine.agent.tools.project_field_rules import PLAN_ADVICE, plan_refusals
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -423,8 +424,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if assignee_ids:
         errors.extend(_assignee_errors(assignee_ids, allowed, ctx))
 
+    # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): the project's required fields, row by row, the way the app's
+    # form holds each task it creates; with the other errors, in the one atomic refusal.
+    refused_by_rules = followups_on() and plan_refusals(project, args)
+    if refused_by_rules:
+        errors.extend(refused_by_rules)
+
     if errors:
-        raise ToolError("Plan validation failed:\n- " + "\n- ".join(errors[:25]))
+        advice = ["\n" + PLAN_ADVICE] if refused_by_rules else []
+        raise ToolError("Plan validation failed:\n- " + "\n- ".join(errors[:25]) + "".join(advice))
 
     # Tier quota: the plan mints len(tasks) rows — plus one backing
     # task when it creates a NEW milestone — in a single approval, so

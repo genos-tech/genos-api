@@ -34,6 +34,7 @@ from origin.search_engine.agent.tools import create_task_plan as _create_task_pl
 from origin.search_engine.agent.tools import delete_calendar_event as _delete_calendar_event
 from origin.search_engine.agent.tools import list_calendar_events as _list_calendar_events
 from origin.search_engine.agent.tools import list_calendars as _list_calendars
+from origin.search_engine.agent.tools import list_project_tags as _list_project_tags
 from origin.search_engine.agent.tools import milestone_convert as _milestone_convert
 from origin.search_engine.agent.tools import task_attachments as _task_attachments
 from origin.search_engine.agent.tools import todo_source as _todo_source
@@ -81,6 +82,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("delete_calendar_event", PARITY_FLAG, _delete_calendar_event.DESCRIPTION_ADDITION),
     # MIP-1607 (AGENT_PARITY_FOLLOWUPS): `account: "all"` reads every account in one call. After the sentence above.
     ("list_calendar_events", FOLLOWUPS_FLAG, _list_calendar_events.FOLLOWUPS_DESCRIPTION_ADDITION),
+    # MIP-1589 (the follow-ups flag): a project's required fields and the names of its templates.
+    ("list_project_tags", FOLLOWUPS_FLAG, _list_project_tags.DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`
