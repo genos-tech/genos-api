@@ -57,16 +57,20 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-1607 (`AGENT_PARITY_FOLLOWUPS`: `account: "all"` on the events read): +157 more (146,026 all-on, 147,481 with
 # a Long member's block): 19 characters left, so the constant stays 147,500 and the next follow-up raises it with its
 # own measurement; `BUDGET_CHARS` (test_agent_prefix_budget) went to 146,500 because this test holds all-on to it too.
-# MIP-1589 (the follow-ups flag, default off): +146 more (`list_project_tags`' sentence). Together with MIP-1607's +157 the
+# MIP-1589 (the follow-ups flag, now on by default, see THE FLIP below): +146 more (`list_project_tags`' sentence). Together with MIP-1607's +157 the
 # flag-on prefix is 146,172 all-on and 147,627 with a Long member's block: over 147,500, so the constant goes up to the
 # next 500, 148,000 (373 characters left).
 # The first paid run's wording fixes (+249: 146,421 all-on, 147,876 with a Long member's block): 124 characters left, the
 # constant stays.
+# THE FLIP OF THE FOLLOW-UPS (2026-11-15): `AGENT_PARITY_FOLLOWUPS` is on by default, so production sends the 146,421 above
+# (re-measured on the merged tree; all-on equals production now except for the held flags, which add no declarations).
+# Nothing is raised: 147,876 with a Long member's block fits the 148,000 constant (124 left), and `BUDGET_CHARS`
+# (146,500) holds the production number (79 left). Evidence: the second grouped run of 2026-11-15, see `apis/settings.py`.
 ALL_ON_BUDGET_CHARS = 148_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
-# paid run). Everything else in ALL_ON is held.
+# paid run; its follow-ups 2026-11-15 after the second grouped run). Everything else in ALL_ON is held.
 SHIPPED_ON = frozenset(
     {
         "AGENT_RESUME_KEEPS_BLOCKS",
@@ -82,6 +86,7 @@ SHIPPED_ON = frozenset(
         "AGENT_INAPP_TIMELINE_TOOL",
         "AGENT_CONTENT_LENGTH",
         "AGENT_PARITY_TOOLS",
+        "AGENT_PARITY_FOLLOWUPS",
     }
 )
 # The neighbours that change what is declared and are not flags under test.

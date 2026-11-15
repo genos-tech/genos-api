@@ -85,18 +85,22 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # call: +4.2% of the prompt, +6% per ask in the grouped paid run of 2026-11-15, gemini-3.6-flash). Nothing
 # needs raising: the constant stays 146,000 (131 characters left), and `ALL_ON_BUDGET_CHARS` (147,500; 147,324
 # with a Long member's content block) holds too. The next parity task raises both with its own measurement.
-# MIP-1607 (`AGENT_PARITY_FOLLOWUPS`, default OFF, `list_calendar_events` takes `account: "all"`): +157 characters
+# MIP-1607 (`AGENT_PARITY_FOLLOWUPS`, shipped OFF, ON by default since the flip below; `list_calendar_events` takes `account: "all"`): +157 characters
 # of static text only while the new flag is on (one sentence on the events read and the `account` property
 # worded for "all"): 146,026 with every flag on, so the constant is raised to 146,500 (next 500). What production
 # sends today (the flag is off) is still the 145,869 above, byte for byte (the fingerprint golden); the
 # measure of the flag-on prefix is `test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget`.
 # MIP-1589 (same flag): `list_project_tags` gains one more description sentence (+146). Both together: 146,172 with the
 # flag on over the production flags, still inside the 146,500 above.
-# The first paid run's wording fixes (`AGENT_PARITY_FOLLOWUPS`, still default off): a sentence on `create_task` and on
+# The first paid run's wording fixes (`AGENT_PARITY_FOLLOWUPS`, still off then): a sentence on `create_task` and on
 # `create_task_plan` (a required field comes from the member: ask, never guess) and the calendar sentence's "omit `account`
 # unless ..." add +249 (146,421 with the flag on over the production flags; production with the flag off is still
 # 145,869). Nothing is raised: 79 characters are left under the 146,500 above. (The note on the rules is a RESULT field, so
 # it costs a call that reads a project with required fields, not the declarations.)
+# THE FLIP OF THE FOLLOW-UPS (2026-11-15, `AGENT_PARITY_FOLLOWUPS` on by default): production now sends the flag-on prefix,
+# 146,421 characters, +552 over the 145,869 of the rollback (about +130 input tokens per call at 4.2 characters per token;
+# nothing measurable per ask in the second grouped run of 2026-11-15, gemini-3.6-flash). Nothing is raised: the constant
+# stays 146,500 (79 characters left) and `ALL_ON_BUDGET_CHARS` (148,000; 147,876 with a Long member's block) holds too.
 BUDGET_CHARS = 146_500
 
 
@@ -139,8 +143,8 @@ class PrefixBudgetTests(SimpleTestCase):
         self.assertLessEqual(total, BUDGET_CHARS)
 
     def test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget(self) -> None:
-        # The follow-ups flag (MIP-1607 and the other parity follow-ups) is OFF in production: the day it is
-        # flipped it must already fit, or the flip is also a budget decision nobody made.
+        # The follow-ups flag (MIP-1607 and the other parity follow-ups) is ON in production since the flip. Held
+        # separately, with the prompt as the loop builds it, for the parity flag ON as well (the production pair).
         from apis import settings as production  # noqa: PLC0415
 
         with mock.patch.dict(
