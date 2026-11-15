@@ -98,6 +98,9 @@ REGISTRY = {
     "origin.search_engine.agent_views.AgentSessionDetailView": self_only(_OWN_AGENT),
     "origin.search_engine.agent_views.AgentSessionPinView": self_only(_OWN_AGENT),
     "origin.search_engine.agent_views.AgentSessionsListView": self_only(_OWN_AGENT),
+    "origin.search_engine.agent_views.AgentTaskSessionView": checked(
+        "participates_in_team", "can_read"
+    ),
     "origin.search_engine.agent_views.AgentStepUndoView": self_only(
         "undoes an approved write of the caller's own run (run.user_id must equal "
         "request.user.id; anyone else's, or no such step, is the same 404)"
