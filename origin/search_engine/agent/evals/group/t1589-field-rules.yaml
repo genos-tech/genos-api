@@ -1,0 +1,164 @@
+# MIP-1589 (flag AGENT_PARITY_FOLLOWUPS, arm `followups`): a project's owner can make fields REQUIRED on its tasks (here priority
+# and due date, with no default). The app's own form refuses a task that lacks one; before this flag an agent-made task got past
+# it. With the flag on, `create_task` / `create_task_plan` refuse such a task BEFORE the approval card, in a sentence that names
+# the fields, and `list_project_tags` returns the rules (`task_field_rules`) and the template names (`task_templates`).
+# Judged on what the model PROPOSES and ANSWERS (a write is never approved here, so no row changes): when the member gave no
+# priority or due date the model must ASK (no `create_task`/`create_task_plan` proposal, and the answer names the missing
+# fields); it must never propose a create unasked, nor invent the values. The project's own rule has no default, so there is
+# nothing legitimate to fill in.
+#
+# Seed `project_field_rules` (viewer `b` / `ja-b`): the viewer's own project "Eval field rules" / "評価フィールドルール" with
+# priority and due date required. The story's people never see it.
+#
+# Positives `requires_arm: followups` (without the flag nothing refuses and nothing lists the rules, so arm0 proposes the
+# create at once). Controls run on arm0 too and carry the arm's tag (`followups`): a create that gives both fields must still
+# reach the approval card (the flag must not block a complete create), and a plain create in a project with no rules must
+# be unchanged. Read the `missing-fields` answers by hand: the check is the words "priority"/"due" (期限/優先度), not a judge.
+
+- id: t1589.missing-fields.en
+  lang: en
+  tags: [eval-group, t1589]
+  fixture: sequence
+  viewer: b
+  seed: [project_field_rules]
+  requires_arm: followups
+  note: "Positive: the project requires priority and due date and the member gave neither. No create is proposed; the model asks for them (the refusal reaches it before any card)."
+  query: 'Add a task "Prepare the vendor contract" to the Eval field rules project.'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [create_task, create_task_plan]
+    answer_contains_any: ["priority", "due"]
+    answer_chars_at_least: 20
+
+- id: t1589.missing-fields.ja
+  lang: ja
+  tags: [eval-group, t1589]
+  fixture: sequence
+  viewer: ja-b
+  seed: [project_field_rules]
+  requires_arm: followups
+  note: "Positive: the project requires priority and due date and the member gave neither. No create is proposed; the model asks for them (the refusal reaches it before any card)."
+  query: 「ベンダー契約書を準備する」というタスクを評価フィールドルールプロジェクトに追加してください。
+  expect:
+    no_errors: true
+    pending_tools_excludes: [create_task, create_task_plan]
+    answer_contains_any: ["優先度", "期限", "期日"]
+    answer_chars_at_least: 20
+
+- id: t1589.plan-missing.en
+  lang: en
+  tags: [eval-group, t1589]
+  fixture: sequence
+  viewer: b
+  seed: [project_field_rules]
+  requires_arm: followups
+  note: "Positive: a plan whose tasks lack the required fields is refused as a whole before the card; the model asks for the fields and proposes no plan."
+  query: 'Create a plan in the Eval field rules project with two tasks: "Draft the contract" and "Review the contract".'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [create_task, create_task_plan]
+    answer_contains_any: ["priority", "due"]
+    answer_chars_at_least: 20
+
+- id: t1589.plan-missing.ja
+  lang: ja
+  tags: [eval-group, t1589]
+  fixture: sequence
+  viewer: ja-b
+  seed: [project_field_rules]
+  requires_arm: followups
+  note: "Positive: a plan whose tasks lack the required fields is refused as a whole before the card; the model asks for the fields and proposes no plan."
+  query: 評価フィールドルールプロジェクトに、「契約書を下書きする」と「契約書をレビューする」の2つのタスクで計画を作ってください。
+  expect:
+    no_errors: true
+    pending_tools_excludes: [create_task, create_task_plan]
+    answer_contains_any: ["優先度", "期限", "期日"]
+    answer_chars_at_least: 20
+
+- id: t1589.list-rules.en
+  lang: en
+  tags: [eval-group, t1589]
+  fixture: sequence
+  viewer: b
+  seed: [project_field_rules]
+  requires_arm: followups
+  note: "Positive: the rules are readable: the model reads them with list_project_tags (`task_field_rules`) and answers with the required fields, writing nothing."
+  query: What does the Eval field rules project require when I create a task in it? Just tell me, do not create anything.
+  expect:
+    no_errors: true
+    tools_used_contains: [list_project_tags]
+    pending_tools_excludes: [create_task, create_task_plan]
+    answer_contains_any: ["priority", "due"]
+    answer_chars_at_least: 20
+
+- id: t1589.list-rules.ja
+  lang: ja
+  tags: [eval-group, t1589]
+  fixture: sequence
+  viewer: ja-b
+  seed: [project_field_rules]
+  requires_arm: followups
+  note: "Positive: the rules are readable: the model reads them with list_project_tags (`task_field_rules`) and answers with the required fields, writing nothing."
+  query: 評価フィールドルールプロジェクトでタスクを作るときに必須の項目は何ですか？ 見るだけで、何も作らないでください。
+  expect:
+    no_errors: true
+    tools_used_contains: [list_project_tags]
+    pending_tools_excludes: [create_task, create_task_plan]
+    answer_contains_any: ["優先度", "期限", "期日"]
+    answer_chars_at_least: 20
+
+- id: t1589.given.en
+  lang: en
+  tags: [eval-group, t1589, followups]
+  fixture: sequence
+  viewer: b
+  seed: [project_field_rules]
+  note: "Control (arm0 and followups): the member gave both required fields, so the create must reach the approval card: the flag must not block a complete create."
+  query: 'Add a task "Prepare the vendor contract" to the Eval field rules project, priority High, due 2027-03-15.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_present: [priority, due_date]
+      args_match:
+        priority: "^High$"
+        due_date: "2027-03-15"
+
+- id: t1589.given.ja
+  lang: ja
+  tags: [eval-group, t1589, followups]
+  fixture: sequence
+  viewer: ja-b
+  seed: [project_field_rules]
+  note: "Control (arm0 and followups): the member gave both required fields, so the create must reach the approval card: the flag must not block a complete create."
+  query: 「ベンダー契約書を準備する」というタスクを評価フィールドルールプロジェクトに追加してください。優先度は高、期限は2027-03-15です。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_present: [priority, due_date]
+      args_match:
+        priority: "^High$"
+        due_date: "2027-03-15"
+
+- id: t1589.no-rules.en
+  lang: en
+  tags: [eval-group, t1589, followups]
+  fixture: v1
+  note: "Control (arm0 and followups): a project with no field rules is unchanged: a plain create reaches the approval card."
+  query: Add a task to the Website Redesign project to order new desk lamps for the office.
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+
+- id: t1589.no-rules.ja
+  lang: ja
+  tags: [eval-group, t1589, followups]
+  fixture: v1
+  note: "Control (arm0 and followups): a project with no field rules is unchanged: a plain create reaches the approval card."
+  query: Website Redesign プロジェクトに、オフィス用の新しいデスクライトを注文するタスクを追加してください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]

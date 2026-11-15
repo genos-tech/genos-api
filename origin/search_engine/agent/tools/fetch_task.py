@@ -20,7 +20,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
-from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.parity import followups_on, parity_on
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import (
     Tool,
@@ -197,7 +197,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # The words of a missing one, so a guessed id does not say which tasks exist in other
         # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
         raise ToolForbidden(f"Task {task_id} not found.")
-    if task.is_deleted:
+    if followups_on():
+        # MIP-1590 (`AGENT_PARITY_FOLLOWUPS`): a deleted task, and a task of a soft-deleted project, read exactly like a
+        # missing one (the class and the words of the lookup above): "has been deleted" told a teammate who may not
+        # even read the task that it had existed, and the project's tasks are not reachable once it is deleted
+        # (`task_context`). `select_related("project")` already holds the project row: no extra query.
+        if task.is_deleted or (
+            task.project_id is not None and (task.project is None or task.project.is_deleted)
+        ):
+            raise ToolError(f"Task {task_id} not found.")
+    elif task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
 
     allowed = task_acl_user_ids(

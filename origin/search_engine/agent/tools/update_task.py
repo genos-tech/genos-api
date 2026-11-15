@@ -30,18 +30,19 @@ from django.db import transaction
 
 from apis.request_id import log_failure
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.parity import ignore_unless_parity, parity_on
+from origin.search_engine.agent.parity import followups_on, ignore_unless_parity, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.field_limits import TASK_TITLE_MAX, check_text_length
+from origin.search_engine.agent.tools.project_field_rules import update_refusal
 from origin.search_engine.agent.tools.task_body_edit import (
     append_blocks,
     body_hash,
@@ -146,6 +147,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to update task {task_id}.")
+
+    # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): an edit that CLEARS a field the project requires is refused
+    # (an edit that leaves it alone is never judged, see `project_field_rules`).
+    if followups_on() and task.project_id is not None:
+        project = ProjectMaster.objects.filter(project_id=task.project_id).first()
+        if project is not None and (message := update_refusal(project, args)):
+            raise ToolError(message)
 
     # A milestone's backing row is a task, so `status: "Deleted"` would be
     # accepted and mirrored onto the milestone, but that is only HALF of a
