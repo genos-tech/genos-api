@@ -66,16 +66,23 @@ def people_allowed_on(project, raw_ids, readers=()):
     return [raw for raw in raw_ids if raw and may_collaborate(project, raw, readers)]
 
 
-def notifiable_collaborator_ids(task_id) -> set[str]:
-    """The task's collaborators who can open it, as strings: who a notice about the task may
-    reach (MIP-1567).
+def collaborator_ids(task_id) -> set[str]:
+    """Everyone listed as a collaborator of the task, as strings, whether or not they can open it."""
+    from origin.models.task.task_models import TaskMaster
 
-    A collaborator told about a task they cannot open is told about something they cannot
-    follow, and the activity feed already withholds such a row from them (MIP-1560). People
-    listed before the rule held (a teammate who was never on the project, or who has left it)
-    stay in the list and are skipped here, at send time. Two queries for the task and its
-    collaborators plus two for the readers, however many collaborators there are.
-    """
+    if task_id is None:
+        return set()
+    return {
+        str(pk)
+        for pk in TaskMaster.collaborators.through.objects.filter(
+            taskmaster_id=task_id
+        ).values_list("customuser_id", flat=True)
+    }
+
+
+def task_readers_among(task_id, candidates) -> set[str]:
+    """The ids among `candidates` who can open the task, as strings (`can_access_task`'s rule in
+    batch form): one query for the task, two for the readers, however many candidates."""
     from origin.models.task.task_models import TaskMaster
 
     if task_id is None:
@@ -87,13 +94,20 @@ def notifiable_collaborator_ids(task_id) -> set[str]:
     )
     if row is None:
         return set()
-    collaborators = {
-        str(pk)
-        for pk in TaskMaster.collaborators.through.objects.filter(
-            taskmaster_id=task_id
-        ).values_list("customuser_id", flat=True)
-    }
-    return task_reader_ids(row["project_id"], row["assignee_id"], row["reporter_id"], collaborators)
+    return task_reader_ids(row["project_id"], row["assignee_id"], row["reporter_id"], candidates)
+
+
+def notifiable_collaborator_ids(task_id) -> set[str]:
+    """The task's collaborators who can open it, as strings: who a notice about the task may
+    reach (MIP-1567).
+
+    A collaborator told about a task they cannot open is told about something they cannot
+    follow, and the activity feed already withholds such a row from them (MIP-1560). People
+    listed before the rule held (a teammate who was never on the project, or who has left it)
+    stay in the list and are skipped here, at send time. Two queries for the task and its
+    collaborators plus two for the readers, however many collaborators there are.
+    """
+    return task_readers_among(task_id, collaborator_ids(task_id))
 
 
 def _canonical(raw):
