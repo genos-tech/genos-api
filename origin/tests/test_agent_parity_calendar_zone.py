@@ -1,4 +1,4 @@
-"""A calendar write's time with no UTC offset and no zone (MIP-1059, `AGENT_PARITY_TOOLS`).
+"""A calendar write's time with no UTC offset and no zone (MIP-1059; ungated 2026-11-15).
 
 The tools are told to pass a naive "YYYY-MM-DDTHH:MM:SS" and the approval card says it is read in the member's
 zone (`member_time_zone`, or the `time_zone` the model named). `build_time_endpoint` sent the value with
@@ -12,8 +12,10 @@ What the app does in the same case: nothing to mirror. Its form turns the local 
 client's `start` / `end` objects through to Google as they are. So the twin here compares the INSTANT each
 leaves on an account whose calendar zone is not the member's, not the bytes of the body.
 
-With the flag on the tool sends the member's zone for a naive time that names no zone; with it off the call is
-what it always was (naive, no `timeZone`, rejected).
+The tool sends the member's zone for a naive time that names no zone, with `AGENT_PARITY_TOOLS` on AND off
+(api #869/#894 did it only while the flag was on; the maintainer decided on 2026-11-15 to apply it everywhere:
+with the flag off the same call was a request Google rejects with HTTP 400). The rest of MIP-1059 (the `account`
+parameter, `get_calendar_event`, chips, the approval card's `member_time_zone`) stays behind the flag.
 """
 
 from __future__ import annotations
@@ -106,7 +108,7 @@ class ReadingTests(CalendarBase):
         self.assertTrue(is_naive_datetime("2026-12-03T10:00:00"))
         self.assertTrue(is_naive_datetime("2026-12-03T00:00"))
 
-    def test_the_zone_is_filled_only_for_a_naive_value_that_names_none_and_only_with_the_flag(self):
+    def test_the_zone_is_filled_only_for_a_naive_value_that_names_none(self):
         uid = str(self.user.id)
         CustomUser.objects.filter(id=self.user.id).update(timezone=TOKYO)
         naive = ("2026-12-03T10:00:00", "2026-12-03T11:00:00")
@@ -115,6 +117,12 @@ class ReadingTests(CalendarBase):
         self.assertEqual(effective_time_zone("Europe/London", naive, uid), "Europe/London")
         self.assertIsNone(effective_time_zone(None, ("2026-12-03T10:00:00Z",) * 2, uid))
         self.assertIsNone(effective_time_zone(None, ("2026-12-03", "2026-12-04"), uid))
+
+
+class ReadingFlagOffTests(ReadingTests):
+    """The same reading with the flag off: the fill no longer depends on it."""
+
+    flag = False
 
 
 class WhatGoogleGetsTests(ZoneBase):
@@ -183,13 +191,21 @@ class WhatGoogleGetsTests(ZoneBase):
 
 class TwinTests(ZoneBase):
     """The app's endpoint and the tool, on an account whose calendar zone (Los Angeles) is not the member's
-    (Tokyo): each leaves the same INSTANT, and nothing else differs."""
+    (Tokyo): each leaves the same INSTANT, and nothing else differs. Run with the flag on (the member's second
+    account, named) and off (`TwinFlagOffTests`: the default account, as a flag-off call can name none)."""
+
+    @property
+    def acct(self):
+        return self.home if self.flag else self.work
+
+    def acct_args(self):
+        return {"account": str(self.home.id)} if self.flag else {}
 
     def app_create(self):
         return self.client.post(
             EVENTS,
             {
-                "account_id": str(self.home.id),
+                "account_id": str(self.acct.id),
                 "summary": "Design review",
                 # what the app's form sends for 10:00 in Tokyo: `new Date(local).toISOString()`
                 "start": {"dateTime": "2026-12-03T01:00:00.000Z"},
@@ -199,7 +215,7 @@ class TwinTests(ZoneBase):
         )
 
     def tool_create(self):
-        return CREATE_CALENDAR_EVENT.run(create_args(account=str(self.home.id)), self.ctx)
+        return CREATE_CALENDAR_EVENT.run(create_args(**self.acct_args()), self.ctx)
 
     def record(self, act):
         self.google.calls.clear()
@@ -238,12 +254,12 @@ class TwinTests(ZoneBase):
 
     def test_both_updates_leave_the_same_instant(self):
         for event_id in ("a1", "b1"):
-            self.google.add_event(self.home, "primary", event_id, summary="Dentist")
+            self.google.add_event(self.acct, "primary", event_id, summary="Dentist")
         app = self.record(
             lambda: self.client.patch(
                 f"{EVENTS}a1/",
                 {
-                    "account_id": str(self.home.id),
+                    "account_id": str(self.acct.id),
                     "start": {"dateTime": "2026-12-04T06:00:00.000Z"},
                     "end": {"dateTime": "2026-12-04T07:00:00.000Z"},
                 },
@@ -254,16 +270,16 @@ class TwinTests(ZoneBase):
             lambda: UPDATE_CALENDAR_EVENT.run(
                 {
                     "event_id": "b1",
-                    "account": str(self.home.id),
                     "start_iso": "2026-12-04T15:00:00",
                     "end_iso": "2026-12-04T16:00:00",
+                    **self.acct_args(),
                 },
                 self.ctx,
             )
         )
         self.assertEqual(app["out"].status_code, 200)
-        self.assertEqual(self.held(self.home, "a1"), self.held(self.home, "b1"))
-        self.assertEqual(self.held(self.home, "b1"), (at(TOKYO, 15, day=4), at(TOKYO, 16, day=4)))
+        self.assertEqual(self.held(self.acct, "a1"), self.held(self.acct, "b1"))
+        self.assertEqual(self.held(self.acct, "b1"), (at(TOKYO, 15, day=4), at(TOKYO, 16, day=4)))
         self.assertEqual(app["rows"], tool["rows"])
         self.assertEqual(app["notices"], tool["notices"])
 
@@ -274,31 +290,73 @@ class TwinTests(ZoneBase):
         self.assertEqual(self.google.instants[key], (at(TOKYO, 10), at(TOKYO, 11)))
 
 
-class FlagOffTests(ZoneBase):
-    """Flag off: the call is what it always was, and the zone is still the caller's to name."""
+class TwinFlagOffTests(TwinTests):
+    """The twin again with `AGENT_PARITY_TOOLS` off: the zone is no longer the flag's."""
 
     flag = False
 
-    def test_the_body_is_byte_for_byte_what_it_was_no_zone_added(self):
-        self.google.naive_reading = None  # Google rejects it: the error is what a member got before
-        with self.assertRaisesRegex(ToolError, "HTTP 400"):
-            CREATE_CALENDAR_EVENT.run(create_args(), self.ctx)
-        (post,) = self.google.of("POST")
-        self.assertEqual(post.body["start"], {"dateTime": "2026-12-03T10:00:00"})
-        self.assertEqual(post.body["end"], {"dateTime": "2026-12-03T11:00:00"})
 
-    def test_where_google_reads_it_in_the_calendars_zone_the_event_lands_at_that_instant_as_before(
-        self,
-    ):
+class FlagOffTests(ZoneBase):
+    """Flag off: the time zone is filled all the same (ungated 2026-11-15). Before, a naive time with no
+    `time_zone` left as it came, and Google answered HTTP 400 to a body that had no offset and no zone."""
+
+    flag = False
+
+    def test_a_naive_time_with_no_zone_is_sent_in_the_members_zone_and_google_accepts_it(self):
+        self.google.naive_reading = None  # Google rejects a zoneless time: what a member got before
+        CREATE_CALENDAR_EVENT.run(create_args(), self.ctx)
+        (post,) = self.google.of("POST")
+        self.assertEqual(post.body["start"], {"dateTime": "2026-12-03T10:00:00", "timeZone": TOKYO})
+        self.assertEqual(post.body["end"], {"dateTime": "2026-12-03T11:00:00", "timeZone": TOKYO})
+        (key,) = self.google.instants
+        self.assertEqual(self.google.instants[key], (at(TOKYO, 10), at(TOKYO, 11)))
+
+    def test_where_google_would_read_it_in_the_calendars_zone_the_event_no_longer_lands_there(self):
         CREATE_CALENDAR_EVENT.run(create_args(), self.ctx)
         (key,) = self.google.instants
-        self.assertEqual(self.google.instants[key][0], at(LOS_ANGELES, 10))  # not 10:00 in Tokyo
+        self.assertEqual(self.google.instants[key][0], at(TOKYO, 10))
+        self.assertNotEqual(self.google.instants[key][0], at(LOS_ANGELES, 10))
 
     def test_a_zone_the_model_names_is_sent_as_before(self):
-        CREATE_CALENDAR_EVENT.run(create_args(time_zone=TOKYO), self.ctx)
-        self.assertEqual(self.body_start(), {"dateTime": "2026-12-03T10:00:00", "timeZone": TOKYO})
-
-    def test_the_flag_off_helper_hands_back_what_it_was_given(self):
-        self.assertIsNone(
-            effective_time_zone(None, ("2026-12-03T10:00:00",) * 2, str(self.user.id))
+        CREATE_CALENDAR_EVENT.run(create_args(time_zone=LOS_ANGELES), self.ctx)
+        self.assertEqual(
+            self.body_start(), {"dateTime": "2026-12-03T10:00:00", "timeZone": LOS_ANGELES}
         )
+
+    def test_a_value_with_an_offset_and_an_all_day_date_are_sent_as_before(self):
+        CREATE_CALENDAR_EVENT.run(
+            create_args(start_iso="2026-12-03T01:00:00Z", end_iso="2026-12-03T02:00:00+09:00"),
+            self.ctx,
+        )
+        self.assertEqual(self.body_start(), {"dateTime": "2026-12-03T01:00:00Z"})
+        CREATE_CALENDAR_EVENT.run(
+            create_args(start_iso="2026-12-25", end_iso="2026-12-26"), self.ctx
+        )
+        self.assertEqual(self.body_start(), {"date": "2026-12-25"})
+
+    def test_an_update_that_moves_an_event_reads_its_naive_times_in_the_members_zone(self):
+        self.google.naive_reading = None
+        self.google.add_event(self.work, "primary", "wk1", summary="Standup")
+        UPDATE_CALENDAR_EVENT.run(
+            {
+                "event_id": "wk1",
+                "start_iso": "2026-12-04T15:00:00",
+                "end_iso": "2026-12-04T16:00:00",
+            },
+            self.ctx,
+        )
+        (patch,) = self.google.of("PATCH")
+        self.assertEqual(
+            patch.body["start"], {"dateTime": "2026-12-04T15:00:00", "timeZone": TOKYO}
+        )
+        self.assertEqual(self.held(self.work, "wk1")[0], at(TOKYO, 15, day=4))
+
+    def test_the_helper_fills_the_zone_with_the_flag_off(self):
+        self.assertEqual(
+            effective_time_zone(None, ("2026-12-03T10:00:00",) * 2, str(self.user.id)), TOKYO
+        )
+
+    def test_the_account_parameter_is_still_the_flags(self):
+        with self.assertRaises(ToolError):
+            CREATE_CALENDAR_EVENT.run(create_args(account=str(self.home.id)), self.ctx)
+        self.assertEqual(self.google.of("POST"), [])
