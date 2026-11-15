@@ -134,7 +134,9 @@ class WorldTests(RunnerBase):
             self.assertFalse(ProjectMembers.objects.filter(attendee=world.gone).exists())
             note = TaskNoteMaster.objects.get(task=world.tasks["b"])
             self.assertEqual(note.owner_id, world.other.id)
-            self.assertEqual(get_explicit_role(world.other.id, NOTE_TYPE_TASK, note.note_id), ROLE_OWNER)
+            self.assertEqual(
+                get_explicit_role(world.other.id, NOTE_TYPE_TASK, note.note_id), ROLE_OWNER
+            )
         finally:
             world.teardown()
         from django.contrib.auth import get_user_model
@@ -185,7 +187,9 @@ class EveryCaseTests(RunnerBase):
                     problems.append(f"{c['id']}: passes its prompt checks with the flag off")
                 failed = [(n, c_on[n]["detail"]) for n in names if not c_on[n]["ok"]]
                 if failed:
-                    problems.append(f"{c['id']}: fails its prompt checks with the flag on: {failed}")
+                    problems.append(
+                        f"{c['id']}: fails its prompt checks with the flag on: {failed}"
+                    )
             else:
                 for n in names:
                     if not (c_off[n]["ok"] and c_on[n]["ok"]):
