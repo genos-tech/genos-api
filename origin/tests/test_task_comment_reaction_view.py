@@ -24,6 +24,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskCommentReactionFact, TaskComments, TaskMaster
 from origin.services import task_comment_reactions
+from origin.tests.reaction_repeats import allow_repeated_reactions
 from origin.tests.test_base import BaseAPITestCase
 
 REACTION = "/api/v2/task/comment/reaction/"
@@ -81,7 +82,9 @@ class ReactionViewBase(BaseAPITestCase):
         return TaskCommentReactionFact.objects.filter(task=self.task, **filters)
 
     def double_up(self, emoji="👍", sender=None, times=2):
-        """Rows as the old view left them: the same person's same emoji, once per counter value."""
+        """Rows as the old view left them: the same person's same emoji, once per counter value.
+        (The table refuses them now, MIP-1595, so the constraint is dropped for this test.)"""
+        allow_repeated_reactions()
         for _ in range(times):
             TaskCommentReactionFact.objects.create(
                 team=self.team,

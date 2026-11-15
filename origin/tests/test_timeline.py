@@ -1516,7 +1516,9 @@ class TestReactionsWithTheSameInstantKeepTheirOrder(TimelineBase):
                 task=task,
                 comment_id=comment_id,
                 reaction_id=reaction_id,
-                reaction_emoji="\U0001f44d",
+                # one emoji per reaction: the same person's same emoji twice on a comment is
+                # refused by the table (MIP-1595)
+                reaction_emoji=chr(0x1F600 + reaction_id),
                 sender=self.user2,
             )
         TaskCommentReactionFact.objects.filter(task=task).update(ts_created_at=self.at(30))
