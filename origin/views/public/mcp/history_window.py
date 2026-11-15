@@ -94,6 +94,7 @@ def _summary(payload: dict[str, Any], shown: int, days: int) -> str:
             f"{scope} has no messages in the last {days} days. Older messages are hidden by "
             "your plan's chat history window."
         )
-    return (
-        f"Loaded {shown} messages from {scope} (your plan's history window is the last {days} days)"
-    )
+    note = f"your plan's history window is the last {days} days"
+    if payload.get("thread_id") is not None and payload.get("has_more"):
+        note += "; only the first 100 replies"
+    return f"Loaded {shown} messages from {scope} ({note})"

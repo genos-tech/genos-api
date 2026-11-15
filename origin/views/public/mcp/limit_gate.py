@@ -30,7 +30,7 @@ from rest_framework.response import Response
 
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.services import mcp_tier_limits as limits
-from origin.views.public.mcp import protocol, tools
+from origin.views.public.mcp import list_paging, protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 
 log = logging.getLogger(__name__)
@@ -42,22 +42,11 @@ BULK_TOOLS = {
 }
 # The arguments that size a page, by the name a tool gives them.
 PAGE_ARGS = ("limit", "max_results")
-# The lists that take a `limit` with a default of 100 (phase 2, `MCP_LIST_DEFAULT_LIMIT`). With
-# a plan page size below that, a call that names no `limit` is given the plan's, so the cap holds
-# for the default too. Only while the published schema HAS a `limit` for the tool (it does once
-# phase 2's list paging is on), because an argument a tool does not declare is refused.
-PAGED_LIST_TOOLS = frozenset(
-    {
-        "list_projects",
-        "get_team_members",
-        "list_project_members",
-        "list_channel_members",
-        "list_note_access",
-        "list_today_todos",
-        "list_project_tags",
-    }
-)
-PAGED_LIST_DEFAULT = 100
+# The lists phase 2 pages (`list_paging.SPECS`), which take a `limit` that defaults to
+# `list_paging.DEFAULT_LIMIT` (100, `MCP_LIST_DEFAULT_LIMIT`). With a plan page size below that, a
+# call that names no `limit` is given the plan's, so the cap holds for the default too. Only while
+# the published schema HAS a `limit` for the tool (while `MCP_RESULT_LIMITS` is on), because an
+# argument a tool does not declare is refused.
 # Chat reads whose window is an argument.
 HISTORY_SINCE_TOOLS = frozenset({"list_my_mentions", "get_timeline"})
 
@@ -197,9 +186,9 @@ def _page_refusal_and_arguments(tool, arguments, ctx):
                     "page on for the rest.",
                     hit,
                 )
-    if tool.name in PAGED_LIST_TOOLS and "limit" not in arguments:
+    if tool.name in list_paging.SPECS and "limit" not in arguments:
         cap = limits.page_cap(ctx.user_id)
-        if cap is not None and cap < PAGED_LIST_DEFAULT:
+        if cap is not None and cap < list_paging.DEFAULT_LIMIT:
             if "limit" in (tools.input_schema(tool).get("properties") or {}):
                 return {**arguments, "limit": cap}, None
     return arguments, None
@@ -285,7 +274,7 @@ def _could_be_limited(tool, arguments: dict[str, Any]) -> bool:
     them nothing below runs: no plan lookup, no schema."""
     return (
         tool.name in BULK_TOOLS
-        or tool.name in PAGED_LIST_TOOLS
+        or tool.name in list_paging.SPECS
         or tool.name in HISTORY_SINCE_TOOLS
         or any(arg in arguments for arg in PAGE_ARGS)
     )
