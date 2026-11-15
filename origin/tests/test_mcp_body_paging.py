@@ -64,7 +64,14 @@ class CutPoint(SimpleTestCase):
     def test_the_arguments_are_checked_in_words(self):
         self.assertEqual(bp.validate({}), (0, 20_000))
         self.assertEqual(bp.validate({"offset": "5", "max_chars": 3_000}), (5, 3_000))
+        self.assertEqual(bp.validate({"offset": 2000.0, "max_chars": 1000.0}), (2000, 1000))
+        with self.assertRaises(Exception) as long:
+            bp.validate({"offset": "9" * 5_000})
+        self.assertLess(len(str(long.exception)), 200, "a hostile value is not echoed whole")
         for bad in (
+            {"offset": float("inf")},
+            {"offset": 5.7},
+            {"max_chars": 1500.9},
             {"offset": -1},
             {"offset": "x"},
             {"offset": True},
@@ -164,6 +171,34 @@ class NoteParts(McpBase):
             parts += 1
         self.assertEqual("".join(got), self.markdown)
         self.assertGreater(parts, 5)
+
+    def test_dense_text_that_costs_more_in_json_than_it_counts_still_joins_back(self):
+        # a newline, a quote and a backslash each cost two characters in the JSON the model reads;
+        # a part sized by its characters alone would be cut by the guard after `next_offset` was
+        # set, and the cut-off text would be lost between two parts
+        dense = PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Dense",
+            body=[
+                {"type": "paragraph", "content": [{"type": "text", "text": 'q"\\ '}]}
+                for _ in range(9_000)
+            ],
+        )
+        markdown = blocks_to_markdown(dense.body)
+        args = {"note_id": dense.note_id, "note_type": "personal"}
+        got, offset, parts = [], 0, 0
+        while offset is not None:
+            with on():
+                result = self._result(self._call("get_note", {**args, "offset": offset}))
+            s = result["structuredContent"]
+            self.assertLessEqual(len(text_of(result)), rl.MCP_RESULT_MAX_CHARS)
+            self.assertNotIn("more characters not shown", s["body_markdown"])
+            got.append(s["body_markdown"])
+            offset = s.get("next_offset")
+            parts += 1
+        self.assertEqual("".join(got), markdown)
+        self.assertGreater(parts, 2)
 
     def test_the_last_part_says_it_is_the_last_and_still_not_the_whole(self):
         s = self.read(offset=len(self.markdown) - 500)["structuredContent"]
