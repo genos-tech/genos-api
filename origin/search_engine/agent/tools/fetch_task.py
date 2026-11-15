@@ -30,6 +30,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.search_engine.agent.tools.task_anchors import enabled as anchors_enabled
 from origin.search_engine.agent.tools.task_anchors import task_anchors
 from origin.search_engine.agent.tools.task_attachments import attachment_fields
@@ -202,9 +203,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # missing one (the class and the words of the lookup above): "has been deleted" told a teammate who may not
         # even read the task that it had existed, and the project's tasks are not reachable once it is deleted
         # (`task_context`). `select_related("project")` already holds the project row: no extra query.
-        if task.is_deleted or (
-            task.project_id is not None and (task.project is None or task.project.is_deleted)
-        ):
+        if task.is_deleted or in_deleted_project(task):
             raise ToolError(f"Task {task_id} not found.")
     elif task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")

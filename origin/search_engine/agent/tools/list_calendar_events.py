@@ -43,8 +43,8 @@ ALL_ACCOUNTS = "all"
 #: model learns how many accounts there are from `list_calendars` (`accounts`) or from `other_accounts`
 #: on a read, never from an extra call this sentence asks for.
 FOLLOWUPS_DESCRIPTION_ADDITION = (
-    " With several accounts (`accounts` of list_calendars, or `other_accounts`), pass `account` "
-    '"all" to read every one in one call.'
+    " Omit `account` unless the member names an account or asks for all of them; with several accounts "
+    '(`other_accounts`, or `accounts` of list_calendars) "all" reads every one in one call.'
 )
 
 #: The `account` property worded for the flag (`tool_flag_params`, `descriptions`).

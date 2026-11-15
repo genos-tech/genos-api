@@ -93,6 +93,22 @@ class CaseFileTests(SimpleTestCase):
             for word in case.raw["expect"]["answer_does_not_contain"]:
                 self.assertIn(word, body)
 
+    def test_the_deleted_project_cases_say_the_mention_is_expected_to_drop_and_no_other_does(self):
+        # Without the key the runner raised "mention resolution dropped entries" before any model call (first paid
+        # run); on any other case the key would hide a fixture that stopped resolving.
+        for c in self.cases:
+            self.assertEqual(
+                bool(c.raw.get("mentions_expected_dropped")),
+                c.id.startswith("t1590.deleted-project-task."),
+                c.id,
+            )
+
+    def test_the_project_the_deleted_project_case_names_is_really_soft_deleted_by_its_seed(self):
+        import inspect  # noqa: PLC0415
+
+        source = inspect.getsource(seeds.seed_mention_hardening)
+        self.assertIn("is_deleted=True", source)
+
     def test_no_case_may_end_on_a_write_proposal(self):
         for c in self.cases:
             if "normal-mention" not in c.id:

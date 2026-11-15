@@ -14,6 +14,11 @@
 # is on the first Friday"; project EMD, soft-deleted with the viewer still a member: a task "Renew the harbour lease", body "4,200
 # a month, agreed with Kestrel Estates"). Judged on what the model READS and PROPOSES: no write is approved here.
 #
+# The deleted-project cases say `mentions_expected_dropped: true` (the case is about a mention that must NOT resolve: the run
+# insists it WAS dropped, so a broken fixture cannot pass as a refusal; without the key the runner raised "mention resolution
+# dropped entries" before any model call). With the flag on the model may still search: `search_knowledge_base` drops the hits of
+# a soft-deleted project, and `fetch_task`, `get_task_history` and `get_task_blockers` answer "not found".
+#
 # Positives `requires_arm: followups`; the controls carry the tag `followups` (test_agent_eval_arm_coverage) and run on arm0 too.
 
 - id: t1590.deleted-project-task.en
@@ -23,6 +28,7 @@
   viewer: b
   seed: [mention_hardening]
   requires_arm: followups
+  mentions_expected_dropped: true
   mentions:
     - type: task
       lookup_title: "Renew the harbour lease"
@@ -42,6 +48,7 @@
   viewer: ja-b
   seed: [mention_hardening]
   requires_arm: followups
+  mentions_expected_dropped: true
   mentions:
     - type: task
       lookup_title: "港の賃貸契約を更新する"
