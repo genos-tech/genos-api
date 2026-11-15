@@ -1179,7 +1179,7 @@ class AgentAskView(AuthenticatedAPIView):
         # far more than the REST one, through tools whose own ACL notes
         # assume the team is already established.
         if not participates_in_team(team_id, user_id):
-            if team_id != claimed_team:
+            if str(team_id) != str(claimed_team):
                 # The team was substituted, not named: refusing it by name would tell the person about a team they
                 # never sent. The restore route answers the task's own words here, and so does this.
                 return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)

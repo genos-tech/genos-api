@@ -103,6 +103,17 @@ class RefusedAskTests(TaskWorld):
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json(), {"error": task_context.NOT_FOUND})
 
+    def test_a_task_the_asker_cannot_reach_is_not_read_under_a_team_they_belong_to(self):
+        # The cross-tenant guard that test used to be, kept for a task they may NOT open: a member of teams A and B
+        # who names B for a private team A task they are not on gets the missing-task answer, and nothing is written.
+        TeamMembers.objects.get_or_create(team=self.team_b, attendee=self.a_owner)
+        private = self.make_task("Private", project=self.private_project())
+        before = rows()
+        resp, captured = self.ask(task_context=self.ctx(private), team_id=str(self.team_b.team_id))
+        self.assertEqual((resp.status_code, resp.json()), (404, {"error": task_context.NOT_FOUND}))
+        self.assertNotIn("kwargs", captured)
+        self.assertEqual(rows(), before)
+
     def test_a_task_of_one_team_is_not_read_under_another_team_the_asker_also_belongs_to(self):
         # The tenant check on its own: the asker may read the task (a member of its project) and belongs to team B
         # too. Naming team B for a team A task must not hand the model team A's words under team B's context, and it
