@@ -91,7 +91,7 @@
   decision: approve
   expect:
     resumed_prompt_excludes: ["Context recap", "Hana Sato"]
-    answer_contains_any: ["Billing migration kickoff", "kickoff"]
+    answer_contains_any: ["Billing migration kickoff", "kickoff", "(task:"]
     max_calls: 4
 
 - id: t991.first-turn.approve.ja

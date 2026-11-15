@@ -47,7 +47,19 @@ class Command(BaseCommand):
     def add_arguments(self, parser: Any) -> None:
         parser.add_argument(
             "--arms",
-            help="Comma list: arm names from group/arms/ and/or all-on. Default: all of them.",
+            help=(
+                "Comma list: arm names from group/arms/ and/or all-on. Default: all of them. "
+                "arm0 always runs too, whatever this says."
+            ),
+        )
+        parser.add_argument(
+            "--full-arms",
+            default="",
+            help=(
+                "Comma list of arms (also named in --arms) that run the WHOLE selection, like all-on "
+                "but with only that arm's flag: a regression sample. Never runs a case that needs "
+                "another arm."
+            ),
         )
         parser.add_argument(
             "--tag",
@@ -256,7 +268,10 @@ class Command(BaseCommand):
                         + "\n(--skip-unavailable drops such arms; a typo'd flag would otherwise compare "
                         "the baseline with itself)"
                     )
-        plan = harness.build_plan(selected, arms, arm_names=requested, reps=max(options["reps"], 1))
+        full_arms = [a.strip() for a in (options.get("full_arms") or "").split(",") if a.strip()]
+        plan = harness.build_plan(
+            selected, arms, arm_names=requested, reps=max(options["reps"], 1), full_arms=full_arms
+        )
         if harness.ALL_ON in [a.name for a in plan.arms]:
             all_on = harness.all_on_arm(arms)
             problems = harness.validate_overrides(all_on)
@@ -325,6 +340,10 @@ class Command(BaseCommand):
         )
         w(
             "The projection uses round per-case token guesses; run --measure-one to replace them with a measurement."
+        )
+        w(
+            "It is a floor: the paid run of 2026-11-15 cost 3.1x what this said (about US$0.012 per model call; "
+            "routing cases 8x, sequence behaviour cases 3.7x). Multiply before you set the cap; see RUNBOOK."
         )
         if harness.plan_needs_search(plan):
             w(

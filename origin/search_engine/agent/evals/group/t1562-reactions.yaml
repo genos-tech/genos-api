@@ -83,7 +83,7 @@
 
 - id: t1562.edit-own.en
   lang: en
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: b
   note: "Negative (arm0 and parity): fixing the user's OWN comment stays an edit (body_text), not a reaction or a flag."
@@ -98,7 +98,7 @@
 
 - id: t1562.edit-own.ja
   lang: ja
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: ja-b
   note: "Negative (arm0 and parity): fixing the user's OWN comment stays an edit (body_text), not a reaction or a flag."

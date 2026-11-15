@@ -382,6 +382,38 @@ class PlanTests(Workspace):
         plan = harness.build_plan(cases, self.arms)
         self.assertTrue(all(i.skip for i in plan.items if i.case.id == "lonely"))
 
+    def test_a_full_arm_runs_the_whole_selection_but_never_a_case_that_needs_another_arm(self):
+        # The regression sample of a flag that changes what EVERY call sees (the parity batch): the ordinary
+        # cases of other items, run with this one flag on. `needs` requires t2, so it never runs on t1.
+        plan = harness.build_plan(self.cases_all, self.arms, full_arms=["t1"])
+        self.assertEqual(self.runs(plan, "t1"), ["a#1", "b#1", "c#1", "c#2", "c#3"])
+        # nothing else moves
+        self.assertEqual(
+            self.runs(plan, ARM0), ["a#1", "b#1", "c#1", "c#2", "c#3", "needs#1(skip)"]
+        )
+        self.assertEqual(self.runs(plan, "t2"), ["b#1", "c#1", "c#2", "c#3", "needs#1"])
+        self.assertEqual(self.runs(plan, ALL_ON), ["a#1", "b#1", "c#1", "c#2", "c#3", "needs#1"])
+        self.assertTrue(any("t1" in n and "whole selection" in n for n in plan.notes), plan.notes)
+
+    def test_without_full_arms_the_plan_is_what_it_always_was(self):
+        self.assertEqual(
+            self.runs(harness.build_plan(self.cases_all, self.arms), "t1"),
+            self.runs(harness.build_plan(self.cases_all, self.arms, full_arms=()), "t1"),
+        )
+        self.assertEqual(
+            self.runs(harness.build_plan(self.cases_all, self.arms), "t1"),
+            ["a#1", "c#1", "c#2", "c#3"],
+        )
+
+    def test_a_full_arm_must_be_an_arm_of_the_plan(self):
+        with self.assertRaisesMessage(harness.HarnessError, "unknown arm"):
+            harness.build_plan(self.cases_all, self.arms, full_arms=["zzz"])
+        with self.assertRaisesMessage(harness.HarnessError, "not among the arms"):
+            harness.build_plan(self.cases_all, self.arms, arm_names=["t2"], full_arms=["t1"])
+        for name in (ARM0, ALL_ON):
+            with self.assertRaisesMessage(harness.HarnessError, "already runs the whole selection"):
+                harness.build_plan(self.cases_all, self.arms, full_arms=[name])
+
     def test_projection_prices_the_catalog_model(self):
         cost = harness.project_cost(harness.build_plan(self.cases_all, self.arms), MODEL)
         self.assertGreater(cost["cost_usd"], 0)
@@ -430,6 +462,17 @@ class DryRunTests(Workspace):
         # 3 cases x 2 reps on arm0, the same on t1 and on all-on
         self.assertIn("| arm0 | - | 6 |", out)
         self.assertIn("| t1 |", out)
+
+    def test_full_arms_puts_the_whole_selection_on_that_arm_in_the_plan(self):
+        self.cases("y", [case("b", "t2")])
+        out, _ = self.run_command("--dry-run", "--case", "a", "--case", "b", "--arms", "t1")
+        self.assertIn("| t1 |", out)
+        self.assertRegex(out, r"\| t1 \| [^|]*\| 1 \|")  # only its own case
+        out, _ = self.run_command(
+            "--dry-run", "--case", "a", "--case", "b", "--arms", "t1", "--full-arms", "t1"
+        )
+        self.assertRegex(out, r"\| t1 \| [^|]*\| 2 \|")  # the selection
+        self.assertIn("whole selection", out)
 
     def test_a_real_run_without_a_cap_is_refused(self):
         with self.assertRaisesMessage(CommandError, "--cost-cap-usd"):
