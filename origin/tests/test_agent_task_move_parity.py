@@ -30,6 +30,7 @@ from origin.search_engine.agent.parity import TASK_MOVE_FLAG
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import task_project_move
+from origin.tests.test_agent_parity_milestones import ToolBase
 from origin.tests.test_task_personal_note_roles_revoked import TaskNoteBase
 from origin.views.utils.note_role import NOTE_TYPE_TASK, ROLE_OWNER
 
@@ -129,12 +130,23 @@ class ToolRefusesAnAssigneeOutsideTheDestinationTests(MoveBase):
         self.task.refresh_from_db()
         self.assertEqual(self.task.assignee_id, self.leaver.id)
 
-    def test_the_way_out_is_a_tool_the_model_has_not_a_parameter_update_task_lacks(self):
+    def test_the_way_out_stops_the_loop_it_does_not_hand_the_model_a_tool_to_use(self):
+        # The first paid run (2026-11-16): "reassign with `assign_task`" sent the model off looking up
+        # people (5 to 7 calls) and, 4 times in 6, proposing an assignment of its own choosing. The
+        # tool's way out tells it to stop and ask. (`update_task` has no `assignee` parameter either,
+        # so the app's "send `assignee` with the move" would be a blind retry.)
         TaskMaster.objects.filter(pk=self.task.pk).update(assignee=self.leaver)
         with flag(True), self.assertRaises(ToolError) as caught:
             self.tool_move(self.task, self.beta)
         message = str(caught.exception)
-        self.assertIn("`assign_task`", message)
+        self.assertIn(
+            "Tell the user who is blocking this move and ask who should take the task over. "
+            "Do not pick an assignee yourself, do not propose a change, do not look anything up. "
+            "Nothing was changed.",
+            message,
+        )
+        for tool in ("assign_task", "manage_project_members", "get_team_members"):
+            self.assertNotIn(tool, message)
         self.assertNotIn("send `assignee`", message)
         self.assertNotIn("assignee", UPDATE_TASK.parameters_schema["properties"])
 
@@ -215,6 +227,54 @@ class ToolSaysWhatTheMoveDidTests(MoveBase):
         )
         # recorded, so a move back gives them back (MIP-1583), whatever the flag
         self.assertEqual(TaskNoteRoleRevoke.objects.filter(user=self.author).count(), 2)
+
+    def test_a_plain_sentence_the_model_can_read_says_it_too(self):
+        # The loop drops `__summary__` before the model sees the result, so the counters alone
+        # ("moved": {"notes_narrowed": 1}) were answered with just "Moved X to Archive" (the first
+        # paid run). `moved_notice` is a result field, in the member's words.
+        self.create_task_note(self.author, self.task)
+        with flag(True):
+            out = self.tool_move(self.task, self.beta)
+        self.assertEqual(
+            out["moved_notice"],
+            "Tell the member: 1 task note was narrowed to Beta's members. Its author is not on "
+            "Beta, so they lost their Owner role on it (moving the task back to a project they "
+            "are on gives it back).",
+        )
+
+    def test_the_notice_counts_people_and_says_both_in_plural(self):
+        self.create_task_note(self.author, self.task)
+        self.create_task_note(self.author, self.child)
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.leaver)
+        TaskMaster.objects.filter(pk=self.child.pk).update(reporter=self.stranger)
+        with flag(True):
+            out = self.tool_move(self.task, self.beta)  # the stranger is on the team, not on Beta
+        self.assertEqual(out["moved"], {"notes_narrowed": 2, "reporters_outside_destination": 1})
+        self.assertEqual(
+            out["moved_notice"],
+            "Tell the member: 2 task notes were narrowed to Beta's members. Their authors are not "
+            "on Beta, so they lost their Owner role on them (moving the task back to a project "
+            "they are on gives it back). 1 person who filed a moved task is not on Beta or its "
+            "team; they keep reading what they filed.",
+        )
+
+    def test_the_notice_is_there_only_when_there_is_something_to_say(self):
+        with flag(True):
+            plain = self.tool_move(self.task, self.beta)
+        self.assertNotIn("moved_notice", plain)
+        self.assertNotIn("moved", plain)
+        task, _child = self.tree()
+        self.create_task_note(self.author, task)
+        with flag(False):
+            off = self.tool_move(task, self.beta)
+        self.assertNotIn("moved_notice", off)  # flag off: not a byte more than before
+
+    def test_the_notice_helper_says_nothing_for_nothing(self):
+        from origin.services.task_project_move import move_notice  # noqa: PLC0415
+
+        self.assertEqual(move_notice({}, "Beta"), "")
+        zeros = {"notes_narrowed": 0, "reporters_outside_destination": 0}
+        self.assertEqual(move_notice(zeros, "Beta"), "")
 
     def test_a_move_back_narrows_nothing_and_writes_the_rows_back(self):
         note = self.create_task_note(self.author, self.task)
@@ -367,7 +427,7 @@ class AppAndToolTwinTests(MoveBase):
         """The sentence without the ids of its own tree and without the way out (which differs on
         purpose: the PUT takes `assignee`, the tool does not)."""
         text = text.replace(child.display_id, "<child>").replace(task.display_id, "<task>")
-        return text.split(" Reassign")[0].split(" Ask ")[0]
+        return text.split(" Reassign them first")[0].split(" Tell the user")[0]
 
     def test_the_app_and_the_tool_refuse_the_same_moves_and_report_the_same_counts(self):
         for scenario in self.SCENARIOS:
@@ -412,3 +472,24 @@ class AppAndToolTwinTests(MoveBase):
         self.assertEqual(res.status_code, 400, res.data)
         self.assertIn("Reassign them first (or send `assignee` with the move).", res.data["error"])
         self.assertNotIn("assign_task", res.data["error"])
+
+
+class MilestoneMoveKeepsItsResultTests(ToolBase):
+    """`manage_milestone`'s move keeps the counters and the summary clauses it has (MIP-1583/1597);
+    the plain-sentence field is `update_task`'s alone (MIP-1609)."""
+
+    def test_the_milestone_move_result_has_no_moved_notice(self):
+        m = self.roadmap_milestone()
+        out = self.move_tool(m)
+        self.assertNotIn("moved_notice", out)
+        self.assertNotIn("moved_notice", out["moved"])
+        self.assertEqual(
+            set(out["moved"]),
+            {
+                "from_project_id",
+                "from_project_name",
+                "tasks_moved",
+                "cleared",
+                "display_ids_changed",
+            },
+        )

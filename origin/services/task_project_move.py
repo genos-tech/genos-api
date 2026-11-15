@@ -195,6 +195,34 @@ def move_report_said(report: dict) -> dict[str, int]:
     }
 
 
+def move_notice(report: dict, destination_name: str) -> str:
+    """The same two counts as `move_report_said`, in a plain sentence for the person who asked for the
+    move, or "" when both are zero (MIP-1609, `update_task` only: the milestone move keeps its result).
+
+    The in-app loop hands the model a result WITHOUT its `__summary__`, so a bare
+    `"moved": {"notes_narrowed": 1}` was answered with "Moved X to Archive" (the first paid run). A
+    field that is already a sentence in the member's words is what the model repeats."""
+    narrowed = report.get("notes_narrowed", 0)
+    reporters = report.get("reporters_outside_destination", 0)
+    parts = []
+    if narrowed:
+        one = narrowed == 1
+        parts.append(
+            f"{narrowed} task {'note was' if one else 'notes were'} narrowed to "
+            f"{destination_name}'s members. {'Its author is' if one else 'Their authors are'} not "
+            f"on {destination_name}, so they lost their Owner role on {'it' if one else 'them'} "
+            "(moving the task back to a project they are on gives it back)."
+        )
+    if reporters:
+        one = reporters == 1
+        parts.append(
+            f"{reporters} {'person who filed' if one else 'people who filed'} a moved task "
+            f"{'is' if one else 'are'} not on {destination_name} or its team; they keep reading "
+            "what they filed."
+        )
+    return f"Tell the member: {' '.join(parts)}" if parts else ""
+
+
 def move_report_clauses(report: dict, destination_name: str) -> str:
     """The end of a move tool's `__summary__` for the same counts, "" when both are zero."""
     narrowed = report.get("notes_narrowed", 0)

@@ -2,8 +2,9 @@
 # move (MIP-1583) and the app's task PUT (MIP-1597). With the flag on, a move whose task is assigned to someone on neither the
 # destination project nor its team (here: someone who LEFT the team and whose open task was not unassigned) is refused before
 # anything is written ("This task can't move to Archive: the assignee of <display id> is not on that project or its team ...
-# Ask the member who should take over, reassign with `assign_task`, then move it again. Nothing was changed."), and a move that
-# goes through says the task notes it narrowed (`moved.notes_narrowed`, the note's author is not on the destination).
+# Tell the user who is blocking this move and ask who should take the task over. Do not pick an assignee yourself, do not
+# propose a change, do not look anything up. Nothing was changed."), and a move that goes through says the task notes it
+# narrowed (`moved.notes_narrowed` and a plain sentence in `moved_notice`; the in-app loop does not show the model `__summary__`).
 #
 # All `kind: resume` (see evals/group/resume_runner.py for the schema): like the milestone move, the refusal comes from the tool
 # AFTER the approval, so a behaviour case (which pauses on the proposal) could never show it to the model. The first leg is
@@ -14,7 +15,7 @@
 #
 # Per language:
 #   refused        positive: the assignee left the team; the tool refuses. The model must say so and ask (who should take the task
-#                  over), proposing NO write: not the same move again, and not an `assign_task` to someone it picked itself.
+#                  over), proposing NO write: not the same move again, and not an assignment or a member change to someone it picked itself, and no lookups.
 #   notes-narrowed positive: a normal move goes through and the result says one task note lost its author's Owner role
 #                  (`"moved": {"notes_narrowed": 1}`; the in-app loop sends the result's fields, not its `__summary__`); the model
 #                  says the task moved and mentions the note.
@@ -84,7 +85,7 @@
     args: {task_id: "{task:contract}", project_id: "{destination_id}"}
   decision: approve
   expect:
-    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}']
+    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '"moved_notice": "Tell the member: 1 task note was narrowed']
     resumed_prompt_excludes: ["Nothing was changed"]
     no_pending: true
     answer_contains_any: ["note"]
@@ -107,7 +108,7 @@
     args: {task_id: "{task:contract}", project_id: "{destination_id}"}
   decision: approve
   expect:
-    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}']
+    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '"moved_notice": "Tell the member: 1 task note was narrowed']
     resumed_prompt_excludes: ["Nothing was changed"]
     no_pending: true
     answer_contains_any: ["ノート", "メモ"]
@@ -129,7 +130,7 @@
   decision: approve
   expect:
     resumed_prompt_contains: ['"changed_fields": ["project"]']
-    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "Nothing was changed"]
+    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "moved_notice", "Nothing was changed"]
     no_pending: true
     answer_contains_any: ["Archive", "moved"]
     max_calls: 4
@@ -150,7 +151,7 @@
   decision: approve
   expect:
     resumed_prompt_contains: ['"changed_fields": ["project"]']
-    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "Nothing was changed"]
+    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "moved_notice", "Nothing was changed"]
     no_pending: true
     answer_contains_any: ["アーカイブ", "移動"]
     max_calls: 4

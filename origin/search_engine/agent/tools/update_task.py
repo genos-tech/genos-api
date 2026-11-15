@@ -79,6 +79,7 @@ from origin.services.milestone_service import sync_backing_task
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
 from origin.services.task_project_move import (
+    move_notice,
     move_report_clauses,
     move_report_said,
     task_move_assignee_problem,
@@ -655,6 +656,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # writes it again), and who filed a moved task without being on the destination keeps
         # reading it: said only when it happened, in the milestone move's words (MIP-1609).
         result["moved"] = said
+        # A sentence besides the counters: the in-app loop does not show the model `__summary__`.
+        result["moved_notice"] = move_notice(move_report, destination.project_name)
         result["__summary__"] += move_report_clauses(move_report, destination.project_name)
     if undo_capture is not None and (image := undo_capture.finish(update_fields)):
         result[UNDO_KEY] = image
@@ -662,10 +665,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 
 #: What a refused move tells the model to do instead (MIP-1609). The app's PUT says "send
-#: `assignee` with the move"; this tool takes no assignee, and a model told to send one would
-#: retry the same call blindly.
+#: `assignee` with the move"; this tool takes no assignee, so that would be a blind retry. The first
+#: paid run also showed that naming a tool to reassign with ("reassign with `assign_task`") sent the
+#: model off looking people up (5 to 7 calls) and, in 4 of 6 runs, proposing an assignment it picked
+#: itself. So the way out is to stop and ask.
 TOOL_WAY_OUT = (
-    "Ask the member who should take over, reassign with `assign_task`, then move it again."
+    "Tell the user who is blocking this move and ask who should take the task over. "
+    "Do not pick an assignee yourself, do not propose a change, do not look anything up."
 )
 
 

@@ -205,5 +205,6 @@ class EveryCaseTests(RunnerBase):
         off = self.run_case(case("t1609.refused.en"), PRODUCTION)
         on = self.run_case(case("t1609.refused.en"), FLAG_ON)
         self.assertIn('"changed_fields": ["project"]', off["resumed_prompt"])
-        self.assertIn("`assign_task`", on["resumed_prompt"])
+        self.assertIn("Do not pick an assignee yourself", on["resumed_prompt"])
+        self.assertNotIn("assign_task`, then", on["resumed_prompt"])
         self.assertNotIn('"changed_fields"', on["resumed_prompt"])
