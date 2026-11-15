@@ -142,6 +142,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
     ancestry,
     note_threads,
     progress,
+    result_limits,
     secretary,
     via_privacy,
 )
@@ -2888,8 +2889,22 @@ def call(
     # ever reach an external client.
     payload.pop("__undo__", None)
 
-    body = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
-    text = f"{summary}\n\n{body}" if summary else body
+    # The notice goes ahead of everything, in the text the model actually reads, on every read and
+    # on a write that carries someone else's text (see below).
+    notice = bool(fenced or not tool.write)
+
+    def render(value: dict[str, Any]) -> str:
+        body = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+        text = f"{summary}\n\n{body}" if summary else body
+        return f"{UNTRUSTED_NOTICE}\n\n{text}" if notice else text
+
+    # MIP-1367 phase 2, behind `MCP_RESULT_LIMITS` (default off: nothing here runs and the answer
+    # is what it was, byte for byte). Per-item caps, then one cap on the whole text; what is cut is
+    # said in a `truncated` block and in `_meta`.
+    truncated = False
+    if result_limits.limits_on():
+        payload, truncated = result_limits.apply(tool.name, payload, render)
+    text = render(payload)
     result: dict[str, Any] = {
         "content": [{"type": "text", "text": text}],
         # The parsed payload alongside the text, so a client that
@@ -2897,16 +2912,19 @@ def call(
         "structuredContent": payload,
         "isError": False,
     }
-    if fenced or not tool.write:
+    meta: dict[str, Any] = {}
+    if notice:
         # Every read, not just the fenced ones: titles, to-do text and
         # event descriptions are workspace-written too and carry no fence,
         # and a read that returns none today may return one tomorrow. A
         # write's result is mostly what the caller just sent, so it says
         # this only when someone else's text came back with it.
         #
-        # Ahead of everything, in the text the model actually reads, and
-        # as a flag in `_meta` for a client that would rather render it.
-        # Not inside `structuredContent`, whose shape is the tool's.
-        result["content"][0]["text"] = f"{UNTRUSTED_NOTICE}\n\n{text}"
-        result["_meta"] = {"genos/untrustedContent": True}
+        # Ahead of everything (above), and as a flag in `_meta` for a client that would rather
+        # render it. Not inside `structuredContent`, whose shape is the tool's.
+        meta["genos/untrustedContent"] = True
+    if truncated:
+        meta["genos/truncated"] = True
+    if meta:
+        result["_meta"] = meta
     return result
