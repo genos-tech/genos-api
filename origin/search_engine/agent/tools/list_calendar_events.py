@@ -8,6 +8,7 @@ by start time. Free-form text (summary, description) is wrapped via
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
@@ -19,11 +20,13 @@ from origin.search_engine.agent.calendar import (
     calendar_api_error,
     cite_event,
     google_calendar_request,
+    member_google_accounts,
+    read_from_account,
     resolve_google_calendar_account,
     segment,
     shape_event,
 )
-from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.parity import followups_on, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
 #: Appended to the description while the flag is on (`tool_flag_text`).
@@ -32,18 +35,47 @@ DESCRIPTION_ADDITION = (
     "the member has."
 )
 
-__all__ = ["LIST_CALENDAR_EVENTS", "PARITY_PROPERTIES"]
+#: The value of `account` that reads every connected Google account in one call (MIP-1607,
+#: `AGENT_PARITY_FOLLOWUPS`). Not an account id, so it can never be mistaken for one.
+ALL_ACCOUNTS = "all"
+
+#: With the follow-ups flag on, the sentence that follows the parity one (`tool_flag_text`): the
+#: model learns how many accounts there are from `list_calendars` (`accounts`) or from `other_accounts`
+#: on a read, never from an extra call this sentence asks for.
+FOLLOWUPS_DESCRIPTION_ADDITION = (
+    " With several accounts (`accounts` of list_calendars, or `other_accounts`), pass `account` "
+    '"all" to read every one in one call.'
+)
+
+#: The `account` property worded for the flag (`tool_flag_params`, `descriptions`).
+FOLLOWUPS_ACCOUNT_DESCRIPTION = (
+    'account_id from list_calendars, or "all" for every account. Omit for the default account.'
+)
+
+#: What a read of the default account says when the member has more accounts (dynamic, per call, with
+#: `other_accounts`), so a model that did not look first learns the way to the rest in the result.
+OTHER_ACCOUNTS_HINT = 'Only the default account was read. `account: "all"` reads every account.'
+
+__all__ = [
+    "ALL_ACCOUNTS",
+    "FOLLOWUPS_ACCOUNT_DESCRIPTION",
+    "FOLLOWUPS_DESCRIPTION_ADDITION",
+    "LIST_CALENDAR_EVENTS",
+    "PARITY_PROPERTIES",
+]
 
 # Upper bound on a single call; the model can paginate by adjusting
 # `from`/`to` if it needs more.
 _MAX_RESULTS_CAP = 100
 
+#: `account: "all"` (MIP-1607): the most events one call returns over every account together, and the
+#: most accounts it reads. Each account is read with `max_results` exactly as a single read is.
+_ALL_EVENTS_CAP = 100
+_ALL_ACCOUNTS_CAP = 10
 
-def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    account_ref = account_arg(args, write=False)
-    account = resolve_google_calendar_account(ctx.user_id, account_ref)
-    calendar_id = args.get("calendar_id") or "primary"
 
+def _read_params(args: dict[str, Any]) -> dict[str, Any]:
+    """The query of one `events.list`: the same for a single account and for each account of "all"."""
     params: dict[str, Any] = {
         "singleEvents": "true",
         "orderBy": "startTime",
@@ -71,6 +103,83 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # Google's `q` is a full-text search over summary, description,
         # location, attendees. Useful for "find my standup".
         params["q"] = query.strip()
+    return params
+
+
+def _is_all(raw: Any) -> bool:
+    return isinstance(raw, str) and raw.strip().lower() == ALL_ACCOUNTS
+
+
+def _start_key(event: dict[str, Any]) -> datetime:
+    """An event's start as an instant, to order events of different accounts (and time zones): an all-day
+    date is its midnight in UTC, a time without an offset is read as UTC, and anything unreadable sorts last."""
+    raw = event.get("start")
+    try:
+        if isinstance(raw, str) and "T" not in raw:
+            return datetime.combine(date.fromisoformat(raw), time.min, tzinfo=UTC)
+        parsed = datetime.fromisoformat(str(raw))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return datetime.max.replace(tzinfo=UTC)
+
+
+def _run_all_accounts(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """`account: "all"`: every Google account of THE MEMBER, in one call (MIP-1607, flag on).
+
+    The accounts are the member's own (`member_google_accounts` goes through the same `accounts_for` as every
+    other account lookup), so there is no id to check and nothing of another member can be named. One that
+    cannot be read does not hide the others: it is listed under `failed_accounts`, as `list_calendars` does;
+    every account failing is an error with the first one's words. Each event carries its `account_id` (and the
+    `cite` token that names it), and the events of all accounts come back in the order of their start."""
+    _user, everything = member_google_accounts(ctx.user_id)
+    calendar_id = args.get("calendar_id") or "primary"
+    params = _read_params(args)
+    path = f"/calendars/{segment(calendar_id)}/events"
+    read, failed = [], []
+    rows: list[tuple[datetime, int, dict[str, Any]]] = []
+    for account in everything[:_ALL_ACCOUNTS_CAP]:
+        body, failure = read_from_account(account, path, params)
+        if failure is not None:
+            failed.append(failure)
+            continue
+        shaped = [
+            cite_event({**shape_event(e), "account_id": str(account.id)}, account.id, ctx)
+            for e in (body or {}).get("items", [])
+            if isinstance(e, dict)
+        ]
+        read.append({"account_id": str(account.id), "label": account.label, "events": len(shaped)})
+        rows.extend((_start_key(e), len(read), e) for e in shaped)
+    for account in everything[_ALL_ACCOUNTS_CAP:]:
+        failed.append({"account_id": str(account.id), "reason": "Not read: too many accounts"})
+    if failed and not read:
+        raise ToolError(f"No events could be read: {failed[0]['reason']}.")
+    rows.sort(key=lambda row: (row[0], row[1]))
+    events = [row[2] for row in rows[:_ALL_EVENTS_CAP]]
+    out: dict[str, Any] = {
+        "calendar_id": calendar_id,
+        "from": args.get("from"),
+        "to": args.get("to"),
+        "account": ALL_ACCOUNTS,
+        "accounts": read,
+        "events": events,
+        "__summary__": f"Listed {len(events)} event(s) on `{calendar_id}` over {len(read)} account(s).",
+    }
+    if len(rows) > len(events):
+        out["events_not_shown"] = len(rows) - len(events)
+    if failed:
+        out["failed_accounts"] = failed
+    return out
+
+
+def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    account_ref = account_arg(args, write=False)
+    if account_ref is not None and followups_on() and _is_all(account_ref):
+        return _run_all_accounts(args, ctx)
+    account = resolve_google_calendar_account(ctx.user_id, account_ref)
+    calendar_id = args.get("calendar_id") or "primary"
+    params = _read_params(args)
+    time_min = args.get("from")
+    time_max = args.get("to")
 
     resp = google_calendar_request(
         account, "GET", f"/calendars/{segment(calendar_id)}/events", params=params
@@ -89,6 +198,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if parity_on():
         result["events"] = [cite_event(e, account.id, ctx) for e in events]
         result.update(account_fields(account, defaulted=not account_ref, label=True))
+        if followups_on() and result.get("other_accounts"):
+            result["hint"] = OTHER_ACCOUNTS_HINT
     return result
 
 
@@ -139,7 +250,7 @@ LIST_CALENDAR_EVENTS = Tool(
             "max_results": {
                 "type": "INTEGER",
                 "description": (
-                    f"Cap the number of events returned. Default 50, " f"max {_MAX_RESULTS_CAP}."
+                    f"Cap the number of events returned. Default 50, max {_MAX_RESULTS_CAP}."
                 ),
             },
         },

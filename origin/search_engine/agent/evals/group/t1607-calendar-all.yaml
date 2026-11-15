@@ -1,0 +1,175 @@
+# MIP-1607 (flag AGENT_PARITY_FOLLOWUPS, arm `followups`): `list_calendar_events` takes `account: "all"`, one call that reads
+# every connected Google account of the member (each event carries its `account_id`; an account that cannot be read is
+# listed under `failed_accounts`). The paid run of 2026-11-15 measured a Japanese "what is on my calendar" at 4.3 calls
+# instead of 2.3: with two accounts the model read each account separately. The flag-on description tells the model to pass
+# "all" when `list_calendars` (`accounts`) or an earlier read (`other_accounts`) showed several accounts, and a default read
+# of such a member says in its result how to read the rest (`hint`). It must NOT make a one-account member's call longer.
+#
+# Judged on what the model READS: `tool_calls_match` (case keys: group/content_checks.py) counts the `list_calendar_events`
+# calls and checks the arguments each one sent. Nothing here writes: a calendar write is never approved in an eval.
+#
+# Seeds `calendar_two_accounts` (the PM viewers, `b` / `ja-b`: a work account, the default, with "Sprint planning" on
+# 2027-03-01, and a personal account with "Dentist appointment" on 03-02 and "Piano lesson" on 03-04) and
+# `calendar_one_account` (`c` / `ja`: one work account with "Sprint planning"), as for t1059: Google is the in-process
+# fake (`calendar_stub`), which answers each account only its own events and ignores the date range, so the questions name
+# an explicit range in March 2027 rather than "this week" (which would ask the model about a week the fake cannot answer).
+#
+# The positives `requires_arm: followups` (the value "all" is not accepted without the flag). The negatives run on arm0 too
+# and carry the arm's tag, `followups`: a member with ONE account must send no `account` and must not be sent to
+# `list_calendars` to look the count up (the hint must add no call for the member who has nothing to choose between).
+
+- id: t1607.all-accounts.en
+  lang: en
+  tags: [eval-group, t1607]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  requires_arm: followups
+  note: "Positive: two Google accounts, a broad calendar question. At most `list_calendars` and then ONE events call with `account: all`; the answer has the work and the personal events."
+  query: 'What is on my calendar between March 1 and March 5, 2027? Please check all my Google accounts.'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tool_calls_match:
+      - tool: list_calendar_events
+        count: 1
+        args_match:
+          account: "^all$"
+      - tool: list_calendars
+        count_at_most: 1
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["Sprint planning", "Dentist appointment"]
+
+- id: t1607.all-accounts.ja
+  lang: ja
+  tags: [eval-group, t1607]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  requires_arm: followups
+  note: "Positive: two Google accounts, a broad calendar question. At most `list_calendars` and then ONE events call with `account: all`; the answer has the work and the personal events."
+  query: '2027年3月1日から3月5日までのカレンダーの予定を教えてください。私のGoogleアカウントはすべて確認してください。'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tool_calls_match:
+      - tool: list_calendar_events
+        count: 1
+        args_match:
+          account: "^all$"
+      - tool: list_calendars
+        count_at_most: 1
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["スプリント計画", "歯医者の予約"]
+
+- id: t1607.all-accounts-unprompted.en
+  lang: en
+  tags: [eval-group, t1607]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  requires_arm: followups
+  note: "Positive, no hint in the question: it does not say 'all my accounts'. The model has two ways to find out how many accounts there are (list_calendars, or `other_accounts` and the `hint` in a first read); the goal is the personal event in the answer with no more than two events calls and `all` on the last."
+  query: 'What do I have on my calendar between March 1 and March 5, 2027?'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tool_calls_match:
+      - tool: list_calendar_events
+        count_at_most: 2
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["Sprint planning", "Dentist appointment"]
+
+- id: t1607.all-accounts-unprompted.ja
+  lang: ja
+  tags: [eval-group, t1607]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  requires_arm: followups
+  note: "Positive, no hint in the question: it does not say 'all my accounts'. The model has two ways to find out how many accounts there are (list_calendars, or `other_accounts` and the `hint` in a first read); the goal is the personal event in the answer with no more than two events calls and `all` on the last."
+  query: '2027年3月1日から3月5日までのカレンダーの予定を教えてください。'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tool_calls_match:
+      - tool: list_calendar_events
+        count_at_most: 2
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["スプリント計画", "歯医者の予約"]
+
+- id: t1607.one-account.en
+  lang: en
+  tags: [eval-group, t1607, followups]
+  fixture: sequence
+  viewer: c
+  seed: [calendar_one_account]
+  note: "Negative (arm0 and followups): a member with ONE Google account. One events call that sends no `account`, and no trip to list_calendars to count accounts."
+  query: 'What is on my calendar between March 1 and March 5, 2027?'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tools_used_excludes: [list_calendars]
+    tool_calls_match:
+      - tool: list_calendar_events
+        count: 1
+        args_absent: [account]
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["Sprint planning"]
+
+- id: t1607.one-account.ja
+  lang: ja
+  tags: [eval-group, t1607, followups]
+  fixture: sequence
+  viewer: ja
+  seed: [calendar_one_account]
+  note: "Negative (arm0 and followups): a member with ONE Google account. One events call that sends no `account`, and no trip to list_calendars to count accounts."
+  query: '2027年3月1日から3月5日までのカレンダーの予定を教えてください。'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tools_used_excludes: [list_calendars]
+    tool_calls_match:
+      - tool: list_calendar_events
+        count: 1
+        args_absent: [account]
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["スプリント計画"]
+
+- id: t1607.named-account.en
+  lang: en
+  tags: [eval-group, t1607, followups]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  note: "Negative (arm0 and followups): the member NAMES one account (the personal one). Reading everything would answer a question nobody asked: the events call must not send `all`; on arm0 it names the account it looked up."
+  query: 'What is on my personal Google calendar between March 1 and March 5, 2027? Only that account.'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tool_calls_match:
+      - tool: list_calendar_events
+        args_match:
+          account: "^(?!all$)"
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["Dentist appointment"]
+    answer_does_not_contain: ["Sprint planning"]
+
+- id: t1607.named-account.ja
+  lang: ja
+  tags: [eval-group, t1607, followups]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  note: "Negative (arm0 and followups): the member NAMES one account (the personal one). Reading everything would answer a question nobody asked: the events call must not send `all`; on arm0 it names the account it looked up."
+  query: '2027年3月1日から3月5日までの、私の個人用Googleカレンダーの予定を教えてください。そのアカウントだけです。'
+  expect:
+    no_errors: true
+    tools_used_contains: [list_calendar_events]
+    tool_calls_match:
+      - tool: list_calendar_events
+        args_match:
+          account: "^(?!all$)"
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_all: ["歯医者の予約"]
+    answer_does_not_contain: ["スプリント計画"]

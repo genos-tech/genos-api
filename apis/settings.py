@@ -2093,6 +2093,27 @@ SEARCH_ENGINE["AGENT_UNDO_NOTE_IN_MEMORY"] = (
 # unasked, and each case that asks for one sends it right.
 SEARCH_ENGINE["AGENT_PARITY_TOOLS"] = os.environ.get("AGENT_PARITY_TOOLS", "true").lower() == "true"
 
+# MIP-578 parity batch, model-visible follow-ups (MIP-1589, MIP-1607, MIP-1590): a SECOND flag, because
+# `AGENT_PARITY_TOOLS` is on in production and can no longer protect a new model-visible change.
+# Dark-shipped OFF, measured in one grouped paid run (arm `followups`). ON =
+# (1) MIP-1589: the agent's and MCP's `create_task`, `update_task` and `create_task_plan` refuse a task the
+# app's own form would refuse because a field its project REQUIRES (the owner's field rules) is missing, with
+# a sentence that names the fields and says nothing was changed; `list_project_tags` also returns the
+# project's rules and the NAMES of its task templates (never the bodies);
+# (2) MIP-1607: `list_calendar_events` accepts `account: "all"` and reads every connected Google account
+# of the member in one call (each event carries its `account_id`; a failing account is reported);
+# (3) MIP-1590: the title or name in a mention bullet of the system prompt is fenced and cleaned like message
+# text, the objects a mention names are read again with the asker's CURRENT access when an approval resumes,
+# and `fetch_task` and the mention resolver answer a task of a soft-deleted project, and a deleted task, exactly
+# as a missing one. OFF = what the model, an MCP client and every tool saw before: the declarations, the
+# prompt and the results are byte-identical (the fingerprint golden), and a call that sends `account: "all"` is
+# refused as the unknown account it always was. Rollback: leave it unset or `AGENT_PARITY_FOLLOWUPS=false`.
+# Flip criterion: the `followups` arm shows no case that creates a task without a required field unasked, one
+# calendar event call for a member with several accounts, and no extra call for a member with one.
+SEARCH_ENGINE["AGENT_PARITY_FOLLOWUPS"] = (
+    os.environ.get("AGENT_PARITY_FOLLOWUPS", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

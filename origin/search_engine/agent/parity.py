@@ -20,6 +20,10 @@ from django.conf import settings
 
 #: The one flag the parity batch shares.
 PARITY_FLAG = "AGENT_PARITY_TOOLS"
+#: The flag of the batch's model-visible follow-ups (MIP-1589 field rules, MIP-1607 `account: "all"`, MIP-1590
+#: mention hardening). A SECOND flag, default OFF: `PARITY_FLAG` is on in production since 2026-11-15, so it can no
+#: longer protect a new model-visible change.
+FOLLOWUPS_FLAG = "AGENT_PARITY_FOLLOWUPS"
 
 
 def flag_on(flag: str) -> bool:
@@ -28,6 +32,10 @@ def flag_on(flag: str) -> bool:
 
 def parity_on() -> bool:
     return flag_on(PARITY_FLAG)
+
+
+def followups_on() -> bool:
+    return flag_on(FOLLOWUPS_FLAG)
 
 
 def ignore_unless_parity(

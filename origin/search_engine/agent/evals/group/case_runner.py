@@ -230,6 +230,7 @@ class DefaultCaseRunner:
             tool_text=tool_text,
             calls=inner.calls,
             pending=pending,
+            tool_calls=native.tool_results,
         )
         result["checks"] += extra
         result["passed"] = bool(native.passed) and all(c["ok"] for c in extra)

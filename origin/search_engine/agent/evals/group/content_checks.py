@@ -30,6 +30,13 @@ does not use them:
       an exact value), and
       `task_args_match` (the same for the rows of a plan: at least one task must match each).
 
+  `expect: {tool_calls_match: [{tool, count | count_at_most | count_at_least, args_present, args_absent, args_match}]}`
+      (MIP-1607) checks the arguments of the READ calls the model made, which `pending_write` cannot see (a read
+      never pauses): of the calls to `tool`, how many there were, and, for EVERY one of them, which arguments it
+      sent (`args_present`), must not have sent (`args_absent`) and what they match (`args_match`, as above).
+      "One `list_calendar_events` call, with `account: all`" is `{tool: list_calendar_events, count: 1,
+      args_match: {account: "^all$"}}`; a member with one account must send no `account` at all.
+
 The pending events are teed out of `run_agent` by wrapping the name `runner.run_agent` for the
 duration of a case, reference-counted and routed by a ContextVar (the same pattern as the locale
 patch in `case_runner`), so `runner.py` is not edited.
@@ -423,6 +430,10 @@ def _sent(arguments: Any, name: str) -> bool:
     return isinstance(arguments, dict) and arguments.get(name) not in (None, "")
 
 
+#: The argument checks `pending_write` and `tool_calls_match` share (`_argument_checks`).
+ARGUMENT_KEYS = frozenset({"args_present", "args_absent", "args_match"})
+
+
 def _argument_checks(spec: dict[str, Any], arguments: Any, add: Any) -> None:
     """`args_present`, `args_absent`, `args_match` and `task_args_match` (see the module docstring),
     reported through `add` (which names each check)."""
@@ -456,6 +467,58 @@ def _argument_checks(spec: dict[str, Any], arguments: Any, add: Any) -> None:
             not wrong,
             f"no task carries {wrong}" if wrong else f"matched over {len(rows)} tasks",
         )
+
+
+def check_tool_calls(specs: Any, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`tool_calls_match` (see the module docstring): `[{"name", "ok", "detail"}]`, one per spec and key.
+    `calls` is what the runner traced: `[{"tool_name", "arguments", "result"}]`, in order."""
+    checks: list[dict[str, Any]] = []
+    for spec in specs if isinstance(specs, list) else [specs]:
+        tool = str((spec or {}).get("tool") or "")
+        mine = [c.get("arguments") for c in calls if str(c.get("tool_name")) == tool]
+
+        def add(name: str, ok: bool, detail: str, tool: str = tool) -> None:
+            checks.append(
+                {"name": f"tool_calls_match.{tool}.{name}", "ok": bool(ok), "detail": detail}
+            )
+
+        if not tool:
+            add("tool", False, "a tool_calls_match entry needs `tool`", tool="?")
+            continue
+        n = len(mine)
+        if "count" in spec:
+            add("count", n == int(spec["count"]), f"{n} call(s), want exactly {spec['count']}")
+        if "count_at_most" in spec:
+            add(
+                "count_at_most",
+                n <= int(spec["count_at_most"]),
+                f"{n} call(s), want at most {spec['count_at_most']}",
+            )
+        if "count_at_least" in spec:
+            add(
+                "count_at_least",
+                n >= int(spec["count_at_least"]),
+                f"{n} call(s), want at least {spec['count_at_least']}",
+            )
+        # The argument checks hold for EVERY call of the tool (a call that sent nothing fails `args_present`).
+        # With no call there is nothing to judge: the count keys are what say a call had to happen.
+        for index, arguments in enumerate(mine):
+
+            def add_one(
+                name: str, ok: bool, detail: str, index: int = index, tool: str = tool
+            ) -> None:
+                checks.append(
+                    {
+                        "name": f"tool_calls_match.{tool}[{index}].{name}",
+                        "ok": bool(ok),
+                        "detail": detail,
+                    }
+                )
+
+            _argument_checks(
+                {k: v for k, v in spec.items() if k in ARGUMENT_KEYS}, arguments, add_one
+            )
+    return checks
 
 
 def summarize_proposals(events: list[dict[str, Any]], limit: int = 300) -> list[dict[str, str]]:

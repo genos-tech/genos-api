@@ -93,6 +93,8 @@ GROUP_EXPECT_KEYS = frozenset(
         "answer_does_not_match",
         # MIP-905 (group/content_checks.py): what the model proposed, and the answer's length
         "pending_write",
+        # MIP-1607 (group/content_checks.py): count and arguments of the READ calls the model made
+        "tool_calls_match",
         "answer_chars_at_most",
         "answer_chars_at_least",
     }
@@ -980,6 +982,7 @@ def group_checks(
     tool_text: str,
     calls: int,
     pending: list[dict[str, Any]] | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Checks for the group-only `expect:` keys. Returns `[{"name","ok","detail"}]`.
 
@@ -1000,12 +1003,18 @@ def group_checks(
                           forbidden CLAIM rather than a forbidden word: a correct answer can use
                           the word negated ("返信待ちはありません"), which the plain-substring
                           `answer_does_not_contain` cannot tell from the claim. (MIP-1518)
+    tool_calls_match      (MIP-1607) how many calls of a tool and what arguments each sent, from
+                          the runner's traces (`tool_calls`); see `content_checks`
     pending_write         (MIP-905) checks on the write the model PROPOSED, from the
                           `tool_call_pending_approval` events: tool, task counts, body lengths
                           in characters, headings, not cut off. See `content_checks`.
     answer_chars_at_most / answer_chars_at_least   the answer's length in characters
     """
     checks: list[dict[str, Any]] = []
+    if "tool_calls_match" in expect:
+        from origin.search_engine.agent.evals.group import content_checks  # noqa: PLC0415
+
+        checks += content_checks.check_tool_calls(expect["tool_calls_match"], tool_calls or [])
     if (
         "pending_write" in expect
         or "answer_chars_at_most" in expect
