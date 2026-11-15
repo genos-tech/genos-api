@@ -49,7 +49,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageAttachmentSerializer,
     MessageSerializer,
 )
-from origin.services import webhook_enqueue
+from origin.services import message_via, webhook_enqueue
 from origin.services.channel_scope import chat_member_rows, is_chat_member
 from origin.services.deleted_account_channel_owners import acts_as_owner
 from origin.services.mention_extractor import (
@@ -209,6 +209,7 @@ def _allocate_seq_and_create_message_with_activities(
     metadata,
     correlation_id=None,
     self_assign=True,
+    via=None,
 ):
     """Wraps `_allocate_seq_and_create_message` and additionally fans out
     `Activity` rows for the recipients who should see a sidebar entry.
@@ -235,6 +236,7 @@ def _allocate_seq_and_create_message_with_activities(
         metadata=metadata,
         correlation_id=correlation_id,
         return_parent=True,
+        via=via,
     )
     # Idempotent re-send (reconnect flush after a lost ack): the row
     # already existed, so DON'T re-create activities. Doing so would
@@ -333,6 +335,7 @@ def _allocate_seq_and_create_message(
     metadata,
     correlation_id=None,
     return_parent=False,
+    via=None,
 ):
     """Atomically allocate the next per-channel seq and create the row.
 
@@ -352,7 +355,15 @@ def _allocate_seq_and_create_message(
 
     Returns `msg` normally; `(msg, parent, created)` when `return_parent`
     is set, where `created` is False on the idempotent dedup path.
+
+    `metadata.via` (which connected app wrote the message, MIP-1570) is the server's to set: a
+    `via` in `metadata` is dropped here, whoever called, so a client's `message.send` can never
+    draw an official app's icon on what it typed. `via` is the one way in, for the server-side
+    writer that knows the write came through a connected app (`task_card_post`).
     """
+    metadata = message_via.without_via(metadata)
+    if via is not None:
+        metadata = {**(metadata or {}), message_via.KEY: via}
     with transaction.atomic():
         # Lock the channel row so two concurrent senders can't race to
         # allocate the same seq. `select_for_update()` blocks until the
@@ -791,7 +802,13 @@ class MessageDetailView(AuthenticatedAPIView):
             message.body = body_json
             message.body_text = body_text
             message.edited_at = timezone.now()
-            message.save(update_fields=["body", "body_text", "edited_at", "ts_updated_at"])
+            update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
+            # A person's edit: the text is theirs now, so a connected app's stamp goes (MIP-1570).
+            cleaned = message_via.without_via(message.metadata)
+            if cleaned is not message.metadata:
+                message.metadata = cleaned
+                update_fields.append("metadata")
+            message.save(update_fields=update_fields)
 
             # Re-sync MessageMention rows from the new body. The simple
             # wipe-and-recreate approach is correct (set semantics) and
@@ -853,13 +870,23 @@ class MessageDetailView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-def rewrite_card_message(message, *, body, body_text, metadata=None):
+def rewrite_card_message(message, *, body, body_text, metadata=None, server_built=False):
     """Replace a task card's body (and metadata, when given) and re-sync its mentions.
+
+    `metadata.via` (a connected app's stamp, MIP-1570) is not the caller's to set: unless the
+    server built `metadata` itself from the stored row (`server_built`, the refresh after an
+    edit that had no browser), a `via` in it is dropped, and so is one already on the card when
+    `metadata` is not given: the body is a person's now.
 
     The one definition of "rewrite a card": `TaskCardMessageView.patch` (the browser's
     rewrite after an edit) and `task_card_post.refresh_*_card` (the server's, after an edit
     that had no browser, MIP-1460) both go through it, so the two cannot drift.
     """
+    if not server_built:
+        given = metadata if isinstance(metadata, dict) else message.metadata
+        cleaned = message_via.without_via(given)
+        if isinstance(metadata, dict) or cleaned is not given:
+            metadata = cleaned
     with transaction.atomic():
         message.body = body
         message.body_text = body_text

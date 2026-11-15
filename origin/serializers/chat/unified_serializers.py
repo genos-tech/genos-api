@@ -31,6 +31,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
+from origin.services import message_via
 from origin.services.member_roles import channel_role_to_member_role
 
 
@@ -210,6 +211,21 @@ class MessageSerializer(serializers.ModelSerializer):
             "tsSent",
             "tsUpdated",
         ]
+
+    def to_representation(self, instance):
+        """`metadata.via` as the whole channel may read it (MIP-1570).
+
+        A message is serialised once and relayed to every member of the channel (the socket
+        `message.send` response, `realtime_push.push_message`, the chat list's `latestMessage`),
+        so there is no viewer to reduce for: a stored `via` leaves only as a connected app's
+        kind and family, and a `via` that is anything else is left out. The writers store it in
+        that form already (`message_via`); this is the second defence. A message with no `via`,
+        and every other key of `metadata`, is served as it was."""
+        data = super().to_representation(instance)
+        meta = data.get("metadata")
+        if isinstance(meta, dict) and message_via.KEY in meta:
+            data["metadata"] = message_via.for_wire(meta)
+        return data
 
     def get_channelKind(self, obj):
         # `obj.channel` may be a deferred FK; channel_id_kind cache would
