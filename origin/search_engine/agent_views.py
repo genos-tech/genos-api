@@ -2024,7 +2024,8 @@ def _resume_context_for(
     `object_ref` (MIP-1057) is the task or milestone the conversation is about: its ID alone
     (`task_context.resume_object`), never its text. `/decide/` reads the task again as the person may
     read it by then, so one deleted or lost to them while the card waited is not replayed, a change
-    made to it meanwhile is in the block, and the run row holds nothing of the task. Absent from the row when the ask was not about one, so a row without one is what it was.
+    made to it meanwhile is in the block, and the run row holds nothing of the task. Absent from the
+    row when the ask was not about one, so a row without one is what it was.
 
     `refs` (MIP-1058) is the third part, for the messages and the selected passage of the ask (`ask_refs`):
     the messages' IDS and the passage as the person sent it, never a message's text. `/decide/` reads each
@@ -4078,9 +4079,8 @@ class AgentTaskSessionView(AuthenticatedAPIView):
     Only the caller's own sessions in the team are ever read (`user_id=request.user.id`). The team
     is the one the platform aligns to the task (`AuthenticatedAPIView.initial`: a `team_id` naming the
     caller's current team becomes the team that owns a task they can reach; a substitution, never a
-    grant). While
-    `AGENT_PARITY_TOOLS` is off the feature is dark: 200 with both empty, whatever the task is, so a
-    client built for it works unchanged and learns nothing.
+    grant). While `AGENT_PARITY_TOOLS` is off the feature is dark: 200 with both empty, whatever the
+    task is, so a client built for it works unchanged and learns nothing.
 
     Like the thread and note payloads this does not apply the plan's history window; the sessions
     list and `/sessions/<id>/` do.

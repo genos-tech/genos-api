@@ -101,6 +101,18 @@ class RefusedAskTests(TaskWorld):
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.json(), {"error": task_context.NOT_FOUND})
 
+    def test_a_task_of_one_team_is_not_read_through_another_team_the_asker_also_belongs_to(self):
+        # The tenant check on its own: the asker may read the task (a member of its project) and belongs to
+        # team B too, so neither the team gate nor the access rule refuses. Naming team B for a team A task
+        # would hand the model team A's words under team B's context.
+        TeamMembers.objects.get_or_create(team=self.team_b, attendee=self.a_owner)
+        task = self.make_task("Fix the login flow")
+        before = rows()
+        resp, captured = self.ask(task_context=self.ctx(task), team_id=str(self.team_b.team_id))
+        self.assertEqual((resp.status_code, resp.json()), (404, {"error": task_context.NOT_FOUND}))
+        self.assertNotIn("kwargs", captured)
+        self.assertEqual(rows(), before)
+
 
 class WhoMayAskTests(TaskWorld):
     """The rule the model's own `fetch_task` applies, no wider (plus the milestone rule)."""
@@ -427,6 +439,19 @@ class SessionScopeTests(TaskWorld):
             last_active_at=timezone.now() - timedelta(days=3)
         )
         self.assertEqual(self.ask_about(task)["kwargs"]["session_id"], first)
+
+    def test_a_task_conversation_continued_by_its_session_id_alone_does_not_expire_either(self):
+        # No `task_context` here (a row picked from the history list): the session id is the only thing that
+        # names it, so the TTL bypass is what keeps it, and with it the task.
+        task = self.make_task("Fix the login flow")
+        first = self.ask_about(task)["kwargs"]["session_id"]
+        AgentSession.objects.filter(pk=first).update(
+            last_active_at=timezone.now() - timedelta(days=3)
+        )
+        resp, captured = self.ask(session_id=first, query="and the owner?")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["kwargs"]["session_id"], first)
+        self.assertIn(BLOCK, captured["kwargs"]["system_extra"])
 
     def test_another_member_asking_about_the_same_task_gets_their_own_conversation(self):
         task = self.make_task()
