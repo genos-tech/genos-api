@@ -882,7 +882,7 @@ class TestWithTheResultLimitsOn(LimitsBase):
 
     def projects(self, **args):
         result = self._result(self._call("list_projects", args))
-        return result, result["structuredContent"]
+        return result, result.get("structuredContent")
 
     def test_a_list_that_would_default_to_100_is_paged_at_the_plans_page_size(self):
         _, whole = self.projects()
