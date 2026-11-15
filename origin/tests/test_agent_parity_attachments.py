@@ -63,6 +63,8 @@ class AttachmentsBase(BaseAPITestCase):
     """`self.user` is the project's reporter and member; `self.user2` is a second member."""
 
     flag = True
+    #: The file leaves storage in an `on_commit` hook, which a `TestCase` never reaches by itself.
+    commit_hooks = True
 
     def setUp(self):
         super().setUp()
@@ -130,16 +132,18 @@ class AttachmentsBase(BaseAPITestCase):
         user = user or self.user
         set_current_user(user, via=via or {"kind": "agent"})
         try:
-            return DELETE_TASK_ATTACHMENT.run(
-                {"task_id": task.task_id, "attachment_id": attachment_id},
-                ctx or self.ctx_for(user),
-            )
+            with self.captureOnCommitCallbacks(execute=self.commit_hooks):
+                return DELETE_TASK_ATTACHMENT.run(
+                    {"task_id": task.task_id, "attachment_id": attachment_id},
+                    ctx or self.ctx_for(user),
+                )
         finally:
             clear_current_user()
 
     def rest_delete(self, task_id, attachment_id, user=None):
         self.sign_in(user or self.user)
-        return self.client.delete(f"{URL}?task={task_id}&attachment_id={attachment_id}")
+        with self.captureOnCommitCallbacks(execute=self.commit_hooks):
+            return self.client.delete(f"{URL}?task={task_id}&attachment_id={attachment_id}")
 
     def sign_in(self, user):
         """Sign `user` in once: signing in writes a token row, which is not the delete's doing."""
@@ -445,10 +449,10 @@ class DeleteToolTests(AttachmentsBase):
     def test_a_storage_error_is_logged_without_the_path_and_the_row_still_goes(self):
         attachment = self.attach(self.task, "private-name.txt")
         with (
+            self.assertLogs("origin.services.task_attachment_manage", level="WARNING") as logs,
             mock.patch(
                 "django.db.models.fields.files.FieldFile.delete", side_effect=OSError("disk")
             ),
-            self.assertLogs("origin.services.task_attachment_manage", level="WARNING") as logs,
         ):
             self.run_tool(self.task, attachment.attachment_id)
         self.assertFalse(TaskAttachments.objects.filter(pk=attachment.pk).exists())
@@ -583,13 +587,16 @@ class PermissionTwinTests(AttachmentsBase):
             )
         self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
 
-    def test_a_deleted_task_refuses_the_tool_where_the_page_does_not_look(self):
-        # Documented difference (stricter): `can_access_task` never reads `is_deleted`.
+    def test_a_deleted_task_is_refused_by_the_tool_and_by_the_page(self):
+        # The page used to opt out of the soft-delete refusal; since MIP-1582 both refuse.
         deleted = self.make_task("Gone")
         attachment = self.attach(deleted, "a.txt")
         TaskMaster.objects.filter(pk=deleted.pk).update(is_deleted=True)
         with self.assertRaisesRegex(ToolError, "has been deleted"):
             self.run_tool(deleted, attachment.attachment_id)
+        self.assertEqual(
+            self.rest_delete(deleted.task_id, attachment.attachment_id).status_code, 404
+        )
         self.assertTrue(TaskAttachments.objects.filter(pk=attachment.pk).exists())
 
     def test_a_task_that_does_not_exist_is_not_found(self):
@@ -638,8 +645,18 @@ class TwinEffectsTests(AttachmentsBase):
                 TaskActivity.objects.filter(task=task).values_list("pk", flat=True)
             )
             stamp_before = TaskMaster.objects.get(pk=task.pk).ts_updated_at
-            with watching_notices() as notices:
-                result = act()
+            # The change feed's keys are read before the commit hooks run (they flush them), and
+            # the hooks (the file leaving storage) run after, so storage is compared too.
+            self.commit_hooks = False
+            try:
+                with self.captureOnCommitCallbacks(execute=False) as hooks:
+                    with watching_notices() as notices:
+                        result = act()
+                    feed_keys = sorted(change_feed.pending_keys())
+            finally:
+                self.commit_hooks = True
+            for hook in hooks:
+                hook()
             counts_after = row_counts()
         finally:
             for p in patches.values():
@@ -672,11 +689,18 @@ class TwinEffectsTests(AttachmentsBase):
                 if f.startswith(prefix)
             ),
             "history": new_history,
-            "row_deltas": deltas(counts_before, counts_after),
+            # `ChangeVersion` is left out: both twins sit in one project, so whichever runs first
+            # creates the feed's version rows and the second only updates them. What the feed was
+            # told is compared below (`change_feed`), key by key.
+            "row_deltas": {
+                label: n
+                for label, n in deltas(counts_before, counts_after).items()
+                if label != "origin.ChangeVersion"
+            },
             "notices": notices,
             "index_calls": started["index_client"].call_count + started["purge_client"].call_count,
             "pushes": started["push"].call_count,
-            "change_feed": sorted(change_feed.pending_keys()),
+            "change_feed": feed_keys,
             "task_stamp_moved": TaskMaster.objects.get(pk=task.pk).ts_updated_at != stamp_before,
         }
 
@@ -711,11 +735,13 @@ class TwinEffectsTests(AttachmentsBase):
         # the search index is never touched, by either (attachments are not indexed)
         self.assertEqual(page["index_calls"], 0)
         self.assertEqual(tool["index_calls"], 0)
-        # no live push, no change-feed bump, the task row itself is not touched
+        # no live push; but the task is stamped and the change feed told, the same by both, so a
+        # teammate's cached copy drops the file (MIP-1582: it used to touch neither)
         self.assertEqual(tool["pushes"], page["pushes"])
         self.assertEqual(tool["change_feed"], page["change_feed"])
+        self.assertTrue(any(k.startswith("tasks:") for k in page["change_feed"]))
         self.assertEqual(tool["task_stamp_moved"], page["task_stamp_moved"])
-        self.assertFalse(page["task_stamp_moved"])
+        self.assertTrue(page["task_stamp_moved"])
         # and the page's other task, which neither touched, still has both files
         self.assertEqual(TaskAttachments.objects.filter(task=self.task).count(), 0)
         self.assertEqual(TaskAttachments.objects.filter(task=self.twin_tool).count(), 1)
@@ -944,7 +970,8 @@ class ApproveTests(AttachmentsBase):
 
     def test_approving_deletes_the_file_for_good_and_says_it_could_not_be_undone(self):
         attachment = self.attach(self.task, "n.txt")
-        events = self.approve(self.paused(attachment.attachment_id), **ON)
+        with self.captureOnCommitCallbacks(execute=True):  # the file leaves storage on commit
+            events = self.approve(self.paused(attachment.attachment_id), **ON)
         result = [e for e in events if e["type"] == "tool_call_result"]
         self.assertEqual(len(result), 1)
         # the browser is told which task's cached copy still lists the file
@@ -1069,7 +1096,8 @@ class McpFlagOnTests(McpFilesBase):
 
     def test_a_key_that_may_delete_deletes_and_leaves_a_trace_of_ids_only(self):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
-        text, is_error = self._tool_text(self.delete_call(2))
+        with self.captureOnCommitCallbacks(execute=True):  # the file leaves storage on commit
+            text, is_error = self._tool_text(self.delete_call(2))
         self.assertFalse(is_error, text)
         self.assertIn("two.txt", text)
         self.assertEqual(

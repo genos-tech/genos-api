@@ -56,7 +56,7 @@ class TaskCommentReactionRequiredTests(TaskRequestDataRequiredBase):
             "team_id": str(self.team.team_id),
             "task_id": self.task.task_id,
             "comment_id": 1,
-            "reaction_emoji": "x",
+            "reaction_emoji": "👍",
         }
         body.update(over)
         return {k: v for k, v in body.items() if v is not ...}
@@ -71,7 +71,7 @@ class TaskCommentReactionRequiredTests(TaskRequestDataRequiredBase):
     def test_a_valid_reaction_is_unchanged(self):
         resp = self.post(REACTION, self.body())
         self.assertEqual(resp.status_code, 201, resp.content)
-        self.assertEqual(resp.json()["reaction_emoji"], "x")
+        self.assertEqual(resp.json()["reaction_emoji"], "👍")
         self.assertEqual(resp.json()["comment_id"], 1)
         self.assertEqual(TaskCommentReactionFact.objects.count(), 1)
 
@@ -89,13 +89,19 @@ class TaskCommentReactionRequiredTests(TaskRequestDataRequiredBase):
     def test_a_body_with_only_the_task_names_what_is_missing(self):
         self.assertRefused(
             {"task_id": self.task.task_id},
-            "team_id, comment_id and reaction_emoji are required.",
+            "comment_id and reaction_emoji are required.",
         )
 
     def test_each_field_omitted_is_a_400_naming_it(self):
-        for field in ("team_id", "comment_id", "reaction_emoji"):
+        for field in ("comment_id", "reaction_emoji"):
             with self.subTest(field=field):
                 self.assertRefused(self.body(**{field: ...}), f"{field} is required.")
+
+    def test_the_team_is_no_longer_asked_for_the_task_names_it(self):
+        """MIP-1582: the row's team is the task's, so a body without one is a valid reaction."""
+        resp = self.post(REACTION, self.body(team_id=...))
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(TaskCommentReactionFact.objects.get().team_id, self.team.team_id)
 
     def test_a_comment_id_that_is_not_a_number_is_a_400(self):
         for value in (None, "x", "", [], {}, [1], {"a": 1}, True, 1.5):
