@@ -21,6 +21,7 @@ from unittest import mock
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
+from apis import settings_test
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -422,4 +423,34 @@ class ParityOffTests(TaskLoopBase):
         self.assertIsNone(self.row(run_id).resume_context)
         self.decide_to_the_end(run_id, token)
         self.assertEqual(self.legs, [None, None])
+        self.assertEqual(AgentSession.objects.filter(task_id__isnull=False).count(), 0)
+
+
+class ProductionDefaultsParityOffTests(TaskLoopBase):
+    """Flag off under what production runs: the twelve shipped flags on (the key-free test settings keep them
+    off), `AGENT_PARITY_TOOLS` off. A `task_context` must change nothing the model is sent or the row keeps."""
+
+    flags = {
+        **{flag: True for flag in settings_test.AGENT_FLAGS_ON_IN_PRODUCTION},
+        PARITY_FLAG: False,
+    }
+    script = ("answer", "answer", "write", "write")
+
+    def test_the_prompt_and_what_a_pause_keeps_are_the_same_with_and_without_a_task_context(self):
+        task = self.make_task(SECRET, content=_blocks(SECRET))
+        self.ask_plain()
+        self.ask_plain(**self.ctx(task))
+        without, with_ctx = self.model.system_instructions[:2]
+        self.assertEqual(with_ctx, without)  # the whole system instruction, byte for byte
+        plain_run, _ = self.ask()
+        ctx_run, _ = self.ask(**self.ctx(task))
+        # What the pause keeps (the shipped resume flags are on, so a plain run keeps what it always did).
+        self.assertEqual(self.row(ctx_run).resume_context, self.row(plain_run).resume_context)
+        paused_plain, paused_ctx = self.model.system_instructions[2:4]
+        self.assertEqual(paused_ctx, paused_plain)
+        self.assertNotIn("object", json.dumps(self.row(ctx_run).resume_context))
+        for prompt in (with_ctx, paused_ctx):
+            self.assertNotIn(SECRET, prompt)
+            self.assertNotIn(BLOCK, prompt)
+        # No session is bound to the task, whatever the request said.
         self.assertEqual(AgentSession.objects.filter(task_id__isnull=False).count(), 0)
