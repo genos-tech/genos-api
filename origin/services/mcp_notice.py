@@ -289,6 +289,13 @@ def _deleted_comment_item(args, payload) -> dict[str, Any]:
     return item
 
 
+# `manage_milestone` `convert` (a task into a milestone, a milestone into a task) has NO rule here,
+# on purpose (MIP-1597): a conversion is the app's own structural act on something the member asked
+# for in this very call, and its result (the new id, what stayed under it) is in the tool's answer
+# they are reading, so a "changed in your AI app" notice would repeat it. A rule would also need a
+# new notification switch, which is not worth it for that. A project move of a milestone makes none
+# either (`_milestone` only notices a create and a status change). Pinned by
+# `tests/test_move_leftovers.py::ConvertMakesNoAiAppNoticeTests`.
 RULES: dict[str, Callable[[dict, dict], Notice | None]] = {
     "create_task": _created_task,
     "create_task_plan": _task_plan,
