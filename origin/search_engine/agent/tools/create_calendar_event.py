@@ -45,7 +45,19 @@ from origin.search_engine.agent.calendar import (
 from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 
-__all__ = ["CREATE_CALENDAR_EVENT", "PARITY_PROPERTIES"]
+__all__ = ["CREATE_CALENDAR_EVENT", "DESCRIPTION_ADDITION", "PARITY_PROPERTIES"]
+
+#: Appended to the description while `AGENT_PARITY_TOOLS` is on (`tool_flag_text`). A write proposes before it
+#: reads anything, so the default account is what it gets unless the model looks the account up first. The paid
+#: run of 2026-11-15 had a Japanese "personal Google calendar" request proposed on the default (work) account,
+#: with no `account` and no `list_calendars`, in 2 of 3 repetitions (the English twin looked it up 3 of 3).
+#: Conditional on the member NAMING one, so a member with one account, who names none, is sent nowhere. The
+#: wording is the same for every language on purpose, and short: the prefix has little headroom.
+DESCRIPTION_ADDITION = (
+    " When the member names a calendar or an account (personal, work, an address; any language), "
+    "call `list_calendars` first and pass that `account`: the default is the first one connected. "
+    "Names none: leave `account` out."
+)
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

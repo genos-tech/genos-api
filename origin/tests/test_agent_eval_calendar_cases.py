@@ -125,6 +125,13 @@ class CaseFileTests(SimpleTestCase):
             spec = self.by_id[f"t1059.one-account.{lang}"].raw["expect"]["pending_write"]
             self.assertEqual(spec["args_absent"], ["account"])
 
+    def test_a_member_with_one_account_is_not_sent_to_list_calendars(self):
+        # The account hint (`create_calendar_event`'s flag-on sentence) must add no call for a member who names
+        # no account: the guard that fails when it makes the model look up an account nobody asked for.
+        for lang in ("en", "ja"):
+            expect = self.by_id[f"t1059.one-account.{lang}"].raw["expect"]
+            self.assertEqual(expect["tools_used_excludes"], ["list_calendars"], lang)
+
     def test_the_named_account_cases_quote_the_personal_address_the_card_will_carry(self):
         for slug in ("create-named", "delete-second"):
             for lang in ("en", "ja"):
@@ -215,6 +222,16 @@ class ChecksAreNotVacuousTests(SimpleTestCase):
                 self.assertTrue(
                     [r for r in bad if r.startswith("pending_tools_excludes")], (case_id, bad)
                 )
+
+    def test_one_account_fails_a_model_that_looked_up_accounts_it_was_not_asked_about(self):
+        for lang in ("en", "ja"):
+            case_id = f"t1059.one-account.{lang}"
+            looked = self.reasons(
+                case_id, answer="", proposed=("create_calendar_event",), used=("list_calendars",)
+            )
+            self.assertTrue([r for r in looked if r.startswith("tools_used_excludes")], looked)
+            straight = self.reasons(case_id, answer="", proposed=("create_calendar_event",))
+            self.assertEqual([r for r in straight if r.startswith("tools_used_excludes")], [])
 
     def test_read_second_needs_the_time_in_the_answer_and_a_calendar_read(self):
         ok = self.reasons(
