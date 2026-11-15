@@ -1,4 +1,4 @@
-"""Take one file off a task, and number the next one: what the Attachments tab and the agent share.
+"""Add one file to a task, take one off, and number the next: what the Attachments tab and the agent share.
 
 A task attachment is a `TaskAttachments` row and the file it points at in media storage. The REST
 view (`TaskAttachmentsView.delete`) and the agent's `delete_task_attachment` tool (MIP-1563) call
@@ -28,6 +28,12 @@ through the row's task, so an orphan is not listed anywhere.
 
 It touches no search index: a task's attachments are not part of what Spotlight indexes (the
 chunkers read the title, body and comments), so there is nothing to purge, and the page never did.
+
+Adding (`add_attachment`, MIP-1595) does the same stamp, in the same transaction as the row, and the
+mirror-image order, for the same reason (fail safe): the FILE is written to storage first, then, in
+ONE transaction, the row is saved and the task stamped. A failure at any step leaves at worst an
+ORPHAN FILE nobody can reach (removed best-effort, logged on failure), never a LISTED row whose file
+is missing. There is no agent tool that adds a file; the page's route is the one caller.
 
 Numbering: `next_attachment_id`. A number is never handed out twice on a task (see there).
 """
@@ -78,6 +84,32 @@ def next_attachment_id(task_id) -> int:
     return max(live or 0, remembered or 0) + 1
 
 
+def add_attachment(serializer) -> TaskAttachments:
+    """Save a VALIDATED `TaskAttachmentsSerializer`: the file, then the row and the task's stamp.
+
+    The file is written first and on its own (storage is not transactional); then ONE transaction
+    holds the row (whose `post_save` writes the history row) and the stamp that tells the change
+    feed, so a teammate's cache drops its old file list. If the row or the stamp fails, or the
+    transaction does not commit, the file just written is removed again (best effort, logged) and
+    the error goes on: no row ever points at a file that is not there. Returns the saved row and
+    leaves it on `serializer.instance`, so `serializer.data` is what `serializer.save()` gave.
+    """
+    data = dict(serializer.validated_data)
+    upload = data.pop("attached_file")
+    attachment = TaskAttachments(**data)
+    attachment.attached_file.save(upload.name, upload, save=False)  # the file reaches storage here
+    stored = attachment.attached_file
+    try:
+        with transaction.atomic():
+            attachment.save()
+            _stamp_task(attachment.task_id)
+    except BaseException:
+        _remove_file(stored, attachment.attachment_id, "add_attachment")
+        raise
+    serializer.instance = attachment
+    return attachment
+
+
 def delete_attachment(attachment: TaskAttachments) -> None:
     """Delete the attachment's row (and stamp the task), then its file once that has committed.
 
@@ -97,7 +129,7 @@ def delete_attachment(attachment: TaskAttachments) -> None:
 
 
 def _stamp_task(task_id) -> None:
-    """The task changed (a file left it): move its `ts_updated_at` and tell the change feed.
+    """The task changed (a file left it or joined it): move its `ts_updated_at` and tell the change feed.
 
     A queryset `.update()` skips `auto_now`, so it is stamped by hand; `post_save` is not wanted
     here (the task's own history and notices are for edits of the task). The task's team and
@@ -112,12 +144,13 @@ def _stamp_task(task_id) -> None:
     task_cache.invalidate_for_task(task)
 
 
-def _remove_file(stored, attachment_id) -> None:
+def _remove_file(stored, attachment_id, what: str = "delete_attachment") -> None:
     try:
         stored.delete(save=False)
     except Exception as file_err:  # noqa: BLE001 - see `delete_attachment`
         logger.warning(
-            "[delete_attachment] file cleanup failed for attachment_id=%s: %s",
+            "[%s] file cleanup failed for attachment_id=%s: %s",
+            what,
             attachment_id,
             type(file_err).__name__,
         )
