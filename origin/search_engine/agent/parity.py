@@ -21,8 +21,8 @@ from django.conf import settings
 #: The one flag the parity batch shares.
 PARITY_FLAG = "AGENT_PARITY_TOOLS"
 #: The flag of the batch's model-visible follow-ups (MIP-1589 field rules, MIP-1607 `account: "all"`, MIP-1590
-#: mention hardening). A SECOND flag, default OFF: `PARITY_FLAG` is on in production since 2026-11-15, so it can no
-#: longer protect a new model-visible change.
+#: mention hardening). A SECOND flag: `PARITY_FLAG` is on in production since 2026-11-15, so it could no longer protect a
+#: new model-visible change. Default ON since the 2026-11-15 flip too (`apis/settings.py`; env `false` is the rollback).
 FOLLOWUPS_FLAG = "AGENT_PARITY_FOLLOWUPS"
 
 
