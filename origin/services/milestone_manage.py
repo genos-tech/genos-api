@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from django.db import transaction
 from django.db.models import BigIntegerField, Case, Q, Value, When
 from django.utils import timezone
 
@@ -67,6 +68,98 @@ PATCHABLE_FIELDS = (
     "tags",
     "links",
 )
+
+
+def lock_live_milestone(
+    milestone: MilestoneMaster, *, project_id: Any = UNSET
+) -> MilestoneMaster | None:
+    """Lock the milestone's row and re-read it, or None when it is not there to write any more.
+
+    For a write that saves the whole row (`MilestoneView.patch`, the assignee endpoints, the tool's
+    update). The copy such a write holds was read a moment before its transaction, and in that gap
+    a second tab can convert the milestone to a task (`task_milestone_conversion`), delete it or
+    move it to another project: a full save would write the stale copy back over that, and
+    `sync_backing_task` would turn the task it became into a milestone row again (MIP-1583).
+
+    The row is locked for the rest of the caller's transaction, so a convert, a delete or a move
+    waits for it (and finds what it wrote). `milestone` itself is refreshed, so the caller goes on
+    with the stored values. None means "answer as a missing one would": the row is deleted or
+    converted, or, when `project_id` is given, has left that project. The caller must be inside
+    `transaction.atomic()`.
+    """
+    live = MilestoneMaster.objects.select_for_update().filter(pk=milestone.pk, is_deleted=False)
+    if project_id is not UNSET:
+        live = live.filter(project_id=project_id)
+    if not live.exists():
+        return None
+    milestone.refresh_from_db()
+    return milestone
+
+
+def move_assignee_problem(
+    milestone: MilestoneMaster, destination: ProjectMaster, *, assignee_ids: Any = UNSET
+) -> str | None:
+    """Why `milestone` may not move to `destination` because of who is assigned, or None (MIP-1583).
+
+    An assignee reads the task they hold (`can_access_task`), so a task that moves to a project
+    its assignee is not on, and whose team they are not on, would stay open to them. The new
+    people a save names are already judged against the destination (`refuse_new_milestone_people`);
+    this judges the ones ALREADY there, by the same bar an assignment there uses
+    (`may_name_person`: a member of the destination project or of its team), so a move inside
+    one team, the common case, is not refused. A refusal is the safe answer and not a silent
+    unassignment: the caller reassigns and moves again.
+
+    Judged: the milestone's assignees as they will be after this save (`assignee_ids` when the save
+    sends them, else the stored ones), and the assignee of every task that moves with it that a
+    person still sees (a deleted one moves too, silently, and is not judged). The reporter is not.
+    The caller must have checked that the milestone is going to another project.
+    """
+    from origin.services.task_collaborators import may_name_person  # noqa: PLC0415
+
+    if assignee_ids is UNSET:
+        milestone_people = {
+            str(uid)
+            for uid in MilestoneAssignees.objects.filter(milestone=milestone).values_list(
+                "user_id", flat=True
+            )
+        }
+    else:
+        milestone_people = {str(uid) for uid in assignee_ids or [] if uid not in (None, "")}
+    members = milestone_subtree_task_ids(milestone) - {milestone.task_id}
+    task_people: dict[str, list[str]] = {}
+    for task in (
+        TaskMaster.objects.filter(task_id__in=members, is_deleted=False, assignee__isnull=False)
+        .exclude(status="Deleted")
+        .select_related("project")
+        .order_by("task_id")
+    ):
+        task_people.setdefault(str(task.assignee_id), []).append(
+            task.display_id or str(task.task_id)
+        )
+
+    verdicts: dict[str, bool] = {}
+    for person in milestone_people | set(task_people):
+        verdicts[person] = may_name_person(destination, person)
+    on_milestone = sorted(p for p in milestone_people if not verdicts[p])
+    on_tasks = sorted(
+        {ref for person, refs in task_people.items() if not verdicts[person] for ref in refs}
+    )
+    if not on_milestone and not on_tasks:
+        return None
+    parts = []
+    if on_milestone:
+        parts.append(f"{len(on_milestone)} of the milestone's assignees")
+    if on_tasks:
+        shown = ", ".join(on_tasks[:5]) + (
+            f" and {len(on_tasks) - 5} more" if len(on_tasks) > 5 else ""
+        )
+        parts.append(f"the assignee of {shown}")
+    return (
+        f"This milestone can't move to {destination.project_name}: {' and '.join(parts)} "
+        "is not on that project or its team, so they would keep opening tasks that are no longer "
+        "theirs to see. Reassign them first (or send `assignee_ids` with the move). "
+        "Nothing was changed."
+    )
 
 
 def update_milestone(
@@ -294,6 +387,27 @@ def reroot_detached_tasks(backing_task_id: int, milestone_id: int) -> int:
 
 def delete_milestone(milestone: MilestoneMaster) -> None:
     """Soft-delete a milestone the way `MilestoneView.delete` does."""
+    # Locked and re-read first: the copy the caller holds is a moment old, and a milestone
+    # converted to a task in that moment has no backing row any more. Deleting by the stale
+    # `task_id` would soft-delete the task it became (MIP-1583). A retired milestone's row stays
+    # deletable (its `task_id` is None), as it always was.
+    with transaction.atomic():
+        MilestoneMaster.objects.select_for_update().filter(pk=milestone.pk).exists()
+        milestone.refresh_from_db()
+        _delete_locked(milestone)
+    # Backing task got soft-deleted + every child detached → next
+    # project-tasks read needs a fresh DB pull.
+    invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+    # Best-effort: drop the milestone's chunks (and its soft-deleted
+    # backing task's) from OpenSearch — chunkers skip `is_deleted`
+    # rows, so nothing else cleans these up until the orphan sweep.
+    purge_milestone(milestone.milestone_id)
+    if milestone.task_id is not None:
+        purge_task(milestone.task_id)
+
+
+def _delete_locked(milestone: MilestoneMaster) -> None:
+    """The writes of `delete_milestone`, under the row lock."""
     milestone.is_deleted = True
     milestone.save(update_fields=["is_deleted", "ts_updated_at"])
     # Soft-delete the backing task too so the milestone disappears
@@ -329,15 +443,6 @@ def delete_milestone(milestone: MilestoneMaster) -> None:
             cascade="milestone_delete",
             parent_task_id=None,
         )
-    # Backing task got soft-deleted + every child detached → next
-    # project-tasks read needs a fresh DB pull.
-    invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
-    # Best-effort: drop the milestone's chunks (and its soft-deleted
-    # backing task's) from OpenSearch — chunkers skip `is_deleted`
-    # rows, so nothing else cleans these up until the orphan sweep.
-    purge_milestone(milestone.milestone_id)
-    if milestone.task_id is not None:
-        purge_task(milestone.task_id)
 
 
 # --------------------------------------------------------------------------

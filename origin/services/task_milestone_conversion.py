@@ -50,6 +50,19 @@ class ConversionRefused(Exception):
         self.status = status
 
 
+def _refresh_card(*, task_id=None, milestone_id=None) -> None:
+    """The row's card in the project chat now shows what it was: rewrite it as what it is (MIP-1583).
+
+    The browser rewrites a card after an edit it makes (`PATCH card-message`) but never calls it
+    after a conversion, so the card of the app's own conversion stayed the task's (or the
+    milestone's) while the agent's, a write with no browser, was refreshed by the server. The
+    conversion is the server's whoever asked (`derived`), so both paths refresh. Nothing is
+    written when the card already says it, and none is made when there is none."""
+    from origin.services.task_card_post import schedule_refresh  # noqa: PLC0415
+
+    schedule_refresh(task_id=task_id, milestone_id=milestone_id, derived=True)
+
+
 def convert_task_to_milestone(task_id: int) -> MilestoneMaster:
     """Make the root task `task_id` a milestone. Returns the new milestone.
 
@@ -131,6 +144,7 @@ def convert_task_to_milestone(task_id: int) -> MilestoneMaster:
             )
 
     invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
+    _refresh_card(milestone_id=milestone.milestone_id)
     return milestone
 
 
@@ -188,7 +202,10 @@ def convert_milestone_to_task(milestone_id: int) -> tuple[TaskMaster, MilestoneM
         # The tasks that cite the milestone leave it, with its sprint; their place
         # in the tree is not touched. (The row itself is done above.)
         staying = TaskMaster.objects.filter(milestone=milestone).exclude(task_id=row.task_id)
-        kept = staying.count()
+        # Every row lets go of the milestone, a deleted one too (it is not left citing a retired
+        # milestone), but the count is what a person still sees under the task: a task deleted in
+        # the app (`status` "Deleted") or a soft-deleted row is not "kept" (MIP-1583).
+        kept = staying.filter(is_deleted=False).exclude(status="Deleted").count()
         update_tasks_recorded(staying, cascade="milestone_to_task", milestone=None, sprint=None)
 
         # While the row is still linked, so removing each assignee is in its history.
@@ -204,4 +221,5 @@ def convert_milestone_to_task(milestone_id: int) -> tuple[TaskMaster, MilestoneM
     # the task it now is (its change time moved, so the next ingestion pass refreshes it).
     purge_milestone(milestone.milestone_id)
     invalidate_project_tasks_cache(row.team_id, row.project_id)
+    _refresh_card(task_id=row.task_id)
     return row, milestone, kept
