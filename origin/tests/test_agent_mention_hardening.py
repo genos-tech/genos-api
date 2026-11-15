@@ -639,13 +639,17 @@ class DecideReadsMentionedObjectsAgainTests(HardeningBase):
         self.assertNotIn("USER-PROVIDED REFERENCES", self.second_prompt())
 
     def test_the_task_the_conversation_is_about_gets_no_second_bullet(self):
+        # A second mention keeps a references block (and so the rebuild at `/decide/`) in play.
         task = self.make_task()
         run_id, token = self.pause(
-            [self.task_ref(task.task_id)], task_context={"task_id": task.task_id}
+            [self.task_ref(task.task_id), self.project_ref(self.project)],
+            task_context={"task_id": task.task_id},
         )
         self.assertNotIn(f"→ task:{task.task_id}", self.inputs[0])
+        self.assertIs(self.row(run_id).resume_context["mentions_live"], True)
         done = self.finish(run_id, token)
         self.assertNotIn(f"→ task:{task.task_id}", self.second_prompt())
+        self.assertIn(f"→ project:{self.project.project_id}", self.second_prompt())
         self.assertNotIn("dropped_references", done)
 
     def test_a_note_renamed_while_the_card_waited_is_read_as_it_is_now_with_the_titles_on(self):
