@@ -41,6 +41,7 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
+from origin.search_engine.agent.tools.field_limits import TASK_TITLE_MAX, check_text_length
 from origin.search_engine.agent.tools.task_body_edit import (
     append_blocks,
     body_hash,
@@ -200,6 +201,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         new_title = (args.get("title") or "").strip()
         if not new_title:
             raise ToolError("`title` must be non-empty if provided.")
+        check_text_length(new_title, "title", TASK_TITLE_MAX, body="content_text")
         if new_title != task.title:
             task.title = new_title
             update_fields.append("title")
