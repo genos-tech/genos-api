@@ -2188,6 +2188,31 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
     ),
+    McpTool(
+        name="save_conversation_summary",
+        registry_name="save_conversation_summary",
+        description=(
+            "Save a SHORT summary of THIS conversation as a private note in the member's "
+            "My Notes, in a folder called 'AI chat summaries' that this tool finds or "
+            "makes. ASK FIRST and only when the member said yes: never save on your own and "
+            "never every turn. Offer once, at a natural end (they say they are done or thank "
+            "you, a decision is made, a task is finished) or when they ask you to save it, "
+            "with 'Save a short summary of this to Genos?'. Do not offer when the "
+            "conversation is not about work. Write 1 to 5 sentences in `summary` plus "
+            "`items` of kind done, next, waiting or decision; name a task by its display id "
+            "only when a tool result gave it to you, never a guessed one. Never a "
+            "transcript, a quote of the conversation, or anything from their calendar. The "
+            "note is private to them (shared only if they share it), is exported and "
+            "deleted with their other notes, and can be searched by them only. "
+            "`conversation_ref` is a short label you make up the first time and reuse for "
+            "this conversation: saving again with the same label within 12 hours REPLACES "
+            "the earlier note instead of adding a second one, so update the summary rather "
+            "than saving twice. If the member would rather have it on one task, ask, then "
+            "use `add_comment` instead: a comment is visible to everyone who can see the "
+            "task, which this note is not. Requires a write-scoped API key."
+        ),
+        write=True,
+    ),
 )
 
 BY_NAME = {t.name: t for t in CATALOG}
@@ -2454,6 +2479,9 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "manage_project_labels",
         "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
+        # Adds a private note; a repeat with the same ref replaces the note the same author's
+        # earlier call made (the old text stays in its version history).
+        "save_conversation_summary",
     }
 )
 

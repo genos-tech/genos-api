@@ -1,7 +1,9 @@
-"""The secretary's MCP prompts (MIP-1073): `catch_me_up` and `plan_my_day`.
+"""The secretary's MCP prompts: `catch_me_up` and `plan_my_day` (MIP-1073), `save_summary` (MIP-1622).
 
 An MCP prompt is a canned instruction the CLIENT shows the member as a command: in
 Claude Code they appear as `/mcp__genos__catch_me_up` and `/mcp__genos__plan_my_day`.
+`save_summary` is the member's own way to keep a short summary of the conversation they are in:
+they decide when, so it is the one answer to "not every turn" that does not rely on the model.
 The member types one, the client asks us for the prompt, and the model it runs gets our
 text as its first message. Genos pays nothing for the thinking: the model on the other end
 does it, with `get_my_briefing` and the workspace tools as its hands.
@@ -150,6 +152,41 @@ def _plan_my_day(args: dict[str, str], tools: frozenset[str]) -> str:
     return "\n".join(lines)
 
 
+def _save_summary(args: dict[str, str], tools: frozenset[str]) -> str:
+    about = args.get("topic")
+    lines = ["Save a short summary of this conversation to Genos."]
+    if about:
+        lines.append(
+            f"The user said what it is about, in their words: {json.dumps(about)}. Use it as "
+            "the topic."
+        )
+    lines += [
+        "",
+        "1. The user asked for this, so do not ask them again. Look at THIS conversation only.",
+        "2. Write 1 to 5 sentences: what it was about and where it ended. Then, only if there "
+        "are any, short items of kind done, next, waiting or decision, at most 12. Name a task "
+        "by its display id only when a tool result in this conversation gave it to you; never "
+        "guess one.",
+        "3. Never a transcript or a quote of the conversation, and nothing from their calendar. "
+        "If the conversation was not about work, say so in one line and save nothing.",
+    ]
+    if "save_conversation_summary" in tools:
+        lines += [
+            "4. Call `save_conversation_summary` once, with a short `conversation_ref` that you "
+            "make up for this conversation. If you already saved a summary of this conversation, "
+            "call it again with the SAME `conversation_ref`: it replaces the earlier note "
+            "instead of adding a second one.",
+            "5. Say in one line where it is: a private note in My Notes, in the folder "
+            '"AI chat summaries".',
+        ]
+    else:
+        lines += [
+            "4. This connection cannot save, so write the summary here in the chat instead, "
+            "and say it was not saved to Genos.",
+        ]
+    return "\n".join(lines)
+
+
 PROMPTS: tuple[McpPrompt, ...] = (
     McpPrompt(
         name="catch_me_up",
@@ -181,6 +218,22 @@ PROMPTS: tuple[McpPrompt, ...] = (
             ),
         ),
         build=_plan_my_day,
+    ),
+    McpPrompt(
+        name="save_summary",
+        title="Save a summary",
+        description=(
+            "Keep a short summary of this conversation in Genos, as a private note in your "
+            "My Notes: a few sentences and what is done, next, waited on or decided. Never "
+            "the conversation itself."
+        ),
+        arguments=(
+            PromptArgument(
+                name="topic",
+                description="Optional: what the conversation is about, in your own words.",
+            ),
+        ),
+        build=_save_summary,
     ),
 )
 

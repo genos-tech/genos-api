@@ -22,6 +22,7 @@ from origin.views.public.mcp.secretary.get_my_memory import GET_MY_MEMORY
 from origin.views.public.mcp.secretary.get_timeline import GET_TIMELINE
 from origin.views.public.mcp.secretary.list_my_schedules import LIST_MY_SCHEDULES
 from origin.views.public.mcp.secretary.run_my_schedule import RUN_MY_SCHEDULE
+from origin.views.public.mcp.secretary.save_conversation_summary import SAVE_CONVERSATION_SUMMARY
 from origin.views.public.mcp.secretary.set_item_importance import SET_ITEM_IMPORTANCE
 from origin.views.public.mcp.secretary.tune_my_importance import TUNE_MY_IMPORTANCE
 from origin.views.public.mcp.secretary.update_my_schedule import UPDATE_MY_SCHEDULE
@@ -36,8 +37,10 @@ SCHEDULE_TOOLS = (
 IMPORTANCE_TOOLS = (GET_MY_IMPORTANCE, SET_ITEM_IMPORTANCE, TUNE_MY_IMPORTANCE)
 # What Genos remembers (MIP-1088): see it, and delete it.
 MEMORY_TOOLS = (GET_MY_MEMORY, FORGET_MY_MEMORY)
+# A short summary of an AI-app conversation, kept as a private note (MIP-1622).
 SECRETARY_TOOLS = (
     GET_MY_BRIEFING,
+    SAVE_CONVERSATION_SUMMARY,
     GET_ITEM_LINE,
     GET_TIMELINE,
     *IMPORTANCE_TOOLS,

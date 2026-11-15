@@ -495,6 +495,8 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "update_my_schedule",
         "delete_my_schedule",
         "run_my_schedule",
+        # The member said yes in the chat, and it is a private note: no feed row (MIP-1622).
+        "save_conversation_summary",
     }
 
     def test_every_write_tool_is_a_rule_or_deliberately_silent(self):

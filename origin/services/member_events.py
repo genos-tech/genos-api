@@ -209,6 +209,9 @@ NO_SINGLE_ITEM = frozenset(
         "update_my_schedule",
         "delete_my_schedule",
         "run_my_schedule",
+        # A summary the member said yes to saving as a private note (MIP-1622): it creates a note
+        # whose id only the result has, like `create_note`.
+        "save_conversation_summary",
     }
 )
 
