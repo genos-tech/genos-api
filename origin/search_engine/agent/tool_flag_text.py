@@ -80,6 +80,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # and a delete have found their event first.
     ("create_calendar_event", PARITY_FLAG, _create_calendar_event.DESCRIPTION_ADDITION),
     ("delete_calendar_event", PARITY_FLAG, _delete_calendar_event.DESCRIPTION_ADDITION),
+    # MIP-1607 (AGENT_PARITY_FOLLOWUPS): `account: "all"` reads every account in one call. After the sentence above.
+    ("list_calendar_events", FOLLOWUPS_FLAG, _list_calendar_events.FOLLOWUPS_DESCRIPTION_ADDITION),
     # MIP-1589 (the follow-ups flag): a project's required fields and the names of its templates.
     ("list_project_tags", FOLLOWUPS_FLAG, _list_project_tags.DESCRIPTION_ADDITION),
 )

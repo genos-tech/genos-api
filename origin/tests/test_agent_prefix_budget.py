@@ -85,10 +85,13 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # call: +4.2% of the prompt, +6% per ask in the grouped paid run of 2026-11-15, gemini-3.6-flash). Nothing
 # needs raising: the constant stays 146,000 (131 characters left), and `ALL_ON_BUDGET_CHARS` (147,500; 147,324
 # with a Long member's content block) holds too. The next parity task raises both with its own measurement.
-# MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`, DEFAULT OFF): `list_project_tags` gains one description sentence (+146:
-# `task_field_rules` and `task_templates`; 146,015 with the flag on over the production flags). Production sends
-# nothing of it (the flag is off: still 145,869), but the all-on arm and the day the flag is flipped must fit, and
-# 131 characters were left, so the constant goes up to the next 500 over the measured size: 146,500.
+# MIP-1607 (`AGENT_PARITY_FOLLOWUPS`, default OFF, `list_calendar_events` takes `account: "all"`): +157 characters
+# of static text only while the new flag is on (one sentence on the events read and the `account` property
+# worded for "all"): 146,026 with every flag on, so the constant is raised to 146,500 (next 500). What production
+# sends today (the flag is off) is still the 145,869 above, byte for byte (the fingerprint golden); the
+# measure of the flag-on prefix is `test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget`.
+# MIP-1589 (same flag): `list_project_tags` gains one more description sentence (+146). Both together: 146,172 with the
+# flag on over the production flags, still inside the 146,500 above.
 BUDGET_CHARS = 146_500
 
 
@@ -131,11 +134,17 @@ class PrefixBudgetTests(SimpleTestCase):
         self.assertLessEqual(total, BUDGET_CHARS)
 
     def test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget(self) -> None:
-        # Default off: production does not pay this yet; the day it is flipped it must already fit.
+        # The follow-ups flag (MIP-1607 and the other parity follow-ups) is OFF in production: the day it is
+        # flipped it must already fit, or the flip is also a budget decision nobody made.
         from apis import settings as production  # noqa: PLC0415
 
         with mock.patch.dict(
-            settings.SEARCH_ENGINE, {**production.SEARCH_ENGINE, "AGENT_PARITY_FOLLOWUPS": True}
+            settings.SEARCH_ENGINE,
+            {
+                **production.SEARCH_ENGINE,
+                "AGENT_PARITY_TOOLS": True,
+                "AGENT_PARITY_FOLLOWUPS": True,
+            },
         ):
             total = _declared_chars() + len(agent_system_prompt())
         self.assertLessEqual(total, BUDGET_CHARS)
