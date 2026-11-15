@@ -276,7 +276,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         start_date = parse_iso_date(args["start_date"], "`start_date`")
     collaborator_ids: list[str] = []
     if args.get("collaborators") is not None:
-        collaborator_ids = plan_collaborators(args["collaborators"], project, set())
+        # The task's assignee (a project member, checked above) and its reporter (the caller)
+        # can open it; so can anyone else on the project, and nobody else.
+        collaborator_ids = plan_collaborators(
+            args["collaborators"],
+            project,
+            set(),
+            readers=(assignee.id if assignee is not None else None, ctx.user_id),
+        )
     custom_values: dict[str, Any] = {}
     if args.get("custom_fields") is not None:
         custom_values = plan_custom_fields(

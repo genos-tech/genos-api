@@ -23,7 +23,7 @@ from origin.views.public.mcp.tools import CATALOG
 # which is in `CATALOG` but published only while its flag is on: the number a client sees today did
 # not move, and `FLAGGED_WRITES` is the one that will be added to it on the flip. MIP-1059 added one
 # flag-gated READ (`get_calendar_event`, the same flag): `FLAGGED_READS`.
-PUBLISHED = 97
+PUBLISHED = 99
 FLAGGED = 2
 FLAGGED_WRITES = 1
 FLAGGED_READS = 1
@@ -32,9 +32,9 @@ FROM_REGISTRY = (
 )
 FROM_REGISTRY_READS = 47
 FROM_REGISTRY_WRITES = 36
-MCP_ONLY = 14
+MCP_ONLY = 16
 MCP_ONLY_READS = 7
-MCP_ONLY_WRITES = 7
+MCP_ONLY_WRITES = 9
 REGISTRY_SIZE = 88
 # Registry tools with no MCP tool at all: 4 reads, and `delete_project` (a write that is in the app only).
 LEFT_OUT = {
