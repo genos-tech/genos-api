@@ -795,7 +795,7 @@ class ParticipantRowOfAHolder(Cards):
             thread_root=card,
             is_thread_reply=True,
         )
-        Activity.objects.create(
+        row = Activity.objects.create(
             team=self.team,
             recipient=self.assignee,
             actor=self.user,
@@ -804,6 +804,10 @@ class ParticipantRowOfAHolder(Cards):
             message=reply,
             meta={},
         )
+        from origin.services.activity_minimal_card import task_links
+
+        # nor is it given a link into the task in the push or the email
+        self.assertEqual(task_links([row]), {})
 
         got = self.feed(self.assignee)
 
