@@ -75,9 +75,9 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # the nudge; no regression on t905 / section W). Raised to 146,000, the measurement rounded up to the next 500:
 # 352 characters are left, so the next parity task raises it with its own measurement.
 # The calendar account hint (a follow-up to MIP-1059, the same flag): one sentence on `create_calendar_event`
-# (217 characters: a member who names a calendar or an account gets `list_calendars` first, a write
-# proposes before it reads), +217, 145,865 measured with the flag on over the shipped flags. The constant
-# stays: 135 characters are left, so the next parity task raises it with its own measurement. With the flag
+# (221 characters: a member who names a specific calendar or account gets `list_calendars` first, a write
+# proposes before it reads), +221, 145,869 measured with the flag on over the shipped flags. The constant
+# stays: 131 characters are left, so the next parity task raises it with its own measurement. With the flag
 # off production still sends 139,147.
 BUDGET_CHARS = 146_000
 

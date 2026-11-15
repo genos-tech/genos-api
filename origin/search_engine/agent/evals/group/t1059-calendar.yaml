@@ -225,3 +225,43 @@
       args_match:
         summary: "朝会"
     tools_used_excludes: [list_calendars]
+
+- id: t1059.one-account-named.en
+  lang: en
+  tags: [eval-group, t1059, parity]
+  fixture: sequence
+  viewer: c
+  seed: [calendar_one_account]
+  note: "Negative (arm0 and parity): a member with ONE Google account who NAMES it ('my work calendar'). With the account hint the model may look the account up first (one extra call is accepted: it cannot know the count before it looks), but the proposal must still land on that one account: the card's `account_label` is the work address and `account_count` is 1. No invented id, no refusal, no question back. `account` is neither required nor forbidden (the only account's id is a correct value)."
+  query: 'Add "Standup" to my work Google calendar on 2027-03-12 from 09:00 to 09:15, Asia/Tokyo time.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_calendar_event]
+    pending_write:
+      tool: create_calendar_event
+      args_present: [summary, start_iso, end_iso]
+      args_match:
+        summary: "Standup"
+        start_iso: "2027-03-12T09:00"
+        account_label: "eval.work@genos-eval.example"
+        account_count: "^1$"
+
+- id: t1059.one-account-named.ja
+  lang: ja
+  tags: [eval-group, t1059, parity]
+  fixture: sequence
+  viewer: ja
+  seed: [calendar_one_account]
+  note: "Negative (arm0 and parity): a member with ONE Google account who NAMES it ('my work calendar'). With the account hint the model may look the account up first (one extra call is accepted: it cannot know the count before it looks), but the proposal must still land on that one account: the card's `account_label` is the work address and `account_count` is 1. No invented id, no refusal, no question back. `account` is neither required nor forbidden (the only account's id is a correct value)."
+  query: '仕事用のGoogleカレンダーに、2027-03-12の09:00から09:15まで「朝会」を追加してください（Asia/Tokyoの時間です）。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_calendar_event]
+    pending_write:
+      tool: create_calendar_event
+      args_present: [summary, start_iso, end_iso]
+      args_match:
+        summary: "朝会"
+        start_iso: "2027-03-12T09:00"
+        account_label: "eval.work@genos-eval.example"
+        account_count: "^1$"

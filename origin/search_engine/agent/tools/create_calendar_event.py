@@ -54,8 +54,8 @@ __all__ = ["CREATE_CALENDAR_EVENT", "DESCRIPTION_ADDITION", "PARITY_PROPERTIES"]
 #: Conditional on the member NAMING one, so a member with one account, who names none, is sent nowhere. The
 #: wording is the same for every language on purpose, and short: the prefix has little headroom.
 DESCRIPTION_ADDITION = (
-    " When the member names a calendar or an account (personal, work, an address; any language), "
-    "call `list_calendars` first and pass that `account`: the default is the first one connected. "
+    " When the member names a specific calendar or account (personal, work, an address; any language), "
+    "call `list_calendars` first and pass that `account`, or the event goes to the default one. "
     "Names none: leave `account` out."
 )
 

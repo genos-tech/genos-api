@@ -219,7 +219,7 @@ class FlagOffTests(CalendarMcpBase):
         for name, tool in self.listed().items():
             with self.subTest(tool=name):
                 self.assertNotIn(CREATE_ACCOUNT_HINT, tool["description"])
-                self.assertNotIn("names a calendar or an account", tool["description"])
+                self.assertNotIn("names a specific calendar or account", tool["description"])
 
     def test_an_account_argument_is_refused_as_unknown_so_nothing_is_sent(self):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)

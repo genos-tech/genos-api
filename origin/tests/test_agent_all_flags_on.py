@@ -49,8 +49,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-1533: +209 more (the plan tool's description sentence and `content_markdown` no longer "Optional";
 # 145,648 all-on, 147,103 with a Long member's block; measured in the paid run of 2026-11-15), so 147,500:
 # 397 characters left.
-# The calendar account hint (follow-up to MIP-1059): +217 more (one sentence on `create_calendar_event`;
-# 145,865 all-on, 147,320 with a Long member's block): 180 characters left, the constant stays.
+# The calendar account hint (follow-up to MIP-1059): +221 more (one sentence on `create_calendar_event`;
+# 145,869 all-on, 147,324 with a Long member's block): 176 characters left, the constant stays.
 ALL_ON_BUDGET_CHARS = 147_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the

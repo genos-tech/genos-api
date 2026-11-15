@@ -529,8 +529,8 @@ class FlagOffTests(CalendarBase):
         for name in CALENDAR_TOOLS:
             with self.subTest(tool=name):
                 self.assertNotIn(CREATE_ACCOUNT_HINT, declared[name])
-                self.assertNotIn("names a calendar or an account", declared[name])
-                self.assertNotIn("names a calendar or an account", REGISTRY[name].description)
+                self.assertNotIn("names a specific calendar or account", declared[name])
+                self.assertNotIn("names a specific calendar or account", REGISTRY[name].description)
 
     def test_a_read_that_names_an_account_reads_the_default_as_before(self):
         out = LIST_CALENDAR_EVENTS.run({"account": str(self.home.id)}, self.ctx)
@@ -633,10 +633,10 @@ class DeclarationTests(CalendarBase):
             REGISTRY["create_calendar_event"].description + CREATE_ACCOUNT_HINT,
         )
         for needle in (
-            "names a calendar or an account",
+            "names a specific calendar or account",
             "any language",
             "call `list_calendars` first",
-            "pass that `account`",
+            "pass that `account`, or the event goes to the default one",
             "Names none: leave `account` out",
         ):
             self.assertIn(needle, CREATE_ACCOUNT_HINT)
@@ -651,7 +651,7 @@ class DeclarationTests(CalendarBase):
             if name == "create_calendar_event":
                 continue
             with self.subTest(tool=name):
-                self.assertNotIn("names a calendar or an account", declared[name])
+                self.assertNotIn("names a specific calendar or account", declared[name])
         # `list_calendars` is still told it may be skipped for a request that names nothing: the hint adds a
         # call only when the member names an account, never for everyone.
         self.assertIn("you can skip this", declared["list_calendars"])
