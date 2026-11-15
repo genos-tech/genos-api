@@ -42,6 +42,7 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.serializers.chat.unified_serializers import ActivitySerializer
+from origin.services.activity_minimal_card import activities_wire
 from origin.services.activity_surface_access import (
     COVERED_SURFACES,
     unreadable_surface_activity_ids,
@@ -541,7 +542,7 @@ class ActivitySurfaceView(AuthenticatedAPIView):
 
         schedule_push_for_activities(rows)
         return Response(
-            {"activities": ActivitySerializer(rows, many=True).data},
+            {"activities": activities_wire(rows)},
             status=status.HTTP_201_CREATED,
         )
 
@@ -610,6 +611,6 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
 
         schedule_push_for_activities(rows)
         return Response(
-            {"activities": ActivitySerializer(rows, many=True).data},
+            {"activities": activities_wire(rows)},
             status=status.HTTP_201_CREATED,
         )

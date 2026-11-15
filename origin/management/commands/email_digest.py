@@ -176,6 +176,7 @@ class Command(CronCommand):
         coalesced notification email already delivered."""
         # Lazy import: email_enqueue imports webpush_dispatch; keep this
         # command importable without dragging the push stack at load time.
+        from origin.services.activity_minimal_card import minimal_card_ids_failing_closed
         from origin.services.email_enqueue import _email_spec
 
         window_start = last or (now - _FIRST_WINDOW)
@@ -216,9 +217,11 @@ class Command(CronCommand):
         acts = [a for a in acts if a.id not in emailed_acts]
         items = [i for i in items if i.item_id not in emailed_items]
 
+        # A mention of a task the member cannot open is a minimal line, as in the push.
+        minimal = minimal_card_ids_failing_closed(acts)
         entries = []
         for act in acts:
-            spec = _email_spec(act)
+            spec = _email_spec(act, minimal=act.id in minimal)
             if spec is None:
                 continue
             entries.append({"title": spec["title"], "url": _absolute(spec["url"])})

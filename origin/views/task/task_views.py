@@ -22,9 +22,11 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
-from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
 from origin.services import realtime_push, task_ancestry, task_comment_reactions, unified_writer
+from origin.services.activity_minimal_card import (
+    activities_wire as activities_wire_for_recipients,
+)
 from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
@@ -2505,8 +2507,9 @@ class TaskCommentsView(AuthenticatedAPIView):
             # task_comment handler can broadcast `activity.created`
             # (mirrors the message-send proxy contract).
             fanout = fan_out_task_comment(comment_obj)
+            # A recipient who cannot open the task is shown the minimal card (MIP-1593).
             activities_wire = (
-                ActivitySerializer(fanout.activities, many=True).data if fanout.activities else []
+                activities_wire_for_recipients(fanout.activities) if fanout.activities else []
             )
             comment_mentioned_ids = fanout.mentioned_user_ids
             # A task comment IS delivered to a non-project-member, and
