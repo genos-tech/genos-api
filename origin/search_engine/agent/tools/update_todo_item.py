@@ -27,6 +27,11 @@ from django.db import transaction
 from origin.models.chat.todo_models import ToDoCategory
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size
+from origin.search_engine.agent.tools.field_limits import (
+    TODO_CATEGORY_MAX,
+    TODO_TITLE_MAX,
+    check_text_length,
+)
 from origin.search_engine.agent.tools.todo_args import (
     NOTES_TEXT_DESCRIPTION,
     REMIND_AT_SCHEMA,
@@ -53,6 +58,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         new_title = (args["title"] or "").strip()
         if not new_title:
             raise ToolError("`title`, if provided, must not be blank.")
+        check_text_length(new_title, "title", TODO_TITLE_MAX, body="notes_text")
 
     move_to = None
     if args.get("target_date") not in (None, ""):
@@ -63,6 +69,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             raise ToolError(str(exc)) from None
 
     category_name = (args.get("category") or "").strip()
+    check_text_length(category_name, "category", TODO_CATEGORY_MAX)
     category_change = bool(args.get("clear_category")) or bool(category_name)
     if category_change:
         # A sub-item's category is its parent's, as in the app.

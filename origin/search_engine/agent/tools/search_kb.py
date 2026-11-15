@@ -23,6 +23,10 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.field_limits import (
+    MCP_SEARCH_QUERY_MAX_CHARS,
+    check_text_length,
+)
 from origin.search_engine.agent.tools.search_window import SearchWindow, skip_rewrite
 from origin.search_engine.search import search
 
@@ -114,6 +118,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "matches": [],
             "__summary__": "No query supplied.",
         }
+    if ctx.surface == "mcp":
+        # A search is a sentence or two; a megabyte of text reached the embedding (MIP-1367).
+        # MCP only: the in-app agent's calls are unchanged.
+        check_text_length(
+            query,
+            "query",
+            MCP_SEARCH_QUERY_MAX_CHARS,
+            nothing="Nothing was searched.",
+        )
 
     entity_types = args.get("entity_types")
     if entity_types is not None and not isinstance(entity_types, list):

@@ -48,6 +48,7 @@ from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.agent.tools.field_limits import NOTE_TITLE_MAX, check_text_length
 from origin.search_engine.agent.tools.note_targets import (
     chat_note_parent_context,
     normalize_note_type,
@@ -148,6 +149,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     title = (args.get("title") or "").strip()
     if not title:
         raise ToolError("`title` is required.")
+    check_text_length(
+        title, "title", NOTE_TITLE_MAX, nothing="Nothing was created.", body="content_text"
+    )
 
     content_text = (args.get("content_text") or "").strip()
     body = _wrap_blocknote(content_text, ctx)

@@ -216,8 +216,9 @@ class ActivityListView(AuthenticatedAPIView):
     page of the same sync and carries `[]`. The rule is the chat-membership one
     (`channel_scope.chat_member_q`, the rule `can_read_chat` applies, on a live chat): an
     `Activity.team` is its channel's team, so `can_read_chat`'s team scoping is always met.
-    One exception (MIP-1598, MIP-1599): a comment row, an @mention in a task comment or the
-    "X commented" row of a participant (`activity_minimal_card.COMMENT_ROW_Q`), is
+    One exception (MIP-1598, MIP-1599, MIP-1609): a comment row, an @mention in a task comment,
+    the "X commented" row of a participant or a reaction on the caller's comment
+    (`activity_minimal_card.COMMENT_ROW_Q`), is
     about the TASK, so for a task the caller can open (`can_access_task`'s rule) the row is kept
     though the project chat is not theirs (an assignee or reporter who is not on the project).
     Channel-less surface rows (task body, notes) are not chat rows and are unchanged.

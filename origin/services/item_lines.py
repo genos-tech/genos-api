@@ -101,6 +101,7 @@ from origin.models.chat.unified_models import (
     MessageReaction,
 )
 from origin.models.common.member_event_models import MemberEvent
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -300,16 +301,24 @@ class _Read:
 
 def readable_task_q(ctx: ToolContext, prefix: str = "") -> Q:
     """`LabelAccess.task_readable` as a filter: this team, not deleted, and the member is on the
-    project, the assignee or the reporter. `prefix` reaches the task from another model
-    (`"task__"`). It is a second statement of that rule, here so that a pool can be cut AFTER
-    the access filter (MIP-1195); a test pins the two equal over every way a task can be
-    readable or not."""
+    project, the project's owner (while on the project's team), the assignee or the reporter.
+    `prefix` reaches the task from another model (`"task__"`). It is a second statement of that
+    rule, here so that a pool can be cut AFTER the access filter (MIP-1195); a test pins the two
+    equal over every way a task can be readable or not."""
     me = str(ctx.user_id)
     projects = ProjectMembers.objects.filter(attendee_id=me).values("project_id")
+    # The owner has no member row, and counts only while on the project's team (a live member
+    # row, or the team's owner): `acl.active_project_owners` (MIP-1591, MIP-1609).
+    project_team = OuterRef(f"{prefix}project__team_id")
+    owner = Q(**{f"{prefix}project__owner_id": me}) & (
+        Exists(TeamMembers.objects.filter(team_id=project_team, attendee_id=me, is_deleted=False))
+        | Exists(TeamMaster.objects.filter(team_id=project_team, owner_id=me))
+    )
     return Q(**{f"{prefix}team_id": ctx.team_id, f"{prefix}is_deleted": False}) & (
         Q(**{f"{prefix}project_id__in": projects})
         | Q(**{f"{prefix}assignee_id": me})
         | Q(**{f"{prefix}reporter_id": me})
+        | owner
     )
 
 
