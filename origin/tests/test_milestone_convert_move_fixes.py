@@ -204,3 +204,60 @@ class StaleSaveTests(ToolBase):
                 if "FOR UPDATE" in q["sql"] and "origin_milestonemaster" in q["sql"]
             ]
             self.assertTrue(locked, f"{name} did not lock the milestone row")
+
+
+# --------------------------------------------------------------------------------------------
+# item 5: the project chat's card after the app's own conversion
+# --------------------------------------------------------------------------------------------
+
+
+class CardAfterConversionTests(ToolBase):
+    """The app rewrites a task's card itself after an edit, but not after a conversion (the
+    browser never calls `updateTaskCard` for it), so the chat kept the card of what the row
+    used to be. The server rewrites it, as it does for a write that has no browser."""
+
+    def card(self, task_id):
+        return Message.objects.get(task_id=task_id, is_thread_reply=False)
+
+    def test_a_task_converted_to_a_milestone_gets_a_milestone_card(self):
+        root = self.task("Plan the launch")
+        post_task_created_card(root, actor_id=str(self.owner.id))
+        before = self.card(root.task_id)
+        self.assertIsNone(before.edited_at)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post(
+                "/api/v2/task/convert-to-milestone/", {"task_id": root.task_id}, format="json"
+            )
+        self.assertEqual(res.status_code, 200, res.data)
+
+        card = self.card(root.task_id)
+        self.assertIsNotNone(card.edited_at, "the card was left as the task's")
+        milestone = MilestoneMaster.objects.get(task_id=root.task_id)
+        body, body_text, _ = _milestone_card_parts(milestone)
+        self.assertEqual((card.body, card.body_text), (body, body_text))
+        self.assertNotEqual(card.body, before.body)
+
+    def test_a_milestone_converted_to_a_task_gets_a_task_card(self):
+        m = self.roadmap_milestone()
+        post_milestone_created_card(m, actor_id=str(self.owner.id))
+        before = self.card(m.task_id)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post(TO_TASK, {"milestone_id": m.milestone_id}, format="json")
+        self.assertEqual(res.status_code, 200, res.data)
+
+        card = self.card(m.task_id)
+        self.assertIsNotNone(card.edited_at, "the card was left as the milestone's")
+        body, body_text, _ = _task_card_parts(TaskMaster.objects.get(task_id=m.task_id))
+        self.assertEqual((card.body, card.body_text), (body, body_text))
+        self.assertNotEqual(card.body, before.body)
+
+    def test_a_task_with_no_card_gets_none_made(self):
+        # A refresh rewrites a card that is there; it never makes one.
+        root = self.task("No card")
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                "/api/v2/task/convert-to-milestone/", {"task_id": root.task_id}, format="json"
+            )
+        self.assertFalse(Message.objects.filter(task_id=root.task_id).exists())
