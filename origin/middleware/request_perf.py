@@ -22,6 +22,9 @@ reaches Railway), the numbers that can:
   * `bytes`     the Content-Length header; `-` when there is none. A
                 streaming body is never read (and its time is not counted:
                 the line is written when the headers are ready).
+  * `tool`, `result_chars`  only on an MCP `tools/call` that ran a tool, appended after
+                `bytes`: the tool's name and the characters of its serialized text answer
+                (`views/public/mcp/result_log.py`, MIP-1367). Never an argument or a result.
   * `route`     the URL TEMPLATE (`api/v2/milestone/<int:milestone_id>/`),
                 `unresolved` when nothing matched. Never the path, the
                 query string, a header, a body or a user.
@@ -249,6 +252,16 @@ def _bytes(response) -> str:
     return length if length.isdigit() else "-"
 
 
+def _tool(request) -> str:
+    """` tool=<name> result_chars=<n>` for an MCP call that ran a tool, else nothing, so every
+    other line keeps its shape. `mcp_tool` is only ever set from a registered tool's name."""
+    name = getattr(request, "mcp_tool", None)
+    chars = getattr(request, "mcp_result_chars", None)
+    if not isinstance(name, str) or not isinstance(chars, int):
+        return ""
+    return f" tool={name} result_chars={chars}"
+
+
 class RequestPerfMiddleware:
     def __init__(self, get_response):
         if not getattr(settings, "REQUEST_PERF_LOG", True):
@@ -295,7 +308,7 @@ class RequestPerfMiddleware:
         try:
             log.info(
                 "perf.request method=%s route=%s status=%d wall_ms=%d cpu_ms=%d "
-                "db_n=%d db_ms=%d inflight=%d bytes=%s",
+                "db_n=%d db_ms=%d inflight=%d bytes=%s%s",
                 _method(request),
                 _route(request),
                 response.status_code,
@@ -305,6 +318,7 @@ class RequestPerfMiddleware:
                 round(span.stats.seconds * 1000),
                 span.inflight,
                 _bytes(response),
+                _tool(request),
             )
         except Exception:  # noqa: BLE001 — a log line must never fail a request
             pass
