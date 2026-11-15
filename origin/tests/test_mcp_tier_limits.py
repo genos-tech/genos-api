@@ -519,6 +519,14 @@ class TestSearchPerDay(LimitsBase):
         self.assertEqual(self.call_ok().status_code, 200)
         self.assertEqual(spy.call_count, 3)
 
+    def test_the_search_total_is_per_person_across_every_key(self):
+        self.stub()
+        self.rig(mcp_search_daily=2)
+        for raw in (self.raw, self._key(scope=SCOPE_READ)):
+            self.client.credentials(HTTP_AUTHORIZATION=f"ApiKey {raw}")
+            self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 200)
+        self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 429)
+
     def test_search_counts_one_per_call_for_the_search_limit_not_five(self):
         self.stub()
         self.rig(mcp_search_daily=5)
@@ -812,6 +820,26 @@ class TestPageSize(LimitsBase):
         self._call("list_projects", {})
         self.assertEqual(spy.call_args.args[1], {})
 
+    def test_shadow_never_gives_a_list_a_page_size(self):
+        spy = self.stub()
+        real = tools.input_schema
+
+        def with_limit(tool):
+            schema = real(tool)
+            return {**schema, "properties": {**schema.get("properties", {}), "limit": {}}}
+
+        self.rig(mcp_list_page_max=10)
+        with _env("shadow"), mock.patch.object(tools, "input_schema", side_effect=with_limit):
+            self._call("list_projects", {})
+        self.assertEqual(spy.call_args.args[1], {})
+
+    def test_a_boolean_is_not_a_page_size(self):
+        spy = self.stub()
+        self.rig(mcp_list_page_max=0)
+        self._call("list_tasks", {"limit": True})
+        spy.assert_called_once()
+        self.assertTrue(self._result(self._call("list_tasks", {"limit": 1}))["isError"])
+
     def test_the_plan_with_a_page_of_100_or_none_is_never_given_one(self):
         spy = self.stub()
         real = tools.input_schema
@@ -830,6 +858,20 @@ class TestPageSize(LimitsBase):
 # ---------------------------------------------------------------------------------------------
 # The failure policy
 # ---------------------------------------------------------------------------------------------
+
+
+class TestACallNothingLimitsCostsNothing(LimitsBase):
+    def test_a_plain_read_gets_no_limit_evaluation_at_all_in_prepare(self):
+        self.rig(mcp_list_page_max=5, mcp_bulk_max_tasks=1)
+        ctx = mock.Mock(user_id=str(self.user.id), team_id=str(self.team.team_id))
+        args = {"task_id": "WRD-7"}
+        with mock.patch.object(limit_gate, "_tool_would_refuse_first") as first:
+            with mock.patch.object(limits, "plan_for") as plan:
+                result = limit_gate.prepare("get_task", args, ctx, SCOPE_WRITE, False)
+        self.assertEqual(result, (args, None))
+        self.assertIs(result[0], args)
+        first.assert_not_called()
+        plan.assert_not_called()
 
 
 class TestFailurePolicy(LimitsBase):
@@ -1055,6 +1097,27 @@ class TestHistoryOnGetChatThread(McpChatBase):
         payload = self.read(thread_id=str(replies_root.id))
         self.assertEqual(len(payload["messages"]), 4)
 
+    def test_off_with_the_live_key_flipped_still_hides_nothing(self):
+        self.rig(mcp_apply_message_retention=True)
+        with _env(None):
+            self.assertEqual(len(self.read()["messages"]), 2)
+            self.assertIsNone(limits.history_window(str(self.user.id)))
+
+    def test_a_message_with_no_readable_time_is_kept_and_a_threads_has_more_is_kept(self):
+        from origin.views.public.mcp.history_window import hide_old_messages
+
+        self.rig(mcp_apply_message_retention=True)
+        old = {"ts": "2000-01-01T00:00:00+00:00", "text": "old"}
+        undated = {"text": "no time"}
+        payload = {
+            "messages": [old, undated, {"ts": "not a time", "text": "odd"}],
+            "has_more": True,
+            "thread_id": "t1",
+        }
+        out = hide_old_messages(payload, {}, {}, mock.Mock(user_id=str(self.user.id)))
+        self.assertEqual([m["text"] for m in out["messages"]], ["no time", "odd"])
+        self.assertTrue(out["has_more"])
+
     def test_off_returns_the_payload_it_was_given(self):
         from origin.views.public.mcp.history_window import hide_old_messages
 
@@ -1110,6 +1173,26 @@ class TestHistoryByArgument(LimitsBase):
         )  # one cutoff per day: cursors hold
         self._call("get_timeline", {"anchor_type": "task", "anchor_id": "WRD-7"})
         self.assertEqual(spy.call_args.args[1], {"anchor_type": "task", "anchor_id": "WRD-7"})
+
+    def test_a_task_timeline_is_never_windowed_whatever_its_dates(self):
+        spy = self.stub()
+        self.rig(mcp_apply_message_retention=True)
+        old = (timezone.now() - timedelta(days=900)).isoformat()
+        args = {"anchor_type": "task", "anchor_id": "WRD-7", "since": old, "until": old}
+        self._call("get_timeline", args)
+        self.assertEqual(spy.call_args.args[1], args)
+
+    def test_shadow_changes_no_timeline_argument(self):
+        spy = self.stub()
+        self.rig(mcp_apply_message_retention=True)
+        old = (timezone.now() - timedelta(days=500)).isoformat()
+        args = {"anchor_type": "thread", "anchor_id": "x", "since": old}
+        with _env("shadow"):
+            self._call("get_timeline", args)
+            self.assertEqual(spy.call_args.args[1], args)
+            args = {"anchor_type": "chat", "anchor_id": "x", "since": old, "until": old}
+            self._call("get_timeline", args)
+            self.assertEqual(spy.call_args.args[1], args)
 
     def test_a_chat_window_that_ends_before_the_history_is_refused_in_words(self):
         spy = self.stub()

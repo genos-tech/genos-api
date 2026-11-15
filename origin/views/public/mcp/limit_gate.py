@@ -280,6 +280,17 @@ def _history_arguments(tool, arguments, ctx):
     return {**arguments, "since": floor.isoformat()}, None
 
 
+def _could_be_limited(tool, arguments: dict[str, Any]) -> bool:
+    """Whether any tool limit has anything to say about this call. Most calls have none, and for
+    them nothing below runs: no plan lookup, no schema."""
+    return (
+        tool.name in BULK_TOOLS
+        or tool.name in PAGED_LIST_TOOLS
+        or tool.name in HISTORY_SINCE_TOOLS
+        or any(arg in arguments for arg in PAGE_ARGS)
+    )
+
+
 def prepare(
     tool_name: Any, arguments: dict[str, Any], ctx: ToolContext, scope: str, allow_destructive: bool
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -291,7 +302,7 @@ def prepare(
         return arguments, None
     try:
         tool = tools.BY_NAME.get(tool_name) if isinstance(tool_name, str) else None
-        if tool is None or not tools.published(tool):
+        if tool is None or not tools.published(tool) or not _could_be_limited(tool, arguments):
             return arguments, None
         if _tool_would_refuse_first(tool, arguments, scope, allow_destructive):
             return arguments, None
