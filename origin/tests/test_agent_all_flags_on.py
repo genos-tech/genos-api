@@ -135,6 +135,7 @@ class AllOnArmTests(SimpleTestCase):
             "AGENT_CONTENT_LENGTH",
             "AGENT_BODY_ON_USER_MODEL",
             "AGENT_PARITY_TOOLS",
+            "AGENT_PARITY_FOLLOWUPS",
         }
         self.assertLessEqual(expected, set(ALL_ON))
 
