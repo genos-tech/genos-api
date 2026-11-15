@@ -9,8 +9,8 @@ MIP-1567 stopped a collaborator who cannot open a task from being added or notif
   * the task-comment fan-out reached a prior commenter who left the project: the participants
     (assignee, collaborators, prior commenters) now pass `task_reader_ids`. A direct @mention is
     kept as it was: it reaches a teammate who is not on the project on purpose;
-  * `can_access_task` (REST) and `task_acl_user_ids` (search) are two rules: the exact
-    difference is pinned here.
+  * `can_access_task` (REST) and `task_acl_user_ids` (search) are two rules: what still
+    differs is pinned here (an assignee or reporter who left the team is on neither, MIP-1592).
 """
 
 import json
@@ -367,13 +367,18 @@ class CommentFanoutTests(Base):
 
 class TwoRulesTests(Base):
     """`can_access_task` (REST: open and edit) and `task_acl_user_ids` (search ACL, the agent's
-    tools) are two rules that differ in exactly two ways, both pinned here. The search rule is
-    never wider than the REST one; where it is narrower, that is on purpose:
+    tools) are two rules. An assignee or reporter who left the team is on neither since
+    MIP-1592 (`test_ex_member_task_access`); what still differs is pinned here, deliberately.
+    The search rule is never wider than the REST one for a task in a project; where it is
+    narrower, that is on purpose or a follow-up:
 
       * a project OWNER with no `ProjectMembers` row can open the task but is not on the search
-        ACL (the owner is not an indexed member);
-      * an assignee or reporter who LEFT THE TEAM can still open the task but is not on the search
-        ACL: a removed member stops finding what they were on (MIP-1371).
+        ACL (the owner is not an indexed member; api #880 / MIP-1591 puts them there);
+      * a project OWNER who LEFT THE TEAM can still open the task (the member row goes, `owner`
+        stays) and is not on the search ACL (MIP-1592 leaves this to a decision of its own);
+      * a task in NO PROJECT: search lists its assignee and reporter with no team test at all,
+        so an assignee who left the team is still on the search ACL while REST refuses them
+        (REST asks the task's own team). Search is wider here, the one place it is.
     """
 
     def acl(self, task=None):
@@ -390,7 +395,19 @@ class TwoRulesTests(Base):
     def test_they_agree_for_every_ordinary_person(self):
         self.assertEqual(self.rest(self.everyone()), self.acl())
 
-    def test_search_is_never_wider_than_rest(self):
+    def test_they_agree_for_an_assignee_who_left_the_team(self):
+        TeamMembers.objects.filter(attendee=self.assignee).update(is_deleted=True)
+        self.assertFalse(can_access_task(self.task.task_id, self.assignee.id))
+        self.assertNotIn(str(self.assignee.id), self.acl())
+        self.assertEqual(self.rest(self.everyone()), self.acl())
+        self.assertIn(str(self.reporter.id), self.acl())  # the other holder is unaffected
+
+    def test_they_agree_for_a_reporter_who_left_the_team(self):
+        TeamMembers.objects.filter(attendee=self.reporter).update(is_deleted=True)
+        self.assertEqual(self.rest(self.everyone()), self.acl())
+        self.assertNotIn(str(self.reporter.id), self.acl())
+
+    def test_search_is_never_wider_than_rest_in_a_project(self):
         ProjectMembers.objects.filter(attendee=self.user, project=self.project).delete()
         TeamMembers.objects.filter(attendee=self.assignee).update(is_deleted=True)
         people = self.everyone()
@@ -401,8 +418,18 @@ class TwoRulesTests(Base):
         self.assertTrue(can_access_task(self.task.task_id, self.user.id))
         self.assertNotIn(str(self.user.id), self.acl())
 
-    def test_an_assignee_who_left_the_team_is_the_second_difference(self):
+    def test_a_project_owner_who_left_the_team_is_the_second_difference(self):
+        ProjectMembers.objects.filter(attendee=self.user, project=self.project).delete()
+        TeamMembers.objects.filter(attendee=self.user).update(is_deleted=True)
+        self.assertTrue(can_access_task(self.task.task_id, self.user.id))
+        self.assertNotIn(str(self.user.id), self.acl())
+
+    def test_a_task_in_no_project_is_where_search_is_wider(self):
+        loose = TaskMaster.objects.create(
+            team=self.team, title="L", status="Open", assignee=self.assignee, reporter=self.reporter
+        )
         TeamMembers.objects.filter(attendee=self.assignee).update(is_deleted=True)
-        self.assertTrue(can_access_task(self.task.task_id, self.assignee.id))
-        self.assertNotIn(str(self.assignee.id), self.acl())
-        self.assertIn(str(self.reporter.id), self.acl())  # the other holder is unaffected
+        self.assertFalse(can_access_task(loose.task_id, self.assignee.id))
+        self.assertIn(str(self.assignee.id), self.acl(loose))
+        self.assertTrue(can_access_task(loose.task_id, self.reporter.id))
+        self.assertIn(str(self.reporter.id), self.acl(loose))

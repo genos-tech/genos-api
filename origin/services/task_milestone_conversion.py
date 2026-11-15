@@ -187,7 +187,9 @@ def convert_milestone_to_task(milestone_id: int) -> tuple[TaskMaster, MilestoneM
             # the task they now collaborate on (a milestone's assignee may be a teammate who
             # is not on the project, MIP-915): the others stay off, as a collaborator who
             # cannot read the task is told about it for nothing (MIP-1567).
-            readers = task_reader_ids(row.project_id, row.assignee_id, row.reporter_id, others)
+            readers = task_reader_ids(
+                row.project_id, row.assignee_id, row.reporter_id, others, team_id=row.team_id
+            )
             others = [uid for uid in others if str(uid) in readers]
             if others:
                 row.collaborators.add(*others)

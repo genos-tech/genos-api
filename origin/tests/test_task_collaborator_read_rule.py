@@ -7,7 +7,8 @@ the project") and was then told about its comments, although the activity feed w
 from them (MIP-1560).
 
 Pinned here:
-  * `task_reader_ids` is `can_access_task` in batch form, in a fixed number of queries;
+  * `task_reader_ids` is `can_access_task` in batch form, in a fixed number of queries (the
+    holders who left the team are pinned in `test_ex_member_task_access`, MIP-1592);
   * the notification fan-outs (task comments, task-body comments) skip a collaborator who cannot
     open the task and keep one who can;
   * leaving the project takes the person off the collaborators of its tasks (not where they are
@@ -80,7 +81,9 @@ class ReadRuleBase(BaseAPITestCase):
 
     def readers(self, people):
         t = self.task
-        return task_reader_ids(t.project_id, t.assignee_id, t.reporter_id, [p.id for p in people])
+        return task_reader_ids(
+            t.project_id, t.assignee_id, t.reporter_id, [p.id for p in people], team_id=t.team_id
+        )
 
 
 class TaskReaderIdsTests(ReadRuleBase):
@@ -113,19 +116,19 @@ class TaskReaderIdsTests(ReadRuleBase):
             loose.assignee_id,
             loose.reporter_id,
             [self.member.id, self.assignee.id, self.reporter.id],
+            team_id=loose.team_id,
         )
         self.assertEqual(got, {str(self.assignee.id), str(self.reporter.id)})
 
     def test_nobody_asked_means_nothing_read_and_no_query(self):
         with CaptureQueriesContext(connection) as ctx:
-            self.assertEqual(task_reader_ids(self.project.project_id, None, None, []), set())
-            self.assertEqual(
-                task_reader_ids(self.project.project_id, None, None, [None, ""]), set()
-            )
+            args = (self.project.project_id, None, None)
+            self.assertEqual(task_reader_ids(*args, [], team_id=None), set())
+            self.assertEqual(task_reader_ids(*args, [None, ""], team_id=None), set())
         self.assertEqual(len(ctx), 0)
 
     def test_a_malformed_project_id_reads_nothing_instead_of_raising(self):
-        self.assertEqual(task_reader_ids("abc", None, None, [self.member.id]), set())
+        self.assertEqual(task_reader_ids("abc", None, None, [self.member.id], team_id=None), set())
 
     def test_the_number_of_queries_does_not_grow_with_the_people(self):
         def count(people):

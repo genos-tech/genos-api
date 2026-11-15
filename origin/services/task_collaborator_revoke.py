@@ -31,6 +31,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from origin.models.task.task_models import TaskMaster
+from origin.services.member_removal import active_team_member_ids
 from origin.views.utils.scope_guards import is_project_member, project_reader_ids
 
 
@@ -51,10 +52,12 @@ def unreadable_collaborator_rows(task_ids=None) -> list[tuple[int, int]]:
     """`(row pk, task id)` of the collaborator rows whose person cannot open their task, for
     `task_ids` or, left out, for every task.
 
-    The rule is `can_access_task`'s (project member or owner, assignee, reporter), decided for
-    all rows in a fixed number of queries: one for the rows with their task's project, assignee
-    and reporter, and two per distinct project. A task in no project keeps only its assignee and
-    reporter. Soft-deleted tasks are judged like any other: the rule does not look at that.
+    The rule is `can_access_task`'s (project member or owner; the assignee or reporter while
+    still on the task's team, MIP-1592), decided for all rows in a fixed number of queries: one
+    for the rows with their task's project, team, assignee and reporter, two per distinct
+    project and two per distinct team. A task in no project keeps only its assignee and
+    reporter who are still on its team. Soft-deleted tasks are judged like any other: the rule
+    does not look at that.
     """
     rows = TaskMaster.collaborators.through.objects.values_list(
         "pk",
@@ -63,22 +66,39 @@ def unreadable_collaborator_rows(task_ids=None) -> list[tuple[int, int]]:
         "taskmaster__project_id",
         "taskmaster__assignee_id",
         "taskmaster__reporter_id",
+        "taskmaster__project__team_id",
+        "taskmaster__team_id",
     )
     if task_ids is not None:
         rows = rows.filter(taskmaster_id__in=[t for t in task_ids if t is not None])
     rows = list(rows)
     people_by_project: dict = defaultdict(set)
-    for _pk, _task, person, project_id, _assignee, _reporter in rows:
+    for _pk, _task, person, project_id, *_rest in rows:
         if project_id is not None:
             people_by_project[project_id].add(str(person))
     readers = {
         project_id: project_reader_ids(project_id, people)
         for project_id, people in people_by_project.items()
     }
-    out = []
-    for pk, task_id, person, project_id, assignee_id, reporter_id in rows:
+    # The holders among the collaborators who are not on the project, per team.
+    holders_by_team: dict = defaultdict(set)
+    for _pk, _task, person, project_id, assignee_id, reporter_id, project_team, task_team in rows:
         who = str(person)
-        if who in {str(assignee_id), str(reporter_id)} or who in readers.get(project_id, ()):
+        if who in {str(assignee_id), str(reporter_id)} and who not in readers.get(project_id, ()):
+            team = project_team or task_team
+            if team is not None:
+                holders_by_team[team].add(who)
+    on_team = {
+        team: active_team_member_ids(team, people) for team, people in holders_by_team.items()
+    }
+    out = []
+    for pk, task_id, person, project_id, assignee_id, reporter_id, project_team, task_team in rows:
+        who = str(person)
+        if who in readers.get(project_id, ()):
+            continue
+        if who in {str(assignee_id), str(reporter_id)} and who in on_team.get(
+            project_team or task_team, ()
+        ):
             continue
         out.append((pk, task_id))
     return out
