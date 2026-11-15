@@ -269,9 +269,8 @@ class CommentMentionTests(Cards):
             message = wire[sid]["message"]
             self.assertEqual(self.leaks(wire[sid]), [], wire[sid])
             self.assertIn(COMMENT_TEXT, message["bodyText"])
-            for key in ("taskId", "displayId", "taskStatus", "parentId", "threadRootId"):
+            for key in ("taskId", "displayId", "taskStatus"):
                 self.assertIsNone(message[key], key)
-            self.assertNotIn("taskCommentId", message["metadata"])
             self.assertEqual(
                 pushes[sid]["title"], f"{self.user.username} mentioned you in a task you can't open"
             )

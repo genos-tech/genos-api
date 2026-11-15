@@ -14,7 +14,8 @@ rendered it WITHOUT that judgement are the ones that call this:
 
 For such a recipient they show a minimal card: who mentioned them, that it was in a task they
 cannot open, the mentioned comment's own text (the sender wrote it to them), and no task title,
-project name or id, display id, status, or link into the project.
+project name, task id, display id or status; the push and the email carry no link into the project.
+(The live row keeps the project chat's and the messages' opaque ids: they open nothing for them.)
 
 Who can open the task is `can_access_task`'s rule, in batch form: the project's member or owner,
 the assignee, the reporter. It is asked once for all the rows of a write, never per row.
@@ -41,10 +42,11 @@ MINIMAL_URL = "/workspace/tasks"
 # What the live row says in place of the task's title.
 MINIMAL_FIRST_LINE = "Mentioned in a task you can't open"
 
-# The task details a message embedded in an activity row carries (`MessageSerializer`), and the
-# header it threads under (the task card), which names the task as well.
+# What a message embedded in an activity row (`MessageSerializer`) says of its task. What stays
+# is opaque: the chat's and the messages' ids, `seq`, the comment's number on its task
+# (`metadata.taskCommentId`). None of those opens anything for them (the chat, the message and
+# the task all answer 404) and the app labels the row from them, so they are not blanked.
 _TASK_KEYS_OF_A_MESSAGE = ("taskId", "displayId", "taskStatus", "taskCommentCount")
-_THREAD_KEYS_OF_A_MESSAGE = ("parentId", "threadRootId")
 # What of an activity's `meta` and a message's `metadata` is not about the task.
 _KEPT_META = ("tsSent", "isComment", "via")
 
@@ -177,11 +179,9 @@ def minimal_wire(data: dict) -> dict:
     message = out.get("message")
     if isinstance(message, dict):
         message = dict(message)
-        for key in _TASK_KEYS_OF_A_MESSAGE + _THREAD_KEYS_OF_A_MESSAGE:
+        for key in _TASK_KEYS_OF_A_MESSAGE:
             if key in message:
                 message[key] = None
-        message_meta = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-        message["metadata"] = {k: message_meta[k] for k in ("via",) if k in message_meta}
         out["message"] = message
     else:
         kept["firstLineContent"] = MINIMAL_FIRST_LINE
