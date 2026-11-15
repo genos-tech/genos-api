@@ -10,7 +10,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
-from django.db.models import Case, Count, F, IntegerField, Max, Q, Sum, Value, When
+from django.db.models import Case, Count, F, IntegerField, Q, Sum, Value, When
 from django.db.models.fields.json import KeyTextTransform
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -29,7 +29,7 @@ from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
-from origin.services.task_attachment_manage import delete_attachment
+from origin.services.task_attachment_manage import delete_attachment, next_attachment_id
 from origin.services.task_cache import (
     get_cached_project_tasks,
     invalidate_for_task,
@@ -77,7 +77,6 @@ from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import (
     as_int,
-    as_uuid,
     body_object,
     missing_fields,
     refuse_unsafe_link_urls,
@@ -142,6 +141,11 @@ def _no_task():
     `BigAutoField`) tells nobody which tasks exist.
     """
     return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _no_comment():
+    """The answer for a comment that is missing, deleted or another task's."""
+    return Response({"error": "Comment not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 def _thread_not_found():
@@ -2282,13 +2286,10 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
         # Add only a new attachment
         if attachment_id != "" and int(attachment_id) == -1:
-            curr_attachments_id = TaskAttachments.objects.filter(task=task).aggregate(
-                Max("attachment_id")
-            )["attachment_id__max"]
-
             data = {
                 "task": task,
-                "attachment_id": (int(curr_attachments_id) if curr_attachments_id else 0) + 1,
+                # Never a number the task has had before, deleted ones included (MIP-1582).
+                "attachment_id": next_attachment_id(task),
                 "attached_file": attached_file,
                 "attached_type": attached_type,
                 "original_filename": original_name,
@@ -2355,9 +2356,10 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 {"error": "Both 'task' and 'attachment_id' are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # `include_deleted`: left as it was. Whether a deleted task's attachment may be removed
-        # is MIP-1582's call, together with the agent's `delete_task_attachment`.
-        if not can_access_task(task, request.user.id, include_deleted=True):
+        # A deleted task answers as a missing one, like the rest of this route and the agent's
+        # tool (MIP-1582, after MIP-1572 left it open): its media is already unreadable, and a
+        # file taken off a task nobody can see is a delete nobody can look at or undo.
+        if not can_access_task(task, request.user.id):
             return _no_task()
 
         try:
@@ -2369,11 +2371,12 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 {"error": "Attachment not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        # The file, then the row: the one delete the agent's `delete_task_attachment` shares.
+        # The row (and the task's stamp), then the file once that has committed: the one delete
+        # the agent's `delete_task_attachment` shares. Anyone who can open the task may delete any
+        # of its files, whoever added it: there is no uploader column, and that is the intent.
         delete_attachment(attachment)
-        return Response(
-            {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
-        )
+        # A 204 has no body.
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 def _own_comment(request, task_id, comment_id):
@@ -2778,7 +2781,7 @@ class TaskCommentReactionView(AuthenticatedAPIView):
         # time the rest are asked for it is there.
         if not can_access_task(body.get("task_id"), request.user.id):
             return _no_task()
-        if res := require_fields(body, "team_id", "comment_id", "reaction_emoji"):
+        if res := require_fields(body, "comment_id", "reaction_emoji"):
             return res
         # A comment id is a number. Text, a list or an object here was a ValueError or a
         # TypeError (500) at the lookup below.
@@ -2789,47 +2792,58 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # `require_fields` takes `""` as present; a team id is a UUID, and `""` was a
-        # ValidationError (500) at the lookup below.
-        if as_uuid(body["team_id"]) is None:
-            return Response(
-                {"error": "team_id must be a valid id."},
-                status=status.HTTP_400_BAD_REQUEST,
+        # The task's own team, never the body's `team_id`: nothing tied that to the task the
+        # access check above was about, so the row could be filed under any team the caller
+        # named. A client still sends it (the sockets handler does); it is not read.
+        task = TaskMaster.objects.filter(task_id=as_int(body["task_id"])).only("team_id").first()
+        if task is None:
+            return _no_task()
+        # The same answer for a comment that never existed, one that was deleted and another
+        # task's number: the agent's tool refuses the same three the same way.
+        if not TaskComments.objects.filter(
+            task=task.task_id, comment_id=comment_id, is_deleted=False
+        ).exists():
+            return _no_comment()
+
+        # The tools' rule (`check_emoji`), so the page and the agent agree on what a reaction
+        # is: a Unicode emoji or a team's `:name:`, at most 64 characters, no text and no
+        # control characters. The column had no bound at all.
+        try:
+            emoji = task_comment_reactions.check_emoji(
+                body["reaction_emoji"], task.team_id, field="reaction_emoji"
             )
+        except task_comment_reactions.ReactionRefused as refused:
+            return Response({"error": str(refused)}, status=status.HTTP_400_BAD_REQUEST)
 
-        data = {
-            "team": body["team_id"],
-            "task": body["task_id"],
-            "comment_id": comment_id,
-            "reaction_id": task_comment_reactions.next_reaction_id(
-                body["team_id"], body["task_id"], comment_id
-            ),
-            "reaction_emoji": body["reaction_emoji"],
-            # The caller, not the body's `sender_id`, for the same reason
-            # as a comment's author: the reaction notifies as them.
-            "sender": request.user.id,
-        }
-
-        serializer = TaskCommentReactionFactSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
+        # One reaction per person and emoji: a repeat answers with the row already there (200,
+        # not 201) and tells nobody again. It used to make a second row, which the DELETE then
+        # could not take back.
+        added = task_comment_reactions.store_reaction(
+            team_id=task.team_id,
+            task_id=task.task_id,
+            comment_id=comment_id,
+            # The caller, not the body's `sender_id`, for the same reason as a comment's
+            # author: the reaction notifies as them.
+            user_id=request.user.id,
+            emoji=emoji,
+        )
+        if added.created:
             # Mirror the reaction onto the v3 PM comment message so the comment author gets an
             # activity-feed row + web push. The legacy TaskCommentReactionFact alone writes NO v3
             # activity, so reacting to a task comment used to notify nobody.
             task_comment_reactions.announce_reaction(
-                task_id=data["task"],
-                comment_id=data["comment_id"],
-                emoji=data["reaction_emoji"],
-                actor_id=data["sender"],
+                task_id=task.task_id,
+                comment_id=comment_id,
+                emoji=emoji,
+                actor_id=request.user.id,
             )
-            return Response(
-                {
-                    **serializer.data,
-                    **_reaction_broadcast_context(data["task"], data["comment_id"], request.user),
-                },
-                status=status.HTTP_201_CREATED,
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                **TaskCommentReactionFactSerializer(added.reaction).data,
+                **_reaction_broadcast_context(task.task_id, comment_id, request.user),
+            },
+            status=status.HTTP_201_CREATED if added.created else status.HTTP_200_OK,
+        )
 
     def delete(self, request):
         team_id = request.GET.get("team_id")
@@ -2856,39 +2870,38 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            # Only ever the caller's own reaction. `sender_id` is still
-            # required, so older clients keep working, but it no longer
-            # names whose reaction to take back.
-            reaction = TaskCommentReactionFact.objects.get(
-                team=team_id,
-                sender=request.user.id,
-                task_id=int(task_id),
-                comment_id=comment_id,
-                reaction_emoji=reaction_emoji,
-            )
-            reaction_id = reaction.reaction_id
-            reaction.delete()
-            # 200 with a body, not 204: the socket layer is this route's
-            # only caller, and it broadcasts the removal from this answer.
-            # `requests` can't parse an empty 204, so the handler saw an
-            # error on every removal and nobody else's view updated.
-            return Response(
-                {
-                    "message": "Reaction deleted successfully.",
-                    "reaction_id": reaction_id,
-                    "comment_id": comment_id,
-                    "task": int(task_id),
-                    "sender": str(request.user.id),
-                    **_reaction_broadcast_context(task_id, comment_id, request.user),
-                },
-                status=status.HTTP_200_OK,
-            )
-        except TaskCommentReactionFact.DoesNotExist:
+        # Only ever the caller's own reaction. `sender_id` and `team_id` are still required, so
+        # older clients keep working, but neither is read: the first no longer names whose
+        # reaction to take back, and the task fixes the team. Every copy goes (a repeat POST
+        # used to make a second row, and `.get()` on two was a 500). The emoji is matched as
+        # stored, not held to the POST's rule, so a reaction written before that rule stays
+        # removable. It never asks for the comment either: a reaction on a comment that has
+        # since gone must still be takeable back.
+        removed_ids = task_comment_reactions.delete_reactions(
+            task_id=int(task_id),
+            comment_id=comment_id,
+            user_id=request.user.id,
+            emoji=reaction_emoji,
+        )
+        if not removed_ids:
             return Response(
                 {"error": "Reaction not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        # 200 with a body, not 204: the socket layer is this route's only caller, and it
+        # broadcasts the removal from this answer. `requests` can't parse an empty 204, so the
+        # handler saw an error on every removal and nobody else's view updated.
+        return Response(
+            {
+                "message": "Reaction deleted successfully.",
+                "reaction_id": removed_ids[0],
+                "comment_id": comment_id,
+                "task": int(task_id),
+                "sender": str(request.user.id),
+                **_reaction_broadcast_context(task_id, comment_id, request.user),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class TaskCommentMentionView(AuthenticatedAPIView):
