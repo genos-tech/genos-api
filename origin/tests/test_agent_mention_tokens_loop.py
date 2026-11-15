@@ -28,7 +28,7 @@ from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
 from origin.models.common.team_models import TeamMembers
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.models import AgentRun
 
@@ -533,9 +533,12 @@ class ATaskConversationLostWhileTheCardWaitedTests(TokenBase):
             if how == "deleted":
                 type(task).objects.filter(pk=task.pk).update(is_deleted=True)
             else:
-                ProjectMembers.objects.filter(project=self.project, attendee=self.user).delete()
+                # As a MEMBER: the project's owner reads it with no member row (`can_access_task`,
+                # and the search ACL since MIP-1591), so the project goes to `other` first.
+                self.lose_access(task)
             done = self.done(self.decide_to_the_end(run_id, token, "reject"))
             words.append(done.get("dropped_references"))
+            ProjectMaster.objects.filter(pk=self.project.pk).update(owner=self.user)
             ProjectMembers.objects.get_or_create(
                 team=self.team, project=self.project, attendee=self.user
             )
