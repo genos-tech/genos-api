@@ -101,6 +101,8 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # 146,421 characters, +552 over the 145,869 of the rollback (about +130 input tokens per call at 4.2 characters per token;
 # nothing measurable per ask in the second grouped run of 2026-11-15, gemini-3.6-flash). Nothing is raised: the constant
 # stays 146,500 (79 characters left) and `ALL_ON_BUDGET_CHARS` (148,000; 147,876 with a Long member's block) holds too.
+# THE FLIP OF THE TASK-MOVE PARITY (2026-11-16, `AGENT_TASK_MOVE_PARITY` on by default): it changes tool RESULTS only, so no
+# declaration or prompt moves and the prefix stays 146,421 characters; nothing is raised.
 BUDGET_CHARS = 146_500
 
 

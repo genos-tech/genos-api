@@ -1,8 +1,10 @@
-"""The gate of MIP-1609's model-visible change: `AGENT_TASK_MOVE_PARITY` (default OFF).
+"""The gate of MIP-1609's model-visible change: `AGENT_TASK_MOVE_PARITY` (ON by default since 2026-11-16).
 
 `AGENT_PARITY_TOOLS` and `AGENT_PARITY_FOLLOWUPS` are both on in production since 2026-11-15, so neither can protect
 a new model-visible change: `update_task`'s project move refusing an assignee outside the destination and saying
-what the move did has its own flag. This file pins the mechanism; `test_agent_task_move_parity` pins what the tool
+what the move did has its own flag. It shipped OFF and is ON by default since the 2026-11-16 flip (env `false` is the rollback); the
+key-free test settings keep it OFF (`apis/settings_test.py`), so the "off" tests describe the rollback arm, not
+production. This file pins the mechanism; `test_agent_task_move_parity` pins what the tool
 does with the flag on and off. The committed fingerprint golden (`test_agent_fingerprint_golden`) is the proof that
 no declaration or prompt moves: the flag changes tool RESULTS only.
 """
@@ -24,12 +26,15 @@ FLAG = "AGENT_TASK_MOVE_PARITY"
 
 
 class FlagDefaultTests(SimpleTestCase):
-    def test_it_ships_off(self):
-        self.assertIs(production.SEARCH_ENGINE[FLAG], False)
+    def test_it_ships_on(self):
+        # The production default (`apis.settings`); the rollback is the env value `false`.
+        self.assertIs(production.SEARCH_ENGINE[FLAG], True)
 
-    def test_the_test_suite_runs_with_it_off_and_it_is_not_a_shipped_flag(self):
+    def test_the_test_suite_runs_with_it_off_and_it_is_a_shipped_flag(self):
+        # Every other test assumes the unflagged behaviour and turns the flag on explicitly; the "off" tests
+        # of the flag therefore describe the rollback arm.
         self.assertIs(settings.SEARCH_ENGINE[FLAG], False)
-        self.assertNotIn(FLAG, test_settings.AGENT_FLAGS_ON_IN_PRODUCTION)
+        self.assertIn(FLAG, test_settings.AGENT_FLAGS_ON_IN_PRODUCTION)
 
     def test_the_helper_follows_the_setting(self):
         self.assertEqual(parity.TASK_MOVE_FLAG, FLAG)
@@ -68,6 +73,10 @@ class ArmTests(SimpleTestCase):
     def test_the_all_on_arm_includes_it(self):
         self.assertTrue(harness.all_on_arm(harness.load_arms()).effective[FLAG])
 
-    def test_the_arm_changes_something_against_production(self):
+    def test_the_arm_was_measured_against_the_rollback(self):
+        # The baseline the arm was measured against is the rollback: the flag off. Against today's production
+        # the flag is already on, and the harness says the arm would change nothing.
+        rollback = {**production.SEARCH_ENGINE, FLAG: False}
         arm = harness.load_arms()["task-move-parity"]
-        self.assertEqual(harness.validate_overrides(arm, production.SEARCH_ENGINE), [])
+        self.assertEqual(harness.validate_overrides(arm, rollback), [])
+        self.assertEqual(len(harness.validate_overrides(arm, production.SEARCH_ENGINE)), 1)

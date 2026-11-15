@@ -68,7 +68,7 @@ if _test_db_name:
 # (`origin/tests/test_schedule_plan_gate.py`).
 PRODUCTION_TIER_QUOTAS = SEARCH_ENGINE["TIER_QUOTAS"]  # noqa: F405
 # MIP-1089 turned ten agent flags ON by default in production (the timeline tool, content length,
-# the parity batch and its follow-ups followed). The suite keeps them OFF here:
+# the parity batch, its follow-ups and the task-move parity followed). The suite keeps them OFF here:
 # every flag's tests (and the "flag off is byte-identical to main" pins) turn the flag on or off
 # EXPLICITLY, and the many tests that are about something else assume the unflagged behaviour.
 # `apis.settings.SEARCH_ENGINE` (not this copy) keeps the production defaults, and
@@ -88,6 +88,7 @@ AGENT_FLAGS_ON_IN_PRODUCTION = (
     "AGENT_CONTENT_LENGTH",
     "AGENT_PARITY_TOOLS",
     "AGENT_PARITY_FOLLOWUPS",
+    "AGENT_TASK_MOVE_PARITY",
 )
 SEARCH_ENGINE = {  # noqa: F405
     **SEARCH_ENGINE,  # noqa: F405
