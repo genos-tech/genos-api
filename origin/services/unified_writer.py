@@ -51,6 +51,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
+from origin.services import message_via
 
 logger = logging.getLogger(__name__)
 
@@ -750,7 +751,9 @@ def write_task_comment_as_thread_reply(
                 parent=parent,
                 thread_root=parent,
                 is_thread_reply=True,
-                metadata={"taskCommentId": int(comment_id)},
+                # The connected app that wrote this comment, if one did (MIP-1570): its kind and
+                # family only, the form the whole channel may read.
+                metadata=message_via.stamped({"taskCommentId": int(comment_id)}),
                 reply_count=0,
             )
             # Atomically increment the parent's reply_count. Using
@@ -811,7 +814,14 @@ def update_task_comment_thread_reply(
         msg.body = body or []
         msg.body_text = _body_text_from_body(body)
         msg.edited_at = timezone.now()
-        msg.save(update_fields=["body", "body_text", "edited_at", "ts_updated_at"])
+        update_fields = ["body", "body_text", "edited_at", "ts_updated_at"]
+        # The stamp says who wrote the text that is there now (MIP-1570): this edit's writer
+        # replaces the old one's, and a person's edit leaves none.
+        metadata = message_via.stamped(msg.metadata)
+        if metadata != (msg.metadata or {}):
+            msg.metadata = metadata
+            update_fields.append("metadata")
+        msg.save(update_fields=update_fields)
         return msg
     except Exception:  # noqa: BLE001
         logger.exception(

@@ -30,7 +30,7 @@ from origin.services import (
     v3_activity,
     webhook_enqueue,
 )
-from origin.services.task_collaborators import notifiable_collaborator_ids
+from origin.services.task_collaborators import collaborator_ids, task_readers_among
 from origin.services.webpush_dispatch import schedule_push_for_activities
 from origin.views.utils.mention_handler import resolve_mentions
 
@@ -93,19 +93,21 @@ def _participant_ids(task_id: int, mentioned: set[str]) -> set[str]:
     A comment with no @mention otherwise pings nobody, so notify the
     task's assignee, its collaborators, and everyone who has previously
     commented. The commenter is skipped inside the activity helper.
-    """
-    participants: set[str] = set()
 
+    Only people who can open the task (MIP-1567, MIP-1579): a collaborator who is not on the
+    project, or a prior commenter who has left it, is told of nothing. The assignee passes by the
+    rule itself (`can_access_task` counts the assignee and the reporter as readers), so a
+    teammate made assignee is still told; the check is one batch for everyone.
+    """
     assignee_id = (
         TaskMaster.objects.filter(task_id=task_id).values_list("assignee_id", flat=True).first()
     )
+    candidates: set[str] = set()
     if assignee_id is not None:
-        participants.add(str(assignee_id))
+        candidates.add(str(assignee_id))
 
-    # Collaborators are notified on task activity exactly like the
-    # assignee — add them to the participant set, those who can open the task
-    # (MIP-1567: a collaborator who is not on the project is told of nothing).
-    participants |= notifiable_collaborator_ids(task_id)
+    # Collaborators are notified on task activity exactly like the assignee.
+    candidates |= collaborator_ids(task_id)
 
     for sender_id in (
         TaskComments.objects.filter(task=task_id, is_deleted=False)
@@ -113,12 +115,12 @@ def _participant_ids(task_id: int, mentioned: set[str]) -> set[str]:
         .distinct()
     ):
         if sender_id is not None:
-            participants.add(str(sender_id))
+            candidates.add(str(sender_id))
 
     # Excluding @-mentioned users AFTER adding collaborators so a
     # mentioned collaborator gets the MENTION activity (more specific),
     # never a duplicate THREAD_REPLY.
-    return participants - mentioned
+    return task_readers_among(task_id, candidates) - mentioned
 
 
 def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
@@ -177,6 +179,10 @@ def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
 
         # `skip_actor=False`: tagging yourself in a comment still pings,
         # consistent with task-body and note mentions.
+        # NOT filtered by the read rule, on purpose: a direct @mention reaches a person of the
+        # team who is not on the project (`test_direct_mention_recipients`), and the sender is
+        # told so by the non-member-mention report so they can add them (MIP-1579). What the
+        # recipient is then shown of the task is the activity feed's gate (MIP-1560).
         mention_acts = v3_activity.create_mention_activities(
             message=mirror,
             mentioned_user_ids=result.mentioned_user_ids,

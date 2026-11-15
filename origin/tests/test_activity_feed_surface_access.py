@@ -510,8 +510,9 @@ class BatchEqualsThePerRowRule(SurfaceBase):
                 row.id in bad, not can_access_task(task.task_id, self.reader.id), task.task_id
             )
         self.assertIn(ghost.id, bad)
-        # the one place the feed is stricter than `can_access_task`: a soft-deleted task
-        self.assertTrue(can_access_task(deleted.task_id, self.reader.id))
+        # a soft-deleted task: the feed filter (MIP-1566) and `can_access_task` (MIP-1572) now
+        # say the same thing, no
+        self.assertFalse(can_access_task(deleted.task_id, self.reader.id))
         self.assertIn(deleted_row.id, bad)
         self.assertEqual(len(bad), 3)  # `other_project` plain, the ghost, the deleted task
 

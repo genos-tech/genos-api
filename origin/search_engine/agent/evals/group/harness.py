@@ -127,6 +127,10 @@ RESUME_KEYS = frozenset(
         "edited_args",
         "undo",
         "follow_up",
+        # MIP-1057: the task or milestone the ask is about (a key of `tasks`), and the one the
+        # follow-up is about instead
+        "task_context",
+        "follow_up_task",
         "expect",
         # `scenario: closing_line` (no resume at all) and its own keys
         "scenario",

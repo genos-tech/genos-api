@@ -1395,11 +1395,90 @@ class ParseVariantsTests(SimpleTestCase):
             ["a"],
         )
 
-    def test_bracket_inside_variant_truncates_to_invalid_json(self):
-        # The non-greedy regex stops at the FIRST `]`, so a variant string
-        # that itself contains `]` yields a truncated, unparseable slice
-        # -> json.loads fails -> []. Documents a real limitation.
-        self.assertEqual(query_rewriter._parse_variants('["a]b", "c"]'), [])
+    def test_bracket_inside_variant_is_kept(self):
+        # A variant that itself contains `]` used to cut the match at that `]`
+        # (non-greedy regex) and the slice was not JSON -> []. The array is now
+        # decoded from its opening `[` to its real end (MIP-1574).
+        self.assertEqual(query_rewriter._parse_variants('["a]b", "c"]'), ["a]b", "c"])
+
+    def test_bracketed_prose_before_the_array_is_skipped(self):
+        self.assertEqual(
+            query_rewriter._parse_variants('Variants [draft]: ["a", "b"]'),
+            ["a", "b"],
+        )
+
+    def test_fenced_array(self):
+        self.assertEqual(query_rewriter._parse_variants('```json\n["a", "b"]\n```'), ["a", "b"])
+
+    def test_single_quoted_list_is_read(self):
+        # A python-style list is the shape a small model drifts to; the
+        # root cause of the observed failures is unconfirmed (the log keeps
+        # only lengths), this is hardening.
+        self.assertEqual(query_rewriter._parse_variants("['a b', 'c d']"), ["a b", "c d"])
+
+    def test_trailing_comma_is_read(self):
+        self.assertEqual(query_rewriter._parse_variants('["a", "b",]'), ["a", "b"])
+
+    def test_the_fallback_reads_literals_only(self):
+        self.assertEqual(query_rewriter._parse_variants("[__import__('os').getcwd()]"), [])
+
+    def test_objects_with_one_string_value_give_that_string(self):
+        # PR #875's CI run: the rewriter answered with non-string items (kind=non_string_items,
+        # stop=STOP) in 3 of 75 retrieval cases. An object that holds one string is that variant.
+        self.assertEqual(
+            query_rewriter._parse_variants('[{"query": "a b"}, {"variant": " c d "}]'),
+            ["a b", "c d"],
+        )
+
+    def test_objects_with_several_strings_are_not_guessed(self):
+        self.assertEqual(
+            query_rewriter._parse_variants('[{"query": "a", "reason": "because"}]'), []
+        )
+
+    def test_a_nested_array_is_flattened_one_level(self):
+        self.assertEqual(query_rewriter._parse_variants('[["a b", "c d"]]'), ["a b", "c d"])
+
+    def test_unquoted_words_still_fail(self):
+        self.assertEqual(query_rewriter._parse_variants("[foo, bar]"), [])
+
+
+class ParseReplyKindTests(SimpleTestCase):
+    """`_parse_reply` names WHY a reply gave no variants: the warning logs that name, never the text."""
+
+    def kind(self, raw):
+        return query_rewriter._parse_reply(raw)[1]
+
+    def test_ok(self):
+        self.assertEqual(self.kind('["a"]'), "ok")
+
+    def test_empty_reply(self):
+        self.assertEqual(self.kind(""), "empty_reply")
+
+    def test_prose_without_a_bracket(self):
+        self.assertEqual(self.kind("I cannot help with that"), "no_array")
+
+    def test_brackets_that_are_not_a_list(self):
+        self.assertEqual(self.kind("[foo, bar]"), "bad_json")
+
+    def test_empty_array(self):
+        self.assertEqual(self.kind("[]"), "empty_array")
+
+    def test_only_blank_strings(self):
+        # 12 characters, the exact length the query "a" was logged with in 11 of 12 runs.
+        self.assertEqual(len('["", "", ""]'), 12)
+        self.assertEqual(self.kind('["", "", ""]'), "empty_array")
+
+    def test_objects_that_hold_no_single_string(self):
+        self.assertEqual(self.kind('[{"q": 1}, {"a": "x", "b": "y"}]'), "non_string_items")
+
+    def test_numbers_only(self):
+        self.assertEqual(self.kind("[1, 2]"), "non_string_items")
+
+    def test_item_shape_is_described_without_content(self):
+        describe = query_rewriter._describe_items
+        self.assertEqual(describe([{"query": "secret"}, {"query": "x"}]), "dict(1 key)x2")
+        self.assertEqual(describe([["secret"], 3]), "int, list")
+        self.assertNotIn("secret", describe([{"query": "secret"}, ["secret"]]))
 
 
 # --------------------------------------------------------------------------- #
@@ -1462,6 +1541,61 @@ class RewriteQueryTests(SimpleTestCase):
         ):
             out = query_rewriter.rewrite_query("q", num_variants=3)
         self.assertEqual(out, ["q"])
+
+    def test_unusable_output_warns_with_kind_and_length_never_the_text(self):
+        client = _client_yielding("I cannot help with that")
+        with patch(
+            "origin.search_engine.query_rewriter.get_model_client", return_value=client
+        ):
+            with self.assertLogs("origin.search_engine.query_rewriter", level="WARNING") as cm:
+                query_rewriter.rewrite_query("q", num_variants=3)
+        (line,) = cm.output
+        self.assertIn("unparseable output", line)
+        self.assertIn("kind=no_array", line)
+        self.assertIn("(23 chars", line)
+        # MIP-622: the variants restate the member's question, so no content in the log.
+        self.assertNotIn("cannot help", line)
+
+    def test_the_warning_says_what_the_unusable_items_were(self):
+        client = _client_yielding('[{"q": 1}, {"q": 2}]')
+        with patch(
+            "origin.search_engine.query_rewriter.get_model_client", return_value=client
+        ):
+            with self.assertLogs("origin.search_engine.query_rewriter", level="WARNING") as cm:
+                query_rewriter.rewrite_query("q", num_variants=3)
+        self.assertIn("kind=non_string_items", cm.output[0])
+        self.assertIn("items=dict(1 key)x2", cm.output[0])
+
+    def test_the_warning_names_how_the_call_stopped(self):
+        def step(**kwargs):
+            kwargs["usage_sink"].stop_reason = "MAX_TOKENS"
+            kwargs["usage_sink"].truncated = True
+            return iter([('["cut off', None)])
+
+        client = MagicMock()
+        client.generate_step.side_effect = step
+        with patch(
+            "origin.search_engine.query_rewriter.get_model_client", return_value=client
+        ):
+            with self.assertLogs("origin.search_engine.query_rewriter", level="WARNING") as cm:
+                out = query_rewriter.rewrite_query("q", num_variants=3)
+        self.assertEqual(out, ["q"])
+        self.assertIn("stop=MAX_TOKENS", cm.output[0])
+        self.assertIn("truncated", cm.output[0])
+
+    def test_no_variants_to_offer_is_not_a_warning(self):
+        # `[]` and blank strings are the model saying there is nothing to rewrite
+        # (the query "a"): valid JSON, and the fallback is the designed answer.
+        for reply in ("[]", '["", "", ""]'):
+            with self.subTest(reply=reply):
+                client = _client_yielding(reply)
+                with patch(
+                    "origin.search_engine.query_rewriter.get_model_client",
+                    return_value=client,
+                ):
+                    with self.assertNoLogs("origin.search_engine.query_rewriter", level="WARNING"):
+                        out = query_rewriter.rewrite_query("a", num_variants=3)
+                self.assertEqual(out, ["a"])
 
     def test_client_exception_returns_original_only(self):
         client = MagicMock()

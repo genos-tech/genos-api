@@ -43,6 +43,12 @@ CASE SCHEMA (`origin/search_engine/agent/evals/group/<tag>.yaml`, `kind: resume`
       note: {title: ..., body: ..., summary: ...}     # optional: the ask is "about this note"
       tasks: [{key: login, title: "Fix login flow"}]  # optional rows for @/# references
       mentions: [{type: task, task: login}]           # `task` is a key of `tasks`
+      # a task row may also say (MIP-1057): due_date, start_date ("2026-11-21"), body (its
+      # description), assignee ("other": the colleague; default the asker), milestone: true (its
+      # backing row and a milestone on it)
+      task_context: login          # the ask is "about this task or milestone" (a key of `tasks`):
+                                   # sent as `task_context`, and again on `follow_up`
+      follow_up_task: report       # the follow-up is about THIS task instead: a new conversation
       earlier_turns: [{q: "...", a: "..."}]           # the session's earlier turns (991)
       proposal: {tool: create_task, args: {title: ..., priority: Low}}   # {project_id} is filled
       decision: approve | reject
@@ -215,18 +221,38 @@ class World:
     def _build(self, case: dict[str, Any]) -> None:
         from origin.models.chat.unified_models import Channel, ChannelMember, Message  # noqa: PLC0415
         from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
+        from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
         from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
         for spec in case.get("tasks") or []:
-            self.tasks[spec["key"]] = TaskMaster.objects.create(
+            # The optional keys are MIP-1057's (a task or milestone as the context of an ask); a row
+            # without them is what it always was.
+            extra: dict[str, Any] = {}
+            for column in ("due_date", "start_date"):
+                if spec.get(column):
+                    extra[column] = spec[column]
+            if spec.get("body"):
+                extra["content"] = _blocks(spec["body"])
+            task = TaskMaster.objects.create(
                 team=self.team,
                 project=self.project,
                 reporter=self.user,
-                assignee=self.user,
+                assignee=self.other if spec.get("assignee") == "other" else self.user,
                 title=spec["title"],
                 status=spec.get("status", "Open"),
                 priority=spec.get("priority", "Low"),
+                is_milestone=bool(spec.get("milestone")),
+                **extra,
             )
+            if spec.get("milestone"):
+                MilestoneMaster.objects.create(
+                    team=self.team,
+                    project=self.project,
+                    title=spec["title"],
+                    task=task,
+                    reporter=self.user,
+                )
+            self.tasks[spec["key"]] = task
         thread = case.get("thread")
         if thread:
             channel = Channel.objects.create(team=self.team, kind=2, title="eval-thread")
@@ -276,6 +302,10 @@ class World:
             task = self.tasks[spec["task"]]
             out.append({"type": "task", "task_id": task.task_id, "label": task.title})
         return out
+
+    def task_context(self, key: str) -> dict[str, Any]:
+        """The `task_context` an ask about the task `key` carries (MIP-1057)."""
+        return {"task_id": self.tasks[key].task_id}
 
     def fill(self, value: Any) -> Any:
         """`{project_id}` / `{task:<key>}` placeholders in a case's proposal arguments."""
@@ -662,6 +692,8 @@ def _drive(case: dict[str, Any], world: World, controller: Any, result: dict[str
             payload["note_context"] = world.note_context
         if case.get("mentions"):
             payload["mentions"] = world.mentions()
+        if case.get("task_context"):
+            payload["task_context"] = world.task_context(case["task_context"])
         session_id = _seed_earlier_turns(world, case.get("earlier_turns") or [])
         if session_id:
             payload["session_id"] = session_id
@@ -711,18 +743,21 @@ def _drive(case: dict[str, Any], world: World, controller: Any, result: dict[str
         if case.get("follow_up"):
             before = len(factory.calls)
             run.refresh_from_db()
-            events = _events(
-                client.post(
-                    ASK_URL,
-                    {
-                        "query": case["follow_up"],
-                        "team_id": str(world.team.team_id),
-                        "locale": _locale(case),
-                        "session_id": str(run.session_id),
-                    },
-                    format="json",
-                )
-            )
+            follow: dict[str, Any] = {
+                "query": case["follow_up"],
+                "team_id": str(world.team.team_id),
+                "locale": _locale(case),
+                "session_id": str(run.session_id),
+            }
+            if case.get("follow_up_task"):
+                # The app opened ANOTHER task's Ask: that task's own conversation, which has no
+                # session yet, so none is sent (the client restores it first and finds none).
+                follow["task_context"] = world.task_context(case["follow_up_task"])
+                del follow["session_id"]
+            elif case.get("task_context"):
+                # The same Ask, asked again: the client sends the object with every ask.
+                follow["task_context"] = world.task_context(case["task_context"])
+            events = _events(client.post(ASK_URL, follow, format="json"))
             tools += _tools(events)
             answer = _answer(events)
             new_pending = _pending(events) or new_pending

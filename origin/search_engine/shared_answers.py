@@ -101,21 +101,22 @@ def opted_out_user_ids() -> set[str]:
     }
 
 
-# The `AgentSession` columns that bind a session to the thread or note it was
-# opened from ("Ask about this thread / note"). ANY of them set makes the
-# session scoped. A new kind of scope (a project, a task, ...) is one more name
-# here: `is_scoped_session` (a row) and `scoped_session_q` (a queryset) are
+# The `AgentSession` columns that bind a session to the thread, note, task or
+# milestone it was opened from ("Ask about this thread / note / task"). ANY of
+# them set makes the session scoped. A new kind of scope (a project, ...) is one
+# more name here: `is_scoped_session` (a row) and `scoped_session_q` (a queryset) are
 # both built from this tuple, so the chunker, the list, the re-collection and
 # the sweep follow without another edit. (A test fails when `AgentSession`
 # gains a column that is in neither this tuple nor its known unscoped ones.)
-SESSION_SCOPE_COLUMNS = ("chat_type", "chat_id", "thread_id", "note_type", "note_id")
+SESSION_SCOPE_COLUMNS = ("chat_type", "chat_id", "thread_id", "note_type", "note_id", "task_id")
 
 
 def is_scoped_session(session) -> bool:
-    """True if `session` was opened from a specific thread or note.
+    """True if `session` was opened from a specific thread, note, task or milestone.
 
     The first turn of such a session is primed with a summary of that thread /
-    note in the system prompt. The summary is not a tool result, so
+    note (or, for a task, its facts and the start of its description, MIP-1057)
+    in the system prompt. The summary is not a tool result, so
     `reconstruct_sources_for_run` never sees it and the audience computed from
     the run's sources says nothing about who may read it: the answer can quote
     a private thread to everyone who can see some other object the run read.

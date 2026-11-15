@@ -57,6 +57,7 @@ SCOPE_VALUES = {
     "thread_id": uuid.UUID("00000000-0000-4000-8000-0000000000d1"),
     "note_type": 1,
     "note_id": 4242,
+    "task_id": 5151,
 }
 
 

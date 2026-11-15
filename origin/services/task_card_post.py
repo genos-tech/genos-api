@@ -54,7 +54,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, Message
 from origin.models.common.user_models import CustomUser
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
-from origin.services import realtime_push, task_card
+from origin.services import inbox_via, realtime_push, task_card
 from origin.services.activity_suppression import activity_suppressed
 
 log = logging.getLogger(__name__)
@@ -92,6 +92,8 @@ def _post(*, project, task_id, actor_id, body, body_text, metadata) -> Message |
         # Whoever made the task through an AI app already gets MIP-1432's one notice for the
         # call; a row per self-assigned task would bury it (a plan assigns every task to its maker).
         self_assign=False,
+        # Written through a connected app: its kind and family, for the icon (MIP-1570).
+        via=inbox_via.connected_app_via(),
     )
     # The socket handler announces the message to the chat room and each activity to its
     # recipient when the app sends a message; here there is no handler, so tell the open apps
@@ -253,7 +255,9 @@ def _refresh(project, task_id, parts) -> Message | None:
     merged = {**(card.metadata or {}), **metadata}
     if card.body == body and card.body_text == body_text and (card.metadata or {}) == merged:
         return None
-    rewrite_card_message(card, body=body, body_text=body_text, metadata=merged)
+    # `merged` is the stored row's own metadata (its stamp, if any, is the creation's) plus what the
+    # server just built: nothing a client sent (MIP-1570).
+    rewrite_card_message(card, body=body, body_text=body_text, metadata=merged, server_built=True)
     realtime_push.push_message(card, realtime_push.UPDATED)
     return card
 

@@ -360,7 +360,7 @@
 
 - id: gibberish_returns_few_or_nothing
   fixture: true
-  documented_red: "red in 98 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: always \"got 10 results, expected <= 3\"; in 50 of 99 runs the log of this case also shows \"Query rewriter returned unparseable output\""
+  documented_red: "red in 98 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: always \"got 10 results, expected <= 3\" (a ranking gap, not the rewriter: the 25 logs re-read in MIP-1574 never show a rewriter warning for this case; the \"unparseable\" warnings counted for it were the NEXT case, single_letter_query_no_crash)"
   query: "quantum photosynthesis xylophone marauder"
   expect:
     result_count_at_most: 3
@@ -899,7 +899,7 @@
 
 - id: mention_entity_boost_control
   fixture: true
-  documented_red: "red in 88 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: forbidden title \"spike: framer-motion\" appeared in the top 3 WITHOUT the mention, so the paired mention_entity_boost case proves nothing about the boost while this one is red"
+  documented_red: "red in 88 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: forbidden title \"spike: framer-motion\" appeared in the top 3 WITHOUT the mention, so the paired mention_entity_boost case proves nothing about the boost while this one is red; the failure is the same with and without a rewriter reply (10 of 10 with an unparseable one), so it is the baseline ranking, not rewrite variance; in 21 failing logs re-read in MIP-1574 the spike task is the 3rd result in 17 and the 1st or 2nd in 4 (the 2026-07-11 calibration said 5th), so recalibrate the boost window and the control limit together from a measured run (MIP-1574)"
   query: "spike results"
   limit: 3
   expect:
