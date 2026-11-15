@@ -191,7 +191,7 @@ class TwinOfTheAnswerWithoutTheLog(McpBase):
     def test_every_answer_is_identical_with_and_without_the_logging(self):
         self._key()
         with_log = self.calls()
-        with mock.patch.object(result_log, "note_result"):
+        with mock.patch("origin.views.public.mcp.views.note_result"):
             without = self.calls()
         self.assertEqual(with_log, without)
 

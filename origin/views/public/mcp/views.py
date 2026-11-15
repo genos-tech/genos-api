@@ -27,8 +27,9 @@ from origin.services import mcp_notice, member_events, security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.credentials import credential_of
-from origin.views.public.mcp import prompts, protocol, result_log, tools
+from origin.views.public.mcp import prompts, protocol, tools
 from origin.views.public.mcp.protocol import JsonRpcError
+from origin.views.public.mcp.result_log import note_result
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
 from origin.views.utils.scope_guards import participates_in_team
@@ -530,7 +531,7 @@ class McpView(PublicApiView):
                 )
                 # Size and name for the `perf.request` line, and the shadow cap's log line
                 # (MIP-1367). Observes only: `result` goes back exactly as built.
-                result_log.note_result(request, name, result)
+                note_result(request, name, result)
                 return result
             except JsonRpcError:
                 raise
