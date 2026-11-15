@@ -145,6 +145,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
     secretary,
     via_privacy,
 )
+from origin.views.public.mcp.history_window import hide_old_messages  # noqa: E402
 from origin.views.public.mcp.resolve import (
     resolve_milestone_ref,
     resolve_note_ref,
@@ -615,6 +616,8 @@ CATALOG: tuple[McpTool, ...] = (
             "posts to a chat. A chat the caller is not in is answered like one "
             "that does not exist."
         ),
+        # The plan's chat-history window, dark (MIP-1367): a no-op unless MCP_TIER_LIMITS_MODE says so.
+        augment=hide_old_messages,
     ),
     McpTool(
         name="list_my_mentions",

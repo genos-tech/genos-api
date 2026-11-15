@@ -1582,6 +1582,19 @@ SEARCH_ENGINE = {
             "mcp_enabled": False,
             # Scheduled jobs and Genos reports are Core and up (MIP-1213), a reason to upgrade.
             "schedules_enabled": False,
+            # MCP volume and reach limits (MIP-1367 phase 3), in every tier below. DARK: None =
+            # unlimited, so nothing is enforced. The proposed numbers and the switch
+            # (MCP_TIER_LIMITS_MODE: off / shadow / enforce) are in
+            # origin/services/mcp_tier_limits.py; flipping one limit = copying its proposed value here.
+            "mcp_calls_per_min": None,
+            "mcp_calls_per_day": None,
+            "mcp_search_daily": None,
+            "mcp_max_api_keys": None,
+            "mcp_max_connections": None,
+            "mcp_bulk_max_tasks": None,
+            "mcp_bulk_max_plan_tasks": None,
+            "mcp_list_page_max": None,
+            "mcp_apply_message_retention": None,
         },
         # Paid-tier LLM caps are set by a value-based X/Y/Z tiering model,
         # not a profit gate — genos-docs/operations/LLM_TIER_COST_OPTIMIZATION.md
@@ -1652,6 +1665,15 @@ SEARCH_ENGINE = {
             "digest_cadence": None,
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "mcp_calls_per_min": None,
+            "mcp_calls_per_day": None,
+            "mcp_search_daily": None,
+            "mcp_max_api_keys": None,
+            "mcp_max_connections": None,
+            "mcp_bulk_max_tasks": None,
+            "mcp_bulk_max_plan_tasks": None,
+            "mcp_list_page_max": None,
+            "mcp_apply_message_retention": None,
         },
         # Pro reads as: Genos ORGANIZES (composite writes — a milestone
         # + task tree in one approval), deep reasoning + adaptive
@@ -1673,6 +1695,15 @@ SEARCH_ENGINE = {
             "digest_cadence": "weekly",
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "mcp_calls_per_min": None,
+            "mcp_calls_per_day": None,
+            "mcp_search_daily": None,
+            "mcp_max_api_keys": None,
+            "mcp_max_connections": None,
+            "mcp_bulk_max_tasks": None,
+            "mcp_bulk_max_plan_tasks": None,
+            "mcp_list_page_max": None,
+            "mcp_apply_message_retention": None,
         },
         # max = 2x pro on the headline totals for ~1.96x the price, and
         # 2.5x on the premium caps — the deliberate value > price gap is
@@ -1695,6 +1726,15 @@ SEARCH_ENGINE = {
             "digest_cadence": "daily",
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "mcp_calls_per_min": None,
+            "mcp_calls_per_day": None,
+            "mcp_search_daily": None,
+            "mcp_max_api_keys": None,
+            "mcp_max_connections": None,
+            "mcp_bulk_max_tasks": None,
+            "mcp_bulk_max_plan_tasks": None,
+            "mcp_list_page_max": None,
+            "mcp_apply_message_retention": None,
         },
         # Contact-sales tier: everything unlimited except an absolute
         # per-file ceiling. Set manually via `feature_access set-tier`
@@ -1716,6 +1756,15 @@ SEARCH_ENGINE = {
             "digest_cadence": "daily",
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "mcp_calls_per_min": None,
+            "mcp_calls_per_day": None,
+            "mcp_search_daily": None,
+            "mcp_max_api_keys": None,
+            "mcp_max_connections": None,
+            "mcp_bulk_max_tasks": None,
+            "mcp_bulk_max_plan_tasks": None,
+            "mcp_list_page_max": None,
+            "mcp_apply_message_retention": None,
         },
     },
 }
