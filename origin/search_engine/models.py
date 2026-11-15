@@ -232,6 +232,13 @@ class AgentRun(models.Model):
     team_id = models.CharField(max_length=64, db_index=True)
     user_id = models.CharField(max_length=64, db_index=True)
     query = models.TextField()
+    # The question as the MODEL read it (MIP-1585), when it differs from `query`: the member's own words with each
+    # visible mention token (`#Title `, `@Name `, whose label is text somebody else chose) replaced by the item's
+    # bracketed id. `query` stays exactly what the member typed, because they read it back (history, restore,
+    # "Ask again"); this one is what the leg after an approval and every later turn of the session hand the model.
+    # NULL unless `AGENT_PARITY_TOOLS` was on at the ask and a token was replaced; read only while it is on
+    # (`agent/mention_tokens.model_query_of`).
+    model_query = models.TextField(null=True, blank=True, default=None)
     status = models.CharField(max_length=20, default="running")
     final_answer_text = models.TextField(blank=True, default="")
     error_message = models.TextField(blank=True, default="")

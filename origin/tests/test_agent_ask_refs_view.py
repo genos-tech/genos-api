@@ -136,8 +136,23 @@ class MessageAskTests(TaskMixin, AskRefWorld):
         mentions = [{"type": "task", "task_id": task.task_id}]
         _, off = self.ask(mentions=mentions, flag=False)
         _, on = self.ask(mentions=mentions, flag=True)
-        self.assertEqual(off["kwargs"]["system_extra"], on["kwargs"]["system_extra"])
+        # The flag changed how a task mention reads (MIP-1585: the bullet is keyed by the bracketed id the question
+        # carries instead of the title), but with the flag off it reads as it always did, and the chip is the same.
+        self.assertIn(f'"#{task.title}" → task:{task.task_id}', off["kwargs"]["system_extra"])
+        self.assertNotIn(task.title, on["kwargs"]["system_extra"])
+        self.assertIn(f"[task:{task.task_id}] → task:{task.task_id}", on["kwargs"]["system_extra"])
         self.assertEqual(off["kwargs"]["seed_sources"], on["kwargs"]["seed_sources"])
+        # ...and a message mention beside it does not change that bullet.
+        _, both = self.ask(mentions=[*mentions, self.mention()], flag=True)
+        bullet = f"  - [task:{task.task_id}] → task:{task.task_id}"
+        self.assertEqual(
+            [
+                line
+                for line in both["kwargs"]["system_extra"].splitlines()
+                if line.startswith(bullet)
+            ],
+            [line for line in on["kwargs"]["system_extra"].splitlines() if line.startswith(bullet)],
+        )
 
     def test_at_most_three_messages_are_read_and_the_rest_are_said_to_be_dropped(self):
         messages = [self.say(self.chat, f"message number {i}") for i in range(MAX_MESSAGE_REFS + 2)]
