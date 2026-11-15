@@ -477,7 +477,6 @@ class ListTests(World):
         gone_ms.refresh_from_db()
         self.assertFalse(gone_ms.is_deleted)
 
-
     def test_the_other_milestone_doors_answer_a_gone_project_as_a_missing_milestone(self):
         gone_ms = MilestoneMaster.objects.create(
             team=self.team, project=self.gone, title="M", reporter=self.user
@@ -505,7 +504,9 @@ class ListTests(World):
                     "/api/v2/milestone/convert-to-task/", {"milestone_id": m}, format="json"
                 ),
                 "assignee add": lambda m: self.client.post(
-                    f"/api/v2/milestone/{m}/assignees/", {"user_id": str(self.user2.id)}, format="json"
+                    f"/api/v2/milestone/{m}/assignees/",
+                    {"user_id": str(self.user2.id)},
+                    format="json",
                 ),
                 "assignee remove": lambda m: self.client.delete(
                     f"/api/v2/milestone/{m}/assignees/{self.user2.id}/"
