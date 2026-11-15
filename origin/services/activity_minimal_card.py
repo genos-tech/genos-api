@@ -140,7 +140,8 @@ def task_reader_pairs(
 ) -> set[tuple[str, int]]:
     """The `(recipient id, task id)` pairs `can_access_task` says yes to: the project's member
     or owner, the assignee or the reporter while still on the task's team (MIP-1592: the
-    project's team, else the task's own), and the task is not soft-deleted (MIP-1566). Three
+    project's team, else the task's own), and the task is not soft-deleted (MIP-1566) nor in a
+    soft-deleted project (MIP-1621). Three
     queries, five when a holder who is not on the project is among the pairs, however many
     recipients and tasks.
 
@@ -149,6 +150,7 @@ def task_reader_pairs(
     `can_access_task` over every kind of person, so a change to the rule there shows up here."""
     from origin.models.project.prj_models import ProjectMaster, ProjectMembers
     from origin.models.task.task_models import TaskMaster
+    from origin.services.live_projects import not_in_gone_project
     from origin.views.utils.scope_guards import active_team_pairs
 
     who = {str(r) for r in recipient_ids if r}
@@ -156,7 +158,9 @@ def task_reader_pairs(
     if not who or not wanted:
         return set()
     tasks = list(
-        TaskMaster.objects.filter(task_id__in=wanted, is_deleted=False).values(
+        TaskMaster.objects.filter(
+            not_in_gone_project(), task_id__in=wanted, is_deleted=False
+        ).values(
             "task_id", "project_id", "assignee_id", "reporter_id", "team_id", "project__team_id"
         )
     )

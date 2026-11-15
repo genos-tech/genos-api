@@ -30,6 +30,7 @@ from origin.services.activity_minimal_card import (
 from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
+from origin.services.live_projects import not_in_gone_project
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_attachment_manage import (
     add_attachment,
@@ -258,7 +259,7 @@ class TaskMasterView(AuthenticatedAPIView):
         body = body_object(request)
         project_id = body.get("project")
         project = None
-        if is_project_member(project_id, request.user.id):
+        if is_project_member(project_id, request.user.id, live_only=True):
             project = ProjectMaster.objects.filter(project_id=project_id).first()
         if project is None:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -532,7 +533,10 @@ class TaskMasterView(AuthenticatedAPIView):
                 )
             # A soft-deleted task is not there for a save: it answers as a missing one does
             # (MIP-1572), `can_access_task` below refuses it the same way for anyone else.
-            task = TaskMaster.objects.get(task_id=task_id, is_deleted=False)
+            # A task of a soft-deleted project reads the same way (MIP-1621).
+            task = TaskMaster.objects.filter(not_in_gone_project()).get(
+                task_id=task_id, is_deleted=False
+            )
         except TaskMaster.DoesNotExist:
             return Response(
                 {"error": "Task not found to delete."}, status=status.HTTP_404_NOT_FOUND
@@ -1535,7 +1539,7 @@ class ChildTaskView(AuthenticatedAPIView):
                 {"error": "Wrong parameters."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not is_project_member(raw_project_id, request.user.id):
+        if not is_project_member(raw_project_id, request.user.id, live_only=True):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
@@ -2111,7 +2115,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
         project_id = request.GET.get("project_id")
         # Both values came from the query string, so naming a project id
         # returned its whole task list with assignee emails.
-        if project_id and not is_project_member(project_id, request.user.id):
+        if project_id and not is_project_member(project_id, request.user.id, live_only=True):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if team_id is None or project_id is None:
@@ -3161,7 +3165,7 @@ def _openable_task_q(user_id, prefix):
         | Q(**{f"{prefix}reporter_id": user_id})
         | Q(**{f"{prefix}project_id__in": member_of})
         | Q(**{f"{prefix}project_id__in": owned})
-    )
+    ) & not_in_gone_project(prefix)
 
 
 class TaskDependencyView(AuthenticatedAPIView):

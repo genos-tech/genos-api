@@ -110,7 +110,7 @@ class ConvertMilestoneToTaskView(AuthenticatedAPIView):
         project_id = MilestoneMaster.objects.filter(
             milestone_id=milestone_id, is_deleted=False
         ).values_list("project_id", flat=True)
-        if not project_id or not is_project_member(project_id[0], request.user.id):
+        if not project_id or not is_project_member(project_id[0], request.user.id, live_only=True):
             return _not_found("Milestone")
 
         try:

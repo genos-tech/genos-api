@@ -56,6 +56,7 @@ from rest_framework.response import Response
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services.live_projects import live_project_ids, not_in_gone_project
 from origin.services.security_events import note_refusal
 
 # Deliberately vague, and identical for "no such team" and "not yours".
@@ -110,21 +111,27 @@ def is_team_member(team_id, user_id) -> bool:
     )
 
 
-def is_project_member(project_id, user_id) -> bool:
+def is_project_member(project_id, user_id, *, live_only: bool = False) -> bool:
     """True if `user_id` owns or belongs to `project_id`.
 
     No `is_deleted` filter: `ProjectMembers` has no such column, removal
     is a hard delete (`prj_views.LeaveProjectView`).
+
+    `live_only=True` (MIP-1621) answers False for a soft-deleted project, in the same two
+    queries (the project's flag rides the joins they already make): for the endpoints that
+    hand out a project's TASKS, which must answer for a gone project as for a missing one.
+    The default is unchanged for the ones that act on the project itself (leave, join).
     """
     if project_id is None or user_id is None:
         return False
-    if _no_such(
-        lambda: ProjectMaster.objects.filter(project_id=project_id, owner=user_id).exists()
-    ):
+    owned = ProjectMaster.objects.filter(project_id=project_id, owner=user_id)
+    member = ProjectMembers.objects.filter(project=project_id, attendee=user_id)
+    if live_only:
+        owned = owned.filter(is_deleted=False)
+        member = member.filter(project__is_deleted=False)
+    if _no_such(lambda: owned.exists()):
         return True
-    return _no_such(
-        lambda: ProjectMembers.objects.filter(project=project_id, attendee=user_id).exists()
-    )
+    return _no_such(lambda: member.exists())
 
 
 def is_guest(team_id, user_id) -> bool:
@@ -401,24 +408,23 @@ def reachable_project_ids(user_id, team_id) -> list:
 
     Safe to filter tasks on without a `team=` clause beside it: every id
     in here is either filed under `team_id` or is an object this person
-    holds a participation row on.
+    holds a participation row on. A soft-deleted project is not in it (MIP-1621).
     """
     if user_id is None or team_id is None:
         return []
     from origin.models.common.team_models import ExternalGrant
     from origin.services.external_grants import external_objects_for_member
 
-    mine = set(member_project_ids(user_id, team_id=team_id))
+    mine = set(member_project_ids(user_id, team_id=team_id, live_only=True))
     shared = _no_such(
         lambda: set(
-            external_objects_for_member(
-                ExternalGrant.ObjectType.PROJECT, team_id, user_id
-            ).keys()
+            external_objects_for_member(ExternalGrant.ObjectType.PROJECT, team_id, user_id).keys()
         ),
         default=set(),
     )
-    # `object_id` is a text column; the project FK is an integer.
-    return list(mine | {int(pid) for pid in shared if str(pid).isdigit()})
+    # `object_id` is a text column; the project FK is an integer. A shared project that is
+    # soft-deleted is not reachable either (MIP-1621); one query, none without a grant.
+    return list(mine | set(live_project_ids({int(pid) for pid in shared if str(pid).isdigit()})))
 
 
 def guest_visible_user_ids(team_id, user_id) -> set:
@@ -521,7 +527,9 @@ def external_visible_user_ids(team_id, user_id) -> set:
     return _no_such(_query, default=set())
 
 
-def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
+def can_access_task(
+    task_id, user_id, *, include_deleted: bool = False, include_gone_project: bool = False
+) -> bool:
     """May `user_id` see (and therefore edit) this task?
 
     The project's members and its owner, plus the assignee and the reporter WHILE THEY ARE
@@ -557,6 +565,11 @@ def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
     site, and the reason sits next to it. The check rides on the one query this makes, and
     so does the team test, so a current holder costs one query as it always did. A person
     refused here is refused exactly as a task that does not exist.
+
+    A task of a soft-deleted PROJECT is refused the same way (MIP-1621), and `include_deleted`
+    does not bring it back: the project is as gone as the task, and nothing restores either.
+    `include_gone_project=True` is for the one caller whose answer is model-visible and gated
+    behind a flag (`manage_milestone._already_gone`); no app path passes it.
     """
     if task_id is None or user_id is None:
         return False
@@ -566,6 +579,8 @@ def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
         rows = TaskMaster.objects.filter(task_id=task_id)
         if not include_deleted:
             rows = rows.filter(is_deleted=False)
+        if not include_gone_project:
+            rows = rows.filter(not_in_gone_project())
         team = Coalesce("project__team_id", "team_id")
         row = (
             rows.annotate(_team=team)
@@ -706,17 +721,23 @@ def team_ids_for_user(user_id) -> list:
     )
 
 
-def member_project_ids(user_id, team_id=None) -> list:
+def member_project_ids(user_id, team_id=None, *, live_only: bool = False) -> list:
     """Project ids `user_id` may see, optionally narrowed to one team.
 
     The canonical way to scope a team-wide task/note query down to the
     caller. `task_views.TaskMetaView` already derives exactly this list
     inline; endpoints that return "every task in the team" should filter
     through this instead.
+
+    The owned half has always left a soft-deleted project out; the member half did not, so
+    the agent tools add `project__is_deleted=False` to their own queries. `live_only=True`
+    (MIP-1621) leaves a soft-deleted project out of the member half too, in the same query.
     """
     if user_id is None:
         return []
     qs = ProjectMembers.objects.filter(attendee=user_id)
+    if live_only:
+        qs = qs.filter(project__is_deleted=False)
     if team_id is not None:
         qs = qs.filter(team=team_id)
     owned = ProjectMaster.objects.filter(owner=user_id, is_deleted=False)

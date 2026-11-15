@@ -84,7 +84,7 @@ def _converted_or_not_found(request, milestone_id: int):
         .select_related("converted_to_task__project")
         .first()
     )
-    if gone is None or not is_project_member(gone.project_id, request.user.id):
+    if gone is None or not is_project_member(gone.project_id, request.user.id, live_only=True):
         return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
     task = gone.converted_to_task
     if task.is_deleted or not can_access_task(task.task_id, request.user.id):
@@ -345,7 +345,7 @@ class MilestoneView(AuthenticatedAPIView):
                     "project", "team", "sprint", "task", "reporter"
                 )
                 .prefetch_related("milestone_assignees__user", "task__collaborators")
-                .get(milestone_id=milestone_id, is_deleted=False)
+                .get(milestone_id=milestone_id, is_deleted=False, project__is_deleted=False)
             )
         except MilestoneMaster.DoesNotExist:
             return _converted_or_not_found(request, milestone_id)
@@ -480,7 +480,9 @@ class MilestoneView(AuthenticatedAPIView):
 
     def patch(self, request, milestone_id: int):
         try:
-            milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
+            milestone = MilestoneMaster.objects.get(
+                milestone_id=milestone_id, is_deleted=False, project__is_deleted=False
+            )
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
@@ -704,7 +706,9 @@ class MilestoneView(AuthenticatedAPIView):
 
     def delete(self, request, milestone_id: int):
         try:
-            milestone = MilestoneMaster.objects.get(milestone_id=milestone_id)
+            milestone = MilestoneMaster.objects.get(
+                milestone_id=milestone_id, project__is_deleted=False
+            )
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
@@ -725,7 +729,9 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             return res
 
         try:
-            milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
+            milestone = MilestoneMaster.objects.get(
+                milestone_id=milestone_id, is_deleted=False, project__is_deleted=False
+            )
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
@@ -779,7 +785,9 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
 
     def delete(self, request, milestone_id: int, user_id):
         try:
-            milestone = MilestoneMaster.objects.get(milestone_id=milestone_id, is_deleted=False)
+            milestone = MilestoneMaster.objects.get(
+                milestone_id=milestone_id, is_deleted=False, project__is_deleted=False
+            )
         except MilestoneMaster.DoesNotExist:
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):

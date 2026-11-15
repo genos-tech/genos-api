@@ -236,7 +236,7 @@ class TaskListCreateView(PublicApiView):
         # Default scope is every project the principal belongs to —
         # never the whole team, which is the shape that made
         # GetTeamTasksView a finding in ACL_AUDIT.md.
-        allowed = member_project_ids(request.user.id, team_id=team.team_id)
+        allowed = member_project_ids(request.user.id, team_id=team.team_id, live_only=True)
         raw_project = request.query_params.get("project_id")
         if raw_project:
             try:
