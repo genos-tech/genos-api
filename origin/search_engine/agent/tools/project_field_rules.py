@@ -135,10 +135,10 @@ def defaults(project: ProjectMaster) -> dict[str, Any]:
     elif isinstance(assignee, str) and _is_uuid(assignee):
         out["assignee_id"] = assignee
     cfg = rules.get("priority", {})
-    if cfg.get("default") in VALID_PRIORITIES:
+    if isinstance(cfg.get("default"), str) and cfg["default"] in VALID_PRIORITIES:
         out["priority"] = cfg["default"]
     cfg = rules.get("effortLevel", {})
-    if cfg.get("default") in VALID_EFFORTS:
+    if isinstance(cfg.get("default"), str) and cfg["default"] in VALID_EFFORTS:
         out["effort_level"] = cfg["default"]
     offset = rules.get("dueDate", {}).get("defaultOffsetDays")
     if isinstance(offset, int) and not isinstance(offset, bool) and 0 <= offset <= 3650:

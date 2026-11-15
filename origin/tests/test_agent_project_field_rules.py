@@ -133,6 +133,14 @@ class MissingFieldsVectors(SimpleTestCase):
             dueDate={"defaultOffsetDays": True},
         )
         self.assertEqual(rules.defaults(hostile), {})
+        # Stored junk that is not even text must not break a read or a refusal (a list is unhashable).
+        junk = project_with(
+            priority={"default": ["High"]},
+            effortLevel={"default": {"x": 1}},
+            tags={"defaultTagNames": "bug"},
+            assignee={"default": 5},
+        )
+        self.assertEqual(rules.defaults(junk), {})
 
 
 class Base(McpBase):
