@@ -40,6 +40,7 @@ from origin.search_engine.chunkers.base import (
     typed_display_id,
 )
 from origin.search_engine.text_extraction import extract_text
+from origin.services.member_removal import active_team_member_ids
 
 
 def iter_milestone_chunks(
@@ -84,6 +85,16 @@ def iter_milestone_chunks(
         if row["user_id"] is not None:
             assignees_by_ms[row["milestone_id"]].append(str(row["user_id"]))
 
+    # The reporter rides on the backing task and reads it like any task's reporter: only while
+    # they are still on the team, as `task_chunker` does for a task (MIP-1371, MIP-1609).
+    reporters_by_team: dict[str, set[str]] = defaultdict(set)
+    for m in milestones:
+        if m.team_id and m.reporter_id:
+            reporters_by_team[str(m.team_id)].add(str(m.reporter_id))
+    still_on_team: dict[str, set[str]] = {
+        t: active_team_member_ids(t, ids) for t, ids in reporters_by_team.items()
+    }
+
     for m in milestones:
         if not m.team_id:
             continue
@@ -94,7 +105,7 @@ def iter_milestone_chunks(
         if m.project_id in owner_by_project:
             acl.add(owner_by_project[m.project_id])
         acl.update(assignees_by_ms.get(m.milestone_id, []))
-        if m.reporter_id:
+        if m.reporter_id and str(m.reporter_id) in still_on_team.get(team_id, ()):
             acl.add(str(m.reporter_id))
 
         title_clean = (m.title or "").strip()

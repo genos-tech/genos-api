@@ -1703,7 +1703,18 @@ class TestFlagsAreSetAfterTheAccessFilter(LineBase):
             team_name="Else", team_email="e@example.com", owner=self.user2
         )
         TaskMaster.objects.filter(pk=other_team.pk).update(team=team)
-        ids = [t.task_id for t in (mine, reported, in_project, elsewhere, deleted, other_team)]
+        # The project's owner with no member row of their own (MIP-1609).
+        owned = ProjectMaster.objects.create(
+            team=self.team, project_name="Owned", owner=self.user, project_system_user=self.user2
+        )
+        ProjectMembers.objects.filter(project=owned, attendee=self.user).delete()
+        as_owner = self.make_task(
+            "as owner", project=owned, assignee=self.user2, reporter=self.user2
+        )
+        ids = [
+            t.task_id
+            for t in (mine, reported, in_project, elsewhere, deleted, other_team, as_owner)
+        ]
         python_rule = set(LabelAccess(self.ctx).tasks(ids))
         sql_rule = set(
             TaskMaster.objects.filter(task_id__in=ids)
@@ -1711,7 +1722,9 @@ class TestFlagsAreSetAfterTheAccessFilter(LineBase):
             .values_list("task_id", flat=True)
         )
         self.assertEqual(sql_rule, python_rule)
-        self.assertEqual(python_rule, {mine.task_id, reported.task_id, in_project.task_id})
+        self.assertEqual(
+            python_rule, {mine.task_id, reported.task_id, in_project.task_id, as_owner.task_id}
+        )
 
 
 class TestArguments(LineBase):
