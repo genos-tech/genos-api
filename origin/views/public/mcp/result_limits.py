@@ -104,18 +104,28 @@ def _marker(removed: int) -> str:
     return _MARKER.format(n=removed)
 
 
-def _safe_prefix(text: str, keep: int) -> str:
-    """`text[:keep]`, backed off to before the first fence opener left without its closer, so a
-    cut never leaves a fence open."""
-    prefix = text[:keep]
+def _open_tags(text: str) -> list[int]:
+    """Where the fence openers that are never closed in `text` start."""
     opened: list[int] = []
-    for match in _TAG_AT.finditer(prefix):
+    for match in _TAG_AT.finditer(text):
         if match.group(1):
             if opened:
                 opened.pop()
         else:
             opened.append(match.start())
-    return prefix[: opened[0]] if opened else prefix
+    return opened
+
+
+def _safe_prefix(text: str, keep: int) -> str:
+    """`text[:keep]`, backed off to before the first fence opener the cut would leave without its
+    closer, so a cut never leaves a fence open that the text did not already have open. A text
+    that is itself unbalanced (it quotes a lone tag) is cut where it is: there is no balance to
+    keep, and backing off would throw the whole string away."""
+    prefix = text[:keep]
+    opened = _open_tags(prefix)
+    if opened and not _open_tags(text):
+        return prefix[: opened[0]]
+    return prefix
 
 
 def _exact_fence(text: str) -> tuple[str, str, str] | None:
@@ -506,6 +516,8 @@ def _cut_long_strings(work: Any, excess: int, cuts: Cuts) -> bool:
     level = _water_level(strings, excess)
     changed = False
     for container, key, text, path in strings:
+        if len(_split_marker(text)[0]) - level <= _MARKER_COST:
+            continue  # the marker would cost about what the cut saves
         new, removed = cut_text(text, level)
         if removed:
             container[key] = new
@@ -532,7 +544,8 @@ def _from_start(tool: str, work: Any, path: str) -> bool:
         tool in DROP_FROM_START
         and path == "messages"
         and isinstance(work, dict)
-        and not work.get("thread_id")
+        and "thread_id" in work
+        and not work["thread_id"]
     )
 
 
@@ -570,6 +583,15 @@ def _drop_items(work: Any, excess: int, tool: str, cuts: Cuts) -> bool:
         work["has_more"] = True
         work["next_cursor"] = items[0]["message_id"]
         cuts.next_cursor = None
+    elif not from_start and isinstance(work, dict) and path in work:
+        # The tool's own cursor (`list_tasks`, `list_my_chats`, `get_timeline`) points past the
+        # items it listed, and the ones just dropped came before it: left as it is, a client that
+        # pages on would skip them without a word. Better none than a cursor that skips; the
+        # notice says to ask again with a smaller `limit`, which comes with a right one.
+        if work.get("next_cursor"):
+            work["next_cursor"] = None
+        if "has_more" in work and dropped:
+            work["has_more"] = True
     return dropped > 0
 
 

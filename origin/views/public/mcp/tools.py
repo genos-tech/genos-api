@@ -2841,8 +2841,9 @@ def call(
     # argument, and the in-app agent's copy of it must stay as it is.
     sent = dict(args)
     mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
-    # MIP-1367: the paging arguments (`offset`, `max_chars`, `limit`, `cursor`) belong to this layer,
-    # not to the registry tool, so they are taken out here; checked in words before anything runs.
+    # MIP-1367: the paging arguments of the tools that take them (while the switch is on) belong to
+    # this layer, not to the registry tool, so they are taken out here and checked in words before
+    # anything runs. The switch is read ONCE per call.
     limits = result_limits.limits_on()
     limit_args: dict[str, Any] = {}
     caller = page = None

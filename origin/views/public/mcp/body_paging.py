@@ -82,12 +82,18 @@ def _int_arg(args: dict[str, Any], name: str, default: int, low: int) -> int:
     value = args.get(name)
     if value is None or value == "":
         return default
+    bad = ToolError(f"`{name}` must be a whole number (got {repr(value)[:40]}).")
     if isinstance(value, bool):
-        raise ToolError(f"`{name}` must be a whole number (got {value!r}).")
+        raise bad
+    if isinstance(value, float):
+        # JSON allows 5.7, Infinity and NaN; the schema says integer.
+        if not value.is_integer():
+            raise bad
+        value = int(value)
     try:
         number = int(value)
-    except (TypeError, ValueError):
-        raise ToolError(f"`{name}` must be a whole number (got {value!r}).") from None
+    except (TypeError, ValueError, OverflowError):
+        raise bad from None
     if number < low:
         raise ToolError(f"`{name}` must be at least {low} (got {number}).")
     return number
@@ -143,7 +149,7 @@ def page_body(
     total = len(body)
     if offset and offset >= total:
         raise ToolError(
-            f"`offset` {offset} is past the end: the {_WHAT[tool]} has {total} characters. "
+            f"`offset` is past the end: the {_WHAT[tool]} has {total} characters. "
             "Pass the `next_offset` of the previous part."
         )
 
@@ -157,9 +163,22 @@ def page_body(
         room = cap - _fits_room(payload, field, render) - NOTICE_ROOM
     window = max(min(max_chars, room), 200)
 
-    end = cut_point(body, offset, window) if offset or total > window else total
-    if end - offset > window:
-        end = offset + window
+    # The part is sized in characters but the answer is measured as JSON text, where a newline, a
+    # quote or a backslash costs two: dense markdown renders far larger than it counts. Shrink the
+    # part until the answer, with the fields a partial read adds, fits, BEFORE `next_offset` is
+    # set: a part the generic guard cut afterwards would leave a gap between two parts.
+    target = cap - NOTICE_ROOM
+    for _ in range(12):
+        end = cut_point(body, offset, window)
+        payload[field] = body[offset:end]
+        probe = payload
+        if offset or end < total:
+            probe = {**payload, "body_total_chars": total, "next_offset": end}
+        size = len(render(probe))
+        if size <= target or window <= 200:
+            break
+        window = max(200, min(window - 1, int(window * target / size * 0.97)))
+    payload[field] = body
     if comments_left_out:
         cuts.drop("comments", comments_left_out)
     if offset == 0 and end >= total:
