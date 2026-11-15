@@ -85,7 +85,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # call: +4.2% of the prompt, +6% per ask in the grouped paid run of 2026-11-15, gemini-3.6-flash). Nothing
 # needs raising: the constant stays 146,000 (131 characters left), and `ALL_ON_BUDGET_CHARS` (147,500; 147,324
 # with a Long member's content block) holds too. The next parity task raises both with its own measurement.
-BUDGET_CHARS = 146_000
+# MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`, DEFAULT OFF): `list_project_tags` gains one description sentence (+146:
+# `task_field_rules` and `task_templates`; 146,015 with the flag on over the production flags). Production sends
+# nothing of it (the flag is off: still 145,869), but the all-on arm and the day the flag is flipped must fit, and
+# 131 characters were left, so the constant goes up to the next 500 over the measured size: 146,500.
+BUDGET_CHARS = 146_500
 
 
 def _declared_chars() -> int:
@@ -123,6 +127,16 @@ class PrefixBudgetTests(SimpleTestCase):
         ):
             # `agent_system_prompt()`, not the constant: the flag adds the event citation line (MIP-1059),
             # and so does the reject-reason rule the production defaults turn on.
+            total = _declared_chars() + len(agent_system_prompt())
+        self.assertLessEqual(total, BUDGET_CHARS)
+
+    def test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget(self) -> None:
+        # Default off: production does not pay this yet; the day it is flipped it must already fit.
+        from apis import settings as production  # noqa: PLC0415
+
+        with mock.patch.dict(
+            settings.SEARCH_ENGINE, {**production.SEARCH_ENGINE, "AGENT_PARITY_FOLLOWUPS": True}
+        ):
             total = _declared_chars() + len(agent_system_prompt())
         self.assertLessEqual(total, BUDGET_CHARS)
 

@@ -54,6 +54,9 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # THE FLIP (2026-11-15): `AGENT_PARITY_TOOLS` is on by default, so production sends the 145,869 above
 # (re-measured on the merged tree). Nothing is raised: 147,324 with a Long member's block fits the
 # 147,500 constant, and `BUDGET_CHARS` (146,000) holds the production number.
+# MIP-1589 (the follow-ups flag, default off): +146 more (`list_project_tags`' sentence; 146,015 all-on, 147,470 with a
+# Long member's block): 30 characters left, the constant stays. MIP-1607's calendar sentence (+157) is the next to need
+# a raise.
 ALL_ON_BUDGET_CHARS = 147_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
