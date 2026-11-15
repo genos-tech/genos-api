@@ -187,7 +187,7 @@
       }
     },
     "production": {
-      "all": "1dc7a2f2888eb21da699bd56c06a8474f30c809bf1869e43f155d6321e5f95d8",
+      "all": "9b9b8742685fc1f3c6c841379b2491dfb158a9970f6493de9d91016ffc2fdcad",
       "surfaces": {
         "prompt.level.act": {
           "bytes": 27627,
@@ -338,36 +338,36 @@
           "sha256": "0f91563de066d29a0bad81904b1a05efe0a8a1637549055ebb210e6b9de27d7c"
         },
         "tools.claude.full": {
-          "bytes": 144048,
-          "sha256": "8c6ccd519c7ebcc40603ac69fb68302b3fbecea38836dcda2233fb6266b743b0"
+          "bytes": 144602,
+          "sha256": "da4b184f58735ea8499df7fc88df4b4efa06c5a39dbce0f160d278ab62140981"
         },
         "tools.claude.read": {
-          "bytes": 64921,
-          "sha256": "0642d4662a278a7f4277c05ed919f777a90db3f09d9b2f5c54e189e7aa78f358"
+          "bytes": 65283,
+          "sha256": "52d40a4562bf4422e8dd82976de9ea0a85e2dce2d0006a9d0abdc061dfa82981"
         },
         "tools.gemini.full": {
-          "bytes": 152828,
-          "sha256": "df9bb2c0ce991c08d36e8e695f1d41f967c724f4e824a6939af9a4b4eaebc765"
+          "bytes": 153382,
+          "sha256": "f6e7ae4c637d456a58a5d891863cadac551a92439b2e801f977ea32288259d60"
         },
         "tools.gemini.read": {
-          "bytes": 68458,
-          "sha256": "891077d1390904d6a5f91fb3964ffdbe37687252c18d4dbf59df1303d62b27a3"
+          "bytes": 68820,
+          "sha256": "ee9922c87849acbb920de9d59e698c38492438df1dda7595b01994615380c52d"
         },
         "tools.neutral.full": {
-          "bytes": 140216,
-          "sha256": "db050757fd8264d4c87ff8b4b9942d8cab7da2249bcbe6e888e986179657e53c"
+          "bytes": 140770,
+          "sha256": "41a96295210b0176b3b1bbf23f5610988efd91c1e98b852499a6000b450a04aa"
         },
         "tools.neutral.read": {
-          "bytes": 63090,
-          "sha256": "b8f92f8e868ea900fd9e860a59ece000c500fc779d3e5809505c57b8f1453bc3"
+          "bytes": 63452,
+          "sha256": "068d6bb4acaf73a470397481b11decb4dd4c5f64492e6d604ec630a90c97e799"
         },
         "tools.openai.full": {
-          "bytes": 150773,
-          "sha256": "5456a95d99220a04813008e47fe44ed03941d1db10d29ef58f5a312bf9b23cf4"
+          "bytes": 151327,
+          "sha256": "641e5f6e274b3fa34c53c881048e1c82da73ec0bfba14116b7c30f076651d54b"
         },
         "tools.openai.read": {
-          "bytes": 68315,
-          "sha256": "821eae5a84fd2c171b89e4cea396324dbcd2dd02e876174c29f6e95557d2e421"
+          "bytes": 68677,
+          "sha256": "63722fbe5e2d88e93c3c397da663bbc07a31612214b4d0d39d48a864703354da"
         }
       }
     }

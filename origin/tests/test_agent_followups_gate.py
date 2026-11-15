@@ -1,9 +1,11 @@
 """The gate of the parity batch's model-visible follow-ups: `AGENT_PARITY_FOLLOWUPS` (MIP-1589, MIP-1607, MIP-1590).
 
 `AGENT_PARITY_TOOLS` is on in production since 2026-11-15 and can no longer protect a new model-visible change, so
-the follow-ups have their own flag, default OFF. This file pins the mechanism the three items share; each item's own
-tests pin what it does with the flag on and off. The committed fingerprint golden (`test_agent_fingerprint_golden`)
-is the proof that with the flag off the model is shown exactly what it was.
+the follow-ups have their own flag. It shipped OFF and is ON by default since the 2026-11-15 flip (the PR after the
+re-measure; env `AGENT_PARITY_FOLLOWUPS=false` is the rollback). This file pins the mechanism the three items share;
+each item's own tests pin what it does with the flag on and off. The key-free test settings keep the flag OFF
+(`apis/settings_test.py`), so the "off" tests describe the rollback arm, not production. The committed fingerprint golden
+(`test_agent_fingerprint_golden`) is the proof that with the flag off the model is shown exactly what it was.
 """
 
 from __future__ import annotations
@@ -22,13 +24,15 @@ FLAG = "AGENT_PARITY_FOLLOWUPS"
 
 
 class FlagDefaultTests(SimpleTestCase):
-    def test_it_ships_off(self):
-        self.assertIs(production.SEARCH_ENGINE[FLAG], False)
+    def test_it_ships_on(self):
+        # The production default (`apis.settings`); the rollback is the env value `false`.
+        self.assertIs(production.SEARCH_ENGINE[FLAG], True)
 
     def test_the_test_suite_runs_with_it_off(self):
+        # Every other test assumes the unflagged behaviour and turns the flag on explicitly; the "off" tests of the
+        # batch therefore describe the non-production (rollback) arm.
         self.assertIs(settings.SEARCH_ENGINE[FLAG], False)
-        # Not one of the flags the suite switches off for production: it is off in production too.
-        self.assertNotIn(FLAG, test_settings.AGENT_FLAGS_ON_IN_PRODUCTION)
+        self.assertIn(FLAG, test_settings.AGENT_FLAGS_ON_IN_PRODUCTION)
 
     def test_the_helper_follows_the_setting(self):
         self.assertEqual(parity.FOLLOWUPS_FLAG, FLAG)
@@ -56,8 +60,9 @@ class ArmTests(SimpleTestCase):
         self.assertTrue(harness.all_on_arm(harness.load_arms()).effective[FLAG])
 
     def test_the_arm_changes_something_against_the_baseline(self):
-        # The baseline (arm0) is what production runs: the flag off.
-        self.assertEqual(
-            harness.validate_overrides(harness.load_arms()["followups"], production.SEARCH_ENGINE),
-            [],
-        )
+        # The baseline the arm was measured against is the rollback: the flag off. Against today's production the
+        # flag is already on, and the harness says the arm would change nothing.
+        rollback = {**production.SEARCH_ENGINE, FLAG: False}
+        arm = harness.load_arms()["followups"]
+        self.assertEqual(harness.validate_overrides(arm, rollback), [])
+        self.assertEqual(len(harness.validate_overrides(arm, production.SEARCH_ENGINE)), 1)
