@@ -18,9 +18,11 @@ who edits an app-written message drops the stamp, and the serializer reduces onc
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from unittest import mock
 
 from django.urls import reverse
+from django.utils import timezone
 
 from origin.middleware.current_user import via_override
 from origin.models.chat.unified_models import Channel, ChannelKind, Message
@@ -32,7 +34,14 @@ from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.list_my_chats import LIST_MY_CHATS
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.serializers.chat.unified_serializers import MessageSerializer
-from origin.services import message_via, task_card_post, unified_writer
+from origin.services import (
+    briefing,
+    item_lines,
+    message_via,
+    task_card_post,
+    timeline,
+    unified_writer,
+)
 from origin.services.task_comment_fanout import fan_out_task_comment
 from origin.services.task_comment_manage import edit_comment
 from origin.tests.test_base import BaseAPITestCase
@@ -59,7 +68,7 @@ SECRETS = (
     "client_name",
     "key_name",
 )
-BODY = [{"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]
+BODY = [{"type": "paragraph", "content": [{"type": "text", "text": "mirror-comment-text"}]}]
 PLANTS = [
     {"kind": "oauth", "app": "claude"},
     {"kind": "oauth", "app": "chatgpt", "connection_id": "x"},
@@ -474,29 +483,45 @@ class AnEditByAPersonDropsTheStamp(_Base):
 
 
 class TheModelSeesNoDifference(_Base):
-    """`fetch_chat_thread` and `list_my_chats` read named keys; a stamp changes nothing they say."""
+    maxDiff = None
 
-    def _both(self):
+    """The in-app model's chat readers read named keys of `metadata`; a stamp changes nothing."""
+
+    def _everything(self):
+        now = self.now
+        since, until = now - timedelta(days=1), now + timedelta(days=1)
         thread = FETCH_CHAT_THREAD.run(
             {"chat_id": str(self.channel.id), "thread_id": str(self.parent.id)}, self.ctx
         )
         main = FETCH_CHAT_THREAD.run({"chat_id": str(self.channel.id)}, self.ctx)
         chats = LIST_MY_CHATS.run({}, self.ctx)
-        return json.dumps([thread, main, chats], sort_keys=True, default=str)
+        line = item_lines.item_lines(self.ctx, self.task.task_id, since, until, now=now)
+        events = timeline.timeline(
+            self.ctx,
+            "task",
+            str(self.task.task_id),
+            since=since.isoformat(),
+            until=until.isoformat(),
+        )
+        events.pop("window", None)  # its `until` is clamped to the wall clock
+        brief = briefing.build_briefing(self.ctx, window="week", now=now)
+        return json.loads(json.dumps([thread, main, chats, line, events, brief], default=str))
 
     def test_with_and_without_a_via_the_tool_results_are_byte_identical(self):
-        task = self.make_task()
-        self.parent = self.card_of(task)
-        _, mirror = self.comment(task, None)
-        without = self._both()
+        self.now = timezone.now() + timedelta(hours=1)
+        self.task = self.make_task()
+        self.parent = self.card_of(self.task)
+        _, mirror = self.comment(self.task, None)
+        without = self._everything()
+        self.assertIn("mirror-comment-text", json.dumps(without), "the comment was read")
         Message.objects.filter(pk=mirror.pk).update(
             metadata={**mirror.metadata, "via": REDUCED_CLAUDE}
         )
         Message.objects.filter(pk=self.parent.pk).update(
             metadata={**self.parent.metadata, "via": REDUCED_CLAUDE}
         )
-        self.assertEqual(self._both(), without)
-        self.assertNotIn("claude", without)
+        self.assertEqual(self._everything(), without)
+        self.assertNotIn("claude", json.dumps(without))
 
 
 class TheHelper(BaseAPITestCase):
