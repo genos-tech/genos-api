@@ -509,3 +509,33 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
             if n.get("type") == "text"
         )
         self.assertIn("the task", flat)
+
+
+class NoteBodyCodeLanguageTests(NoteWriteToolTestBase):
+    """A fence the editor has no language id for is stored as `text` (MIP-1604):
+    BlockNote's code block throws on any other, so create_note and update_note
+    must not store a body the editor cannot mount. Code is stored unchanged."""
+
+    MD = "```ts\nconst a = 1\n```\n\n```go\nfunc main() {}\n```"
+
+    @staticmethod
+    def _languages(body):
+        return [b["props"]["language"] for b in body if b["type"] == "codeBlock"]
+
+    def test_create_note_stores_editor_language_ids(self):
+        res = create_note_run(
+            {"note_type": "personal", "title": "n", "content_text": self.MD}, self.ctx
+        )
+        note = PersonalNoteMaster.objects.get(note_id=res["note_id"])
+        self.assertEqual(self._languages(note.body), ["typescript", "text"])
+        sources = [b["content"][0]["text"] for b in note.body if b["type"] == "codeBlock"]
+        self.assertEqual(sources, ["const a = 1", "func main() {}"])
+
+    def test_update_note_stores_editor_language_ids(self):
+        note = self._personal_note()
+        update_note_run(
+            {"note_type": "personal", "note_id": note.note_id, "content_text": self.MD},
+            self.ctx,
+        )
+        note.refresh_from_db()
+        self.assertEqual(self._languages(note.body), ["typescript", "text"])

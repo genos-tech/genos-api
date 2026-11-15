@@ -108,36 +108,175 @@ _SOURCE_BLOCK_FENCES = {"math": "mathBlock", "mermaid": "diagram"}
 # through the text: the source cannot contain a `$`, so each opener's scan stops at
 # the next one.
 
-# Fence info strings → the language ids the editor's syntax-highlighted
-# code block (`@blocknote/code-block`'s `supportedLanguages`) knows. Its
-# editor-side ``` shortcut resolves aliases the same way
-# (`getLanguageId`), so `py` lands as `python` either way. Anything not
-# listed is kept as written — the editor shows it unhighlighted.
-_LANGUAGE_ALIASES = {
-    "": "text",
+# The language of a code block, kept to ids the editor can render (MIP-1604, the api
+# half of MIP-1601). BlockNote's highlighted code block throws "Language X is not
+# supported." from its node view when `props.language` is not one of the ids below
+# (`typescript`, not its alias `ts`), and the note body then never mounts. So an
+# imported fence name is resolved here: an id passes, an alias maps to its id,
+# anything else (go, dockerfile, toml, ...) is plain `text`, and the code itself is
+# never touched.
+#
+# KEEP IN SYNC with genos-frontend `src/components/editors/codeBlockLanguage.ts`
+# (`resolveCodeLanguage`, `EXTRA_CODE_LANGUAGE_ALIASES`) and `@blocknote/code-block`'s
+# `codeBlockOptions.supportedLanguages` (BlockNote 0.57). The data is copied, not
+# shared; `TestCodeBlockLanguage` checks that every alias target is in the id list.
+SUPPORTED_CODE_LANGUAGE_IDS = frozenset(
+    (
+        "text",
+        "c",
+        "cpp",
+        "css",
+        "glsl",
+        "graphql",
+        "haml",
+        "html",
+        "java",
+        "javascript",
+        "json",
+        "jsonc",
+        "jsonl",
+        "jsx",
+        "julia",
+        "less",
+        "markdown",
+        "mdx",
+        "php",
+        "postcss",
+        "pug",
+        "python",
+        "r",
+        "regexp",
+        "sass",
+        "scss",
+        "shellscript",
+        "sql",
+        "svelte",
+        "typescript",
+        "vue",
+        "vue-html",
+        "wasm",
+        "wgsl",
+        "xml",
+        "yaml",
+        "tsx",
+        "haskell",
+        "csharp",
+        "latex",
+        "lua",
+        "mermaid",
+        "ruby",
+        "rust",
+        "scala",
+        "swift",
+        "kotlin",
+        "objective-c",
+    )
+)
+
+# Aliases the editor's own language picker carries (its ``` shortcut resolves them the
+# same way, so `py` lands as `python` either way).
+PICKER_CODE_LANGUAGE_ALIASES = {
     "txt": "text",
     "plain": "text",
-    "plaintext": "text",
     "c++": "cpp",
     "gql": "graphql",
     "js": "javascript",
-    "ts": "typescript",
+    "jl": "julia",
+    "md": "markdown",
+    "jade": "pug",
     "py": "python",
-    "sh": "shellscript",
+    "regex": "regexp",
     "bash": "shellscript",
+    "sh": "shellscript",
     "shell": "shellscript",
     "zsh": "shellscript",
+    "ts": "typescript",
     "yml": "yaml",
-    "md": "markdown",
+    "typescriptreact": "tsx",
+    "hs": "haskell",
+    "c#": "csharp",
+    "cs": "csharp",
+    "mmd": "mermaid",
     "rb": "ruby",
     "rs": "rust",
     "kt": "kotlin",
-    "cs": "csharp",
-    "c#": "csharp",
-    "hs": "haskell",
+    "kts": "kotlin",
     "objc": "objective-c",
-    "tex": "latex",
 }
+
+# Names the picker does not carry, each pointing at a supported id. A language with no
+# highlighter in the editor is deliberately NOT here: it resolves to `text`.
+EXTRA_CODE_LANGUAGE_ALIASES = {
+    # JavaScript / TypeScript family
+    "node": "javascript",
+    "nodejs": "javascript",
+    "mjs": "javascript",
+    "cjs": "javascript",
+    "javascriptreact": "jsx",
+    "mts": "typescript",
+    "cts": "typescript",
+    # Shell
+    "console": "shellscript",
+    "shell-session": "shellscript",
+    "shellsession": "shellscript",
+    "terminal": "shellscript",
+    "ksh": "shellscript",
+    "fish": "shellscript",
+    # Data / markup
+    "htm": "html",
+    "xhtml": "html",
+    "svg": "xml",
+    "xsd": "xml",
+    "xsl": "xml",
+    "plist": "xml",
+    "json5": "jsonc",
+    "ndjson": "jsonl",
+    "yamlfrontmatter": "yaml",
+    "mdown": "markdown",
+    # Others
+    "python3": "python",
+    "py3": "python",
+    "pyw": "python",
+    "cc": "cpp",
+    "cxx": "cpp",
+    "hpp": "cpp",
+    "h": "c",
+    "c-sharp": "csharp",
+    "golang": "text",
+    "tex": "latex",
+    "postgresql": "sql",
+    "postgres": "sql",
+    "mysql": "sql",
+    "sqlite": "sql",
+    "plsql": "sql",
+    # Output, not code
+    "plaintext": "text",
+    "none": "text",
+    "nohighlight": "text",
+    "output": "text",
+    "log": "text",
+    "diff": "text",
+}
+
+_CODE_LANGUAGE_ALIASES = {**EXTRA_CODE_LANGUAGE_ALIASES, **PICKER_CODE_LANGUAGE_ALIASES}
+_PLAIN_TEXT_LANGUAGE = "text"
+
+
+def resolve_code_language(raw: object) -> str:
+    """The editor id for a fence's language name: an id passes through, an alias (any
+    case) maps to its id, anything else (including no name, or a non-string) is `text`.
+    Only the first word counts, so `ts title="a.ts"` or `js {1,3}` still resolve.
+    Mirrors the frontend's `resolveCodeLanguage`. Never raises."""
+    if not isinstance(raw, str):
+        return _PLAIN_TEXT_LANGUAGE
+    name = re.split(r"[\s{]", raw.strip(), maxsplit=1)[0].lower()
+    name = name.removeprefix(".").removeprefix("language-")
+    if not name:
+        return _PLAIN_TEXT_LANGUAGE
+    if name in SUPPORTED_CODE_LANGUAGE_IDS:
+        return name
+    return _CODE_LANGUAGE_ALIASES.get(name, _PLAIN_TEXT_LANGUAGE)
+
 
 # A nested list item is indented at least this far past its parent's
 # marker column (CommonMark accepts 2 for `-`, and 2–4 is what models emit).
@@ -553,10 +692,9 @@ def _table_block(
 
 
 def _code_block(language: str, source: str) -> dict[str, Any]:
-    lang = language.strip().lower()
     return {
         "type": "codeBlock",
-        "props": {"language": _LANGUAGE_ALIASES.get(lang, lang)},
+        "props": {"language": resolve_code_language(language)},
         # Literal: no inline parsing inside code.
         "content": [_text_node(source)] if source else [],
         "children": [],
