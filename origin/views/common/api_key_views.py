@@ -17,6 +17,7 @@ ever widens again.)
 
 import uuid
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -33,6 +34,7 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
+from origin.services import mcp_tier_limits
 from origin.services.api_keys import key_label, revoke_api_key
 from origin.services.member_roles import OWNER, can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
@@ -61,6 +63,15 @@ def _serialize(key: ApiKey) -> dict:
         "revokedAt": key.revoked_at,
         "createdAt": key.ts_created_at,
     }
+
+
+def _active_key_count(user) -> int:
+    """The person's keys that still work: not revoked, not expired."""
+    return (
+        ApiKey.objects.filter(user=user, revoked_at__isnull=True)
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+        .count()
+    )
 
 
 class ApiKeyListCreateView(AuthenticatedAPIView):
@@ -153,6 +164,27 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         expires_at = timezone.now() + timezone.timedelta(days=days)
+
+        # The plan's limit on how many keys a person has (MIP-1367 phase 3): dark, so `off` and a
+        # plan with no limit make no query. Only a NEW key is refused; the ones that exist keep
+        # working. Team keys count too: they are the creator's to revoke.
+        if hit := mcp_tier_limits.check_new_credential(
+            request.user.id, mcp_tier_limits.MAX_API_KEYS, lambda: _active_key_count(request.user)
+        ):
+            return Response(
+                {
+                    "error": (
+                        f"Your plan allows {hit.limit} active API keys, and you have {hit.used}. "
+                        "Revoke a key you no longer use in Settings → Developer, or upgrade "
+                        "your plan. Your existing keys keep working."
+                    ),
+                    "limit_reached": True,
+                    "used": hit.used,
+                    "limit": hit.limit,
+                    "category": hit.category,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         raw = generate_key()
         key = ApiKey.objects.create(

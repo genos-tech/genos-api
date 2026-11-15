@@ -34,7 +34,7 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_connections, mcp_oauth
+from origin.services import mcp_connections, mcp_oauth, mcp_tier_limits
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -167,6 +167,11 @@ class McpConsentDecisionView(_ConsentBase):
 
         application = get_application_model().objects.get(client_id=credentials["client_id"])
         scopes = decision["scopes"]
+        # The plan's limit on connected apps (MIP-1367 phase 3): dark. A NEW connection, or one
+        # brought back after a disconnect, is refused over the limit; consenting again to one that
+        # is active is not a new connection. Checked before anything is written.
+        if limited := self._over_the_plans_connections(request.user, application):
+            return limited
         with transaction.atomic():
             # Consenting again after a disconnect starts clean: whatever tokens the old
             # connection left are not woken up by the new one.
@@ -191,6 +196,31 @@ class McpConsentDecisionView(_ConsentBase):
             if response.status_code != 200:
                 transaction.set_rollback(True)
         return response
+
+    @staticmethod
+    def _over_the_plans_connections(user, application) -> Response | None:
+        active = McpConnection.objects.filter(user=user, revoked_at__isnull=True)
+        hit = mcp_tier_limits.check_new_credential(
+            user.id,
+            mcp_tier_limits.MAX_CONNECTIONS,
+            active.count,
+            exempt=lambda: active.filter(application=application).exists(),
+        )
+        if hit is None:
+            return None
+        # The consent page shows `error_description` (as it does for `plan_required`), and the
+        # plan-limit names the web app already reads sit beside it.
+        return _problem(
+            "plan_limit",
+            f"Your plan allows {hit.limit} connected AI apps, and you have {hit.used}. "
+            "Disconnect one you no longer use in Settings → Connected apps, or upgrade your "
+            "plan. Your existing connections keep working.",
+            http=status.HTTP_429_TOO_MANY_REQUESTS,
+            limit_reached=True,
+            used=hit.used,
+            limit=hit.limit,
+            category=hit.category,
+        )
 
     @staticmethod
     def _outcome(library, fake, credentials, scopes, *, allow, record=None) -> Response:
