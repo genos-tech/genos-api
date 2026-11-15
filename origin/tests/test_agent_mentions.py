@@ -551,9 +551,14 @@ class AskViewMentionTests(BaseAPITestCase):
     def test_mentions_append_to_thread_context_block(self):
         channel = Channel.objects.create(team=self.team, kind=2, title="general")
         ChannelMember.objects.create(channel=channel, user=self.user, role="owner")
-        with patch(
-            "origin.search_engine.agent_views.load_or_generate_for_ask",
-            return_value="THREAD SUMMARY TEXT",
+        with (
+            patch(
+                "origin.search_engine.agent_views.load_or_generate_for_ask",
+                return_value="THREAD SUMMARY TEXT",
+            ),
+            # The thread has no replies and its summary is faked: the access check before the
+            # summary (MIP-1590) is not what this test is about.
+            patch("origin.search_engine.agent_views.check_thread_for_ask"),
         ):
             resp, captured = self._post_ask(
                 self._base_payload(
