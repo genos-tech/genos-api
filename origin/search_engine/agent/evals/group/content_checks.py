@@ -30,12 +30,15 @@ does not use them:
       an exact value), and
       `task_args_match` (the same for the rows of a plan: at least one task must match each).
 
-  `expect: {tool_calls_match: [{tool, count | count_at_most | count_at_least, args_present, args_absent, args_match}]}`
+  `expect: {tool_calls_match: [{tool, count | count_at_most | count_at_least, args_present, args_absent, args_match,
+      args_not_match}]}`
       (MIP-1607) checks the arguments of the READ calls the model made, which `pending_write` cannot see (a read
       never pauses): of the calls to `tool`, how many there were, and, for EVERY one of them, which arguments it
       sent (`args_present`), must not have sent (`args_absent`) and what they match (`args_match`, as above).
       "One `list_calendar_events` call, with `account: all`" is `{tool: list_calendar_events, count: 1,
-      args_match: {account: "^all$"}}`; a member with one account must send no `account` at all.
+      args_match: {account: "^all$"}}`. `args_not_match` (name -> regex) is the other way: an argument that is not
+      sent passes, one that is sent must NOT match (a member with one account may send `account: all`, which reads the
+      same single account, but not a specific account id: `{account: "^(?!all$)"}`).
 
 The pending events are teed out of `run_agent` by wrapping the name `runner.run_agent` for the
 duration of a case, reference-counted and routed by a ContextVar (the same pattern as the locale
@@ -431,7 +434,7 @@ def _sent(arguments: Any, name: str) -> bool:
 
 
 #: The argument checks `pending_write` and `tool_calls_match` share (`_argument_checks`).
-ARGUMENT_KEYS = frozenset({"args_present", "args_absent", "args_match"})
+ARGUMENT_KEYS = frozenset({"args_present", "args_absent", "args_match", "args_not_match"})
 
 
 def _argument_checks(spec: dict[str, Any], arguments: Any, add: Any) -> None:
@@ -451,6 +454,18 @@ def _argument_checks(spec: dict[str, Any], arguments: Any, add: Any) -> None:
             if not re.search(str(pattern), text, re.IGNORECASE):
                 wrong[name] = text[:80]
         add("args_match", not wrong, f"did not match: {wrong}" if wrong else "all matched")
+    if "args_not_match" in spec:
+        # An argument that is not sent is fine; one that is sent must NOT match (a one-account member may send
+        # `account: "all"`, which reads the same single account, but never a specific account id).
+        wrong = {}
+        for name, pattern in spec["args_not_match"].items():
+            value = arguments.get(name) if isinstance(arguments, dict) else None
+            if value in (None, ""):
+                continue
+            text = _as_text(value)
+            if re.search(str(pattern), text, re.IGNORECASE):
+                wrong[name] = text[:80]
+        add("args_not_match", not wrong, f"matched what is forbidden: {wrong}" if wrong else "none")
     if "task_args_match" in spec:
         tasks = arguments.get("tasks") if isinstance(arguments, dict) else None
         rows = [t for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []

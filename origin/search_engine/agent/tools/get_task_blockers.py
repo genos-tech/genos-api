@@ -43,6 +43,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     ToolForbidden,
 )
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 
 
 def _hydrate_ref(dep_id: int, other: TaskMaster) -> dict[str, Any]:
@@ -76,6 +77,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # The words of a missing one, so a guessed id does not say which tasks exist in other
         # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
         raise ToolForbidden(f"Task {task_id} not found.")
+    # MIP-1590 item 5 (flag `AGENT_PARITY_FOLLOWUPS`): a task of a soft-deleted project reads like a missing one.
+    if in_deleted_project(target):
+        raise ToolError(f"Task {task_id} not found.")
     allowed = task_acl_user_ids(
         getattr(target, "project_id", None),
         getattr(target, "assignee_id", None),

@@ -44,6 +44,7 @@ from origin.search_engine.agent.tools.base import Tool
 from origin.search_engine.agent.tools.fetch_note import DESCRIPTION_ADDITION as _NOTE_THREADS
 from origin.search_engine.agent.tools.get_current_user import DESCRIPTION_ADDITION as _TEAM
 from origin.search_engine.agent.tools.inbox_report import DESCRIPTION_ADDITION as _INBOX_REPORT
+from origin.search_engine.agent.tools.project_field_rules import REQUIRED_SENTENCE as _REQUIRED
 from origin.search_engine.agent.tools.task_anchors import DESCRIPTION_ADDITION as _ANCHORS
 
 #: `(tool name, SEARCH_ENGINE flag, sentence appended to the description)`
@@ -84,6 +85,9 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("list_calendar_events", FOLLOWUPS_FLAG, _list_calendar_events.FOLLOWUPS_DESCRIPTION_ADDITION),
     # MIP-1589 (the follow-ups flag): a project's required fields and the names of its templates.
     ("list_project_tags", FOLLOWUPS_FLAG, _list_project_tags.DESCRIPTION_ADDITION),
+    # The first paid run: the model read the rules and filled the required fields itself. A required field is the member's.
+    ("create_task", FOLLOWUPS_FLAG, _REQUIRED),
+    ("create_task_plan", FOLLOWUPS_FLAG, _REQUIRED),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`

@@ -27,6 +27,7 @@ from origin.search_engine.agent.tools.field_limits import (
     MCP_SEARCH_QUERY_MAX_CHARS,
     check_text_length,
 )
+from origin.search_engine.agent.tools.project_gone import drop_deleted_projects
 from origin.search_engine.agent.tools.search_window import SearchWindow, skip_rewrite
 from origin.search_engine.search import search
 
@@ -244,6 +245,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             }
         )
 
+    # MIP-1590 item 5 (flag `AGENT_PARITY_FOLLOWUPS`): the index still holds the tasks, notes and milestones of a
+    # soft-deleted project, and a hit would name them (and the project). They read as never indexed.
+    matches = drop_deleted_projects(matches)
     matches = window.apply(matches)
 
     return {
