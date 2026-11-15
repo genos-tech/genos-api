@@ -173,7 +173,8 @@ def _locked_task(undoing: Undoing, task_id: int) -> TaskMaster:
     """The task, locked, with the checks every task undo shares: it is still there,
     still the team's, and the person may still edit it."""
     task = TaskMaster.objects.select_for_update().filter(task_id=task_id).first()
-    if task is None:
+    # A soft-deleted task is gone as far as an undo is concerned, as a missing one is (MIP-1572).
+    if task is None or task.is_deleted:
         raise _changed("The task")
     if str(task.team_id or "") != undoing.team_id or not can_access_task(
         task.task_id, undoing.user_id

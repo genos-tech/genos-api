@@ -10,9 +10,7 @@ The rule per row is the one the product applies to open the thing itself, not a 
 
   * 5 task body   `scope_guards.can_access_task`: on the project (member or owner), the assignee,
                   or the reporter. A task that no longer exists, or was soft-deleted, is not
-                  readable (MIP-1566). That second part is this module's own: `can_access_task`
-                  has no `is_deleted` check, and its ~50 other callers (task endpoints, media,
-                  GitHub links, undo) are left as they are.
+                  readable (MIP-1566), which `can_access_task` itself now says too (MIP-1572).
   * 6 / 7 / 8     `note_role.get_effective_role` (an explicit grant, project membership for a
                   task note, the chat's readers for a chat note, a team folder for a personal
                   note), in its batch form `readable_note_ids`. A personal note's owner reads it
@@ -66,8 +64,8 @@ def _as_int(value):
 
 def _readable_tasks(user_id, task_ids: set[int]) -> set[int]:
     """The subset of `task_ids` `can_access_task(task_id, user_id)` says yes to: the assignee,
-    the reporter, the project's owner, or a project member; minus the soft-deleted tasks, which
-    `can_access_task` lets through but a feed row must not outlive (MIP-1566). Three queries."""
+    the reporter, the project's owner, or a project member, and not soft-deleted (MIP-1566; the
+    same rule as `can_access_task`'s since MIP-1572). Three queries."""
     me = str(user_id)
     tasks = list(
         TaskMaster.objects.filter(task_id__in=task_ids, is_deleted=False).values(

@@ -514,7 +514,9 @@ class TaskMasterView(AuthenticatedAPIView):
                     {"error": "task_id is required."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            task = TaskMaster.objects.get(task_id=task_id)
+            # A soft-deleted task is not there for a save: it answers as a missing one does
+            # (MIP-1572), `can_access_task` below refuses it the same way for anyone else.
+            task = TaskMaster.objects.get(task_id=task_id, is_deleted=False)
         except TaskMaster.DoesNotExist:
             return Response(
                 {"error": "Task not found to delete."}, status=status.HTTP_404_NOT_FOUND
@@ -2353,7 +2355,9 @@ class TaskAttachmentsView(AuthenticatedAPIView):
                 {"error": "Both 'task' and 'attachment_id' are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if not can_access_task(task, request.user.id):
+        # `include_deleted`: left as it was. Whether a deleted task's attachment may be removed
+        # is MIP-1582's call, together with the agent's `delete_task_attachment`.
+        if not can_access_task(task, request.user.id, include_deleted=True):
             return _no_task()
 
         try:
@@ -3313,6 +3317,9 @@ class TaskDependencyBatchListView(AuthenticatedAPIView):
             .filter(_openable_task_q(user_id, "blocked_task__"))
             .select_related("blocked_task", "blocked_task__project")
             .exclude(blocked_task__is_deleted=True)
+            # The task asked about is held to the rule the single list's gate applies
+            # (`can_access_task`): a soft-deleted one keeps its empty lists (MIP-1572).
+            .exclude(blocker_task__is_deleted=True)
         )
         blocked_by_rows = (
             TaskDependency.objects.filter(blocked_task_id__in=task_ids)
@@ -3320,6 +3327,7 @@ class TaskDependencyBatchListView(AuthenticatedAPIView):
             .filter(_openable_task_q(user_id, "blocker_task__"))
             .select_related("blocker_task", "blocker_task__project")
             .exclude(blocker_task__is_deleted=True)
+            .exclude(blocked_task__is_deleted=True)
         )
         blocking_rows = list(blocking_rows)
         blocked_by_rows = list(blocked_by_rows)
