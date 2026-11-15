@@ -73,7 +73,8 @@ class CaseFileTests(SimpleTestCase):
             self.assertEqual(c.raw["seed"], [want], c.id)
             self.assertEqual(c.raw["fixture"], "sequence", c.id)
             viewer = c.raw["viewer"]
-            person = "a" if viewer == "ja" else viewer.removeprefix("ja-")  # `ja` is the Japanese team's `a`
+            # `ja` is the Japanese team's `a`
+            person = "a" if viewer == "ja" else viewer.removeprefix("ja-")
             self.assertIn(person, seeds.VISIBLE_TO[want], c.id)
 
     def test_the_cases_judge_reads_and_forbid_every_calendar_write(self):
