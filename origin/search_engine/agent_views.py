@@ -2539,18 +2539,19 @@ def _run_complete_url(session) -> str:
         return f"{base}/thread/{session.thread_id}" if session.thread_id else base
     if session.note_type == 1 and session.note_id:
         return f"/workspace/notes/my/{session.note_id}"
-    if session.task_id is not None and parity_on():
+    task_id = getattr(session, "task_id", None)  # a stand-in session in a test has no such column
+    if task_id is not None and parity_on():
         # The task's own page (the route `todo_source` already links a to-do's task by), where the Ask
         # opened from it restores its conversation. A task that is gone has no page: the generic link.
         from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
         project_id = (
-            TaskMaster.objects.filter(task_id=session.task_id, is_deleted=False)
+            TaskMaster.objects.filter(task_id=task_id, is_deleted=False)
             .values_list("project_id", flat=True)
             .first()
         )
         if project_id is not None:
-            return f"/workspace/tasks/project/{project_id}/task/{session.task_id}"
+            return f"/workspace/tasks/project/{project_id}/task/{task_id}"
     return "/workspace/genos"
 
 
