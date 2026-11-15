@@ -22,8 +22,7 @@ from origin.views.public.mcp.tools import CATALOG
 # MIP-1563 added one flag-gated WRITE tool (`delete_task_attachment`, flag `AGENT_PARITY_TOOLS`),
 # which is in `CATALOG` but published only while its flag is on: the number a client sees today did
 # not move, and `FLAGGED_WRITES` is the one that will be added to it on the flip. MIP-1059 added one
-# flag-gated READ (`get_calendar_event`, the same flag): `FLAGGED_READS`. (99, not 97: MIP-1100 added
-# two published tools on main, the note-comment reply and resolve.)
+# flag-gated READ (`get_calendar_event`, the same flag): `FLAGGED_READS`.
 PUBLISHED = 99
 FLAGGED = 2
 FLAGGED_WRITES = 1

@@ -17,6 +17,7 @@ Contract under test:
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -485,3 +486,43 @@ class CreateTaskPlanAtomicityTests(CreateTaskPlanTestBase):
                     }
                 )
         self.assert_nothing_created()
+
+
+class CreateTaskPlanBodyNudgeTests(TestCase):
+    """MIP-1533: the declaration asks the model for a real body per task, not the title.
+
+    The server fills a title-only task with a skeleton (MIP-1510) as a safety net; the nudge is
+    what makes the model write the body itself. The eval (`t1510`) reads the result with
+    `content_checks.body_kind`: a body the model wrote is `content`, a title echo is `skeleton`.
+    """
+
+    def item_description(self) -> str:
+        item = CREATE_TASK_PLAN.parameters_schema["properties"]["tasks"]["items"]
+        return item["properties"]["content_markdown"]["description"]
+
+    def test_the_tool_description_asks_for_a_body_on_every_task(self):
+        text = CREATE_TASK_PLAN.description
+        self.assertIn("EVERY task its own short content_markdown", text)
+        self.assertIn("never just the title", text)
+
+    def test_the_body_field_is_no_longer_called_optional(self):
+        text = self.item_description()
+        self.assertNotIn("Optional", text)
+        self.assertIn("write a short real one for EVERY task", text)
+        self.assertIn("never a copy of the title", text)
+
+    def test_the_house_template_and_size_hints_are_kept(self):
+        text = self.item_description()
+        for kept in ("### 🧾 Summary", "### ✅ Acceptance criteria", "under ~150 words"):
+            self.assertIn(kept, text)
+
+    def test_the_eval_tells_a_title_echo_from_the_body_the_nudge_asks_for(self):
+        from origin.search_engine.agent.evals.group.content_checks import body_kind
+
+        title = "Design the filter UI"
+        self.assertEqual(body_kind(f"### Summary\n\n{title}", title), "skeleton")
+        written = (
+            "### 🧾 Summary\nSketch the filter panel for the search page.\n\n"
+            "### ✅ Acceptance criteria\n- Mock covers empty and error states\n"
+        )
+        self.assertEqual(body_kind(written, title), "content")
