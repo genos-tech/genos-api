@@ -67,7 +67,7 @@ GOLDEN: dict[str, str] = {
     "tool/list_tasks": "8c20725757cd5cee1b4c3c5d1ae9a7dabb0bf6cf8cf597d05607d36c28e7d9ae",
     "tool/list_tasks_overdue": "5514d527ce3f8604ce6f4b412586e7a286fa052a3987ca070bada3e776a6052c",
     "tool/fetch_task": "ed42299a027f7691caddc6436558e294a1facd301fd221d195ba1abce30297bf",
-    "declarations": "2ea75af309f465673ede2a6f8c0785617004f0b2f6797aaa2835653289e11998",
+    "declarations": "ed62ffd3efdd82d34a5205126a75ef8bb637d435288e1f1251e095112420dd28",
 }
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
