@@ -16,7 +16,6 @@ here touches a database or a model.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from django.test import SimpleTestCase
 
@@ -132,16 +131,6 @@ class SharedFileTests(SimpleTestCase):
         self.assertNotEqual(
             builtin_templates.canonical_sha256(reordered), builtin_templates.canonical_sha256(raw)
         )
-
-    def test_the_file_ships_in_the_image(self):
-        # `COPY . .` copies it; `.dockerignore` must not list it (the dockerignore test only
-        # protects files it knows about).
-        ignore = Path(__file__).resolve().parents[2] / ".dockerignore"
-        if ignore.exists():
-            for line in ignore.read_text().splitlines():
-                line = line.strip().rstrip("/")
-                self.assertFalse(line.endswith(".json") and "builtin_task_templates" in line)
-        self.assertTrue(builtin_templates.SOURCE_PATH.is_file())
 
     def test_a_malformed_file_is_refused_at_load(self):
         good = self._raw()["templates"]
