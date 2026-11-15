@@ -79,6 +79,7 @@ from origin.search_engine.agent import (
     approval_edits,
     approval_notes,
     approval_reason,
+    task_context,
     undo,
     undo_apply,
 )
@@ -259,6 +260,18 @@ def _within_history_retention(session: AgentSession, user_id: str) -> bool:
     return session.last_active_at >= timezone.now() - timedelta(days=days)
 
 
+def _task_session_of(team_id: str, user_id: str, task_id: int) -> AgentSession | None:
+    """The person's conversation about one task or milestone (MIP-1057): the most recently active
+    session of (team, user, task), or None. The ONE lookup, so the ask that reuses it and the
+    endpoint that restores it pick the same session. Several can exist (a new conversation on the
+    same task starts another); the newest is the one that is open, like a thread's or a note's."""
+    return (
+        AgentSession.objects.filter(team_id=team_id, user_id=user_id, task_id=task_id)
+        .order_by("-last_active_at", "-created_at")
+        .first()
+    )
+
+
 def _get_or_create_session(
     session_id_str: str | None,
     team_id: str,
@@ -266,6 +279,7 @@ def _get_or_create_session(
     *,
     thread_context: dict | None = None,
     note_context: dict | None = None,
+    task_ctx: dict | None = None,
     force_new: bool = False,
     allow_expired: bool = False,
 ) -> AgentSession:
@@ -290,12 +304,21 @@ def _get_or_create_session(
          TTL-bounded — a user might come back days later and expect
          their prior Q&A to still be there.
       4. If `note_context` is set, try the analogous per-note lookup.
-      5. Otherwise create a new session, tagged with whichever context
+      5. If `task_ctx` is set (`{"task_id": N}`, MIP-1057), the analogous
+         per-task lookup.
+      6. Otherwise create a new session, tagged with whichever context
          was provided.
 
-    `thread_context` and `note_context` are mutually exclusive — the
-    request layer rejects both being present. This function trusts
+    `thread_context`, `note_context` and `task_ctx` are mutually exclusive —
+    the request layer rejects more than one being present. This function trusts
     that and tags the session with at most one entity scope.
+
+    With `task_ctx` a session named by `session_id` is used only if it is
+    bound to THAT task: a general session (the Cmd-K one) or another task's is
+    set aside, so asking about a task never writes into a conversation about
+    something else, and the general session is left as it was. A session bound
+    to a task is likewise set aside under a thread or note context, and, when
+    the ask names no object at all, while the person can no longer open the task.
     """
     ttl_minutes = int(settings.SEARCH_ENGINE.get("SESSION_TTL_MINUTES", 30))
     if not force_new:
@@ -306,11 +329,30 @@ def _get_or_create_session(
                     team_id=team_id,
                     user_id=user_id,
                 )
+                if task_ctx is not None and session.task_id != task_ctx["task_id"]:
+                    raise AgentSession.DoesNotExist  # another conversation: not this task's
+                if session.task_id is not None and (thread_context or note_context):
+                    raise AgentSession.DoesNotExist  # a task's conversation is not a thread's or a note's
+                if (
+                    session.task_id is not None
+                    and task_ctx is None
+                    and parity_on()
+                    and not task_context.can_read(session.task_id, team_id, user_id)
+                ):
+                    # Continued with the session id alone, and the person can no longer open the task
+                    # (deleted, or they lost access): the conversation reads like one that is not there,
+                    # so what it holds about the task (the earlier turns, the recap) is not handed to the
+                    # model again. It stays in their history; this ask starts a fresh conversation.
+                    raise AgentSession.DoesNotExist
                 cutoff = timezone.now() - timedelta(minutes=ttl_minutes)
-                # Entity-scoped sessions (thread OR note) bypass TTL —
-                # same rationale as the per-thread / per-note lookups
-                # below.
-                entity_scoped = session.chat_type is not None or session.note_type is not None
+                # Entity-scoped sessions (thread, note OR task) bypass TTL —
+                # same rationale as the per-thread / per-note / per-task
+                # lookups below.
+                entity_scoped = (
+                    session.chat_type is not None
+                    or session.note_type is not None
+                    or session.task_id is not None
+                )
                 # Retention lookup only when the cheap checks fail —
                 # `resume: true` rides on every continuing ask, so the
                 # common case (session still live) must not pay a tier
@@ -364,6 +406,14 @@ def _get_or_create_session(
                 )
                 existing.last_active_at = timezone.now()
                 return existing
+        if task_ctx:
+            existing = _task_session_of(team_id, user_id, task_ctx["task_id"])
+            if existing is not None:
+                AgentSession.objects.filter(session_id=existing.session_id).update(
+                    last_active_at=timezone.now()
+                )
+                existing.last_active_at = timezone.now()
+                return existing
     create_kwargs: dict = {"team_id": team_id, "user_id": user_id}
     if thread_context:
         create_kwargs["chat_type"] = thread_context["chat_type"]
@@ -372,6 +422,8 @@ def _get_or_create_session(
     elif note_context:
         create_kwargs["note_type"] = note_context["note_type"]
         create_kwargs["note_id"] = note_context["note_id"]
+    elif task_ctx:
+        create_kwargs["task_id"] = task_ctx["task_id"]
     return AgentSession.objects.create(**create_kwargs)
 
 
@@ -1066,6 +1118,26 @@ class AgentAskView(AuthenticatedAPIView):
         ):
             if data.get(field) and not isinstance(data[field], dict):
                 return Response({"error": malformed}, status=status.HTTP_400_BAD_REQUEST)
+        # `task_context` (MIP-1057, "Ask about this task or milestone") is read only while the parity flag
+        # is on: with it off the field is ignored as an unknown one always was, whatever it holds, so it
+        # cannot be a 400 either. Its own shape, and that it is the only context, are checked here with
+        # the rest of the body, before anything is spent.
+        task_ctx: dict[str, int] | None = None
+        if parity_on() and data.get("task_context"):
+            task_ctx = task_context.parse_context(data["task_context"])
+            if task_ctx is None:
+                return Response(
+                    {"error": task_context.MALFORMED}, status=status.HTTP_400_BAD_REQUEST
+                )
+            if data.get("thread_context") or data.get("note_context"):
+                return Response(
+                    {
+                        "error": (
+                            "task_context cannot be combined with thread_context or note_context."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         query = (data.get("query") or "").strip()
         team_id = data.get("team_id")
@@ -1095,6 +1167,16 @@ class AgentAskView(AuthenticatedAPIView):
         # assume the team is already established.
         if not participates_in_team(team_id, user_id):
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # The task or milestone the ask is about (MIP-1057), read by the asker's own access BEFORE
+        # anything is spent or written: a refused ask opens no cost rollup, mints no session and leaves
+        # no run row. A task that does not exist, one that was deleted, one in another team and one the
+        # asker may not read get ONE answer (`task_context.NOT_FOUND`), so the id cannot be probed.
+        task_read: task_context.TaskRead | None = None
+        if task_ctx is not None:
+            task_read = task_context.read_task(task_ctx["task_id"], team_id, user_id)
+            if task_read is None:
+                return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
 
         # Answer-language locale (GENOS_CAPABILITY_ROADMAP §3.4). Prefer the
         # request body (the live UI locale the browser just sent) and fall
@@ -1402,6 +1484,7 @@ class AgentAskView(AuthenticatedAPIView):
                 user_id,
                 thread_context=thread_ctx_parsed,
                 note_context=note_ctx_parsed,
+                task_ctx=task_ctx,
                 force_new=force_new_conversation,
                 allow_expired=resume_requested,
             )
@@ -1431,6 +1514,20 @@ class AgentAskView(AuthenticatedAPIView):
             log.exception("Session load failed; continuing without memory")
             prior_turns = []
             prior_run_ids = []
+
+        # A conversation that is ABOUT a task stays about it when it is continued without saying so (a
+        # session picked from the history list sends its `session_id` and nothing else): the object
+        # comes from the session, read again with the asker's access now. One that cannot be read any
+        # more is not an error here (nothing was named): the ask goes on without the block.
+        if (
+            task_read is None
+            and parity_on()
+            and session is not None
+            and session.task_id is not None
+            and not thread_ctx_raw
+            and not note_ctx_raw
+        ):
+            task_read = task_context.read_task(session.task_id, team_id, user_id)
 
         # Persist one AgentRun row per /ask/ call. Failures here are
         # logged but never break the user-facing response.
@@ -1661,6 +1758,15 @@ class AgentAskView(AuthenticatedAPIView):
         # one block a resumed leg re-checks (`_resume_context_for`).
         scoped_extra = system_extra
 
+        # The task or milestone the conversation is about (MIP-1057), in the slot a thread or note summary
+        # takes (it is never sent with one). Kept out of `scoped_extra` on purpose: that is replayed AS SENT
+        # at a pause, and this is read again at the decision (`resume_object`), so no copy of the task sits
+        # on the run row.
+        if task_read is not None:
+            object_extra = task_context.build_block(task_read)
+            system_extra = f"{object_extra}\n\n{system_extra}" if system_extra else object_extra
+            seed_sources = [task_context.seed_source(task_read), *(seed_sources or [])]
+
         # The messages and the selected passage the person pointed at (MIP-1058): their text, fenced, in a
         # block of its own BETWEEN the summary and the references. Apart from the references because a
         # resumed leg replays those as sent, and this block has content, which `/decide/` reads again
@@ -1678,7 +1784,17 @@ class AgentAskView(AuthenticatedAPIView):
         # note branch already set — a thread or note ask can also carry
         # mentions, and both blocks should reach the model. The seed
         # chips ride the same dedup/friendly-title pipeline in run_agent.
-        mention_extra = build_mention_system_extra(resolved_mentions)
+        # The task the conversation is about has its block, so a `#` mention of the SAME task (the app may
+        # still send one) adds no second bullet for it; its chip and its search boost stay.
+        mention_extra = build_mention_system_extra(
+            resolved_mentions
+            if task_read is None
+            else [
+                m
+                for m in resolved_mentions
+                if not (m.kind == "task" and m.task_id == task_read.task_id)
+            ]
+        )
         if mention_extra:
             system_extra = f"{system_extra}\n\n{mention_extra}" if system_extra else mention_extra
         if resolved_mentions:
@@ -1713,6 +1829,8 @@ class AgentAskView(AuthenticatedAPIView):
                 mention_extra=mention_extra,
                 tier_extra=tier_extra,
                 refs=resume_refs(ref_messages, selection),
+                # The task's id, never its text: `/decide/` reads it again (MIP-1057).
+                object_ref=task_context.resume_object(task_read) if task_read is not None else None,
                 # The earlier turns ride on the second flag (`AGENT_RESUME_KEEPS_TURNS`).
                 prior_summary=prior_summary if keeps_turns else None,
                 prior_run_ids=prior_run_ids if keeps_turns else (),
@@ -1865,6 +1983,7 @@ def _resume_context_for(
     mention_extra: str | None,
     tier_extra: str | None,
     refs: dict[str, Any] | None = None,
+    object_ref: dict[str, Any] | None = None,
     prior_summary: str | None = None,
     prior_run_ids: Iterable[uuid.UUID] = (),
 ) -> dict[str, Any] | None:
@@ -1917,6 +2036,12 @@ def _resume_context_for(
 
     A first-turn ask has neither, and keeps no `prior`.
 
+    `object_ref` (MIP-1057) is the task or milestone the conversation is about: its ID alone
+    (`task_context.resume_object`), never its text. `/decide/` reads the task again as the person may
+    read it by then, so one deleted or lost to them while the card waited is not replayed, a change
+    made to it meanwhile is in the block, and the run row holds nothing of the task. Absent from the
+    row when the ask was not about one, so a row without one is what it was.
+
     `refs` (MIP-1058) is the third part, for the messages and the selected passage of the ask (`ask_refs`):
     the messages' IDS and the passage as the person sent it, never a message's text. `/decide/` reads each
     message again as the person may read it by then, so a message deleted or lost to them in between is
@@ -1928,7 +2053,7 @@ def _resume_context_for(
     prior = (
         {"summary": prior_summary or None, "run_ids": run_ids} if prior_summary or run_ids else None
     )
-    if not scoped_extra and not rest and prior is None and not refs:
+    if not scoped_extra and not rest and prior is None and not refs and not object_ref:
         return None
     kept: dict[str, Any] = {
         "scope": scope if scoped_extra else None,
@@ -1937,6 +2062,8 @@ def _resume_context_for(
     }
     if refs:
         kept["refs"] = refs
+    if object_ref:
+        kept["object"] = object_ref
     if prior is not None:
         kept["prior"] = prior
     return kept
@@ -1998,6 +2125,13 @@ def _resumed_system_extra(run: AgentRun) -> str | None:
             and _scope_still_readable(kept.get("scope"), run.user_id)
         ):
             parts.append(scoped)
+        # The task or milestone the conversation is about (MIP-1057), in the same place as at the ask: read
+        # again with the person's access now, so one that is gone or no longer theirs is not replayed.
+        object_block = task_context.rebuild_block(
+            kept.get("object"), team_id=str(run.team_id or ""), user_id=str(run.user_id or "")
+        )
+        if object_block:
+            parts.append(object_block)
         # The messages and the selected passage, between the two as at the ask (MIP-1058): rebuilt, with
         # each message read again by the person's own access, not replayed.
         refs_block = rebuild_block(
@@ -2388,8 +2522,8 @@ _CHAT_KIND_TOKEN = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}
 def _run_complete_url(session) -> str:
     """Best-effort deep link for the completion push.
 
-    A thread- or note-scoped session links back to the surface the ask was
-    made from; the Ask modal there restores its conversation from the
+    A thread-, note- or task-scoped session links back to the surface the ask
+    was made from; the Ask modal there restores its conversation from the
     server on open. A plain Genos/Spotlight run deep-links to the Genos
     page (/workspace/genos) — the full-page surface over the same
     conversation, which restores its turns from localStorage on landing.
@@ -2405,6 +2539,19 @@ def _run_complete_url(session) -> str:
         return f"{base}/thread/{session.thread_id}" if session.thread_id else base
     if session.note_type == 1 and session.note_id:
         return f"/workspace/notes/my/{session.note_id}"
+    task_id = getattr(session, "task_id", None)  # a stand-in session in a test has no such column
+    if task_id is not None and parity_on():
+        # The task's own page (the route `todo_source` already links a to-do's task by), where the Ask
+        # opened from it restores its conversation. A task that is gone has no page: the generic link.
+        from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+        project_id = (
+            TaskMaster.objects.filter(task_id=task_id, is_deleted=False)
+            .values_list("project_id", flat=True)
+            .first()
+        )
+        if project_id is not None:
+            return f"/workspace/tasks/project/{project_id}/task/{task_id}"
     return "/workspace/genos"
 
 
@@ -3934,6 +4081,63 @@ class AgentSessionDetailView(AuthenticatedAPIView):
         except _RunInFlight:
             return _run_in_flight_response()
         return Response(result)
+
+
+class AgentTaskSessionView(AuthenticatedAPIView):
+    """GET /api/v2/agent/task-session/?team_id=<id>&task_id=<int>
+
+    The caller's conversation about ONE task or milestone, for the Ask opened from it to restore
+    on open (MIP-1057). `task_id` is the task's `TaskMaster.task_id`; for a milestone, the id of its
+    backing task row (the `taskId` the milestone carries). The task is never named by its display
+    id and never by a `milestone_id`.
+
+    Response (200):
+        {
+            "agent_session_id": "<uuid>" | null,   # the person's newest session on this task
+            "turns": [...]                          # the same shape as /agent/sessions/<id>/'s `turns`
+        }
+    Both empty (`null`, `[]`) when the person has never asked about it. No model is called and
+    nothing is written.
+
+    404 `{"error": "Task not found."}` is ONE answer for a task that does not exist, one that was
+    deleted, one in another team, one the caller may not read (`task_context.can_read`, the rule the
+    ask uses) and a team the caller is not in: past answers about an object the person can no longer
+    open are not handed back. 400 for a missing `team_id` or a `task_id` that is not a task id.
+
+    Only the caller's own sessions in the team are ever read (`user_id=request.user.id`). The team
+    is the one the platform aligns to the task (`AuthenticatedAPIView.initial`: a `team_id` naming the
+    caller's current team becomes the team that owns a task they can reach; a substitution, never a
+    grant). While `AGENT_PARITY_TOOLS` is off the feature is dark: 200 with both empty, whatever the
+    task is, so a client built for it works unchanged and learns nothing.
+
+    Like the thread and note payloads this does not apply the plan's history window; the sessions
+    list and `/sessions/<id>/` do.
+    """
+
+    def get(self, request):
+        user_id = str(getattr(request.user, "id", ""))
+        if not user_id:
+            return Response({"error": "Not authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        task_id = task_context.valid_task_id(request.GET.get("task_id"))
+        if task_id is None:
+            return Response(
+                {"error": "task_id must be an integer."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if not parity_on():
+            return Response({"agent_session_id": None, "turns": []})
+        if not participates_in_team(team_id, user_id) or not task_context.can_read(
+            task_id, team_id, user_id
+        ):
+            return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
+        session = _task_session_of(str(team_id), user_id, task_id)
+        if session is None:
+            return Response({"agent_session_id": None, "turns": []})
+        return Response(
+            {"agent_session_id": str(session.session_id), "turns": _build_turns_payload(session)}
+        )
 
 
 class AgentSessionPinView(AuthenticatedAPIView):

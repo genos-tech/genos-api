@@ -131,6 +131,23 @@ class AgentSession(models.Model):
     # turns.
     note_type = models.IntegerField(blank=True, null=True)
     note_id = models.IntegerField(blank=True, null=True)
+    # ----- Task / milestone Q&A scope (nullable; MIP-1057) -----
+    # Set when the session is bound to ONE task or milestone: "Ask Genos about
+    # this task". It is the `TaskMaster.task_id` of the row asked about, and a
+    # milestone is its BACKING task row (the id every other agent surface
+    # already uses for one), so there is no `milestone_id` column to go stale:
+    # turning a task into a milestone and back keeps the row (MIP-1042), and the
+    # conversation with it. A plain integer, not a ForeignKey, like `note_id`
+    # and `thread_id`: the scope must never cascade away a person's history or
+    # tie this app's migrations to a task table, and a task that is gone simply
+    # no longer restores (`agent/task_context.py`). Mutually exclusive with the
+    # thread and note scopes at the request layer. Same TTL bypass as they have:
+    # a person reopening a task days later expects what they asked about it.
+    #
+    # NOT unique with the person and team, on purpose: "start a new conversation"
+    # makes a second session on the same task, and the lookup (like the thread's
+    # and the note's) takes the most recently active one.
+    task_id = models.BigIntegerField(blank=True, null=True)
 
     # ----- Rolling summary of the turns that have aged out of the
     # verbatim window (only used when RAG_SESSION_ROLLING_SUMMARY is on).
@@ -169,6 +186,15 @@ class AgentSession(models.Model):
             models.Index(fields=["user_id", "chat_type", "chat_id", "thread_id"]),
             # Per-note lookup: same shape as the thread one.
             models.Index(fields=["user_id", "note_type", "note_id"]),
+            # Per-task lookup (MIP-1057). Partial: only the sessions opened from a
+            # task are in it, so it starts EMPTY (no existing row has a task) and is
+            # built without sorting or writing anything, and an ordinary session's
+            # `last_active_at` update never touches it.
+            models.Index(
+                fields=["user_id", "task_id"],
+                name="agentsession_user_task_idx",
+                condition=models.Q(task_id__isnull=False),
+            ),
         ]
 
 
