@@ -695,19 +695,23 @@ class DispatchTests(BaseAPITestCase):
         )
 
     def test_note_surface_mention_pushes(self):
+        # The recipient's own note: a note they cannot open is the minimal card (MIP-1599).
+        from origin.models.note.personal_note_models import PersonalNoteMaster
+
+        note = PersonalNoteMaster.objects.create(team=self.team, owner=self.user2, title="n")
         self._sub(self.user2)
         act = self._activity(
             self.user2,
             ActivityType.MENTION,
             surface_type=6,  # SURFACE_PERSONAL_NOTE
-            meta={"noteId": 88},
+            meta={"noteId": note.note_id},
             channel=False,
         )
         send = self._run([act])
         send.assert_called_once()
         payload = send.call_args.kwargs["payload"]
         self.assertEqual(payload["title"], "Alice mentioned you in a note")
-        self.assertEqual(payload["url"], "/workspace/notes/my/88")
+        self.assertEqual(payload["url"], f"/workspace/notes/my/{note.note_id}")
 
     def test_comment_participant_task_body_pushes(self):
         # The general-comment fan-out: a channel-less THREAD_REPLY tagged

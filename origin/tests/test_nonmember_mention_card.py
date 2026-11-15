@@ -486,7 +486,8 @@ class CostTests(Cards):
         row = v3_activity.create_surface_mention_activities(
             team_id=self.team.team_id,
             actor=self.user,
-            surface_type=6,
+            # not 6 or 8: personal and chat notes are judged since MIP-1599
+            surface_type=10,
             entity_key="note:1:1",
             newly_mentioned_user_ids=[str(self.user2.id)],
             meta={"noteId": 1, "noteType": 1},

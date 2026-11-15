@@ -21,18 +21,22 @@ Who can open the task is `can_access_task`'s rule, in batch form: the project's 
 the assignee, the reporter. It is asked once for all the rows of a write, never per row.
 
 Rows covered: an @mention whose host is a task body (surface 5, `meta.taskId`), a task comment
-(the project-chat mirror, `message.task_id`) or a task NOTE (surface 7, `meta.noteId`, MIP-1598).
-A task note is judged by the NOTE's rule (`note_role.get_effective_role`: an explicit grant or a
-project member row, in batch form `task_note_reader_pairs`), not the task's: the assignee who is
-not on the project opens the task and not its note, so a note mention shows them the minimal
-card, in which the note's title, the task's display id and a link naming either are gone. A
-personal or chat note's mention (6, 8) is not changed here.
+(the project-chat mirror, `message.task_id`) or a NOTE (surfaces 6, 7 and 8, `meta.noteId`,
+MIP-1598, MIP-1599). A note is judged by the NOTE's rule (`note_role.get_effective_role`, in batch
+form `note_reader_pairs`), not the task's: the assignee who is not on the project opens the task
+and not its note, so a note mention shows them the minimal card, in which the note's title, the
+task's display id, the chat's ids and a link naming any of them are gone. The rule per kind of
+note: a task note, an explicit grant or a project member row; a personal note, its owner, an
+explicit grant or a reader of the team folder it is filed in; a chat note, an explicit grant or
+a member of its chat by the chat rule (`chat_note_member_q`).
 
-A comment mention is a row of the task's project chat, which the recipient may not be able to open
-although they can open the TASK (the assignee or reporter who is not on the project). The mention
-is about the task, so what that person is shown follows the task's rule too: the feed keeps the
-row (`task_readable_comment_mention_ids`) and the push and the email link to the task, not to a
-chat that answers 404 (`task_links`). Nothing else of the chat is opened by that.
+A comment row (an @mention of someone in a comment, or the "X commented" row of a participant,
+MIP-1599) is a row of the task's project chat, which the recipient may not be able to open
+although they can open the TASK (the assignee or reporter who is not on the project). The row is
+about the task, so what that person is shown follows the task's rule too: the feed keeps the row
+(`task_readable_comment_row_ids`) and the push and the email link to the task, not to a chat that
+answers 404 (`task_links`), and only while they can still open the task. Nothing else of the chat
+is opened by that: not the chat, not its messages, not a reply under the task's card.
 """
 
 from __future__ import annotations
@@ -43,7 +47,12 @@ from typing import Any, Iterable
 from django.db.models import Q
 
 from origin.models.chat.unified_models import ActivityType
-from origin.services.v3_activity import SURFACE_TASK_BODY, SURFACE_TASK_NOTE
+from origin.services.v3_activity import (
+    SURFACE_CHAT_NOTE,
+    SURFACE_PERSONAL_NOTE,
+    SURFACE_TASK_BODY,
+    SURFACE_TASK_NOTE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +77,12 @@ _KEPT_META = ("tsSent", "isComment", "via")
 
 
 def minimal_title(actor_name: str | None, surface_type: int | None = None) -> str:
-    what = "note" if surface_type == SURFACE_TASK_NOTE else "task"
+    what = "note" if surface_type in NOTE_SURFACES else "task"
     return f"{actor_name or 'Someone'} mentioned you in a {what} you can't open"
 
 
 def minimal_url(surface_type: int | None) -> str:
-    return MINIMAL_NOTE_URL if surface_type == SURFACE_TASK_NOTE else MINIMAL_URL
+    return MINIMAL_NOTE_URL if surface_type in NOTE_SURFACES else MINIMAL_URL
 
 
 def _as_int(value: Any) -> int | None:
@@ -87,11 +96,15 @@ def _as_int(value: Any) -> int | None:
 
 _NO_TARGET = object()
 _TASK = "task"
-_NOTE = "note"
+
+# The note surfaces, and the note type each is (`note_role.NOTE_TYPE_*`).
+_NOTE_TYPE = {SURFACE_PERSONAL_NOTE: 1, SURFACE_TASK_NOTE: 2, SURFACE_CHAT_NOTE: 3}
+NOTE_SURFACES = frozenset(_NOTE_TYPE)
 
 
 def _target_of(act) -> Any:
-    """What an @mention row is about, as `(kind, id)` (`kind` is "task" or "note"), the id None
+    """What an @mention row is about, as `(kind, id)` (`kind` is "task", or a note type: 1
+    personal, 2 task note, 3 chat note), the id None
     when its host names none that parses (the row is then judged unreadable, as the feed does),
     or `_NO_TARGET` for a row this does not cover."""
     if getattr(act, "activity_type", None) != ActivityType.MENTION:
@@ -100,8 +113,8 @@ def _target_of(act) -> Any:
         meta = act.meta if isinstance(act.meta, dict) else {}
         if act.surface_type == SURFACE_TASK_BODY:
             return (_TASK, _as_int(meta.get("taskId")))
-        if act.surface_type == SURFACE_TASK_NOTE:
-            return (_NOTE, _as_int(meta.get("noteId")))
+        if act.surface_type in _NOTE_TYPE:
+            return (_NOTE_TYPE[act.surface_type], _as_int(meta.get("noteId")))
         return _NO_TARGET
     if not act.message_id:
         return _NO_TARGET
@@ -109,10 +122,10 @@ def _target_of(act) -> Any:
     return _NO_TARGET if task_id is None else (_TASK, _as_int(task_id))
 
 
-def _candidates(activities: Iterable[Any]) -> dict[Any, tuple[str, str, int | None]]:
+def _candidates(activities: Iterable[Any]) -> dict[Any, tuple[str, Any, int | None]]:
     """`{activity id: (recipient id, kind, task or note id)}` for the rows this covers. No query
     for a row whose message is already loaded (every producer builds its rows with it)."""
-    out: dict[Any, tuple[str, str, int | None]] = {}
+    out: dict[Any, tuple[str, Any, int | None]] = {}
     for act in activities:
         if act is None:
             continue
@@ -181,23 +194,26 @@ def task_reader_pairs(
 
 
 def minimal_card_activity_ids(activities: Iterable[Any]) -> set:
-    """The ids, among `activities`, of the task and task-note @mentions whose recipient cannot
-    open the task (the task's rule) or the note (the note's rule).
+    """The ids, among `activities`, of the task and note @mentions whose recipient cannot open
+    the task (the task's rule) or the note (the note's rule).
 
-    A fixed number of queries: none when no row is such a mention, three for the task rows and
-    three for the note rows."""
+    A fixed number of queries: none when no row is such a mention, at most five for the task
+    rows and, for each type of note present, at most seven (`note_reader_pairs`), however many
+    rows, recipients and notes."""
     candidates = _candidates(activities)
     if not candidates:
         return set()
-    readable: dict[str, set] = {_TASK: set(), _NOTE: set()}
-    tasks = [(r, i) for r, k, i in candidates.values() if k == _TASK]
-    notes = [(r, i) for r, k, i in candidates.values() if k == _NOTE]
-    if tasks:
-        readable[_TASK] = task_reader_pairs({r for r, _ in tasks}, {i for _, i in tasks})
-    if notes:
-        from origin.views.utils.note_role import task_note_reader_pairs
+    from origin.views.utils.note_role import note_reader_pairs
 
-        readable[_NOTE] = task_note_reader_pairs({r for r, _ in notes}, {i for _, i in notes})
+    readable: dict[Any, set] = {}
+    for kind in {k for _, k, _ in candidates.values()}:
+        wanted = [(r, i) for r, k, i in candidates.values() if k == kind]
+        who, things = {r for r, _ in wanted}, {i for _, i in wanted}
+        readable[kind] = (
+            task_reader_pairs(who, things)
+            if kind == _TASK
+            else note_reader_pairs(who, kind, things)
+        )
     return {
         act_id
         for act_id, (recipient, kind, target) in candidates.items()
@@ -205,20 +221,22 @@ def minimal_card_activity_ids(activities: Iterable[Any]) -> set:
     }
 
 
-# A comment mention: the comment is mirrored into the project chat as a reply carrying its number
-# (`metadata.taskCommentId`), the same test `unread_digest` uses for "a comment on the task". A
-# mention in any other message of that chat (a reply under the task card, a plain chat message) is
-# the chat's content and is never judged by the task's rule.
-COMMENT_MENTION_Q = Q(
-    activity_type=ActivityType.MENTION,
+# A comment row: the comment is mirrored into the project chat as a reply carrying its number
+# (`metadata.taskCommentId`), the same test `unread_digest` uses for "a comment on the task". The
+# rows written for it are the @mention of someone in it and the participant's "X commented"
+# (THREAD_REPLY). A row on any other message of that chat (a reply under the task card, a plain
+# chat message) is the chat's content and is never judged by the task's rule.
+COMMENT_ROW_TYPES = (ActivityType.MENTION, ActivityType.THREAD_REPLY)
+COMMENT_ROW_Q = Q(
+    activity_type__in=COMMENT_ROW_TYPES,
     surface_type__isnull=True,
     message__task_id__isnull=False,
     message__metadata__has_key="taskCommentId",
 )
 
 
-def _is_comment_mention(act) -> bool:
-    if getattr(act, "activity_type", None) != ActivityType.MENTION:
+def is_comment_row(act) -> bool:
+    if getattr(act, "activity_type", None) not in COMMENT_ROW_TYPES:
         return False
     if act.surface_type is not None or not act.message_id:
         return False
@@ -229,13 +247,14 @@ def _is_comment_mention(act) -> bool:
     )
 
 
-def task_readable_comment_mention_ids(user_id: Any, rows, *, limit: int) -> set:
-    """Among the comment-mention rows in `rows` (a queryset of the caller's own `Activity` rows in
-    chats they cannot read), the ids whose task `user_id` can open: the activity feed keeps them
-    (MIP-1598). The mention is about the task, so the task's rule decides, and it is the card's
-    (`task_reader_pairs`). One query for the newest `limit` candidates and three for the rule."""
+def task_readable_comment_row_ids(user_id: Any, rows, *, limit: int) -> set:
+    """Among the comment rows in `rows` (a queryset of the caller's own `Activity` rows in chats
+    they cannot read), the ids whose task `user_id` can open: the activity feed keeps them
+    (MIP-1598, and the participant row since MIP-1599). The row is about the task, so the task's
+    rule decides, and it is the card's (`task_reader_pairs`). One query for the newest `limit`
+    candidates and three for the rule."""
     candidates = tuple(
-        rows.filter(COMMENT_MENTION_Q)
+        rows.filter(COMMENT_ROW_Q)
         .order_by("-ts_created_at", "-id")
         .values_list("id", "message__task_id")[:limit]
     )
@@ -246,13 +265,17 @@ def task_readable_comment_mention_ids(user_id: Any, rows, *, limit: int) -> set:
 
 
 def task_links(activities: Iterable[Any], *, skip: Iterable[Any] = ()) -> dict:
-    """`{activity id: link to the task}` for the comment mentions whose recipient can open the
-    task and not the project chat it is mirrored into (a project chat is read by a project member
-    row: the assignee or reporter who is not on the project, or the project's owner with no row,
-    cannot open it). The push and the email would link to that chat, which answers 404 for them.
+    """`{activity id: link to the task}` for the comment rows (an @mention in a comment, or a
+    participant's "X commented") whose recipient can open the task and not the project chat it is
+    mirrored into (a project chat is read by a project member row: the assignee or reporter who is
+    not on the project, or the project's owner with no row, cannot open it). The push and the
+    email would link to that chat, which answers 404 for them.
 
-    `skip`: the ids already shown the minimal card (they link to nothing). Two queries however
-    many rows, none when no row is a comment mention."""
+    Only for someone who can open the task NOW (`task_reader_pairs`): a participant row is stored
+    for good, and a person who has since lost the task is given no link into it. `skip`: the ids
+    already shown the minimal card (they link to nothing). A fixed number of queries however many
+    rows: two for the tasks and the project members, three to five for the rule, none when no row
+    is a comment row."""
     from origin.models.project.prj_models import ProjectMembers
     from origin.models.task.task_models import TaskMaster
 
@@ -260,15 +283,17 @@ def task_links(activities: Iterable[Any], *, skip: Iterable[Any] = ()) -> dict:
     rows = {
         a.id: (str(a.recipient_id), _as_int(a.message.task_id))
         for a in activities
-        if a is not None and a.id not in skip and _is_comment_mention(a)
+        if a is not None and a.id not in skip and is_comment_row(a)
     }
     if not rows:
         return {}
+    tasks = {t for _, t in rows.values() if t is not None}
     projects = dict(
-        TaskMaster.objects.filter(
-            task_id__in={t for _, t in rows.values() if t is not None}, is_deleted=False
-        ).values_list("task_id", "project_id")
+        TaskMaster.objects.filter(task_id__in=tasks, is_deleted=False).values_list(
+            "task_id", "project_id"
+        )
     )
+    readable = task_reader_pairs({r for r, _ in rows.values()}, tasks)
     on_project = {
         (str(attendee), project)
         for attendee, project in ProjectMembers.objects.filter(
@@ -279,7 +304,9 @@ def task_links(activities: Iterable[Any], *, skip: Iterable[Any] = ()) -> dict:
     return {
         act_id: f"/workspace/tasks/project/{projects[task]}/task/{task}"
         for act_id, (recipient, task) in rows.items()
-        if projects.get(task) is not None and (recipient, projects[task]) not in on_project
+        if projects.get(task) is not None
+        and (recipient, task) in readable
+        and (recipient, projects[task]) not in on_project
     }
 
 
@@ -326,7 +353,7 @@ def minimal_wire(data: dict) -> dict:
     else:
         kept["firstLineContent"] = (
             MINIMAL_NOTE_FIRST_LINE
-            if out.get("surfaceType") == SURFACE_TASK_NOTE
+            if out.get("surfaceType") in NOTE_SURFACES
             else MINIMAL_FIRST_LINE
         )
     out["meta"] = kept
