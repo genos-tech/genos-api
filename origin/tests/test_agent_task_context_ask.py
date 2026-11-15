@@ -476,6 +476,18 @@ class SessionScopeTests(TaskWorld):
         self.assertEqual(resp.status_code, 200)  # nothing was named, so nothing is refused
         self.assertIsNone(captured["kwargs"]["system_extra"])
 
+    def test_an_explicit_thread_context_is_not_given_a_task_block_by_the_session_id(self):
+        task = self.make_task("Fix the login flow")
+        first = self.ask_about(task)["kwargs"]["session_id"]
+        thread = {"chat_type": 2, "chat_id": str(uuid.uuid4()), "thread_id": str(uuid.uuid4())}
+        with mock.patch(
+            "origin.search_engine.agent_views.load_or_generate_for_ask", return_value="a summary"
+        ):
+            _, captured = self.ask(session_id=first, thread_context=thread)
+        extra = captured["kwargs"]["system_extra"]
+        self.assertIn("<thread_summary>", extra)
+        self.assertNotIn(BLOCK, extra)
+
     def test_a_plain_session_continued_by_id_gets_no_block(self):
         general = AgentSession.objects.create(
             team_id=str(self.team_a.team_id), user_id=str(self.a_owner.id)
