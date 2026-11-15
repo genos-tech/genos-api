@@ -42,7 +42,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageReminderSerializer,
     PinSerializer,
 )
-from origin.services import message_reminders
+from origin.services import message_flags, message_reminders
 from origin.services.channel_scope import chat_member_q
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
@@ -115,13 +115,7 @@ class FlagView(AuthenticatedAPIView):
 
     def post(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
-        flag, created = Flag.objects.get_or_create(user=request.user, message=message)
-        # Re-flagging a completed message returns the existing row
-        # (created=False, `uniq_flag`) — reactivate it so it re-enters the
-        # active list instead of silently staying done.
-        if not created and flag.completed_at is not None:
-            flag.completed_at = None
-            flag.save(update_fields=["completed_at"])
+        flag, created = message_flags.flag_message(request.user, message)
         status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(FlagSerializer(flag).data, status=status_code)
 
@@ -129,29 +123,27 @@ class FlagView(AuthenticatedAPIView):
         # Toggle the done state. `completed=true` marks done; `false`
         # reopens. Kept separate from DELETE so completing retains the row.
         message = _verify_message_member(message_id, request.user)
-        try:
-            flag = Flag.objects.get(user=request.user, message=message)
-        except Flag.DoesNotExist:
-            return Response({"error": "Flag not found."}, status=status.HTTP_404_NOT_FOUND)
         completed = bool(request.data.get("completed", False))
-        flag.completed_at = timezone.now() if completed else None
-        flag.save(update_fields=["completed_at"])
-        # Marking it done retires any reminder: the reminder's job was to
-        # bring this back to you, and you just said you're finished with
-        # it. Reopening does NOT resurrect the reminder — the time the user
-        # picked has usually passed by then, so they set a new one.
         if completed:
-            message_reminders.cancel_pending(user=request.user, message=message)
+            # Marking it done retires any reminder (`message_flags.complete_flag`).
+            flag = message_flags.complete_flag(request.user, message)
+        else:
+            # Reopening does NOT resurrect the reminder: the time the user picked has usually
+            # passed by then, so they set a new one.
+            flag = Flag.objects.filter(user=request.user, message=message).first()
+            if flag is not None:
+                flag.completed_at = None
+                flag.save(update_fields=["completed_at"])
+        if flag is None:
+            return Response({"error": "Flag not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(FlagSerializer(flag).data, status=status.HTTP_200_OK)
 
     def delete(self, request, message_id):
         # Verify membership before delete so we don't leak existence.
         message = _verify_message_member(message_id, request.user)
-        Flag.objects.filter(user=request.user, message=message).delete()
-        # Unflagging is the other way of being done with it (see PATCH).
-        # Without this the reminder would arrive pointing at a message the
-        # user has already dismissed from the list it would send them to.
-        message_reminders.cancel_pending(user=request.user, message=message)
+        # Unflagging is the other way of being done with it: the reminder goes too
+        # (`message_flags.unflag_message`).
+        message_flags.unflag_message(request.user, message)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -40,7 +40,21 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # 2026-11-14 measured each flag and the all-on arm, see the hub comment on MIP-1089).
 # To 140,000 for `get_timeline` published to the in-app agent (138,866 measured: +1,475 characters,
 # one declaration), flipped on by default after the t1281 cases were re-read (2026-11-14).
-BUDGET_CHARS = 140_000
+# To 142,000 for the parity batch's parameters (MIP-1561, AGENT_PARITY_TOOLS, default OFF): +1,898
+# characters over `create_task`, `update_task` and `create_task_plan` (140,836 measured with it on
+# over the shipped flags, 140,982 with EVERY flag on, the arm the grouped run measures; the later
+# parity tasks add to the same flag and raise this again). The routing numbers come from that one
+# grouped run, not from this PR: the flag ships off, so production sends what it sent (138,938).
+# MIP-1562 adds two tools' parameters to the same flag (`update_comment`: reaction, remove_reaction,
+# flag; `create_todo_item`: task_id, comment_id): +984 characters, 141,820 measured with the flag on
+# over the shipped flags (141,966 with EVERY flag on). It still fits, so the constant stays; 180
+# characters are left, so the next parity task raises it with its own measurement.
+# MIP-1563 (the same flag): `delete_task_attachment`, a flag-gated WRITE tool (766 characters), and the
+# one sentence `fetch_task` reads while the flag is on (147): +913, 142,733 measured with it on over the
+# shipped flags (142,879 with EVERY flag on). Raised to 143,000, the measurement rounded up to the next
+# 500: 267 characters are left, so the next parity task raises it with its own measurement. With the flag
+# off production sends 138,938, as before.
+BUDGET_CHARS = 143_000
 
 
 def _declared_chars() -> int:
@@ -65,6 +79,17 @@ class PrefixBudgetTests(SimpleTestCase):
             f"of {BUDGET_CHARS}. Trim, or run `manage.py agent_eval_routing` to show the "
             "addition earns its place and raise BUDGET_CHARS in this PR.",
         )
+
+    def test_the_prefix_with_the_parity_flag_on_stays_inside_its_budget(self) -> None:
+        # The flag ships off, so production does not pay this yet; the day it is flipped it must
+        # already fit, or the flip is also a budget decision nobody made.
+        from apis import settings as production  # noqa: PLC0415
+
+        with mock.patch.dict(
+            settings.SEARCH_ENGINE, {**production.SEARCH_ENGINE, "AGENT_PARITY_TOOLS": True}
+        ):
+            total = _declared_chars() + len(AGENT_SYSTEM_PROMPT)
+        self.assertLessEqual(total, BUDGET_CHARS)
 
     def test_the_count_covers_every_declared_tool(self) -> None:
         # A budget that silently measured nothing would always pass.

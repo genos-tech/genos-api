@@ -120,6 +120,11 @@ class CaseResult:
     # EXCLUDED from continuous metrics and reported separately — infra
     # weather must not read as an agent-quality regression.
     infra_error: bool = False
+    # A case whose YAML says `documented_red: "<why>"` (MIP-1537): known to be red, kept in the
+    # suite so it stays visible and a fix shows, but left out of the GATED pass count and the
+    # GATED metrics `scripts/retrieval_gate.py` reads. Empty = a normal case. Set by `agent_eval`
+    # from the case spec, never by a runner.
+    documented_red: str = ""
     # Optional LLM-judge scores; only set when `--judge` was on.
     judge_scores: dict[str, Any] | None = None
     # Continuous quality metrics layered on top of the binary pass/fail
@@ -964,6 +969,16 @@ def _check_behavior_expectations(
         missing = required - seen
         if missing:
             _add(f"pending_tools_contains: missing {sorted(missing)} (saw {sorted(seen)})")
+
+    if "pending_tools_excludes" in expect:
+        # The mirror of `pending_tools_contains` (MIP-1563): a write the model must NOT propose. A
+        # proposal pauses the run, but the model's words before the call are streamed as the answer,
+        # so a case that only reads the answer cannot tell "I will delete it" plus a proposal from a
+        # plain reply.
+        forbidden = set(expect["pending_tools_excludes"])
+        proposed = forbidden & set(tools_pending)
+        if proposed:
+            _add(f"pending_tools_excludes: a write was proposed that must not be: {sorted(proposed)}")
 
     if "pending_args_contain" in expect:
         # What the model PROPOSED to write, not only that it proposed: for a

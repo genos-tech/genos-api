@@ -353,6 +353,13 @@ class AppToolBase(SequenceScenario):
             self.app(user, anchor_type, anchor_id, **args)
         return str(caught.exception)
 
+    def _mcp_result(self, user, anchor_type, anchor_id, **kw):
+        self._mcp(user)
+        args = {"anchor_type": anchor_type, "anchor_id": str(anchor_id), **kw}
+        text, is_error = self._tool_text(self._call("get_timeline", args))
+        self.assertFalse(is_error, text)
+        return json.loads(text[text.index("{") :]), text
+
     def anchors(self, seq) -> dict:
         return {
             "task": seq.task.task_id,
@@ -376,13 +383,6 @@ class TestTheToolGivesWhatMcpGives(AppToolBase):
                 self.assertTrue(app["events"], (viewer.username, anchor_type))
                 compared += 1
         self.assertEqual(compared, 9)
-
-    def _mcp_result(self, user, anchor_type, anchor_id, **kw):
-        self._mcp(user)
-        args = {"anchor_type": anchor_type, "anchor_id": str(anchor_id), **kw}
-        text, is_error = self._tool_text(self._call("get_timeline", args))
-        self.assertFalse(is_error, text)
-        return json.loads(text[text.index("{") :]), text
 
     def test_a_thread_with_a_lead_in_and_a_page_walk_match_too(self):
         seq = self.build_sequence()
@@ -437,6 +437,162 @@ class TestTheToolGivesWhatMcpGives(AppToolBase):
         self.assertLess(
             max(sizes.values()), timeline.BUDGET_CHARS, "the 12-step story is far below the budget"
         )
+
+
+class TestTheBudgetCountsTheFencesInApp(AppToolBase):
+    """MIP-1477: `timeline.wire_size` counts the 24,000-character call budget with the fences taken
+    off (the MCP layer takes them off), but the in-app result keeps them (39 characters a text), so
+    a full page of long snippets used to pass the budget in-app. The in-app call now measures and
+    trims the page with the fences ON, in the unit the budget is defined in (the JSON a client
+    reads, indent 2). NOTE: the model is sent compact JSON (`json.dumps(..., ensure_ascii=False)`,
+    no indent), which is smaller than that, so the old page never passed the budget in the bytes
+    the model really reads; counting the fences is the conservative reading of "never exceeds",
+    and it is pinned in both units below. MCP is pinned unchanged."""
+
+    def worst_case(self, seq, chars=70):
+        """A thread of 150 replies of `chars` characters each. The default is the worst case for
+        the old count: a page of the full 100 events fits the budget WITHOUT the fences (so the
+        old trim never ran) and passes it by about 4,000 characters with them (41 a text)."""
+        root = seq.thread_root
+        for i in range(150):
+            words = f"{i:03d} " + "w" * chars
+            row = Message.objects.create(
+                channel=seq.gm,
+                sender=seq.b if i % 2 else seq.c,
+                seq=100_000 + i,
+                body=[{"type": "paragraph", "content": [{"type": "text", "text": words}]}],
+                body_text=words,
+                thread_root=root,
+                parent=root,
+                is_thread_reply=True,
+            )
+            Message.objects.filter(pk=row.pk).update(ts_sent_at=seq.minutes(2_000 + i))
+        return root
+
+    @staticmethod
+    def indented(result) -> int:
+        return len(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
+    @staticmethod
+    def compact(result) -> int:
+        return len(json.dumps(result, ensure_ascii=False, default=str))
+
+    def walk(self, seq, root):
+        pages = [self.app(seq.b, "thread", root.id, limit=100, text_chars=500)]
+        while pages[-1].get("next_cursor") and len(pages) < 12:
+            pages.append(
+                self.app(
+                    seq.b,
+                    "thread",
+                    root.id,
+                    limit=100,
+                    text_chars=500,
+                    cursor=pages[-1]["next_cursor"],
+                )
+            )
+        return pages
+
+    def test_the_fixture_is_a_worst_case_the_old_count_let_through(self):
+        """Precondition: the service WITHOUT the in-app mode (what the tool did before) passes the
+        budget once the fences are put back, so the tests below are red without the fix."""
+        seq = self.build_sequence(c_in_gm=True)
+        root = self.worst_case(seq)
+        old = timeline.timeline(self.ctx(seq.b), "thread", str(root.id), limit=100, text_chars=500)
+        self.assertEqual(len(old["events"]), 100)
+        self.assertLessEqual(timeline.wire_size(old), timeline.BUDGET_CHARS)
+        self.assertGreater(self.indented(old), timeline.BUDGET_CHARS + 2_000)
+
+    def check_pages(self, seq, root):
+        pages = self.walk(seq, root)
+        self.assertGreaterEqual(len(pages), 2)
+        self.assertIn("size", pages[0]["capped"])
+        events = [e for page in pages for e in page["events"]]
+        keys = [e["key"] for e in events]
+        self.assertEqual(len(keys), len(set(keys)), "none told twice")
+        told = [e for e in events if "www" in (e.get("text") or "")]
+        self.assertEqual(len(told), 150, "none lost")
+        for page in pages:
+            self.assertLessEqual(self.indented(page), timeline.BUDGET_CHARS)
+            self.assertLessEqual(self.compact(page), timeline.BUDGET_CHARS)
+            texts = [e["text"] for e in page["events"] if e.get("text")]
+            self.assertTrue(texts and all(is_fence(t, ("workspace_content",)) for t in texts))
+        return pages
+
+    def test_every_page_in_app_stays_inside_the_budget_with_its_fences(self):
+        seq = self.build_sequence(c_in_gm=True)
+        root = self.worst_case(seq)
+        pages = self.check_pages(seq, root)
+        # fewer events than MCP tells for the same page: the fences take room
+        over_mcp, _ = self._mcp_result(seq.b, "thread", root.id, limit=100, text_chars=500)
+        self.assertLess(len(pages[0]["events"]), len(over_mcp["events"]))
+
+    def test_long_snippets_too(self):
+        seq = self.build_sequence(c_in_gm=True)
+        root = self.worst_case(seq, chars=480)
+        self.check_pages(seq, root)
+
+    def mcp_page_is_unchanged(self, chars, told):
+        seq = self.build_sequence(c_in_gm=True)
+        root = self.worst_case(seq, chars=chars)
+        over_mcp, text = self._mcp_result(seq.b, "thread", root.id, limit=100, text_chars=500)
+        self.assertEqual(len(over_mcp["events"]), told)  # recorded on origin/main (04c3c099)
+        body = text[len(mcp_tools.UNTRUSTED_NOTICE) :].strip()
+        self.assertLessEqual(len(body), timeline.BUDGET_CHARS)
+        direct = timeline.timeline(
+            self.ctx(seq.b), "thread", str(root.id), limit=100, text_chars=500
+        )
+        self.assertEqual(len(direct["events"]), told)
+        self.assertEqual(comparable(unfenced(direct)), comparable(over_mcp))
+
+    def test_mcp_is_unchanged_short_snippets(self):
+        self.mcp_page_is_unchanged(70, 100)
+
+    def test_mcp_is_unchanged_long_snippets(self):
+        self.mcp_page_is_unchanged(480, 34)
+
+    def test_the_mcp_tool_does_not_ask_for_the_in_app_mode(self):
+        seq = self.build_sequence()
+        with mock.patch.object(timeline, "timeline", wraps=timeline.timeline) as spy:
+            self._mcp_result(seq.b, "task", seq.task.task_id)
+        self.assertEqual(spy.call_count, 1)
+        self.assertNotIn("in_app", spy.call_args.kwargs)
+
+    def test_the_in_app_tool_asks_for_it(self):
+        seq = self.build_sequence()
+        with mock.patch.object(timeline, "timeline", wraps=timeline.timeline) as spy:
+            self.app(seq.b, "task", seq.task.task_id)
+        self.assertIs(spy.call_args.kwargs.get("in_app"), True)
+
+
+class TestNoLastSeenAtInApp(AppToolBase):
+    """MIP-1477: `last_seen_at` is the member's own MCP-app opens; the in-app model reads it as
+    "when I last looked at this" and is misled. Dropped in-app only."""
+
+    def test_the_in_app_task_result_has_no_last_seen_at_and_no_seen_capped(self):
+        seq = self.build_sequence()
+        # the member opened it in an AI app: an MCP call leaves the marker
+        self._mcp_result(seq.b, "task", seq.task.task_id)
+        out = self.app(seq.b, "task", seq.task.task_id)
+        self.assertNotIn("last_seen_at", out)
+        self.assertNotIn("seen_capped", out["capped"])
+        self.assertTrue(out["events"])
+
+    def test_mcp_still_tells_it(self):
+        seq = self.build_sequence()
+        self._mcp_result(seq.b, "task", seq.task.task_id)  # leaves the marker
+        over_mcp, _ = self._mcp_result(seq.b, "task", seq.task.task_id)
+        self.assertIn("last_seen_at", over_mcp)
+        self.assertIsNotNone(over_mcp["last_seen_at"])
+        direct = timeline.timeline(self.ctx(seq.b), "task", seq.task.task_id)
+        self.assertIn("last_seen_at", direct)
+
+    def test_the_rest_of_the_in_app_task_result_is_what_it_was(self):
+        seq = self.build_sequence()
+        app = self.app(seq.b, "task", seq.task.task_id)
+        direct = timeline.timeline(self.ctx(seq.b), "task", seq.task.task_id)
+        direct.pop("last_seen_at", None)
+        direct["capped"].pop("seen_capped", None)
+        self.assertEqual(comparable(app), comparable(direct))
 
 
 class TestTheViewerMatrix(AppToolBase):

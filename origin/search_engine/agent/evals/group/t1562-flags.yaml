@@ -1,0 +1,134 @@
+# MIP-1562 (flag AGENT_PARITY_TOOLS, arm `parity`): flag a task comment for later, remove the flag or mark it
+# done, as the comment bubble's "Flag for later", "Remove flag" and "Mark done" do. Nothing set or cleared a
+# flag. Judged on what the model PROPOSES (`pending_write.args_*`). The positives `requires_arm: parity`; the
+# negative (a plain reply to a comment stays add_comment) runs on arm0 too. Same fixture and viewers as
+# t1562-reactions.yaml. The tool answers "not flagged" to a done on a comment that was never flagged, so
+# `flag-done` judges the proposal, not the outcome.
+
+- id: t1562.flag-set.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: flag a colleague's comment for later through update_comment.flag."
+  query: 'Flag Chris''s comment "Fixed and shipped, Y is solved" on the task "Fix the export that fails (Y)" so I can read it again later.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        flag: "^flag$"
+      args_absent: [body_text, reaction]
+
+- id: t1562.flag-set.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: flag a colleague's comment for later through update_comment.flag."
+  query: 'タスク「Fix the export that fails (Y)」のクリスのコメント「修正してリリースしました。Yは解決済みです」に、後で読み返せるようにフラグを付けてください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        flag: "^flag$"
+      args_absent: [body_text, reaction]
+
+- id: t1562.flag-done.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: mark the flag on a comment done through update_comment.flag."
+  query: 'I have dealt with Chris''s comment "Progress: reproduced Y, the cause is a missing permission" on the task "Fix the export that fails (Y)", which I had flagged. Mark the flag on it done.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        flag: "^done$"
+      args_absent: [body_text, reaction]
+
+- id: t1562.flag-done.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: mark the flag on a comment done through update_comment.flag."
+  query: 'タスク「Fix the export that fails (Y)」のクリスのコメント「進捗: Yを再現しました。原因は権限の不足です」にフラグを付けていましたが、対応が済みました。そのフラグを完了にしてください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        flag: "^done$"
+      args_absent: [body_text, reaction]
+
+- id: t1562.flag-unflag.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  requires_arm: parity
+  note: "Positive: remove the flag from a comment through update_comment.flag."
+  query: 'Remove the flag I put on Chris''s comment "Fixed and shipped, Y is solved" on the task "Fix the export that fails (Y)".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        flag: "^unflag$"
+      args_absent: [body_text, reaction]
+
+- id: t1562.flag-unflag.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  requires_arm: parity
+  note: "Positive: remove the flag from a comment through update_comment.flag."
+  query: 'タスク「Fix the export that fails (Y)」のクリスのコメント「修正してリリースしました。Yは解決済みです」に付けたフラグを外してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_comment]
+    pending_write:
+      tool: update_comment
+      args_match:
+        flag: "^unflag$"
+      args_absent: [body_text, reaction]
+
+- id: t1562.reply-stays-a-comment.en
+  lang: en
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: b
+  note: "Negative (arm0 and parity): replying to a colleague stays add_comment, not a reaction."
+  query: 'On the task "Fix the export that fails (Y)", reply to Chris''s last comment saying thanks, and that the PDF export needs the same check.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [add_comment]
+    pending_write:
+      tool: add_comment
+
+- id: t1562.reply-stays-a-comment.ja
+  lang: ja
+  tags: [eval-group, t1562]
+  fixture: sequence
+  viewer: ja-b
+  note: "Negative (arm0 and parity): replying to a colleague stays add_comment, not a reaction."
+  query: 'タスク「Fix the export that fails (Y)」のクリスの最後のコメントに、ありがとうと、PDFエクスポートにも同じ確認が必要だと返信してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [add_comment]
+    pending_write:
+      tool: add_comment

@@ -81,7 +81,7 @@ from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.controller import run_agent
 from origin.search_engine.agent.languages import LANGUAGE_NAMES
-from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools import app_write_tools
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
 from origin.search_engine.llm import spend
@@ -217,7 +217,7 @@ def _digest_llm_choice() -> LlmChoice | None:
 
 
 def _digest_disabled_tools() -> set[str]:
-    writes = {t.name for t in REGISTRY.values() if t.requires_approval}
+    writes = {t.name for t in app_write_tools()}
     return writes | {"search_web"}
 
 

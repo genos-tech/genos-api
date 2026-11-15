@@ -1,38 +1,34 @@
 #!/usr/bin/env python3
-"""Decide whether `agent-evals` should start its billed Vertex steps (MIP-1101).
+"""Decide whether `agent-evals` should start its billed Vertex steps (MIP-1101, simplified in MIP-1537).
 
-The workflow's cheap `surface` job hashes what the in-app model sees on the commit under test and on
-its base (`scripts/agent_surface_hash.py`) and hands the two hashes, the changed files and the PR's
+The workflow's cheap `gate` job lists the files the PR changes and hands that list and the PR's
 labels to this script. It answers `run=true` or `run=false` through `$GITHUB_OUTPUT`.
 
-FAILS OPEN. `run=false` needs positive evidence that nothing the model reads moved: two readable,
-equal hashes AND a readable file list with no retrieval file in it. Anything else (a missing or
-malformed hash, an unreadable list, an exception in here) answers `run=true`, so a bug in the gate
-can only cost a run, never skip a real change. The one way to a skip without that evidence is the
-`skip-evals` label, which a person set on purpose.
+FAILS OPEN. `run=false` needs positive evidence that no retrieval file moved: a readable file list
+with no retrieval file in it. Anything else (an unreadable list, an exception in here) answers
+`run=true`, so a bug in the gate can only cost a run, never skip a real change. The one way to a
+skip without that evidence is the `skip-evals` label, which a person set on purpose.
 
-Since MIP-1527 the billed run is the RETRIEVAL suite only (the workflow's `paths:` is the retrieval
-list below), so a PR starts it only for a retrieval file, a Pipfile bump or an edit of the workflow
-itself. The hash is kept as the second filter: an edit of the workflow alone (equal hashes, no
-retrieval file) still skips the Vertex steps, which is how that file is tested for free. A hash
-that moved does NOT mean the retrieval suite can see the change (it cannot see prompts or tool
-declarations); that case still runs it, because it is rare once `paths:` is narrow, and the
-model-surface check belongs in a free deterministic test, not in a billed retrieval run.
+History. MIP-1101 first made this decision from a hash of what the in-app model is shown
+(`scripts/agent_surface_hash.py`) and skipped when the hashes of the PR and of its base were equal.
+Since MIP-1527 the billed run is the RETRIEVAL suite only, which cannot see prompts or tool
+declarations, so a moved hash says nothing about what that suite measures; and the free golden test
+`origin.tests.test_agent_fingerprint_golden` already fails on any change to what the model reads.
+The hash, its script and its job steps were removed (MIP-1537). What is kept is the one thing the
+job did that still matters: a PR that edits only `agent-evals.yml` matches the workflow's `paths:`
+but changes no retrieval file, and runs the gate for free (the way that file is tested).
 
 Order, first match wins:
   1. a manual dispatch or the weekly schedule -> run (`dry_run` on a dispatch reports, does not run)
   2. label `run-evals`                      -> run
   3. label `skip-evals`                     -> skip
-  4. a hash is missing or unreadable        -> run
-  5. the file list is unreadable            -> run
-  6. a changed file is in RETRIEVAL_PATHS   -> run
-  7. the hashes differ                      -> run
-  8. otherwise                              -> skip
+  4. the file list is unreadable            -> run
+  5. a changed file is in RETRIEVAL_PATHS   -> run
+  6. otherwise                              -> skip
 
 usage (all inputs arrive through the environment, so a label or branch name is never interpolated
 into a shell command):
-    EVENT=pull_request LABELS='["a","b"]' BASE_HASH_FILE=... HEAD_HASH_FILE=... \
-    CHANGED_FILES_FILE=... DRY_RUN=false  agent_eval_gate.py
+    EVENT=pull_request LABELS='["a","b"]' CHANGED_FILES_FILE=... DRY_RUN=false  agent_eval_gate.py
 """
 
 from __future__ import annotations
@@ -49,7 +45,7 @@ SKIP_LABEL = "skip-evals"
 
 # The files the retrieval suite really exercises (MIP-1527). This is the ONE list: the workflow's
 # `pull_request: paths:` must equal it plus the workflow file itself (a test pins that), and a
-# changed file matching it runs the eval whatever the hash says.
+# changed file matching it runs the eval.
 #
 # Why this list and not `origin/search_engine/**`. The billed run is `agent_eval --retrieval` on a
 # seeded fixture: it re-indexes the seed corpus (demo_seeder -> ingestion -> chunkers ->
@@ -125,16 +121,8 @@ def _glob_to_regex(glob: str) -> re.Pattern[str]:
     return re.compile(f"^{out}$")
 
 
-# Kept under its old name: the files that run the eval whatever the hash says.
+# Kept under its old name: the files that run the eval.
 FORCE_PATHS: tuple[re.Pattern[str], ...] = tuple(_glob_to_regex(g) for g in RETRIEVAL_PATHS)
-
-
-def parse_hash(text: str | None) -> str | None:
-    """The sha256 on the `surface-hash:` line of `agent_surface_hash.py`'s output, else None."""
-    if not text:
-        return None
-    found = re.findall(r"^surface-hash: ([0-9a-f]{64})$", text, re.MULTILINE)
-    return found[-1] if found else None
 
 
 def parse_labels(raw: str | None) -> set[str]:
@@ -160,13 +148,11 @@ def decide(
     *,
     event: str,
     labels: set[str],
-    base_hash: str | None,
-    head_hash: str | None,
     changed_files: list[str] | None,
     dry_run: bool = False,
 ) -> tuple[bool, str]:
     """`(run, reason)`. See the module docstring for the order."""
-    run, reason = _decide(event, labels, base_hash, head_hash, changed_files)
+    run, reason = _decide(event, labels, changed_files)
     if event == "workflow_dispatch" and dry_run:
         return (
             False,
@@ -178,25 +164,17 @@ def decide(
 def _decide(
     event: str,
     labels: set[str],
-    base_hash: str | None,
-    head_hash: str | None,
     changed_files: list[str] | None,
 ) -> tuple[bool, str]:
     if event == "workflow_dispatch":
         return True, "manual dispatch: run the evals"
     if event == "schedule":
-        # the weekly run on main: its base is the commit before HEAD, which says nothing here
+        # the weekly run on main: there is no PR diff, which says nothing here
         return True, "weekly schedule: run the retrieval suite on main"
     if RUN_LABEL in labels:
         return True, f"label `{RUN_LABEL}`: run the evals"
     if SKIP_LABEL in labels:
         return False, f"label `{SKIP_LABEL}`: skip the evals (a person asked for it)"
-    if base_hash is None or head_hash is None:
-        which = "base" if base_hash is None else "head"
-        return (
-            True,
-            f"the {which} surface hash is missing or unreadable: failing open, run the evals",
-        )
     if changed_files is None:
         return True, "the changed-file list is unreadable: failing open, run the evals"
     forced = forced_by(changed_files)
@@ -206,14 +184,9 @@ def _decide(
             True,
             f"changed files the retrieval suite exercises: {shown}",
         )
-    if base_hash != head_hash:
-        return (
-            True,
-            f"the model surface changed (base {base_hash[:12]}, head {head_hash[:12]}): run the evals",
-        )
     return (
         False,
-        f"the model surface is unchanged (hash {head_hash[:12]}) and no retrieval file changed: skip",
+        "no retrieval file changed (only the workflow or files the retrieval suite cannot see): skip",
     )
 
 
@@ -239,8 +212,6 @@ def main() -> int:
         run, reason = decide(
             event=env.get("EVENT", ""),
             labels=parse_labels(env.get("LABELS")),
-            base_hash=parse_hash(_read(env.get("BASE_HASH_FILE"))),
-            head_hash=parse_hash(_read(env.get("HEAD_HASH_FILE"))),
             changed_files=_changed_files(env.get("CHANGED_FILES_FILE")),
             dry_run=env.get("DRY_RUN", "").lower() == "true",
         )

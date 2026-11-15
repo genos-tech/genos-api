@@ -65,3 +65,20 @@ def load_own_comment(
             "be changed; get the `comment_id` from `fetch_task`."
         )
     return comment
+
+
+def load_comment(task: TaskMaster, raw_comment_id: Any, ctx: ToolContext) -> TaskComments:
+    """Any live comment on `task`, whoever wrote it: for what the page lets a person do to a
+    colleague's comment (react to it, flag it, add it to the to-do list). `task` came from
+    `load_task`, so the caller may open it. A deleted comment, or an id the task has no comment
+    for, reads as a missing one."""
+    comment_id = as_int(raw_comment_id, "comment_id")
+    comment = TaskComments.objects.filter(
+        task=task.task_id, comment_id=comment_id, is_deleted=False
+    ).first()
+    if comment is None:
+        raise ToolError(
+            f"Comment {comment_id} not found on {task.display_id}. Get the `comment_id` from "
+            "`fetch_task`."
+        )
+    return comment

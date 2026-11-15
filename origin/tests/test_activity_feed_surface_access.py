@@ -8,7 +8,9 @@ project, lost the grant, or left the chat of a chat note.
 
 Now each such row is held to the rule the product applies to open that task / note:
 
-  * 5 task body  -> `can_access_task`: on the project (member or owner), assignee, or reporter
+  * 5 task body  -> `can_access_task`: on the project (member or owner), assignee, or reporter;
+                    and the task must not be soft-deleted (MIP-1566: `can_access_task` itself has
+                    no such check, the feed rule adds it)
   * 6 / 7 / 8    -> `get_effective_role` (the one note rule; a personal note's owner reads it)
 
 A row the member cannot read is dropped from `activities` and its id is a tombstone, so the
@@ -169,6 +171,57 @@ class TaskBodyRows(SurfaceBase):
         row = self.task_row(task)
         TaskMaster.objects.filter(pk=task.pk).delete()
         self.assertTombstoned(row)
+
+    # -- a soft-deleted task (MIP-1566) --------------------------------------------------- #
+
+    def soft_delete(self, task):
+        TaskMaster.objects.filter(pk=task.pk).update(is_deleted=True)
+
+    def test_a_soft_deleted_task_is_a_tombstone_for_every_way_of_reading_it(self):
+        member = ProjectMembers.objects.create(
+            team=self.team, project=self.project, attendee=self.reader
+        )
+        for label, task in (
+            ("member", self.mk_task()),
+            ("assignee", self.mk_task(assignee=self.reader)),
+            ("reporter", self.mk_task(reporter=self.reader)),
+        ):
+            with self.subTest(label):
+                row = self.task_row(task)
+                self.assertListed(row)
+                self.soft_delete(task)
+                self.assertTombstoned(row)
+        member.delete()
+
+    def test_a_soft_deleted_task_of_my_own_project_is_a_tombstone(self):
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Mine",
+            code="OWN",
+            owner=self.reader,
+            project_system_user=self.reader,
+        )
+        task = self.mk_task(project=project)
+        row = self.task_row(task)
+        self.assertListed(row)
+        self.soft_delete(task)
+        self.assertTombstoned(row)
+
+    def test_a_task_that_is_restored_gets_its_rows_back(self):
+        task = self.mk_task(assignee=self.reader)
+        row = self.task_row(task)
+        self.soft_delete(task)
+        self.assertTombstoned(row)
+        TaskMaster.objects.filter(pk=task.pk).update(is_deleted=False)
+        self.assertListed(row)
+
+    def test_a_deleted_task_does_not_hide_the_rows_of_a_live_one(self):
+        dead, live = self.mk_task(assignee=self.reader), self.mk_task(assignee=self.reader)
+        dead_row, live_row = self.task_row(dead), self.task_row(live)
+        self.soft_delete(dead)
+        data = self.feed()
+        self.assertEqual(self.ids(data), {str(live_row.id)})
+        self.assertEqual(data["tombstones"], [str(dead_row.id)])
 
     def test_a_row_with_no_task_id_gets_no_benefit_of_the_doubt(self):
         self.assertTombstoned(self.row(TASK_BODY, {}))
@@ -387,6 +440,22 @@ class QueryCountDoesNotGrowWithRows(SurfaceBase):
         self.assertEqual(len(data_large["activities"]), 40)
         self.assertEqual(large, small)
 
+    def test_soft_deleted_tasks_cost_no_extra_queries(self):
+        def build(n):
+            for _ in range(n):
+                self.task_row(self.mk_task(assignee=self.reader))  # live
+                dead = self.mk_task(assignee=self.reader)
+                self.task_row(dead)
+                TaskMaster.objects.filter(pk=dead.pk).update(is_deleted=True)
+
+        build(2)
+        small, data_small = self.count()
+        build(18)
+        large, data_large = self.count()
+        self.assertEqual((len(data_small["tombstones"]), len(data_large["tombstones"])), (2, 20))
+        self.assertEqual(len(data_large["activities"]), 20)
+        self.assertEqual(large, small)
+
     def test_the_whole_feed_stays_under_a_fixed_budget(self):
         self.build(3)
         used, _ = self.count()
@@ -429,16 +498,22 @@ class BatchEqualsThePerRowRule(SurfaceBase):
             self.mk_task(project=mine),
             self.mk_task(project=joined),
         ]
+        deleted = self.mk_task(project=joined, assignee=self.reader)
+        TaskMaster.objects.filter(pk=deleted.pk).update(is_deleted=True)
         rows = [self.task_row(t) for t in tasks]
+        deleted_row = self.task_row(deleted)
         ghost = self.row(TASK_BODY, {"taskId": 4242424})
-        triples = [(r.id, TASK_BODY, r.meta) for r in [*rows, ghost]]
+        triples = [(r.id, TASK_BODY, r.meta) for r in [*rows, ghost, deleted_row]]
         bad = unreadable_surface_activity_ids(self.reader.id, triples)
         for task, row in zip(tasks, rows):
             self.assertEqual(
                 row.id in bad, not can_access_task(task.task_id, self.reader.id), task.task_id
             )
         self.assertIn(ghost.id, bad)
-        self.assertEqual(len(bad), 2)  # `other_project` plain, and the ghost
+        # the one place the feed is stricter than `can_access_task`: a soft-deleted task
+        self.assertTrue(can_access_task(deleted.task_id, self.reader.id))
+        self.assertIn(deleted_row.id, bad)
+        self.assertEqual(len(bad), 3)  # `other_project` plain, the ghost, the deleted task
 
     def test_note_matrix_equals_the_note_rule(self):
         from origin.services.activity_surface_access import unreadable_surface_activity_ids

@@ -21,6 +21,7 @@ import contextlib
 import json
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase
 
@@ -51,6 +52,8 @@ EXPECTED_KEPT = {
     "manage_note_sharing": {"action", "note_type", "note_id", "user_id", "role"},
     "delete_my_schedule": {"schedule_id"},
     "forget_my_memory": {"what"},
+    # MIP-1563: published only while `AGENT_PARITY_TOOLS` is on, so the test below switches it on.
+    "delete_task_attachment": {"task_id", "attachment_id"},
 }
 
 
@@ -309,6 +312,10 @@ class Cases:
         what the tool declares, and no marker of the rest. A switch holding free text instead
         of one of its listed values is dropped too."""
         self.connect(destructive=True)
+        # `delete_task_attachment` (MIP-1563) is published only while this flag is on.
+        flag = mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True})
+        flag.start()
+        self.addCleanup(flag.stop)
         destructive = [t for t in tools.CATALOG if t.destructive]
         self.assertEqual({t.name for t in destructive}, set(EXPECTED_KEPT), "decide new tools")
         for tool in destructive:

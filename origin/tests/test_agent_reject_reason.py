@@ -3,7 +3,8 @@
 `POST /decide/` accepts `reason` (a string, at most 500 characters, only with `reject`) and
 stores it on the step. With `SEARCH_ENGINE["AGENT_REJECT_REASON"]` on, the model's result for
 the rejected call is `{"error": "user_rejected", "reason": "..."}` and system-prompt rule 7
-gains one line. Off (the default) the model is sent exactly what `origin/main` sends.
+gains one line. Off (the rollback; the flag has been ON by default since api #772) the model is
+sent exactly what `origin/main` sent before the flag existed.
 
 PINS. The off-state goldens were recorded on PRISTINE `origin/main` (346816f2), where a
 `reason` in the body is simply ignored, with the same harness (the flag-pin harness of

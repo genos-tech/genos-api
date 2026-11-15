@@ -5,17 +5,19 @@ Two suite types, sharing the same CLI shape:
   * **Behavior** (default) — full agent loop, real Gemini/Claude calls,
     asserts on the NDJSON event stream. Source: `agent/evals/cases.yaml`.
 
-  * **Retrieval** (`--retrieval`) — direct `search(...)` calls, no LLM,
-    asserts on the ranked entity list. Source:
-    `agent/evals/retrieval_cases.yaml`.
+  * **Retrieval** (`--retrieval`) — direct `search(...)` calls, no agent loop (each
+    call still makes one small query-rewrite model call and one query embedding),
+    asserts on the ranked entity list. Source: `agent/evals/retrieval_cases.yaml`.
 
 Exit code is 0 if every case in the chosen suite(s) passed, 1
-otherwise (CI-friendly).
+otherwise (CI-friendly). A case marked `documented_red` in its YAML is run and shown but
+cannot turn the exit code to 1, and is left out of the "Gated" lines of the summary
+(see `_print_summary`).
 
 Examples:
 
     python manage.py agent_eval                       # behavior suite
-    python manage.py agent_eval --retrieval           # retrieval suite (fast, no LLM)
+    python manage.py agent_eval --retrieval           # retrieval suite (fast; a rewrite call per case)
     python manage.py agent_eval --all                 # both suites
     python manage.py agent_eval --case <id>           # one case (auto-detects suite)
     python manage.py agent_eval --retrieval --fail-fast
@@ -67,7 +69,11 @@ class Command(BaseCommand):
         suite_group.add_argument(
             "--retrieval",
             action="store_true",
-            help="Run only the retrieval suite (fast, no LLM calls).",
+            help=(
+                "Run only the retrieval suite: direct search() calls, no agent loop (fast; each "
+                "call still makes one small query-rewrite model call unless the case pins "
+                "`rewrite: false`)."
+            ),
         )
         suite_group.add_argument(
             "--summary",
@@ -215,9 +221,12 @@ class Command(BaseCommand):
                         answer=result.answer,
                         tool_results=result.tool_results,
                     )
+                # `documented_red: "<why>"` in the case YAML (MIP-1537): run and shown, but it
+                # can neither fail the run nor count in the gated numbers.
+                result.documented_red = str(case.get("documented_red") or "")
                 all_results.append(result)
                 self._print_one(result)
-                if not result.passed:
+                if not result.passed and not result.documented_red:
                     any_failed = True
                     if fail_fast:
                         self.stdout.write(self.style.WARNING("\n--fail-fast: stopping.\n"))
@@ -383,7 +392,10 @@ class Command(BaseCommand):
             )
 
     def _print_one(self, r: CaseResult) -> None:
-        if r.passed:
+        if r.documented_red:
+            # Known red (MIP-1537): visibly not a plain FAIL, and a pass is news, not a PASS.
+            label = self.style.NOTICE("GRN!") if r.passed else self.style.WARNING("RED ")
+        elif r.passed:
             label = self.style.SUCCESS("PASS")
         elif getattr(r, "infra_error", False):
             # Not-passed, but provider infrastructure died (429/5xx) —
@@ -407,6 +419,11 @@ class Command(BaseCommand):
         self.stdout.write(f"  {label}  {r.case_id:<48} {detail}")
         for reason in r.failure_reasons:
             self.stdout.write(self.style.ERROR(f"        - {reason}"))
+        if r.documented_red:
+            news = " IT PASSED: remove `documented_red` from its case." if r.passed else ""
+            self.stdout.write(
+                self.style.NOTICE(f"        documented red: {r.documented_red}{news}")
+            )
         if r.judge_scores is not None:
             j = r.judge_scores
             note = j.get("error") or j.get("notes") or ""
@@ -436,11 +453,13 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"{passed}/{total} passed."))
         else:
             self.stdout.write(self.style.ERROR(f"{passed}/{total} passed.{infra_part}"))
-            failed = [r.case_id for r in results if not r.passed]
+            failed = [r for r in results if not r.passed]
             self.stdout.write("Failures:")
-            for cid in failed:
-                marker = "  (infra)" if cid in infra else ""
-                self.stdout.write(f"  - {cid}{marker}")
+            for r in failed:
+                marker = "  (infra)" if r.case_id in infra else ""
+                if r.documented_red:
+                    marker += "  (documented red)"
+                self.stdout.write(f"  - {r.case_id}{marker}")
 
         if run_judge:
             judged = [r for r in results if r.judge_scores is not None]
@@ -485,7 +504,37 @@ class Command(BaseCommand):
                 parts.append(f"{k}={sum(vals) / len(vals):.3f} (n={len(vals)})")
             self.stdout.write(self.style.NOTICE("\nContinuous metrics: " + "  ".join(parts)))
 
+        self._print_gated(results)
         self._print_cost(results)
+
+    def _print_gated(self, results: list[CaseResult]) -> None:
+        """The numbers `scripts/retrieval_gate.py` reads (MIP-1537): the same pass count and
+        metric means as above, over the cases that are NOT `documented_red`.
+
+        The lines above (`N/M passed.`, `Continuous metrics:`) still cover every case, so nothing
+        that parses them changes meaning. The gate reads only the `Gated` lines below and treats
+        their absence as an unreadable output, so an older harness cannot pass on the old
+        denominator. With no documented-red case the gated numbers equal the ones above.
+        """
+        gated = [r for r in results if not r.documented_red]
+        red = [r for r in results if r.documented_red]
+        passed = sum(1 for r in gated if r.passed)
+        self.stdout.write(f"\nGated (documented-red cases excluded): {passed}/{len(gated)} passed.")
+        scored = [r for r in gated if r.metrics and not getattr(r, "infra_error", False)]
+        if scored:
+            keys = sorted({k for r in scored for k in r.metrics})
+            parts = []
+            for k in keys:
+                vals = [r.metrics[k] for r in scored if k in r.metrics]
+                parts.append(f"{k}={sum(vals) / len(vals):.3f} (n={len(vals)})")
+            self.stdout.write("Gated continuous metrics: " + "  ".join(parts))
+        if red:
+            green = [r.case_id for r in red if r.passed]
+            self.stdout.write(
+                f"Documented red: {len(red)} case(s), {len(green)} passing"
+                + (f" ({', '.join(green)}: remove the mark)" if green else "")
+                + "."
+            )
 
     def _run_basename(self) -> str:
         """`<timestamp>-<short-sha>` stem shared by persisted run files.

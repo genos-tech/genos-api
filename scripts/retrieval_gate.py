@@ -5,15 +5,32 @@
 script on `eval.out`. The floors live here and nowhere else (they used to be three workflow env
 vars, easy to tune in one place and forget in another).
 
-How the numbers were chosen. The audit of 13 PR runs on PRs that touched no retrieval file (the
-noise floor of the suite: the rewriter model varies a little run to run) saw 62-69 cases of 75
-passing, mrr 0.796-0.862 and recall_at_n 0.833-0.931. The old floors (45 / 0.65 / 0.65) sat 17-24
-passes and 0.15-0.19 under that minimum, so a lost lane of a dozen cases went unnoticed; they only
-tripped on a dead vector lane. The new ones sit just under the observed minimum: a drop of a handful
-of cases, which is a real regression, now turns the run red, and normal noise does not.
+What it reads. `agent_eval --retrieval` marks the cases that are known to be red (`documented_red:
+"<why>"` in `retrieval_cases.yaml`, MIP-1537), still runs and shows them, and prints their numbers
+apart: the gate reads ONLY the two lines `Gated (documented-red cases excluded): P/T passed.` and
+`Gated continuous metrics: ...`, never the all-cases lines above them, and fails as "cannot read the
+eval output" when they are missing (an older harness must not pass on the old denominator).
+
+How the numbers were chosen. Source: the PASS/FAIL lines and the per-case metric lines of the 99
+successful `agent-evals` runs on genos-api from 2026-11-02 to 2026-11-14 (75 cases in every one;
+`gh run view <id> --log`, no new model call). Five cases were red in 88-99 of the 99 runs (see the
+`documented_red` reasons in the YAML); left out of the numbers, the other 70 cases gave, over the
+99 runs:
+
+    passed (of 70)    min 62  mean 66.1  max 70
+    mrr (n=48)        min 0.822  mean 0.864
+    recall_at_n (n=48) min 0.875  mean 0.939
+
+(Counting all 75 cases the minimums were 62 passed, mrr 0.793, recall 0.833: #803 set the floors
+58 / 0.75 / 0.80 from the 13-run audit, 4 passes and 0.04 / 0.03 under the minimum.) The floors keep
+that same margin under the new minimums: MIN_PASS stays 58, now out of 70 gated cases instead of
+75; its effect on the pass count is the same as before (the five red cases passed 0.19 times per
+run between them), so only MIN_MRR and MIN_RECALL got stricter. A margin of 4 passes is still
+thin: a Vertex 429 burst on the query embeddings or the rewriter would count as failures.
 
 If this flaps: look at which cases flipped before touching a number. Lowering a floor is a decision
-about what the suite is for, so say why in the PR.
+about what the suite is for, so say why in the PR. A case that passes the run it is marked red in
+is reported as `GRN!`; remove its `documented_red` and the floors can be re-derived.
 
 Exit code: 0 pass, 1 fail (a regression, or an output that cannot be read: an unreadable
 `eval.out` means the harness broke, which must be loud, not green).
@@ -24,32 +41,36 @@ from __future__ import annotations
 import re
 import sys
 
-# The floors. `passed` is an absolute count of the 75 retrieval cases.
+# The floors. `passed` is an absolute count of the GATED retrieval cases (every case that is not
+# `documented_red`: 70 today). `MIN_TOTAL` stops marking cases red from quietly emptying the gate.
 MIN_PASS = 58
-MIN_MRR = 0.75
-MIN_RECALL = 0.80
+MIN_MRR = 0.78
+MIN_RECALL = 0.84
+MIN_TOTAL = 70
 
 
 def parse(out: str) -> tuple[int, int, float, float]:
-    """`(passed, total, mrr, recall_at_n)` from the output of `agent_eval --retrieval`.
+    """`(passed, total, mrr, recall_at_n)` of the GATED cases from the output of
+    `agent_eval --retrieval`.
 
-    Raises ValueError when a number is missing: a harness that printed no summary or no aggregate
-    metric line is broken, and the gate must not read that as a pass.
+    Raises ValueError when a number is missing: a harness that printed no gated summary or no gated
+    metric line is broken (or is the one from before MIP-1537, whose all-cases numbers must not be
+    compared with these floors), and the gate must not read that as a pass.
     """
-    summaries = re.findall(r"(\d+)/(\d+) passed", out)
+    summaries = re.findall(
+        r"^Gated \(documented-red cases excluded\): (\d+)/(\d+) passed\.", out, re.M
+    )
     if not summaries:
-        raise ValueError("no 'N/M passed' summary line in the eval output")
+        raise ValueError("no 'Gated (documented-red cases excluded): N/M passed.' line")
     passed, total = (int(n) for n in summaries[-1])  # the summary is the last one printed
-    # The AGGREGATE line ("Continuous metrics: mrr=0.870 (n=75) ..."), not the per-case
-    # "metrics: mrr=1.000" lines that precede it.
-    agg = re.search(r"Continuous metrics:(.*)", out)
+    agg = re.search(r"^Gated continuous metrics:(.*)", out, re.M)
     if not agg:
-        raise ValueError("no 'Continuous metrics:' line in the eval output")
+        raise ValueError("no 'Gated continuous metrics:' line in the eval output")
 
     def metric(name: str) -> float:
         m = re.search(rf"\b{name}=([0-9.]+)", agg.group(1))
         if not m:
-            raise ValueError(f"no {name}= in the 'Continuous metrics:' line")
+            raise ValueError(f"no {name}= in the 'Gated continuous metrics:' line")
         return float(m.group(1))
 
     return passed, total, metric("mrr"), metric("recall_at_n")
@@ -61,8 +82,12 @@ def evaluate(out: str) -> tuple[bool, str]:
         passed, total, mrr, recall = parse(out)
     except ValueError as exc:
         return False, f"GATE  FAIL: cannot read the eval output ({exc}); the harness broke"
-    ok = passed >= MIN_PASS and mrr >= MIN_MRR and recall >= MIN_RECALL
+    ok = passed >= MIN_PASS and mrr >= MIN_MRR and recall >= MIN_RECALL and total >= MIN_TOTAL
     verdict = "PASS" if ok else "FAIL: regression"
+    if total < MIN_TOTAL:
+        verdict = (
+            f"FAIL: only {total} gated cases (>= {MIN_TOTAL}): too many marked documented_red?"
+        )
     return ok, (
         f"GATE  passed={passed}/{total} (>= {MIN_PASS})  mrr={mrr:.3f} (>= {MIN_MRR})  "
         f"recall_at_n={recall:.3f} (>= {MIN_RECALL})  ->  {verdict}"

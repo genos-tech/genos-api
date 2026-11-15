@@ -101,6 +101,8 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "add_comment": ("task", "task_id"),
     "update_comment": ("task", "task_id"),
     "delete_comment": ("task", "task_id"),
+    # MIP-1563 (offered only while `AGENT_PARITY_TOOLS` is on): the task a file was deleted from.
+    "delete_task_attachment": ("task", "task_id"),
     "restore_task_body": ("task", "task_id"),
     "add_task_delivery": ("task", "task_id"),
     "remove_task_delivery": ("task", "task_id"),
@@ -118,6 +120,8 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "list_note_access": ("note", "note_id"),
     "update_note": ("note", "note_id"),
     "restore_note_version": ("note", "note_id"),
+    "reply_to_note_comment": ("note", "note_id"),
+    "resolve_note_comment": ("note", "note_id"),
     "manage_note_sharing": ("note", "note_id"),
     "delete_note": ("note", "note_id"),
     # chat

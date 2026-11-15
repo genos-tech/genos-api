@@ -2,7 +2,8 @@
 
 `POST /decide/` takes an optional `reason` with `decision: "reject"`. It is stored on the
 step (`AgentStep.decision_reason`) whatever the flag says. What the model sees of it is
-decided here, behind `SEARCH_ENGINE["AGENT_REJECT_REASON"]` (default off):
+decided here, behind `SEARCH_ENGINE["AGENT_REJECT_REASON"]` (default ON since api #772; the env value
+`false` is the rollback):
 
   * off   the model's result is `{"error": "user_rejected"}`, exactly as before;
   * on    `{"error": "user_rejected", "reason": "<their words>"}`. The `error` key stays

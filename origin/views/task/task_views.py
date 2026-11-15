@@ -24,11 +24,12 @@ from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
 from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
-from origin.services import realtime_push, task_ancestry, unified_writer
+from origin.services import realtime_push, task_ancestry, task_comment_reactions, unified_writer
 from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
+from origin.services.task_attachment_manage import delete_attachment
 from origin.services.task_cache import (
     get_cached_project_tasks,
     invalidate_for_task,
@@ -449,10 +450,16 @@ class TaskMasterView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             # Collaborators ride outside the serializer (M2M) — set them
-            # once the row exists. Absent key => no collaborators.
+            # once the row exists. Absent key => no collaborators. Anyone who could not open the
+            # task is left out (MIP-1567): its assignee and reporter can, a teammate who is not
+            # on the project cannot.
             sync_task_collaborators(
                 serializer.instance,
-                _people_allowed_on(project, request.data.get("collaborators")),
+                _people_allowed_on(
+                    project,
+                    request.data.get("collaborators"),
+                    (request.data.get("assignee"), request.data.get("reporter")),
+                ),
             )
             increment_usage(str(request.user.id), TASK_CREATE_KEY)
             # Drop the project-tasks cache so the next sidebar fetch
@@ -2351,35 +2358,18 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
         try:
             attachment = TaskAttachments.objects.get(task=task, attachment_id=attachment_id)
-            # Remove the underlying file from MEDIA storage first.
-            # `model.delete()` only drops the DB row; the FileField does
-            # not auto-purge the backing blob on disk, so without this
-            # the upload directory would grow unbounded with orphans.
-            # `save=False` skips re-saving the (about-to-be-deleted)
-            # row. Wrapped so a missing/already-removed file (e.g. an
-            # orphan from a half-finished prior delete) doesn't block
-            # the row deletion.
-            if attachment.attached_file:
-                try:
-                    attachment.attached_file.delete(save=False)
-                except Exception as file_err:
-                    # Don't fail the API call — the DB row deletion is
-                    # the user-facing contract; a missing file is a
-                    # cleanup concern, not a correctness one.
-                    logger.warning(
-                        "[TaskAttachmentsView.delete] file cleanup failed for attachment_id=%s: %s",
-                        attachment_id,
-                        type(file_err).__name__,
-                    )
-            attachment.delete()
-            return Response(
-                {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
-            )
-        except TaskAttachments.DoesNotExist:
+        except (TaskAttachments.DoesNotExist, ValueError, TypeError):
+            # A malformed id (`attachment_id=abc`) names nothing, as a missing one does: it
+            # used to reach the query as a `ValueError` and answer 500.
             return Response(
                 {"error": "Attachment not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        # The file, then the row: the one delete the agent's `delete_task_attachment` shares.
+        delete_attachment(attachment)
+        return Response(
+            {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
+        )
 
 
 def _own_comment(request, task_id, comment_id):
@@ -2803,17 +2793,13 @@ class TaskCommentReactionView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        current_max_reaction_id = TaskCommentReactionFact.objects.filter(
-            team_id=body["team_id"],
-            task_id=body["task_id"],
-            comment_id=comment_id,
-        ).aggregate(max_id=Max("reaction_id"))["max_id"]
-
         data = {
             "team": body["team_id"],
             "task": body["task_id"],
             "comment_id": comment_id,
-            "reaction_id": current_max_reaction_id + 1 if current_max_reaction_id else 1,
+            "reaction_id": task_comment_reactions.next_reaction_id(
+                body["team_id"], body["task_id"], comment_id
+            ),
             "reaction_emoji": body["reaction_emoji"],
             # The caller, not the body's `sender_id`, for the same reason
             # as a comment's author: the reaction notifies as them.
@@ -2823,33 +2809,15 @@ class TaskCommentReactionView(AuthenticatedAPIView):
         serializer = TaskCommentReactionFactSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            # Mirror the reaction onto the v3 PM comment message so the
-            # comment author gets an activity-feed row + web push. The
-            # legacy TaskCommentReactionFact alone writes NO v3 activity,
-            # so reacting to a task comment used to notify nobody. The
-            # comment's mirror Message carries `metadata.taskCommentId`.
-            try:
-                from origin.models.chat.unified_models import Message
-                from origin.models.common.user_models import CustomUser
-                from origin.services import v3_activity
-                from origin.services.webpush_dispatch import schedule_push_for_activities
-
-                reactor = CustomUser.objects.filter(id=data["sender"]).first()
-                mirror = (
-                    Message.objects.filter(
-                        task_id=int(data["task"]),
-                        metadata__taskCommentId=int(data["comment_id"]),
-                    )
-                    .order_by("-ts_sent_at")
-                    .first()
-                )
-                if mirror is not None and reactor is not None:
-                    acts = v3_activity.create_reaction_activity(
-                        message=mirror, emoji=data["reaction_emoji"], actor=reactor
-                    )
-                    schedule_push_for_activities(acts)
-            except Exception as exc:  # never break the saved reaction
-                logger.warning("task-comment reaction v3 fan-out failed: %s", exc)
+            # Mirror the reaction onto the v3 PM comment message so the comment author gets an
+            # activity-feed row + web push. The legacy TaskCommentReactionFact alone writes NO v3
+            # activity, so reacting to a task comment used to notify nobody.
+            task_comment_reactions.announce_reaction(
+                task_id=data["task"],
+                comment_id=data["comment_id"],
+                emoji=data["reaction_emoji"],
+                actor_id=data["sender"],
+            )
             return Response(
                 {
                     **serializer.data,

@@ -11,6 +11,7 @@ edit. The sizes are printed (`-v 2`) so the session's prefix cost can be quoted.
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 from unittest import mock
@@ -21,7 +22,7 @@ from django.test import SimpleTestCase, TestCase
 
 from apis import settings_test as test_settings
 from origin.search_engine.agent import content_length as cl
-from origin.search_engine.agent import tool_flag_text
+from origin.search_engine.agent import tool_flag_params, tool_flag_text
 from origin.search_engine.agent.controller import _app_tool, _build_tool_declarations
 from origin.search_engine.agent.evals.group import harness
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system_prompt
@@ -32,10 +33,15 @@ from origin.tests.test_agent_prefix_budget import BUDGET_CHARS
 from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase, cases
 
 # All-on prefix measured 139,012 (off 134,315: +4,551 declarations, +146 prompt rule): same headroom
-# the budget keeps.
+# the budget keeps. 140,982 with the parity batch's parameters (AGENT_PARITY_TOOLS, MIP-1561: +1,898
+# characters over the three task tools), so 143,500 here: a Long member adds the 1,453-character
+# content block on top (142,437) and the same ~1,000 characters of headroom stay.
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
-ALL_ON_BUDGET_CHARS = 141_000
+# MIP-1562: +984 more (141,966 all-on, 143,421 with a Long member's block): 79 characters left.
+# MIP-1563: +913 more (the flag-gated delete tool and `fetch_task`'s sentence; 142,879 all-on, 144,334
+# with a Long member's block), so 144,500: 166 characters left.
+ALL_ON_BUDGET_CHARS = 144_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.
@@ -113,6 +119,7 @@ class AllOnArmTests(SimpleTestCase):
             "AGENT_INAPP_TIMELINE_TOOL",
             "AGENT_CONTENT_LENGTH",
             "AGENT_BODY_ON_USER_MODEL",
+            "AGENT_PARITY_TOOLS",
         }
         self.assertLessEqual(expected, set(ALL_ON))
 
@@ -129,14 +136,49 @@ class AllOnDeclarationTests(SimpleTestCase):
         off, on = self._off_and_on()
         self.assertEqual([d.name for d in on[: len(off)]], [d.name for d in off])
         extra = [d.name for d in on[len(off) :]]
-        self.assertEqual(extra, ["get_timeline"])
+        # The timeline tool, then MIP-1563's write tool (flag-gated with the parity batch).
+        self.assertEqual(extra, ["get_timeline", "delete_task_attachment"])
         self.assertEqual(len({d.name for d in on}), len(on), "a tool is declared twice")
 
-    def test_schemas_do_not_move_only_descriptions_grow(self):
+    def test_schemas_only_gain_the_declared_parameters_and_descriptions_only_grow(self):
+        # The parity flag (MIP-1561) is the one flag that adds PARAMETERS (`tool_flag_params`).
+        # Take the declared ones back out of the all-on schema and it must be the all-off schema
+        # exactly: every parameter a tool had is kept as it was. Every other tool's schema does
+        # not move at all, and a description only grows (the one sentence a flag REPLACES is
+        # swapped in place, `tool_flag_text.REPLACEMENTS`).
+        added = {a.tool: a for a in tool_flag_params.ADDITIONS}
+        replaced: dict[str, list[tuple[str, str]]] = {}
+        for name, _flag, old, new in tool_flag_text.REPLACEMENTS:
+            replaced.setdefault(name, []).append((old, new))
         off, on = self._off_and_on()
         for before, after in zip(off, on, strict=False):
-            self.assertEqual(before.parameters_schema, after.parameters_schema, before.name)
-            self.assertTrue(after.description.startswith(before.description), before.name)
+            addition = added.get(before.name)
+            if addition is None:
+                self.assertEqual(before.parameters_schema, after.parameters_schema, before.name)
+            else:
+                stripped = copy.deepcopy(after.parameters_schema)
+                for name in addition.properties:
+                    self.assertIn(name, stripped["properties"], before.name)
+                    del stripped["properties"][name]
+                for array_name, row_props in addition.nested:
+                    rows = stripped["properties"][array_name]["items"]["properties"]
+                    for name in row_props:
+                        self.assertIn(name, rows, before.name)
+                        del rows[name]
+                # A parameter the new ones are an alternative to (`update_comment`'s `body_text`) is
+                # `required` only while the flag is off.
+                if addition.optional:
+                    self.assertEqual(
+                        set(before.parameters_schema["required"]) - set(stripped["required"]),
+                        set(addition.optional),
+                        before.name,
+                    )
+                    stripped["required"] = before.parameters_schema["required"]
+                self.assertEqual(before.parameters_schema, stripped, before.name)
+            base = before.description
+            for old, new in replaced.get(before.name, []):
+                base = base.replace(old, new, 1)
+            self.assertTrue(after.description.startswith(base), before.name)
 
     def test_each_flag_addition_is_in_its_tool_and_in_the_declared_order(self):
         _, on = self._off_and_on()
@@ -158,8 +200,11 @@ class AllOnDeclarationTests(SimpleTestCase):
             self.assertEqual(flagged_tools(), [])
         with settings_with(ALL_ON):
             self.assertIsNotNone(_app_tool("get_timeline"))
-            self.assertEqual([t.name for t in flagged_tools()], ["get_timeline"])
+            self.assertEqual(
+                [t.name for t in flagged_tools()], ["get_timeline", "delete_task_attachment"]
+            )
         self.assertNotIn("get_timeline", REGISTRY)
+        self.assertNotIn("delete_task_attachment", REGISTRY)
 
     def test_the_operator_kill_switch_still_hides_the_flagged_tool_with_all_on(self):
         with settings_with({**ALL_ON, "AGENT_DISABLED_TOOLS": frozenset({"get_timeline"})}):
@@ -223,7 +268,7 @@ class AllOnProviderTests(SimpleTestCase):
             tools = _request_kwargs(client_cls, path, decls)["tools"]
             names = [t.get("name") or t["function"]["name"] for t in tools]
             self.assertEqual(names, [d.name for d in decls], client_cls)
-            self.assertEqual(names[-1], "get_timeline")
+            self.assertEqual(names[-2:], ["get_timeline", "delete_task_attachment"])
 
 
 class AllOnFingerprintTests(TestCase):
@@ -317,7 +362,8 @@ class AllOnToolResultTests(SequenceScenario):
         out = self.run_tool("fetch_task", self.seq.b, task_id=self.seq.task.task_id)
         self.assertIn("anchors", out)
         keys = list(out)
-        self.assertEqual(keys[-2:], ["anchors", "__summary__"])
+        # MIP-1563 (the parity flag, on here): the task's files follow the anchors.
+        self.assertEqual(keys[-3:], ["anchors", "attachments", "__summary__"])
         # the task's own status is still there; the rule's fields appear only when the rule changes it
         self.assertIn("status", out)
 

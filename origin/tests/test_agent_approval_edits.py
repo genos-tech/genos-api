@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import copy
 from datetime import timedelta
+from unittest import mock
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.db import transaction
 from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
@@ -39,7 +41,7 @@ from origin.search_engine.agent import approval_edits as edits
 from origin.search_engine.agent.controller import _FRIENDLY_ARG_RESOLVERS
 from origin.search_engine.agent.model_fence import unfence_arguments
 from origin.search_engine.agent.references import _catalog
-from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.search_engine.agent.tools import FLAGGED_REGISTRY, REGISTRY, ToolContext
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.base import wrap_workspace_content
 
@@ -57,6 +59,9 @@ V1_ALLOW_LIST = {
         "effort_level",
         "due_date",
         "start_date",
+        # MIP-1561: published only while AGENT_PARITY_TOOLS is on (a plain choice from the
+        # tool's own enum, as update_task's is). Not template, links or reporter_id.
+        "status",
     },
     "update_task": {
         "title",
@@ -113,7 +118,9 @@ FORBIDDEN_NAMES = {
 
 
 def _approval_tools() -> set[str]:
-    return {name for name, tool in REGISTRY.items() if tool.requires_approval}
+    """The registered writes and the flag-gated ones (MIP-1563)."""
+    flagged = {name for name, (_flag, tool) in FLAGGED_REGISTRY.items() if tool.requires_approval}
+    return {name for name, tool in REGISTRY.items() if tool.requires_approval} | flagged
 
 
 def _last_segment(template: str) -> str:
@@ -147,7 +154,8 @@ class AllowListCompletenessTests(SimpleTestCase):
                 self.assertEqual(edits.EDITABLE_FIELDS[name], {})
 
     def test_nothing_that_deletes_shares_or_plans_is_editable(self):
-        for name, tool in REGISTRY.items():
+        every = {**REGISTRY, **{name: tool for name, (_flag, tool) in FLAGGED_REGISTRY.items()}}
+        for name, tool in every.items():
             if not tool.requires_approval:
                 continue
             if (
@@ -160,7 +168,9 @@ class AllowListCompletenessTests(SimpleTestCase):
                 with self.subTest(tool=name):
                     self.assertEqual(edits.EDITABLE_FIELDS.get(name), {})
 
+    @mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True})
     def test_every_path_is_a_declared_argument_of_the_right_type(self):
+        # With AGENT_PARITY_TOOLS on: `create_task.status` is declared only then.
         types = {
             edits.TEXT: "STRING",
             edits.BODY: "STRING",

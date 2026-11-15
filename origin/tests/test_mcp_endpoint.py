@@ -1079,9 +1079,12 @@ class TestTheCatalogContract(McpBase):
             "assignee_id": "get_team_members",
             "folder_id": "list_note_folders",
             "comment_id": "get_task",
+            # A task's files are listed by `get_task` while `AGENT_PARITY_TOOLS` is on (MIP-1563).
+            "attachment_id": "get_task",
             "activity_id": "get_task_history",
             "sprint_id": "list_sprints",
             "user_id": ("get_team_members", "list_project_members"),
+            "thread_id": "get_note",  # a note's comment threads (MIP-1100)
         }
         published = {t.name for t in tools.CATALOG}
         undrivable = []
@@ -1612,13 +1615,18 @@ class TestUnknownArgumentsAreRefused(McpBase):
         import inspect
         import re
 
+        from origin.search_engine.agent.tool_flag_params import ADDITIONS  # noqa: PLC0415
         from origin.views.public.mcp import tools as mcp_tools
 
         offenders = []
+        # With every flag that publishes parameters ON (`tool_flag_params`): a tool reads those
+        # while the flag is off too, and ignores them (`parity.ignore_unless_parity`).
+        flags = {addition.flag: True for addition in ADDITIONS}
         for tool in mcp_tools.BY_NAME.values():
             run = get_mcp_tool(tool.registry_name).run
             source = inspect.getsource(inspect.getmodule(getattr(run, "__wrapped__", run)))
-            declared = set((mcp_tools.input_schema(tool).get("properties") or {}).keys())
+            with patch.dict(settings.SEARCH_ENGINE, flags):
+                declared = set((mcp_tools.input_schema(tool).get("properties") or {}).keys())
             # `args.get("x")` / `args["x"]`, not `create_kwargs["x"]`: the character
             # before `args` must not be a word character.
             read = set(re.findall(r'(?<![A-Za-z0-9_])args\.get\(\s*"([a-z_]+)"', source))
@@ -1713,12 +1721,14 @@ class TestTheNewWrites(McpBase):
         """One refusal per published write, because the check is per tool
         and a new entry is exactly the thing that forgets it."""
         self._key(scope=SCOPE_READ)
-        for tool in tools.CATALOG:
-            if not tool.write:
-                continue
-            text, is_error = self._tool_text(self._call(tool.name, {}))
-            self.assertTrue(is_error, f"{tool.name} was not refused a read-only key")
-            self.assertIn("read-only", text, tool.name)
+        # With the parity flag on, so the flag-gated write (MIP-1563) is a published one too.
+        with patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True}):
+            for tool in tools.CATALOG:
+                if not tool.write:
+                    continue
+                text, is_error = self._tool_text(self._call(tool.name, {}))
+                self.assertTrue(is_error, f"{tool.name} was not refused a read-only key")
+                self.assertIn("read-only", text, tool.name)
 
     def test_a_note_in_another_team_cannot_be_edited(self):
         """The resolver does not check the team — the tool's own tenant
@@ -1872,6 +1882,9 @@ class TestPlantedInstructions(McpBase):
                 # What Genos stored about the member from their activity: theirs to delete,
                 # the same as the Settings page does (MIP-1088).
                 "forget_my_memory",
+                # A task's file: removed from storage with no copy kept (MIP-1563). Published only
+                # while `AGENT_PARITY_TOOLS` is on, so it is in the catalog, not in a flag-off list.
+                "delete_task_attachment",
             },
         )
         self.assertTrue(all(t.write for t in tools.CATALOG if t.destructive))

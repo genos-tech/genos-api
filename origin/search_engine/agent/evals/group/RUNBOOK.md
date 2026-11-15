@@ -224,3 +224,37 @@ the model.
   * `t905.bigplan.*` pins `llm: gemini/low` (a 4,096-token cap that binds) and needs
     `AGENT_EFFORT_LEVELS=true`. Standard may come back cut off or with an error TODAY: that is the
     finding (truncation detection, MIP-905 A1, turns it into a message), not a harness fault.
+* **Parity parameters (MIP-1561, tag `t1561`, arm `parity`, flag `AGENT_PARITY_TOOLS`).** One arm for the
+  whole MIP-578 parity batch; later parity tasks add their parameters and cases to the same arm. The files
+  are `t1561-status.yaml`, `-template.yaml`, `-links.yaml` and `-reporter.yaml` (EN and JA per case). The
+  positives have `requires_arm: parity` (the parameter is not declared without it); the negatives
+  (`plain`, `template-none`, `links-body`, `assign-not-reporter`) run on arm0 too: they are the baseline for
+  "a plain request does not start sending a status, reporter, links or template unasked". They judge what the
+  model PROPOSED, with four more `pending_write` keys (`group/content_checks.py`): `args_present` (names that
+  must be sent), `args_absent` (names that must not be), `args_match` (name to a case-insensitive regex on
+  the value as text) and `task_args_match` (the same over the rows of a plan: at least one task must match).
+  The server-side fill (a template body, the default template) is pinned by free tests, not here. Read the
+  `links-update` proposals by hand: `links` is the FULL set, and whether the model kept the task's existing
+  links is a report line, not a failure.
+* **Parity: comments and to-dos (MIP-1562, tag `t1562`, the same arm `parity`).** `t1562-reactions.yaml`,
+  `-flags.yaml` and `-todo-source.yaml` (EN and JA per case), on the sequence fixture: viewer `b` / `ja-b` is
+  Ben, so Chris's comments on "Fix the export that fails (Y)" are a colleague's and "Thanks, please also
+  check the CSV export" is his own. The positives (`reaction-add`, `reaction-remove`, `flag-set`, `flag-done`,
+  `flag-unflag`, `todo-comment`, `todo-task`) have `requires_arm: parity`; the negatives (`edit-own`,
+  `reply-stays-a-comment`, `todo-plain`, `todo-reminder-plain`) run on arm0 too and are the baseline for "fixing
+  your own comment is still an edit, replying is still add_comment, and a to-do the person typed carries no
+  task unasked". They judge the PROPOSAL with the same `pending_write` keys as t1561; the server side (access,
+  idempotence, what a reaction tells people) is pinned by free tests, not here. Read the `reaction-remove`
+  and `flag-done` proposals by hand: nothing in the fixture holds a reaction or a flag, so a model that
+  asks first whether there is one is not a failure.
+* **Parity: a task's files (MIP-1563, tag `t1563`, the same arm `parity`).** `t1563-files.yaml` (EN and JA per
+  case), on the sequence fixture with the seed `task_files` (project EAF, the viewer alone: the task "Prepare the
+  board deck" with two real files, #1 `budget-2026.xlsx` and #2 `kickoff-notes.pdf`; `予算2026.xlsx` and
+  `キックオフ議事録.pdf` for the Japanese team). The positives (`list`, `delete`) have `requires_arm: parity` (the
+  `attachments` field and the `delete_task_attachment` tool exist only with the flag); the negatives
+  (`show-not-delete`, `download-not-delete`, `upload-not-delete`) run on arm0 too and are the baseline for "asking to
+  see, open or attach a file is never a delete". A delete proposal pauses the run, so a model that proposed one has
+  no answer and `answer_chars_at_least` fails it. `list` also forbids a link or a storage path in the answer
+  (the tool returns neither). The delete cases only PROPOSE: nothing is approved, so the seeded files stay.
+  `delete` judges the card too (`current` carries the file's name). The server side (who may delete, what the
+  delete removes, the MCP opt-in) is pinned by free tests, not here.

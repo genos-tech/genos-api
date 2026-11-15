@@ -461,6 +461,9 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
     # Writes that deliberately never notify: small edits, settings, the member's own tuning.
     SILENT = {
         "update_comment",
+        # A task's file (MIP-1563, offered only while `AGENT_PARITY_TOOLS` is on): left out like the
+        # other deletes of a part of a task, until the app's feed has wording for a deleted file.
+        "delete_task_attachment",
         "restore_task_body",
         "add_task_delivery",
         "remove_task_delivery",
@@ -481,6 +484,8 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "manage_note_folder",
         "favorite_note",
         "delete_note_folder",
+        "reply_to_note_comment",
+        "resolve_note_comment",
         "manage_note_sharing",
         "restore_note_version",
         "set_item_importance",

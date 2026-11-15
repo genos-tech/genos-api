@@ -31,6 +31,16 @@
 #                   RAG_USE_QUERY_REWRITE flag. It can't force it ON, so
 #                   `agent_eval_compare --b-overrides` still owns the flag.
 #
+#   documented_red: optional, a non-empty string = the evidence that the case is
+#                   known to be red (MIP-1537): how often, since when, the
+#                   failure line. The case still runs and is shown (`RED`; a
+#                   pass is shown as `GRN!`), but it cannot fail the run and is
+#                   left out of the `Gated` pass count and metrics that
+#                   scripts/retrieval_gate.py reads. Five cases carry it; a test
+#                   (test_retrieval_documented_red) pins the exact set, so
+#                   marking another one is a visible, deliberate diff. Remove the
+#                   mark when the case is fixed or turns green for good.
+#
 #   expect:
 #     # Hard-pinned ids — use only when ids are stable across reseeds.
 #     must_contain_in_top_n:        { n, entity_ids: [...] }
@@ -309,6 +319,7 @@
 
 - id: scope_website_redesign_top
   fixture: true
+  documented_red: "red in 96 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: \"marketing pages\" is missing from the top 5"
   query: "Website Redesign launch readiness"
   expect:
     must_contain_title_in_top_n:
@@ -349,6 +360,7 @@
 
 - id: gibberish_returns_few_or_nothing
   fixture: true
+  documented_red: "red in 98 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: always \"got 10 results, expected <= 3\"; in 50 of 99 runs the log of this case also shows \"Query rewriter returned unparseable output\""
   query: "quantum photosynthesis xylophone marauder"
   expect:
     result_count_at_most: 3
@@ -800,6 +812,7 @@
 
 - id: graph_native_crosslingual_vector_entry
   fixture: true
+  documented_red: "red in 99 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: the Japanese query reaches the spike task only by vector, the keyword-anchor gate refuses to seed expansion, \"Hero + FeatureGrid\" is missing from the top 8 (the documented gap in the comment above)"
   overlays: true
   query: "アニメーションライブラリの選定に依存しているタスクは？"
   expect:
@@ -886,6 +899,7 @@
 
 - id: mention_entity_boost_control
   fixture: true
+  documented_red: "red in 88 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: forbidden title \"spike: framer-motion\" appeared in the top 3 WITHOUT the mention, so the paired mention_entity_boost case proves nothing about the boost while this one is red"
   query: "spike results"
   limit: 3
   expect:
@@ -930,6 +944,7 @@
 
 - id: mention_todo_boost
   fixture: true
+  documented_red: "red in 95 of the 99 successful agent-evals runs of 2026-11-02..2026-11-14: \"events tracker\" is missing from the top 1 (the top result is \"This week's priorities\")"
   query: "plausible"
   mentions:
     - type: todo

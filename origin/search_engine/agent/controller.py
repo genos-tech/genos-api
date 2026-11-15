@@ -65,6 +65,7 @@ from django.db import connections
 from django.utils import timezone
 
 from apis.request_id import describe_exception
+from origin.models.task.task_models import TaskComments
 from origin.search_engine.agent import (
     approval_edits,
     approval_notes,
@@ -84,6 +85,7 @@ from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.model_fence import fence_for_model
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
@@ -91,16 +93,23 @@ from origin.search_engine.agent.prompts import (
     agent_system_prompt,
 )
 from origin.search_engine.agent.references import declared_schema, resolve_call
+from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import declared_description
 from origin.search_engine.agent.tools import (
+    FLAGGED_REGISTRY,
     MCP_ONLY_REGISTRY,
     REGISTRY,
     ToolContext,
     ToolError,
+    app_write_tools,
     flagged_tool,
     flagged_tools,
 )
-from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies_for_caller
+from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
+from origin.search_engine.agent.tools.plan_task_bodies import (
+    fill_plan_task_bodies_for_caller,
+    new_task_body_for_caller,
+)
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -366,7 +375,7 @@ def _operator_disabled_tools() -> set[str]:
         return set()
     # An MCP-only tool is not in REGISTRY but is a real name here: MCP honours the
     # same switch, and naming one must not read as a typo (MIP-1070).
-    known = set(configured) & (set(REGISTRY) | set(MCP_ONLY_REGISTRY))
+    known = set(configured) & (set(REGISTRY) | set(MCP_ONLY_REGISTRY) | set(FLAGGED_REGISTRY))
     if not _KILLSWITCH_LOGGED:
         _KILLSWITCH_LOGGED = True
         log.warning(
@@ -411,7 +420,9 @@ def _build_tool_declarations(
         ToolDeclaration(
             name=t.name,
             description=declared_description(t),
-            parameters_schema=declared_schema(t.name, t.parameters_schema),
+            parameters_schema=declared_schema(
+                t.name, with_flagged_params(t.name, t.parameters_schema)
+            ),
         )
         for t in (*REGISTRY.values(), *flagged_tools())
         if t.name not in disabled
@@ -805,7 +816,12 @@ def _friendly_update_task_arguments(
     planning = [
         k for k in ("start_date", "collaborators", "custom_fields") if args.get(k) is not None
     ]
-    if not moving and not planning:
+    # `reporter_id` and `links` (MIP-1561): shown old -> new like the fields above, only while the
+    # flag that publishes them is on.
+    parity_fields = (
+        [k for k in ("reporter_id", "links") if args.get(k) is not None] if parity_on() else []
+    )
+    if not moving and not planning and not parity_fields:
         return
     task = access.task(args.get("task_id"))
     if planning:
@@ -823,6 +839,18 @@ def _friendly_update_task_arguments(
     if "project_id" in moving:
         name = access.project_name(task.project_id)
         current["project_id"] = name if name is not None else task.project_id
+    if "reporter_id" in parity_fields:
+        # The present reporter by name, for a person the caller may name; else the raw id.
+        names = access.usernames([str(task.reporter_id)]) if task.reporter_id else {}
+        current["reporter_id"] = (
+            names.get(str(task.reporter_id), str(task.reporter_id)) if task.reporter_id else None
+        )
+    if "links" in parity_fields:
+        current["links"] = [
+            {"title": link.get("title") or None, "url": link.get("url")}
+            for link in (task.links if isinstance(task.links, list) else [])
+            if isinstance(link, dict) and isinstance(link.get("url"), str)
+        ]
     if current:
         out["current"] = current
 
@@ -832,7 +860,15 @@ def _friendly_create_task_arguments(
 ) -> None:
     """In-place nested enrichment for `create_task` arguments: the proposed
     `collaborators` and member-field values as usernames. There is no present
-    value to show, so no `current`."""
+    value to show, so no `current`.
+
+    With the parity flag on (MIP-1561) a task sent without a body shows, and gets, the template
+    body `create_task` fills in when it runs (the one `template` names, else the project's
+    default): the card equals what is created, as a plan's does (MIP-1510)."""
+    if parity_on():
+        body = new_task_body_for_caller(args, access.team_id, access.user_id)
+        if body is not None:
+            out["content_text"] = body
     if args.get("collaborators") is None and args.get("custom_fields") is None:
         return
     _friendly_task_fields(out, args, access, args.get("project_id"), None)
@@ -882,6 +918,43 @@ def _friendly_create_todo_arguments(
 
     if args.get("remind_at") not in (None, "") and access.usable:
         out["time_zone"] = zone_for_user_id(access.user_id).key
+
+
+def _friendly_update_comment_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """ADDS `comment` (who wrote it, and its first line) to a `reaction` or `flag` call (MIP-1562),
+    so the card says WHAT is being reacted to or flagged: unlike an edit, it is usually a colleague's
+    comment, and a bare comment number tells the approver nothing. Only for a comment on a task the
+    caller may read, and only while the parity flag publishes the two parameters."""
+    # A blank value is a model filling a slot (`update_comment` reads it as an edit), not a request.
+    if not parity_on() or (args.get("reaction") in (None, "") and args.get("flag") in (None, "")):
+        return
+    task = access.task(args.get("task_id"))
+    try:
+        comment_id = int(args.get("comment_id"))
+    except (TypeError, ValueError):
+        return
+    if task is None:
+        return
+    comment = TaskComments.objects.filter(
+        task=task.task_id, comment_id=comment_id, is_deleted=False
+    ).first()
+    if comment is None:
+        return
+    author = access.username(comment.sender_id) if comment.sender_id else None
+    first_line = next(
+        (
+            line.strip()
+            for line in blocks_to_markdown(comment.comment_body).splitlines()
+            if line.strip()
+        ),
+        "",
+    )
+    out["comment"] = {
+        "author": author,
+        "excerpt": first_line if len(first_line) <= 160 else first_line[:159].rstrip() + "…",
+    }
 
 
 def _friendly_delete_todo_arguments(
@@ -1098,6 +1171,45 @@ def _friendly_delete_milestone_arguments(
     out["current"] = {"title": milestone.title, "tasks": milestone_task_count(milestone)}
 
 
+def _friendly_delete_task_attachment_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `delete_task_attachment` arguments (MIP-1563).
+
+    ADDS what the approver is about to lose: the file's name, its size and its type, so the card
+    says WHICH file instead of "file 2". Only for a task the caller can read, and only a file that is
+    on that task (the lookup is `(task, attachment_id)`, the delete's own), so an id from another
+    task shows nothing. Plain text for the card, never a link to the file."""
+    from origin.search_engine.agent.tools.delete_task_attachment import (  # noqa: PLC0415
+        find_attachment,
+        whole_number,
+    )
+    from origin.search_engine.agent.tools.task_attachments import (  # noqa: PLC0415
+        TYPE_CHARS,
+        attachment_name,
+        attachment_size,
+    )
+
+    task = access.task(args.get("task_id"))
+    try:
+        # The tool's own reading of the id, so the card names a file only for a call that would run
+        # (`True` and `1.5` are refused by the tool, not read as file 1).
+        attachment_id = whole_number(args.get("attachment_id"), "attachment_id")
+    except ToolError:
+        return
+    if task is None:
+        return
+    attachment = find_attachment(task.task_id, attachment_id)
+    if attachment is None:
+        return
+    out["current"] = {
+        "name": attachment_name(attachment),
+        "size_bytes": attachment_size(attachment),
+        # What the uploading client sent as the type: cut, as the listing cuts it.
+        "type": (attachment.attached_type or "")[:TYPE_CHARS] or None,
+    }
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 # Each edits the labelled copy and may read the caller's raw args for an
 # id the flat pass has already replaced with a label.
@@ -1108,8 +1220,10 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "update_task": _friendly_update_task_arguments,
     "manage_milestone": _friendly_manage_milestone_arguments,
     "delete_milestone": _friendly_delete_milestone_arguments,
+    "delete_task_attachment": _friendly_delete_task_attachment_arguments,
     "update_todo_item": _friendly_update_todo_arguments,
     "create_todo_item": _friendly_create_todo_arguments,
+    "update_comment": _friendly_update_comment_arguments,
     # The note it stars, named; a folder takes the flat `folder_id` label.
     "favorite_note": _friendly_update_note_arguments,
     "delete_note": _friendly_update_note_arguments,
@@ -1556,6 +1670,8 @@ _TASK_WRITE_TOOLS = frozenset(
         "restore_task_body",
         "add_task_delivery",
         "remove_task_delivery",
+        # MIP-1563 (flag-gated, `register_flagged_tool`): the task stays, a file on it goes.
+        "delete_task_attachment",
     }
 )
 _NOTE_SOURCE_TOOLS = frozenset(
@@ -1615,7 +1731,7 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
     — rather than per branch, so a new write tool can't forget it.
     """
     sources = _sources_from_tool_result(call_name, result)
-    if sources and getattr(REGISTRY.get(call_name), "requires_approval", False):
+    if sources and getattr(_app_tool(call_name), "requires_approval", False):
         for s in sources:
             s["operated"] = True
     return sources
@@ -2456,7 +2572,7 @@ def resume_agent(
         # tool has since been disabled (tier downgrade, toggled-off
         # preference, ops kill-switch) is vetoed exactly like an
         # unknown tool: the approval token must not outlive the grant.
-        tool = REGISTRY.get(call_name)
+        tool = _app_tool(call_name)
         vetoed = (disabled_tools or set()) | _operator_disabled_tools()
         if tool is None or call_name in vetoed:
             err = (
@@ -2579,6 +2695,15 @@ def resume_agent(
                 if call_name == "delete_project" and result.get("project_id") is not None:
                     result_event["project"] = {
                         "project_id": result["project_id"],
+                        "deleted": True,
+                    }
+                # A deleted task file (MIP-1563): the server has deleted it, and the browser's cached
+                # copy of the task still lists it. The ref names the task so the browser forgets that
+                # copy (a file delete does not move the task's `updated_at`). Additive.
+                if call_name == "delete_task_attachment" and result.get("task_id") is not None:
+                    result_event["task_attachment"] = {
+                        "task_id": result["task_id"],
+                        "attachment_id": result.get("attachment_id"),
                         "deleted": True,
                     }
                 # Approved note writes carry a compact `note` ref so the
@@ -3581,7 +3706,7 @@ def _drive_loop(
             cut_write = bool(accumulated_function_calls) and (
                 last_call["partial_call"]
                 or getattr(
-                    REGISTRY.get(accumulated_function_calls[-1].name), "requires_approval", False
+                    _app_tool(accumulated_function_calls[-1].name), "requires_approval", False
                 )
             )
             if cut_write:
@@ -4259,7 +4384,7 @@ def _critique_with_retrieval(
 
     # Read-only continuation: disable write tools (a write would pause for
     # approval mid-critique) on top of anything the caller already disabled.
-    write_tools = {t.name for t in REGISTRY.values() if getattr(t, "requires_approval", False)}
+    write_tools = {t.name for t in app_write_tools()}
     loop2_disabled = (disabled_tools or set()) | write_tools
 
     # Budget: continue past loop 1's steps (its tool steps + its answer

@@ -126,7 +126,9 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
-from origin.search_engine.agent.tool_flag_text import ADDITIONS
+from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
+from origin.search_engine.agent.tool_flag_params import with_flagged_params
+from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services.note_comments import note_comment_fields
@@ -138,6 +140,7 @@ from origin.services.security_events import (
 )
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
+    note_threads,
     progress,
     secretary,
     via_privacy,
@@ -215,6 +218,12 @@ class McpTool:
     # person can type has to work everywhere one is accepted, and a
     # batch is exactly where hand-typed ids show up.
     nested_task_ref_args: tuple[tuple[str, str], ...] = ()
+    # A tool that exists only while this `SEARCH_ENGINE` flag is on (MIP-1563: a WRITE tool cannot be
+    # gated by the parameters the flag lays over a schema). Its registry tool is filed with
+    # `register_flagged_tool`. While the flag is off the entry is not listed (`visible_tools`) and a
+    # call is answered as for a name nobody published (`call`), so the catalog a client sees is what
+    # it was. "" = always published.
+    flag: str = ""
     # Applied to the registry schema after dialect conversion.
     schema_overrides: dict[str, Any] = field(default_factory=dict)
     # Applied to a property nested inside an array item's schema, keyed
@@ -550,7 +559,8 @@ CATALOG: tuple[McpTool, ...] = (
             "`anchor_text` it sits on, its replies (`author`, `ts`, "
             "`markdown`) and whether it is `resolved`. Open threads come "
             "first; resolved ones are left out unless `include_resolved` is "
-            "true."
+            "true. Answer a thread with `reply_to_note_comment`, settle it with "
+            "`resolve_note_comment`; both take its `thread_id`."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -1029,9 +1039,10 @@ CATALOG: tuple[McpTool, ...] = (
             "`start_date` (YYYY-MM-DD, '' clears) sets the planned start; "
             "nothing checks it against the due date. `collaborators` replaces "
             "the task's collaborators with user ids ([] clears; "
-            "`get_team_members` / `list_project_members`), so send the ones you "
-            "are keeping too: `get_task` lists them. Anyone new must be on the "
-            "team or the project, or the call is refused. `custom_fields` sets "
+            "`list_project_members`), so send the ones you "
+            "are keeping too: `get_task` lists them. Anyone new must be a member "
+            "of the project (a collaborator is told about the task and has to be "
+            "able to open it), or the call is refused. `custom_fields` sets "
             "the project's own fields by name, as a list of `{name, value}` "
             "(`{name, values}` for a tag field): `list_project_tags` gives each "
             "field's type and options, and only the fields you name change. A "
@@ -1100,6 +1111,23 @@ CATALOG: tuple[McpTool, ...] = (
         ),
         write=True,
         destructive=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="delete_task_attachment",
+        registry_name="delete_task_attachment",
+        description=(
+            "Delete one file attached to a task. **This is not reversible from here** — the "
+            "file leaves the task and storage, and there is no undo on this surface, so only "
+            "call it when the user asked for that specific file to go. Get `attachment_id` "
+            "from `get_task` (its `attachments`: name, size, type). Anyone who can open the "
+            "task may delete its files, as in the app. Requires a write-scoped API key that its "
+            "owner also opted into destructive tools."
+        ),
+        write=True,
+        destructive=True,
+        flag=PARITY_FLAG,
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
     ),
@@ -1205,8 +1233,8 @@ CATALOG: tuple[McpTool, ...] = (
             "— `get_current_user` for yourself; omit it to leave the task "
             "unassigned. `tags` takes names from `list_project_tags` — only "
             "tags that fit the task; leave it out if none does. `start_date` "
-            "(YYYY-MM-DD), `collaborators` (user ids from `get_team_members` "
-            "or `list_project_members`) and `custom_fields` (the project's own "
+            "(YYYY-MM-DD), `collaborators` (user ids from "
+            "`list_project_members`; members of the project) and `custom_fields` (the project's own "
             "fields by name, as `{name, value}` or `{name, values}` for a tag "
             "field; `list_project_tags` lists them with their types and "
             "options) are set at creation too. Requires a "
@@ -1676,6 +1704,39 @@ CATALOG: tuple[McpTool, ...] = (
             "URL (or its numeric id with `note_type`) for a note. `favorite` is "
             "true to star (the default) and false to unstar. Requires a "
             "write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="reply_to_note_comment",
+        registry_name="reply_to_note_comment",
+        description=(
+            "Reply to a comment thread on a note, as the caller: it shows in the "
+            "note's editor next to the other replies, marked as written through a "
+            "connected app. Take `thread_id` from `comment_threads` in `get_note`. "
+            "`text` is plain text, one paragraph per line; no formatting, no "
+            "@-mentions, and it cannot start a new thread on a passage. Anyone who "
+            "can open the note may reply, viewers included. Returns `comment_id`, "
+            "`comment_count` and `thread_resolved`. Name the note by its Genos URL, "
+            "or by its numeric id with `note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="resolve_note_comment",
+        registry_name="resolve_note_comment",
+        description=(
+            "Mark a comment thread on a note resolved. Stricter than the editor: only "
+            "the thread's author or the note's owner can; anyone else is refused (use "
+            "`reply_to_note_comment` instead). Resolving a resolved thread changes "
+            "nothing. Take `thread_id` from `comment_threads` in `get_note`. Returns "
+            "`resolved`, `already_resolved` and `resolved_by` (a user id). Reopening a "
+            "thread is done in the editor. Name the note by its Genos URL, or by its "
+            "numeric id with `note_type`. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
@@ -2161,8 +2222,17 @@ def _registered(tool: McpTool):
     return registered
 
 
+def published(tool: McpTool) -> bool:
+    """Is `tool` offered right now? Always, unless it is gated by a flag that is off."""
+    return not tool.flag or flag_on(tool.flag)
+
+
 def input_schema(tool: McpTool) -> dict[str, Any]:
-    schema = _to_json_schema(_registered(tool).parameters_schema)
+    # The parameters a default-off flag publishes (MIP-1561): none while it is off, so the
+    # catalog is what it was.
+    schema = _to_json_schema(
+        with_flagged_params(tool.registry_name, _registered(tool).parameters_schema)
+    )
     if tool.schema_overrides:
         properties = dict(schema.get("properties") or {})
         properties.update(tool.schema_overrides)
@@ -2298,7 +2368,9 @@ def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpToo
     return [
         t
         for t in CATALOG
-        if t.registry_name not in disabled and _permitted(t, scope, allow_destructive)
+        if t.registry_name not in disabled
+        and published(t)
+        and _permitted(t, scope, allow_destructive)
     ]
 
 
@@ -2332,6 +2404,7 @@ OVERWRITE_TOOLS = frozenset(
         "update_tasks_bulk",
         "update_todo_item",
         "update_my_schedule",
+        "resolve_note_comment",  # settles a thread; the editor can reopen it
         "set_item_importance",  # replaces the member's mark on one task
         "tune_my_importance",  # replaces how a signal counts
     }
@@ -2351,6 +2424,7 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "create_todo_item",
         "favorite_note",
         "manage_project_labels",
+        "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
     }
 )
@@ -2438,12 +2512,22 @@ def shared_flag_text(tool: McpTool) -> str:
     return _rewrite_refs(text)
 
 
+def _replaced(tool: McpTool) -> str:
+    """The catalog text with the sentences a default-off flag rewrites swapped for their new
+    wording while it is on (`tool_flag_text.MCP_REPLACEMENTS`); the catalog's own text otherwise."""
+    text = tool.description
+    for name, flag, old, new in MCP_REPLACEMENTS:
+        if name == tool.registry_name and settings.SEARCH_ENGINE.get(flag):
+            text = text.replace(old, new, 1)
+    return text
+
+
 def description_for(tool: McpTool, credential_kind: str = "api_key") -> str:
     """The description as the holder of THIS credential should read it. The text is written
     for an API key ("Requires a write-scoped API key"); a person who connected an app has no
     key, and OpenAI's review asks that descriptions match behaviour, so they are told what
     they actually need: write access in their connection (MIP-1110)."""
-    text = tool.description + shared_flag_text(tool)
+    text = _replaced(tool) + shared_flag_text(tool)
     if credential_kind == "api_key":
         return text
     text = text.replace(
@@ -2650,7 +2734,7 @@ def call(
     becomes a JSON-RPC protocol error instead.
     """
     tool = BY_NAME.get(name)
-    if tool is None or tool.registry_name in _disabled_tools():
+    if tool is None or tool.registry_name in _disabled_tools() or not published(tool):
         raise on_unknown_tool(name)
 
     args = dict(arguments or {})

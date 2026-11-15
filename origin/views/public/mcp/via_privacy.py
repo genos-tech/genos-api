@@ -8,7 +8,8 @@ another member gave their key ("my-laptop-claude"), which can be personal.
 Rule (Ken, 2026-11-13): the name belongs to the owner only. A key writes as its owner, so a row's
 actor is the key's owner: on a row the viewer made, `via` is left whole; on anyone else's row it is
 reduced to its kind (`api_key`, `oauth`, `app`, or any kind not known to be public). Nothing else
-about the row changes.
+about the row changes. One exception, on purpose (MIP-1568): a connected app's official family
+(`claude`, `chatgpt`) is shown to everyone, for the app's icon; see `SHOW_OAUTH_APP_TO_EVERYONE`.
 
 `via_for_viewer` is that rule, for every surface: the in-app agent's `get_task_history` (MIP-1470,
 unconditionally: it is a privacy fix), MCP `get_task_history` and `get_progress_history`
@@ -19,6 +20,8 @@ and progress feeds (`task_activity_views`), and the comment list.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
+from origin.services.mcp_client_family import APP_FAMILIES
 
 if TYPE_CHECKING:  # the REST feed imports `via_for_viewer`; it needs none of the agent tools
     from origin.search_engine.agent.tools import ToolContext
@@ -37,6 +40,13 @@ SAFE_VIA_FIELDS: dict[str, tuple[str, ...]] = {
     "unknown": (),
 }
 
+# MIP-1568 (Ken, 2026-11-14): a connected app's official family (`claude`, `chatgpt`, stamped on
+# its `via` by `McpOAuthCredential.via`) is shown to EVERY reader of the row, so a colleague, a
+# notification card or the chat list can show the app's icon. A reader learns which AI product made
+# a change, never the connection id, the client name or which of the member's apps it was.
+# Flip this to False and the family is the actor's alone, like the name: one line, no other change.
+SHOW_OAUTH_APP_TO_EVERYONE = True
+
 
 def via_for_viewer(via: Any, actor_id: Any, viewer_id: Any) -> Any:
     """`via` as `viewer_id` may read it: whole for the row's actor (the key's owner), else its kind.
@@ -45,7 +55,9 @@ def via_for_viewer(via: Any, actor_id: Any, viewer_id: Any) -> Any:
     `get_progress_history`, the task activity and progress feeds, the comment list). For anyone
     but the actor, a kind in `SAFE_VIA_FIELDS` keeps its listed public fields; every other `via`
     is reduced to `{"kind": kind}`, or `{}` when it has no usable kind (a value that is not a dict,
-    a dict without a text kind). `None` stays `None`. The input is never edited.
+    a dict without a text kind). A connected app's family is the one extra field everyone may
+    read (`SHOW_OAUTH_APP_TO_EVERYONE`): `{"kind": "oauth", "app": "claude"}`, only when it is
+    one of the known families. `None` stays `None`. The input is never edited.
     """
     if via is None:
         return None
@@ -54,7 +66,10 @@ def via_for_viewer(via: Any, actor_id: Any, viewer_id: Any) -> Any:
     kind = via.get("kind") if isinstance(via, dict) else None
     if not isinstance(kind, str) or not kind:
         return {}
-    return {"kind": kind, **{f: via[f] for f in SAFE_VIA_FIELDS.get(kind, ()) if f in via}}
+    shown = {"kind": kind, **{f: via[f] for f in SAFE_VIA_FIELDS.get(kind, ()) if f in via}}
+    if kind == "oauth" and SHOW_OAUTH_APP_TO_EVERYONE and via.get("app") in APP_FAMILIES:
+        shown["app"] = via["app"]
+    return shown
 
 
 def with_via_owner_only(

@@ -1,0 +1,98 @@
+# MIP-1561 (flag AGENT_PARITY_TOOLS, arm `parity`): a task is created in the status the person asked
+# for, as the app's create form and quick-add can, instead of always Open.
+# Positives `requires_arm: parity` (the parameter is not declared without it, so they cannot pass);
+# the negative runs on arm0 too: a plain "add a task" must not start sending a status unasked (the
+# parameter is declared with the arm; arm0 is the baseline). Judged on what the model PROPOSED (the
+# write never runs in an eval): `pending_write.args_*`, see group/content_checks.py.
+# Per language: a single task (positive), a plan task (edge: `create_task_plan` rows take `status` too),
+# and the negative. The v1 fixture is read, never written.
+
+- id: t1561.status.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: 'already in progress' becomes status WIP on the proposal."
+  query: 'In the Website Redesign project, create a task "Publish the 1.0 changelog" that someone has already started on, so it should show as in progress.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_match:
+        status: "^WIP$"
+
+- id: t1561.status.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: 'already in progress' becomes status WIP on the proposal."
+  query: Website Redesign プロジェクトに「1.0 の変更履歴を公開する」というタスクを作ってください。すでに誰かが着手しているので、進行中の状態にしてください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_match:
+        status: "^WIP$"
+
+- id: t1561.status-plan.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Edge: a plan whose first task is already done carries status Closed on that task."
+  query: 'In the Website Redesign project create three tasks: "Collect the launch copy" (already finished), "Review the launch copy" and "Publish the launch copy".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 3
+      task_args_match:
+        status: "^Closed$"
+
+- id: t1561.status-plan.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Edge: a plan whose first task is already done carries status Closed on that task."
+  query: Website Redesign プロジェクトに3つのタスクを作ってください:「公開文面の収集」(すでに完了)、「公開文面のレビュー」、「公開文面の公開」。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task_plan]
+    pending_write:
+      tool: create_task_plan
+      tasks_at_least: 3
+      task_args_match:
+        status: "^Closed$"
+
+- id: t1561.plain.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): a plain task request sends no status, reporter, links or template unasked."
+  query: "Add a task to the Website Redesign project to buy more coffee for the office."
+  expect:
+    no_errors: true
+    tools_used_excludes: [create_task_plan]
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_absent: [status, reporter_id, links, template]
+
+- id: t1561.plain.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): a plain task request sends no status, reporter, links or template unasked."
+  query: Website Redesign プロジェクトに、オフィスのコーヒーを買い足すタスクを1つ追加してください。
+  expect:
+    no_errors: true
+    tools_used_excludes: [create_task_plan]
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_absent: [status, reporter_id, links, template]

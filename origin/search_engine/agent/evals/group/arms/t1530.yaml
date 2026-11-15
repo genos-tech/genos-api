@@ -1,0 +1,4 @@
+arm: t1530
+overrides:
+    AGENT_UNDO_NOTE_IN_MEMORY: true
+requires: []

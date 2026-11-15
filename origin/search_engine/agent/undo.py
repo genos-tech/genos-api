@@ -44,6 +44,11 @@ stands. The flag is on by default (`apis/settings.py`; the env value `false` is 
 so the next turn's earlier answer ends with a short factual note, and a replayed result carries
 `undone_by_user` (`agent/approval_notes.py`; the outcome is kept on `AgentStep.undo_outcome_json`).
 
+The conversation MEMORY (`search_past_conversations`, the earlier-turns window) is told by
+`SEARCH_ENGINE["AGENT_UNDO_NOTE_IN_MEMORY"]` (default off, MIP-1530): the run's chunk carries one
+`(the person undid this: ...)` line per undone write (derived from the steps by
+`chunkers/conversation_chunker.py`) and `undo_apply.perform_undo` re-ingests that run.
+
 This module is imported by the tools, so it must not import the tool registry.
 Executing an undo is `undo_apply`.
 """
@@ -156,6 +161,8 @@ UNDO_SUPPORT: dict[str, str] = {
     "approve_join_request": NONE,
     "decline_join_request": NONE,
     "delete_project": NONE,
+    # --- a task's files (MIP-1563; flag-gated in the app, `register_flagged_tool`) ---
+    "delete_task_attachment": NONE,
 }
 
 # tool name -> (reason code, one line) for every tool that is not `full`. The
@@ -164,14 +171,22 @@ UNDO_SUPPORT: dict[str, str] = {
 UNDO_REASONS: dict[str, tuple[str, str]] = {
     "update_task": (
         UNSUPPORTED_FIELDS,
-        "a call that touches collaborators, custom fields, or a move to another "
+        "a call that touches collaborators, custom fields, links, the reporter, or a move to another "
         "project, parent or milestone (or a milestone's own task) has no stored old value",
     ),
     "update_note": (
         UNSUPPORTED_FIELDS,
         "a folder move is not covered; title and body are put back from the note's versions",
     ),
-    "update_comment": (NO_SNAPSHOT, "the comment's previous text is not kept"),
+    # MIP-1562 (flag `AGENT_PARITY_TOOLS`): a reaction or a flag is not undone either. The card
+    # predicts from the tool name, so one code covers all three; the tool's own result says it
+    # changed nothing when it already held, and the opposite call (`remove_reaction`, `flag:
+    # "unflag"`) puts either back by hand.
+    "update_comment": (
+        NO_SNAPSHOT,
+        "the comment's previous text is not kept; a reaction or a flag is put back with the "
+        "opposite call, an undo of it is not built",
+    ),
     "delete_comment": (
         NOT_YET,
         "a soft delete, so recoverable in principle; the restore is not built",
@@ -220,6 +235,11 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     "approve_join_request": (NOTIFIED_PEOPLE, "the person is let in and told"),
     "decline_join_request": (NOTIFIED_PEOPLE, "the person is told no"),
     "delete_project": (IRREVERSIBLE_DELETE, "it removes the project and everything in it"),
+    "delete_task_attachment": (
+        IRREVERSIBLE_DELETE,
+        "a hard delete: the file leaves storage and the row goes, and no snapshot of either is kept; "
+        "only the task's history records that the file was removed, by name",
+    ),
 }
 
 
@@ -256,8 +276,19 @@ UPDATE_TASK_RESTORABLE_ARGS = frozenset(
         "tags",
     }
 )
+# `links` and `reporter_id` (MIP-1561, published by `AGENT_PARITY_TOOLS`) are here although the flag
+# may be off: a call that carries one is not undoable whenever it arrives. The links are not among the
+# columns a pre-image keeps, and putting a reporter back is not built.
 UPDATE_TASK_UNRESTORABLE_ARGS = frozenset(
-    {"collaborators", "custom_fields", "milestone_id", "parent_task_id", "project_id"}
+    {
+        "collaborators",
+        "custom_fields",
+        "milestone_id",
+        "parent_task_id",
+        "project_id",
+        "links",
+        "reporter_id",
+    }
 )
 UPDATE_NOTE_RESTORABLE_ARGS = frozenset({"note_id", "note_type", "title", "content_text"})
 UPDATE_NOTE_UNRESTORABLE_ARGS = frozenset({"folder_id"})

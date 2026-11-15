@@ -1,0 +1,85 @@
+# MIP-1561 (flag AGENT_PARITY_TOOLS, arm `parity`): the reporter of a task is set or changed, as the
+# task page's reporter picker does. The model resolves a name to a user id (get_team_members) and
+# sends `reporter_id`; the case judges that it is sent (the id itself is the fixture's, so it is not
+# matched). Positives `requires_arm: parity`; the negative runs on arm0 too: "assign it to Bob" is
+# assign_task (assignee), never the reporter. The v1 fixture is read, never written.
+
+- id: t1561.reporter-create.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: 'reported by Carol Park' is reporter_id on create_task."
+  query: 'In the Website Redesign project create a task "Fix the footer links" that was reported by Carol Park.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_present: [reporter_id]
+
+- id: t1561.reporter-create.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: 'reported by Carol Park' is reporter_id on create_task."
+  query: Website Redesign プロジェクトに「フッターのリンクを直す」タスクを作ってください。報告者は Carol Park です。
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_task]
+    pending_write:
+      tool: create_task
+      args_present: [reporter_id]
+
+- id: t1561.reporter-update.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: change who reported an existing task."
+  query: 'Change the reporter of the task "Investigate slow homepage load on mobile Safari" in the Website Redesign project to Bob Martinez.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    tools_used_excludes: [assign_task]
+    pending_write:
+      tool: update_task
+      args_present: [reporter_id]
+
+- id: t1561.reporter-update.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  requires_arm: parity
+  note: "Positive: change who reported an existing task."
+  query: Website Redesign プロジェクトのタスク「Investigate slow homepage load on mobile Safari」の報告者を Bob Martinez に変更してください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    tools_used_excludes: [assign_task]
+    pending_write:
+      tool: update_task
+      args_present: [reporter_id]
+
+- id: t1561.assign-not-reporter.en
+  lang: en
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): 'assign it to Bob Martinez' is the assignee, never the reporter."
+  query: 'Assign the task "Investigate slow homepage load on mobile Safari" in the Website Redesign project to Bob Martinez.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [assign_task]
+    tools_used_excludes: [update_task]
+
+- id: t1561.assign-not-reporter.ja
+  lang: ja
+  tags: [eval-group, t1561]
+  fixture: v1
+  note: "Negative (arm0 and parity): 'assign it to Bob Martinez' is the assignee, never the reporter."
+  query: Website Redesign プロジェクトのタスク「Investigate slow homepage load on mobile Safari」を Bob Martinez に割り当ててください。
+  expect:
+    no_errors: true
+    pending_tools_contains: [assign_task]
+    tools_used_excludes: [update_task]
