@@ -232,6 +232,7 @@ def search(
     boost_project_ids: Optional[list[str]] = None,
     person_id: Optional[str] = None,
     exclude_lanes: Optional[frozenset[str]] = None,
+    exclude_project_ids: Optional[list[str]] = None,
 ) -> dict:
     """Run a hybrid search and return entity-grouped results.
 
@@ -402,6 +403,7 @@ def search(
         project_ids=project_ids,
         milestone_ids=milestone_ids,
         exclude_lanes=exclude_lanes,
+        exclude_project_ids=exclude_project_ids,
     )
 
     # --- Phase 10: query rewriting (optional) ---
@@ -677,6 +679,7 @@ def search(
                 for_agent=for_agent,
                 client=client,
                 index=index,
+                exclude_project_ids=exclude_project_ids,
             )
 
     # --- Display-id lookup (MIP-739): "MIP-739" pins that task first. ---
@@ -1151,6 +1154,7 @@ def _build_filter(
     project_ids: Optional[list[str]] = None,
     milestone_ids: Optional[list[str]] = None,
     exclude_lanes: Optional[frozenset[str]] = None,
+    exclude_project_ids: Optional[list[str]] = None,
 ) -> list[dict]:
     # `acl_user_ids` holds user ids plus, for content readable by the
     # whole team (a public Team Notes folder), a `team:<team_id>`
@@ -1217,6 +1221,17 @@ def _build_filter(
         # regardless of what `entity_types` asks for.
         filt.append(
             {"bool": {"must_not": [{"term": {"entity_type": et}} for et in sorted(exclude_lanes)]}}
+        )
+    if exclude_project_ids:
+        # Soft-deleted projects (MIP-1621): everything indexed under one is as gone as the
+        # project, in the query itself so it also narrows `limit` and the counts. Added only
+        # when there is one, so a search that has none builds the filter it always built.
+        filt.append(
+            {
+                "bool": {
+                    "must_not": [{"terms": {"project_id": [str(p) for p in exclude_project_ids]}}]
+                }
+            }
         )
     if project_ids:
         # Project scoping (Spotlight's project filter). A plain `terms`
@@ -2339,6 +2354,7 @@ def _graph_expand(
     for_agent: bool,
     client,
     index: str,
+    exclude_project_ids: Optional[list[str]] = None,
 ) -> list[dict]:
     """GraphRAG ranking-fusion (A1 / Q2.4, multi-hop since A1-ext).
 
@@ -2428,7 +2444,9 @@ def _graph_expand(
     entity_ids = [f"task:{t}" for t in neigh_ids]
 
     # ACL-filtered fetch of the neighbour task chunks (same filter as search).
-    flt = _build_filter(team_id, user_id, ["task"], None, None)
+    flt = _build_filter(
+        team_id, user_id, ["task"], None, None, exclude_project_ids=exclude_project_ids
+    )
     flt.append({"terms": {"entity_id": entity_ids}})
     try:
         resp = client.search(

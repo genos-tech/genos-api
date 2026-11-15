@@ -25,6 +25,7 @@ from rest_framework.response import Response
 
 from origin.search_engine.metered import metered_request
 from origin.search_engine.search import memory_exclude_lanes, search
+from origin.services.live_projects import gone_project_ids
 from origin.services.throttles import SearchThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import body_object, refuse_non_string_fields
@@ -151,6 +152,8 @@ class SearchView(AuthenticatedAPIView):
                 # the tier doesn't have. Permissive (empty) for every
                 # tier until the flip.
                 exclude_lanes=memory_exclude_lanes(user_id),
+                # A soft-deleted project's tasks, comments and notes are not found (MIP-1621).
+                exclude_project_ids=[str(p) for p in sorted(gone_project_ids())] or None,
                 **extra_kwargs,
             )
         return Response(result, status=status.HTTP_200_OK)

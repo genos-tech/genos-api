@@ -794,6 +794,7 @@ def seed_mention_hardening(info: dict[str, Any]) -> None:
     that the project is gone."""
     from django.db.models import Max  # noqa: PLC0415
 
+    from origin.models.chat.unified_models import Channel  # noqa: PLC0415
     from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
     from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
@@ -805,8 +806,14 @@ def seed_mention_hardening(info: dict[str, Any]) -> None:
         ("EMD", "Eval wound-down project", spec["gone"], spec["gone_body"]),
     ):
         project = _isolated_project(info, name, code, [me])
-        if code == "EMD" and not project.is_deleted:
-            ProjectMaster.objects.filter(pk=project.pk).update(is_deleted=True)
+        if code == "EMD":
+            if not project.is_deleted:
+                ProjectMaster.objects.filter(pk=project.pk).update(is_deleted=True)
+            # A project that was soft-deleted through `save()` (the only way the flag was ever set) took its
+            # PM chat with it (`pm_channel_signals` mirrors `is_deleted` onto the channel); a queryset update
+            # does not, so the chat is hidden here the same way. Left alone, `list_my_chats` would hand the
+            # model the project's name and the case would fail for a path this seed made up (MIP-1621).
+            Channel.objects.filter(project=project, is_deleted=False).update(is_deleted=True)
         if TaskMaster.objects.filter(team_id=team_id, project=project, title=title).exists():
             continue
         number = (

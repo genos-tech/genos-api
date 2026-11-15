@@ -124,6 +124,7 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
 from origin.services import briefing, member_events, note_scope
 from origin.services.channel_scope import channel_titles, readable_chats_qs
@@ -314,11 +315,17 @@ def readable_task_q(ctx: ToolContext, prefix: str = "") -> Q:
         Exists(TeamMembers.objects.filter(team_id=project_team, attendee_id=me, is_deleted=False))
         | Exists(TeamMaster.objects.filter(team_id=project_team, owner_id=me))
     )
-    return Q(**{f"{prefix}team_id": ctx.team_id, f"{prefix}is_deleted": False}) & (
-        Q(**{f"{prefix}project_id__in": projects})
-        | Q(**{f"{prefix}assignee_id": me})
-        | Q(**{f"{prefix}reporter_id": me})
-        | owner
+    return (
+        Q(**{f"{prefix}team_id": ctx.team_id, f"{prefix}is_deleted": False})
+        & (
+            Q(**{f"{prefix}project_id__in": projects})
+            | Q(**{f"{prefix}assignee_id": me})
+            | Q(**{f"{prefix}reporter_id": me})
+            | owner
+        )
+        # A task of a soft-deleted project is nobody's to read (MIP-1621; `Q()` while the flag
+        # `AGENT_PARITY_FOLLOWUPS` is off): the same rule `LabelAccess.task_readable` states.
+        & live_tasks_q(prefix)
     )
 
 

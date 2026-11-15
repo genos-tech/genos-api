@@ -38,6 +38,7 @@ from apis.request_id import log_failure
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.services.task_cache import invalidate_project_tasks_cache
 
 _MAX_EDGES = 30
@@ -104,6 +105,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return (
             task is not None
             and not task.is_deleted
+            and not in_deleted_project(task)
             and str(getattr(task, "team_id", "") or "") == ctx.team_id
             and (
                 task.project_id in member_project_ids

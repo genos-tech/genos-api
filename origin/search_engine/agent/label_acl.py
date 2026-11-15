@@ -46,6 +46,7 @@ from origin.search_engine.agent.acl import (
     owns_personal_folder,
 )
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.services.channel_scope import can_read_chat
 from origin.views.utils.note_folder_role import get_folder_role
 from origin.views.utils.note_role import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
@@ -127,6 +128,10 @@ class LabelAccess:
         if not self.usable or task.is_deleted:
             return False
         if str(getattr(task, "team_id", "") or "") != self.team_id:
+            return False
+        if in_deleted_project(task):
+            # MIP-1621 (flag `AGENT_PARITY_FOLLOWUPS`): a task of a soft-deleted project is nobody's to read,
+            # the assignee's and the reporter's included. `readable_task_q` says the same in SQL.
             return False
         return (
             task.project_id in self._projects()

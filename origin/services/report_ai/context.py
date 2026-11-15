@@ -28,6 +28,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import ToolContext, wrap_workspace_content
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.search_engine.agent.tools.task_enums import (
     VALID_PRIORITIES,
     VALID_STATUSES,
@@ -124,8 +125,13 @@ def _open_tasks(ctx: ToolContext, task_ids: list[int]) -> list[TaskMaster]:
     out = []
     for task_id in wanted:
         task = rows.get(task_id)
-        if task is not None and ctx.user_id in task_acl_user_ids(
-            task.project_id, task.assignee_id, task.reporter_id
+        if (
+            task is not None
+            # A task of a soft-deleted project is not the member's to open (MIP-1621, flag
+            # `AGENT_PARITY_FOLLOWUPS`), so a report never names it.
+            and not in_deleted_project(task)
+            and ctx.user_id
+            in task_acl_user_ids(task.project_id, task.assignee_id, task.reporter_id)
         ):
             out.append(task)
     return out

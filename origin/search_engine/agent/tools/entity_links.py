@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import re
 
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
+
 _TASK_RE = re.compile(r"^task:(\d+)$")
 _PROJECT_RE = re.compile(r"^project:(\d+)$")
 _MILESTONE_RE = re.compile(r"^milestone:(\d+)$")
@@ -126,7 +128,12 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
             .select_related("project")
             .first()
         )
-        if task is None or str(task.team_id or "") != team_id or not task.project_id:
+        if (
+            task is None
+            or str(task.team_id or "") != team_id
+            or not task.project_id
+            or in_deleted_project(task)
+        ):
             return None
         return (
             f"/workspace/tasks/project/{task.project_id}/task/{task.task_id}",
@@ -149,10 +156,17 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
     if m:
         from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
 
-        milestone = MilestoneMaster.objects.filter(
-            milestone_id=int(m.group(1)), is_deleted=False
-        ).first()
-        if milestone is None or str(milestone.team_id or "") != team_id or not milestone.project_id:
+        milestone = (
+            MilestoneMaster.objects.select_related("project")
+            .filter(milestone_id=int(m.group(1)), is_deleted=False)
+            .first()
+        )
+        if (
+            milestone is None
+            or str(milestone.team_id or "") != team_id
+            or not milestone.project_id
+            or in_deleted_project(milestone)
+        ):
             return None
         return (
             f"/workspace/tasks/project/{milestone.project_id}/milestone/{milestone.milestone_id}",

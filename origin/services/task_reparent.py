@@ -227,8 +227,12 @@ def find_parent(parent_task_id, team_id):
     """The live task `parent_task_id` names, as `(task, None)`, or
     `(None, why_not)`. A deleted task, or one in another team, is not a
     parent anyone can file work under."""
+    from origin.search_engine.agent.tools.project_gone import live_tasks_q  # noqa: PLC0415
+
+    # A task of a soft-deleted project is no parent either, and reads as a missing one (MIP-1621,
+    # flag `AGENT_PARITY_FOLLOWUPS`: both callers are agent tools).
     parent = (
-        TaskMaster.objects.filter(task_id=parent_task_id, is_deleted=False)
+        TaskMaster.objects.filter(live_tasks_q(), task_id=parent_task_id, is_deleted=False)
         .exclude(status="Deleted")
         .first()
     )

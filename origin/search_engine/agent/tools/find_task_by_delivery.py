@@ -39,6 +39,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.services.github_webhooks import parse_pr_url_full
 from origin.services.task_delivery import (
     canonical_pr_url,
@@ -58,7 +59,7 @@ _MAX_MATCHES = 10
 
 
 def _readable(task: TaskMaster, ctx: ToolContext) -> bool:
-    if task.is_deleted or str(task.team_id or "") != ctx.team_id:
+    if task.is_deleted or str(task.team_id or "") != ctx.team_id or in_deleted_project(task):
         return False
     return ctx.user_id in task_acl_user_ids(task.project_id, task.assignee_id, task.reporter_id)
 
