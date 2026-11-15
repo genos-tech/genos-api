@@ -1,0 +1,265 @@
+{
+    "templates": [
+        {
+            "id": "default",
+            "label": "Standard task",
+            "sections": [
+                {
+                    "heading": "🧾 Summary",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "One or two lines on what this task delivers."
+                        }
+                    ]
+                },
+                {
+                    "heading": "🪜 Motivation",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "Why does this matter? What problem are we solving?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "✅ Acceptance criteria",
+                    "items": [
+                        {
+                            "kind": "bullet",
+                            "text": "First condition that must be true when this is done."
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Second condition…"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Third condition…"
+                        }
+                    ]
+                },
+                {
+                    "heading": "🎯 Notes & links",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "Anything else worth pinning here."
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "bug",
+            "label": "Bug report",
+            "sections": [
+                {
+                    "heading": "🐞 Summary",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "One-line description of the bug."
+                        }
+                    ]
+                },
+                {
+                    "heading": "🔁 Steps to reproduce",
+                    "items": [
+                        {
+                            "kind": "bullet",
+                            "text": "Go to …"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Click on …"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Observe that …"
+                        }
+                    ]
+                },
+                {
+                    "heading": "🎯 Expected behavior",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "What should happen?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "💥 Actual behavior",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "What actually happens? Include error messages, screenshots."
+                        }
+                    ]
+                },
+                {
+                    "heading": "🧪 Environment",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "Browser, OS, app version, user, team, anything that narrows it down."
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "spike",
+            "label": "Research / spike",
+            "sections": [
+                {
+                    "heading": "❓ Question",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "What are we trying to learn or decide?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "💡 Hypothesis",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "What do we currently believe is true?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "🧭 Approach",
+                    "items": [
+                        {
+                            "kind": "bullet",
+                            "text": "Where to look first…"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Experiments / prototypes to try…"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "People to talk to…"
+                        }
+                    ]
+                },
+                {
+                    "heading": "⏱ Timebox",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "How long are we willing to spend on this?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "📌 Findings",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "Fill in as you learn — link out to docs, PRs, threads."
+                        }
+                    ]
+                },
+                {
+                    "heading": "🚧 Out of scope",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "Explicitly things we are NOT answering here."
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "milestone",
+            "label": "Milestone",
+            "sections": [
+                {
+                    "heading": "🎯 Goal",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "What outcome does this milestone deliver, and for whom?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "✅ Success criteria",
+                    "items": [
+                        {
+                            "kind": "bullet",
+                            "text": "Measurable signal #1 that we hit the goal."
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Measurable signal #2."
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Measurable signal #3."
+                        }
+                    ]
+                },
+                {
+                    "heading": "📦 In scope",
+                    "items": [
+                        {
+                            "kind": "bullet",
+                            "text": "Workstream / feature 1"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Workstream / feature 2"
+                        }
+                    ]
+                },
+                {
+                    "heading": "🚫 Out of scope",
+                    "items": [
+                        {
+                            "kind": "bullet",
+                            "text": "Thing we are explicitly NOT doing."
+                        }
+                    ]
+                },
+                {
+                    "heading": "⚠️ Risks & dependencies",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "What could derail this? Who/what are we waiting on?"
+                        }
+                    ]
+                },
+                {
+                    "heading": "🧭 Order of work",
+                    "items": [
+                        {
+                            "kind": "placeholder",
+                            "text": "Which task do we take first, and what comes next?"
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Step 1: the first task."
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Step 2: what it unblocks. Note tasks that can run in parallel."
+                        },
+                        {
+                            "kind": "bullet",
+                            "text": "Gates, when each parent task closes, and the critical path."
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

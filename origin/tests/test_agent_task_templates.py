@@ -1,11 +1,11 @@
 """The server's copy of the app's built-in task templates (MIP-1561).
 
-The templates live in the browser (`genos-frontend` `src/features/tasks/utils/taskTemplates.ts`).
-The server keeps only their section HEADINGS (`plan_task_bodies.BUILT_IN_TEMPLATES`), so a task made
-through the agent or MCP with `template: "bug"` has the sections a person picking "Bug report" in the
-app gets. This is a mirror of client text, so it is pinned in both directions: this file spells the
-four templates out (a change to either side is a visible change here), and the system prompt's own
-list of house headings, which the model is told to write, must be a subset of them.
+The templates are written down once, in `builtin_task_templates.json` (MIP-1606; the browser builds
+its blocks from a vendored copy, see `test_builtin_task_templates`). The server reads only their
+section HEADINGS from it (`plan_task_bodies.BUILT_IN_TEMPLATES`), so a task made through the agent or
+MCP with `template: "bug"` has the sections a person picking "Bug report" in the app gets. This file
+spells the four templates out as literals (a change to the file is a visible change here), and the
+system prompt's own list of house headings, which the model is told to write, must be a subset.
 
 No database, no model.
 """

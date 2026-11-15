@@ -1,9 +1,9 @@
 """Template prompts nobody filled in are not content (MIP-825).
 
-The frontend's body templates (`genos-frontend` `taskTemplates.ts`) are real
-blocks: each prompt ("Why does this matter? What problem are we solving?") is
-a paragraph or bullet in italic gray. A task whose author never wrote in a
-section is stored with the prompt still in it, so `content_text` and
+The app's body templates (`genos-frontend` `taskTemplates.ts`, built from the shared
+`builtin_task_templates.json`) are real blocks: each prompt ("Why does this matter? What
+problem are we solving?") is a paragraph or bullet in italic gray. A task whose author never
+wrote in a section is stored with the prompt still in it, so `content_text` and
 `content_markdown` carried instructions that read as content (KDS-332, -333,
 -489 were mostly that).
 
@@ -12,62 +12,22 @@ not rewritten, so nothing can be lost, and a prompt the author is about to fill
 in still shows in the editor.
 
 A block is an untouched prompt only if its text is exactly one of the prompts
-below AND it still has the prompt styling. Typing into a prompt replaces its
-text; a line the author wrote that repeats a prompt has no such styling, so
+in that file (`PROMPTS`, read from it) AND it still has the prompt styling. Typing into a
+prompt replaces its text; a line the author wrote that repeats a prompt has no such styling, so
 both are kept. A heading left with nothing under it goes too.
 
-KEEP THIS LIST IN STEP with `taskTemplates.ts` (a template gaining a prompt
-needs its text here, or that prompt keeps being read as content; a prompt
-that is missing here is merely shown, never wrongly hidden).
+There is no list to keep in step any more (MIP-1606): the prompts ARE the file's items. A prompt
+missing from the file is merely shown, never wrongly hidden.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from origin.search_engine.agent.tools.builtin_templates import PROMPT_TEXTS
 from origin.search_engine.text_extraction import _top_level_blocks, extract_text
 
-PROMPTS: frozenset[str] = frozenset(
-    {
-        # default
-        "One or two lines on what this task delivers.",
-        "Why does this matter? What problem are we solving?",
-        "First condition that must be true when this is done.",
-        "Second condition…",
-        "Third condition…",
-        "Anything else worth pinning here.",
-        # bug
-        "One-line description of the bug.",
-        "Go to …",
-        "Click on …",
-        "Observe that …",
-        "What should happen?",
-        "What actually happens? Include error messages, screenshots.",
-        "Browser, OS, app version, user, team, anything that narrows it down.",
-        # spike
-        "What are we trying to learn or decide?",
-        "How long are we willing to spend on this?",
-        "What do we currently believe is true?",
-        "Where to look first…",
-        "People to talk to…",
-        "Experiments / prototypes to try…",
-        "Fill in as you learn — link out to docs, PRs, threads.",
-        "Explicitly things we are NOT answering here.",
-        # milestone
-        "What outcome does this milestone deliver, and for whom?",
-        "Measurable signal #1 that we hit the goal.",
-        "Measurable signal #2.",
-        "Measurable signal #3.",
-        "Workstream / feature 1",
-        "Workstream / feature 2",
-        "Thing we are explicitly NOT doing.",
-        "What could derail this? Who/what are we waiting on?",
-        "Which task do we take first, and what comes next?",
-        "Step 1: the first task.",
-        "Step 2: what it unblocks. Note tasks that can run in parallel.",
-        "Gates, when each parent task closes, and the critical path.",
-    }
-)
+PROMPTS: frozenset[str] = PROMPT_TEXTS
 
 
 def _is_untouched_prompt(block: Any) -> bool:

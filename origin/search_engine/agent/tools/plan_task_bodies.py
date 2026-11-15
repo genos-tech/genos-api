@@ -23,10 +23,11 @@ MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with 
 for byte): the same fill reaches `create_task` (`new_task_body`), a task can NAME its template
 (`template`: a built-in or one of the project's own, by name), and a project whose default is a
 built-in id gets that built-in. The app's create form starts from exactly that choice. The built-in
-templates live in the browser (`taskTemplates.ts`); the server keeps only their section HEADINGS
-(`BUILT_IN_HEADINGS`, a mirror of client text, kept in step by `test_agent_task_templates`), and
-puts the task's title under the first one, as it does for a custom template. Their grey prompts are
-not copied: a prompt that lost its styling in markdown would be read back as content (MIP-825).
+templates are written down once, in `builtin_task_templates.json` (MIP-1606; the browser builds its
+blocks from a vendored copy of the same file, pinned by a hash in both repos). The server reads only
+their section HEADINGS from it (`BUILT_IN_HEADINGS`), and puts the task's title under the first
+one, as it does for a custom template. Their grey prompts are left out of the body:
+a prompt that lost its styling in markdown would be read back as content (MIP-825).
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.body_limits import check_body_size, check_body_sizes
+from origin.search_engine.agent.tools.builtin_templates import BUILT_IN_TEMPLATES
 
 # The picker value a custom template carries in `default_task_template`.
 _CUSTOM_PREFIX = "custom:"
@@ -47,46 +49,9 @@ _CUSTOM_PREFIX = "custom:"
 _MINIMAL_HEADING = "### Summary"
 
 
-# The app's built-in task templates (`taskTemplates.ts` `TASK_TEMPLATES`): id -> (label, section
-# headings in order). Headings only; see the module docstring.
-BUILT_IN_TEMPLATES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "default": (
-        "Standard task",
-        ("🧾 Summary", "🪜 Motivation", "✅ Acceptance criteria", "🎯 Notes & links"),
-    ),
-    "bug": (
-        "Bug report",
-        (
-            "🐞 Summary",
-            "🔁 Steps to reproduce",
-            "🎯 Expected behavior",
-            "💥 Actual behavior",
-            "🧪 Environment",
-        ),
-    ),
-    "spike": (
-        "Research / spike",
-        (
-            "❓ Question",
-            "💡 Hypothesis",
-            "🧭 Approach",
-            "⏱ Timebox",
-            "📌 Findings",
-            "🚧 Out of scope",
-        ),
-    ),
-    "milestone": (
-        "Milestone",
-        (
-            "🎯 Goal",
-            "✅ Success criteria",
-            "📦 In scope",
-            "🚫 Out of scope",
-            "⚠️ Risks & dependencies",
-            "🧭 Order of work",
-        ),
-    ),
-}
+# The app's built-in task templates (id -> (label, section headings in order)): read from their one
+# source file, `builtin_task_templates.json` (see `builtin_templates`). Headings only; see the
+# module docstring.
 BUILT_IN_HEADINGS = {tid: headings for tid, (_label, headings) in BUILT_IN_TEMPLATES.items()}
 _MAX_NAMES_LISTED = 20
 
