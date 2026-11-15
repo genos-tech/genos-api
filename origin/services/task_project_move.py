@@ -196,12 +196,15 @@ def move_report_said(report: dict) -> dict[str, int]:
 
 
 def move_notice(report: dict, destination_name: str) -> str:
-    """The same two counts as `move_report_said`, in a plain sentence for the person who asked for the
-    move, or "" when both are zero (MIP-1609, `update_task` only: the milestone move keeps its result).
+    """The same two counts as `move_report_said`, as an instruction to say them to the person who asked
+    for the move, or "" when both are zero (MIP-1609, `update_task` only: the milestone move keeps
+    its result).
 
     The in-app loop hands the model a result WITHOUT its `__summary__`, so a bare
-    `"moved": {"notes_narrowed": 1}` was answered with "Moved X to Archive" (the first paid run). A
-    field that is already a sentence in the member's words is what the model repeats."""
+    `"moved": {"notes_narrowed": 1}` was answered with "Moved X to Archive" (paid run 1), and a
+    sentence at the end of the result was relayed in English but not in Japanese (run 2). The caller
+    puts this in the field `tell_the_member`, first in the result, and the sentence ends on what to
+    do with it."""
     narrowed = report.get("notes_narrowed", 0)
     reporters = report.get("reporters_outside_destination", 0)
     parts = []
@@ -209,7 +212,7 @@ def move_notice(report: dict, destination_name: str) -> str:
         one = narrowed == 1
         parts.append(
             f"{narrowed} task {'note was' if one else 'notes were'} narrowed to "
-            f"{destination_name}'s members. {'Its author is' if one else 'Their authors are'} not "
+            f"{destination_name}'s members: {'its author is' if one else 'their authors are'} not "
             f"on {destination_name}, so they lost their Owner role on {'it' if one else 'them'} "
             "(moving the task back to a project they are on gives it back)."
         )
@@ -220,7 +223,12 @@ def move_notice(report: dict, destination_name: str) -> str:
             f"{'is' if one else 'are'} not on {destination_name} or its team; they keep reading "
             "what they filed."
         )
-    return f"Tell the member: {' '.join(parts)}" if parts else ""
+    if not parts:
+        return ""
+    return (
+        f"{' '.join(parts)} Say so in your answer, in the language the member writes in, after "
+        "saying the task moved."
+    )
 
 
 def move_report_clauses(report: dict, destination_name: str) -> str:

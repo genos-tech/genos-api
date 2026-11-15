@@ -2,9 +2,10 @@
 # move (MIP-1583) and the app's task PUT (MIP-1597). With the flag on, a move whose task is assigned to someone on neither the
 # destination project nor its team (here: someone who LEFT the team and whose open task was not unassigned) is refused before
 # anything is written ("This task can't move to Archive: the assignee of <display id> is not on that project or its team ...
-# Tell the user who is blocking this move and ask who should take the task over. Do not pick an assignee yourself, do not
-# propose a change, do not look anything up. Nothing was changed."), and a move that goes through says the task notes it
-# narrowed (`moved.notes_narrowed` and a plain sentence in `moved_notice`; the in-app loop does not show the model `__summary__`).
+# The task stays where it is. Nothing was changed. STOP: do not call any tool. Do not remove, clear or change the assignee
+# yourself, do not move the task again, do not look anything up. Your ONLY next step is to tell the member, in the language
+# they are writing in, who is blocking this move and ask who should take the task over."), and a move that goes through says the task notes it
+# narrowed (`moved.notes_narrowed` and an instruction as the first key, `tell_the_member`; the in-app loop does not show the model `__summary__`).
 #
 # All `kind: resume` (see evals/group/resume_runner.py for the schema): like the milestone move, the refusal comes from the tool
 # AFTER the approval, so a behaviour case (which pauses on the proposal) could never show it to the model. The first leg is
@@ -41,7 +42,7 @@
     args: {task_id: "{task:contract}", project_id: "{destination_id}"}
   decision: approve
   expect:
-    resumed_prompt_contains: ["is not on that project or its team", "Nothing was changed"]
+    resumed_prompt_contains: ["is not on that project or its team", "Nothing was changed", "Do not remove, clear or change the assignee yourself"]
     no_pending: true
     answer_contains_any: ["assign", "who should", "take over"]
     max_calls: 4
@@ -63,7 +64,7 @@
     args: {task_id: "{task:contract}", project_id: "{destination_id}"}
   decision: approve
   expect:
-    resumed_prompt_contains: ["is not on that project or its team", "Nothing was changed"]
+    resumed_prompt_contains: ["is not on that project or its team", "Nothing was changed", "Do not remove, clear or change the assignee yourself"]
     no_pending: true
     answer_contains_any: ["担当", "割り当て", "割当", "引き継"]
     max_calls: 4
@@ -85,7 +86,7 @@
     args: {task_id: "{task:contract}", project_id: "{destination_id}"}
   decision: approve
   expect:
-    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '"moved_notice": "Tell the member: 1 task note was narrowed']
+    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '[result update_task {"tell_the_member": "1 task note was narrowed']
     resumed_prompt_excludes: ["Nothing was changed"]
     no_pending: true
     answer_contains_any: ["note"]
@@ -108,10 +109,10 @@
     args: {task_id: "{task:contract}", project_id: "{destination_id}"}
   decision: approve
   expect:
-    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '"moved_notice": "Tell the member: 1 task note was narrowed']
+    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '[result update_task {"tell_the_member": "1 task note was narrowed']
     resumed_prompt_excludes: ["Nothing was changed"]
     no_pending: true
-    answer_contains_any: ["ノート", "メモ"]
+    answer_contains_any: ["ノート", "メモ", "注記", "注釈"]
     max_calls: 4
 
 - id: t1609.plain-move.en
@@ -130,7 +131,7 @@
   decision: approve
   expect:
     resumed_prompt_contains: ['"changed_fields": ["project"]']
-    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "moved_notice", "Nothing was changed"]
+    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "tell_the_member", "Nothing was changed"]
     no_pending: true
     answer_contains_any: ["Archive", "moved"]
     max_calls: 4
@@ -151,7 +152,7 @@
   decision: approve
   expect:
     resumed_prompt_contains: ['"changed_fields": ["project"]']
-    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "moved_notice", "Nothing was changed"]
+    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "tell_the_member", "Nothing was changed"]
     no_pending: true
     answer_contains_any: ["アーカイブ", "移動"]
     max_calls: 4

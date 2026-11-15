@@ -2,11 +2,11 @@
 # (MIP-1597), behind the THIRD flag AGENT_TASK_MOVE_PARITY (default OFF; both batch flags are already on in production).
 #   ON: a move whose task, or a sub-task that goes with it, is assigned to someone on neither the destination project
 #     nor its team (someone who left the team) is refused before anything is written ("This task can't move to
-#     <project>: the assignee of <display id> is not on that project or its team ... Tell the user who is blocking
-#     this move and ask who should take the task over; do not pick an assignee, propose a change or look anything up.
-#     Nothing was changed."); a move that goes through adds
-#     `moved: {notes_narrowed, reporters_outside_destination}` (each only when not zero), a plain sentence in
-#     `moved_notice` (the in-app loop does not show the model `__summary__`) and the matching summary clauses.
+#     <project>: the assignee of <display id> is not on that project or its team ... The task stays where it is.
+#     Nothing was changed. STOP: do not call any tool, do not remove or change the assignee, do not look anything up; the
+#     ONLY next step is to tell the member who is blocking and ask who should take over."); a move that goes through adds
+#     `moved: {notes_narrowed, reporters_outside_destination}` (each only when not zero), an instruction as the
+#     FIRST key, `tell_the_member` (the in-app loop does not show the model `__summary__`) and the matching summary clauses.
 # Model-visible: tool RESULTS only (a refusal and fields). No declaration or prompt changes, so the prefix is the
 # same with the flag on and off. The flag-off results are byte-identical (`test_agent_task_move_parity`).
 # Cases: `t1609-task-move.yaml` (all `kind: resume`: the refusal comes after the approval, as for the milestone move).

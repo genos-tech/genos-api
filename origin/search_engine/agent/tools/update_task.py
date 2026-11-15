@@ -507,9 +507,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         else None
     )
     if destination is not None and (
-        problem := task_move_assignee_problem(task, destination, way_out=TOOL_WAY_OUT)
+        problem := task_move_assignee_problem(task, destination, way_out=TOOL_STAYS)
     ):
-        raise ToolError(problem)
+        raise ToolError(f"{problem} {TOOL_NEXT_STEP}")
 
     if (
         not update_fields
@@ -656,22 +656,32 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # writes it again), and who filed a moved task without being on the destination keeps
         # reading it: said only when it happened, in the milestone move's words (MIP-1609).
         result["moved"] = said
-        # A sentence besides the counters: the in-app loop does not show the model `__summary__`.
-        result["moved_notice"] = move_notice(move_report, destination.project_name)
+        # An instruction besides the counters, FIRST in the result: the in-app loop does not show
+        # the model `__summary__`, and a sentence at the end was not relayed in Japanese.
+        result = {
+            "tell_the_member": move_notice(move_report, destination.project_name),
+            **result,
+        }
         result["__summary__"] += move_report_clauses(move_report, destination.project_name)
     if undo_capture is not None and (image := undo_capture.finish(update_fields)):
         result[UNDO_KEY] = image
     return result
 
 
-#: What a refused move tells the model to do instead (MIP-1609). The app's PUT says "send
-#: `assignee` with the move"; this tool takes no assignee, so that would be a blind retry. The first
-#: paid run also showed that naming a tool to reassign with ("reassign with `assign_task`") sent the
-#: model off looking people up (5 to 7 calls) and, in 4 of 6 runs, proposing an assignment it picked
-#: itself. So the way out is to stop and ask.
-TOOL_WAY_OUT = (
-    "Tell the user who is blocking this move and ask who should take the task over. "
-    "Do not pick an assignee yourself, do not propose a change, do not look anything up."
+#: What a refused move says besides the shared sentence (MIP-1609). The app's PUT says "send
+#: `assignee` with the move"; this tool takes no assignee, so that would be a blind retry. Paid run 1:
+#: naming a tool to reassign with ("reassign with `assign_task`") sent the model off looking people up
+#: (5 to 7 calls) and, in 4 of 6 runs, proposing an assignment it picked itself. Paid run 2: a soft
+#: "do not look anything up" held in English (3/3) but not in Japanese (0/3): five calls, and once an
+#: update with `assignee_id: ""`, an attempt to unassign the task to get past the refusal. So the
+#: message is a hard stop: it says the task stays and nothing changed (here, `TOOL_STAYS`, before the
+#: shared "Nothing was changed.") and ENDS on the one next step (`TOOL_NEXT_STEP`, last in the text).
+TOOL_STAYS = "The task stays where it is."
+TOOL_NEXT_STEP = (
+    "STOP: do not call any tool. Do not remove, clear or change the assignee yourself, "
+    "do not move the task again, do not look anything up. Your ONLY next step is to tell "
+    "the member, in the language they are writing in, who is blocking this move and ask "
+    "who should take the task over."
 )
 
 

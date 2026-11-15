@@ -2175,12 +2175,12 @@ SEARCH_ENGINE["AGENT_PARITY_FOLLOWUPS"] = (
 # longer protect a new model-visible change. Model-visible (a tool result and a new refusal), DEFAULT OFF until the
 # grouped run (arm `task-move-parity`). ON = a move whose task (or a sub-task that goes with it) is assigned to
 # someone on neither the destination project nor its team (someone who left the team) is refused before anything is
-# written, in the milestone move's sentence ("This task can't move to <project>: the assignee of <display id> ... Tell
-# the user who is blocking this move and ask who should take the task over. Do not pick an assignee yourself, do not
-# propose a change, do not look anything up. Nothing was changed."); a move that goes through adds
-# `moved: {notes_narrowed, reporters_outside_destination}` (each only when not zero), a plain sentence in
-# `moved_notice` (the in-app loop does not show the model `__summary__`) and the same clauses as the milestone move's
-# summary. OFF = byte-identical results to before (no declaration changes either
+# written, in the milestone move's sentence ("This task can't move to <project>: the assignee of <display id> ... The
+# task stays where it is. Nothing was changed. STOP: do not call any tool. Do not remove, clear or change the assignee
+# yourself ... Your ONLY next step is to tell the member ... who is blocking this move and ask who should take the task
+# over."); a move that goes through adds `moved: {notes_narrowed, reporters_outside_destination}` (each only when not
+# zero), an instruction as the FIRST key, `tell_the_member` (the in-app loop does not show the model `__summary__`), and
+# the same clauses as the milestone move's summary. OFF = byte-identical results to before (no declaration changes either
 # way). The Owner rows a move ends on task notes are recorded and restored whatever the flag (MIP-1583); the app's
 # PUT has refused and reported since MIP-1597, whatever the flag. Rollback: unset or `false` (nothing to migrate).
 SEARCH_ENGINE["AGENT_TASK_MOVE_PARITY"] = (

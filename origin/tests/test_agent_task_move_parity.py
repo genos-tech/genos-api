@@ -125,24 +125,35 @@ class ToolRefusesAnAssigneeOutsideTheDestinationTests(MoveBase):
         self.assertIn(self.task.display_id, message)  # named by its display id
         self.assertIn("This task can't move to Beta", message)
         self.assertIn("is not on that project or its team", message)
-        self.assertTrue(message.endswith("Nothing was changed."), message)
+        self.assertIn("Nothing was changed.", message)
         self.assert_in_alpha(self.task, self.child)
         self.task.refresh_from_db()
         self.assertEqual(self.task.assignee_id, self.leaver.id)
 
-    def test_the_way_out_stops_the_loop_it_does_not_hand_the_model_a_tool_to_use(self):
-        # The first paid run (2026-11-16): "reassign with `assign_task`" sent the model off looking up
-        # people (5 to 7 calls) and, 4 times in 6, proposing an assignment of its own choosing. The
-        # tool's way out tells it to stop and ask. (`update_task` has no `assignee` parameter either,
+    def test_the_refusal_is_a_hard_stop_that_ends_on_the_one_next_step(self):
+        # Paid runs of 2026-11-16. Run 1: "reassign with `assign_task`" sent the model off looking people
+        # up (5 to 7 calls) and, 4 times in 6, proposing an assignment of its own choosing. Run 2: a soft
+        # "do not look anything up" held in English (3/3) but not in Japanese (0/3): five calls, and once
+        # a proposed update with `assignee_id: ""` to unassign the task and get past the refusal. So the
+        # message says what is blocked, that the task stays, that nothing changed, and ENDS on the only
+        # next step (the last thing the model reads). (`update_task` has no `assignee` parameter either,
         # so the app's "send `assignee` with the move" would be a blind retry.)
         TaskMaster.objects.filter(pk=self.task.pk).update(assignee=self.leaver)
         with flag(True), self.assertRaises(ToolError) as caught:
             self.tool_move(self.task, self.beta)
         message = str(caught.exception)
         self.assertIn(
-            "Tell the user who is blocking this move and ask who should take the task over. "
-            "Do not pick an assignee yourself, do not propose a change, do not look anything up. "
-            "Nothing was changed.",
+            "so they would keep opening tasks that are no longer theirs to see. "
+            "The task stays where it is. Nothing was changed. ",
+            message,
+        )
+        self.assertTrue(
+            message.endswith(
+                "STOP: do not call any tool. Do not remove, clear or change the assignee yourself, "
+                "do not move the task again, do not look anything up. Your ONLY next step is to tell "
+                "the member, in the language they are writing in, who is blocking this move and ask "
+                "who should take the task over."
+            ),
             message,
         )
         for tool in ("assign_task", "manage_project_members", "get_team_members"):
@@ -228,19 +239,23 @@ class ToolSaysWhatTheMoveDidTests(MoveBase):
         # recorded, so a move back gives them back (MIP-1583), whatever the flag
         self.assertEqual(TaskNoteRoleRevoke.objects.filter(user=self.author).count(), 2)
 
-    def test_a_plain_sentence_the_model_can_read_says_it_too(self):
+    def test_a_sentence_the_model_reads_first_says_it_too(self):
         # The loop drops `__summary__` before the model sees the result, so the counters alone
-        # ("moved": {"notes_narrowed": 1}) were answered with just "Moved X to Archive" (the first
-        # paid run). `moved_notice` is a result field, in the member's words.
+        # ("moved": {"notes_narrowed": 1}) were answered with just "Moved X to Archive" (paid run 1), and
+        # a sentence at the end of the result was relayed in English but not in Japanese (run 2).
+        # `tell_the_member` is an imperative field in the member's words, and the FIRST key.
         self.create_task_note(self.author, self.task)
         with flag(True):
             out = self.tool_move(self.task, self.beta)
+        self.assertEqual(next(iter(out)), "tell_the_member")
         self.assertEqual(
-            out["moved_notice"],
-            "Tell the member: 1 task note was narrowed to Beta's members. Its author is not on "
-            "Beta, so they lost their Owner role on it (moving the task back to a project they "
-            "are on gives it back).",
+            out["tell_the_member"],
+            "1 task note was narrowed to Beta's members: its author is not on Beta, so they lost "
+            "their Owner role on it (moving the task back to a project they are on gives it back). "
+            "Say so in your answer, in the language the member writes in, after saying the task "
+            "moved.",
         )
+        self.assertNotIn("moved_notice", out)
 
     def test_the_notice_counts_people_and_says_both_in_plural(self):
         self.create_task_note(self.author, self.task)
@@ -251,23 +266,24 @@ class ToolSaysWhatTheMoveDidTests(MoveBase):
             out = self.tool_move(self.task, self.beta)  # the stranger is on the team, not on Beta
         self.assertEqual(out["moved"], {"notes_narrowed": 2, "reporters_outside_destination": 1})
         self.assertEqual(
-            out["moved_notice"],
-            "Tell the member: 2 task notes were narrowed to Beta's members. Their authors are not "
-            "on Beta, so they lost their Owner role on them (moving the task back to a project "
-            "they are on gives it back). 1 person who filed a moved task is not on Beta or its "
-            "team; they keep reading what they filed.",
+            out["tell_the_member"],
+            "2 task notes were narrowed to Beta's members: their authors are not on Beta, so they "
+            "lost their Owner role on them (moving the task back to a project they are on gives it "
+            "back). 1 person who filed a moved task is not on Beta or its team; they keep reading "
+            "what they filed. Say so in your answer, in the language the member writes in, after "
+            "saying the task moved.",
         )
 
     def test_the_notice_is_there_only_when_there_is_something_to_say(self):
         with flag(True):
             plain = self.tool_move(self.task, self.beta)
-        self.assertNotIn("moved_notice", plain)
+        self.assertNotIn("tell_the_member", plain)
         self.assertNotIn("moved", plain)
         task, _child = self.tree()
         self.create_task_note(self.author, task)
         with flag(False):
             off = self.tool_move(task, self.beta)
-        self.assertNotIn("moved_notice", off)  # flag off: not a byte more than before
+        self.assertNotIn("tell_the_member", off)  # flag off: not a byte more than before
 
     def test_the_notice_helper_says_nothing_for_nothing(self):
         from origin.services.task_project_move import move_notice  # noqa: PLC0415
@@ -427,7 +443,7 @@ class AppAndToolTwinTests(MoveBase):
         """The sentence without the ids of its own tree and without the way out (which differs on
         purpose: the PUT takes `assignee`, the tool does not)."""
         text = text.replace(child.display_id, "<child>").replace(task.display_id, "<task>")
-        return text.split(" Reassign them first")[0].split(" Tell the user")[0]
+        return text.split(" Reassign them first")[0].split(" The task stays where it is.")[0]
 
     def test_the_app_and_the_tool_refuse_the_same_moves_and_report_the_same_counts(self):
         for scenario in self.SCENARIOS:
@@ -450,7 +466,7 @@ class AppAndToolTwinTests(MoveBase):
                         self.shape(res.data["error"], app_task, app_child),
                         self.shape(refused, tool_task, tool_child),
                     )
-                    self.assertTrue(refused.endswith("Nothing was changed."))
+                    self.assertIn("Nothing was changed.", refused)
                     self.assert_in_alpha(app_task, tool_task)
                     continue
                 self.assertEqual(res.status_code, 200, res.data)
@@ -478,11 +494,12 @@ class MilestoneMoveKeepsItsResultTests(ToolBase):
     """`manage_milestone`'s move keeps the counters and the summary clauses it has (MIP-1583/1597);
     the plain-sentence field is `update_task`'s alone (MIP-1609)."""
 
-    def test_the_milestone_move_result_has_no_moved_notice(self):
+    def test_the_milestone_move_result_has_no_tell_the_member_field(self):
         m = self.roadmap_milestone()
         out = self.move_tool(m)
+        self.assertNotIn("tell_the_member", out)
+        self.assertNotIn("tell_the_member", out["moved"])
         self.assertNotIn("moved_notice", out)
-        self.assertNotIn("moved_notice", out["moved"])
         self.assertEqual(
             set(out["moved"]),
             {
