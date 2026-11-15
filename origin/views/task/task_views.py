@@ -31,7 +31,11 @@ from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
-from origin.services.task_attachment_manage import delete_attachment, next_attachment_id
+from origin.services.task_attachment_manage import (
+    add_attachment,
+    delete_attachment,
+    next_attachment_id,
+)
 from origin.services.task_cache import (
     get_cached_project_tasks,
     invalidate_for_task,
@@ -2299,7 +2303,9 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
             serializer = TaskAttachmentsSerializer(data=data)
             if serializer.is_valid():
-                instance = serializer.save()
+                # The file, then the row and the task's stamp in one transaction: teammates'
+                # caches learn of the new file as they do of a delete (MIP-1595).
+                instance = add_attachment(serializer)
 
                 # Echo the bytes back through the FileField's storage API.
                 # The previous `open("." + url.replace("/media/", "/uploads/"))`
@@ -2844,6 +2850,10 @@ class TaskCommentReactionView(AuthenticatedAPIView):
             {
                 **TaskCommentReactionFactSerializer(added.reaction).data,
                 **_reaction_broadcast_context(task.task_id, comment_id, request.user),
+                # The status code says it too (201 / 200), but the sockets handler's HTTP client
+                # returns the body of any 2xx alike: this is what it reads to announce a live toast
+                # for a NEW reaction only (MIP-1595). Additive; the row's own keys are unchanged.
+                "created": added.created,
             },
             status=status.HTTP_201_CREATED if added.created else status.HTTP_200_OK,
         )

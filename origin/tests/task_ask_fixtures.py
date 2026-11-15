@@ -39,6 +39,14 @@ class TaskWorld(AskRefWorld):
             team=team or project.team, project=project, attendee=user
         )
 
+    def remove_asker(self, project=None):
+        """Take the asker off the project as a MEMBER. A project's owner cannot be removed (and with
+        no member row they are still a reader: `can_access_task`, and the search ACL since MIP-1591),
+        so the project goes to `a_editor` first."""
+        project = project or self.project
+        ProjectMaster.objects.filter(pk=project.pk).update(owner=self.a_editor)
+        ProjectMembers.objects.filter(project=project, attendee=self.a_owner).delete()
+
     def private_project(self, owner=None, members=(), team=None, **kw):
         owner = owner or self.a_editor
         self._projects = getattr(self, "_projects", 0) + 1

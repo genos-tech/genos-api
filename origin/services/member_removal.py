@@ -136,17 +136,25 @@ def mark_search_acl_dirty(team_id, user_id) -> None:
     """Ask search to refresh the projects whose tasks the person is on.
 
     Their membership rows already mark the projects they WERE members of; this covers the
-    others: a project where they only appeared as assignee or reporter. Best-effort, like
-    every ACL mark."""
+    others: a project where they only appeared as assignee or reporter, or that they own
+    without a member row. Best-effort, like every ACL mark."""
+    from origin.models.project.prj_models import ProjectMaster
     from origin.models.task.task_models import TaskMaster
     from origin.search_engine.acl_dirty import mark_projects_dirty
 
-    ids = (
+    ids = set(
         TaskMaster.objects.filter(team_id=team_id, is_deleted=False)
         .filter(Q(assignee_id=user_id) | Q(reporter_id=user_id))
         .exclude(project_id__isnull=True)
         .values_list("project_id", flat=True)
         .distinct()
+    )
+    # And the projects they OWN: the owner is on a task's search ACL with no member row of their
+    # own (MIP-1591), so a project they own and are not listed on is not marked by the rows.
+    ids.update(
+        ProjectMaster.objects.filter(team_id=team_id, owner_id=user_id).values_list(
+            "project_id", flat=True
+        )
     )
     mark_projects_dirty(list(ids))
 

@@ -374,17 +374,19 @@ class CleanupTests(Base):
         self.assertIn(lonely.project_id, claim().project_ids)
 
     def test_a_removed_member_leaves_the_task_acl_but_a_current_one_stays(self):
-        # Neither is a project member of `lonely`: the assignee/reporter route is the only way in.
+        # Neither is a project member of `lonely`: the assignee/reporter route is the only way in
+        # for them. Its owner (no member row either) is on the ACL since MIP-1591, and stays.
         lonely = ProjectMaster.objects.create(
             team=self.team, project_name="Lonely", owner=self.owner, project_system_user=self.owner
         )
-        both = {str(self.viewer.id), str(self.editor.id)}
+        owner = str(self.owner.id)
+        both = {str(self.viewer.id), str(self.editor.id), owner}
         self.assertEqual(task_acl_user_ids(lonely.project_id, self.viewer.id, self.editor.id), both)
         self.auth(self.owner)
         self.remove_team(self.viewer)
         self.assertEqual(
             task_acl_user_ids(lonely.project_id, self.viewer.id, self.editor.id),
-            {str(self.editor.id)},
+            {str(self.editor.id), owner},
         )
 
     def test_the_team_owner_always_counts_as_on_the_team(self):

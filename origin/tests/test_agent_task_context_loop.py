@@ -86,6 +86,9 @@ class TaskLoopBase(ResumeBase):
         return self.model.system_instructions[0]
 
     def lose_access(self, task):
+        # As a MEMBER: a project's owner cannot be removed and still reads it with no member row
+        # (`can_access_task`, and the search ACL since MIP-1591), so the project goes to `other`.
+        ProjectMaster.objects.filter(pk=self.project.pk).update(owner=self.other)
         ProjectMembers.objects.filter(project=self.project, attendee=self.user).delete()
 
 

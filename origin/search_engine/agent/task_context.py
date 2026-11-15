@@ -304,14 +304,25 @@ def resume_object(t: TaskRead) -> dict[str, Any]:
     return {"task_id": t.task_id}
 
 
-def rebuild_block(kept: Any, *, team_id: str, user_id: str) -> str | None:
-    """The block for the leg resumed after an approval: the task read AGAIN, as the asker may read it now.
+def rebuild(kept: Any, *, team_id: str, user_id: str) -> tuple[str | None, list[str]]:
+    """`(block, dropped)` for the leg resumed after an approval: the task read AGAIN, as the asker may read it now.
 
-    None when it is gone or no longer theirs (no block, as for a message `ask_refs.rebuild_block` cannot read),
-    when the run kept none, and while the flag is off, so a rollback takes effect on a run already paused."""
+    No block when it is gone or no longer theirs (as for a message `ask_refs.rebuild` cannot read), when the run
+    kept none, and while the flag is off, so a rollback takes effect on a run already paused.
+
+    `dropped` is `["task"]` when the run HAD an object and it cannot be read now (MIP-1585): one kind for a task
+    that was deleted, one the person lost, and a milestone that stopped being theirs, so nothing is said about
+    which. Empty for a run with no object, and while the flag is off."""
     from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
 
     if not parity_on() or not isinstance(kept, dict):
-        return None
+        return None, []
     read = read_task(kept.get("task_id"), team_id, user_id)
-    return build_block(read) if read is not None else None
+    if read is None:
+        return None, ["task"]
+    return build_block(read), []
+
+
+def rebuild_block(kept: Any, *, team_id: str, user_id: str) -> str | None:
+    """The block for the leg resumed after an approval (`rebuild` without what it dropped)."""
+    return rebuild(kept, team_id=team_id, user_id=user_id)[0]

@@ -259,7 +259,8 @@ def set_mark(
     source: str | None = None,
 ) -> dict[str, Any]:
     """Mark a task `not_important` or `priority_is_right` (and `on_it` where the caller allows
-    it: the REST door, MIP-1211), or `clear` the mark. Only a task the caller can open (the same
+    it: the REST door, MIP-1211, and the MCP tool while `AGENT_PARITY_TOOLS` is on, MIP-1588), or `clear`
+    the mark. Only a task the caller can open (the same
     words as one that does not exist, so nothing is given away). Answers with the mark that was
     there before (`previous`), so an Undo can put it back. The task's state signature and the
     source of the answer are kept with it, so a report can tell "until the task changes"."""
