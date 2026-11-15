@@ -21,6 +21,7 @@ from origin.services.task_project_move import (
     collect_descendant_task_ids,
     relocate_task_satellites,
     relocate_tasks,
+    reporters_outside_destination,
 )
 from origin.views.utils.scope_guards import is_project_member
 
@@ -320,9 +321,16 @@ def project_move_error(task, project_id, team_id, user_id, *, detaching=False) -
     return None
 
 
-def move_task_to_project(task, project_id) -> None:
+def move_task_to_project(task, project_id, *, report: dict | None = None) -> None:
     """Move `task`, its sub-tree and the rows keyed to it into `project_id`.
-    Validate with `project_move_error` first.
+    Validate with `project_move_error` first (and `task_move_assignee_problem`).
+
+    `report`, when given, is filled with what the move did that the caller tells the person, as
+    `milestone_manage.update_milestone` fills it for a milestone (MIP-1609): `notes_narrowed`, the
+    task notes (of the task and of its sub-tasks) whose author lost their Owner role because they
+    are not on the destination (recorded, so a move back writes it again, MIP-1583), and
+    `reporters_outside_destination`, how many people who filed a live task that moved are not on
+    the destination or its team (MIP-1597). The PUT counts the same (`TaskMasterView.put`).
 
     What `TaskMasterView.put` does for a changed `project`: the row's team
     follows its project, its number is re-claimed in the destination, the
@@ -366,13 +374,17 @@ def move_task_to_project(task, project_id) -> None:
                 task.save(update_fields=["parent_task_id", "root_task_id", "ts_updated_at"])
                 cascade_tree_position_to_subtasks(task)
 
-        relocate_tasks(
-            collect_descendant_task_ids(task.task_id),
-            project_id=task.project_id,
-            team_id=task.team_id,
+        descendants = collect_descendant_task_ids(task.task_id)
+        narrowed = relocate_tasks(descendants, project_id=task.project_id, team_id=task.team_id)
+        narrowed += relocate_task_satellites(
+            {task.task_id}, project_id=task.project_id, team_id=task.team_id
         )
-        relocate_task_satellites({task.task_id}, project_id=task.project_id, team_id=task.team_id)
         task.refresh_from_db()
+        if report is not None:
+            report["notes_narrowed"] = narrowed
+            report["reporters_outside_destination"] = reporters_outside_destination(
+                {task.task_id} | descendants, destination
+            )
 
     invalidate_for_task(task)
     invalidate_project_tasks_cache(old_team_id, old_project_id)

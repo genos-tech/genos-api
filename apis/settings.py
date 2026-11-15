@@ -2170,6 +2170,23 @@ SEARCH_ENGINE["AGENT_PARITY_FOLLOWUPS"] = (
     os.environ.get("AGENT_PARITY_FOLLOWUPS", "true").lower() == "true"
 )
 
+# MIP-1609: `update_task`'s own project move behaves like the milestone move (MIP-1583) and the app's task PUT
+# (MIP-1597). A THIRD flag: `AGENT_PARITY_TOOLS` and `AGENT_PARITY_FOLLOWUPS` are both on in production and can no
+# longer protect a new model-visible change. Model-visible (a tool result and a new refusal), DEFAULT OFF until the
+# grouped run (arm `task-move-parity`). ON = a move whose task (or a sub-task that goes with it) is assigned to
+# someone on neither the destination project nor its team (someone who left the team) is refused before anything is
+# written, in the milestone move's sentence ("This task can't move to <project>: the assignee of <display id> ... The
+# task stays where it is. Nothing was changed. STOP: do not call any tool. Do not remove, clear or change the assignee
+# yourself ... Your ONLY next step is to tell the member ... who is blocking this move and ask who should take the task
+# over."); a move that goes through adds `moved: {notes_narrowed, reporters_outside_destination}` (each only when not
+# zero), an instruction as the FIRST key, `tell_the_member` (the in-app loop does not show the model `__summary__`), and
+# the same clauses as the milestone move's summary. OFF = byte-identical results to before (no declaration changes either
+# way). The Owner rows a move ends on task notes are recorded and restored whatever the flag (MIP-1583); the app's
+# PUT has refused and reported since MIP-1597, whatever the flag. Rollback: unset or `false` (nothing to migrate).
+SEARCH_ENGINE["AGENT_TASK_MOVE_PARITY"] = (
+    os.environ.get("AGENT_TASK_MOVE_PARITY", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (
     os.environ.get("CLAUDE_PROMPT_CACHE", "true").lower() == "true"
 )

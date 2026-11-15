@@ -145,7 +145,13 @@ def shown_refs(refs: list[str]) -> str:
     return ", ".join(refs[:5]) + (f" and {len(refs) - 5} more" if len(refs) > 5 else "")
 
 
-def task_move_assignee_problem(task, destination, *, assignee=None) -> str | None:
+#: What the app's task PUT says to do instead: it takes an `assignee` in the same save.
+PUT_WAY_OUT = "Reassign them first (or send `assignee` with the move)."
+
+
+def task_move_assignee_problem(
+    task, destination, *, assignee=None, way_out: str = PUT_WAY_OUT
+) -> str | None:
     """Why `task` may not move to `destination` because of who is assigned, or None (MIP-1597).
 
     The single-task PUT's side of `milestone_manage.move_assignee_problem` (MIP-1583), by the same
@@ -155,7 +161,8 @@ def task_move_assignee_problem(task, destination, *, assignee=None) -> str | Non
     (a save that sends none, or a null, keeps the stored one: `task.assignee_id`). A deleted
     sub-task moves too and is not judged. The caller must have checked that the task is going to
     another project, and that the caller is on the destination (a stranger gets a not-found
-    first).
+    first). `way_out` is what to do instead: the PUT's by default; `update_task` takes no assignee,
+    so it names the tool that reassigns (MIP-1609).
     """
     moving = {task.task_id} | collect_descendant_task_ids(task.task_id)
     people = moving_assignees(moving - {task.task_id})
@@ -173,7 +180,71 @@ def task_move_assignee_problem(task, destination, *, assignee=None) -> str | Non
         "task",
         destination,
         [f"the assignee of {shown_refs(refs)}"],
-        way_out="Reassign them first (or send `assignee` with the move).",
+        way_out=way_out,
+    )
+
+
+def move_report_said(report: dict) -> dict[str, int]:
+    """What a tool's result says of a move's `report` (`notes_narrowed`,
+    `reporters_outside_destination`): only the counts that are not zero, so a move that narrowed
+    nothing answers what it always did (MIP-1583, MIP-1597; the milestone and the task tools)."""
+    return {
+        key: report[key]
+        for key in ("notes_narrowed", "reporters_outside_destination")
+        if report.get(key)
+    }
+
+
+def move_notice(report: dict, destination_name: str) -> str:
+    """The same two counts as `move_report_said`, as an instruction to say them to the person who asked
+    for the move, or "" when both are zero (MIP-1609, `update_task` only: the milestone move keeps
+    its result).
+
+    The in-app loop hands the model a result WITHOUT its `__summary__`, so a bare
+    `"moved": {"notes_narrowed": 1}` was answered with "Moved X to Archive" (paid run 1), and a
+    sentence at the end of the result was relayed in English but not in Japanese (run 2). The caller
+    puts this in the field `tell_the_member`, first in the result, and the sentence ends on what to
+    do with it."""
+    narrowed = report.get("notes_narrowed", 0)
+    reporters = report.get("reporters_outside_destination", 0)
+    parts = []
+    if narrowed:
+        one = narrowed == 1
+        parts.append(
+            f"{narrowed} task {'note was' if one else 'notes were'} narrowed to "
+            f"{destination_name}'s members: {'its author is' if one else 'their authors are'} not "
+            f"on {destination_name}, so they lost their Owner role on {'it' if one else 'them'} "
+            "(moving the task back to a project they are on gives it back)."
+        )
+    if reporters:
+        one = reporters == 1
+        parts.append(
+            f"{reporters} {'person who filed' if one else 'people who filed'} a moved task "
+            f"{'is' if one else 'are'} not on {destination_name} or its team; they keep reading "
+            "what they filed."
+        )
+    if not parts:
+        return ""
+    return (
+        f"{' '.join(parts)} Say so in your answer, in the language the member writes in, after "
+        "saying the task moved."
+    )
+
+
+def move_report_clauses(report: dict, destination_name: str) -> str:
+    """The end of a move tool's `__summary__` for the same counts, "" when both are zero."""
+    narrowed = report.get("notes_narrowed", 0)
+    reporters = report.get("reporters_outside_destination", 0)
+    return (
+        f"; {narrowed} task note(s) lost their author's Owner role, as the author is not "
+        f"on {destination_name}"
+        if narrowed
+        else ""
+    ) + (
+        f"; {reporters} reporter(s) of moved tasks are not on {destination_name} "
+        "and keep reading what they filed"
+        if reporters
+        else ""
     )
 
 

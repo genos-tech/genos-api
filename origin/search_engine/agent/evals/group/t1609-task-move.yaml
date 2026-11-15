@@ -1,0 +1,158 @@
+# MIP-1609 (flag AGENT_TASK_MOVE_PARITY, arm `task-move-parity`): `update_task`'s own project move behaves like the milestone
+# move (MIP-1583) and the app's task PUT (MIP-1597). With the flag on, a move whose task is assigned to someone on neither the
+# destination project nor its team (here: someone who LEFT the team and whose open task was not unassigned) is refused before
+# anything is written ("This task can't move to Archive: the assignee of <display id> is not on that project or its team ...
+# The task stays where it is. Nothing was changed. STOP: do not call any tool. Do not remove, clear or change the assignee
+# yourself, do not move the task again, do not look anything up. Your ONLY next step is to tell the member, in the language
+# they are writing in, who is blocking this move and ask who should take the task over."), and a move that goes through says the task notes it
+# narrowed (`moved.notes_narrowed` and an instruction as the first key, `tell_the_member`; the in-app loop does not show the model `__summary__`).
+#
+# All `kind: resume` (see evals/group/resume_runner.py for the schema): like the milestone move, the refusal comes from the tool
+# AFTER the approval, so a behaviour case (which pauses on the proposal) could never show it to the model. The first leg is
+# scripted (it proposes the move), the member approves, the REAL tool runs in the case's own team, and the leg after the
+# decision uses the model under test. This file uses the runner's MIP-1609 keys: `destination` (a second project of the team,
+# the asker its only member; `{destination_id}`), `assignee: gone` (someone who left the team) and `note_by: other` (a task note
+# by the colleague, who is on the team but not on the destination).
+#
+# Per language:
+#   refused        positive: the assignee left the team; the tool refuses. The model must say so and ask (who should take the task
+#                  over), proposing NO write: not the same move again, and not an assignment or a member change to someone it picked itself, and no lookups.
+#   notes-narrowed positive: a normal move goes through and the result says one task note lost its author's Owner role
+#                  (`"moved": {"notes_narrowed": 1}`; the in-app loop sends the result's fields, not its `__summary__`); the model
+#                  says the task moved and mentions the note.
+#   plain-move     control (arm0 and the arm, tagged `task-move-parity`): a move with nobody outside and no note is unchanged; the
+#                  model reports the move and proposes nothing more.
+# `polarity` is read by the case-shape test (`test_agent_eval_task_move_cases`): `pos` = the prompt check fails with the flag off
+# and passes with it on; `neg` = the same in both. The answer checks are words, not a judge: read the `refused` answers by hand.
+
+- id: t1609.refused.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t1609]
+  fixture: false
+  requires_arm: task-move-parity
+  polarity: pos
+  expect_baseline: fail
+  destination: {name: Archive}
+  tasks:
+    - {key: contract, title: "Vendor contract review", assignee: gone}
+  query: 'Move the task "Vendor contract review" to the Archive project.'
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:contract}", project_id: "{destination_id}"}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["is not on that project or its team", "Nothing was changed", "Do not remove, clear or change the assignee yourself"]
+    no_pending: true
+    answer_contains_any: ["assign", "who should", "take over"]
+    max_calls: 4
+
+- id: t1609.refused.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t1609]
+  fixture: false
+  requires_arm: task-move-parity
+  polarity: pos
+  expect_baseline: fail
+  destination: {name: アーカイブ}
+  tasks:
+    - {key: contract, title: "ベンダー契約のレビュー", assignee: gone}
+  query: タスク「ベンダー契約のレビュー」をアーカイブプロジェクトに移動してください。
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:contract}", project_id: "{destination_id}"}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ["is not on that project or its team", "Nothing was changed", "Do not remove, clear or change the assignee yourself"]
+    no_pending: true
+    answer_contains_any: ["担当", "割り当て", "割当", "引き継"]
+    max_calls: 4
+
+- id: t1609.notes-narrowed.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t1609]
+  fixture: false
+  requires_arm: task-move-parity
+  polarity: pos
+  expect_baseline: fail
+  destination: {name: Archive}
+  tasks:
+    - {key: contract, title: "Vendor contract review", note_by: other}
+  query: 'Move the task "Vendor contract review" to the Archive project.'
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:contract}", project_id: "{destination_id}"}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '[result update_task {"tell_the_member": "1 task note was narrowed']
+    resumed_prompt_excludes: ["Nothing was changed"]
+    no_pending: true
+    answer_contains_any: ["note"]
+    max_calls: 4
+
+- id: t1609.notes-narrowed.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t1609]
+  fixture: false
+  requires_arm: task-move-parity
+  polarity: pos
+  expect_baseline: fail
+  destination: {name: アーカイブ}
+  tasks:
+    - {key: contract, title: "ベンダー契約のレビュー", note_by: other}
+  query: タスク「ベンダー契約のレビュー」をアーカイブプロジェクトに移動してください。
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:contract}", project_id: "{destination_id}"}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ['"moved": {"notes_narrowed": 1}', '[result update_task {"tell_the_member": "1 task note was narrowed']
+    resumed_prompt_excludes: ["Nothing was changed"]
+    no_pending: true
+    answer_contains_any: ["ノート", "メモ", "注記", "注釈"]
+    max_calls: 4
+
+- id: t1609.plain-move.en
+  kind: resume
+  lang: en
+  tags: [eval-group, t1609, task-move-parity]
+  fixture: false
+  polarity: neg
+  destination: {name: Archive}
+  tasks:
+    - {key: contract, title: "Vendor contract review"}
+  query: 'Move the task "Vendor contract review" to the Archive project.'
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:contract}", project_id: "{destination_id}"}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ['"changed_fields": ["project"]']
+    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "tell_the_member", "Nothing was changed"]
+    no_pending: true
+    answer_contains_any: ["Archive", "moved"]
+    max_calls: 4
+
+- id: t1609.plain-move.ja
+  kind: resume
+  lang: ja
+  tags: [eval-group, t1609, task-move-parity]
+  fixture: false
+  polarity: neg
+  destination: {name: アーカイブ}
+  tasks:
+    - {key: contract, title: "ベンダー契約のレビュー"}
+  query: タスク「ベンダー契約のレビュー」をアーカイブプロジェクトに移動してください。
+  proposal:
+    tool: update_task
+    args: {task_id: "{task:contract}", project_id: "{destination_id}"}
+  decision: approve
+  expect:
+    resumed_prompt_contains: ['"changed_fields": ["project"]']
+    resumed_prompt_excludes: ["notes_narrowed", "reporters_outside_destination", "tell_the_member", "Nothing was changed"]
+    no_pending: true
+    answer_contains_any: ["アーカイブ", "移動"]
+    max_calls: 4

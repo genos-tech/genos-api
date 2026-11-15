@@ -149,6 +149,8 @@ class AllOnArmTests(SimpleTestCase):
             "AGENT_BODY_ON_USER_MODEL",
             "AGENT_PARITY_TOOLS",
             "AGENT_PARITY_FOLLOWUPS",
+            # MIP-1609 (default off, tool results only: no declaration or prompt moves)
+            "AGENT_TASK_MOVE_PARITY",
         }
         self.assertLessEqual(expected, set(ALL_ON))
 
