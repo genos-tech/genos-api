@@ -121,15 +121,20 @@ def replace_tokens(query: str, slots: Sequence[tuple[str, str]]) -> str:
     of the query for each distinct token (a marker array, not a scan of the spans found so far)."""
     if not slots or not query:
         return query
-    # One entry per token text (the same label sent twice, or sent and trimmed to itself), the first holder winning, so a
-    # request that repeats a label does not repeat the scan.
-    distinct: dict[str, str] = {}
+    # One entry per token text, holding the holders of the mentions that share it (two tasks with the same title, a label
+    # sent twice or sent and trimmed to itself): the first occurrence goes to the first holder, the next to the second,
+    # as the picker pairs a token with a mention, and any further occurrence to the last. So a request that repeats a
+    # label does not repeat the scan.
+    holders: dict[str, list[str]] = {}
     for token, holder in slots:
-        distinct.setdefault(token, holder)
+        held = holders.setdefault(token, [])
+        if holder not in held:
+            held.append(holder)
     claimed = bytearray(len(query))
     spans: list[tuple[int, int, str]] = []
-    for token, holder in sorted(distinct.items(), key=lambda s: -len(s[0])):
+    for token, held in sorted(holders.items(), key=lambda s: -len(s[0])):
         start = 0
+        nth = 0
         while (idx := query.find(token, start)) != -1:
             end = idx + len(token)
             start = idx + 1
@@ -140,7 +145,8 @@ def replace_tokens(query: str, slots: Sequence[tuple[str, str]]) -> str:
             if claimed.find(1, idx, end) != -1:
                 continue
             claimed[idx:end] = b"\x01" * (end - idx)
-            spans.append((idx, end, holder))
+            spans.append((idx, end, held[min(nth, len(held) - 1)]))
+            nth += 1
     if not spans:
         return query
     out: list[str] = []

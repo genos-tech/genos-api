@@ -2195,6 +2195,14 @@ def _resumed_context(run: AgentRun) -> tuple[str | None, list[str]]:
         return "\n\n".join(parts) or None, dropped
     except Exception:  # noqa: BLE001 — see the docstring
         log.exception("Could not rebuild the system prompt context of run %s", run.run_id)
+        # The context is lost whole, so say what the paused run held of what a person pointed at (kinds only).
+        if parity_on():
+            refs = kept.get("refs")
+            held = {
+                "message": isinstance(refs, dict) and bool(refs.get("messages")),
+                "task": isinstance(kept.get("object"), dict),
+            }
+            dropped += [kind for kind, was_held in held.items() if was_held and kind not in dropped]
         return None, dropped
 
 

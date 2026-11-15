@@ -127,6 +127,13 @@ class ReplaceTokensTests(SimpleTestCase):
         self.assertNotIn("#", out)
         self.assertLess(time.monotonic() - started, 2.0)
 
+    def test_two_mentions_with_the_same_label_are_paired_in_order_as_the_picker_pairs_them(self):
+        slots = [("#Fix login", "[task:1]"), ("#Fix login", "[task:2]"), ("#Fix login", "[task:1]")]
+        self.assertEqual(
+            replace_tokens("compare #Fix login with #Fix login and #Fix login", slots),
+            "compare [task:1] with [task:2] and [task:2]",
+        )
+
     def test_every_occurrence_of_a_hostile_label_goes(self):
         slots = [(f"#{HOSTILE}", "[task:1]")]
         out = replace_tokens(f"#{HOSTILE} then again #{HOSTILE}!", slots)
@@ -408,6 +415,24 @@ class WhatAResumedRunMayReportTests(SimpleTestCase):
         self.assertEqual(
             agent_views.DROPPED_REFERENCE_KINDS, ("message", "selection", "selected_from", "task")
         )
+
+    def test_a_rebuild_that_fails_says_what_the_paused_run_held(self):
+        from origin.search_engine import agent_views  # noqa: PLC0415
+
+        kept = {"dropped": ["selection"], "refs": {"messages": ["x"]}, "object": {"task_id": 1}}
+        with (
+            flag(True),
+            mock.patch.object(agent_views.task_context, "rebuild", side_effect=RuntimeError("db")),
+        ):
+            extra, dropped = agent_views._resumed_context(self.Run(kept))
+            self.assertEqual((extra, dropped), (None, ["selection", "message", "task"]))
+            plain = {"refs": {"messages": []}, "object": None, "rest": "R"}
+            self.assertEqual(agent_views._resumed_context(self.Run(plain)), (None, []))
+        with (
+            flag(False),
+            mock.patch.object(agent_views.task_context, "rebuild", side_effect=RuntimeError("db")),
+        ):
+            self.assertEqual(agent_views._resumed_context(self.Run(kept)), (None, []))
 
     def test_nothing_while_the_flag_is_off_and_nothing_for_a_row_that_kept_nothing(self):
         from origin.search_engine import agent_views  # noqa: PLC0415

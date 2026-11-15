@@ -264,6 +264,17 @@ class AHostileTaskTitleTests(TokenBase):
         self.assertNotIn(f"[task:{task.task_id}] → ", seen)
         self.assertIn(f"task_id: {task.task_id}", seen)
 
+    def test_two_tasks_with_the_same_title_are_each_pointed_at_in_order(self):
+        first, second = self.make_task("Fix login"), self.make_task("Fix login")
+        self.post(
+            query="compare #Fix login with #Fix login",
+            mentions=[self.task_mention(first), self.task_mention(second)],
+        )
+        (seen,) = self.inputs
+        self.assertIn(f"compare [task:{first.task_id}] with [task:{second.task_id}]", seen)
+        self.assertIn(f"  - [task:{first.task_id}] → ", seen)
+        self.assertIn(f"  - [task:{second.task_id}] → ", seen)
+
     def test_a_person_whose_username_is_hostile_is_named_by_id_alone(self):
         hostile = self.hostile_sender()
         TeamMembers.objects.create(team=self.team, attendee=hostile)
