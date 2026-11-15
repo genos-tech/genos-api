@@ -30,7 +30,10 @@ from django.conf import settings
 
 from origin.models.chat.unified_models import ActivityType, ChannelKind
 from origin.models.common.notification_models import EmailNotificationEvent
-from origin.services.activity_minimal_card import minimal_card_ids_failing_closed
+from origin.services.activity_minimal_card import (
+    minimal_card_ids_failing_closed,
+    task_links_failing_open,
+)
 from origin.services.email_gating import should_email
 from origin.services.webpush_dispatch import (
     _chat_url,
@@ -48,10 +51,11 @@ def _enabled() -> bool:
     return bool(getattr(settings, "EMAIL_NOTIFICATIONS_ENABLED", False))
 
 
-def _email_spec(act, *, minimal: bool = False) -> dict | None:
+def _email_spec(act, *, minimal: bool = False, task_link: str | None = None) -> dict | None:
     """Map an Activity to its email (category, title, body, url).
 
-    `minimal`: the recipient cannot open the task this @mention is in (`activity_minimal_card`).
+    `minimal`: the recipient cannot open the task or note this @mention is in, `task_link`: they
+    can open the task but not the chat its comment sits in (`activity_minimal_card`).
     Reuses `_push_spec` wholesale, plus the one branch push deliberately
     lacks: `ActivityType.TASK_ASSIGN`. Nothing PRODUCES task_assign rows
     yet (`create_self_assign_activity` deliberately emits MENTION so the
@@ -71,7 +75,7 @@ def _email_spec(act, *, minimal: bool = False) -> dict | None:
             "body": (act.meta or {}).get("displayId", ""),
             "url": _task_url(act.meta),
         }
-    return _push_spec(act, minimal=minimal)
+    return _push_spec(act, minimal=minimal, task_link=task_link)
 
 
 def enqueue_email_for_activities(activities) -> None:
@@ -79,10 +83,11 @@ def enqueue_email_for_activities(activities) -> None:
     if not _enabled() or not activities:
         return
     minimal = minimal_card_ids_failing_closed(activities)
+    links = task_links_failing_open(activities, skip=minimal)
     rows = []
     for act in activities:
         try:
-            spec = _email_spec(act, minimal=act.id in minimal)
+            spec = _email_spec(act, minimal=act.id in minimal, task_link=links.get(act.id))
             if spec is None:
                 continue
             recipient_id = str(act.recipient_id)
