@@ -654,3 +654,86 @@ class TaskReaderPairsAreCanAccessTask(Cards):
                     (person.username, task.title),
                 )
         self.assertEqual({t for _, t in got if t == 999_999}, set())
+
+    def test_it_equals_can_access_task_for_people_who_left_the_team(self):
+        """MIP-1592 narrowed `can_access_task` for an assignee or reporter who is no longer on the
+        task's team; the pair rule, which the card, the feed and the comment rows ask, must say
+        the same (MIP-1599 re-checks it with the merged rule)."""
+        from origin.models.common.team_models import TeamMaster
+
+        def person(name):
+            u = User.objects.create_user(
+                username=name, email=f"{name}@m1599.test", password="pass12345"
+            )
+            TeamMembers.objects.create(team=self.team, attendee=u)
+            return u
+
+        gone_assignee, gone_reporter, gone_owner, guest, solo = (
+            person(n) for n in ("gone_a", "gone_r", "gone_o", "guest", "solo")
+        )
+        other_owner = User.objects.create_user(
+            username="oo", email="oo@m1599.test", password="pass12345"
+        )
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="o@m1599.test", owner=other_owner
+        )
+        owned_by_gone = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Gone's",
+            code="GON",
+            owner=gone_owner,
+            project_system_user=gone_owner,
+        )
+
+        def task(**kw):
+            return TaskMaster.objects.create(
+                team=kw.pop("team", self.team),
+                project=kw.pop("project", self.project),
+                title="T",
+                status="WIP",
+                **kw,
+            )
+
+        tasks = [
+            task(assignee=gone_assignee, reporter=self.user),
+            task(assignee=self.user, reporter=gone_reporter),
+            task(assignee=self.user, reporter=self.user, project=owned_by_gone),
+            task(assignee=gone_assignee, reporter=gone_reporter, project=None),
+            task(assignee=self.user, reporter=solo, project=None),
+            task(assignee=guest, reporter=self.user),
+            task(assignee=gone_assignee, team=None),
+            task(assignee=gone_assignee, team=other_team),
+            task(assignee=gone_assignee, reporter=self.user, is_deleted=True),
+        ]
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=guest)
+        TeamMembers.objects.filter(attendee=guest).update(is_deleted=True)  # a guest: no team row
+        # the ones who left: the team row soft-deleted, the project rows gone
+        for u in (gone_assignee, gone_reporter, gone_owner):
+            TeamMembers.objects.filter(attendee=u).update(is_deleted=True)
+            ProjectMembers.objects.filter(attendee=u).delete()
+        # the team's owner with no member row of their own
+        TeamMembers.objects.filter(attendee=self.user).delete()
+        people = [
+            self.user,
+            self.colleague,
+            gone_assignee,
+            gone_reporter,
+            gone_owner,
+            guest,
+            solo,
+            self.member,
+        ]
+
+        got = task_reader_pairs([p.id for p in people], [t.task_id for t in tasks])
+
+        for who in people:
+            for t in tasks:
+                self.assertEqual(
+                    (str(who.id), t.task_id) in got,
+                    can_access_task(t.task_id, who.id),
+                    (who.username, t.task_id, t.project_id, t.team_id, t.is_deleted),
+                )
+        # and the rule is not vacuous: someone who left is refused a task they hold
+        self.assertFalse(can_access_task(tasks[0].task_id, gone_assignee.id))
+        self.assertTrue(can_access_task(tasks[5].task_id, guest.id))
+        self.assertTrue(can_access_task(tasks[2].task_id, gone_owner.id))
