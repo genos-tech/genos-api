@@ -145,7 +145,16 @@ class ByIdTests(DeletedTaskBase):
             self.authenticate(person)
             for name, call in self.calls().items():
                 with self.subTest(f"{name} as {who}"):
-                    self.assertEqual(_answer(call(gone.task_id)), _answer(call(MISSING)))
+                    call(
+                        MISSING
+                    )  # warm the per-request caches, so neither count carries the cold start
+                    with CaptureQueriesContext(connection) as gone_queries:
+                        gone_answer = _answer(call(gone.task_id))
+                    with CaptureQueriesContext(connection) as missing_queries:
+                        missing_answer = _answer(call(MISSING))
+                    self.assertEqual(gone_answer, missing_answer)
+                    # The refusal costs what the lookup of a missing id costs, give or take the guard's one query.
+                    self.assertLessEqual(len(gone_queries), len(missing_queries) + 2)
 
     def test_the_same_endpoints_still_read_a_task_of_a_live_project(self):
         ProjectMaster.objects.filter(pk=self.project.pk).update(is_deleted=False)
