@@ -690,6 +690,12 @@ class MilestoneView(AuthenticatedAPIView):
             # How many task notes lost their author's Owner role because the author is not on the
             # destination (MIP-1583). It is not silent, and a move back writes the roles again.
             response_data["notesNarrowed"] = move_report.get("notes_narrowed", 0)
+            # How many people who filed a task that moved are not on the destination or its team
+            # (MIP-1597). Not refused (a reporter is who filed it, not who works it): they keep
+            # reading what they filed, and the person who moved it can tell them.
+            response_data["reportersOutsideDestination"] = move_report.get(
+                "reporters_outside_destination", 0
+            )
         if newly_mentioned or removed_mentioned:
             response_data["newly_mentioned_user_ids"] = newly_mentioned
             response_data["all_mentioned_user_ids"] = all_mentioned

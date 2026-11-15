@@ -89,7 +89,7 @@ from origin.services.task_milestone_conversion import (
     convert_milestone_to_task,
     convert_task_to_milestone,
 )
-from origin.services.task_project_move import milestone_subtree_task_ids
+from origin.services.task_project_move import milestone_move_task_count
 from origin.views.utils.scope_guards import can_access_task, is_project_member
 
 _TITLE_MAX = MilestoneMaster._meta.get_field("title").max_length
@@ -514,10 +514,8 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         changed.insert(0, "project")
         # The tasks that go with it that a person still sees (a deleted one moves too, silently):
         # not the milestone's own row, which is the milestone.
-        moved_tasks = TaskMaster.objects.filter(
-            task_id__in=milestone_subtree_task_ids(milestone) - {milestone.task_id},
-            is_deleted=False,
-        ).count()
+        # A task the app deleted keeps its row with the status "Deleted": not counted either.
+        moved_tasks = milestone_move_task_count(milestone)
 
     if not changed:
         payload = _milestone_payload(milestone.milestone_id)

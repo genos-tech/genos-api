@@ -75,6 +75,21 @@ def milestone_subtree_task_ids(milestone) -> set:
     return {int(task_id) for task_id in ids if task_id is not None}
 
 
+def live_tasks(task_ids):
+    """The tasks among `task_ids` a person still sees: not soft-deleted, and not the status
+    "Deleted" the app gives a task it deletes (the row stays). What the move and convert answers
+    count and judge (MIP-1583, MIP-1597), as `subTasksKept` does."""
+    return TaskMaster.objects.filter(task_id__in=task_ids, is_deleted=False).exclude(
+        status="Deleted"
+    )
+
+
+def milestone_move_task_count(milestone) -> int:
+    """How many tasks go with a moving milestone that a person still sees: not its own row (that
+    is the milestone) and not a deleted one (it moves too, silently)."""
+    return live_tasks(milestone_subtree_task_ids(milestone) - {milestone.task_id}).count()
+
+
 def relocate_tasks(
     task_ids,
     *,

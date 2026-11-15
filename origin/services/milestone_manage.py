@@ -41,9 +41,14 @@ from origin.services.milestone_service import (
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_project_move import (
+    assignee_problem_sentence,
     collect_descendant_task_ids,
     milestone_subtree_task_ids,
+    moving_assignees,
+    people_outside,
     relocate_tasks,
+    reporters_outside_destination,
+    shown_refs,
 )
 from origin.services.task_reparent import resolve_root_task_id
 from origin.signals.task_signals import update_tasks_recorded
@@ -111,11 +116,10 @@ def move_assignee_problem(
 
     Judged: the milestone's assignees as they will be after this save (`assignee_ids` when the save
     sends them, else the stored ones), and the assignee of every task that moves with it that a
-    person still sees (a deleted one moves too, silently, and is not judged). The reporter is not.
+    person still sees (a deleted one moves too, silently, and is not judged). The reporter is not
+    judged: a move reports them instead (`reporters_outside_destination`, MIP-1597).
     The caller must have checked that the milestone is going to another project.
     """
-    from origin.services.task_collaborators import may_name_person  # noqa: PLC0415
-
     if assignee_ids is UNSET:
         milestone_people = {
             str(uid)
@@ -125,24 +129,12 @@ def move_assignee_problem(
         }
     else:
         milestone_people = {str(uid) for uid in assignee_ids or [] if uid not in (None, "")}
-    members = milestone_subtree_task_ids(milestone) - {milestone.task_id}
-    task_people: dict[str, list[str]] = {}
-    for task in (
-        TaskMaster.objects.filter(task_id__in=members, is_deleted=False, assignee__isnull=False)
-        .exclude(status="Deleted")
-        .select_related("project")
-        .order_by("task_id")
-    ):
-        task_people.setdefault(str(task.assignee_id), []).append(
-            task.display_id or str(task.task_id)
-        )
+    task_people = moving_assignees(milestone_subtree_task_ids(milestone) - {milestone.task_id})
 
-    verdicts: dict[str, bool] = {}
-    for person in milestone_people | set(task_people):
-        verdicts[person] = may_name_person(destination, person)
-    on_milestone = sorted(p for p in milestone_people if not verdicts[p])
+    outside = people_outside(destination, milestone_people | set(task_people))
+    on_milestone = sorted(milestone_people & outside)
     on_tasks = sorted(
-        {ref for person, refs in task_people.items() if not verdicts[person] for ref in refs}
+        {ref for person, refs in task_people.items() if person in outside for ref in refs}
     )
     if not on_milestone and not on_tasks:
         return None
@@ -150,15 +142,12 @@ def move_assignee_problem(
     if on_milestone:
         parts.append(f"{len(on_milestone)} of the milestone's assignees")
     if on_tasks:
-        shown = ", ".join(on_tasks[:5]) + (
-            f" and {len(on_tasks) - 5} more" if len(on_tasks) > 5 else ""
-        )
-        parts.append(f"the assignee of {shown}")
-    return (
-        f"This milestone can't move to {destination.project_name}: {' and '.join(parts)} "
-        "is not on that project or its team, so they would keep opening tasks that are no longer "
-        "theirs to see. Reassign them first (or send `assignee_ids` with the move). "
-        "Nothing was changed."
+        parts.append(f"the assignee of {shown_refs(on_tasks)}")
+    return assignee_problem_sentence(
+        "milestone",
+        destination,
+        parts,
+        way_out="Reassign them first (or send `assignee_ids` with the move).",
     )
 
 
@@ -200,7 +189,10 @@ def update_milestone(
 
     `report`, when given, is filled with what a move did that the caller tells the person:
     `notes_narrowed`, the task notes whose author lost their Owner role because they are not on the
-    destination (MIP-1583; recorded, so a move back writes it again).
+    destination (MIP-1583; recorded, so a move back writes it again), and
+    `reporters_outside_destination`, how many people who filed a task that moved (or the milestone)
+    are not on the destination project or its team (MIP-1597; reported, not refused: they keep
+    reading what they filed).
 
     `project_move` is the project the milestone goes to, already checked by the caller (it is
     one the caller may use). A milestone is the top of its own hierarchy, so unlike a sub-task
@@ -279,6 +271,9 @@ def update_milestone(
         )
         if report is not None:
             report["notes_narrowed"] = narrowed
+            report["reporters_outside_destination"] = reporters_outside_destination(
+                milestone_subtree_task_ids(milestone), project_move
+            )
         # The assignee join denormalizes the team for scoped reads.
         MilestoneAssignees.objects.filter(milestone=milestone).update(team_id=milestone.team_id)
     return added
