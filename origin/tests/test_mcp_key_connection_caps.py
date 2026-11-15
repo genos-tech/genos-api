@@ -310,7 +310,7 @@ class TestConnectionsDark(ConnectionCaps):
                     self.user, self.app
                 )
             )
-        self.assertEqual([q for q in queries.captured_queries if "mcp_connection" in q["sql"]], [])
+        self.assertEqual([q for q in queries.captured_queries if "mcpconnection" in q["sql"].lower()], [])
 
     def test_off_connects_any_number_and_counts_nothing(self):
         self.rig(mcp_max_connections=0)
