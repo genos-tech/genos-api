@@ -399,15 +399,36 @@ def run_behavior_case(case: dict[str, Any]) -> CaseResult:
         # (Multi-turn cases don't support mentions yet.)
         mention_extra: str | None = None
         mention_seeds: list[dict[str, Any]] | None = None
-        if case.get("mentions"):
-            resolved = _resolve_mention_specs(case["mentions"], team_id=team_id, user_id=user_id)
+        # MIP-1058: a case may also point at chat messages (`{type: message, lookup_text: ...}`, the ids
+        # being dynamic) and carry `selected_text`. Both build their block with the production code
+        # (`agent/ask_refs.py`), in the order the ask view puts them: BEFORE the references. A case whose
+        # message is one the asker may not read says `mentions_expected_dropped: true`, and the run then
+        # insists the mention WAS dropped, so a broken fixture cannot pass as a refusal.
+        if case.get("mentions") or case.get("selected_text"):
+            resolved = _resolve_mention_specs(
+                case.get("mentions") or [],
+                team_id=team_id,
+                user_id=user_id,
+                expect_dropped=bool(case.get("mentions_expected_dropped")),
+            )
+            from origin.search_engine.agent.ask_refs import (  # noqa: PLC0415
+                build_reference_block,
+                parse_selection,
+            )
             from origin.search_engine.agent.mentions import (  # noqa: PLC0415
                 build_mention_seed_sources,
                 build_mention_system_extra,
             )
+            from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
 
             mention_extra = build_mention_system_extra(resolved)
             mention_seeds = build_mention_seed_sources(resolved)
+            ref_extra = build_reference_block(
+                [m.message_read for m in resolved if m.kind == "message" and m.message_read],
+                parse_selection(case.get("selected_text")) if parity_on() else None,
+            )
+            if ref_extra:
+                mention_extra = f"{ref_extra}\n\n{mention_extra}" if mention_extra else ref_extra
             ctx = dataclasses.replace(ctx, resolved_mentions=tuple(m.as_json() for m in resolved))
 
         # UX tier model §4 — per-case agency level. Mirrors exactly what
@@ -978,7 +999,9 @@ def _check_behavior_expectations(
         forbidden = set(expect["pending_tools_excludes"])
         proposed = forbidden & set(tools_pending)
         if proposed:
-            _add(f"pending_tools_excludes: a write was proposed that must not be: {sorted(proposed)}")
+            _add(
+                f"pending_tools_excludes: a write was proposed that must not be: {sorted(proposed)}"
+            )
 
     if "pending_args_contain" in expect:
         # What the model PROPOSED to write, not only that it proposed: for a
@@ -1836,7 +1859,9 @@ def _lookup_member_id(username: str, *, team_id: str) -> str:
     return str(membership.attendee.id)
 
 
-def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id: str) -> list:
+def _resolve_mention_specs(
+    specs: list[dict[str, Any]], *, team_id: str, user_id: str, expect_dropped: bool = False
+) -> list:
     """Turn a case's `mentions:` list into resolved `ResolvedMention`s.
 
     Each entry is the production wire shape, except the id field may be
@@ -1848,6 +1873,8 @@ def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id
             seeded project names carry a per-fixture slug suffix)
         {type: group, lookup_name: "..."}     → group_id
         {type: todo, lookup_title: "..."}     → item_id (fixture user's)
+        {type: message, lookup_text: "..."}   → message_id (the team's message whose
+            text contains it; MIP-1058)
     Raises ValueError when a lookup finds nothing — a case referencing a
     missing entity is a broken case, not a soft failure.
 
@@ -1934,10 +1961,29 @@ def _resolve_mention_specs(specs: list[dict[str, Any]], *, team_id: str, user_id
             if item is None:
                 raise ValueError(f"mention lookup: no todo titled {spec.get('lookup_title')!r}")
             entry["item_id"] = item.item_id
+        elif kind == "message" and "lookup_text" in entry:
+            from origin.models.chat.unified_models import Message  # noqa: PLC0415
+
+            message = Message.objects.filter(
+                channel__team_id=team_id,
+                body_text__icontains=entry.pop("lookup_text"),
+                deleted_at__isnull=True,
+            ).first()
+            if message is None:
+                raise ValueError(
+                    f"mention lookup: no message containing {spec.get('lookup_text')!r}"
+                )
+            entry["message_id"] = str(message.id)
         wire.append(entry)
 
     ctx = ToolContext(team_id=team_id, user_id=user_id)
     resolved = resolve_mentions(parse_mentions(wire), ctx)
+    if expect_dropped:
+        # The mirror (MIP-1058): a case about a reference the asker may NOT read. If it resolved, the
+        # fixture is wrong and the case would measure nothing.
+        if len(resolved) == len(wire):
+            raise ValueError("mention resolution kept every entry, but the case expects a drop")
+        return resolved
     if len(resolved) != len(wire):
         # A dropped mention in an eval is always a case bug — surface it
         # loudly rather than silently running an un-mentioned query.

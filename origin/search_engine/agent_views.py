@@ -82,6 +82,14 @@ from origin.search_engine.agent import (
     undo,
     undo_apply,
 )
+from origin.search_engine.agent.ask_refs import (
+    Selection,
+    build_reference_block,
+    parse_selection,
+    rebuild_block,
+    resume_refs,
+    valid_message_id,
+)
 from origin.search_engine.agent.controller import (
     COST_CEILING_MESSAGE,
     CREDITS_EXHAUSTED_MESSAGE,
@@ -104,7 +112,10 @@ from origin.search_engine.agent.mentions import (
     build_mention_seed_sources,
     build_mention_system_extra,
     parse_mentions,
+    provenance_token,
     resolve_mentions,
+    resolve_selected_from,
+    selection_marker,
 )
 from origin.search_engine.agent.multi_turn import PriorContext
 from origin.search_engine.agent.note_summary import (
@@ -123,6 +134,7 @@ from origin.search_engine.agent.note_summary import (
 from origin.search_engine.agent.note_summary import (
     regenerate_summary as regenerate_note_summary,
 )
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.thread_summary import (
     ThreadSummaryError,
     fetch_thread_messages_for_agent,
@@ -1042,6 +1054,12 @@ class AgentAskView(AuthenticatedAPIView):
         refusal = refuse_non_string_fields(data, "query", "session_id")
         if refusal is not None:
             return refusal
+        # `selected_text` (MIP-1058) is read only while the parity flag is on: with it off the field is
+        # ignored as an unknown one always was, whatever it holds.
+        if parity_on():
+            refusal = refuse_non_string_fields(data, "selected_text")
+            if refusal is not None:
+                return refusal
         for field, malformed in (
             ("thread_context", _THREAD_CONTEXT_MALFORMED),
             ("note_context", _NOTE_CONTEXT_MALFORMED),
@@ -1342,6 +1360,41 @@ class AgentAskView(AuthenticatedAPIView):
                 resolved_mentions = resolve_mentions(mentions_parsed, ctx)
             except Exception:  # noqa: BLE001
                 log.exception("Mention resolution failed; continuing without mentions")
+        # A selected passage and its source (MIP-1058, `agent/ask_refs.py`), while the parity flag is on.
+        # What could not be used is only COUNTED, as kinds ("message", "selection", "selected_from"): the
+        # same word for a thing that does not exist and one the asker may not read, so the answer says
+        # nothing about which.
+        selection: Selection | None = None
+        dropped_references: list[str] = []
+        if parity_on():
+            raw_mentions = data.get("mentions")
+            asked_messages = {
+                valid_message_id(e.get("message_id")) or str(e.get("message_id"))
+                for e in (raw_mentions if isinstance(raw_mentions, list) else ())
+                if isinstance(e, dict) and e.get("type") == "message"
+            }
+            if len({m.message_id for m in resolved_mentions if m.kind == "message"}) < len(
+                asked_messages
+            ):
+                dropped_references.append("message")
+            selection = parse_selection(data.get("selected_text"))
+            if selection is None:
+                if str(data.get("selected_text") or "").strip():
+                    dropped_references.append("selection")
+            elif data.get("selected_from"):
+                try:
+                    source, is_new = resolve_selected_from(
+                        data["selected_from"], ctx, mentions_parsed
+                    )
+                except Exception:  # noqa: BLE001 — a source that cannot be read is no source
+                    log.exception("Selection source resolution failed; continuing without it")
+                    source, is_new = None, False
+                if source is None:
+                    dropped_references.append("selected_from")
+                else:
+                    selection = dataclasses.replace(selection, source=provenance_token(source))
+                    if is_new:
+                        resolved_mentions.append(source)
         try:
             session = _get_or_create_session(
                 session_id_str,
@@ -1388,7 +1441,14 @@ class AgentAskView(AuthenticatedAPIView):
                 user_id=user_id,
                 query=query,
                 session=session,
-                mentions=[m.as_json() for m in resolved_mentions],
+                # A selection leaves a marker with no text in it (`selection_marker`): the audit of a collected
+                # answer must know it may quote a passage nobody can classify.
+                mentions=[m.as_json() for m in resolved_mentions]
+                + (
+                    [selection_marker(len(selection.text), selection.truncated)]
+                    if selection
+                    else []
+                ),
                 locale=locale,
             )
         except Exception:  # noqa: BLE001
@@ -1601,6 +1661,19 @@ class AgentAskView(AuthenticatedAPIView):
         # one block a resumed leg re-checks (`_resume_context_for`).
         scoped_extra = system_extra
 
+        # The messages and the selected passage the person pointed at (MIP-1058): their text, fenced, in a
+        # block of its own BETWEEN the summary and the references. Apart from the references because a
+        # resumed leg replays those as sent, and this block has content, which `/decide/` reads again
+        # (`_resumed_system_extra`). None, and so nothing added, with the parity flag off.
+        ref_messages = [
+            m.message_read
+            for m in resolved_mentions
+            if m.kind == "message" and m.message_read is not None
+        ]
+        ref_extra = build_reference_block(ref_messages, selection)
+        if ref_extra:
+            system_extra = f"{system_extra}\n\n{ref_extra}" if system_extra else ref_extra
+
         # Structured-mention injection. APPENDS to whatever the thread/
         # note branch already set — a thread or note ask can also carry
         # mentions, and both blocks should reach the model. The seed
@@ -1608,6 +1681,8 @@ class AgentAskView(AuthenticatedAPIView):
         mention_extra = build_mention_system_extra(resolved_mentions)
         if mention_extra:
             system_extra = f"{system_extra}\n\n{mention_extra}" if system_extra else mention_extra
+        if resolved_mentions:
+            # Not tied to the block above: a message mention has a chip and no bullet.
             seed_sources = (seed_sources or []) + build_mention_seed_sources(resolved_mentions)
         # Mentions v2 — stash the resolved refs on the server-trusted
         # ToolContext so `search_knowledge_base` can derive its soft-
@@ -1637,6 +1712,7 @@ class AgentAskView(AuthenticatedAPIView):
                 scoped_extra=scoped_extra,
                 mention_extra=mention_extra,
                 tier_extra=tier_extra,
+                refs=resume_refs(ref_messages, selection),
                 # The earlier turns ride on the second flag (`AGENT_RESUME_KEEPS_TURNS`).
                 prior_summary=prior_summary if keeps_turns else None,
                 prior_run_ids=prior_run_ids if keeps_turns else (),
@@ -1708,6 +1784,7 @@ class AgentAskView(AuthenticatedAPIView):
             acting_user=request.user,
             request_id=current_request_id(),
             resume_context=resume_context,
+            dropped_references=dropped_references,
         )
         response = StreamingHttpResponse(stream, content_type="application/x-ndjson")
         response["Cache-Control"] = "no-cache"
@@ -1787,6 +1864,7 @@ def _resume_context_for(
     scoped_extra: str | None,
     mention_extra: str | None,
     tier_extra: str | None,
+    refs: dict[str, Any] | None = None,
     prior_summary: str | None = None,
     prior_run_ids: Iterable[uuid.UUID] = (),
 ) -> dict[str, Any] | None:
@@ -1838,19 +1916,27 @@ def _resume_context_for(
         ids hold nothing, and a run that is gone is a turn that is simply not there.
 
     A first-turn ask has neither, and keeps no `prior`.
+
+    `refs` (MIP-1058) is the third part, for the messages and the selected passage of the ask (`ask_refs`):
+    the messages' IDS and the passage as the person sent it, never a message's text. `/decide/` reads each
+    message again as the person may read it by then, so a message deleted or lost to them in between is
+    not replayed, and no copy of someone else's words sits on the run row. Absent from the row when the ask
+    had none, so a row with none is what it was.
     """
     rest = "\n\n".join(block for block in (mention_extra, tier_extra) if block) or None
     run_ids = [str(run_id) for run_id in prior_run_ids]
     prior = (
         {"summary": prior_summary or None, "run_ids": run_ids} if prior_summary or run_ids else None
     )
-    if not scoped_extra and not rest and prior is None:
+    if not scoped_extra and not rest and prior is None and not refs:
         return None
     kept: dict[str, Any] = {
         "scope": scope if scoped_extra else None,
         "scoped": scoped_extra or None,
         "rest": rest,
     }
+    if refs:
+        kept["refs"] = refs
     if prior is not None:
         kept["prior"] = prior
     return kept
@@ -1912,6 +1998,13 @@ def _resumed_system_extra(run: AgentRun) -> str | None:
             and _scope_still_readable(kept.get("scope"), run.user_id)
         ):
             parts.append(scoped)
+        # The messages and the selected passage, between the two as at the ask (MIP-1058): rebuilt, with
+        # each message read again by the person's own access, not replayed.
+        refs_block = rebuild_block(
+            kept.get("refs"), team_id=str(run.team_id or ""), user_id=str(run.user_id or "")
+        )
+        if refs_block:
+            parts.append(refs_block)
         if isinstance(rest, str) and rest:
             parts.append(rest)
         return "\n\n".join(parts) or None
@@ -2386,6 +2479,7 @@ def _stream_ndjson(
     acting_user=None,
     request_id: str | None = None,
     resume_context: dict[str, Any] | None = None,
+    dropped_references: list[str] | None = None,
 ) -> Iterator[bytes]:
     """Bridge a controller callback into chunked NDJSON.
 
@@ -2712,6 +2806,12 @@ def _stream_ndjson(
                 # swap + charge already happened correctly.
                 if fallback_note is not None:
                     event = {**event, "model_fallback": fallback_note}
+                # What the ask pointed at and could not use (MIP-1058): kinds only, the same word whether
+                # the thing was missing, deleted, unreadable or malformed. Additive on `done` for the same
+                # reason, and absent unless something was dropped. A run that pauses on a write sends no
+                # `done` and so carries no note, as with `model_fallback`.
+                if dropped_references:
+                    event = {**event, "dropped_references": list(dropped_references)}
                 # Total response time for this stream, for the client's
                 # "answered in Xs" display. Additive field on `done` (not
                 # a new event type) for the same contract reason as
