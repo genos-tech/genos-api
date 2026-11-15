@@ -47,6 +47,7 @@ from origin.services.task_project_move import (
     moving_assignees,
     people_outside,
     relocate_tasks,
+    reporters_outside_destination,
     shown_refs,
 )
 from origin.services.task_reparent import resolve_root_task_id

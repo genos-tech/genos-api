@@ -156,6 +156,207 @@ class PutMoveRechecksAssigneesTests(PutMoveBase):
 
 
 # --------------------------------------------------------------------------------------------
+# item 1: notesNarrowed on the task PUT
+# --------------------------------------------------------------------------------------------
+
+
+class PutMoveSaysHowManyNotesItNarrowedTests(PutMoveBase):
+    def test_the_count_covers_the_moved_task_and_its_sub_tasks(self):
+        self.create_task_note(self.author, self.task)
+        self.create_task_note(self.author, self.child)
+        res = self.move(self.task, self.beta)  # the author is not on Beta
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["notesNarrowed"], 2)
+        self.assertEqual(res.data["movedFromProjectId"], self.alpha.project_id)
+
+    def test_a_note_on_a_sub_task_alone_is_counted(self):
+        self.create_task_note(self.author, self.child)
+        res = self.move(self.task, self.beta)
+        self.assertEqual(res.data["notesNarrowed"], 1)
+
+    def test_a_note_on_the_moved_task_alone_is_counted(self):
+        self.create_task_note(self.author, self.task)
+        res = self.move(self.task, self.beta)
+        self.assertEqual(res.data["notesNarrowed"], 1)
+
+    def test_a_move_that_narrows_nothing_says_zero(self):
+        gamma = self.project_of("Gamma", self.author)  # the author is on it
+        self.create_task_note(self.author, self.task)
+        res = self.move(self.task, gamma)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["notesNarrowed"], 0)
+
+    def test_a_save_that_is_not_a_move_has_no_count(self):
+        res = self.put(self.task, title="renamed")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertNotIn("notesNarrowed", res.data)
+
+    def test_a_move_back_to_a_project_the_author_is_on_narrows_nothing(self):
+        # one rule: the note ends when its author is not on the destination, a move back restores
+        self.create_task_note(self.author, self.task)
+        out = self.move(self.task, self.beta)
+        self.assertEqual(out.data["notesNarrowed"], 1)
+        back = self.move(self.task, self.alpha)
+        self.assertEqual(back.data["notesNarrowed"], 0)
+
+
+# --------------------------------------------------------------------------------------------
+# item 2: a reporter outside the destination is reported, not refused
+# --------------------------------------------------------------------------------------------
+
+
+class PutMoveCountsReportersOutsideTests(PutMoveBase):
+    def test_a_reporter_outside_the_destination_is_counted_and_the_task_still_moves(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.author)
+        res = self.move(self.task, self.abroad)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["reportersOutsideDestination"], 1)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.project_id, self.abroad.project_id)
+
+    def test_a_reporter_on_the_team_keeps_reading_it(self):
+        # who keeps access, whatever the reporter clause of `can_access_task` is made of: the
+        # reporter is on the team that owns the destination project (a same-team move), so the
+        # move counts nobody and nobody loses the task. A task nobody holds stays closed to them.
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.author)
+        res = self.move(self.task, self.beta)  # the author is on the team, not on Beta
+        self.assertEqual(res.data["reportersOutsideDestination"], 0)
+        self.assertTrue(can_access_task(self.task.task_id, self.author.id))
+        self.assertFalse(can_access_task(self.task.task_id, self.stranger.id))
+
+    def test_the_move_is_not_refused_for_a_reporter_nor_is_anybody_given_the_task(self):
+        # a reporter is not an assignee: the cross-team move goes through. Nobody gains: a person
+        # who held nothing before (the stranger) holds nothing after.
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.author)
+        self.assertFalse(can_access_task(self.task.task_id, self.stranger.id))
+        res = self.move(self.task, self.abroad)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertFalse(can_access_task(self.task.task_id, self.stranger.id))
+
+    def test_people_are_counted_once_however_many_tasks_they_filed(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.author)
+        TaskMaster.objects.filter(pk=self.child.pk).update(reporter=self.author)
+        res = self.move(self.task, self.abroad)
+        self.assertEqual(res.data["reportersOutsideDestination"], 1)
+
+    def test_two_people_count_two(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.author)
+        TaskMaster.objects.filter(pk=self.child.pk).update(reporter=self.stranger)
+        res = self.move(self.task, self.abroad)
+        self.assertEqual(res.data["reportersOutsideDestination"], 2)
+
+    def test_the_reporter_the_same_save_sets_is_the_one_counted(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.author)
+        res = self.move(self.task, self.abroad, reporter=str(self.owner.id))
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["reportersOutsideDestination"], 0)
+
+    def test_a_deleted_sub_task_is_not_counted(self):
+        TaskMaster.objects.filter(pk=self.child.pk).update(reporter=self.author, status="Deleted")
+        self.sub_task(self.task, reporter=self.stranger, is_deleted=True)
+        res = self.move(self.task, self.abroad)
+        self.assertEqual(res.data["reportersOutsideDestination"], 0)
+
+    def test_the_one_who_moves_and_people_on_the_destination_are_not_counted(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=self.owner)
+        TaskMaster.objects.filter(pk=self.child.pk).update(reporter=self.author)
+        res = self.move(self.task, self.beta)  # the author is on the team of Beta
+        self.assertEqual(res.data["reportersOutsideDestination"], 0)
+
+    def test_a_save_that_is_not_a_move_has_no_count(self):
+        res = self.put(self.task, title="renamed")
+        self.assertNotIn("reportersOutsideDestination", res.data)
+
+
+class MilestoneMoveCountsReportersOutsideTests(ToolBase):
+    """The milestone PATCH and the tool say the same: who filed a task that moves, and is not on
+    the destination project or its team, keeps reading it; the move is not stopped."""
+
+    def elsewhere(self):
+        team = TeamMaster.objects.create(
+            team_name="Elsewhere", team_email="else@test.com", owner=self.owner
+        )
+        project = ProjectMaster.objects.create(
+            team=team,
+            project_name="Elsewhere",
+            code="ELS",
+            owner=self.owner,
+            project_system_user=self.owner,
+        )
+        ProjectMembers.objects.create(team=team, project=project, attendee=self.owner)
+        return project
+
+    def world(self):
+        """Nobody is assigned but the owner; alice filed two of the tasks, bob filed the milestone."""
+        m = self.roadmap_milestone()
+        MilestoneAssignees.objects.filter(milestone=m).delete()
+        MilestoneAssignees.objects.create(milestone=m, team=self.team, user=self.owner)
+        TaskMaster.objects.filter(milestone=m).update(assignee=self.owner)
+        TaskMaster.objects.filter(title__in=["Second", "First's child"]).update(reporter=self.alice)
+        return m
+
+    def patch(self, m, **body):
+        return self.client.patch(f"{MILESTONE_URL}{m.milestone_id}/", body, format="json")
+
+    def test_the_patch_counts_people_once_and_still_moves(self):
+        m = self.world()
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["reportersOutsideDestination"], 1)  # alice, twice
+        self.assertIn("notesNarrowed", res.data)
+        # nobody gains: someone who could not open it before cannot now (whether the reporter keeps
+        # it follows the reporter clause of `can_access_task`, which MIP-1592 narrows)
+        second = TaskMaster.objects.get(title="Second")
+        self.assertFalse(can_access_task(second.task_id, self.stranger.id))
+
+    def test_the_milestones_own_reporter_counts(self):
+        m = self.world()
+        MilestoneMaster.objects.filter(pk=m.pk).update(reporter=self.bob)
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["reportersOutsideDestination"], 2)
+
+    def test_a_deleted_task_is_not_counted(self):
+        m = self.world()
+        TaskMaster.objects.filter(title="Second").update(status="Deleted")
+        TaskMaster.objects.filter(title="First's child").update(is_deleted=True)
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.data["reportersOutsideDestination"], 0)
+
+    def test_a_move_inside_the_team_says_zero(self):
+        m = self.world()
+        res = self.patch(m, project_id=self.dest.project_id)  # alice is on DST and on the team
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data["reportersOutsideDestination"], 0)
+
+    def test_a_save_that_is_not_a_move_has_no_count(self):
+        m = self.world()
+        res = self.patch(m, title="Renamed")
+        self.assertNotIn("reportersOutsideDestination", res.data)
+
+    def leaver(self):
+        # bob left the team: he is not on DST or on its team
+        TeamMembers.objects.filter(team=self.team, attendee=self.bob).update(is_deleted=True)
+
+    def test_the_tool_says_it_only_when_there_is_one(self):
+        self.leaver()
+        m = self.roadmap_milestone()
+        TaskMaster.objects.filter(milestone=m).update(assignee=self.owner)
+        MilestoneAssignees.objects.filter(milestone=m).delete()
+        TaskMaster.objects.filter(title="Second").update(reporter=self.bob)
+        out = self.move_tool(m)
+        self.assertEqual(out["moved"]["reporters_outside_destination"], 1)
+        self.assertIn("1 reporter", out["__summary__"])
+        self.assertEqual(TaskMaster.objects.get(title="Second").project_id, self.dest.project_id)
+
+    def test_the_tool_says_nothing_when_there_is_none(self):
+        m = self.roadmap_milestone()
+        out = self.move_tool(m)
+        self.assertNotIn("reporters_outside_destination", out["moved"])
+        self.assertNotIn("reporter", out["__summary__"])
+
+
+# --------------------------------------------------------------------------------------------
 # item 4: the counts are the live tasks
 # --------------------------------------------------------------------------------------------
 

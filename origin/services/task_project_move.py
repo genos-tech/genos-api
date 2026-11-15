@@ -116,6 +116,19 @@ def moving_assignees(task_ids) -> dict[str, list[str]]:
     return people
 
 
+def reporters_outside_destination(task_ids, destination) -> int:
+    """How many DIFFERENT people filed a live task among `task_ids` and are not on `destination`
+    or its team (MIP-1597). A milestone's own reporter is its backing task's, which is in the set.
+
+    A reporter is who filed the task, not someone working it, so a move is not refused for one
+    (an assignee is: `milestone_manage.move_assignee_problem`, `task_move_assignee_problem`).
+    The reporter keeps reading the task through `can_access_task`'s reporter clause; the move
+    reports how many people that is, so the person who moves can tell them. Nobody gains.
+    """
+    reporters = set(live_tasks(task_ids).values_list("reporter_id", flat=True))
+    return len(people_outside(destination, reporters))
+
+
 def assignee_problem_sentence(subject: str, destination, parts: list[str], *, way_out: str) -> str:
     """The refusal a move gives when an assignee is not on the destination: one wording for the
     milestone and the task, so the app and the tool say the same (`way_out` is the part that
