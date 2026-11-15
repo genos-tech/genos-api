@@ -200,13 +200,11 @@ class McpConsentDecisionView(_ConsentBase):
     @staticmethod
     def _over_the_plans_connections(user, application) -> Response | None:
         active = McpConnection.objects.filter(user=user, revoked_at__isnull=True)
-        if (
-            mcp_tier_limits.mode() == mcp_tier_limits.OFF
-            or active.filter(application=application).exists()
-        ):
-            return None
         hit = mcp_tier_limits.check_new_credential(
-            user.id, mcp_tier_limits.MAX_CONNECTIONS, active.count
+            user.id,
+            mcp_tier_limits.MAX_CONNECTIONS,
+            active.count,
+            exempt=lambda: active.filter(application=application).exists(),
         )
         if hit is None:
             return None

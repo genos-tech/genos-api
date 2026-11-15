@@ -15,6 +15,7 @@ A limit on what a person CREATES, so the properties are about creation only:
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import timedelta
 from unittest import mock
 
@@ -31,6 +32,7 @@ from origin.services import mcp_tier_limits as limits
 from origin.tests.test_api_keys import KEYS_URL
 from origin.tests.test_base import BaseAPITestCase
 from origin.tests.test_mcp_oauth_consent import ConsentBase
+from origin.views.common import mcp_consent_views as views
 
 LIMIT_BODY_KEYS = {"error", "limit_reached", "used", "limit", "category"}
 
@@ -82,15 +84,12 @@ class ApiKeyCaps(_Rigs, BaseAPITestCase):
     def create(self, name="k", **extra):
         return self.client.post(KEYS_URL, {"name": name, **extra}, format="json")
 
-    _n = 0
-
     def make_keys(self, n, user=None, **fields):
-        type(self)._n += 1
         for i in range(n):
             ApiKey.objects.create(
                 user=user or self.user,
                 name=f"k{i}",
-                key_hash=f"{(user or self.user).id}-{i}-{sorted(fields)}-{len(fields)}-{self._n}",
+                key_hash=uuid.uuid4().hex + uuid.uuid4().hex,
                 prefix="gnos_x",
                 **fields,
             )
@@ -299,11 +298,25 @@ class ConnectionCaps(_Rigs, ConsentBase):
 class TestConnectionsDark(ConnectionCaps):
     mode = None
 
+    def test_a_plan_with_no_limit_asks_nothing_not_even_whether_it_is_a_re_consent(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.connect(1)
+        quota.get_effective_tier(str(self.user.id))  # warm the tier cache
+        with _env("enforce"), CaptureQueriesContext(connection) as queries:
+            self.assertIsNone(
+                views.McpConsentDecisionView._over_the_plans_connections(  # noqa: SLF001
+                    self.user, self.app
+                )
+            )
+        self.assertEqual([q for q in queries.captured_queries if "mcp_connection" in q["sql"]], [])
+
     def test_off_connects_any_number_and_counts_nothing(self):
         self.rig(mcp_max_connections=0)
         for n in range(3):
             self.connect(n)
-        with mock.patch.object(limits, "check_new_credential", side_effect=AssertionError("asked")):
+        with mock.patch.object(limits, "plan_for", side_effect=AssertionError("looked up")):
             res = self.decide()
         self.assertEqual(res.status_code, 200, res.content)
 

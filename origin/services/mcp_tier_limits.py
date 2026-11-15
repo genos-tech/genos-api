@@ -474,12 +474,18 @@ def check_cap(user_id: Any, key: str, *, size: int, tool: Any = None) -> CapHit 
     return CapHit(CATEGORY[key], int(limit), shown, plan.tier)
 
 
-def check_new_credential(user_id: Any, key: str, count: Callable[[], int]) -> CapHit | None:
+def check_new_credential(
+    user_id: Any,
+    key: str,
+    count: Callable[[], int],
+    exempt: Callable[[], bool] | None = None,
+) -> CapHit | None:
     """May this person have ONE MORE key or connected app? For the creation of a NEW one only:
     the ones they already have keep working whatever the limit becomes (hide, never delete).
 
-    `count` says how many they have now, and is called only when the plan has a limit here: `off`
-    (and a plan with no limit) look nothing up. `shadow` logs `mcp.tier_would_limit` and answers
+    `count` says how many they have now, and `exempt` (optional) whether this one is not new after
+    all (consenting again to a connection that is active); both are called only when the plan has a
+    limit here: `off` (and a plan with no limit) look nothing up. `shadow` logs `mcp.tier_would_limit` and answers
     None. A count that fails lets the creation through (an infra error never blocks the person)."""
     active = mode()
     if active == OFF:
@@ -489,6 +495,8 @@ def check_new_credential(user_id: Any, key: str, count: Callable[[], int]) -> Ca
     if limit is None:
         return None
     try:
+        if exempt is not None and exempt():
+            return None
         used = int(count())
     except Exception:  # noqa: BLE001 - never block a creation on a count that failed
         log.exception("MCP limits: counting for %s failed", key)
