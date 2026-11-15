@@ -16,7 +16,8 @@ recorded on every channel and compared:
   * a row count of EVERY model.
 
 The one difference that is expected, and so asserted, is `via` (the app against the agent). A difference
-that is not on that list fails the test.
+that is not on that list fails the test. (The project chat's card used to be a second one, until the app's
+own conversion rewrote it too, MIP-1583.)
 """
 
 from __future__ import annotations
@@ -271,28 +272,18 @@ class TwinBase(ToolBase):
             ),
         }
 
-    def assert_twins(self, app, tool, *, card_refreshed=False):
+    def assert_twins(self, app, tool):
         """Everything either one left is the same, but for how the write arrived.
 
-        `card_refreshed` is the one documented difference of the convert to a milestone: a write
-        that has no browser gets its project-chat card rewritten by the server (MIP-1460), and the
-        app's own conversion does not rewrite it (the browser does not call `updateTaskCard` after a
-        conversion). So the tool's card is the same text but edited, and one live push more."""
+        The project chat's card is one of the things compared: the app's conversion rewrites it as
+        the tool's does (MIP-1583; the browser does not call `updateTaskCard` after a conversion,
+        so the server does, as it does for any write that has no browser)."""
         self.assertEqual(tool["shape"], app["shape"], "the rows")
         self.assertEqual(tool["history"], app["history"], "the history")
         self.assertEqual(app["via"], ["app"])
         self.assertEqual(tool["via"], ["agent"])
-        if card_refreshed:
-            self.assertEqual(
-                [(*c[:3], False, c[4]) for c in tool["cards"]],
-                app["cards"],
-                "the card's text",
-            )
-            self.assertTrue(all(c[3] for c in tool["cards"]), "rewritten, so edited")
-            self.assertEqual(tool["pushes"], app["pushes"] + 1, "one live push for the card")
-        else:
-            self.assertEqual(tool["cards"], app["cards"], "the project chat's cards")
-            self.assertEqual(tool["pushes"], app["pushes"], "live pushes")
+        self.assertEqual(tool["cards"], app["cards"], "the project chat's cards")
+        self.assertEqual(tool["pushes"], app["pushes"], "live pushes")
         # `ChangeVersion` rows are created the first time a key is bumped: which keys were bumped is
         # compared below, so the first writer's extra rows are not a difference.
         for record in (app, tool):
@@ -319,7 +310,7 @@ class ConvertTwinTests(TwinBase):
 
         self.assertEqual(app["result"].status_code, 200)
         self.assertEqual(tool["result"]["direction"], "task_to_milestone")
-        self.assert_twins(app, tool, card_refreshed=True)
+        self.assert_twins(app, tool)
         # and the change itself is the one the app's contract names
         shape = tool["shape"]
         self.assertTrue(shape["tasks"]["Plan the launch"]["is_milestone"])

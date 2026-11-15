@@ -82,8 +82,9 @@ def relocate_tasks(
     team_id,
     clear_sprint=False,
     clear_tags=True,
-) -> None:
-    """Move a set of task rows into `project_id` / `team_id`.
+) -> int:
+    """Move a set of task rows into `project_id` / `team_id`. Returns the number of task notes that
+    lost their author's Owner row to it (`relocate_task_satellites`).
 
     For the rows that ride ALONG with a move (sub-tasks, a milestone's
     member tasks) — the ones no user re-picks anything for. The row the
@@ -100,7 +101,7 @@ def relocate_tasks(
     """
     task_ids = {int(task_id) for task_id in task_ids if task_id is not None}
     if not task_ids:
-        return
+        return 0
 
     fields = {
         "project_id": project_id,
@@ -129,11 +130,12 @@ def relocate_tasks(
     for task in TaskMaster.objects.filter(task_id__in=task_ids):
         claim_project_task_number(task)
 
-    relocate_task_satellites(task_ids, project_id=project_id, team_id=team_id)
+    return relocate_task_satellites(task_ids, project_id=project_id, team_id=team_id)
 
 
-def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
-    """Carry everything else keyed to a task across the boundary with it.
+def relocate_task_satellites(task_ids, *, project_id, team_id) -> int:
+    """Carry everything else keyed to a task across the boundary with it. Returns how many task
+    notes lost their author's Owner row to it (the author is not on the project they went to).
 
     Split from `relocate_tasks` for the endpoint that writes the moved
     task's own columns through a serializer and only needs this half —
@@ -143,7 +145,7 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
     """
     task_ids = {int(task_id) for task_id in task_ids if task_id is not None}
     if not task_ids:
-        return
+        return 0
     # Task notes denormalize the owning team and project, and the notes
     # tree is read with `team=<id>, project__in=<ids>` — so a note left
     # behind disappears from both projects' trees while still being
@@ -153,14 +155,18 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
     moved_note_ids = [note_id for note_id, _, _ in moved]
     notes.update(project_id=project_id, team_id=team_id)
     # The Owner row of an author who is not on the project the note now lives in ends with it
-    # (MIP-1493); the notes are in the new project's search scope, whose ACL is refreshed.
+    # (MIP-1493), recorded so a move to a project they ARE on writes it back (MIP-1583); the notes
+    # are in the new project's search scope, whose ACL is refreshed.
     from origin.search_engine.acl_dirty import mark_projects_dirty
-    from origin.services.note_role_revoke import revoke_task_roles_on_move
+    from origin.services.note_role_revoke import (
+        restore_task_roles_on_move,
+        revoke_task_roles_on_move,
+    )
 
-    if revoke_task_roles_on_move(
-        moves=[(note_id, old_project) for note_id, _, old_project in moved],
-        target_project_id=project_id,
-    ):
+    note_moves = [(note_id, old_project) for note_id, _, old_project in moved]
+    narrowed = revoke_task_roles_on_move(moves=note_moves, target_project_id=project_id)
+    restored = restore_task_roles_on_move(moves=note_moves, target_project_id=project_id)
+    if narrowed or restored:
         mark_projects_dirty([project_id])
     # The `.update()` fires no `post_save`: tell the change feed by hand
     # (MIP-970), for the team the notes left and the one they joined.
@@ -182,6 +188,7 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
         forget_object_team("task", task_id)
     for note_id in moved_note_ids:
         forget_object_team("note", note_id, NOTE_TYPE_TASK)
+    return narrowed
 
 
 def _settle_dependencies(task_ids, *, team_id) -> None:
@@ -204,9 +211,7 @@ def _settle_dependencies(task_ids, *, team_id) -> None:
     endpoints = {edge["blocker_task_id"] for edge in edges} | {
         edge["blocked_task_id"] for edge in edges
     }
-    teams = dict(
-        TaskMaster.objects.filter(task_id__in=endpoints).values_list("task_id", "team_id")
-    )
+    teams = dict(TaskMaster.objects.filter(task_id__in=endpoints).values_list("task_id", "team_id"))
     straddling = [
         edge["id"]
         for edge in edges
