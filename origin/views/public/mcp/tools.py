@@ -140,8 +140,10 @@ from origin.services.security_events import (
 )
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
+    body_paging,
     note_threads,
     progress,
+    result_limits,
     secretary,
     via_privacy,
 )
@@ -2304,6 +2306,10 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         array_schema["items"] = items
         properties[list_arg] = array_schema
         schema = {**schema, "properties": properties}
+    # The paging arguments of MIP-1367, published only while `MCP_RESULT_LIMITS` is on: with it
+    # off this adds nothing and the schema is what it was.
+    if extra := result_limits.extra_properties(tool.name):
+        schema = {**schema, "properties": {**(schema.get("properties") or {}), **extra}}
     return schema
 
 
@@ -2839,9 +2845,32 @@ def call(
     # argument, and the in-app agent's copy of it must stay as it is.
     sent = dict(args)
     mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
+    # MIP-1367: the paging arguments of the tools that take them (while the switch is on) belong to
+    # this layer, not to the registry tool, so they are taken out here and checked in words before
+    # anything runs. The switch is read ONCE per call.
+    limits = result_limits.limits_on()
+    limit_args: dict[str, Any] = {}
+    caller = page = None
+    if limits:
+        limit_args = {
+            k: args.pop(k) for k in result_limits.paging_arg_names(tool.name) if k in args
+        }
+        caller = result_limits.Caller(ctx.user_id, ctx.team_id, dict(args))
+        try:
+            page = result_limits.check_args(tool.name, limit_args, caller)
+        except ToolError as exc:
+            return _text_result(str(exc), is_error=True)
     try:
         args = resolve_references(tool, args, ctx.team_id)
-        payload = _registered(tool).run(args, ctx)
+        if (
+            limits
+            and tool.write
+            and (why := body_paging.refusal_for_write(tool.name, args, ctx.user_id))
+        ):
+            # MIP-1367: a write that replaces a body this caller has only partly read.
+            raise ToolError(why)
+        runner = result_limits.run_override(tool.registry_name) if limits else None
+        payload = runner(args, ctx) if runner else _registered(tool).run(args, ctx)
         if tool.augment is not None:
             payload = tool.augment(dict(payload or {}), args, mcp_args, ctx)
     except ToolError as exc:
@@ -2891,8 +2920,31 @@ def call(
     # ever reach an external client.
     payload.pop("__undo__", None)
 
-    body = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
-    text = f"{summary}\n\n{body}" if summary else body
+    # The notice goes ahead of everything, in the text the model actually reads, on every read and
+    # on a write that carries someone else's text (see below).
+    notice = bool(fenced or not tool.write)
+
+    def render(value: dict[str, Any]) -> str:
+        body = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+        text = f"{summary}\n\n{body}" if summary else body
+        return f"{UNTRUSTED_NOTICE}\n\n{text}" if notice else text
+
+    # MIP-1367 phase 2, behind `MCP_RESULT_LIMITS` (default off: nothing here runs and the answer
+    # is what it was, byte for byte). Per-item caps, then one cap on the whole text; what is cut is
+    # said in a `truncated` block and in `_meta`.
+    truncated = False
+    if limits:
+        try:
+            payload, truncated = result_limits.apply(
+                tool.name, payload, render, args=limit_args, caller=caller, page=page
+            )
+        except ToolError as exc:
+            # After the tool's own access checks, so it says the same for a note that is missing
+            # and one that is not the caller's.
+            return _text_result(str(exc), is_error=True)
+        if tool.name in result_limits.BODY_FIELDS:
+            body_paging.remember_read(tool.name, args, payload, ctx.user_id)
+    text = render(payload)
     result: dict[str, Any] = {
         "content": [{"type": "text", "text": text}],
         # The parsed payload alongside the text, so a client that
@@ -2900,16 +2952,19 @@ def call(
         "structuredContent": payload,
         "isError": False,
     }
-    if fenced or not tool.write:
+    meta: dict[str, Any] = {}
+    if notice:
         # Every read, not just the fenced ones: titles, to-do text and
         # event descriptions are workspace-written too and carry no fence,
         # and a read that returns none today may return one tomorrow. A
         # write's result is mostly what the caller just sent, so it says
         # this only when someone else's text came back with it.
         #
-        # Ahead of everything, in the text the model actually reads, and
-        # as a flag in `_meta` for a client that would rather render it.
-        # Not inside `structuredContent`, whose shape is the tool's.
-        result["content"][0]["text"] = f"{UNTRUSTED_NOTICE}\n\n{text}"
-        result["_meta"] = {"genos/untrustedContent": True}
+        # Ahead of everything (above), and as a flag in `_meta` for a client that would rather
+        # render it. Not inside `structuredContent`, whose shape is the tool's.
+        meta["genos/untrustedContent"] = True
+    if truncated:
+        meta["genos/truncated"] = True
+    if meta:
+        result["_meta"] = meta
     return result
