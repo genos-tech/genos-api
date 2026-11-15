@@ -31,6 +31,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
+from origin.services import inbox_via
 from origin.services.member_roles import channel_role_to_member_role
 
 
@@ -577,6 +578,21 @@ class ActivitySerializer(serializers.ModelSerializer):
 
     def get_channelKind(self, obj):
         return obj.channel.kind if obj.channel else None
+
+    def to_representation(self, instance):
+        """`meta.via` as the row's recipient may read it (MIP-1573).
+
+        The same serialization is pushed to the recipient (`activity.created`) and returned to
+        the writer, so the reader is always the row's own recipient: the actor reads a row
+        whole (their own app), anyone else its kind and, for a connected app, the official
+        family (`via_for_viewer`, so `SHOW_OAUTH_APP_TO_EVERYONE` acts on rows already filed).
+        A row with no `via`, and every other key of `meta`, is as it was."""
+        data = super().to_representation(instance)
+        if isinstance(data.get("meta"), dict) and "via" in data["meta"]:
+            data["meta"] = inbox_via.optionals_for_viewer(
+                data["meta"], sender_id=instance.actor_id, viewer_id=instance.recipient_id
+            )
+        return data
 
 
 class DeltaEnvelopeSerializer(serializers.Serializer):
