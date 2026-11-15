@@ -337,6 +337,31 @@ class RestoreTests(TaskWorld):
         self.client.credentials()
         self.assertIn(self.restore(task.task_id).status_code, (401, 403))
 
+    def test_the_number_of_queries_does_not_grow_with_the_turns(self):
+        # A restore runs on every open of the task's Ask: pin that a long conversation costs the
+        # queries a short one does (the access check, the session, the runs, their steps).
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        task = self.make_task()
+
+        def queries():
+            with CaptureQueriesContext(connection) as captured:
+                resp = self.restore(task.task_id)
+            self.assertEqual(resp.status_code, 200)
+            return len(captured), len(resp.json()["turns"])
+
+        run = self.ask_about(task)["stream"]["run"]
+        self.answer(run.run_id, "first")
+        one, turns_one = queries()
+        for i in range(4):
+            run = self.ask_about(task, query=f"again {i}")["stream"]["run"]
+            self.answer(run.run_id, f"answer {i}")
+        five, turns_five = queries()
+        self.assertEqual((turns_one, turns_five), (1, 5))
+        # Not more (the very first call also fills the platform's object-team cache).
+        self.assertLessEqual(five, one)
+
     def test_a_post_is_not_a_restore(self):
         resp = self.client.post("/api/v2/agent/task-session/", {}, format="json")
         self.assertEqual(resp.status_code, 405)
