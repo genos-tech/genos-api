@@ -85,7 +85,7 @@ from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.agent.model_fence import fence_for_model
-from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.parity import followups_on, parity_on
 from origin.search_engine.agent.prompts import (
     AGENT_CRITIQUE_RETRIEVAL_DIRECTIVE,
     AGENT_SELF_CRITIQUE_PROMPT_TEMPLATE,
@@ -110,6 +110,7 @@ from origin.search_engine.agent.tools.plan_task_bodies import (
     fill_plan_task_bodies_for_caller,
     new_task_body_for_caller,
 )
+from origin.search_engine.agent.tools.project_field_rules import proposal_refusal
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
     read_custom_fields,
@@ -4078,6 +4079,15 @@ def _drive_loop(
             except ToolError as exc:
                 resolved_args.append(dict(c.args))
                 ref_errors[i] = str(exc)
+        # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): a create the app's own form would refuse because a field the
+        # project requires is missing never reaches an approval card; the model is told which fields (and that
+        # nothing was created), and asks the member. The tool checks again when it runs.
+        if followups_on():
+            for i, c in enumerate(accumulated_function_calls):
+                if i not in ref_errors and (
+                    refusal := proposal_refusal(c.name, resolved_args[i], ctx)
+                ):
+                    ref_errors[i] = refusal
 
         # ---- C3: resolve session-cache hits before any execution ----
         # A follow-up turn re-calling the same read-only tool with the

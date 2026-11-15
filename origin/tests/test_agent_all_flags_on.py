@@ -54,7 +54,13 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # THE FLIP (2026-11-15): `AGENT_PARITY_TOOLS` is on by default, so production sends the 145,869 above
 # (re-measured on the merged tree). Nothing is raised: 147,324 with a Long member's block fits the
 # 147,500 constant, and `BUDGET_CHARS` (146,000) holds the production number.
-ALL_ON_BUDGET_CHARS = 147_500
+# MIP-1607 (`AGENT_PARITY_FOLLOWUPS`: `account: "all"` on the events read): +157 more (146,026 all-on, 147,481 with
+# a Long member's block): 19 characters left, so the constant stays 147,500 and the next follow-up raises it with its
+# own measurement; `BUDGET_CHARS` (test_agent_prefix_budget) went to 146,500 because this test holds all-on to it too.
+# MIP-1589 (the follow-ups flag, default off): +146 more (`list_project_tags`' sentence). Together with MIP-1607's +157 the
+# flag-on prefix is 146,172 all-on and 147,627 with a Long member's block: over 147,500, so the constant goes up to the
+# next 500, 148,000 (373 characters left).
+ALL_ON_BUDGET_CHARS = 148_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
@@ -163,45 +169,51 @@ class AllOnDeclarationTests(SimpleTestCase):
         # exactly: every parameter a tool had is kept as it was. Every other tool's schema does
         # not move at all, and a description only grows (the one sentence a flag REPLACES is
         # swapped in place, `tool_flag_text.REPLACEMENTS`).
-        added = {a.tool: a for a in tool_flag_params.ADDITIONS}
+        added: dict[str, list] = {}
+        for a in tool_flag_params.ADDITIONS:
+            added.setdefault(a.tool, []).append(a)
         replaced: dict[str, list[tuple[str, str]]] = {}
         for name, _flag, old, new in tool_flag_text.REPLACEMENTS:
             replaced.setdefault(name, []).append((old, new))
         off, on = self._off_and_on()
         for before, after in zip(off, on, strict=False):
-            addition = added.get(before.name)
-            if addition is None:
+            if before.name not in added:
                 self.assertEqual(before.parameters_schema, after.parameters_schema, before.name)
             else:
                 stripped = copy.deepcopy(after.parameters_schema)
-                for name in addition.properties:
-                    self.assertIn(name, stripped["properties"], before.name)
-                    del stripped["properties"][name]
-                for array_name, row_props in addition.nested:
-                    rows = stripped["properties"][array_name]["items"]["properties"]
-                    for name in row_props:
-                        self.assertIn(name, rows, before.name)
-                        del rows[name]
-                # An enum value the flag appends (`manage_milestone`'s `convert`) and a description it
-                # words for itself (`project_id`): taken back to the base schema's own.
-                for name, values in addition.enum_values.items():
-                    enum = stripped["properties"][name]["enum"]
-                    self.assertEqual(enum[-len(values) :], list(values), before.name)
-                    del enum[-len(values) :]
-                for name, text in addition.descriptions.items():
-                    self.assertEqual(stripped["properties"][name]["description"], text)
-                    stripped["properties"][name]["description"] = before.parameters_schema[
-                        "properties"
-                    ][name]["description"]
-                # A parameter the new ones are an alternative to (`update_comment`'s `body_text`) is
-                # `required` only while the flag is off.
-                if addition.optional:
-                    self.assertEqual(
-                        set(before.parameters_schema["required"]) - set(stripped["required"]),
-                        set(addition.optional),
-                        before.name,
-                    )
-                    stripped["required"] = before.parameters_schema["required"]
+                # Last row first: a later row may reword a property an earlier one declared
+                # (MIP-1607's `account` of the events read), and then there is nothing to put back.
+                for addition in reversed(added[before.name]):
+                    for name in addition.properties:
+                        self.assertIn(name, stripped["properties"], before.name)
+                        del stripped["properties"][name]
+                    for array_name, row_props in addition.nested:
+                        rows = stripped["properties"][array_name]["items"]["properties"]
+                        for name in row_props:
+                            self.assertIn(name, rows, before.name)
+                            del rows[name]
+                    # An enum value the flag appends (`manage_milestone`'s `convert`) and a description it
+                    # words for itself (`project_id`): taken back to the base schema's own.
+                    for name, values in addition.enum_values.items():
+                        enum = stripped["properties"][name]["enum"]
+                        self.assertEqual(enum[-len(values) :], list(values), before.name)
+                        del enum[-len(values) :]
+                    for name, text in addition.descriptions.items():
+                        self.assertEqual(stripped["properties"][name]["description"], text)
+                        base_props = before.parameters_schema["properties"]
+                        if name in base_props:
+                            stripped["properties"][name]["description"] = base_props[name][
+                                "description"
+                            ]
+                    # A parameter the new ones are an alternative to (`update_comment`'s `body_text`) is
+                    # `required` only while the flag is off.
+                    if addition.optional:
+                        self.assertEqual(
+                            set(before.parameters_schema["required"]) - set(stripped["required"]),
+                            set(addition.optional),
+                            before.name,
+                        )
+                        stripped["required"] = before.parameters_schema["required"]
                 self.assertEqual(before.parameters_schema, stripped, before.name)
             base = before.description
             for old, new in replaced.get(before.name, []):
