@@ -20,6 +20,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import (
     Tool,
@@ -31,6 +32,7 @@ from origin.search_engine.agent.tools.base import (
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.task_anchors import enabled as anchors_enabled
 from origin.search_engine.agent.tools.task_anchors import task_anchors
+from origin.search_engine.agent.tools.task_attachments import attachment_fields
 from origin.search_engine.agent.tools.task_body_edit import body_hash
 from origin.search_engine.agent.tools.task_custom_fields import (
     project_fields,
@@ -272,6 +274,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         else {}
     )
 
+    # The task's files as metadata (MIP-1563, `AGENT_PARITY_TOOLS`): never the bytes, never a link.
+    # Flag off: no key at all, the result is what it always was.
+    attachments = attachment_fields(task, ctx) if parity_on() else {}
+
     return {
         "task_id": task_id,
         "display_id": task.display_id,
@@ -294,6 +300,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "deliveries": deliveries,
         **effective,
         **anchors,
+        **attachments,
         "__summary__": (
             f"Loaded task {task.display_id}" + (f" + {len(comments)} comments" if comments else "")
         ),

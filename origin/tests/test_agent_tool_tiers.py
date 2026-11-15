@@ -29,18 +29,25 @@ from origin.search_engine.agent.tool_tiers import (
     disabled_tools_for_level,
     tier_disabled_tools,
 )
-from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools import FLAGGED_REGISTRY, REGISTRY
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.models import AgentRun, AgentStep
 
 
 def _write_tools() -> set[str]:
+    """The registered writes: what every gate hides while every flag is off."""
     return {t.name for t in REGISTRY.values() if t.requires_approval}
+
+
+def _flagged_write_tools() -> set[str]:
+    """The writes that exist only while a flag is on (MIP-1563). They are classified too: the day
+    the flag is on, the tier gates must already know them."""
+    return {name for name, (_flag, tool) in FLAGGED_REGISTRY.items() if tool.requires_approval}
 
 
 class ClassificationTests(SimpleTestCase):
     def test_every_write_tool_classified_exactly_once(self):
-        writes = _write_tools()
+        writes = _write_tools() | _flagged_write_tools()
         self.assertEqual(
             writes,
             set(SINGLE_WRITE_TOOLS) | set(COMPOSITE_WRITE_TOOLS),
@@ -58,9 +65,10 @@ class ClassificationTests(SimpleTestCase):
         # act gate (the remainder derivation would still be safe, but
         # the classification would no longer describe reality).
         for name in SINGLE_WRITE_TOOLS | COMPOSITE_WRITE_TOOLS:
-            self.assertIn(name, REGISTRY, f"{name} not in REGISTRY")
+            tool = REGISTRY.get(name) or (FLAGGED_REGISTRY.get(name) or (None, None))[1]
+            self.assertIsNotNone(tool, f"{name} not in REGISTRY or FLAGGED_REGISTRY")
             self.assertTrue(
-                REGISTRY[name].requires_approval,
+                tool.requires_approval,
                 f"{name} is classified as a write tool but has requires_approval=False",
             )
 

@@ -49,7 +49,12 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # flag; `create_todo_item`: task_id, comment_id): +984 characters, 141,820 measured with the flag on
 # over the shipped flags (141,966 with EVERY flag on). It still fits, so the constant stays; 180
 # characters are left, so the next parity task raises it with its own measurement.
-BUDGET_CHARS = 142_000
+# MIP-1563 (the same flag): `delete_task_attachment`, a flag-gated WRITE tool (766 characters), and the
+# one sentence `fetch_task` reads while the flag is on (147): +913, 142,733 measured with it on over the
+# shipped flags (142,879 with EVERY flag on). Raised to 143,000, the measurement rounded up to the next
+# 500: 267 characters are left, so the next parity task raises it with its own measurement. With the flag
+# off production sends 138,938, as before.
+BUDGET_CHARS = 143_000
 
 
 def _declared_chars() -> int:

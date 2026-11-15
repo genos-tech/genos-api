@@ -96,10 +96,12 @@ from origin.search_engine.agent.references import declared_schema, resolve_call
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import declared_description
 from origin.search_engine.agent.tools import (
+    FLAGGED_REGISTRY,
     MCP_ONLY_REGISTRY,
     REGISTRY,
     ToolContext,
     ToolError,
+    app_write_tools,
     flagged_tool,
     flagged_tools,
 )
@@ -373,7 +375,7 @@ def _operator_disabled_tools() -> set[str]:
         return set()
     # An MCP-only tool is not in REGISTRY but is a real name here: MCP honours the
     # same switch, and naming one must not read as a typo (MIP-1070).
-    known = set(configured) & (set(REGISTRY) | set(MCP_ONLY_REGISTRY))
+    known = set(configured) & (set(REGISTRY) | set(MCP_ONLY_REGISTRY) | set(FLAGGED_REGISTRY))
     if not _KILLSWITCH_LOGGED:
         _KILLSWITCH_LOGGED = True
         log.warning(
@@ -1169,6 +1171,45 @@ def _friendly_delete_milestone_arguments(
     out["current"] = {"title": milestone.title, "tasks": milestone_task_count(milestone)}
 
 
+def _friendly_delete_task_attachment_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """In-place nested enrichment for `delete_task_attachment` arguments (MIP-1563).
+
+    ADDS what the approver is about to lose: the file's name, its size and its type, so the card
+    says WHICH file instead of "file 2". Only for a task the caller can read, and only a file that is
+    on that task (the lookup is `(task, attachment_id)`, the delete's own), so an id from another
+    task shows nothing. Plain text for the card, never a link to the file."""
+    from origin.search_engine.agent.tools.delete_task_attachment import (  # noqa: PLC0415
+        find_attachment,
+        whole_number,
+    )
+    from origin.search_engine.agent.tools.task_attachments import (  # noqa: PLC0415
+        TYPE_CHARS,
+        attachment_name,
+        attachment_size,
+    )
+
+    task = access.task(args.get("task_id"))
+    try:
+        # The tool's own reading of the id, so the card names a file only for a call that would run
+        # (`True` and `1.5` are refused by the tool, not read as file 1).
+        attachment_id = whole_number(args.get("attachment_id"), "attachment_id")
+    except ToolError:
+        return
+    if task is None:
+        return
+    attachment = find_attachment(task.task_id, attachment_id)
+    if attachment is None:
+        return
+    out["current"] = {
+        "name": attachment_name(attachment),
+        "size_bytes": attachment_size(attachment),
+        # What the uploading client sent as the type: cut, as the listing cuts it.
+        "type": (attachment.attached_type or "")[:TYPE_CHARS] or None,
+    }
+
+
 # Tool-name → nested enrichment pass, applied after the flat resolvers.
 # Each edits the labelled copy and may read the caller's raw args for an
 # id the flat pass has already replaced with a label.
@@ -1179,6 +1220,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "update_task": _friendly_update_task_arguments,
     "manage_milestone": _friendly_manage_milestone_arguments,
     "delete_milestone": _friendly_delete_milestone_arguments,
+    "delete_task_attachment": _friendly_delete_task_attachment_arguments,
     "update_todo_item": _friendly_update_todo_arguments,
     "create_todo_item": _friendly_create_todo_arguments,
     "update_comment": _friendly_update_comment_arguments,
@@ -1628,6 +1670,8 @@ _TASK_WRITE_TOOLS = frozenset(
         "restore_task_body",
         "add_task_delivery",
         "remove_task_delivery",
+        # MIP-1563 (flag-gated, `register_flagged_tool`): the task stays, a file on it goes.
+        "delete_task_attachment",
     }
 )
 _NOTE_SOURCE_TOOLS = frozenset(
@@ -1687,7 +1731,7 @@ def _ui_sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list
     — rather than per branch, so a new write tool can't forget it.
     """
     sources = _sources_from_tool_result(call_name, result)
-    if sources and getattr(REGISTRY.get(call_name), "requires_approval", False):
+    if sources and getattr(_app_tool(call_name), "requires_approval", False):
         for s in sources:
             s["operated"] = True
     return sources
@@ -2528,7 +2572,7 @@ def resume_agent(
         # tool has since been disabled (tier downgrade, toggled-off
         # preference, ops kill-switch) is vetoed exactly like an
         # unknown tool: the approval token must not outlive the grant.
-        tool = REGISTRY.get(call_name)
+        tool = _app_tool(call_name)
         vetoed = (disabled_tools or set()) | _operator_disabled_tools()
         if tool is None or call_name in vetoed:
             err = (
@@ -2651,6 +2695,15 @@ def resume_agent(
                 if call_name == "delete_project" and result.get("project_id") is not None:
                     result_event["project"] = {
                         "project_id": result["project_id"],
+                        "deleted": True,
+                    }
+                # A deleted task file (MIP-1563): the server has deleted it, and the browser's cached
+                # copy of the task still lists it. The ref names the task so the browser forgets that
+                # copy (a file delete does not move the task's `updated_at`). Additive.
+                if call_name == "delete_task_attachment" and result.get("task_id") is not None:
+                    result_event["task_attachment"] = {
+                        "task_id": result["task_id"],
+                        "attachment_id": result.get("attachment_id"),
                         "deleted": True,
                     }
                 # Approved note writes carry a compact `note` ref so the
@@ -3653,7 +3706,7 @@ def _drive_loop(
             cut_write = bool(accumulated_function_calls) and (
                 last_call["partial_call"]
                 or getattr(
-                    REGISTRY.get(accumulated_function_calls[-1].name), "requires_approval", False
+                    _app_tool(accumulated_function_calls[-1].name), "requires_approval", False
                 )
             )
             if cut_write:
@@ -4331,7 +4384,7 @@ def _critique_with_retrieval(
 
     # Read-only continuation: disable write tools (a write would pause for
     # approval mid-critique) on top of anything the caller already disabled.
-    write_tools = {t.name for t in REGISTRY.values() if getattr(t, "requires_approval", False)}
+    write_tools = {t.name for t in app_write_tools()}
     loop2_disabled = (disabled_tools or set()) | write_tools
 
     # Budget: continue past loop 1's steps (its tool steps + its answer

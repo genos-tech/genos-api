@@ -247,3 +247,14 @@ the model.
   idempotence, what a reaction tells people) is pinned by free tests, not here. Read the `reaction-remove`
   and `flag-done` proposals by hand: nothing in the fixture holds a reaction or a flag, so a model that
   asks first whether there is one is not a failure.
+* **Parity: a task's files (MIP-1563, tag `t1563`, the same arm `parity`).** `t1563-files.yaml` (EN and JA per
+  case), on the sequence fixture with the seed `task_files` (project EAF, the viewer alone: the task "Prepare the
+  board deck" with two real files, #1 `budget-2026.xlsx` and #2 `kickoff-notes.pdf`; `予算2026.xlsx` and
+  `キックオフ議事録.pdf` for the Japanese team). The positives (`list`, `delete`) have `requires_arm: parity` (the
+  `attachments` field and the `delete_task_attachment` tool exist only with the flag); the negatives
+  (`show-not-delete`, `download-not-delete`, `upload-not-delete`) run on arm0 too and are the baseline for "asking to
+  see, open or attach a file is never a delete". A delete proposal pauses the run, so a model that proposed one has
+  no answer and `answer_chars_at_least` fails it. `list` also forbids a link or a storage path in the answer
+  (the tool returns neither). The delete cases only PROPOSE: nothing is approved, so the seeded files stay.
+  `delete` judges the card too (`current` carries the file's name). The server side (who may delete, what the
+  delete removes, the MCP opt-in) is pinned by free tests, not here.

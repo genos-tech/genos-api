@@ -970,6 +970,16 @@ def _check_behavior_expectations(
         if missing:
             _add(f"pending_tools_contains: missing {sorted(missing)} (saw {sorted(seen)})")
 
+    if "pending_tools_excludes" in expect:
+        # The mirror of `pending_tools_contains` (MIP-1563): a write the model must NOT propose. A
+        # proposal pauses the run, but the model's words before the call are streamed as the answer,
+        # so a case that only reads the answer cannot tell "I will delete it" plus a proposal from a
+        # plain reply.
+        forbidden = set(expect["pending_tools_excludes"])
+        proposed = forbidden & set(tools_pending)
+        if proposed:
+            _add(f"pending_tools_excludes: a write was proposed that must not be: {sorted(proposed)}")
+
     if "pending_args_contain" in expect:
         # What the model PROPOSED to write, not only that it proposed: for a
         # tool whose argument carries a whole new body (`update_note`), text the

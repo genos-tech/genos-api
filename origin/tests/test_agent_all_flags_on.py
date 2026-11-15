@@ -39,7 +39,9 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # A Long member adds the content block (MIP-905, appended to the system instruction by the loop, not
 # part of `agent_system_prompt()`); `test_the_content_block_...` below adds it on top of this number.
 # MIP-1562: +984 more (141,966 all-on, 143,421 with a Long member's block): 79 characters left.
-ALL_ON_BUDGET_CHARS = 143_500
+# MIP-1563: +913 more (the flag-gated delete tool and `fetch_task`'s sentence; 142,879 all-on, 144,334
+# with a Long member's block), so 144,500: 166 characters left.
+ALL_ON_BUDGET_CHARS = 144_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.
@@ -134,7 +136,8 @@ class AllOnDeclarationTests(SimpleTestCase):
         off, on = self._off_and_on()
         self.assertEqual([d.name for d in on[: len(off)]], [d.name for d in off])
         extra = [d.name for d in on[len(off) :]]
-        self.assertEqual(extra, ["get_timeline"])
+        # The timeline tool, then MIP-1563's write tool (flag-gated with the parity batch).
+        self.assertEqual(extra, ["get_timeline", "delete_task_attachment"])
         self.assertEqual(len({d.name for d in on}), len(on), "a tool is declared twice")
 
     def test_schemas_only_gain_the_declared_parameters_and_descriptions_only_grow(self):
@@ -197,8 +200,11 @@ class AllOnDeclarationTests(SimpleTestCase):
             self.assertEqual(flagged_tools(), [])
         with settings_with(ALL_ON):
             self.assertIsNotNone(_app_tool("get_timeline"))
-            self.assertEqual([t.name for t in flagged_tools()], ["get_timeline"])
+            self.assertEqual(
+                [t.name for t in flagged_tools()], ["get_timeline", "delete_task_attachment"]
+            )
         self.assertNotIn("get_timeline", REGISTRY)
+        self.assertNotIn("delete_task_attachment", REGISTRY)
 
     def test_the_operator_kill_switch_still_hides_the_flagged_tool_with_all_on(self):
         with settings_with({**ALL_ON, "AGENT_DISABLED_TOOLS": frozenset({"get_timeline"})}):
@@ -262,7 +268,7 @@ class AllOnProviderTests(SimpleTestCase):
             tools = _request_kwargs(client_cls, path, decls)["tools"]
             names = [t.get("name") or t["function"]["name"] for t in tools]
             self.assertEqual(names, [d.name for d in decls], client_cls)
-            self.assertEqual(names[-1], "get_timeline")
+            self.assertEqual(names[-2:], ["get_timeline", "delete_task_attachment"])
 
 
 class AllOnFingerprintTests(TestCase):
@@ -356,7 +362,8 @@ class AllOnToolResultTests(SequenceScenario):
         out = self.run_tool("fetch_task", self.seq.b, task_id=self.seq.task.task_id)
         self.assertIn("anchors", out)
         keys = list(out)
-        self.assertEqual(keys[-2:], ["anchors", "__summary__"])
+        # MIP-1563 (the parity flag, on here): the task's files follow the anchors.
+        self.assertEqual(keys[-3:], ["anchors", "attachments", "__summary__"])
         # the task's own status is still there; the rule's fields appear only when the rule changes it
         self.assertIn("status", out)
 
