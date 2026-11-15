@@ -72,7 +72,7 @@ class GetSearchTeamTasksView(AuthenticatedAPIView):
             # explicitly skipped that entirely and searched it — so the
             # one safe path was the default, and the parameterised path
             # was not.
-            if not is_project_member(project_id, request_user_id):
+            if not is_project_member(project_id, request_user_id, live_only=True):
                 return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
             scope_filter = Q(project=project_id)
 

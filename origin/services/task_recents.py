@@ -22,7 +22,7 @@ def can_open(user_id, task: TaskMaster) -> bool:
     """Same door as reading the task: a live task of a project the caller is in."""
     if task.is_deleted or task.is_init_task or task.project_id is None:
         return False
-    return is_project_member(task.project_id, user_id)
+    return is_project_member(task.project_id, user_id, live_only=True)
 
 
 def record_open(*, user_id, task: TaskMaster):

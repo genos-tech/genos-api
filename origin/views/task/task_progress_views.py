@@ -75,7 +75,9 @@ class TaskProgressListView(AuthenticatedAPIView):
             .values("project_id", "team_id")
             .first()
         )
-        if task is None or not is_project_member(task["project_id"], request.user.id):
+        if task is None or not is_project_member(
+            task["project_id"], request.user.id, live_only=True
+        ):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
 
         facts = TaskProgressFact.objects.filter(ancestor_task_id=task_id, depth__gte=min_depth)
