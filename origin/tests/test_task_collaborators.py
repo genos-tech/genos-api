@@ -44,6 +44,8 @@ class CollaboratorRoundTripTests(BaseAPITestCase):
             username="thirduser", email="third@example.com", password="thirdpass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # A collaborator has to be able to open the task (MIP-1567): a member of its project.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user3)
         self.authenticate()
 
     def create_task(self, **overrides):
@@ -144,6 +146,33 @@ class CollaboratorRoundTripTests(BaseAPITestCase):
             {self.user2.id},
         )
 
+    def test_a_teammate_who_is_not_on_the_project_is_dropped_on_create(self):
+        # They could not open the task, so they are not put on it (MIP-1567); the project
+        # member next to them still is, and the create itself is not refused.
+        teammate = User.objects.create_user(
+            username="teammate", email="mate@example.com", password="matepass123"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=teammate)
+
+        resp = self.create_task(collaborators=[teammate.id, self.user3.id])
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        task = TaskMaster.objects.get(task_id=resp.data["task"]["task_id"])
+        self.assertEqual({u.id for u in task.collaborators.all()}, {self.user3.id})
+
+    def test_the_assignee_may_be_a_collaborator_though_not_on_the_project(self):
+        # The assignee can open the task whatever the project says (`can_access_task`).
+        teammate = User.objects.create_user(
+            username="teammate", email="mate@example.com", password="matepass123"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=teammate)
+
+        resp = self.create_task(assignee=teammate.id, collaborators=[teammate.id])
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        task = TaskMaster.objects.get(task_id=resp.data["task"]["task_id"])
+        self.assertEqual({u.id for u in task.collaborators.all()}, {teammate.id})
+
     def test_unknown_collaborator_id_is_dropped_not_500(self):
         resp = self.create_task(collaborators=[self.user2.id, 9999999])
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
@@ -167,10 +196,13 @@ class MilestoneCollaboratorTests(BaseAPITestCase):
             project_system_user=self.user,
         )
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user)
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.user3 = User.objects.create_user(
             username="mcollab", email="mcollab@example.com", password="mcollabpass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # A collaborator has to be able to open the task (MIP-1567): a member of its project.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user3)
         self.authenticate()
 
     def _create_milestone(self, **extra):
@@ -198,6 +230,25 @@ class MilestoneCollaboratorTests(BaseAPITestCase):
         self.assertEqual(
             {u.id for u in m.task.collaborators.all()}, {self.user2.id, self.user3.id}
         )
+
+    def test_a_teammate_who_is_not_on_the_project_is_refused_on_create_and_patch(self):
+        # MIP-1567: a milestone's collaborators ride on its backing task, where they are told
+        # of its comments, so they have to be able to open it.
+        teammate = User.objects.create_user(
+            username="mate", email="mate@example.com", password="matepass123"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=teammate)
+
+        created = self._create_milestone(collaborators=[teammate.id])
+        self.assertEqual(created.status_code, status.HTTP_400_BAD_REQUEST, created.data)
+        self.assertIn("could not open the task", created.data["error"])
+        self.assertFalse(MilestoneMaster.objects.filter(title="M1").exists())
+
+        milestone_id = self._create_milestone().data["milestone"]["milestoneId"]
+        patched = self._patch(milestone_id, {"collaborators": [teammate.id]})
+        self.assertEqual(patched.status_code, status.HTTP_400_BAD_REQUEST, patched.data)
+        m = MilestoneMaster.objects.get(milestone_id=milestone_id)
+        self.assertEqual(m.task.collaborators.count(), 0)
 
     def test_patch_writes_collaborators_and_survives_backing_sync(self):
         milestone_id = self._create_milestone().data["milestone"]["milestoneId"]
@@ -238,6 +289,8 @@ class CollaboratorNotificationFanoutTests(BaseAPITestCase):
             username="collabuser", email="collab@example.com", password="collabpass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # A collaborator has to be able to open the task (MIP-1567): a member of its project.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user3)
         # The commenter has to be able to open the task to comment on it.
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         # assignee=self.user, collaborator=self.user3, commenter=self.user2.
@@ -310,6 +363,8 @@ class HeaderlessTaskCommentFanoutTests(BaseAPITestCase):
             username="hcollab", email="hcollab@example.com", password="hcollabpass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # A collaborator has to be able to open the task (MIP-1567): a member of its project.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user3)
         # The commenter has to be able to open the task to comment on it.
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.task = TaskMaster.objects.create(
@@ -360,6 +415,8 @@ class RealCardPathCommentTests(BaseAPITestCase):
             username="rc3", email="rc3@example.com", password="rc3pass123"
         )
         TeamMembers.objects.create(team=self.team, attendee=self.user3)
+        # A collaborator has to be able to open the task (MIP-1567): a member of its project.
+        ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user3)
         # The commenter has to be able to open the task to comment on it.
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
         self.task = TaskMaster.objects.create(

@@ -140,6 +140,7 @@ from origin.services.security_events import (
 )
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
+    note_threads,
     progress,
     secretary,
     via_privacy,
@@ -558,7 +559,8 @@ CATALOG: tuple[McpTool, ...] = (
             "`anchor_text` it sits on, its replies (`author`, `ts`, "
             "`markdown`) and whether it is `resolved`. Open threads come "
             "first; resolved ones are left out unless `include_resolved` is "
-            "true."
+            "true. Answer a thread with `reply_to_note_comment`, settle it with "
+            "`resolve_note_comment`; both take its `thread_id`."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -1037,9 +1039,10 @@ CATALOG: tuple[McpTool, ...] = (
             "`start_date` (YYYY-MM-DD, '' clears) sets the planned start; "
             "nothing checks it against the due date. `collaborators` replaces "
             "the task's collaborators with user ids ([] clears; "
-            "`get_team_members` / `list_project_members`), so send the ones you "
-            "are keeping too: `get_task` lists them. Anyone new must be on the "
-            "team or the project, or the call is refused. `custom_fields` sets "
+            "`list_project_members`), so send the ones you "
+            "are keeping too: `get_task` lists them. Anyone new must be a member "
+            "of the project (a collaborator is told about the task and has to be "
+            "able to open it), or the call is refused. `custom_fields` sets "
             "the project's own fields by name, as a list of `{name, value}` "
             "(`{name, values}` for a tag field): `list_project_tags` gives each "
             "field's type and options, and only the fields you name change. A "
@@ -1230,8 +1233,8 @@ CATALOG: tuple[McpTool, ...] = (
             "— `get_current_user` for yourself; omit it to leave the task "
             "unassigned. `tags` takes names from `list_project_tags` — only "
             "tags that fit the task; leave it out if none does. `start_date` "
-            "(YYYY-MM-DD), `collaborators` (user ids from `get_team_members` "
-            "or `list_project_members`) and `custom_fields` (the project's own "
+            "(YYYY-MM-DD), `collaborators` (user ids from "
+            "`list_project_members`; members of the project) and `custom_fields` (the project's own "
             "fields by name, as `{name, value}` or `{name, values}` for a tag "
             "field; `list_project_tags` lists them with their types and "
             "options) are set at creation too. Requires a "
@@ -1701,6 +1704,39 @@ CATALOG: tuple[McpTool, ...] = (
             "URL (or its numeric id with `note_type`) for a note. `favorite` is "
             "true to star (the default) and false to unstar. Requires a "
             "write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="reply_to_note_comment",
+        registry_name="reply_to_note_comment",
+        description=(
+            "Reply to a comment thread on a note, as the caller: it shows in the "
+            "note's editor next to the other replies, marked as written through a "
+            "connected app. Take `thread_id` from `comment_threads` in `get_note`. "
+            "`text` is plain text, one paragraph per line; no formatting, no "
+            "@-mentions, and it cannot start a new thread on a passage. Anyone who "
+            "can open the note may reply, viewers included. Returns `comment_id`, "
+            "`comment_count` and `thread_resolved`. Name the note by its Genos URL, "
+            "or by its numeric id with `note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
+        name="resolve_note_comment",
+        registry_name="resolve_note_comment",
+        description=(
+            "Mark a comment thread on a note resolved. Stricter than the editor: only "
+            "the thread's author or the note's owner can; anyone else is refused (use "
+            "`reply_to_note_comment` instead). Resolving a resolved thread changes "
+            "nothing. Take `thread_id` from `comment_threads` in `get_note`. Returns "
+            "`resolved`, `already_resolved` and `resolved_by` (a user id). Reopening a "
+            "thread is done in the editor. Name the note by its Genos URL, or by its "
+            "numeric id with `note_type`. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
@@ -2368,6 +2404,7 @@ OVERWRITE_TOOLS = frozenset(
         "update_tasks_bulk",
         "update_todo_item",
         "update_my_schedule",
+        "resolve_note_comment",  # settles a thread; the editor can reopen it
         "set_item_importance",  # replaces the member's mark on one task
         "tune_my_importance",  # replaces how a signal counts
     }
@@ -2387,6 +2424,7 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "create_todo_item",
         "favorite_note",
         "manage_project_labels",
+        "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
     }
 )

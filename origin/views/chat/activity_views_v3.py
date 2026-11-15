@@ -47,6 +47,12 @@ from origin.services.activity_surface_access import (
     unreadable_surface_activity_ids,
 )
 from origin.services.channel_scope import chat_member_q
+from origin.services.v3_activity import (
+    SURFACE_CHAT_NOTE,
+    SURFACE_PERSONAL_NOTE,
+    SURFACE_TASK_BODY,
+    SURFACE_TASK_NOTE,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.incremental import capture_server_time
 from origin.views.utils.request_validators import (
@@ -62,6 +68,26 @@ _MAX_ROWS = 200
 # The most ids one response lists as tombstones (newest first). Ids only, so this is ~80 KB; a
 # member with more rows than this in chats they lost gets the rest on the next full reload.
 _MAX_TOMBSTONES = 2000
+
+
+# The surfaces a client may file an activity on: a task body and the three note types (the sockets
+# handlers only ever send these, and the producers below only know them).
+CLIENT_SURFACES = frozenset(
+    {SURFACE_TASK_BODY, SURFACE_PERSONAL_NOTE, SURFACE_TASK_NOTE, SURFACE_CHAT_NOTE}
+)
+
+
+def _surface_refusal() -> Response:
+    """400 for any other surface (MIP-1571).
+
+    Until now any integer was accepted, including 10, the "your AI app did X" notice that only
+    `mcp_notice` writes: a team member could file one, with `meta` of their own, in a colleague's
+    feed. The client now draws the official Claude / ChatGPT icon on such a row from
+    `meta.appFamily`, so a notice a client could forge would carry an icon it did not earn."""
+    return Response(
+        {"error": "surface_type must be 5 (task body) or 6, 7, 8 (a note)."},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 def _unreadable_note(user, team_id, surface_type, meta) -> Response | None:
@@ -483,6 +509,8 @@ class ActivitySurfaceView(AuthenticatedAPIView):
                 {"error": "surface_type must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if surface_type not in CLIENT_SURFACES:
+            return _surface_refusal()
         # The caller (the mentioner / `actor`) must belong to the team
         # they're creating activities in — otherwise an authenticated user
         # could fabricate sidebar entries for any member of any team whose
@@ -557,6 +585,8 @@ class ActivityCommentSurfaceView(AuthenticatedAPIView):
                 {"error": "surface_type must be an integer."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if surface_type not in CLIENT_SURFACES:
+            return _surface_refusal()
         # Same actor-membership guard as the mention endpoint: the commenter
         # must belong to the team, so an authenticated user can't fabricate
         # activities in a team they're not in. (Recipients are separately
