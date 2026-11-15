@@ -2841,6 +2841,10 @@ class TaskCommentReactionView(AuthenticatedAPIView):
             {
                 **TaskCommentReactionFactSerializer(added.reaction).data,
                 **_reaction_broadcast_context(task.task_id, comment_id, request.user),
+                # The status code says it too (201 / 200), but the sockets handler's HTTP client
+                # returns the body of any 2xx alike: this is what it reads to announce a live toast
+                # for a NEW reaction only (MIP-1595). Additive; the row's own keys are unchanged.
+                "created": added.created,
             },
             status=status.HTTP_201_CREATED if added.created else status.HTTP_200_OK,
         )
