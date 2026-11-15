@@ -126,6 +126,19 @@ class CutText(SimpleTestCase):
         cut, _ = rl.cut_text(text, 100)  # ends inside the opener tag
         self.assertTrue(balanced(cut))
 
+    def test_a_text_that_quotes_a_lone_tag_is_cut_where_it_is_not_thrown_away(self):
+        text = "see <workspace_content> in " + "q" * 3_000
+        cut, removed = rl.cut_text(text, 500)
+        self.assertEqual(cut.split("\n[…")[0], text[:500])
+        self.assertEqual(removed, len(text) - 500)
+
+    def test_a_string_over_the_floor_by_less_than_its_marker_is_not_cut_by_the_guard(self):
+        work = {"a": "x" * (rl.LONG_STRING_FLOOR + 30), "b": "y" * 9_000}
+        changed = rl._cut_long_strings(work, 5_000, rl.Cuts())
+        self.assertTrue(changed)
+        self.assertEqual(work["a"], "x" * (rl.LONG_STRING_FLOOR + 30))
+        self.assertIn("more characters not shown", work["b"])
+
     def test_a_text_that_only_looks_like_it_has_a_fence_is_cut_normally(self):
         text = "see </workspace_content> and " + "z" * 3000
         cut, removed = rl.cut_text(text, 500)
@@ -313,6 +326,36 @@ class TheGuard(SimpleTestCase):
         self.assertEqual(out["next_cursor"], kept[0]["message_id"])
         self.assertTrue(out["has_more"])
         self.assertEqual(out["truncated"]["omitted_items"], {"messages": 30 - len(kept)})
+
+    def test_a_tools_own_cursor_does_not_point_past_items_that_were_dropped(self):
+        # list_tasks, list_my_chats and get_timeline page with their own `next_cursor`; the items
+        # dropped from the END came before it, so it would skip them for a client that pages on
+        rows = [{"task_id": i, "t": "z" * 1_500} for i in range(30)]
+        payload = {"tasks": rows, "has_more": True, "next_cursor": "CURSOR-AFTER-30"}
+        out, _ = self.run_guard(payload, tool="list_tasks", cap=12_000)
+        self.assertLess(len(out["tasks"]), 30)
+        self.assertIsNone(out["next_cursor"])
+        self.assertTrue(out["has_more"])
+        self.assertEqual(out["truncated"]["next_call"], rl.HINTS["list_tasks"])
+        whole = {"tasks": [{"task_id": 1}], "has_more": True, "next_cursor": "KEEP"}
+        out, cut = self.run_guard(whole, tool="list_tasks", cap=12_000)
+        self.assertFalse(cut)
+        self.assertEqual(out["next_cursor"], "KEEP")
+
+    def test_a_nested_list_dropping_items_leaves_the_tools_cursor_alone(self):
+        payload = {
+            "tasks": [{"task_id": 1, "notes": [{"t": "n" * 1_500} for _ in range(30)]}],
+            "next_cursor": "KEEP",
+        }
+        out, _ = self.run_guard(payload, tool="list_tasks", cap=12_000)
+        self.assertLess(len(out["tasks"][0]["notes"]), 30)
+        self.assertEqual(out["next_cursor"], "KEEP")
+
+    def test_an_answer_that_does_not_say_it_is_a_thread_is_not_treated_as_a_channel(self):
+        messages = [{"message_id": f"m{i}", "text": "w" * 1_500} for i in range(30)]
+        out, _ = self.run_guard({"messages": messages}, tool="get_chat_thread", cap=12_000)
+        self.assertEqual(out["messages"][0]["message_id"], "m0")
+        self.assertNotIn("next_cursor", out)
 
     def test_a_thread_loses_its_newest_replies(self):
         replies = [{"thread_message_id": f"r{i}", "text": "w" * 1_500} for i in range(30)]
