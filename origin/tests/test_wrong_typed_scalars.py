@@ -269,7 +269,7 @@ class ReactionAndTaskTests(Base):
             "task_id": self.task.task_id,
             "team_id": self.team_id,
             "comment_id": 1,
-            "reaction_emoji": "x",
+            "reaction_emoji": "👍",
         }
         body.update(over)
         return self.client.post(REACTION, body, format="json")
@@ -296,12 +296,12 @@ class ReactionAndTaskTests(Base):
         self.assertEqual(self.reaction().status_code, 201)
         self.assertEqual(TaskCommentReactionFact.objects.count(), 1)
 
-    def test_an_empty_team_id_is_a_400_and_writes_nothing(self):
-        """`align_team_to_object` swaps a non-empty team for the task's own and skips `""`,
-        which `require_fields` accepts as present and the lookup then rejects as a UUID."""
+    def test_an_empty_team_id_is_not_read_so_it_is_not_a_400_either(self):
+        """The `""` that was a 500 and then a 400 is a reaction now: the team is the task's
+        (MIP-1582) and the body's `team_id` is not read at all."""
         res = self.reaction(team_id="")
-        self.assertAnswer(res, 400, "team_id must be a valid id.")
-        self.assertEqual(TaskCommentReactionFact.objects.count(), 0)
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(TaskCommentReactionFact.objects.get().team_id, self.team.team_id)
 
     def test_a_valid_create_is_unchanged(self):
         before = TaskMaster.objects.count()

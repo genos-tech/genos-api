@@ -3,8 +3,9 @@
 `can_access_task` read `TaskMaster` with no `is_deleted` check, so every endpoint behind
 it treated a task that was deleted as live: a member who knew the id could still read it,
 comment on it, attach to it or edit it. The guard now refuses a soft-deleted row unless
-the call site says `include_deleted=True`; two sites do, on purpose (the attachment
-delete and the task-to-milestone conversion, both left to their own tasks).
+the call site says `include_deleted=True`; one site does, on purpose (the task-to-milestone
+conversion, left to its own task). The attachment delete was the other until MIP-1582 decided it:
+a deleted task answers there as a missing one.
 
 What the tests pin, per endpoint:
 
@@ -115,6 +116,9 @@ class TestEndpointsRefuseADeletedTask(DeletedTaskBase):
                 f"/api/v2/task/getTask/?team_id={team}&project_id={proj}&task_id={t}"
             ),
             "attachment GET": lambda t: c.get(f"/api/v2/task/attachment/?task_id={t}"),
+            "attachment DELETE": lambda t: c.delete(
+                f"/api/v2/task/attachment/?task={t}&attachment_id=1"
+            ),
             "attachment POST": lambda t: c.post(
                 "/api/v2/task/attachment/", {"task": t, "attachment_id": "-1"}, format="multipart"
             ),
@@ -149,14 +153,14 @@ class TestEndpointsRefuseADeletedTask(DeletedTaskBase):
                     "task_id": t,
                     "team_id": team,
                     "comment_id": 1,
-                    "reaction_emoji": "x",
+                    "reaction_emoji": "👍",
                     "sender_id": str(self.user2.id),
                 },
                 format="json",
             ),
             "reaction DELETE": lambda t: c.delete(
                 "/api/v2/task/comment/reaction/"
-                f"?team_id={team}&sender_id={self.user2.id}&task_id={t}&comment_id=1&reaction_emoji=x"
+                f"?team_id={team}&sender_id={self.user2.id}&task_id={t}&comment_id=1&reaction_emoji=%F0%9F%91%8D"
             ),
             "mention POST": lambda t: c.post(
                 "/api/v2/task/comment/mention/",
@@ -256,12 +260,13 @@ class TestRestoreOfTheDeletedStateIsNotBlocked(DeletedTaskBase):
         gone.refresh_from_db()
         self.assertTrue(gone.is_deleted)
 
-    def test_the_attachment_delete_is_left_as_it_was(self):
-        """MIP-1582 owns it: a deleted task is still reachable here, so it answers about the
-        attachment ("Attachment not found.") and not about the task."""
+    def test_the_attachment_delete_refuses_a_deleted_task_as_a_missing_one(self):
+        """MIP-1582: it used to opt out (`include_deleted=True`) and answer about the attachment
+        ("Attachment not found.") and not about the task. A file of a deleted task is left where it
+        is, as the agent's tool leaves it."""
         gone = self.task(deleted=True)
         res = self.client.delete(f"/api/v2/task/attachment/?task={gone.task_id}&attachment_id=1")
-        self.assertEqual(_answer(res), (404, {"error": "Attachment not found."}))
+        self.assertEqual(_answer(res), (404, {"error": "Task not found."}))
 
     def test_the_milestone_conversion_keeps_its_own_answer_for_a_deleted_task(self):
         """MIP-1583 owns it: `convert_task_to_milestone` refuses with its `task_deleted` code."""
@@ -467,6 +472,6 @@ class TestTheGuard(DeletedTaskBase):
         )
         self.assertEqual(
             files,
-            ["origin/views/task/conversion_views.py", "origin/views/task/task_views.py"],
+            ["origin/views/task/conversion_views.py"],
             found,
         )
