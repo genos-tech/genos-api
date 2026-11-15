@@ -181,6 +181,54 @@ def readable_note_ids(user_id, note_type, note_ids) -> set:
     return readable
 
 
+def task_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
+    """The `(user id, note id)` pairs, among these users and TASK notes, where the user can read
+    the note: `get_effective_role(user, NOTE_TYPE_TASK, note) is not None` for many people and
+    notes at once, in three queries however many (`readable_note_ids` takes one person).
+
+    An explicit grant, or a `ProjectMembers` row on the note's project. The project's owner and a
+    task's assignee or reporter are NOT readers of its notes unless they hold one of those: this
+    is the note's rule, not `can_access_task`'s. `tests/test_mention_followups.py` pins it equal
+    to `get_effective_role` and `readable_note_ids` over every kind of person, so the three
+    cannot drift. Ids come back as strings (users) and ints (notes).
+    """
+    who = {str(u) for u in user_ids if u}
+    wanted = set()
+    for n in note_ids:
+        try:
+            wanted.add(int(n))
+        except (TypeError, ValueError):
+            continue
+    if not who or not wanted:
+        return set()
+
+    pairs = {
+        (str(user), note)
+        for user, note in NotePermissionMaster.objects.filter(
+            user__in=who, note_type=NOTE_TYPE_TASK, note_id__in=wanted
+        ).values_list("user_id", "note_id")
+    }
+    projects = dict(
+        TaskNoteMaster.objects.filter(note_id__in=wanted, project__isnull=False).values_list(
+            "note_id", "project_id"
+        )
+    )
+    if projects:
+        members = {
+            (str(user), project)
+            for user, project in ProjectMembers.objects.filter(
+                attendee__in=who, project_id__in=set(projects.values())
+            ).values_list("attendee_id", "project_id")
+        }
+        pairs |= {
+            (user, note)
+            for note, project in projects.items()
+            for user in who
+            if (user, project) in members
+        }
+    return pairs
+
+
 def note_exists(note_type, note_id):
     if note_type == NOTE_TYPE_PERSONAL:
         return PersonalNoteMaster.objects.filter(note_id=note_id).exists()

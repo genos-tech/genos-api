@@ -313,8 +313,9 @@ def create_surface_mention_activities(
 
 def _task_stakeholders(task_id) -> set:
     """Assignee + collaborators of a task — who to tell about a comment
-    left on the task BODY (surface 5) even without an @-mention. A collaborator who cannot
-    open the task is not told (MIP-1567).
+    left on the task BODY (surface 5) even without an @-mention. Anyone who cannot
+    open the task is not told: a collaborator (MIP-1567), or an assignee who left the
+    team (MIP-1592).
 
     Prior *task-comment* senders (the separate legacy task-comment feature)
     are intentionally NOT included: a BlockNote inline comment's own prior
@@ -323,19 +324,19 @@ def _task_stakeholders(task_id) -> set:
     "the task's assigned user plus stakeholders", exactly the report's ask.
     """
     from origin.models.task.task_models import TaskMaster
-    from origin.services.task_collaborators import notifiable_collaborator_ids
+    from origin.services.task_collaborators import collaborator_ids, task_readers_among
 
-    out: set = set()
     if task_id is None:
-        return out
+        return set()
     assignee_id = (
         TaskMaster.objects.filter(task_id=task_id).values_list("assignee_id", flat=True).first()
     )
+    candidates = collaborator_ids(task_id)
     if assignee_id is not None:
-        out.add(str(assignee_id))
-    # Only the collaborators who can open the task (MIP-1567).
-    out |= notifiable_collaborator_ids(task_id)
-    return out
+        candidates.add(str(assignee_id))
+    # Only those who can open the task (MIP-1567): the assignee too, since one who has left the
+    # team no longer can (MIP-1592).
+    return task_readers_among(task_id, candidates)
 
 
 def _note_grant_user_ids(note_type: int, note_id) -> set:

@@ -5,12 +5,14 @@ The mention picker offers the whole TEAM, but every surface a mention
 can appear on has its own, narrower membership. That mismatch currently
 fails three different ways and tells the mentioner nothing:
 
-  * task comments / bodies — the mention is delivered and the task IS
-    readable (`GetTaskView` has no membership gate), but the task never
-    appears in the recipient's lists, so it's reachable only from that
-    one notification;
+  * task comments / bodies — the mention is delivered, and the task opens for the people
+    `can_access_task` lets in (`GetTaskView` answers 404 to anyone else: the project's members
+    and owner, the task's assignee and reporter), so a teammate who is not on the project gets
+    the notification and a minimal card of it (MIP-1593) and cannot open the task, which never
+    appears in their lists either;
   * task and chat notes — delivered, then 403 on open, because
-    `get_effective_role` grants access via project / channel membership;
+    `get_effective_role` grants access via project / channel membership (a task note's mention
+    shows such a teammate a minimal card, MIP-1598);
   * chat messages — silently DROPPED before delivery
     (`_valid_mention_user_ids` intersects with `ChannelMember`), so the
     recipient is never told at all while the chip still renders in the
