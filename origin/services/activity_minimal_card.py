@@ -126,14 +126,17 @@ def task_reader_pairs(
     recipient_ids: Iterable[Any], task_ids: Iterable[Any]
 ) -> set[tuple[str, int]]:
     """The `(recipient id, task id)` pairs `can_access_task` says yes to: the project's member
-    or owner, the assignee, the reporter, and the task is not soft-deleted (MIP-1566). Three
-    queries however many recipients and tasks.
+    or owner, the assignee or the reporter while still on the task's team (MIP-1592: the
+    project's team, else the task's own), and the task is not soft-deleted (MIP-1566). Three
+    queries, five when a holder who is not on the project is among the pairs, however many
+    recipients and tasks.
 
     The ONE place this rule is written for the mention card, the activity feed's gate and the
     comment-mention row (MIP-1598); `tests/test_mention_followups.py` pins it equal to
     `can_access_task` over every kind of person, so a change to the rule there shows up here."""
     from origin.models.project.prj_models import ProjectMaster, ProjectMembers
     from origin.models.task.task_models import TaskMaster
+    from origin.views.utils.scope_guards import active_team_pairs
 
     who = {str(r) for r in recipient_ids if r}
     wanted = {t for t in (_as_int(i) for i in task_ids) if t is not None}
@@ -141,7 +144,7 @@ def task_reader_pairs(
         return set()
     tasks = list(
         TaskMaster.objects.filter(task_id__in=wanted, is_deleted=False).values(
-            "task_id", "project_id", "assignee_id", "reporter_id"
+            "task_id", "project_id", "assignee_id", "reporter_id", "team_id", "project__team_id"
         )
     )
     projects = {t["project_id"] for t in tasks if t["project_id"] is not None}
@@ -158,12 +161,22 @@ def task_reader_pairs(
                 owner_id__in=who, project_id__in=projects
             ).values_list("owner_id", "project_id")
         }
-    out: set[tuple[str, int]] = set()
+    # The holders who are not on the project are readers only while they are on the task's team.
+    held: list[tuple[str, dict]] = []
     for t in tasks:
         holders = {str(t["assignee_id"]), str(t["reporter_id"])}
-        for r in who:
-            if r in holders or (r, t["project_id"]) in on_project:
-                out.add((r, t["task_id"]))
+        held += [(r, t) for r in who if r in holders and (r, t["project_id"]) not in on_project]
+    on_team = active_team_pairs(
+        {r for r, _ in held}, {t["project__team_id"] or t["team_id"] for _, t in held}
+    )
+    out: set[tuple[str, int]] = {
+        (r, t["task_id"]) for t in tasks for r in who if (r, t["project_id"]) in on_project
+    }
+    out |= {
+        (r, t["task_id"])
+        for r, t in held
+        if (r, str(t["project__team_id"] or t["team_id"])) in on_team
+    }
     return out
 
 
