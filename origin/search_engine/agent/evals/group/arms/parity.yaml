@@ -3,7 +3,12 @@
 # project's default body template; update_task: links, reporter_id; create_task_plan tasks: status,
 # template; MIP-1562: update_comment: reaction, remove_reaction, flag; create_todo_item: task_id,
 # comment_id; MIP-1563: fetch_task lists a task's files as metadata, and a new write tool,
-# delete_task_attachment, is declared). Later parity tasks add their parameters behind the same flag.
+# delete_task_attachment, is declared; MIP-1564: manage_milestone takes the action `convert` and, on `update`,
+# a `project_id` that moves the milestone; MIP-1059: the calendar tools take `account` (any connected Google account),
+# `get_calendar_event` reads one event, a calendar event can be cited and chipped, and the three calendar writes get a real
+# approval card; MIP-1058: a chat message (`message` mention, read with the asker's chat access) and a selected passage
+# (`selected_text`, capped and fenced) can be the context of an ask: per-ask blocks in `system_extra`, no change to the prompt
+# prefix or a declaration). Later parity tasks add their parameters behind the same flag.
 # Model-visible: the declarations grow by the parameters, one sentence per tool and the delete tool.
 arm: parity
 overrides:

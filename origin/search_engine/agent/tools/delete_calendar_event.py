@@ -12,11 +12,27 @@ from __future__ import annotations
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
+    NOT_FOUND_ACCOUNT_HINT,
+    account_arg,
+    account_fields,
     calendar_api_error,
     google_calendar_request,
     resolve_google_calendar_account,
+    segment,
 )
+from origin.search_engine.agent.calendar import (
+    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
+)
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+
+__all__ = ["DELETE_CALENDAR_EVENT", "PARITY_PROPERTIES"]
+
+#: Appended to the description while `AGENT_PARITY_TOOLS` is on (`tool_flag_text`). The app's own
+#: delete reads a 404 as success too, and that is what makes the wrong account dangerous here.
+DESCRIPTION_ADDITION = (
+    " An event that is not on that `account` also reads as already gone: check the account first."
+)
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -25,27 +41,35 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError("`event_id` is required.")
     calendar_id = args.get("calendar_id") or "primary"
 
-    account = resolve_google_calendar_account(ctx.user_id)
+    account_ref = account_arg(args, write=True)
+    account = resolve_google_calendar_account(ctx.user_id, account_ref)
     resp = google_calendar_request(
-        account, "DELETE", f"/calendars/{calendar_id}/events/{event_id}"
+        account, "DELETE", f"/calendars/{segment(calendar_id)}/events/{segment(event_id)}"
     )
     if resp.status_code == 404:
-        return {
+        result = {
             "event_id": event_id,
             "calendar_id": calendar_id,
             "deleted": True,
             "already_gone": True,
             "__summary__": (f"Event {event_id} was already deleted on Google."),
         }
-    if not resp.ok:
+    elif not resp.ok:
         raise calendar_api_error(resp, "delete event")
-    return {
-        "event_id": event_id,
-        "calendar_id": calendar_id,
-        "deleted": True,
-        "already_gone": False,
-        "__summary__": f"Deleted event {event_id}.",
-    }
+    else:
+        result = {
+            "event_id": event_id,
+            "calendar_id": calendar_id,
+            "deleted": True,
+            "already_gone": False,
+            "__summary__": f"Deleted event {event_id}.",
+        }
+    if parity_on():
+        result.update(account_fields(account, defaulted=not account_ref))
+        if result["already_gone"] and result.get("other_accounts"):
+            # Google's 404 is also what the wrong account says (the app's delete reads it as success too).
+            result["note"] = NOT_FOUND_ACCOUNT_HINT.strip()
+    return result
 
 
 DELETE_CALENDAR_EVENT = Tool(

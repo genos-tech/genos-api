@@ -26,15 +26,26 @@ import uuid
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
+    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
+)
+from origin.search_engine.agent.calendar import (
+    account_arg,
+    account_fields,
     build_time_endpoint,
     calendar_api_error,
+    cite_event,
+    effective_time_zone,
     emails_to_attendees,
     google_calendar_request,
     resolve_google_calendar_account,
+    segment,
     shape_event,
     validate_time_pair,
 )
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+
+__all__ = ["CREATE_CALENDAR_EVENT", "PARITY_PROPERTIES"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -47,7 +58,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError("`start_iso` and `end_iso` are required.")
     validate_time_pair(start_iso, end_iso)
 
-    time_zone = args.get("time_zone") or None
+    time_zone = effective_time_zone(
+        args.get("time_zone") or None, (start_iso, end_iso), ctx.user_id
+    )
     calendar_id = args.get("calendar_id") or "primary"
 
     body: dict[str, Any] = {
@@ -82,11 +95,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # createRequest; without it the field is silently dropped.
         params["conferenceDataVersion"] = 1
 
-    account = resolve_google_calendar_account(ctx.user_id)
+    account_ref = account_arg(args, write=True)
+    account = resolve_google_calendar_account(ctx.user_id, account_ref)
     resp = google_calendar_request(
         account,
         "POST",
-        f"/calendars/{calendar_id}/events",
+        f"/calendars/{segment(calendar_id)}/events",
         json=body,
         params=params or None,
     )
@@ -94,11 +108,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise calendar_api_error(resp, "create event")
     event = resp.json() or {}
     shaped = shape_event(event)
-    return {
+    result = {
         **shaped,
         "calendar_id": calendar_id,
         "__summary__": f"Created event '{summary}' on `{calendar_id}`.",
     }
+    if parity_on():
+        result = {
+            **cite_event(result, account.id, ctx),
+            **account_fields(account, defaulted=not account_ref),
+        }
+    return result
 
 
 CREATE_CALENDAR_EVENT = Tool(

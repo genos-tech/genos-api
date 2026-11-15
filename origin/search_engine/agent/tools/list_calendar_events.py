@@ -11,12 +11,28 @@ from __future__ import annotations
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
+    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
+)
+from origin.search_engine.agent.calendar import (
+    account_arg,
+    account_fields,
     calendar_api_error,
+    cite_event,
     google_calendar_request,
     resolve_google_calendar_account,
+    segment,
     shape_event,
 )
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+
+#: Appended to the description while the flag is on (`tool_flag_text`).
+DESCRIPTION_ADDITION = (
+    " Reads ONE account: the default unless `account` is given; `other_accounts` says how many more "
+    "the member has."
+)
+
+__all__ = ["LIST_CALENDAR_EVENTS", "PARITY_PROPERTIES"]
 
 # Upper bound on a single call; the model can paginate by adjusting
 # `from`/`to` if it needs more.
@@ -24,7 +40,8 @@ _MAX_RESULTS_CAP = 100
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    account = resolve_google_calendar_account(ctx.user_id)
+    account_ref = account_arg(args, write=False)
+    account = resolve_google_calendar_account(ctx.user_id, account_ref)
     calendar_id = args.get("calendar_id") or "primary"
 
     params: dict[str, Any] = {
@@ -56,19 +73,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         params["q"] = query.strip()
 
     resp = google_calendar_request(
-        account, "GET", f"/calendars/{calendar_id}/events", params=params
+        account, "GET", f"/calendars/{segment(calendar_id)}/events", params=params
     )
     if not resp.ok:
         raise calendar_api_error(resp, "list events")
     data = resp.json() or {}
     events = [shape_event(e) for e in data.get("items", []) if isinstance(e, dict)]
-    return {
+    result: dict[str, Any] = {
         "calendar_id": calendar_id,
         "from": time_min,
         "to": time_max,
         "events": events,
         "__summary__": f"Listed {len(events)} event(s) on `{calendar_id}`.",
     }
+    if parity_on():
+        result["events"] = [cite_event(e, account.id, ctx) for e in events]
+        result.update(account_fields(account, defaulted=not account_ref, label=True))
+    return result
 
 
 LIST_CALENDAR_EVENTS = Tool(

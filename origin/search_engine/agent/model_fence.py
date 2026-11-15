@@ -127,6 +127,7 @@ FENCED_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
     # create/update tools is a list of emails and nothing takes a name back.
     # `get_my_schedule` is the fourth caller of `shape_event`.
     "list_calendar_events": _ATTENDEE_NAMES,
+    "get_calendar_event": _ATTENDEE_NAMES,  # MIP-1059
     "update_calendar_event": _ATTENDEE_NAMES,
     "get_my_schedule": _ATTENDEE_NAMES,
 }

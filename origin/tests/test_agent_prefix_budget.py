@@ -23,7 +23,7 @@ from django.conf import settings
 from django.test import SimpleTestCase
 
 from origin.search_engine.agent.controller import _build_tool_declarations
-from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
+from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system_prompt
 
 # 112,091 when this was set: about 26.5k tokens by Gemini's own count. Raised to
 # 118,000 for MIP-880's three tools (115,095 measured, the same headroom as
@@ -54,7 +54,21 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT
 # shipped flags (142,879 with EVERY flag on). Raised to 143,000, the measurement rounded up to the next
 # 500: 267 characters are left, so the next parity task raises it with its own measurement. With the flag
 # off production sends 138,938, as before.
-BUDGET_CHARS = 143_000
+# MIP-1564 (the same flag): `manage_milestone` gains the `convert` action, `task_id` and the project
+# move of `update` (one added description sentence of 617 characters, a `task_id` property, the enum
+# value and the re-worded `project_id`, less the sentence that said a move is not supported): +769,
+# 143,502 measured with it on over the shipped flags (143,648 with EVERY flag on). Raised to 144,000,
+# the measurement rounded up to the next 500: 498 characters are left, so the next parity task raises
+# it with its own measurement. With the flag off production still sends 138,938.
+# MIP-1059 (the same flag): the calendar's several Google accounts. `account` on five calendar tools, the
+# new `get_calendar_event` tool (a flag-gated READ), three description sentences and one line of the system
+# prompt (the event's citation shape: `agent_system_prompt()`, so the flag-on test below measures that and
+# not the constant): +1,701 in declarations (143,502 -> 145,203 by the constant-prompt count used above) and
+# +90 for the prompt line, 145,439 measured with it on over the shipped flags by `agent_system_prompt()`
+# (which also holds the reject-reason rule the shipped defaults turn on) and 145,439 with EVERY flag on.
+# Raised to 145,500, the measurement rounded up to the next 500: 61 characters are left, so the next parity
+# task raises it with its own measurement. With the flag off production still sends 138,938.
+BUDGET_CHARS = 145_500
 
 
 def _declared_chars() -> int:
@@ -88,7 +102,9 @@ class PrefixBudgetTests(SimpleTestCase):
         with mock.patch.dict(
             settings.SEARCH_ENGINE, {**production.SEARCH_ENGINE, "AGENT_PARITY_TOOLS": True}
         ):
-            total = _declared_chars() + len(AGENT_SYSTEM_PROMPT)
+            # `agent_system_prompt()`, not the constant: the flag adds the event citation line (MIP-1059),
+            # and so does the reject-reason rule the production defaults turn on.
+            total = _declared_chars() + len(agent_system_prompt())
         self.assertLessEqual(total, BUDGET_CHARS)
 
     def test_the_count_covers_every_declared_tool(self) -> None:

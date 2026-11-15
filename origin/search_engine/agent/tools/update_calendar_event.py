@@ -22,15 +22,27 @@ import uuid
 from typing import Any
 
 from origin.search_engine.agent.calendar import (
+    NOT_FOUND_ACCOUNT_HINT,
+    account_arg,
+    account_fields,
     build_time_endpoint,
     calendar_api_error,
+    cite_event,
+    effective_time_zone,
     emails_to_attendees,
     google_calendar_request,
     resolve_google_calendar_account,
+    segment,
     shape_event,
     validate_time_pair,
 )
+from origin.search_engine.agent.calendar import (
+    PARITY_ACCOUNT_PROPERTIES as PARITY_PROPERTIES,
+)
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+
+__all__ = ["PARITY_PROPERTIES", "UPDATE_CALENDAR_EVENT"]
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -38,6 +50,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not event_id:
         raise ToolError("`event_id` is required.")
     calendar_id = args.get("calendar_id") or "primary"
+    account_ref = account_arg(args, write=True)
 
     body: dict[str, Any] = {}
     params: dict[str, Any] = {}
@@ -67,7 +80,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         start_iso = start_iso.strip()
         end_iso = end_iso.strip()
         validate_time_pair(start_iso, end_iso)
-        time_zone = args.get("time_zone") or None
+        time_zone = effective_time_zone(
+            args.get("time_zone") or None, (start_iso, end_iso), ctx.user_id
+        )
         body["start"] = build_time_endpoint(start_iso, time_zone)
         body["end"] = build_time_endpoint(end_iso, time_zone)
 
@@ -92,6 +107,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         params["conferenceDataVersion"] = 1
 
     if not body:
+        if account_ref:
+            # Nothing is sent, but a foreign or made-up account is refused as it is on a real change.
+            resolve_google_calendar_account(ctx.user_id, account_ref)
         return {
             "event_id": event_id,
             "calendar_id": calendar_id,
@@ -99,29 +117,36 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "__summary__": f"No changes applied to event {event_id}.",
         }
 
-    account = resolve_google_calendar_account(ctx.user_id)
+    account = resolve_google_calendar_account(ctx.user_id, account_ref)
     resp = google_calendar_request(
         account,
         "PATCH",
-        f"/calendars/{calendar_id}/events/{event_id}",
+        f"/calendars/{segment(calendar_id)}/events/{segment(event_id)}",
         json=body,
         params=params or None,
     )
     if resp.status_code == 404:
-        raise ToolError(
+        message = (
             f"Event {event_id} not found on calendar `{calendar_id}`. It "
             f"may have been deleted upstream."
         )
+        raise ToolError(message + NOT_FOUND_ACCOUNT_HINT if parity_on() else message)
     if not resp.ok:
         raise calendar_api_error(resp, "update event")
     event = resp.json() or {}
     shaped = shape_event(event)
-    return {
+    result = {
         **shaped,
         "calendar_id": calendar_id,
         "changed_fields": list(body.keys()),
         "__summary__": (f"Updated event {event_id}: {', '.join(body.keys())}."),
     }
+    if parity_on():
+        result = {
+            **cite_event(result, account.id, ctx),
+            **account_fields(account, defaulted=not account_ref),
+        }
+    return result
 
 
 UPDATE_CALENDAR_EVENT = Tool(

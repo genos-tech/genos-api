@@ -1098,6 +1098,12 @@ def _friendly_manage_milestone_arguments(
     proposed = [u for u in proposed if u] if isinstance(proposed, list) else []
     action = args.get("action")
 
+    if action == "convert":
+        # MIP-1564 (flag-gated: the tool refuses the action while the flag is off, and a refused call
+        # shows no card of its own).
+        _friendly_convert_arguments(out, args, access)
+        return
+
     milestone = access.milestone(args.get("milestone_id")) if action == "update" else None
     current_people = (
         [
@@ -1138,6 +1144,10 @@ def _friendly_manage_milestone_arguments(
                 if milestone.sprint_id
                 else None
             )
+        move = _milestone_move_facts(milestone, args, access)
+        if move is not None:
+            current["project_id"] = move.pop("from_project")
+            current["move"] = move
         out["current"] = current
         return
 
@@ -1151,6 +1161,139 @@ def _friendly_manage_milestone_arguments(
                 folder=folder, is_deleted=False
             ).count()
         out["current"] = current
+
+
+def _milestone_move_facts(
+    milestone: Any, args: dict[str, Any], access: LabelAccess
+) -> dict[str, Any] | None:
+    """What a project move of `milestone` would do, for the approval card (MIP-1564): the project it
+    leaves, how many tasks go with it, and what is cleared that it holds now. None unless the call
+    really moves it: the flag is on and the destination is a different project the caller may use
+    (the tool's own test, `manage_milestone._destination`), so a card never promises a move the tool
+    would refuse."""
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
+    from origin.search_engine.agent.tools.task_tags import tag_names  # noqa: PLC0415
+    from origin.services.task_project_move import milestone_subtree_task_ids  # noqa: PLC0415
+
+    raw = args.get("project_id")
+    if not parity_on() or raw in (None, "") or access.project_name(raw) is None:
+        return None
+    # The tool's own refusals (`manage_milestone._destination`): the caller is not on the project the
+    # milestone is in, or the call also sets what a move clears.
+    from_project = access.project_name(milestone.project_id)
+    if from_project is None or _label_key(raw) == milestone.project_id:
+        return None
+    if any(args.get(key) is not None for key in ("sprint_id", "milestone_folder_id", "tags")):
+        return None
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    return {
+        "from_project": from_project,
+        "tasks": TaskMaster.objects.filter(
+            task_id__in=milestone_subtree_task_ids(milestone) - {milestone.task_id},
+            is_deleted=False,
+        ).count(),
+        "sprint": (
+            (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
+            if milestone.sprint_id
+            else None
+        ),
+        "folder": (
+            (access.milestone_folder_name(milestone.folder_id) or milestone.folder_id)
+            if milestone.folder_id
+            else None
+        ),
+        "tags": tag_names(milestone.tags),
+    }
+
+
+def _friendly_convert_arguments(
+    out: dict[str, Any], args: dict[str, Any], access: LabelAccess
+) -> None:
+    """ADDS what a `manage_milestone` convert changes, under `current` (MIP-1564), so the card says
+    WHAT is converted and what comes along or is dropped, not "convert 42":
+
+      * a root task (`task_id`): its title and display id, the sub-tasks that join the new milestone,
+        its assignee;
+      * a milestone (`milestone_id`): its title, the tasks that stay under it as sub-tasks, the people
+        (the first stays the assignee, the others become collaborators), and the folder and sprint
+        that are dropped.
+
+    Only for an object the caller may read, so an id they can't see shows nothing; `direction` says
+    which of the two it is. A call with both or neither id (the tool refuses it) gets nothing."""
+    from origin.models.task.milestone_models import MilestoneAssignees  # noqa: PLC0415
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
+    from origin.services.task_project_move import collect_descendant_task_ids  # noqa: PLC0415
+
+    # The action exists only while the flag is on: with it off a (made-up) convert is refused when
+    # it runs, and its card says nothing of the conversion.
+    if not parity_on():
+        return
+    has_task = args.get("task_id") not in (None, "")
+    has_milestone = args.get("milestone_id") not in (None, "")
+    if has_task == has_milestone:
+        return
+    if has_task:
+        task = access.task(args.get("task_id"))
+        if task is None:
+            return
+        out["current"] = {
+            "direction": "task_to_milestone",
+            "title": task.title,
+            "display_id": task.display_id,
+            "sub_tasks": len(collect_descendant_task_ids(task.task_id)),
+            "assignee": access.username(task.assignee_id) if task.assignee_id else None,
+        }
+        return
+    milestone = access.milestone(args.get("milestone_id"))
+    if milestone is None:
+        return
+    people = [
+        str(uid)
+        for uid in MilestoneAssignees.objects.filter(milestone=milestone)
+        .order_by("ts_created_at", "id")
+        .values_list("user_id", flat=True)
+    ]
+    names = access.usernames(people) if people else {}
+    out["current"] = {
+        "direction": "milestone_to_task",
+        "title": milestone.title,
+        "display_id": _backing_display(milestone),
+        "tasks": _milestone_task_count(milestone),
+        "assignee": names.get(people[0], people[0]) if people else None,
+        "collaborators": [names.get(uid, uid) for uid in people[1:]],
+        "folder": (
+            (access.milestone_folder_name(milestone.folder_id) or milestone.folder_id)
+            if milestone.folder_id
+            else None
+        ),
+        "sprint": (
+            (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
+            if milestone.sprint_id
+            else None
+        ),
+    }
+
+
+def _backing_display(milestone: Any) -> str | None:
+    from origin.search_engine.agent.tools.list_milestones import (  # noqa: PLC0415
+        _backing_display_id,
+    )
+
+    return _backing_display_id(milestone)
+
+
+def _milestone_task_count(milestone: Any) -> int:
+    """The live tasks that stay under a converted milestone's row as sub-tasks: those filed in it
+    (`milestone_id`), not its own row. The conversion service counts every row, deleted ones too;
+    the card says what a person would still see."""
+    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+    return (
+        TaskMaster.objects.filter(milestone=milestone, is_deleted=False)
+        .exclude(task_id=milestone.task_id)
+        .count()
+    )
 
 
 def _friendly_delete_milestone_arguments(
@@ -1239,7 +1382,7 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
 
 
 def _friendly_arguments(
-    args: dict[str, Any], tool_name: str | None = None, *, ctx: ToolContext
+    args: dict[str, Any], tool_name: str | None = None, *, ctx: ToolContext, card: bool = False
 ) -> dict[str, Any]:
     """Return a copy of `args` with raw IDs replaced by human labels.
 
@@ -1252,6 +1395,11 @@ def _friendly_arguments(
     The ids come from the model, so `ctx` is REQUIRED: a label is printed
     only for an object the caller may read (`LabelAccess`, MIP-842). Any
     other id, and any lookup that fails, stays raw.
+
+    `card` is True only for the event that PAUSES a run for approval. It lets a tool's card carry
+    what has to be fetched from outside the database (a calendar write's event, read from Google,
+    MIP-1059): that read is made once, at the pause, and not again for the start event after an
+    approval or a rejection, which is built from the same arguments.
     """
     access = LabelAccess(ctx)
     out: dict[str, Any] = {}
@@ -1274,6 +1422,14 @@ def _friendly_arguments(
             enricher(out, args, access)
         except Exception:  # noqa: BLE001 — labels never break the loop
             log.exception("Nested friendly-arg enrichment failed for %s", tool_name)
+    if card and parity_on():
+        # A calendar write's account, zone and (for a change) the event as it is now (MIP-1059).
+        from origin.search_engine.agent.calendar_card import card_facts  # noqa: PLC0415
+
+        try:
+            out.update(card_facts(tool_name or "", args, ctx))
+        except Exception:  # noqa: BLE001 — a card never breaks the loop
+            log.exception("Calendar card enrichment failed for %s", tool_name)
     return out
 
 
@@ -1656,6 +1812,70 @@ def _milestone_source(
     return s
 
 
+_CALENDAR_WRITE_TOOLS = frozenset(
+    {"create_calendar_event", "update_calendar_event", "delete_calendar_event"}
+)
+
+
+def _calendar_change_ref(call_name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """The compact ref on the `tool_call_result` of an approved calendar write: what changed and where
+    (MIP-1059). `action` is `create`, `update` or `delete`; `start`, `end` and `all_day` are present
+    when the write returned the event (a delete, and an update that changed nothing, do not)."""
+    ref: dict[str, Any] = {
+        "action": call_name.split("_", 1)[0],
+        "account_id": result.get("account_id"),
+        "calendar_id": result.get("calendar_id"),
+        "event_id": result.get("id") or result.get("event_id"),
+    }
+    if result.get("start") is not None:
+        ref["start"] = result.get("start")
+        ref["end"] = result.get("end")
+        ref["all_day"] = bool(result.get("all_day"))
+    if call_name == "delete_calendar_event":
+        ref["deleted"] = True
+    return {k: v for k, v in ref.items() if v is not None}
+
+
+def _calendar_event_source(
+    account_id: Any,
+    calendar_id: Any,
+    event_id: Any,
+    event: dict[str, Any] | None = None,
+    *,
+    deleted: bool = False,
+) -> dict[str, Any] | None:
+    """The chip of a Google Calendar event (MIP-1059). None when the event has no token (`event_cite`).
+
+    An event is not in our database, so the chip carries what opens it in the app: the triple
+    `account_id` / `calendar_id` / `event_id` that addresses an event there, as plain fields. The
+    `entity_id` is a citation token and nothing parses it back: the calendar's own id has characters a
+    token cannot hold, and a token is lower-cased in places. `event` is a shaped event
+    (`calendar.shape_event`) when the tool read or wrote it: it gives the title (unfenced) and when it
+    is. A delete has none, so its chip has no title or time and the client words it.
+    """
+    from origin.search_engine.agent.calendar import EVENT_SOURCE, event_cite  # noqa: PLC0415
+
+    token = event_cite(account_id, event_id)
+    if token is None or not calendar_id:
+        return None
+    s = _blank_source(EVENT_SOURCE, token)
+    row = event or {}
+    s["title"] = _strip_workspace_marker(row.get("summary")) or ""
+    s["account_id"] = str(account_id)
+    s["calendar_id"] = str(calendar_id)
+    s["event_id"] = str(event_id)
+    s["event_start"] = row.get("start")
+    s["event_end"] = row.get("end")
+    # Unknown (a delete) is null, not false: the client folds a later copy of a source into the one it
+    # holds and ignores a blank, so a false here would erase an all-day event's true.
+    s["event_all_day"] = bool(row.get("all_day")) if "all_day" in row else None
+    if deleted:
+        # Only on the chip of an approved delete Google confirmed (not an "already gone", which may be the
+        # wrong account): a chip whose title and times came from an earlier read can say it was deleted.
+        s["deleted"] = True
+    return s
+
+
 # Which write tools reach a chip branch of `_sources_from_tool_result`, and which are
 # deliberately without one. `test_agent_write_source_chips` holds the two to the registry
 # both ways, so a new approval-gated tool has to land in one of them.
@@ -1681,6 +1901,9 @@ _NOTE_SOURCE_TOOLS = frozenset(
         "update_note",
         "restore_note_version",
         "manage_note_sharing",
+        # MIP-1059: its result names the note's `note_type` while `AGENT_PARITY_TOOLS` is on. A folder
+        # has no note, so a favorite of a folder yields no chip.
+        "favorite_note",
     }
 )
 _PROJECT_WRITE_TOOLS = frozenset(
@@ -1692,6 +1915,18 @@ _PROJECT_WRITE_TOOLS = frozenset(
         "manage_project_labels",
         "approve_join_request",
         "decline_join_request",
+        # MIP-1059: its result names the sprint's `project_id` while `AGENT_PARITY_TOOLS` is on.
+        "delete_sprint",
+    }
+)
+# The calendar tools whose result is an event (or, for a delete, names one): `calendar_event` chips.
+_CALENDAR_EVENT_TOOLS = frozenset(
+    {
+        "get_calendar_event",
+        "list_calendar_events",
+        "create_calendar_event",
+        "update_calendar_event",
+        "delete_calendar_event",
     }
 )
 # Chip branches that live inline above for the rest: create_task_plan, update_tasks_bulk,
@@ -1701,19 +1936,8 @@ NO_CHIP_WRITE_TOOLS: dict[str, str] = {
     "delete_note": "the note is gone: a chip would be a dead link",
     "delete_note_folder": "a folder is not a source type, and the folders it deleted are gone",
     "manage_note_folder": "a folder is not a source type: there is no chip or citation form for one",
-    "favorite_note": (
-        "its result names a note without its type, and adding it would change what the model "
-        "sees (a December item); a folder is not a source type"
-    ),
     "delete_todo_item": "the to-do is gone: a chip would be a dead link",
-    "delete_sprint": (
-        "its result carries no project, and adding one would change what the model sees "
-        "(a December item)"
-    ),
     "delete_project": "the project is gone, and there is no container to chip instead",
-    "create_calendar_event": "a calendar event is not a source type yet",
-    "update_calendar_event": "a calendar event is not a source type yet",
-    "delete_calendar_event": "a calendar event is not a source type yet",
 }
 
 
@@ -1742,8 +1966,8 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
 
     Returns [] for tools whose results don't map to a clickable entity
     (e.g. analytics aggregations without per-row ids, get_current_user,
-    get_team_members — no user-detail view exists to link to; calendar
-    events, which have no Spotlight entity type or citation grammar).
+    get_team_members — no user-detail view exists to link to). Calendar
+    events are a source type while `AGENT_PARITY_TOOLS` is on (MIP-1059).
 
     Sources are deduped upstream by (entity_type, entity_id), so emitting
     the same task from both `list_tasks` and `search_knowledge_base` in
@@ -1859,6 +2083,32 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
                         )
         return list(seen.values())
 
+    if call_name in _CALENDAR_EVENT_TOOLS:
+        # A calendar event (MIP-1059). Keyed on `account_id`, which a result carries only while
+        # `AGENT_PARITY_TOOLS` is on and only for an account the tool resolved as the member's own: a
+        # result made with the flag off has no chip, as it never had, and a run replayed from history
+        # after the flag went off keeps the chips it had.
+        account_id = result.get("account_id")
+        if not account_id:
+            return []
+        calendar_id = result.get("calendar_id")
+        if call_name == "list_calendar_events":
+            rows = [e for e in result.get("events") or [] if isinstance(e, dict)]
+            built = [_calendar_event_source(account_id, calendar_id, e.get("id"), e) for e in rows]
+        else:
+            # A read or a create/update returns the shaped event (`id`); a delete and an update that
+            # changed nothing name it by `event_id`.
+            event_id = result.get("id") or result.get("event_id")
+            removed = (
+                call_name == "delete_calendar_event"
+                and result.get("deleted") is True
+                and result.get("already_gone") is False
+            )
+            built = [
+                _calendar_event_source(account_id, calendar_id, event_id, result, deleted=removed)
+            ]
+        return [b for b in built if b is not None]
+
     if call_name in _TASK_WRITE_TOOLS:
         # Single-task write tools → chip the operated task, so every
         # approved write hands the user a clickable ref to what changed.
@@ -1880,7 +2130,17 @@ def _sources_from_tool_result(call_name: str, result: dict[str, Any]) -> list[di
 
     if call_name == "manage_milestone":
         # A milestone action → the milestone's chip; a folder action has no
-        # milestone, so the chip is its project's.
+        # milestone, so the chip is its project's. A milestone converted to a task has no
+        # milestone any more (MIP-1564): the chip is the task it became.
+        if result.get("direction") == "milestone_to_task" and result.get("task_id"):
+            return [
+                _task_source(
+                    result["task_id"],
+                    result.get("title"),
+                    result.get("project_id"),
+                    display_id=result.get("display_id"),
+                )
+            ]
         if result.get("milestone_id"):
             return [
                 _milestone_source(
@@ -2239,6 +2499,9 @@ def reconstruct_sources_for_run(run) -> list[dict[str, Any]]:
                 # then update_task): the frontend's always-chip guarantee
                 # rides on the flag.
                 seen_by_id[eid]["operated"] = True
+            if s.get("deleted"):
+                # The same for a delete's mark: an earlier read of the event holds the title and times.
+                seen_by_id[eid]["deleted"] = True
     return list(seen_by_id.values())
 
 
@@ -2706,6 +2969,34 @@ def resume_agent(
                         "attachment_id": result.get("attachment_id"),
                         "deleted": True,
                     }
+                # A converted or moved milestone (MIP-1564): the browser's copy of the row is the
+                # other kind of thing, or in another project, and its project tables list the old
+                # picture. The ref names what the browser has to drop and which projects to
+                # re-read. Additive.
+                if call_name == "manage_milestone" and (
+                    result.get("action") == "convert" or result.get("moved")
+                ):
+                    moved = result.get("moved") or {}
+                    change_ref = {
+                        "kind": "convert" if result.get("action") == "convert" else "move",
+                        "direction": result.get("direction"),
+                        "task_id": result.get("task_id"),
+                        "milestone_id": result.get("milestone_id")
+                        or result.get("converted_milestone_id"),
+                        "project_id": result.get("project_id"),
+                        "from_project_id": moved.get("from_project_id"),
+                    }
+                    result_event["milestone_change"] = {
+                        k: v for k, v in change_ref.items() if v is not None
+                    }
+                # An approved calendar write (MIP-1059): the app's calendar is Google's, so nothing
+                # pushes a change to the browser, and the open calendar has to be told to read again.
+                # The ref names the event by the triple that addresses it in the app and says what
+                # was done; `start` / `end` (when the write returned the event) say which part of the
+                # calendar to re-read. Present only for a write made on a resolved account of the
+                # member (the result carries `account_id` then, while the flag is on). Additive.
+                if call_name in _CALENDAR_WRITE_TOOLS and result.get("account_id"):
+                    result_event["calendar_event"] = _calendar_change_ref(call_name, result)
                 # Approved note writes carry a compact `note` ref so the
                 # frontend can refresh caches and (for body updates) push
                 # the new blocks into the live Yjs doc. Additive — older
@@ -3919,7 +4210,9 @@ def _drive_loop(
                     "step": step,
                     "tool_name": call_name,
                     "arguments": approval_edits.for_card(
-                        _friendly_arguments(call_args, call_name, ctx=ctx), call_args, editable
+                        _friendly_arguments(call_args, call_name, ctx=ctx, card=True),
+                        call_args,
+                        editable,
                     ),
                     "editable": editable,
                     "approval_token": str(approval_token),

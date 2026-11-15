@@ -140,6 +140,7 @@ INTEGRATION_TOOLS: dict[str, frozenset[str]] = {
         {
             "list_calendars",
             "list_calendar_events",
+            "get_calendar_event",  # MIP-1059, declared only while `AGENT_PARITY_TOOLS` is on
             "create_calendar_event",
             "update_calendar_event",
             "delete_calendar_event",

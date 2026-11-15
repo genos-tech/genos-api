@@ -21,10 +21,12 @@ from origin.views.public.mcp.tools import CATALOG
 # `PUBLISHED` is what a client is offered while every flag is off (the catalog minus `FLAGGED`).
 # MIP-1563 added one flag-gated WRITE tool (`delete_task_attachment`, flag `AGENT_PARITY_TOOLS`),
 # which is in `CATALOG` but published only while its flag is on: the number a client sees today did
-# not move, and `FLAGGED_WRITES` is the one that will be added to it on the flip.
+# not move, and `FLAGGED_WRITES` is the one that will be added to it on the flip. MIP-1059 added one
+# flag-gated READ (`get_calendar_event`, the same flag): `FLAGGED_READS`.
 PUBLISHED = 99
-FLAGGED = 1
+FLAGGED = 2
 FLAGGED_WRITES = 1
+FLAGGED_READS = 1
 FROM_REGISTRY = (
     83  # published tools backed by a tool in the agent registry (some under another name)
 )
@@ -70,6 +72,7 @@ class McpToolCountTests(SimpleTestCase):
         self.assertEqual(len(CATALOG) - len(self.flagged), PUBLISHED, HOW)
         self.assertEqual(len(self.flagged), FLAGGED, HOW)
         self.assertEqual(sum(1 for t in self.flagged if t.write), FLAGGED_WRITES, HOW)
+        self.assertEqual(sum(1 for t in self.flagged if not t.write), FLAGGED_READS, HOW)
 
     def test_from_the_agent_registry(self):
         self.assertEqual(len(self.shared), FROM_REGISTRY, HOW)

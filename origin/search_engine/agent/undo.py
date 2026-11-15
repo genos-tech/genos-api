@@ -221,7 +221,15 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
     "create_calendar_event": (NOTIFIED_PEOPLE, "the guests are invited by the calendar"),
     "update_calendar_event": (NO_SNAPSHOT, "the event is not read before it is changed"),
     "delete_calendar_event": (IRREVERSIBLE_DELETE, "the calendar deletes the event for good"),
-    "manage_milestone": (NO_SNAPSHOT, "the milestone's old values are not kept"),
+    # MIP-1564 (flag `AGENT_PARITY_TOOLS`): `convert` and a project move are in the same tool, so the
+    # same answer: no stored old value. A convert back would restore the row's kind but not what the
+    # first one dropped (the folder, the sprint and the tasks' sprint, the several assignees); a move
+    # back would not bring the cleared sprint, folder or tags, or the old display ids.
+    "manage_milestone": (
+        NO_SNAPSHOT,
+        "the milestone's old values are not kept; a convert drops its folder and sprint, and a "
+        "move to another project clears its sprint, folder and tags and renumbers its tasks",
+    ),
     "delete_milestone": (IRREVERSIBLE_DELETE, "it detaches its tasks and removes it"),
     "manage_sprint": (NO_SNAPSHOT, "the sprint's old values are not kept"),
     "delete_sprint": (IRREVERSIBLE_DELETE, "it removes the sprint and detaches its tasks"),
