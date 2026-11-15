@@ -81,6 +81,9 @@ class ThreadSummaryResult:
     model_used: str
 
 
+THREAD_EMPTY = "Thread is empty — nothing to summarise yet."
+
+
 class ThreadSummaryError(Exception):
     """Raised when summary generation can't proceed (ACL denied, empty thread, LLM fail)."""
 
@@ -110,6 +113,36 @@ def compute_fingerprint(messages: list[ThreadMessageRecord]) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def chat_readable(chat_type: int, chat_id: str, user_id: str) -> bool:
+    """Whether `user_id` is in the chat (a live channel they are a member of, or a project's member
+    for a project chat): the access rule of `fetch_thread_messages_for_agent`, without the messages.
+    False for a chat that is missing, deleted or malformed."""
+    allowed = chat_acl_user_ids(chat_type, chat_id)
+    return bool(allowed) and user_id in allowed
+
+
+def check_thread_for_ask(*, chat_type: int, chat_id: str, thread_id: str, user_id: str) -> None:
+    """What `peek_cached_summary` refuses an ask from this thread with, before anything is written.
+
+    Raises `ThreadSummaryError`, in the same words the ask's summary step raises later: not in the chat
+    (or no such chat), or no replies to summarise. Two cheap queries, not the messages: the summary step
+    loads them anyway, so loading them here would read a long thread twice on every ask. A thread whose
+    replies all have no text passes here and is refused by the summary step, as it always was."""
+    if not chat_readable(chat_type, chat_id, user_id):
+        raise ThreadSummaryError("Chat not found or has no members.")
+    try:
+        has_replies = Message.objects.filter(
+            channel_id=chat_id,
+            thread_root_id=thread_id,
+            is_thread_reply=True,
+            deleted_at__isnull=True,
+        ).exists()
+    except (ValidationError, ValueError, TypeError):
+        has_replies = False
+    if not has_replies:
+        raise ThreadSummaryError(THREAD_EMPTY)
+
+
 def fetch_thread_messages_for_agent(
     *,
     chat_type: int,
@@ -124,11 +157,10 @@ def fetch_thread_messages_for_agent(
     is not a member of the underlying chat. Empty list (vs error) means:
     the user has access but the thread is empty.
     """
-    allowed = chat_acl_user_ids(chat_type, chat_id)
     # Either an invalid chat, a chat with no resolvable members, or a chat the caller is not
     # in: ONE answer, in the words of a missing chat, so a guessed id does not say which chats
     # exist (MIP-1519, as the note summary did in MIP-1516). The HTTP status stays 403.
-    if not allowed or user_id not in allowed:
+    if not chat_readable(chat_type, chat_id, user_id):
         raise ThreadSummaryError("Chat not found or has no members.")
 
     # Resolve the channel + thread root by UUID, then pull the thread's
@@ -322,7 +354,7 @@ def peek_cached_summary(
         user_id=user_id,
     )
     if not messages:
-        raise ThreadSummaryError("Thread is empty — nothing to summarise yet.")
+        raise ThreadSummaryError(THREAD_EMPTY)
 
     fingerprint = compute_fingerprint(messages)
     existing = ThreadSummary.objects.filter(
@@ -416,7 +448,7 @@ def get_or_generate_thread_summary(
             user_id=user_id,
         )
         if not messages:
-            raise ThreadSummaryError("Thread is empty — nothing to summarise yet.")
+            raise ThreadSummaryError(THREAD_EMPTY)
         return regenerate_summary(
             chat_type=chat_type,
             chat_id=chat_id,

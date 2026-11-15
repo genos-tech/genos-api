@@ -79,6 +79,7 @@ from origin.search_engine.agent import (
     approval_edits,
     approval_notes,
     approval_reason,
+    session_scope,
     task_context,
     undo,
     undo_apply,
@@ -124,6 +125,7 @@ from origin.search_engine.agent.note_summary import (
     NOTE_NOT_FOUND,
     NoteNotFoundError,
     NoteSummaryError,
+    check_note_for_ask,
     fetch_note_for_agent,
     note_type_label,
 )
@@ -139,6 +141,7 @@ from origin.search_engine.agent.note_summary import (
 from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.thread_summary import (
     ThreadSummaryError,
+    check_thread_for_ask,
     fetch_thread_messages_for_agent,
     load_or_generate_for_ask,
     peek_cached_summary,
@@ -318,9 +321,12 @@ def _get_or_create_session(
     With `task_ctx` a session named by `session_id` is used only if it is
     bound to THAT task: a general session (the Cmd-K one) or another task's is
     set aside, so asking about a task never writes into a conversation about
-    something else, and the general session is left as it was. A session bound
-    to a task is likewise set aside under a thread or note context, and, when
-    the ask names no object at all, while the person can no longer open the task.
+    something else, and the general session is left as it was. A thread or note
+    context is held to the same rule (`session_scope.same_object`): only the
+    session bound to exactly that thread or note is continued, and a general
+    one, another object's or a task's is set aside. When the ask names no object
+    at all, a session bound to a task, thread or note is set aside while the
+    person can no longer open that object (`session_scope.object_readable`).
     """
     ttl_minutes = int(settings.SEARCH_ENGINE.get("SESSION_TTL_MINUTES", 30))
     if not force_new:
@@ -333,18 +339,23 @@ def _get_or_create_session(
                 )
                 if task_ctx is not None and session.task_id != task_ctx["task_id"]:
                     raise AgentSession.DoesNotExist  # another conversation: not this task's
-                if session.task_id is not None and (thread_context or note_context):
-                    raise AgentSession.DoesNotExist  # a task's conversation is not a thread's or a note's
-                if (
-                    session.task_id is not None
-                    and task_ctx is None
-                    and parity_on()
-                    and not task_context.can_read(session.task_id, team_id, user_id)
+                if not session_scope.same_object(
+                    session, thread_context=thread_context, note_context=note_context
                 ):
-                    # Continued with the session id alone, and the person can no longer open the task
-                    # (deleted, or they lost access): the conversation reads like one that is not there,
-                    # so what it holds about the task (the earlier turns, the recap) is not handed to the
-                    # model again. It stays in their history; this ask starts a fresh conversation.
+                    # Another conversation: a thread's under a note's context, one thread's under
+                    # another's, a task's, or a general session (the Cmd-K one) under either (MIP-1590).
+                    raise AgentSession.DoesNotExist
+                if (
+                    task_ctx is None
+                    and not (thread_context or note_context)
+                    # A task's conversation is only ever read while the parity flag is on.
+                    and (session.task_id is None or parity_on())
+                    and not session_scope.object_readable(session, user_id)
+                ):
+                    # Continued with the session id alone, and the person can no longer open the object it is
+                    # about (a task or note deleted, a chat left or deleted, or access lost): the conversation reads like one that
+                    # is not there, so what it holds about the object (the earlier turns, the recap) is not handed
+                    # to the model again. It stays in their history; this ask starts a fresh conversation.
                     raise AgentSession.DoesNotExist
                 cutoff = timezone.now() - timedelta(minutes=ttl_minutes)
                 # Entity-scoped sessions (thread, note OR task) bypass TTL —
@@ -1094,6 +1105,107 @@ _THREAD_CONTEXT_MALFORMED = (
 _NOTE_CONTEXT_MALFORMED = "note_context must have integer note_type and note_id."
 
 
+def _close_unanswered_run(run: AgentRun | None) -> None:
+    """End a run whose ask was refused after its row was written as `error`, not `running`.
+
+    A `running` run younger than the stale threshold blocks the person's "delete all conversations" with a
+    409 (`_delete_agent_conversations`), so a refusal that leaves one behind makes that button fail for
+    hours. No answer and no message are written, so the history (which lists runs that have either) never
+    shows it. Best effort: the refusal is what the caller is told either way."""
+    if run is None:
+        return
+    try:
+        AgentRun.objects.filter(run_id=run.run_id, status="running").update(
+            status="error", finished_at=timezone.now()
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Could not close the run of a refused ask")
+
+
+def _parse_scope_contexts(data: dict) -> tuple[dict | None, dict | None, Response | None]:
+    """`(thread_context, note_context, refusal)` parsed from the ask body.
+
+    The two are mutually exclusive: a request is scoped to a chat thread OR a note, not both. A context
+    with the wrong fields is a 400 (a context that is not an object was refused up front). Parsed once,
+    before anything is written, so the access check, the session lookup and the system-prompt branches
+    all read the same value."""
+    thread_raw = data.get("thread_context") or None
+    note_raw = data.get("note_context") or None
+    if thread_raw and note_raw:
+        return (
+            None,
+            None,
+            Response(
+                {"error": "thread_context and note_context are mutually exclusive."},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        )
+    thread: dict | None = None
+    if thread_raw:
+        try:
+            thread = {
+                "chat_type": int(thread_raw.get("chat_type")),
+                "chat_id": str(thread_raw.get("chat_id") or "").strip(),
+                "thread_id": str(thread_raw.get("thread_id") or "").strip(),
+            }
+            if not thread["chat_id"] or not thread["thread_id"]:
+                raise ValueError("chat_id and thread_id are required")
+        except (TypeError, ValueError):
+            return (
+                None,
+                None,
+                Response({"error": _THREAD_CONTEXT_MALFORMED}, status=status.HTTP_400_BAD_REQUEST),
+            )
+    note: dict | None = None
+    if note_raw:
+        try:
+            note = {
+                "note_type": int(note_raw.get("note_type")),
+                "note_id": int(note_raw.get("note_id")),
+            }
+        except (TypeError, ValueError):
+            return (
+                None,
+                None,
+                Response({"error": _NOTE_CONTEXT_MALFORMED}, status=status.HTTP_400_BAD_REQUEST),
+            )
+    return thread, note, None
+
+
+def _scope_error_response(error: Exception) -> Response:
+    """The HTTP answer to a thread or note the ask cannot be about.
+
+    A note that is missing, in another team or unreadable is ONE 404 (MIP-1516); a thread or note the
+    asker may not read is a 403, an empty one a 400, anything else (the summary model failing) a 503."""
+    if isinstance(error, NoteNotFoundError):
+        return Response({"error": str(error)}, status=status.HTTP_404_NOT_FOUND)
+    message = str(error).lower()
+    if "authorized" in message or "not found" in message:
+        code = status.HTTP_403_FORBIDDEN
+    elif "empty" in message:
+        code = status.HTTP_400_BAD_REQUEST
+    else:
+        code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return Response({"error": str(error)}, status=code)
+
+
+def _scope_refusal(
+    thread_ctx: dict | None, note_ctx: dict | None, team_id: str, user_id: str
+) -> Response | None:
+    """The refusal for an ask about a thread or note the asker cannot be given, or None.
+
+    The same errors, with the same words and statuses, the summary step raises further down (they stay
+    there, for a thread or note that changes in between); asked here so that a refused ask writes nothing."""
+    try:
+        if thread_ctx:
+            check_thread_for_ask(user_id=user_id, **thread_ctx)
+        if note_ctx:
+            check_note_for_ask(user_id=user_id, team_id=team_id, **note_ctx)
+    except (ThreadSummaryError, NoteSummaryError) as e:
+        return _scope_error_response(e)
+    return None
+
+
 class AgentAskView(AuthenticatedAPIView):
     throttle_classes = with_defaults(AgentThrottle)
 
@@ -1197,6 +1309,16 @@ class AgentAskView(AuthenticatedAPIView):
             task_read = task_context.read_task(task_ctx["task_id"], team_id, user_id)
             if task_read is None:
                 return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
+
+        # The thread or note the ask is about, read by the asker's own access BEFORE anything is spent or
+        # written, as the task above is (MIP-1590): a thread or note the asker may not open used to be
+        # refused only after the cost rollup, the session and a `running` run row had been written, and the
+        # leftover run held the person's conversations undeletable (409) until it went stale.
+        thread_ctx_parsed, note_ctx_parsed, refusal = _parse_scope_contexts(data)
+        if refusal is None:
+            refusal = _scope_refusal(thread_ctx_parsed, note_ctx_parsed, str(team_id), user_id)
+        if refusal is not None:
+            return refusal
 
         # Answer-language locale (GENOS_CAPABILITY_ROADMAP §3.4). Prefer the
         # request body (the live UI locale the browser just sent) and fall
@@ -1407,45 +1529,6 @@ class AgentAskView(AuthenticatedAPIView):
         max_prior_turns = int(settings.SEARCH_ENGINE.get("SESSION_MAX_PRIOR_TURNS", 3))
         rolling_summary = bool(settings.SEARCH_ENGINE.get("RAG_SESSION_ROLLING_SUMMARY", False))
         load_cap = _ROLLING_SUMMARY_LOAD_CAP if rolling_summary else max_prior_turns
-        # Parse thread_context / note_context once so the session lookup
-        # AND the corresponding system-prompt-injection branches below
-        # all see the same value. The two are mutually exclusive — a
-        # request can be scoped to either a chat thread OR a note, not
-        # both at once.
-        thread_ctx_raw = data.get("thread_context") or None
-        note_ctx_raw = data.get("note_context") or None
-        if thread_ctx_raw and note_ctx_raw:
-            return Response(
-                {"error": "thread_context and note_context are mutually exclusive."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        thread_ctx_parsed: dict | None = None
-        if thread_ctx_raw:
-            try:
-                thread_ctx_parsed = {
-                    "chat_type": int(thread_ctx_raw.get("chat_type")),
-                    "chat_id": str(thread_ctx_raw.get("chat_id") or "").strip(),
-                    "thread_id": str(thread_ctx_raw.get("thread_id") or "").strip(),
-                }
-                if not thread_ctx_parsed["chat_id"] or not thread_ctx_parsed["thread_id"]:
-                    raise ValueError("chat_id and thread_id are required")
-            except (TypeError, ValueError):
-                return Response(
-                    {"error": _THREAD_CONTEXT_MALFORMED},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        note_ctx_parsed: dict | None = None
-        if note_ctx_raw:
-            try:
-                note_ctx_parsed = {
-                    "note_type": int(note_ctx_raw.get("note_type")),
-                    "note_id": int(note_ctx_raw.get("note_id")),
-                }
-            except (TypeError, ValueError):
-                return Response(
-                    {"error": _NOTE_CONTEXT_MALFORMED},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
         # Structured @/# mentions (see agent/mentions.py). Parse errors
         # mean a malformed payload → 400; per-entry problems and ACL
         # denials are dropped inside the helpers, never fatal. Resolution
@@ -1544,8 +1627,8 @@ class AgentAskView(AuthenticatedAPIView):
             and parity_on()
             and session is not None
             and session.task_id is not None
-            and not thread_ctx_raw
-            and not note_ctx_raw
+            and not thread_ctx_parsed
+            and not note_ctx_parsed
         ):
             task_read = task_context.read_task(session.task_id, team_id, user_id)
 
@@ -1638,19 +1721,12 @@ class AgentAskView(AuthenticatedAPIView):
                         model_override=summaries_pin,
                     )
             except ThreadSummaryError as e:
-                # Three failure flavors with distinct HTTP semantics:
-                #   - ACL denial / chat-not-found  → 403 (don't retry)
-                #   - Empty thread                  → 400 (user-fixable)
-                #   - LLM provider failure          → 503 (transient;
-                #     retry button is appropriate)
-                msg = str(e).lower()
-                if "authorized" in msg or "not found" in msg:
-                    code = status.HTTP_403_FORBIDDEN
-                elif "empty" in msg:
-                    code = status.HTTP_400_BAD_REQUEST
-                else:
-                    code = status.HTTP_503_SERVICE_UNAVAILABLE
-                return Response({"error": str(e)}, status=code)
+                # Three failure flavors with distinct HTTP semantics (`_scope_error_response`): ACL denial /
+                # chat-not-found 403, an empty thread 400, an LLM provider failure 503 (transient; the retry
+                # button is appropriate). The first two are answered before the run exists (`_scope_refusal`);
+                # one that turns up here changed in between, and the run is closed, not left `running`.
+                _close_unanswered_run(run)
+                return _scope_error_response(e)
             chat_type_label = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}.get(t_chat_type, "")
             system_extra = (
                 "The user opened this conversation from a specific chat thread "
@@ -1715,18 +1791,11 @@ class AgentAskView(AuthenticatedAPIView):
                         model_override=summaries_pin,
                         team_id=str(team_id),
                     )
-            except NoteNotFoundError as e:
-                # missing, in another team, or unreadable: one answer (MIP-1516)
-                return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
             except NoteSummaryError as e:
-                msg = str(e).lower()
-                if "authorized" in msg or "not found" in msg:
-                    code = status.HTTP_403_FORBIDDEN
-                elif "empty" in msg:
-                    code = status.HTTP_400_BAD_REQUEST
-                else:
-                    code = status.HTTP_503_SERVICE_UNAVAILABLE
-                return Response({"error": str(e)}, status=code)
+                # `NoteNotFoundError` (missing, in another team, or unreadable: one answer, MIP-1516) is one of
+                # these; see `_scope_error_response`. Closed, not left `running`, as for a thread.
+                _close_unanswered_run(run)
+                return _scope_error_response(e)
             n_type_label = note_type_label(n_note_type)
             system_extra = (
                 "The user opened this conversation from a specific note "
@@ -3908,6 +3977,11 @@ class AgentSessionsListView(AuthenticatedAPIView):
     rather than the recent slice, so it reaches sessions the sidebar
     can't scroll to.
 
+    `scope` says what the conversation is about (MIP-1590): `null` for a general (Cmd-K) one, otherwise
+    the kind of object and its ids, nothing else (no title, no text of the object). A task or milestone is
+    its backing task row's id. A conversation about an object the person can no longer open is left out of
+    the list, and answers 404 on `/agent/sessions/<id>/`, like one outside the plan's window.
+
     Each row carries enough metadata to render a list item (relative
     timestamp + first-query preview + turn count) without fetching the
     full conversation. Click-through hits the detail endpoint below.
@@ -3921,7 +3995,11 @@ class AgentSessionsListView(AuthenticatedAPIView):
                     "last_active_at":  "<iso>",
                     "first_query":     "...",  # first run's query, possibly truncated
                     "turn_count":      int,    # AgentRun count for this session
-                    "is_pinned":       bool
+                    "is_pinned":       bool,
+                    "scope":           null | {"kind": "task", "task_id": int}
+                                            | {"kind": "thread", "chat_type": int,
+                                               "chat_id": "<uuid>", "thread_id": "<uuid>"}
+                                            | {"kind": "note", "note_type": int, "note_id": int}
                 },
                 ...
             ]
@@ -3978,13 +4056,29 @@ class AgentSessionsListView(AuthenticatedAPIView):
         # Two buckets, two caps (see the module constants). Ordering the
         # pinned bucket by `-pinned_at` puts the most recently pinned at
         # the top, which is where the user just looked.
-        pinned = list(
-            sessions_qs.filter(pinned_at__isnull=False).order_by("-pinned_at")[:_PINNED_LIST_LIMIT]
+        #
+        # A conversation about a thread, note, task or milestone the person can no longer open is left
+        # out (MIP-1590), as one outside the plan's window is: the same row would answer 404 when opened.
+        # It is skipped while filling each bucket, so a lost channel does not shorten the list below its
+        # cap while older readable conversations exist. Never deleted: access coming back, or an
+        # upgrade, brings it straight back. One check per distinct object (`readable`).
+        readable: dict = {}
+
+        def first_readable(qs, limit):
+            found = []
+            for candidate in qs.iterator(chunk_size=100):
+                if session_scope.object_readable(candidate, user_id, readable):
+                    found.append(candidate)
+                    if len(found) == limit:
+                        break
+            return found
+
+        pinned = first_readable(
+            sessions_qs.filter(pinned_at__isnull=False).order_by("-pinned_at"), _PINNED_LIST_LIMIT
         )
-        recent = list(
-            sessions_qs.filter(pinned_at__isnull=True).order_by("-last_active_at")[
-                :_HISTORY_LIST_LIMIT
-            ]
+        recent = first_readable(
+            sessions_qs.filter(pinned_at__isnull=True).order_by("-last_active_at"),
+            _HISTORY_LIST_LIMIT,
         )
         sessions = pinned + recent
         if not sessions:
@@ -4011,6 +4105,7 @@ class AgentSessionsListView(AuthenticatedAPIView):
                     "first_query": first_query,
                     "turn_count": turn_count,
                     "is_pinned": s.pinned_at is not None,
+                    "scope": session_scope.scope_of(s),
                 }
             )
 
@@ -4126,6 +4221,15 @@ class AgentSessionDetailView(AuthenticatedAPIView):
         if history_days is not None and session.last_active_at < timezone.now() - timedelta(
             days=history_days
         ):
+            return Response(
+                {"error": "Session not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # The conversation is about a thread, note, task or milestone the person can no longer open (deleted, or
+        # access lost): the same 404, so past answers about it do not outlive their access (MIP-1590). The
+        # session stays; DELETE and pin are not held to this.
+        if not session_scope.object_readable(session, user_id):
             return Response(
                 {"error": "Session not found."},
                 status=status.HTTP_404_NOT_FOUND,

@@ -570,8 +570,14 @@ class SessionScopeTests(TaskWorld):
         task = self.make_task("Fix the login flow")
         first = self.ask_about(task)["kwargs"]["session_id"]
         thread = {"chat_type": 2, "chat_id": str(uuid.uuid4()), "thread_id": str(uuid.uuid4())}
-        with mock.patch(
-            "origin.search_engine.agent_views.load_or_generate_for_ask", return_value="a summary"
+        with (
+            mock.patch(
+                "origin.search_engine.agent_views.load_or_generate_for_ask",
+                return_value="a summary",
+            ),
+            # The thread is made up and its summary faked: the access check before them is
+            # `test_agent_session_hardening`'s subject.
+            mock.patch("origin.search_engine.agent_views.check_thread_for_ask"),
         ):
             _, captured = self.ask(session_id=first, thread_context=thread)
         extra = captured["kwargs"]["system_extra"]
@@ -818,8 +824,12 @@ class FlagOffTests(TaskWorld):
     def test_it_does_not_even_clash_with_a_thread_or_a_note(self):
         task = self.make_task()
         thread = {"chat_type": 2, "chat_id": str(uuid.uuid4()), "thread_id": str(uuid.uuid4())}
-        with mock.patch(
-            "origin.search_engine.agent_views.load_or_generate_for_ask", return_value="a summary"
+        with (
+            mock.patch(
+                "origin.search_engine.agent_views.load_or_generate_for_ask",
+                return_value="a summary",
+            ),
+            mock.patch("origin.search_engine.agent_views.check_thread_for_ask"),
         ):
             resp, captured = self.ask(task_context=self.ctx(task), thread_context=thread)
         self.assertEqual(resp.status_code, 200)
