@@ -131,13 +131,14 @@ class ReactionResponsesCarryTheCommentTests(CommentBroadcastContextBase):
         self.assertEqual(res.data["senderName"], self.user.username)
         self.assertEqual(res.data["reaction_id"], 1)
 
-    def test_a_reaction_to_a_deleted_comment_names_no_author(self):
+    def test_a_reaction_to_a_deleted_comment_is_refused_not_credited_to_nobody(self):
+        """It was stored and answered with no author (MIP-715); a deleted comment is a missing one
+        now (MIP-1582), so there is nothing to name."""
         TaskComments.objects.filter(task=self.task, comment_id=1).update(is_deleted=True)
         self.authenticate(self.user)
         res = self._react()
-        self.assertEqual(res.status_code, 201, res.data)
-        self.assertIsNone(res.data["commentSenderId"])
-        self.assertEqual(res.data["commentBody"], [])
+        self.assertEqual(res.status_code, 404, res.data)
+        self.assertFalse(TaskCommentReactionFact.objects.exists())
 
     def test_removing_a_reaction_answers_with_a_body_the_socket_layer_can_read(self):
         """It answered 204, which the socket handler couldn't parse."""
