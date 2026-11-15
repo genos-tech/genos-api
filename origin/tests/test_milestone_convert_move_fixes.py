@@ -12,10 +12,12 @@ from django.contrib.auth import get_user_model
 
 from origin.models.chat.unified_models import Message
 from origin.models.common.member_event_models import MemberEvent
-from origin.models.common.team_models import TeamMaster
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.tools import ToolError
+from origin.search_engine.agent.tools.manage_milestone import _parse_fields
 from origin.services import member_events
 from origin.services.task_card_post import (
     _milestone_card_parts,
@@ -438,3 +440,89 @@ class MoveRechecksAssigneesTests(ToolBase):
         TaskMaster.objects.filter(milestone=m).update(assignee=None)
         res = self.patch(m, project_id=self.elsewhere().project_id)
         self.assertEqual(res.status_code, 200, res.data)
+
+
+# --------------------------------------------------------------------------------------------
+# the agent's and MCP's `manage_milestone` update: the same two gates as the PATCH
+# --------------------------------------------------------------------------------------------
+
+TOOL_PARSE = "origin.search_engine.agent.tools.manage_milestone._parse_fields"
+
+
+class ToolMoveRechecksAssigneesTests(ToolBase):
+    """The tool only moves inside the caller's team, so the person it refuses is one who has left
+    the team and is still assigned: not on the destination project, nor on its team."""
+
+    def leaver(self):
+        TeamMembers.objects.filter(team=self.team, attendee=self.bob).update(is_deleted=True)
+
+    def test_the_tool_and_the_app_refuse_the_same_move_for_the_same_reason(self):
+        self.leaver()
+        app_m, tool_m = self.roadmap_milestone("Launch a"), self.roadmap_milestone("Launch b")
+        app = self.client.patch(
+            f"{MILESTONE_URL}{app_m.milestone_id}/", {"project_id": self.dest.project_id}
+        )
+        with self.assertRaises(ToolError) as caught:
+            self.move_tool(tool_m)
+        self.assertEqual(app.status_code, 400, app.data)
+        self.assertEqual(
+            str(caught.exception).replace("b", "a"), app.data["error"].replace("b", "a")
+        )
+        for m in (app_m, tool_m):
+            self.assertEqual(
+                MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id
+            )
+
+    def test_the_tool_names_the_way_out_and_changes_nothing(self):
+        self.leaver()
+        m = self.roadmap_milestone()
+        with self.assertRaises(ToolError) as caught:
+            self.move_tool(m)
+        text = str(caught.exception)
+        self.assertIn("Reassign them first", text)
+        self.assertTrue(text.endswith("Nothing was changed."))
+        self.assertEqual(TaskMaster.objects.get(title="First").project_id, self.project.project_id)
+
+    def test_replacing_them_in_the_same_call_moves(self):
+        self.leaver()
+        m = self.roadmap_milestone()
+        TaskMaster.objects.filter(milestone=m).update(assignee=self.owner)
+        out = self.move_tool(m, assignee_ids=[str(self.owner.id)])
+        self.assertEqual(out["project_id"], self.dest.project_id)
+
+    def test_a_move_inside_a_team_with_everyone_on_it_is_not_newly_refused(self):
+        m = self.roadmap_milestone()  # bob is on the team, not on DST
+        self.assertEqual(self.move_tool(m)["project_id"], self.dest.project_id)
+
+
+class ToolStaleUpdateTests(ToolBase):
+    """The tool locked the row for a MOVE only; every update does now, as the app's writes do."""
+
+    def convert_during(self, m):
+        done = []
+        real = _parse_fields
+
+        def parse(*args, **kwargs):
+            out = real(*args, **kwargs)
+            if not done:
+                done.append(True)
+                convert_milestone_to_task(m.milestone_id)
+            return out
+
+        return mock.patch(TOOL_PARSE, side_effect=parse)
+
+    def test_an_update_after_a_conversion_is_refused_and_changes_nothing(self):
+        m = self.roadmap_milestone()
+        with self.convert_during(m), self.assertRaises(ToolError) as caught:
+            self.call({"action": "update", "milestone_id": m.milestone_id, "title": "stale"})
+        self.assertIn("was changed while this was being applied", str(caught.exception))
+        row = TaskMaster.objects.get(task_id=m.task_id)
+        self.assertFalse(row.is_milestone)
+        self.assertEqual(row.title, "Launch")
+        self.assertTrue(MilestoneMaster.objects.get(pk=m.pk).is_deleted)
+
+    def test_an_update_that_is_not_stale_still_applies(self):
+        m = self.roadmap_milestone()
+        out = self.call({"action": "update", "milestone_id": m.milestone_id, "title": "Renamed"})
+        self.assertEqual(out["changed_fields"], ["title"])
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).title, "Renamed")

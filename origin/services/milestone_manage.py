@@ -173,6 +173,7 @@ def update_milestone(
     assignee_ids: Any = UNSET,
     after_sync: Callable[[], None] | None = None,
     project_move: ProjectMaster | None = None,
+    report: dict[str, Any] | None = None,
 ) -> list[str]:
     """Apply a milestone PATCH. The caller owns the transaction and the
     `invalidate_project_tasks_cache` call (for the project it left too, on a move). Returns the
@@ -196,6 +197,10 @@ def update_milestone(
          more so it shows the new first assignee;
       6. a project move (`project_move`, MIP-1564): carries the milestone's world into the
          destination, LAST (see below).
+
+    `report`, when given, is filled with what a move did that the caller tells the person:
+    `notes_narrowed`, the task notes whose author lost their Owner role because they are not on the
+    destination (MIP-1583; recorded, so a move back writes it again).
 
     `project_move` is the project the milestone goes to, already checked by the caller (it is
     one the caller may use). A milestone is the top of its own hierarchy, so unlike a sub-task
@@ -266,12 +271,14 @@ def update_milestone(
         sync_backing_task(milestone)
 
     if project_move is not None:
-        relocate_tasks(
+        narrowed = relocate_tasks(
             milestone_subtree_task_ids(milestone),
             project_id=milestone.project_id,
             team_id=milestone.team_id,
             clear_sprint=True,
         )
+        if report is not None:
+            report["notes_narrowed"] = narrowed
         # The assignee join denormalizes the team for scoped reads.
         MilestoneAssignees.objects.filter(milestone=milestone).update(team_id=milestone.team_id)
     return added

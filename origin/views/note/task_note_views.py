@@ -10,7 +10,10 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.services.note_delete import DeleteRefused, delete_note
-from origin.services.note_role_revoke import revoke_task_roles_on_move
+from origin.services.note_role_revoke import (
+    restore_task_roles_on_move,
+    revoke_task_roles_on_move,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
@@ -729,6 +732,8 @@ class TaskNoteMoveView(AuthenticatedAPIView):
                 frontier = child_ids
 
             revoke_task_roles_on_move(moves=moves, target_project_id=target_task.project_id)
+            # ... and a move to a project the author is on writes back what an earlier move ended.
+            restore_task_roles_on_move(moves=moves, target_project_id=target_task.project_id)
 
         res = {
             "noteType": NOTE_TYPE,
