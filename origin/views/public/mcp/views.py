@@ -28,7 +28,7 @@ from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.anonymous_throttle import McpAnonymousThrottle
 from origin.views.public.credentials import credential_of
-from origin.views.public.mcp import prompts, protocol, request_guard, tools
+from origin.views.public.mcp import limit_gate, prompts, protocol, request_guard, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.mcp.result_log import note_result
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
@@ -291,6 +291,11 @@ class McpView(PublicApiView):
             )
 
         if method == "tools/call":
+            # The plan's calls-per-minute / per-day / search limits (MIP-1367, phase 3): dark. With
+            # `MCP_TIER_LIMITS_MODE` unset this returns None on its first line.
+            limited = limit_gate.admit_response(request, request_id, params, ctx.user_id)
+            if limited is not None:
+                return limited
             return self._ok(
                 request_id,
                 self._call_tool(
@@ -504,6 +509,13 @@ class McpView(PublicApiView):
             )
 
         credential = credential_of(request) if request is not None else None
+
+        # The plan's bulk-size, page-size and chat-history limits (MIP-1367, phase 3): dark. A call
+        # a tool would refuse first (read-only key, no destructive opt-in) is left to it.
+        arguments, limited = limit_gate.prepare(name, arguments, ctx, scope, allow_destructive)
+        if limited is not None:
+            note_result(request, name, limited)
+            return limited
 
         def audit(tool_name: str, outcome: str, args: dict[str, Any], declared) -> None:
             # A destructive call leaves a trace of which key or connected app made it
