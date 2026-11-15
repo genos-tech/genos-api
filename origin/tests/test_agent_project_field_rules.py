@@ -335,6 +335,23 @@ class CreateTaskPlanTests(Base):
         self.assertIn("`priority` must be one of", text)
         self.assertIn("tasks[0]: project", text)
 
+    def test_a_plans_rules_and_defaults_are_read_once_not_per_row(self):
+        self.add_tag("bug")
+        self.set_rules(
+            {"tags": {"required": True, "defaultTagNames": ["bug"]}, "priority": {"required": True}}
+        )
+        rows = [{"title": f"T{i}"} for i in range(10)]
+
+        def count(n):
+            with CaptureQueriesContext(connection) as queries:
+                with self.assertRaises(ToolError):
+                    self.plan(rows[:n])
+            return len(queries)
+
+        self.assertLessEqual(
+            count(10) - count(2), 8
+        )  # the rest is per-row work the plan already did
+
     def test_the_flag_off_creates_the_plan_as_it_always_did(self):
         with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
             self.plan([{"title": "A"}])

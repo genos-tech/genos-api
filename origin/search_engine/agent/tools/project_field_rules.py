@@ -104,13 +104,19 @@ def required_params(
 
 
 def missing_fields(
-    project: ProjectMaster, values: dict[str, Any], *, tags_exist: bool | None = None
+    project: ProjectMaster,
+    values: dict[str, Any],
+    *,
+    tags_exist: bool | None = None,
+    required: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     """The tool parameters the project requires and `values` leaves unset. `values` is keyed by
     parameter name (`assignee_id`, `tags` (the list the caller sent), `priority`, `effort_level`,
-    `due_date`)."""
+    `due_date`). A plan passes `required` (`required_params`, read once) for its many rows."""
     out = []
-    for _key, param in required_params(project, tags_exist=tags_exist):
+    for _key, param in (
+        required if required is not None else required_params(project, tags_exist=tags_exist)
+    ):
         value = values.get(param)
         if (not _has_tags(value)) if param == "tags" else (not _is_set(value)):
             out.append(param)
@@ -183,8 +189,10 @@ def templates_block(project: ProjectMaster) -> dict[str, Any]:
     return out
 
 
-def _defaults_sentence(project: ProjectMaster, params: list[str]) -> str:
-    known = defaults(project)
+def _defaults_sentence(
+    project: ProjectMaster, params: list[str], known: dict[str, Any] | None = None
+) -> str:
+    known = defaults(project) if known is None else known
     parts = [f"{p} {known[p]}" for p in params if p in known]
     return f" The project's own defaults: {'; '.join(parts)}." if parts else ""
 
@@ -205,14 +213,22 @@ def create_refusal(project: ProjectMaster, values: dict[str, Any]) -> str | None
     )
 
 
-def row_refusal(project: ProjectMaster, values: dict[str, Any], where: str) -> str | None:
-    """One line of a plan's validation errors for a task (or the new milestone) that lacks a field."""
-    missing = missing_fields(project, values)
+def row_refusal(
+    project: ProjectMaster,
+    values: dict[str, Any],
+    where: str,
+    *,
+    required: list[tuple[str, str]],
+    known_defaults: dict[str, Any],
+) -> str | None:
+    """One line of a plan's validation errors for a task (or the new milestone) that lacks a field.
+    The rules and the defaults are read once for the whole plan."""
+    missing = missing_fields(project, values, required=required)
     if not missing:
         return None
     return (
         f"{where}: project {project.project_id} requires {_fields(missing)}."
-        f"{_defaults_sentence(project, missing)}"
+        f"{_defaults_sentence(project, missing, known_defaults)}"
     )
 
 
@@ -238,8 +254,10 @@ def plan_row_values(spec: dict[str, Any], default_assignee: str | None, inherite
 
 def plan_refusals(project: ProjectMaster, args: dict[str, Any]) -> list[str]:
     """Every line the plan's rows (and a new milestone) earn, from the plan's own arguments."""
-    if not required_params(project, tags_exist=None):
+    required = required_params(project)
+    if not required:
         return []
+    known_defaults = defaults(project)
     tasks = args.get("tasks")
     default = args.get("default_assignee_id")
     default = str(default) if default and default != "null" else None
@@ -259,11 +277,19 @@ def plan_refusals(project: ProjectMaster, args: dict[str, Any]) -> list[str]:
             "effort_level": milestone.get("effort_level"),
             "due_date": milestone.get("due_date"),
         }
-        if line := row_refusal(project, values, "milestone"):
+        if line := row_refusal(
+            project, values, "milestone", required=required, known_defaults=known_defaults
+        ):
             lines.append(line)
     for i, spec in enumerate(tasks if isinstance(tasks, list) else []):
         if isinstance(spec, dict):
-            line = row_refusal(project, plan_row_values(spec, default, inherited), f"tasks[{i}]")
+            line = row_refusal(
+                project,
+                plan_row_values(spec, default, inherited),
+                f"tasks[{i}]",
+                required=required,
+                known_defaults=known_defaults,
+            )
             if line:
                 lines.append(line)
     return lines
