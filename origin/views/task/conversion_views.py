@@ -68,7 +68,9 @@ class ConvertTaskToMilestoneView(AuthenticatedAPIView):
         # Who can see the task, then who belongs to its project: an assignee who
         # was never added to the project can open the task but can't restructure
         # the project's milestones (the same bar as creating or deleting one).
-        if not can_access_task(task_id, request.user.id):
+        # `include_deleted`: a deleted task is not refused here but by `convert_task_to_milestone`,
+        # which answers it with its own `task_deleted` code. Milestone conversion is MIP-1583's.
+        if not can_access_task(task_id, request.user.id, include_deleted=True):
             return _not_found("Task")
         project_id = TaskMaster.objects.filter(task_id=task_id).values_list("project_id", flat=True)
         if not project_id or not is_project_member(project_id[0], request.user.id):

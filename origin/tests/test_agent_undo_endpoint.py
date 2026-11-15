@@ -493,6 +493,14 @@ class UndoingCreateTask(UndoBase):
         TaskMaster.objects.filter(title="Fresh").delete()
         self.refused(run, step, "changed_since", 409)
 
+    def test_a_task_soft_deleted_since_is_changed_like_one_that_is_gone(self):
+        """`is_deleted` (a deleted milestone's row, say) is "gone" for an undo, as a missing row
+        is: the answer must not tell the two apart (MIP-1572)."""
+        run, step = self.make()
+        TaskMaster.objects.filter(title="Fresh").update(is_deleted=True)
+        self.refused(run, step, "changed_since", 409)
+        self.assertEqual(TaskMaster.objects.get(title="Fresh").status, "Open")
+
     def test_the_sessions_cached_reads_are_dropped(self):
         session = AgentSession.objects.create(team_id=str(self.team.pk), user_id=str(self.user.id))
         run, step = self.go(

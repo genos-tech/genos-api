@@ -520,7 +520,7 @@ def external_visible_user_ids(team_id, user_id) -> set:
     return _no_such(_query, default=set())
 
 
-def can_access_task(task_id, user_id) -> bool:
+def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
     """May `user_id` see (and therefore edit) this task?
 
     Project members, plus the assignee and the reporter. Deliberately the
@@ -533,17 +533,22 @@ def can_access_task(task_id, user_id) -> bool:
     editing has always been open to anyone who can see the task; adding
     a role tier on top is a product decision, not a security fix, and
     isn't made here.
+
+    A soft-deleted task (`is_deleted`) is refused like a missing one (MIP-1572): its
+    deleted state is the owner's answer that nobody works on it any more, and a refusal
+    that differs from a missing task's would say which ids once existed. A caller that
+    really has to reach a deleted row says so with `include_deleted=True` at the call
+    site, and the reason sits next to it. The check rides on the one query this makes.
     """
     if task_id is None or user_id is None:
         return False
     from origin.models.task.task_models import TaskMaster
 
     try:
-        row = (
-            TaskMaster.objects.filter(task_id=task_id)
-            .values("project_id", "assignee_id", "reporter_id")
-            .first()
-        )
+        rows = TaskMaster.objects.filter(task_id=task_id)
+        if not include_deleted:
+            rows = rows.filter(is_deleted=False)
+        row = rows.values("project_id", "assignee_id", "reporter_id").first()
     except (DjangoValidationError, ValueError, TypeError):
         return False
     if row is None:
@@ -561,7 +566,8 @@ def task_reader_ids(project_id, assignee_id, reporter_id, candidates) -> set:
     of people at once: two queries however many candidates, never one per person.
     `tests/test_task_reader_ids.py` pins it equal to `can_access_task` for every kind of
     person. It is NOT `acl.task_acl_user_ids`, which also drops an assignee or reporter who has
-    left the team (MIP-1371) and omits the project's owner.
+    left the team (MIP-1371) and omits the project's owner. It takes the people of a
+    task, not its id, so it cannot see `is_deleted`: a caller holding a task row decides that.
     """
     wanted = {str(c) for c in candidates if c}
     if not wanted:
