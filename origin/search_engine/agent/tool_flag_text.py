@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from django.conf import settings
 
-from origin.search_engine.agent.parity import PARITY_FLAG
+from origin.search_engine.agent.parity import FOLLOWUPS_FLAG, PARITY_FLAG
 from origin.search_engine.agent.tool_flag_params import (
     ON_IT_CLEAR_SENTENCE,
     ON_IT_CLEAR_SENTENCE_ON,
@@ -79,6 +79,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # and a delete have found their event first.
     ("create_calendar_event", PARITY_FLAG, _create_calendar_event.DESCRIPTION_ADDITION),
     ("delete_calendar_event", PARITY_FLAG, _delete_calendar_event.DESCRIPTION_ADDITION),
+    # MIP-1607 (AGENT_PARITY_FOLLOWUPS): `account: "all"` reads every account in one call. After the sentence above.
+    ("list_calendar_events", FOLLOWUPS_FLAG, _list_calendar_events.FOLLOWUPS_DESCRIPTION_ADDITION),
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`
