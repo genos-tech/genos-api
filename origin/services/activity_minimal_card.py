@@ -30,8 +30,8 @@ note: a task note, an explicit grant or a project member row; a personal note, i
 explicit grant or a reader of the team folder it is filed in; a chat note, an explicit grant or
 a member of its chat by the chat rule (`chat_note_member_q`).
 
-A comment row (an @mention of someone in a comment, or the "X commented" row of a participant,
-MIP-1599) is a row of the task's project chat, which the recipient may not be able to open
+A comment row (an @mention of someone in a comment, the "X commented" row of a participant,
+MIP-1599, or a reaction on a comment, told to its author, MIP-1609) is a row of the task's project chat, which the recipient may not be able to open
 although they can open the TASK (the assignee or reporter who is not on the project). The row is
 about the task, so what that person is shown follows the task's rule too: the feed keeps the row
 (`task_readable_comment_row_ids`) and the push and the email link to the task, not to a chat that
@@ -223,10 +223,11 @@ def minimal_card_activity_ids(activities: Iterable[Any]) -> set:
 
 # A comment row: the comment is mirrored into the project chat as a reply carrying its number
 # (`metadata.taskCommentId`), the same test `unread_digest` uses for "a comment on the task". The
-# rows written for it are the @mention of someone in it and the participant's "X commented"
-# (THREAD_REPLY). A row on any other message of that chat (a reply under the task card, a plain
-# chat message) is the chat's content and is never judged by the task's rule.
-COMMENT_ROW_TYPES = (ActivityType.MENTION, ActivityType.THREAD_REPLY)
+# rows written for it are the @mention of someone in it, the participant's "X commented"
+# (THREAD_REPLY) and a REACTION on it, which is told to the comment's author (MIP-1609). A row on
+# any other message of that chat (a reply under the task card, a plain chat message) is the chat's
+# content and is never judged by the task's rule.
+COMMENT_ROW_TYPES = (ActivityType.MENTION, ActivityType.THREAD_REPLY, ActivityType.REACTION)
 COMMENT_ROW_Q = Q(
     activity_type__in=COMMENT_ROW_TYPES,
     surface_type__isnull=True,
@@ -265,8 +266,8 @@ def task_readable_comment_row_ids(user_id: Any, rows, *, limit: int) -> set:
 
 
 def task_links(activities: Iterable[Any], *, skip: Iterable[Any] = ()) -> dict:
-    """`{activity id: link to the task}` for the comment rows (an @mention in a comment, or a
-    participant's "X commented") whose recipient can open the task and not the project chat it is
+    """`{activity id: link to the task}` for the comment rows (an @mention in a comment, a
+    participant's "X commented", or a reaction on a comment) whose recipient can open the task and not the project chat it is
     mirrored into (a project chat is read by a project member row: the assignee or reporter who is
     not on the project, or the project's owner with no row, cannot open it). The push and the
     email would link to that chat, which answers 404 for them.
