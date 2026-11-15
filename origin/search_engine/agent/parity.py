@@ -25,8 +25,9 @@ PARITY_FLAG = "AGENT_PARITY_TOOLS"
 #: new model-visible change. Default ON since the 2026-11-15 flip too (`apis/settings.py`; env `false` is the rollback).
 FOLLOWUPS_FLAG = "AGENT_PARITY_FOLLOWUPS"
 #: MIP-1609: `update_task`'s own project move judges the people already assigned and says what the move did, as
-#: the milestone move does (MIP-1583) and the app's task PUT does (MIP-1597). A THIRD flag, default OFF: both batch
-#: flags above are on in production, so neither can protect a new model-visible change.
+#: the milestone move does (MIP-1583) and the app's task PUT does (MIP-1597). A THIRD flag: both batch
+#: flags above are on in production, so neither could protect a new model-visible change. Default ON since the
+#: 2026-11-16 flip (`apis/settings.py`; env `false` is the rollback).
 TASK_MOVE_FLAG = "AGENT_TASK_MOVE_PARITY"
 
 

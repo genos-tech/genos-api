@@ -20,7 +20,7 @@ MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with 
 team, or someone the task's own ACL already covers; a reporter already on the task is not judged
 again). Neither is something undo can put back (`undo.UPDATE_TASK_UNRESTORABLE_ARGS`).
 
-MIP-1609 (flag `AGENT_TASK_MOVE_PARITY`, default off): a `project_id` move judges who is already assigned
+MIP-1609 (flag `AGENT_TASK_MOVE_PARITY`, default ON since the 2026-11-16 flip): a `project_id` move judges who is already assigned
 (`task_project_move.task_move_assignee_problem`) and says what it did (`moved.notes_narrowed`,
 `moved.reporters_outside_destination`), as `manage_milestone`'s move and the app's task PUT do.
 """

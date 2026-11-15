@@ -1,6 +1,6 @@
 """MIP-1609 item 3: `update_task`'s own project move judges the people already assigned and says what
 the move did, as the milestone move does (MIP-1583, api #881/#882) and as the app's own task PUT does
-(MIP-1597). Behind the flag `AGENT_TASK_MOVE_PARITY` (default off): it adds a refusal and fields to a
+(MIP-1597). Behind the flag `AGENT_TASK_MOVE_PARITY` (ON by default since the 2026-11-16 flip; the test settings keep it off): it adds a refusal and fields to a
 tool result, so it is model-visible.
 
 The tool only moves a task inside the caller's team (`project_move_error`), so what it can refuse is
