@@ -24,9 +24,10 @@ from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT
 from origin.models.common.notification_models import PushSubscription
 from origin.services import presence
 from origin.services.activity_minimal_card import (
-    MINIMAL_URL,
     minimal_card_ids_failing_closed,
     minimal_title,
+    minimal_url,
+    task_links_failing_open,
 )
 from origin.services.unread_badge import unread_badge_total
 from origin.services.v3_activity import (
@@ -108,20 +109,26 @@ def _note_url(meta: dict, surface_type: int) -> str:
     return "/workspace/notes"
 
 
-def _push_spec(act, *, minimal: bool = False) -> dict | None:
-    """`_full_push_spec`, and for an @mention of a task the recipient cannot open
-    (`minimal`, decided in batch by `activity_minimal_card`) the minimal card: the same
-    category (so the same preferences and mute apply), a title that says so, no display id and
-    no link into the project. A comment's own text, which the sender wrote to them, stays."""
+def _push_spec(act, *, minimal: bool = False, task_link: str | None = None) -> dict | None:
+    """`_full_push_spec`, and for an @mention of a task or task note the recipient cannot open
+    (`minimal`, decided in batch by `activity_minimal_card`) the minimal card: the same category
+    (so the same preferences and mute apply), a title that says so, no display id and no link
+    into the project or the note. A comment's own text, which the sender wrote to them, stays.
+
+    `task_link`: a comment mention of someone who can open the task but not the project chat it
+    sits in (MIP-1598): the link is the task's, not the chat's."""
     spec = _full_push_spec(act)
-    if minimal and spec is not None and act.activity_type == ActivityType.MENTION:
-        actor_name = getattr(act.actor, "username", None) or "Someone"
-        spec = {
-            **spec,
-            "title": minimal_title(actor_name),
-            "body": "" if act.surface_type is not None else spec["body"],
-            "url": MINIMAL_URL,
-        }
+    if spec is not None and act.activity_type == ActivityType.MENTION:
+        if minimal:
+            actor_name = getattr(act.actor, "username", None) or "Someone"
+            spec = {
+                **spec,
+                "title": minimal_title(actor_name, act.surface_type),
+                "body": "" if act.surface_type is not None else spec["body"],
+                "url": minimal_url(act.surface_type),
+            }
+        elif task_link:
+            spec = {**spec, "url": task_link}
     return spec
 
 
@@ -360,9 +367,10 @@ def dispatch_push_for_activities(activities) -> None:
         [(a.activity_type, str(getattr(a, "message_id", ""))[:8]) for a in activities],
     )
     minimal = minimal_card_ids_failing_closed(activities)
+    links = task_links_failing_open(activities, skip=minimal)
     for act in activities:
         try:
-            spec = _push_spec(act, minimal=act.id in minimal)
+            spec = _push_spec(act, minimal=act.id in minimal, task_link=links.get(act.id))
             if spec is None:
                 continue
             # Mute, coarse per-chat AND fine per-object. Without this, muting
