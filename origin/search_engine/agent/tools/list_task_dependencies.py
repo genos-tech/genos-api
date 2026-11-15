@@ -22,6 +22,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.list_tasks import _milestone_task_q
+from origin.search_engine.agent.tools.project_gone import live_tasks_q
 
 _MAX_EDGES = 200
 
@@ -83,6 +84,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     edges_qs = (
         TaskDependency.objects.filter(team_id=ctx.team_id)
         .filter(scope_q)
+        # An edge into a task of a soft-deleted project is not shown from the live end either
+        # (MIP-1621, flag `AGENT_PARITY_FOLLOWUPS`; `Q()` while it is off).
+        .filter(live_tasks_q("blocker_task__"), live_tasks_q("blocked_task__"))
         .select_related("blocker_task__project", "blocked_task__project")
         .order_by("blocked_task_id", "blocker_task_id")[:_MAX_EDGES]
     )

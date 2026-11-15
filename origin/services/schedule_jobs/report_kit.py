@@ -22,6 +22,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.services.schedule_jobs import ReportItem
 
 # A report line is a sentence, not a document: a snippet or a title is cut here.
@@ -176,7 +177,12 @@ class Links:
                     ),
                 )
                 for row in TaskMaster.objects.filter(
-                    task_id__in=wanted, team_id=self._team, is_deleted=False
+                    # A task of a soft-deleted project is not linked from a report (MIP-1621, flag
+                    # `AGENT_PARITY_FOLLOWUPS`); `Q()` while it is off.
+                    live_tasks_q(),
+                    task_id__in=wanted,
+                    team_id=self._team,
+                    is_deleted=False,
                 ).values(
                     "task_id",
                     "project_task_number",

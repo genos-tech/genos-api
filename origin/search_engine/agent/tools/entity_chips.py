@@ -42,6 +42,7 @@ from origin.search_engine.agent.acl import (
     task_acl_user_ids,
     task_note_acl_user_ids,
 )
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -155,7 +156,7 @@ def _task_chip(lookup: dict[str, Any], team_id: str, user_id: str) -> dict[str, 
         .first()
     )
     # The chip's route needs the project (`/tasks/project/<p>/task/<t>`).
-    if task is None or not task.project_id:
+    if task is None or not task.project_id or in_deleted_project(task):
         return None
     if user_id not in task_acl_user_ids(task.project_id, task.assignee_id, task.reporter_id):
         return None
@@ -177,7 +178,12 @@ def _milestone_chip(milestone_id: int, team_id: str, user_id: str) -> dict[str, 
         .first()
     )
     backing = milestone.task if milestone is not None else None
-    if backing is None or backing.is_deleted or not milestone.project_id:
+    if (
+        backing is None
+        or backing.is_deleted
+        or not milestone.project_id
+        or in_deleted_project(milestone)
+    ):
         return None  # no backing row yet → the link resolver's milestone route
     if user_id not in milestone_acl_user_ids(milestone.project_id, milestone.milestone_id):
         return None

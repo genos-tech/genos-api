@@ -46,6 +46,7 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.services.github_webhooks import ensure_repo_webhook, parse_pr_url_full
 from origin.services.oauth.tokens import ReauthRequired
 from origin.services.task_delivery import (
@@ -150,6 +151,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # The words of a missing one, so a guessed id does not say which tasks exist in other
         # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
         raise ToolForbidden(f"Task {task_id} not found.")
+    if task_is_gone(task):
+        # MIP-1621 (`AGENT_PARITY_FOLLOWUPS`): a deleted task and a task of a soft-deleted project read as a
+        # missing task, before the ACL check, so no refusal says the task exists.
+        raise ToolError(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
 

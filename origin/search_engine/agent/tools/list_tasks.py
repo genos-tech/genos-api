@@ -41,6 +41,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.project_gone import in_deleted_project, live_tasks_q
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.task_tags import tag_names
 from origin.services.milestone_rollup import milestone_tasks_q
@@ -166,6 +167,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         | Q(assignee_id=ctx.user_id)
         | Q(reporter_id=ctx.user_id)
     )
+    # The assignee and reporter branches above reach a task wherever it is, a soft-deleted project's
+    # included, so the project is asked on the task itself (MIP-1621, flag `AGENT_PARITY_FOLLOWUPS`;
+    # `Q()` while it is off). The page, `total` and `has_more` below are all computed on this set.
+    qs = qs.filter(live_tasks_q())
 
     # --- Optional caller filters ---
 
@@ -275,12 +280,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         qs = qs.filter(sprint_id=sprint_id)
 
     if (parent_id := _int_arg(args, "parent_task_id")) is not None:
-        parent = TaskMaster.objects.filter(task_id=parent_id, is_deleted=False).first()
+        parent = (
+            TaskMaster.objects.select_related("project")
+            .filter(task_id=parent_id, is_deleted=False)
+            .first()
+        )
         # A parent the caller cannot read answers as one that does not exist, so
         # the filter cannot be used to find out which task ids are in use.
         if (
             parent is None
             or str(getattr(parent, "team_id", "") or "") != ctx.team_id
+            or in_deleted_project(parent)
             or ctx.user_id
             not in task_acl_user_ids(parent.project_id, parent.assignee_id, parent.reporter_id)
         ):

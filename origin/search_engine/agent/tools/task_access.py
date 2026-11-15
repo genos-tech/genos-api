@@ -13,6 +13,7 @@ from typing import Any
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.project_gone import task_is_gone
 
 
 def as_int(value: Any, name: str) -> int:
@@ -25,13 +26,17 @@ def as_int(value: Any, name: str) -> int:
 def load_task(raw_task_id: Any, ctx: ToolContext, *, action: str) -> TaskMaster:
     task_id = as_int(raw_task_id, "task_id")
     try:
-        task = TaskMaster.objects.get(task_id=task_id)
+        task = TaskMaster.objects.select_related("project").get(task_id=task_id)
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
         # The words of a missing one, so a guessed id does not say which tasks exist in other
         # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
         raise ToolForbidden(f"Task {task_id} not found.")
+    if task_is_gone(task):
+        # MIP-1621 (`AGENT_PARITY_FOLLOWUPS`): a deleted task and a task of a soft-deleted project read as a
+        # missing task, before the ACL check, so no refusal says the task exists.
+        raise ToolError(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
     allowed = task_acl_user_ids(
