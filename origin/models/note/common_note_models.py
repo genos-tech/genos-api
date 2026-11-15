@@ -1,4 +1,3 @@
-
 from django.db import models
 
 from origin.models.common.team_models import TeamMaster
@@ -34,6 +33,35 @@ class NotePermissionMaster(models.Model):
                 fields=["user", "note_type", "note_id"], name="unique_note_permission"
             )
         ]
+
+
+class TaskNoteRoleRevoke(models.Model):
+    """The Owner row a task note's AUTHOR lost because the note moved to a project they are not on
+    (`services/note_role_revoke.revoke_task_roles_on_move`, MIP-1493), kept so a move to a project
+    they ARE on writes it back (MIP-1583).
+
+    Additive and small: it records a grant that existed, never one that did not. It is consumed
+    (deleted) when the row is written back, when the person joins a project the note is in
+    (`restore_task_author_roles`), and when they leave the team, so it can never
+    outlive the reason it was written and bring an access back that something else ended.
+    """
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="+",
+        to_field="id",
+    )
+    note_id = models.BigIntegerField()
+    # The project the note was in when the row ended: for a person reading the table.
+    from_project_id = models.BigIntegerField(null=True, blank=True)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "note_id"], name="unique_task_note_role_revoke")
+        ]
+        indexes = [models.Index(fields=["note_id"], name="tnrr_note_idx")]
 
 
 class NoteFolderPermission(models.Model):
@@ -104,9 +132,7 @@ class NoteFolderPermission(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(
-                fields=["folder", "user"], name="uniq_note_folder_permission"
-            )
+            models.UniqueConstraint(fields=["folder", "user"], name="uniq_note_folder_permission")
         ]
 
 

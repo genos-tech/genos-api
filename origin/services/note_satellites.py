@@ -32,11 +32,12 @@ from contextvars import ContextVar
 
 from django.db import transaction
 
-from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.common_note_models import NotePermissionMaster, TaskNoteRoleRevoke
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.models import NoteSummary
 
 BATCH = 500
+NOTE_TYPE_TASK = 2
 
 # note_type -> note ids noticed by the receiver inside a `batched_note_cleanup()` block;
 # None outside one (the receiver then deletes at once).
@@ -70,6 +71,9 @@ def _delete(code: int, ids: set[int]) -> None:
         chunk = ordered[start : start + BATCH]
         for model in _SATELLITES:
             model.objects.filter(note_type=code, note_id__in=chunk).delete()
+        if code == NOTE_TYPE_TASK:
+            # The Owner rows a move ended (MIP-1583): keyed by the note's number only, like the rest.
+            TaskNoteRoleRevoke.objects.filter(note_id__in=chunk).delete()
 
 
 @contextmanager
