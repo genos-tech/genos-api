@@ -164,6 +164,7 @@ class NoteParts(McpBase):
     def test_the_parts_join_back_into_the_whole_note(self):
         got, offset, parts = [], 0, 0
         while offset is not None:
+            self.assertLess(parts, 100, "the parts must advance")
             s = self.read(offset=offset, max_chars=7_000)["structuredContent"]
             self.assertLessEqual(len(s["body_markdown"]), 7_000)
             got.append(s["body_markdown"])
@@ -189,6 +190,7 @@ class NoteParts(McpBase):
         args = {"note_id": dense.note_id, "note_type": "personal"}
         got, offset, parts = [], 0, 0
         while offset is not None:
+            self.assertLess(parts, 100, "the parts must advance")
             with on():
                 result = self._result(self._call("get_note", {**args, "offset": offset}))
             s = result["structuredContent"]
@@ -282,8 +284,10 @@ class TaskParts(McpBase):
         self.assertTrue(self.markdown.startswith(s["content_markdown"]))
 
     def test_every_part_of_a_long_body_is_partial_the_last_one_too(self):
-        offset = 0
+        offset, parts = 0, 0
         while offset is not None:
+            parts += 1
+            self.assertLess(parts, 100, "the parts must advance")
             s = self.read(offset=offset, max_chars=9_000)["structuredContent"]
             self.assertNotIn("body_hash", s, f"offset {offset}")
             offset = s.get("next_offset")
