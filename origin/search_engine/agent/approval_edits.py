@@ -71,7 +71,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.model_fence import escape_user_arguments, unfence_arguments
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
-from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError
+from origin.search_engine.agent.tools import ToolContext, ToolError, get_app_tool
 from origin.search_engine.agent.tools.body_limits import check_body_size, max_body_bytes
 from origin.services.reminder_input import ReminderInputError, resolve_remind_at
 from origin.services.user_time import zone_for_user_id
@@ -206,6 +206,9 @@ EDITABLE_FIELDS: dict[str, dict[str, Field]] = {
     "create_task_plan": _NONE,
     "assign_task": _NONE,
     "delete_comment": _NONE,
+    # MIP-1563 (flag-gated in the app): the file to delete is chosen by the model's ids, and the
+    # card names it; nothing about a delete is edited before approving.
+    "delete_task_attachment": _NONE,
     "restore_task_body": _NONE,
     "add_task_delivery": _NONE,
     "remove_task_delivery": _NONE,
@@ -321,7 +324,8 @@ class EditRejected(Exception):
 def _schema_node(tool_name: str, template: str) -> dict[str, Any] | None:
     """The tool's own `parameters_schema` entry for `template`, or None. The schema is the one the
     model is shown: with `AGENT_PARITY_TOOLS` on it carries the parameters that flag adds."""
-    schema = getattr(REGISTRY.get(tool_name), "parameters_schema", None)
+    # `get_app_tool`, not `REGISTRY`: a tool filed behind a flag (MIP-1563) is found while its flag is on.
+    schema = getattr(get_app_tool(tool_name), "parameters_schema", None)
     if not isinstance(schema, dict):
         return None
     schema = with_flagged_params(tool_name, schema)

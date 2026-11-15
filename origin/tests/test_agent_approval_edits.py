@@ -41,7 +41,7 @@ from origin.search_engine.agent import approval_edits as edits
 from origin.search_engine.agent.controller import _FRIENDLY_ARG_RESOLVERS
 from origin.search_engine.agent.model_fence import unfence_arguments
 from origin.search_engine.agent.references import _catalog
-from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.search_engine.agent.tools import FLAGGED_REGISTRY, REGISTRY, ToolContext
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.base import wrap_workspace_content
 
@@ -118,7 +118,9 @@ FORBIDDEN_NAMES = {
 
 
 def _approval_tools() -> set[str]:
-    return {name for name, tool in REGISTRY.items() if tool.requires_approval}
+    """The registered writes and the flag-gated ones (MIP-1563)."""
+    flagged = {name for name, (_flag, tool) in FLAGGED_REGISTRY.items() if tool.requires_approval}
+    return {name for name, tool in REGISTRY.items() if tool.requires_approval} | flagged
 
 
 def _last_segment(template: str) -> str:
@@ -152,7 +154,8 @@ class AllowListCompletenessTests(SimpleTestCase):
                 self.assertEqual(edits.EDITABLE_FIELDS[name], {})
 
     def test_nothing_that_deletes_shares_or_plans_is_editable(self):
-        for name, tool in REGISTRY.items():
+        every = {**REGISTRY, **{name: tool for name, (_flag, tool) in FLAGGED_REGISTRY.items()}}
+        for name, tool in every.items():
             if not tool.requires_approval:
                 continue
             if (

@@ -329,6 +329,39 @@ CHIPPED_WRITE_TOOLS = {
         "project",
         "project:7",
     ),
+    # MIP-1059 (`AGENT_PARITY_TOOLS`): results made with the flag on, which name their account / note
+    # type / project. With the flag off these yield no chip, as before (`test_agent_calendar_source`).
+    "favorite_note": (
+        {"note_id": 5, "note_type": "personal", "favorite": True, "changed": True},
+        "note",
+        "note:personal:5",
+    ),
+    "delete_sprint": (
+        {"sprint_id": 3, "name": "S", "deleted": True, "project_id": 7},
+        "project",
+        "project:7",
+    ),
+    "create_calendar_event": (
+        {"id": "e1", "summary": "x", "calendar_id": "primary", "account_id": "a-1"},
+        "calendar_event",
+        "calendar_event:a-1:e1",
+    ),
+    "update_calendar_event": (
+        {
+            "id": "e1",
+            "summary": "x",
+            "calendar_id": "primary",
+            "account_id": "a-1",
+            "changed_fields": ["summary"],
+        },
+        "calendar_event",
+        "calendar_event:a-1:e1",
+    ),
+    "delete_calendar_event": (
+        {"event_id": "e1", "calendar_id": "primary", "deleted": True, "account_id": "a-1"},
+        "calendar_event",
+        "calendar_event:a-1:e1",
+    ),
 }
 
 

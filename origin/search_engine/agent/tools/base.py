@@ -151,9 +151,12 @@ MCP_ONLY_REGISTRY: dict[str, Tool] = {}
 #
 # Name -> (flag, tool). The name MAY equal an `MCP_ONLY_REGISTRY` name: `get_timeline` is one
 # capability on two surfaces, with a description and a schema written for each. Nothing mixes
-# them up: MCP looks tools up through `get_mcp_tool` (`REGISTRY`, then `MCP_ONLY_REGISTRY`, never
-# this), and the app reaches this registry only through `get_app_tool` / `flagged_tools`. A name
-# in `REGISTRY` is refused (see `register_flagged_tool`).
+# them up: MCP looks tools up through `get_mcp_tool` (`REGISTRY`, then `MCP_ONLY_REGISTRY`, then
+# this one, so the MCP-only twin wins), and the app reaches this registry only through
+# `get_app_tool` / `flagged_tools`. A name in `REGISTRY` is refused (see `register_flagged_tool`).
+#
+# A tool here may be a WRITE tool (MIP-1563). MCP publishes one behind the same flag through a
+# catalog entry with `McpTool.flag`; the flag is checked there (`published`), never by the lookup.
 FLAGGED_REGISTRY: dict[str, tuple[str, Tool]] = {}
 
 
@@ -174,6 +177,15 @@ def flagged_tool(name: str) -> Tool | None:
     return entry[1] if entry is not None and _flag_on(entry[0]) else None
 
 
+def app_write_tools() -> list[Tool]:
+    """Every in-app tool that asks for approval: the registered ones, and the flag-gated ones whose
+    flag is on right now. The one place that answers "which tools write", for the gates that hide
+    writes (the agency tier, the read-only digest and critique passes): a flag-gated write that
+    they did not see would be declared to a person on the read tier. With every flag off this is
+    exactly the registry's writes."""
+    return [t for t in (*REGISTRY.values(), *flagged_tools()) if t.requires_approval]
+
+
 def get_app_tool(name: str) -> Tool | None:
     """The tool the in-app agent runs for `name`: a registered one, or a flag-gated one whose
     flag is on. A lookup by the name the MODEL sent, so a tool that is not declared is not
@@ -183,8 +195,16 @@ def get_app_tool(name: str) -> Tool | None:
 
 
 def get_mcp_tool(name: str) -> Tool | None:
-    """The tool the MCP surface runs for `name`: a shared one, or an MCP-only one."""
-    return REGISTRY.get(name) or MCP_ONLY_REGISTRY.get(name)
+    """The tool the MCP surface runs for `name`: a shared one, an MCP-only one, or (MIP-1563) a
+    flag-gated one the catalog publishes behind the same flag.
+
+    The flag is NOT read here. Whether a flag-gated tool is offered at all is the catalog entry's
+    (`McpTool.flag`, `mcp.tools.published`), which `visible_tools` and `call` both ask before they
+    get as far as this lookup; the catalog's own contract tests read every entry's tool, flag on or
+    off, through it. A name in `REGISTRY` or `MCP_ONLY_REGISTRY` wins, so `get_timeline` (an
+    MCP-only tool with an in-app twin) is still the MCP one."""
+    entry = FLAGGED_REGISTRY.get(name)
+    return REGISTRY.get(name) or MCP_ONLY_REGISTRY.get(name) or (entry[1] if entry else None)
 
 
 def wrap_workspace_content(text: str) -> str:

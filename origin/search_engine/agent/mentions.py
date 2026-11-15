@@ -13,6 +13,23 @@ carrying the resolved ids:
     {"type": "project", "project_id": 7,                  "label": "Website Redesign"}
     {"type": "group", "group_id": 3,                      "label": "design-crew"}
     {"type": "todo", "item_id": 55,                       "label": "Ship hero handoff"}
+    {"type": "calendar_event", "account_id": "<uuid>", "calendar_id": "primary",
+     "event_id": "<google event id>",                     "label": "Dentist appointment"}
+    {"type": "message", "message_id": "<uuid>",           "label": "Alice: can we ship..."}
+
+A `message` (MIP-1058) is a chat message the member pointed "Ask Genos" at, by the id the app shows
+for it (the v3 message UUID, thread replies included). Like `calendar_event` it is accepted only while
+`AGENT_PARITY_TOOLS` is on. Unlike every other kind the server reads CONTENT: `ask_refs.read_message`
+checks the asker's chat access and the text goes into its own fenced block (`ask_refs`), not into the
+USER-PROVIDED REFERENCES block below, which is replayed on a resumed run and must hold no content. A message
+the asker cannot read, one that was deleted and one that never existed are dropped the same way.
+
+A `calendar_event` (MIP-1059) is accepted only while `AGENT_PARITY_TOOLS` is on; with it off the entry is
+dropped as an unknown kind, as before. It is not in our database, so nothing is looked up for it: the
+account must be one of the REQUESTER's connected Google accounts (the app's own guard) and the ids are
+shape-checked, and the prompt block tells the model to read the event with `get_calendar_event`. The
+client's `label` is dropped like every other, and here there is no canonical title to replace it with:
+the block never names the event.
 
 `note_type` / `chat_type` are the integer codes used by
 `thread_context` / `note_context` on the same endpoint; the server owns
@@ -34,10 +51,13 @@ and pre-seeded source chips so citations resolve without tool calls.
 from __future__ import annotations
 
 import logging
+import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from origin.search_engine.agent.ask_refs import MAX_MESSAGE_REFS, valid_message_id
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_LABEL
 
 log = logging.getLogger(__name__)
@@ -50,7 +70,24 @@ MAX_MENTIONS = 20
 # to "and N more" so a whole-team group can't flood the system prompt.
 _GROUP_BULLET_CAP = 10
 
-_VALID_TYPES = {"user", "task", "note", "chat", "project", "group", "todo"}
+_VALID_TYPES = {
+    "user",
+    "task",
+    "note",
+    "chat",
+    "project",
+    "group",
+    "todo",
+    "calendar_event",
+    "message",
+}
+
+# Kinds whose content is read by the server and goes in the block of `ask_refs`, not in a bullet here.
+_NO_BULLET_KINDS = frozenset({"message", "selection"})
+
+# What a calendar id may hold to reach the prompt (MIP-1059): an address, a group-calendar id or a holiday
+# calendar's `#`. No quote, space or slash, so it cannot close the call the block spells around it.
+_EVENT_CALENDAR_ID = re.compile(r"^[A-Za-z0-9@._#+~=-]{1,300}$")
 
 
 class MentionParseError(ValueError):
@@ -70,7 +107,7 @@ class ResolvedMention:
     safe to inject into the system prompt.
     """
 
-    kind: str  # "user" | "task" | "note" | "chat" | "project" | "group" | "todo"
+    kind: str  # "user" | "task" | "note" | "chat" | "project" | "group" | "todo" | "calendar_event" | "message"
     label: str
     # user
     user_id: str | None = None
@@ -102,6 +139,17 @@ class ResolvedMention:
     todo_item_id: int | None = None
     todo_local_date: str | None = None
     todo_completed: bool | None = None
+    # calendar_event (MIP-1059): the account (the requester's own, checked), the calendar and the event.
+    event_account_id: str | None = None
+    event_calendar_id: str | None = None
+    event_id: str | None = None
+    # message (MIP-1058): where it is, never what it says. `message_read` carries the text for the block
+    # of `ask_refs` while the ask is built; it is not persisted (`as_json`), not logged, not compared.
+    message_id: str | None = None
+    message_chat_type_label: str | None = None
+    message_chat_id: str | None = None
+    message_thread_id: str | None = None
+    message_read: Any = field(default=None, repr=False, compare=False)
 
     def as_json(self) -> dict[str, Any]:
         """Compact dict for `AgentRun.mentions` persistence."""
@@ -121,6 +169,13 @@ class ResolvedMention:
             "todo_item_id",
             "todo_local_date",
             "todo_completed",
+            "event_account_id",
+            "event_calendar_id",
+            "event_id",
+            "message_id",
+            "message_chat_type_label",
+            "message_chat_id",
+            "message_thread_id",
         ):
             val = getattr(self, key)
             if val is not None:
@@ -147,6 +202,10 @@ def _identity_key(entry: dict[str, Any]) -> tuple:
         return ("group", entry["group_id"])
     if kind == "todo":
         return ("todo", entry["item_id"])
+    if kind == "calendar_event":
+        return ("calendar_event", entry["account_id"], entry["event_id"])
+    if kind == "message":
+        return ("message", entry["message_id"])
     return ("chat", entry["chat_type"], entry["chat_id"])
 
 
@@ -174,6 +233,7 @@ def parse_mentions(raw: Any) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     seen: set[tuple] = set()
+    messages = 0
     for entry in raw:
         normalised = _normalise_entry(entry)
         if normalised is None:
@@ -183,6 +243,12 @@ def parse_mentions(raw: Any) -> list[dict[str, Any]]:
         key = _identity_key(normalised)
         if key in seen:
             continue
+        if normalised["type"] == "message":
+            # Messages put someone's words in the prompt: a bounded number of them per ask.
+            if messages >= MAX_MESSAGE_REFS:
+                log.info("Dropping a mention beyond the %s message limit", MAX_MESSAGE_REFS)
+                continue
+            messages += 1
         seen.add(key)
         out.append(normalised)
     return out
@@ -195,6 +261,10 @@ def _normalise_entry(entry: Any) -> dict[str, Any] | None:
     if kind not in _VALID_TYPES:
         return None
     label = str(entry.get("label") or "").strip()
+    if kind == "calendar_event":
+        return _normalise_event(entry, label)
+    if kind == "message":
+        return _normalise_message(entry, label)
     try:
         if kind == "user":
             user_id = str(entry.get("user_id") or "").strip()
@@ -228,6 +298,43 @@ def _normalise_entry(entry: Any) -> dict[str, Any] | None:
         return {"type": "chat", "chat_type": chat_type, "chat_id": chat_id, "label": label}
     except (TypeError, ValueError):
         return None
+
+
+def _normalise_event(entry: dict[str, Any], label: str) -> dict[str, Any] | None:
+    """A `calendar_event` entry (MIP-1059), or None. Only while `AGENT_PARITY_TOOLS` is on."""
+    from origin.search_engine.agent.calendar import event_cite  # noqa: PLC0415
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
+
+    if not parity_on():
+        return None
+    try:
+        account_id = str(uuid.UUID(str(entry.get("account_id")).strip()))
+    except (ValueError, AttributeError):
+        return None
+    calendar_id = str(entry.get("calendar_id") or "primary").strip()
+    event_id = str(entry.get("event_id") or "").strip()
+    if not _EVENT_CALENDAR_ID.match(calendar_id) or event_cite(account_id, event_id) is None:
+        return None
+    return {
+        "type": "calendar_event",
+        "account_id": account_id,
+        "calendar_id": calendar_id,
+        "event_id": event_id,
+        "label": label,
+    }
+
+
+def _normalise_message(entry: dict[str, Any], label: str) -> dict[str, Any] | None:
+    """A `message` entry (MIP-1058), or None. Only while `AGENT_PARITY_TOOLS` is on. The id is
+    checked as a UUID here, so the resolver only ever sees one."""
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
+
+    if not parity_on():
+        return None
+    message_id = valid_message_id(entry.get("message_id"))
+    if message_id is None:
+        return None
+    return {"type": "message", "message_id": message_id, "label": label}
 
 
 # --------------------------------------------------------------------------- #
@@ -502,6 +609,46 @@ def _resolve_todo(entry: dict[str, Any], ctx) -> ResolvedMention | None:
     )
 
 
+def _resolve_calendar_event(entry: dict[str, Any], ctx) -> ResolvedMention | None:
+    """The requester's OWN Google account is the whole check (the app's calendar endpoints resolve an
+    account the same way): another member's account id, a made-up one and a non-Google row all drop, silently.
+    Nothing is read from Google here: the event is read later, by the tool, as the member."""
+    from origin.models.common.user_models import ConnectedAccount  # noqa: PLC0415
+
+    if not ConnectedAccount.objects.filter(
+        id=entry["account_id"], user_id=ctx.user_id, provider="google"
+    ).exists():
+        return None
+    # No label: the client's is not trusted, and there is no title in our database to use instead.
+    return ResolvedMention(
+        kind="calendar_event",
+        label="",
+        event_account_id=entry["account_id"],
+        event_calendar_id=entry["calendar_id"],
+        event_id=entry["event_id"],
+    )
+
+
+def _resolve_message(entry: dict[str, Any], ctx) -> ResolvedMention | None:
+    """The message, read with the asker's own chat access (`ask_refs.read_message`); None for one that is
+    missing, deleted, unreadable or out of the asker's history window, all alike. No label: the client's
+    is not trusted and a message has no title."""
+    from origin.search_engine.agent.ask_refs import read_message  # noqa: PLC0415
+
+    read = read_message(entry["message_id"], ctx.team_id, ctx.user_id)
+    if read is None:
+        return None
+    return ResolvedMention(
+        kind="message",
+        label="",
+        message_id=read.message_id,
+        message_chat_type_label=read.chat_type,
+        message_chat_id=read.chat_id,
+        message_thread_id=read.thread_id,
+        message_read=read,
+    )
+
+
 _RESOLVERS = {
     "user": _resolve_user,
     "task": _resolve_task,
@@ -510,6 +657,8 @@ _RESOLVERS = {
     "project": _resolve_project,
     "group": _resolve_group,
     "todo": _resolve_todo,
+    "calendar_event": _resolve_calendar_event,
+    "message": _resolve_message,
 }
 
 
@@ -586,6 +735,14 @@ def _bullet_for(m: ResolvedMention) -> str:
             f"list_uncompleted_todos show it in context; cite it as "
             f"[prose]({eid})."
         )
+    if m.kind == "calendar_event":
+        token = f"calendar_event:{m.event_account_id}:{m.event_id}"
+        return (
+            f"  - a calendar event the person pointed at ({token}). Its text is NOT here: call "
+            f"get_calendar_event(event_id='{m.event_id}', calendar_id='{m.event_calendar_id}', "
+            f"account='{m.event_account_id}') before making claims about it; cite it as "
+            f"[prose]({token})."
+        )
     return (
         f'  - "#{m.label}" → chat channel {m.chat_type_label}:{m.chat_id}. Call '
         f"fetch_chat_thread(chat_type='{m.chat_type_label}', "
@@ -597,6 +754,9 @@ def _bullet_for(m: ResolvedMention) -> str:
 def build_mention_system_extra(resolved: list[ResolvedMention]) -> str | None:
     """The USER-PROVIDED REFERENCES system-prompt block, or None when
     nothing survived resolution."""
+    # A message is read into a block of its own (`ask_refs`): this one is replayed on a resumed run and
+    # holds ids and canonical titles, no content.
+    resolved = [m for m in resolved if m.kind not in _NO_BULLET_KINDS]
     if not resolved:
         return None
     bullets = "\n".join(_bullet_for(m) for m in resolved)
@@ -646,6 +806,15 @@ def build_mention_seed_sources(resolved: list[ResolvedMention]) -> list[dict[str
             out.append(_project_source(m.project_id, m.label))
         elif m.kind == "todo":
             out.append(_todo_source(m.todo_item_id, m.label, m.todo_local_date))
+        elif m.kind == "message":
+            # There is no message-level citation id: the chip is the chat, or the thread the message is in.
+            out.append(
+                _chat_source(
+                    chat_type=m.message_chat_type_label,
+                    chat_id=m.message_chat_id,
+                    thread_id=m.message_thread_id,
+                )
+            )
     return out
 
 
@@ -660,6 +829,11 @@ _PERSISTED_REQUIRED_KEYS = {
     "chat": ("chat_type_label", "chat_id"),
     "project": ("project_id",),
     "todo": ("todo_item_id",),
+    "calendar_event": ("event_account_id", "event_calendar_id", "event_id"),
+    "message": ("message_id", "message_chat_type_label", "message_chat_id"),
+    # The marker an ask with a selected passage leaves (`selection_marker`): no key, nothing in it
+    # but a count. It exists so the audit knows the answer may quote text nobody can classify.
+    "selection": (),
 }
 
 # Kinds that are a name, not an object: they never become a source. They name a
@@ -681,6 +855,13 @@ _PERSISTED_FIELDS = (
     "todo_item_id",
     "todo_local_date",
     "todo_completed",
+    "event_account_id",
+    "event_calendar_id",
+    "event_id",
+    "message_id",
+    "message_chat_type_label",
+    "message_chat_id",
+    "message_thread_id",
 )
 
 
@@ -701,6 +882,8 @@ def _resolved_from_json(entry: Any) -> ResolvedMention | None:
     if kind == "note" and entry["note_type_label"] not in NOTE_TYPE_LABEL.values():
         return None
     if kind == "chat" and entry["chat_type_label"] not in CHAT_TYPE_LABEL.values():
+        return None
+    if kind == "message" and entry["message_chat_type_label"] not in CHAT_TYPE_LABEL.values():
         return None
     fields = {key: entry[key] for key in _PERSISTED_FIELDS if key in entry}
     return ResolvedMention(kind=kind, label=str(entry.get("label") or ""), **fields)
@@ -737,6 +920,23 @@ def mention_audit_sources(mentions_json: Any, *, team_id: str) -> list[dict[str,
             return None
         resolved.append(mention)
     sources = build_mention_seed_sources(resolved)
+    # A calendar event (MIP-1059) is never shareable, so a run that carries one is never collected: the
+    # same answer `source_visibility` gives an event a tool read.
+    sources.extend(
+        {
+            "entity_type": "calendar_event",
+            "entity_id": f"calendar_event:{m.event_account_id}:{m.event_id}",
+        }
+        for m in resolved
+        if m.kind == "calendar_event"
+    )
+    # A selected passage (MIP-1058) is text the browser sent: it may come from a private chat or note, so a
+    # run that carries one is never collected either (`source_visibility`, `selection`).
+    sources.extend(
+        {"entity_type": "selection", "entity_id": "selection"}
+        for m in resolved
+        if m.kind == "selection"
+    )
     if any(m.kind in _NAME_KINDS for m in resolved):
         sources.append({"entity_type": "team_directory", "team_id": str(team_id)})
     return sources
@@ -782,3 +982,52 @@ def mention_search_params(mentions_json: Sequence[dict[str, Any]]) -> dict[str, 
         "boost_entity_ids": entity_ids,
         "boost_project_ids": project_ids,
     }
+
+
+def selection_marker(chars: int, truncated: bool) -> dict[str, Any]:
+    """The entry an ask with a selected passage adds to `AgentRun.mentions` (MIP-1058): no text, only
+    that there was one, so the audit of a collected answer can refuse it."""
+    return {"kind": "selection", "label": "", "selection_chars": chars, "truncated": truncated}
+
+
+def provenance_token(m: ResolvedMention) -> str | None:
+    """What a selection was selected from, as ids and enums only (never a title), or None for a kind
+    with nothing to point at (a person, a group)."""
+    if m.kind == "message":
+        return f"message {m.message_id}"
+    if m.kind == "task":
+        return f"task:{m.task_id}"
+    if m.kind == "note":
+        return f"note:{m.note_type_label}:{m.note_id}"
+    if m.kind == "chat":
+        return f"chat:{m.chat_type_label}:{m.chat_id}"
+    if m.kind == "project":
+        return f"project:{m.project_id}"
+    if m.kind == "todo":
+        return f"todo:{m.todo_local_date}:item:{m.todo_item_id}"
+    if m.kind == "calendar_event":
+        return f"calendar_event:{m.event_account_id}:{m.event_id}"
+    return None
+
+
+def resolve_selected_from(
+    raw: Any, ctx, asked: Sequence[dict[str, Any]]
+) -> tuple[ResolvedMention | None, bool]:
+    """The object a selected passage was selected from (MIP-1058), checked like a mention: `(resolved, is_new)`.
+
+    `raw` is one mention-shaped object, any kind. It is parsed and resolved by the same code as an entry
+    of `mentions`, so the same access rule applies and the same things drop it (a flag that is off, a
+    malformed entry, an object the asker cannot read, one that does not exist). `(None, False)` then:
+    the passage is used without a source, which is what a request that sent no source gets, so the two
+    cases cannot be told apart. `is_new` is False when `asked` (the ask's parsed `mentions`) already
+    names the same object, so it is not listed twice.
+    """
+    if not isinstance(raw, dict):
+        return None, False
+    parsed = parse_mentions([raw])
+    if not parsed:
+        return None, False
+    resolved = resolve_mentions(parsed, ctx)
+    if not resolved:
+        return None, False
+    return resolved[0], _identity_key(parsed[0]) not in {_identity_key(e) for e in asked}

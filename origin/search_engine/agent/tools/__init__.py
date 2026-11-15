@@ -41,6 +41,7 @@ general "which milestones is Alice on?" case.
 """
 
 from origin.search_engine.agent.model_fence import with_unfenced_arguments
+from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.add_project_tag import ADD_PROJECT_TAG
 from origin.search_engine.agent.tools.add_task_delivery import ADD_TASK_DELIVERY
@@ -54,6 +55,7 @@ from origin.search_engine.agent.tools.base import (
     ToolContext,
     ToolError,
     ToolForbidden,
+    app_write_tools,
     flagged_tool,
     flagged_tools,
     get_app_tool,
@@ -72,6 +74,7 @@ from origin.search_engine.agent.tools.delete_note import DELETE_NOTE
 from origin.search_engine.agent.tools.delete_note_folder import DELETE_NOTE_FOLDER
 from origin.search_engine.agent.tools.delete_project import DELETE_PROJECT
 from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
+from origin.search_engine.agent.tools.delete_task_attachment import DELETE_TASK_ATTACHMENT
 from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
 from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
@@ -80,6 +83,7 @@ from origin.search_engine.agent.tools.fetch_note_history import FETCH_NOTE_HISTO
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
+from origin.search_engine.agent.tools.get_calendar_event import GET_CALENDAR_EVENT
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
 from origin.search_engine.agent.tools.get_milestone_assignee_counts import (
     GET_MILESTONE_ASSIGNEE_COUNTS,
@@ -183,13 +187,19 @@ def register_flagged_tool(tool: Tool, flag: str) -> None:
 
     Wrapped like every other tool (`with_unfenced_arguments`, in place). Refused when the name is
     in `REGISTRY` or filed twice; a name in `MCP_ONLY_REGISTRY` is allowed on purpose (see the
-    note on `FLAGGED_REGISTRY`). Write tools cannot be flag-gated this way: the approval and
-    resume paths look tools up in `REGISTRY` only.
+    note on `FLAGGED_REGISTRY`).
+
+    A WRITE tool may be flag-gated too (MIP-1563). Everything that has to know about it reads it
+    through `get_app_tool` / `app_write_tools` and not `REGISTRY`: the dispatch, the approval card,
+    the approve-and-run path, the tier gate that hides writes from a read-only member, the digest
+    and the critique pass that run with no approver. A reader that forgot would see the tool as
+    absent, never as unguarded, EXCEPT the gates that hide writes: those are the reason this goes
+    through `app_write_tools` and `test_agent_flagged_write_tools` holds each one to it.
     """
     if tool.name in REGISTRY or tool.name in FLAGGED_REGISTRY:
         raise ValueError(f"tool {tool.name!r} is already registered")
-    if tool.requires_approval or tool.mcp_only:
-        raise ValueError(f"flag-gated tool {tool.name!r} must be a read tool for the app")
+    if tool.mcp_only:
+        raise ValueError(f"flag-gated tool {tool.name!r} must be a tool the app runs")
     if not hasattr(tool.run, "__wrapped__"):
         object.__setattr__(tool, "run", with_unfenced_arguments(tool.run))
     FLAGGED_REGISTRY[tool.name] = (flag, tool)
@@ -319,6 +329,12 @@ for _t in (
 
 # Flag-gated in-app tools (default off; NOT in REGISTRY, see `base.FLAGGED_REGISTRY`).
 register_flagged_tool(GET_TIMELINE_INAPP, "AGENT_INAPP_TIMELINE_TOOL")
+# MIP-1563: a task's files can be deleted by the agent and MCP, behind the parity batch's flag. A
+# WRITE tool: filed here so that with the flag off it is declared, runnable and published nowhere.
+register_flagged_tool(DELETE_TASK_ATTACHMENT, PARITY_FLAG)
+# MIP-1059: one calendar event by id, on any of the member's connected Google accounts. A READ tool the
+# parity flag publishes, in the app and (through `McpTool.flag`) over MCP.
+register_flagged_tool(GET_CALENDAR_EVENT, PARITY_FLAG)
 
 
 __all__ = [
@@ -328,10 +344,13 @@ __all__ = [
     "get_app_tool",
     "flagged_tool",
     "flagged_tools",
+    "app_write_tools",
     "FLAGGED_REGISTRY",
     "ADD_COMMENT",
     "ADD_TASK_DELIVERY",
     "DELETE_SPRINT",
+    "DELETE_TASK_ATTACHMENT",
+    "GET_CALENDAR_EVENT",
     "MANAGE_PROJECT",
     "MANAGE_PROJECT_MEMBERS",
     "ADD_PROJECT_TAG",

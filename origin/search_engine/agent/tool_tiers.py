@@ -25,7 +25,7 @@ from origin.search_engine.quota import (
     get_integrations,
 )
 
-from .tools import REGISTRY
+from .tools import app_write_tools
 
 # The SINGLE-write tools `act` unlocks. Hand-maintained; everything
 # else is derived, and the direction of the derivation is the whole
@@ -66,6 +66,7 @@ SINGLE_WRITE_TOOLS = frozenset(
         "manage_note_sharing",
         "restore_note_version",
         "delete_sprint",
+        "delete_task_attachment",
     }
 )
 
@@ -96,7 +97,9 @@ def disabled_tools_for_level(level: str) -> set[str]:
     """
     if level == "organize":
         return set()
-    writes = {t.name for t in REGISTRY.values() if t.requires_approval}
+    # Through `app_write_tools`, not the registry alone: a write that is flag-gated while its flag is
+    # on must be hidden from a read-only member like any other (MIP-1563).
+    writes = {t.name for t in app_write_tools()}
     if level == "read":
         return writes
     return writes - SINGLE_WRITE_TOOLS  # level == "act"
@@ -137,6 +140,7 @@ INTEGRATION_TOOLS: dict[str, frozenset[str]] = {
         {
             "list_calendars",
             "list_calendar_events",
+            "get_calendar_event",  # MIP-1059, declared only while `AGENT_PARITY_TOOLS` is on
             "create_calendar_event",
             "update_calendar_event",
             "delete_calendar_event",

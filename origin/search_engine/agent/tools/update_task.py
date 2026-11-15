@@ -35,7 +35,7 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.parity import ignore_unless_parity
+from origin.search_engine.agent.parity import ignore_unless_parity, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -379,7 +379,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             changed.append("custom_fields")
     if wants_collaborators:
         current_people = {str(uid) for uid in task.collaborators.values_list("id", flat=True)}
-        planned_people = plan_collaborators(args["collaborators"], task.project, current_people)
+        planned_people = plan_collaborators(
+            args["collaborators"],
+            task.project,
+            current_people,
+            readers=(task.assignee_id, task.reporter_id),
+        )
         if set(planned_people) != current_people:
             new_collaborators = planned_people
             changed.append("collaborators" if planned_people else "collaborators(cleared)")
@@ -447,6 +452,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             ctx.user_id,
             detaching=move_parent and target_parent_id is None,
         ):
+            if task.is_milestone and parity_on():
+                # MIP-1564: a milestone does move now, with its own tool; the refusal says how
+                # (the flag off, it is the sentence it always was).
+                error = (
+                    f"Task {task.display_id} is a milestone's own row. Move the milestone with "
+                    f"`manage_milestone` (`action` 'update', `milestone_id` {task.milestone_id}, "
+                    "`project_id`): its tasks go with it. Nothing was changed."
+                )
             raise ToolError(error)
     if move_milestone and (move_parent or move_project):
         raise ToolError(

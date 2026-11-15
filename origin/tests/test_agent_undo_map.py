@@ -24,14 +24,18 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent import approval_edits, undo, undo_apply
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
-from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools import FLAGGED_REGISTRY, REGISTRY
 from origin.views.public.mcp.tools import CATALOG
 
 from .test_base import BaseAPITestCase
 
 
 def _approval_tools() -> set[str]:
-    return {name for name, tool in REGISTRY.items() if tool.requires_approval}
+    """Every approval-gated tool the app can run: the registered ones and the flag-gated ones
+    (MIP-1563: `delete_task_attachment` exists only while `AGENT_PARITY_TOOLS` is on, and still
+    has to say whether it can be undone)."""
+    flagged = {name for name, (_flag, tool) in FLAGGED_REGISTRY.items() if tool.requires_approval}
+    return {name for name, tool in REGISTRY.items() if tool.requires_approval} | flagged
 
 
 class MapCompletenessTests(SimpleTestCase):
@@ -118,7 +122,7 @@ class MapCompletenessTests(SimpleTestCase):
         # `UNDO_SUPPORT` is the IN-APP approval card's map. A destructive tool that is
         # MCP-only (MIP-1070) has no card and no entry: it must not be in the app's
         # registry at all, which `test_mcp_only_tools` pins.
-        in_app = destructive & set(REGISTRY)
+        in_app = destructive & _approval_tools()
         for name in sorted(in_app):
             with self.subTest(tool=name):
                 self.assertEqual(undo.UNDO_SUPPORT[name], undo.NONE)

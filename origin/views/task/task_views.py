@@ -29,6 +29,7 @@ from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
+from origin.services.task_attachment_manage import delete_attachment
 from origin.services.task_cache import (
     get_cached_project_tasks,
     invalidate_for_task,
@@ -449,10 +450,16 @@ class TaskMasterView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             # Collaborators ride outside the serializer (M2M) — set them
-            # once the row exists. Absent key => no collaborators.
+            # once the row exists. Absent key => no collaborators. Anyone who could not open the
+            # task is left out (MIP-1567): its assignee and reporter can, a teammate who is not
+            # on the project cannot.
             sync_task_collaborators(
                 serializer.instance,
-                _people_allowed_on(project, request.data.get("collaborators")),
+                _people_allowed_on(
+                    project,
+                    request.data.get("collaborators"),
+                    (request.data.get("assignee"), request.data.get("reporter")),
+                ),
             )
             increment_usage(str(request.user.id), TASK_CREATE_KEY)
             # Drop the project-tasks cache so the next sidebar fetch
@@ -2351,35 +2358,18 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
         try:
             attachment = TaskAttachments.objects.get(task=task, attachment_id=attachment_id)
-            # Remove the underlying file from MEDIA storage first.
-            # `model.delete()` only drops the DB row; the FileField does
-            # not auto-purge the backing blob on disk, so without this
-            # the upload directory would grow unbounded with orphans.
-            # `save=False` skips re-saving the (about-to-be-deleted)
-            # row. Wrapped so a missing/already-removed file (e.g. an
-            # orphan from a half-finished prior delete) doesn't block
-            # the row deletion.
-            if attachment.attached_file:
-                try:
-                    attachment.attached_file.delete(save=False)
-                except Exception as file_err:
-                    # Don't fail the API call — the DB row deletion is
-                    # the user-facing contract; a missing file is a
-                    # cleanup concern, not a correctness one.
-                    logger.warning(
-                        "[TaskAttachmentsView.delete] file cleanup failed for attachment_id=%s: %s",
-                        attachment_id,
-                        type(file_err).__name__,
-                    )
-            attachment.delete()
-            return Response(
-                {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
-            )
-        except TaskAttachments.DoesNotExist:
+        except (TaskAttachments.DoesNotExist, ValueError, TypeError):
+            # A malformed id (`attachment_id=abc`) names nothing, as a missing one does: it
+            # used to reach the query as a `ValueError` and answer 500.
             return Response(
                 {"error": "Attachment not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        # The file, then the row: the one delete the agent's `delete_task_attachment` shares.
+        delete_attachment(attachment)
+        return Response(
+            {"message": "Attachment deleted successfully."}, status=status.HTTP_204_NO_CONTENT
+        )
 
 
 def _own_comment(request, task_id, comment_id):

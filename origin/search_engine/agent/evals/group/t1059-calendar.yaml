@@ -1,0 +1,223 @@
+# MIP-1059 (flag AGENT_PARITY_TOOLS, arm `parity`): the calendar tools reach EVERY connected Google account, not only
+# the first. `list_calendars` lists each account's calendars (tagged with its `account_id`), the five calendar tools take
+# `account` (that id; omitted = the default, the first account), a new read, `get_calendar_event`, reads one event, and a
+# calendar event can be cited (`calendar_event:<account_id>:<event_id>`, a chip in the app) and now has a real approval
+# card (the account's address, and for a change or a delete the event as it is now). Judged on what the model READS and
+# PROPOSES: a calendar write is never approved here (no paid run may write to a calendar), so the cases end on the
+# proposal. The card the proposal produces carries `account_label`, which says WHICH account the model aimed at without
+# the case knowing a generated id, and `current` (the event read from the fake Google) for a delete.
+#
+# Seeds `calendar_two_accounts` (the PM viewers, `b` / `ja-b`: a work account, the default, with "Sprint planning", and a
+# personal account with "Dentist appointment" and "Piano lesson") and `calendar_one_account` (`c` / `ja`: one work account).
+# Google is an in-process fake (`calendar_stub`): each account answers only its own events, so reading the second
+# account's event is a fact about the call, and nothing reaches the network. Dates are in March 2027.
+#
+# The positives `requires_arm: parity` (they cannot pass without `account`, the new tool and the citation shape being
+# declared). The negatives run on arm0 too: asking to LOOK must never become a write, and a member with one account must
+# never be sent an `account` the model invented.
+
+- id: t1059.read-second.en
+  lang: en
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: an event that exists only on the personal account: the model finds the account (list_calendars) and reads it there."
+  query: 'What time is my "Dentist appointment" event on March 2, 2027? It is on my personal Google account.'
+  expect:
+    no_errors: true
+    tools_used_contains_any: [get_calendar_event, list_calendar_events]
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_any: ["15:00", "3:00 pm", "3 pm", "3pm", "3:00 p.m.", "3 p.m."]
+
+- id: t1059.read-second.ja
+  lang: ja
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: an event that exists only on the personal account: the model finds the account (list_calendars) and reads it there."
+  query: '2027年3月2日の「歯医者の予約」は何時ですか？ 私の個人用のGoogleアカウントにある予定です。'
+  expect:
+    no_errors: true
+    tools_used_contains_any: [get_calendar_event, list_calendar_events]
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_contains_any: ["15:00", "15時", "午後3時", "午後３時", "午後 3 時"]
+
+- id: t1059.cite-event.en
+  lang: en
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: the answer cites the event it read as [prose](calendar_event:<account_id>:<event_id>): the chip's token, copied from the event's `cite`."
+  query: 'Tell me when my "Piano lesson" event on my personal Google account is, and link the event.'
+  expect:
+    no_errors: true
+    tools_used_contains_any: [get_calendar_event, list_calendar_events]
+    has_citations: true
+    answer_contains_all: ["calendar_event:"]
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+
+- id: t1059.cite-event.ja
+  lang: ja
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: the answer cites the event it read as [prose](calendar_event:<account_id>:<event_id>): the chip's token, copied from the event's `cite`."
+  query: '私の個人用Googleアカウントにある「ピアノのレッスン」の予定がいつか教えて、その予定へのリンクも付けてください。'
+  expect:
+    no_errors: true
+    tools_used_contains_any: [get_calendar_event, list_calendar_events]
+    has_citations: true
+    answer_contains_all: ["calendar_event:"]
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+
+- id: t1059.create-named.en
+  lang: en
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: create an event on the NAMED (second) account. The proposal carries `account`, and the card says whose address it is (`account_label`)."
+  query: 'Put "Team lunch" on my personal Google calendar on 2027-03-10 from 12:00 to 13:00, Asia/Tokyo time.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_calendar_event]
+    pending_write:
+      tool: create_calendar_event
+      args_present: [account, summary, start_iso, end_iso]
+      args_match:
+        summary: "Team lunch"
+        start_iso: "2027-03-10T12:00"
+        account_label: "eval.personal@genos-eval.example"
+
+- id: t1059.create-named.ja
+  lang: ja
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: create an event on the NAMED (second) account. The proposal carries `account`, and the card says whose address it is (`account_label`)."
+  query: '個人用のGoogleカレンダーに、2027-03-10の12:00から13:00まで「チームランチ」を入れてください（Asia/Tokyoの時間です）。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_calendar_event]
+    pending_write:
+      tool: create_calendar_event
+      args_present: [account, summary, start_iso, end_iso]
+      args_match:
+        summary: "チームランチ"
+        start_iso: "2027-03-10T12:00"
+        account_label: "eval.personal@genos-eval.example"
+
+- id: t1059.delete-second.en
+  lang: en
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: delete an event that is on the second account. The proposal names the event and the account, and the card shows the event as it is now (`current`)."
+  query: 'Delete my "Dentist appointment" event from my personal Google account.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [delete_calendar_event]
+    pending_tools_excludes: [update_calendar_event]
+    pending_write:
+      tool: delete_calendar_event
+      args_present: [event_id, account]
+      args_match:
+        event_id: "^evalhome1$"
+        account_label: "eval.personal@genos-eval.example"
+        current: "Dentist appointment"
+
+- id: t1059.delete-second.ja
+  lang: ja
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  requires_arm: parity
+  note: "Positive: delete an event that is on the second account. The proposal names the event and the account, and the card shows the event as it is now (`current`)."
+  query: '私の個人用Googleアカウントから「歯医者の予約」の予定を削除してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [delete_calendar_event]
+    pending_tools_excludes: [update_calendar_event]
+    pending_write:
+      tool: delete_calendar_event
+      args_present: [event_id, account]
+      args_match:
+        event_id: "^evalhome1$"
+        account_label: "eval.personal@genos-eval.example"
+        current: "歯医者の予約"
+
+- id: t1059.look-only.en
+  lang: en
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: b
+  seed: [calendar_two_accounts]
+  note: "Negative (arm0 and parity): only asked to LOOK. Reaching more accounts must never turn a question into a write."
+  query: 'What do I have on my calendars on March 2 and March 4, 2027? Just tell me, do not change anything.'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_chars_at_least: 20
+
+- id: t1059.look-only.ja
+  lang: ja
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: ja-b
+  seed: [calendar_two_accounts]
+  note: "Negative (arm0 and parity): only asked to LOOK. Reaching more accounts must never turn a question into a write."
+  query: '2027年3月2日と3月4日のカレンダーの予定を教えてください。見るだけで、何も変更しないでください。'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
+    answer_chars_at_least: 20
+
+- id: t1059.one-account.en
+  lang: en
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: c
+  seed: [calendar_one_account]
+  note: "Negative (arm0 and parity): a member with ONE Google account names none. The proposal must not send an `account` the model had to invent."
+  query: 'Add "Standup" to my Google calendar on 2027-03-11 from 09:00 to 09:15, Asia/Tokyo time.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_calendar_event]
+    pending_write:
+      tool: create_calendar_event
+      args_present: [summary, start_iso, end_iso]
+      args_absent: [account]
+      args_match:
+        summary: "Standup"
+
+- id: t1059.one-account.ja
+  lang: ja
+  tags: [eval-group, t1059]
+  fixture: sequence
+  viewer: ja
+  seed: [calendar_one_account]
+  note: "Negative (arm0 and parity): a member with ONE Google account names none. The proposal must not send an `account` the model had to invent."
+  query: 'Googleカレンダーに、2027-03-11の09:00から09:15まで「朝会」を追加してください（Asia/Tokyoの時間です）。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [create_calendar_event]
+    pending_write:
+      tool: create_calendar_event
+      args_present: [summary, start_iso, end_iso]
+      args_absent: [account]
+      args_match:
+        summary: "朝会"

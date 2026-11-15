@@ -101,6 +101,8 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "add_comment": ("task", "task_id"),
     "update_comment": ("task", "task_id"),
     "delete_comment": ("task", "task_id"),
+    # MIP-1563 (offered only while `AGENT_PARITY_TOOLS` is on): the task a file was deleted from.
+    "delete_task_attachment": ("task", "task_id"),
     "restore_task_body": ("task", "task_id"),
     "add_task_delivery": ("task", "task_id"),
     "remove_task_delivery": ("task", "task_id"),
@@ -118,6 +120,8 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "list_note_access": ("note", "note_id"),
     "update_note": ("note", "note_id"),
     "restore_note_version": ("note", "note_id"),
+    "reply_to_note_comment": ("note", "note_id"),
+    "resolve_note_comment": ("note", "note_id"),
     "manage_note_sharing": ("note", "note_id"),
     "delete_note": ("note", "note_id"),
     # chat
@@ -149,6 +153,7 @@ NO_SINGLE_ITEM = frozenset(
         "list_uncompleted_todos",
         "list_today_todos",
         "list_calendar_events",
+        "get_calendar_event",  # MIP-1059, offered only while `AGENT_PARITY_TOOLS` is on
         "list_calendars",
         "get_my_blockers",
         "list_my_inbox",
@@ -279,6 +284,12 @@ def subjects(tool_name: str, args: dict[str, Any]) -> list[tuple[str, str]]:
             if isinstance(thread, str) and _THREAD_RE.match(thread):
                 chat = f"{chat}:{thread}"
             found.append((OBJECT_CHAT_THREAD, chat))
+    if tool_name == "manage_milestone":
+        # `convert` (MIP-1564, only published while `AGENT_PARITY_TOOLS` is on) names the root task
+        # it turns into a milestone by `task_id`: that row is what changed.
+        ident = _int_id(args.get("task_id"))
+        if ident:
+            found.append((OBJECT_TASK, ident))
     seen: set[tuple[str, str]] = set()
     unique = []
     for item in found:

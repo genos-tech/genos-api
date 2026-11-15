@@ -385,8 +385,11 @@ class OverMcpTests(McpBase):
 
 class TheInAppLoopStillDeclaresTheSameTools(SimpleTestCase):
     def test_no_tool_is_added_or_removed(self):
+        # This batch (MIP-1562) adds parameters, not tools. The tools the flag adds are MIP-1563's
+        # flag-gated write, `delete_task_attachment`, and MIP-1059's calendar read, `get_calendar_event`,
+        # filed after every registered tool.
         with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
             off = [d.name for d in _build_tool_declarations()]
         with mock.patch.dict(settings.SEARCH_ENGINE, ON):
             on = [d.name for d in _build_tool_declarations()]
-        self.assertEqual(off, on)
+        self.assertEqual(on, [*off, "delete_task_attachment", "get_calendar_event"])
