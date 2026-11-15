@@ -132,25 +132,39 @@ def _exact_fence(text: str) -> tuple[str, str, str] | None:
     return None
 
 
+_TRAILING_MARKER = re.compile(r"\n\[… (\d+) more characters not shown …\]\Z")
+
+
+def _split_marker(text: str) -> tuple[str, int]:
+    """`(text without a trailing marker, characters that marker already says are missing)`: a
+    string cut once and cut again carries ONE marker, with the sum."""
+    found = _TRAILING_MARKER.search(text)
+    if found is None:
+        return text, 0
+    return text[: found.start()], int(found.group(1))
+
+
 def cut_text(text: str, keep: int) -> tuple[str, int]:
     """`text` cut to about `keep` characters, ending with the `[… N more characters not shown …]`
     marker, and how many characters of it are not shown. A string already within `keep` comes back
-    unchanged (0). A fence stays closed: see the module docstring."""
-    if len(text) <= keep:
-        return text, 0
+    unchanged (0). A fence stays closed: see the module docstring. A string that already ends with
+    a marker (it was cut before) is cut further and keeps one marker, with the total."""
     fence = _exact_fence(text)
     if fence is not None:
         opener, inner, closer = fence
         # The newline the fence puts after the opener is part of the fence, not of the text.
-        body = inner.strip("\n")
-        kept = _safe_prefix(body, keep)
-        removed = len(body) - len(kept)
-        if removed <= 0:
+        base, prior = _split_marker(inner.strip("\n"))
+        if len(base) <= keep:
             return text, 0
-        return f"{opener}\n{kept}\n{_marker(removed)}\n{closer}", removed
-    kept = _safe_prefix(text, keep)
-    removed = len(text) - len(kept)
-    return f"{kept}\n{_marker(removed)}", removed
+        kept = _safe_prefix(base, keep)
+        removed = len(base) - len(kept)
+        return f"{opener}\n{kept}\n{_marker(prior + removed)}\n{closer}", removed
+    base, prior = _split_marker(text)
+    if len(base) <= keep:
+        return text, 0
+    kept = _safe_prefix(base, keep)
+    removed = len(base) - len(kept)
+    return f"{kept}\n{_marker(prior + removed)}", removed
 
 
 # --------------------------------------------------------------------------
@@ -522,21 +536,33 @@ def _from_start(tool: str, work: Any, path: str) -> bool:
     )
 
 
+def _weight(item: Any, depth: int) -> int:
+    """What `item` costs in the indent=2 text it is rendered into, at nesting `depth`: its own
+    lines, each also carrying the indent of the list it sits in."""
+    text = json.dumps(item, indent=2, ensure_ascii=False, default=str)
+    return len(text) + 2 * depth * (text.count("\n") + 1) + 2
+
+
 def _drop_items(work: Any, excess: int, tool: str, cuts: Cuts) -> bool:
-    """Drop items from the heaviest list until about `excess` characters are gone (at least one)."""
+    """Drop items from the heaviest list until about `excess` characters are gone (at least one).
+    Stops a little short on purpose: the caller measures and comes back, so the answer never loses
+    more than it must."""
     found: list[tuple[list, str]] = []
     _lists(work, "", found)
-    weighted = [(sum(_jlen(i) + 4 for i in items), items, path) for items, path in found]
+    weighted = []
+    for items, path in found:
+        depth = path.count(".") + path.count("[]") + 1
+        weighted.append((sum(_weight(i, depth) for i in items), items, path, depth))
     if not weighted:
         return False
     weighted.sort(key=lambda row: -row[0])
-    _, items, path = weighted[0]
+    _, items, path, depth = weighted[0]
     from_start = _from_start(tool, work, path)
     gone = 0
     dropped = 0
-    while items and (gone < excess or dropped == 0):
+    while items and (gone < excess * 0.9 or dropped == 0):
         item = items.pop(0) if from_start else items.pop()
-        gone += _jlen(item) + 4
+        gone += _weight(item, depth)
         dropped += 1
     cuts.drop(path, dropped)
     if from_start and items and isinstance(items[0], dict) and items[0].get("message_id"):

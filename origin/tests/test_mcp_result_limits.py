@@ -79,6 +79,20 @@ def balanced(text):
 
 
 class CutText(SimpleTestCase):
+    def test_a_string_cut_twice_has_one_marker_with_the_total(self):
+        text = "t" * 9_000
+        once, first = rl.cut_text(text, 4_000)
+        twice, second = rl.cut_text(once, 2_000)
+        self.assertEqual((first, second), (5_000, 2_000))
+        self.assertEqual(MARKER.findall(twice), ["7000"])
+        self.assertEqual(twice.rsplit("\n", 1)[0], "t" * 2_000)
+        self.assertEqual(rl.cut_text(once, 4_000), (once, 0), "already within the limit")
+        fenced = wrap("workspace_content", "u" * 9_000)
+        a, _ = rl.cut_text(fenced, 4_000)
+        b, _ = rl.cut_text(a, 2_000)
+        self.assertEqual(MARKER.findall(b), ["7000"])
+        self.assertTrue(b.endswith("\n</workspace_content>"))
+
     def test_a_string_within_the_limit_is_returned_as_it_is(self):
         self.assertEqual(rl.cut_text("x" * 100, 100), ("x" * 100, 0))
 
@@ -251,6 +265,19 @@ class TheGuard(SimpleTestCase):
         out, _ = self.run_guard(payload, cap=8_000)
         for key in "abc":
             self.assertGreaterEqual(len(out[key].split("\n[…")[0]), rl.LONG_STRING_FLOOR)
+
+    def test_a_nested_list_costs_what_its_indentation_costs_so_few_items_go(self):
+        # each event holds 50 small objects: nested lines are indented deeply in the text
+        events = [
+            {"id": i, "attendees": [{"email": f"a{j}@x.org"} for j in range(50)]} for i in range(40)
+        ]
+        payload = {"events": events}
+        original = len(render(payload))
+        out, _ = self.run_guard(payload, cap=original // 2)
+        kept = len(out["events"])
+        self.assertGreater(kept, 12, "about half of the events fit; the estimate must not empty it")
+        self.assertLessEqual(len(render(out)), original // 2)
+        self.assertGreater(len(render(out)), original // 2 - original // 10)
 
     def test_the_heaviest_list_loses_items_first(self):
         payload = {
@@ -624,7 +651,7 @@ class BigCalendarBriefing(McpBase):
     """The briefing promises a size (`test_briefing`: under 32,000 characters). A calendar of long
     event descriptions used to make it 1.6 million (MIP-1367 audit)."""
 
-    def seed_calendar(self, events=60, size=8_000):
+    def seed_calendar(self, events=60, size=8_000, attendees=0):
         from .calendar_fakes import FakeGoogle, connect_google  # noqa: PLC0415
 
         account = connect_google(self.user, "sub-work", "me@work.example", login=True)
@@ -635,7 +662,19 @@ class BigCalendarBriefing(McpBase):
         google.add_calendar(account, "me@work.example", primary=True)
         for i in range(events):
             google.add_event(
-                account, "primary", f"e{i}", summary=f"Meeting {i}", description="d" * size
+                account,
+                "primary",
+                f"e{i}",
+                summary=f"Meeting {i}",
+                description="d" * size,
+                attendees=[
+                    {
+                        "email": f"a{j}@example.com",
+                        "displayName": f"A {j}",
+                        "responseStatus": "accepted",
+                    }
+                    for j in range(attendees)
+                ],
             )
         self._key(scope=SCOPE_READ)
 
@@ -658,6 +697,25 @@ class BigCalendarBriefing(McpBase):
             self.assertLessEqual(len(event["description"].split("\n[…")[0]), 200)
         self.assertIn("agenda.calendar.events[].description", structured["truncated"]["fields"][0])
         self.assertEqual(structured["truncated"]["next_call"], rl.hint_for("get_my_briefing"))
+
+    def test_flag_on_the_calendar_list_keeps_whole_events_and_one_marker_per_description(self):
+        self.seed_calendar(events=40, size=8_000, attendees=60)
+        with on():
+            result = self._result(self._call("list_calendar_events", {"max_results": 40}))
+        text = text_of(result)
+        structured = result["structuredContent"]
+        events = structured["events"]
+        self.assertLessEqual(len(text), rl.MCP_RESULT_MAX_CHARS)
+        self.assertGreaterEqual(len(events), 2, "the list is not emptied to make room")
+        self.assertGreater(len(text), rl.MCP_RESULT_MAX_CHARS - 12_000, "and does not under-fill")
+        for event in events:
+            self.assertEqual(len(MARKER.findall(event["description"])), 1)
+            self.assertLessEqual(len(event["attendees"]), 50)
+            self.assertEqual(event["attendees_omitted"], 10)
+        notice = structured["truncated"]
+        self.assertEqual(notice["omitted_items"], {"events": 40 - len(events)})
+        self.assertIn("events[].description", " ".join(notice["fields"]))
+        self.assertIn("events[].attendees", " ".join(notice["fields"]))
 
     def test_flag_on_a_small_calendar_is_cut_only_where_it_is_long(self):
         self.seed_calendar(events=2, size=150)
