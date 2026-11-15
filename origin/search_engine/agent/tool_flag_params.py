@@ -26,6 +26,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+from origin.models.common.member_importance_models import MARK_ON_IT
 from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
 from origin.search_engine.agent.tools.create_calendar_event import (
     PARITY_PROPERTIES as _CALENDAR_ACCOUNT,
@@ -69,7 +70,7 @@ class ParamAddition:
 
 # MIP-1588: `set_item_importance` (an MCP-only tool) offers the "On it" mark of a report row. `on_it` joins the `mark` enum, and
 # the property is worded for it. The tool applies the same gate (it refuses `on_it` while the flag is off, as it always did).
-ON_IT_MARK = "on_it"
+ON_IT_MARK = MARK_ON_IT
 ON_IT_MARK_DESCRIPTION = (
     "not_important: never offer it as a top item or suggestion. "
     "priority_is_right: stop asking whether to change its priority. "
