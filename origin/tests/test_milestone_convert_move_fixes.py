@@ -261,3 +261,64 @@ class CardAfterConversionTests(ToolBase):
                 "/api/v2/task/convert-to-milestone/", {"task_id": root.task_id}, format="json"
             )
         self.assertFalse(Message.objects.filter(task_id=root.task_id).exists())
+
+
+# --------------------------------------------------------------------------------------------
+# item 6: the marker of a milestone-to-task conversion names the task
+# --------------------------------------------------------------------------------------------
+
+
+class UseMarkerOfAConversionTests(ToolBase):
+    """`member_events.subjects` notes which item an AI app changed ("changed in your AI app"). The
+    milestone a `convert` was asked about is retired by it: the item that changed is the task."""
+
+    def test_converting_a_milestone_marks_the_task_it_became(self):
+        m = self.roadmap_milestone()
+        self.to_task_tool(m)
+        args = {"action": "convert", "milestone_id": m.milestone_id}
+        self.assertEqual(
+            member_events.subjects("manage_milestone", args), [("task", str(m.task_id))]
+        )
+
+    def test_converting_a_task_still_marks_the_task(self):
+        t = self.task("Plan")
+        self.to_milestone_tool(t)
+        self.assertEqual(
+            member_events.subjects("manage_milestone", {"action": "convert", "task_id": t.task_id}),
+            [("task", str(t.task_id))],
+        )
+
+    def test_an_update_of_a_live_milestone_still_marks_the_milestone(self):
+        m = self.roadmap_milestone()
+        self.assertEqual(
+            member_events.subjects(
+                "manage_milestone", {"action": "update", "milestone_id": m.milestone_id}
+            ),
+            [("milestone", str(m.milestone_id))],
+        )
+
+    def test_a_convert_of_a_milestone_that_was_not_converted_marks_nothing_wrong(self):
+        # `record_call` only runs after a success; with no conversion on record the milestone id
+        # is all there is to name.
+        m = self.roadmap_milestone()
+        self.assertEqual(
+            member_events.subjects(
+                "manage_milestone", {"action": "convert", "milestone_id": m.milestone_id}
+            ),
+            [("milestone", str(m.milestone_id))],
+        )
+
+    def test_the_marker_is_written_for_the_task(self):
+        m = self.roadmap_milestone()
+        self.to_task_tool(m)
+        member_events.record_call(
+            user=User.objects.get(pk=self.owner.pk),
+            team_id=str(self.team.team_id),
+            tool_name="manage_milestone",
+            write=True,
+            args={"action": "convert", "milestone_id": m.milestone_id},
+        )
+        rows = list(
+            MemberEvent.objects.filter(user=self.owner).values_list("object_type", "object_id")
+        )
+        self.assertEqual(rows, [("task", str(m.task_id))])
