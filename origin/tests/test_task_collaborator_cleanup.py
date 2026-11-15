@@ -367,13 +367,15 @@ class CommentFanoutTests(Base):
 
 class TwoRulesTests(Base):
     """`can_access_task` (REST: open and edit) and `task_acl_user_ids` (search ACL, the agent's
-    tools) are two rules that differ in exactly two ways, both pinned here. The search rule is
-    never wider than the REST one; where it is narrower, that is on purpose:
+    tools) are two rules that differ in ONE way, pinned here. The search rule is never wider than
+    the REST one; where it is narrower, that is on purpose:
 
-      * a project OWNER with no `ProjectMembers` row can open the task but is not on the search
-        ACL (the owner is not an indexed member);
-      * an assignee or reporter who LEFT THE TEAM can still open the task but is not on the search
-        ACL: a removed member stops finding what they were on (MIP-1371).
+      * a person who LEFT THE TEAM (an assignee, a reporter, or the project's owner) can still
+        open the task but is not on the search ACL: a removed member stops finding what they
+        were on (MIP-1371). MIP-1592 makes REST follow search here.
+
+    The other difference this class used to pin, the project OWNER with no `ProjectMembers`
+    row, is gone (MIP-1591): the owner is on the search ACL, as on the REST rule.
     """
 
     def acl(self, task=None):
@@ -396,12 +398,25 @@ class TwoRulesTests(Base):
         people = self.everyone()
         self.assertLessEqual(self.acl() & {str(p.id) for p in people}, self.rest(people))
 
-    def test_a_project_owner_without_a_member_row_is_the_first_difference(self):
+    def test_a_project_owner_without_a_member_row_is_on_both_rules(self):
         ProjectMembers.objects.filter(attendee=self.user, project=self.project).delete()
         self.assertTrue(can_access_task(self.task.task_id, self.user.id))
-        self.assertNotIn(str(self.user.id), self.acl())
+        self.assertIn(str(self.user.id), self.acl())  # MIP-1591: no longer a difference
 
-    def test_an_assignee_who_left_the_team_is_the_second_difference(self):
+    def test_a_project_owner_who_left_the_team_is_still_a_difference(self):
+        # The owner's member row goes with the team membership (`drop_in_team_access`); the
+        # project keeps its `owner`. REST still opens the task; search, rightly, does not.
+        owner = _user("projowner")
+        TeamMembers.objects.create(team=self.team, attendee=owner)
+        project = self._project("Theirs")
+        ProjectMaster.objects.filter(pk=project.pk).update(owner=owner)
+        task = self._task(project)
+        self.assertIn(str(owner.id), self.acl(task))
+        TeamMembers.objects.filter(attendee=owner).update(is_deleted=True)
+        self.assertTrue(can_access_task(task.task_id, owner.id))
+        self.assertNotIn(str(owner.id), self.acl(task))
+
+    def test_an_assignee_who_left_the_team_is_the_difference(self):
         TeamMembers.objects.filter(attendee=self.assignee).update(is_deleted=True)
         self.assertTrue(can_access_task(self.task.task_id, self.assignee.id))
         self.assertNotIn(str(self.assignee.id), self.acl())

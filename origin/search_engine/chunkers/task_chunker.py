@@ -38,6 +38,7 @@ from typing import Iterator, Optional
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.acl_dirty import DirtyScopes
+from origin.search_engine.agent.acl import active_project_owners
 from origin.search_engine.agent.tools.template_prompts import without_untouched_prompts
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
@@ -125,6 +126,9 @@ def iter_task_chunks(
     still_on_team: dict[str, set[str]] = {
         t: active_team_member_ids(t, ids) for t, ids in involved_by_team.items()
     }
+    # The project's owner reads its tasks with no member row of their own (`can_access_task`),
+    # so they are listed too, while they are on the team (MIP-1591).
+    owner_by_project = active_project_owners(project_ids)
 
     for task in task_qs:
         if not task.team_id:
@@ -139,6 +143,8 @@ def iter_task_chunks(
             acl_user_ids = list(set(acl_user_ids) | {str(task.assignee_id)})
         if task.reporter_id and str(task.reporter_id) in still_on_team.get(team_id, ()):
             acl_user_ids = list(set(acl_user_ids) | {str(task.reporter_id)})
+        if task.project_id in owner_by_project:
+            acl_user_ids = list(set(acl_user_ids) | {owner_by_project[task.project_id]})
 
         entity_id = f"task:{task.task_id}"
         related = _task_related_ids(task)

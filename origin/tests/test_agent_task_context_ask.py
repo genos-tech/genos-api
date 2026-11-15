@@ -22,7 +22,6 @@ from django.conf import settings
 from django.utils import timezone
 
 from origin.models.common.team_models import TeamMembers
-from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent import task_context
 from origin.search_engine.agent.mentions import ResolvedMention
@@ -159,7 +158,7 @@ class WhoMayAskTests(TaskWorld):
     def test_a_member_removed_from_the_project_may_not_any_more(self):
         task = self.make_task()
         self.assertEqual(self.read(task)[0], 200)
-        ProjectMembers.objects.filter(project=self.project, attendee=self.a_owner).delete()
+        self.remove_asker()
         self.assertEqual(self.read(task)[0], 404)
 
     def test_a_task_deleted_since_may_not_be_asked_about(self):
@@ -291,7 +290,7 @@ class RestoreTests(TaskWorld):
         task = self.make_task()
         run = self.ask_about(task)["stream"]["run"]
         self.answer(run.run_id, SECRET)
-        ProjectMembers.objects.filter(project=self.project, attendee=self.a_owner).delete()
+        self.remove_asker()
         resp = self.restore(task.task_id)
         self.assertEqual(resp.status_code, 404)
         self.assertNotIn(SECRET, resp.content.decode())
@@ -560,7 +559,7 @@ class SessionScopeTests(TaskWorld):
         AgentRun.objects.filter(session_id=first).update(
             final_answer_text="SECRET-ANSWER", status="done"
         )
-        ProjectMembers.objects.filter(project=self.project, attendee=self.a_owner).delete()
+        self.remove_asker()
         TaskMaster.objects.filter(pk=task.pk).update(assignee=None, reporter=None)
         _, captured = self.ask(session_id=first, query="repeat what you said")
         self.assertNotEqual(captured["kwargs"]["session_id"], first)

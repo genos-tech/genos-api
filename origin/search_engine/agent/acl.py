@@ -128,8 +128,43 @@ def chat_acl_user_ids(chat_type_code: int, chat_id) -> set[str]:
     }
 
 
+def active_project_owners(project_ids) -> dict[int, str]:
+    """`{project_id: owner_id}` for the projects whose owner is still on the project's team.
+
+    The project's owner reads its tasks and milestones with no `ProjectMembers` row of their own
+    (`scope_guards.is_project_member`), so the search ACL lists them too (MIP-1591). Only while
+    they are on the team, like an assignee or reporter (MIP-1371): a person removed from the
+    team has their member rows dropped but stays `ProjectMaster.owner`, and the index must not
+    bring them back. `active_team_member_ids` counts the team's own owner, who may have no
+    `TeamMembers` row. One query for the projects and one per team, however many projects.
+    """
+    from origin.models.project.prj_models import ProjectMaster
+    from origin.services.member_removal import active_team_member_ids
+
+    ids = {p for p in project_ids if p}
+    if not ids:
+        return {}
+    rows = list(
+        ProjectMaster.objects.filter(project_id__in=ids, owner__isnull=False).values_list(
+            "project_id", "team_id", "owner_id"
+        )
+    )
+    owners_by_team: dict[object, set[str]] = {}
+    for _project_id, team_id, owner_id in rows:
+        if team_id is not None:
+            owners_by_team.setdefault(team_id, set()).add(str(owner_id))
+    active = {t: active_team_member_ids(t, owners) for t, owners in owners_by_team.items()}
+    return {
+        project_id: str(owner_id)
+        for project_id, team_id, owner_id in rows
+        if team_id is not None and str(owner_id) in active.get(team_id, ())
+    }
+
+
 def task_acl_user_ids(project_id: int | None, assignee_id, reporter_id) -> set[str]:
-    """Users allowed to read a task — project members + assignee + reporter."""
+    """Users allowed to read a task: project members, the project's owner, the assignee and
+    the reporter. The same readers as `scope_guards.can_access_task`, except that the last
+    three count only while they are on the team (MIP-1371, MIP-1591)."""
     out: set[str] = set()
     if project_id:
         out.update(
@@ -139,26 +174,29 @@ def task_acl_user_ids(project_id: int | None, assignee_id, reporter_id) -> set[s
             )
             if uid
         )
-    # The assignee and reporter can read the task even outside its project, but only while
-    # they are still on the team (MIP-1371): a removed member is no longer one of them.
+    # The owner, the assignee and the reporter can read the task even outside its member list,
+    # but only while they are still on the team (MIP-1371): a removed member is no longer one
+    # of them.
     involved = {str(u) for u in (assignee_id, reporter_id) if u}
-    if involved and project_id:
+    if project_id:
         from origin.models.project.prj_models import ProjectMaster
         from origin.services.member_removal import active_team_member_ids
 
-        team_id = (
+        team_id, owner_id = (
             ProjectMaster.objects.filter(project_id=project_id)
-            .values_list("team_id", flat=True)
+            .values_list("team_id", "owner_id")
             .first()
-        )
+        ) or (None, None)
         if team_id is not None:
+            if owner_id:
+                involved.add(str(owner_id))
             involved = active_team_member_ids(team_id, involved)
     out.update(involved)
     return out
 
 
 def milestone_acl_user_ids(project_id: int | None, milestone_id: int) -> set[str]:
-    """Users allowed to read a milestone — project members + milestone
+    """Users allowed to read a milestone — project members + the project's owner + milestone
     assignees. Mirrors `milestone_chunker`'s `acl_user_ids` derivation so
     a back-filled citation chip is only surfaced to users search would
     have surfaced it to."""
@@ -171,6 +209,9 @@ def milestone_acl_user_ids(project_id: int | None, milestone_id: int) -> set[str
             )
             if uid
         )
+        owner = active_project_owners([project_id]).get(project_id)
+        if owner:
+            out.add(owner)
     out.update(
         str(uid)
         for uid in MilestoneAssignees.objects.filter(milestone_id=milestone_id).values_list(

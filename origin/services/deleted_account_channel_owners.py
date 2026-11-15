@@ -41,6 +41,7 @@ from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.services.security_events import record_security_event
 
 log = logging.getLogger("origin.mcp")
@@ -126,6 +127,9 @@ def _reassign_project_chat(channel: Channel, dead_id) -> str:
         project.owner_id = new_id
         # The post_save receiver writes the new owner onto the project chat.
         project.save(update_fields=["owner", "ts_updated_at"])
+        # The owner is on the search ACL of the project's tasks with no member row of their own
+        # (MIP-1591): the old owner leaves it and the new one joins it.
+        mark_projects_dirty([project.project_id])
         # The same trail a hand-over through the project page leaves (`prj_views`).
         record_security_event(
             SecurityAction.OWNER_TRANSFERRED,
