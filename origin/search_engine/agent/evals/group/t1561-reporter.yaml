@@ -64,7 +64,7 @@
 
 - id: t1561.assign-not-reporter.en
   lang: en
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): 'assign it to Bob Martinez' is the assignee, never the reporter."
   query: 'Assign the task "Investigate slow homepage load on mobile Safari" in the Website Redesign project to Bob Martinez.'
@@ -75,7 +75,7 @@
 
 - id: t1561.assign-not-reporter.ja
   lang: ja
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): 'assign it to Bob Martinez' is the assignee, never the reporter."
   query: Website Redesign プロジェクトのタスク「Investigate slow homepage load on mobile Safari」を Bob Martinez に割り当ててください。

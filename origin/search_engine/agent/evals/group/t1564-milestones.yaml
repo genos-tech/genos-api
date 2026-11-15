@@ -140,7 +140,7 @@
 
 - id: t1564.show-not-convert.en
   lang: en
-  tags: [eval-group, t1564]
+  tags: [eval-group, t1564, parity]
   fixture: sequence
   viewer: b
   seed: [milestone_convert]
@@ -154,7 +154,7 @@
 
 - id: t1564.show-not-convert.ja
   lang: ja
-  tags: [eval-group, t1564]
+  tags: [eval-group, t1564, parity]
   fixture: sequence
   viewer: ja-b
   seed: [milestone_convert]
@@ -168,7 +168,7 @@
 
 - id: t1564.favorite-no-tool.en
   lang: en
-  tags: [eval-group, t1564]
+  tags: [eval-group, t1564, parity]
   fixture: sequence
   viewer: b
   seed: [milestone_convert]
@@ -181,7 +181,7 @@
 
 - id: t1564.favorite-no-tool.ja
   lang: ja
-  tags: [eval-group, t1564]
+  tags: [eval-group, t1564, parity]
   fixture: sequence
   viewer: ja-b
   seed: [milestone_convert]
@@ -194,7 +194,7 @@
 
 - id: t1564.move-task-update.en
   lang: en
-  tags: [eval-group, t1564]
+  tags: [eval-group, t1564, parity]
   fixture: sequence
   viewer: b
   seed: [milestone_convert]
@@ -212,7 +212,7 @@
 
 - id: t1564.move-task-update.ja
   lang: ja
-  tags: [eval-group, t1564]
+  tags: [eval-group, t1564, parity]
   fixture: sequence
   viewer: ja-b
   seed: [milestone_convert]

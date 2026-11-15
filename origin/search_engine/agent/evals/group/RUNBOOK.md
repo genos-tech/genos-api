@@ -54,6 +54,28 @@ in `SEARCH_ENGINE` on this stack the command REFUSES (a typo'd flag would compar
 itself); `--skip-unavailable` drops such arms and says so. It also refuses an arm whose value already
 equals the current one (check the environment: the flag is already on, so arm0 is not a baseline).
 
+### The dry-run projection is a floor (measured 2026-11-15)
+
+The one paid run of the MIP-578 parity batch (572 runs that made at least one priced call, all arms)
+cost **US$17.82**; this dry-run would have said **US$5.83** for the same cases: **3.1 times too low**,
+at about **US$0.012 per model call** on `gemini-3.6-flash`. By kind (measured against the projection of
+the same runs):
+
+| kind | runs | model calls per run | cost per run | per call | measured / projected |
+|---|---|---|---|---|---|
+| routing | 244 | 1.0 | $0.0079 | $0.0078 | **8.3x** |
+| behaviour, sequence fixture | 186 | 4.8 | $0.063 | $0.0131 | **3.7x** |
+| behaviour, v1 fixture | 73 | 2.9 | $0.048 | $0.0167 | 2.5x |
+| resume | 69 | 1.6 | $0.0102 | $0.0063 | 0.7x (over-projected) |
+
+Why: the projection prices a routing case on `gemini-3.5-flash-lite` (`ROUTING_MODEL`, about $0.001 per
+case) but the run sends it to the session's model, so a routing case costs a flash-class price per call;
+a sequence behaviour case makes about 4.8 calls (the projection guesses 4) with a prefix of about 140k
+characters, and a flag-on arm adds to that. So: multiply the dry-run figure by 3 (by 8 for a routing-only
+selection), set `--cost-cap-usd` from the product, and run `--measure-one` on a sequence case and on a
+routing case first (section 1) to replace the guess with a measurement. The dry-run output says the same
+in one line.
+
 ### The all-on arm and the prefix budget
 
 `origin/tests/test_agent_prefix_budget.py` holds the system prompt plus the tool declarations to
@@ -103,6 +125,28 @@ What runs where (the saving rule): arm0 runs the whole selection once, and every
 with THAT result (the baseline is never re-run per arm). An item arm runs only the cases carrying its
 tag (or `requires_arm: <tag>`). all-on runs the whole selection with every flag on. Cases with
 `requires_arm` are skipped on arm0 at no cost.
+
+* **`--arms` always includes arm0.** `--arms parity` is arm0 plus parity, never parity alone: arm0 runs
+  every selected case that does not `requires_arm`, so a narrow `--case`/`--tag` selection is what keeps
+  it cheap. There is no way to leave it out, and every arm's delta is against it.
+* **An item's negatives carry the arm's tag too.** The positives of the parity batch have `requires_arm:
+  parity`; its negatives (a plain "add a task" must not start sending a status, asking to LOOK must never
+  become a write) run on arm0 AND with the flag on, which only happens when they carry the tag `parity`
+  next to their item tag (`tags: [eval-group, t1059, parity]`). Before 2026-11-15 they did not, so `--arms
+  parity` ran the positives only. `test_agent_eval_arm_coverage` fails a case file that has a positive for
+  an arm and a case without the arm's tag: a new parity task tags its negatives.
+* **`--full-arms parity` is the regression sample.** It runs the WHOLE selection (every case that does not
+  `requires_arm` another arm) on that arm, like all-on but with only that arm's flag: select the sample with
+  `--case`/`--tag` (or `--include-legacy`) and name the arm in `--arms` as well. Use it to see what a flag
+  that changes every call's prefix does to ordinary cases. The old way, moving the other arm files aside so
+  that all-on meant parity alone, is not needed (and the arm files of flags production now ships on are
+  refused by `all-on` anyway: their value is already True).
+
+What the dry-run says about the parity batch on this stack (278 selected cases; the figures are the
+projection, see the floor above): `--arms parity` is 272 runs: arm0 158 (+120 skipped, they `requires_arm`)
+and parity 114 (82 positives + 32 tagged negatives; 82 before the negatives were tagged); with
+`--full-arms parity` the parity arm is 240 runs (every selected case that does not need another arm). The
+default plan (every arm) is 692 runs, projected US$12.30 (US$11.76 before the tags).
 
 Output, in this order, on screen and in `/tmp/run1.report.md`:
 
@@ -160,7 +204,10 @@ Language models are noisy: a verdict that moves on one repetition is not a findi
   `--concurrency 1` (a few cents on the flash tier, up to ~$0.10 on a long call), N calls at
   `--concurrency N`. The number counted is the in-process sum of every priced call, which does not
   depend on `AI_COST_METER`; when the meter is on, the ledger total is a second opinion and the larger
-  counts.
+  counts. **The ledger is the whole database's**: it sums every `AiSpendEvent` written since the session
+  started, by ANY process on that database, so a second eval process (or the app) running at the same
+  time on the same database is counted against this session's cap and can stop it early. Run one eval
+  process per database, or set `AI_COST_METER=false` (then only the in-process sum counts).
 * **Ctrl-C** ends the session cleanly: partial report, status 3.
 * **A stop file**: `--stop-file /tmp/stop` and then `touch /tmp/stop` from another shell. The command
   finishes the case in flight and stops before the next.
@@ -228,7 +275,8 @@ the model.
   whole MIP-578 parity batch; later parity tasks add their parameters and cases to the same arm. The files
   are `t1561-status.yaml`, `-template.yaml`, `-links.yaml` and `-reporter.yaml` (EN and JA per case). The
   positives have `requires_arm: parity` (the parameter is not declared without it); the negatives
-  (`plain`, `template-none`, `links-body`, `assign-not-reporter`) run on arm0 too: they are the baseline for
+  (`plain`, `template-none`, `links-body`, `assign-not-reporter`) run on arm0 too and carry the tag `parity`, so
+  they also run with the flag on: they are the baseline for
   "a plain request does not start sending a status, reporter, links or template unasked". They judge what the
   model PROPOSED, with four more `pending_write` keys (`group/content_checks.py`): `args_present` (names that
   must be sent), `args_absent` (names that must not be), `args_match` (name to a case-insensitive regex on

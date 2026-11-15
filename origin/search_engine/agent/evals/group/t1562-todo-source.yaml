@@ -69,7 +69,7 @@
 
 - id: t1562.todo-plain.en
   lang: en
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: b
   note: "Negative (arm0 and parity): a to-do the person typed carries no task or comment."
@@ -83,7 +83,7 @@
 
 - id: t1562.todo-plain.ja
   lang: ja
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: ja-b
   note: "Negative (arm0 and parity): a to-do the person typed carries no task or comment."
@@ -97,7 +97,7 @@
 
 - id: t1562.todo-reminder-plain.en
   lang: en
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: b
   note: "Negative (arm0 and parity): 'remind me' about something said in passing carries no task or comment."
@@ -111,7 +111,7 @@
 
 - id: t1562.todo-reminder-plain.ja
   lang: ja
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: ja-b
   note: "Negative (arm0 and parity): 'remind me' about something said in passing carries no task or comment."

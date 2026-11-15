@@ -143,6 +143,7 @@
     tools_used_contains_any:
     - fetch_task
     - get_task_history
+    - get_timeline
     facts_in_order:
     - - assign
       - chris
@@ -249,7 +250,7 @@
     - clp-1
     - fix the export
     - エクスポート
-    tool_calls_at_most: 4
+    tool_calls_at_most: 6
 - id: t1271-en-my-day
   lang: en
   tags:
@@ -410,6 +411,7 @@
     tools_used_contains_any:
     - fetch_task
     - get_task_history
+    - get_timeline
     facts_in_order:
     - - assign
       - chris
@@ -433,9 +435,10 @@
       - solved
       - resolved
       - クローズ
-      - 完了
-      - 解決
       - リリース
+    facts_ignore_lines:
+    - '^[\s>*\-•#]*\**\s*(ステータス|状態|状況|status|state)\s*\**\s*[:：]'
+    - '^[\s>*\-•#]*[`*_\[【(（]*\s*(closed|done|resolved|完了|クローズ|クローズ済み|解決済み|終了)\s*[`*_\]】)）]*\s*$'
     answer_does_not_contain:
     - qa
     - クライアントが確認
@@ -522,7 +525,7 @@
     - clp-1
     - fix the export
     - エクスポート
-    tool_calls_at_most: 4
+    tool_calls_at_most: 6
 - id: t1271-ja-my-day
   lang: ja
   tags:

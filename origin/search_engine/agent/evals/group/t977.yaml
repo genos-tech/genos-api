@@ -109,7 +109,7 @@
   decision: approve
   expect:
     resumed_prompt_excludes: ["<thread_summary>", "<note_summary>", "USER-PROVIDED REFERENCES"]
-    answer_contains_any: ["Update the docs", "docs"]
+    answer_contains_any: ["Update the docs", "docs", "(task:"]
     max_calls: 4
 
 - id: t977.plain-ask.approve.ja

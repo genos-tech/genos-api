@@ -162,7 +162,7 @@
 
 - id: t1059.look-only.en
   lang: en
-  tags: [eval-group, t1059]
+  tags: [eval-group, t1059, parity]
   fixture: sequence
   viewer: b
   seed: [calendar_two_accounts]
@@ -175,7 +175,7 @@
 
 - id: t1059.look-only.ja
   lang: ja
-  tags: [eval-group, t1059]
+  tags: [eval-group, t1059, parity]
   fixture: sequence
   viewer: ja-b
   seed: [calendar_two_accounts]
@@ -188,7 +188,7 @@
 
 - id: t1059.one-account.en
   lang: en
-  tags: [eval-group, t1059]
+  tags: [eval-group, t1059, parity]
   fixture: sequence
   viewer: c
   seed: [calendar_one_account]
@@ -206,7 +206,7 @@
 
 - id: t1059.one-account.ja
   lang: ja
-  tags: [eval-group, t1059]
+  tags: [eval-group, t1059, parity]
   fixture: sequence
   viewer: ja
   seed: [calendar_one_account]

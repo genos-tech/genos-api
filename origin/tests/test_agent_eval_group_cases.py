@@ -116,7 +116,9 @@ class T1271Tests(SimpleTestCase):
             expect = c.raw["expect"]
             for key in ("tools_used_contains", "tools_used_contains_any", "tools_used_excludes"):
                 for name in expect.get(key, []):
-                    self.assertIn(name, REGISTRY, f"{c.id}: {name}")
+                    # `get_timeline` is a flagged tool (not in REGISTRY) that is on by default now, so the
+                    # full-timeline cases accept it: a correct timeline comes from it (paid run 2026-11-15).
+                    self.assertTrue(name in REGISTRY or name == "get_timeline", f"{c.id}: {name}")
         for c in self.t1281:
             for name in c.raw["expect"].get("tools_used_contains_any", []) + c.raw["expect"].get(
                 "tools_used_excludes", []

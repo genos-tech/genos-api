@@ -77,7 +77,7 @@
 
 - id: t1561.template-none.en
   lang: en
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): no template asked for, none sent; the server fills the project's default."
   query: "Add a task to the Website Redesign project to book the team offsite venue."
@@ -90,7 +90,7 @@
 
 - id: t1561.template-none.ja
   lang: ja
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): no template asked for, none sent; the server fills the project's default."
   query: Website Redesign プロジェクトに、チームのオフサイト会場を予約するタスクを追加してください。

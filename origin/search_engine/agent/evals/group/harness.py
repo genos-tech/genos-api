@@ -550,13 +550,19 @@ def build_plan(
     *,
     arm_names: list[str] | None = None,
     reps: int = 1,
+    full_arms: list[str] | tuple[str, ...] = (),
 ) -> Plan:
     """What runs where. The saving rule, in one place:
 
     arm0     the whole selection, except cases that `requires_arm` (they cannot run
-             without the flag; they are listed as skipped, at no cost)
+             without the flag; they are listed as skipped, at no cost). ALWAYS in the plan:
+             a name list never leaves it out.
     <tag>    only cases carrying the tag, or `requires_arm` it or an arm it requires
     all-on   the whole selection
+
+    `full_arms` names item arms that, like all-on, run the whole selection (still never a case
+    that `requires_arm` another arm): a REGRESSION SAMPLE of one flag, the ordinary cases of other
+    items with only this flag on. Every name must be an arm of the plan.
     """
     wanted = [n for n in (arm_names or [*arms, ALL_ON]) if n not in (ARM0, "0")]
     for name in wanted:
@@ -575,6 +581,7 @@ def build_plan(
                 continue
         chosen.append(arm)
     plan.arms += chosen
+    full = _full_arm_names(full_arms, arms, chosen)
     for arm in chosen:
         for key, value in _arm_needs(arm, arms).items():
             current = settings.SEARCH_ENGINE.get(key)
@@ -594,7 +601,7 @@ def build_plan(
 
     for arm in plan.arms:
         for case in cases:
-            applies, skip = _applies(case, arm, arms)
+            applies, skip = _applies(case, arm, arms, full)
             if not applies and not skip:
                 continue
             for rep in range(1, (case.reps or reps) + 1):
@@ -604,8 +611,33 @@ def build_plan(
             plan.notes.append(
                 f"arm {arm.name}: none of the selected cases carries its tag, nothing to run"
             )
+    for arm in chosen:
+        if arm.name in full:
+            runs = sum(1 for i in plan.for_arm(arm.name) if not i.skip)
+            plan.notes.append(
+                f"arm {arm.name} runs the whole selection (--full-arms): {runs} run(s), "
+                "not only the cases that carry its tag"
+            )
     plan.arms = [a for a in plan.arms if a.is_baseline or any(i.arm is a for i in plan.items)]
     return plan
+
+
+def _full_arm_names(names: Any, arms: dict[str, Arm], chosen: list[Arm]) -> frozenset[str]:
+    """`--full-arms`, checked: each name is a real arm that is in this plan (arm0 and all-on
+    already run the whole selection)."""
+    out: set[str] = set()
+    for name in names or ():
+        if name in (ARM0, ALL_ON):
+            raise HarnessError(f"--full-arms {name}: {name} already runs the whole selection")
+        if name not in arms:
+            raise HarnessError(f"--full-arms: unknown arm {name!r}; known: {', '.join(arms)}")
+        if name not in {a.name for a in chosen}:
+            raise HarnessError(
+                f"--full-arms {name}: it is not among the arms of this plan (--arms), "
+                "so there would be nothing to run"
+            )
+        out.add(name)
+    return frozenset(out)
 
 
 def _arm_needs(arm: Arm, arms: dict[str, Arm]) -> dict[str, Any]:
@@ -624,7 +656,9 @@ def _cases_need(cases: list[GroupCase]) -> dict[str, Any]:
     return out
 
 
-def _applies(case: GroupCase, arm: Arm, arms: dict[str, Arm]) -> tuple[bool, str]:
+def _applies(
+    case: GroupCase, arm: Arm, arms: dict[str, Arm], full: frozenset[str] = frozenset()
+) -> tuple[bool, str]:
     need = case.requires_arm
     if arm.is_baseline:
         if need:
@@ -636,7 +670,7 @@ def _applies(case: GroupCase, arm: Arm, arms: dict[str, Arm]) -> tuple[bool, str
         return True, ""
     if need:
         return (need in arm.satisfies), ""
-    return (arm.name in case.tags), ""
+    return (arm.name in case.tags or arm.name in full), ""
 
 
 # --------------------------------------------------------------------------- #

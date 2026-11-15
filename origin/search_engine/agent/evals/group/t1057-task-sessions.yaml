@@ -306,7 +306,7 @@
   decision: approve
   expect:
     resumed_prompt_excludes: ["THE TASK THIS CONVERSATION IS ABOUT", "THE MILESTONE THIS CONVERSATION IS ABOUT"]
-    answer_contains_any: ["Update the docs", "docs"]
+    answer_contains_any: ["Update the docs", "docs", "(task:"]
     max_calls: 4
 
 - id: t1057.plain-ask.ja

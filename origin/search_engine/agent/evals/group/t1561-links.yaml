@@ -70,7 +70,7 @@
 
 - id: t1561.links-body.en
   lang: en
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): a URL that is part of the DESCRIPTION stays in the description; links is for 'attach this link'."
   query: 'In the Website Redesign project create a task "Review the competitor pricing" with the description: Compare us with https://example.com/competitor and note the differences.'
@@ -83,7 +83,7 @@
 
 - id: t1561.links-body.ja
   lang: ja
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): a URL that is part of the DESCRIPTION stays in the description; links is for 'attach this link'."
   query: Website Redesign プロジェクトに「競合の価格を確認する」タスクを作ってください。説明は「https://example.com/competitor と比較して、違いをまとめる」です。

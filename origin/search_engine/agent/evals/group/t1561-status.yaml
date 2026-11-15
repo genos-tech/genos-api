@@ -71,7 +71,7 @@
 
 - id: t1561.plain.en
   lang: en
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): a plain task request sends no status, reporter, links or template unasked."
   query: "Add a task to the Website Redesign project to buy more coffee for the office."
@@ -85,7 +85,7 @@
 
 - id: t1561.plain.ja
   lang: ja
-  tags: [eval-group, t1561]
+  tags: [eval-group, t1561, parity]
   fixture: v1
   note: "Negative (arm0 and parity): a plain task request sends no status, reporter, links or template unasked."
   query: Website Redesign プロジェクトに、オフィスのコーヒーを買い足すタスクを1つ追加してください。

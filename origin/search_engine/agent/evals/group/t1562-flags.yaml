@@ -109,7 +109,7 @@
 
 - id: t1562.reply-stays-a-comment.en
   lang: en
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: b
   note: "Negative (arm0 and parity): replying to a colleague stays add_comment, not a reaction."
@@ -122,7 +122,7 @@
 
 - id: t1562.reply-stays-a-comment.ja
   lang: ja
-  tags: [eval-group, t1562]
+  tags: [eval-group, t1562, parity]
   fixture: sequence
   viewer: ja-b
   note: "Negative (arm0 and parity): replying to a colleague stays add_comment, not a reaction."
