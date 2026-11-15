@@ -22,14 +22,20 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_models import *
 from origin.search_engine.purge import purge_task
 from origin.search_engine.quota import TASK_CREATE_KEY, increment_usage
-from origin.serializers.chat.unified_serializers import ActivitySerializer
 from origin.serializers.task.task_serializers import *
 from origin.services import realtime_push, task_ancestry, task_comment_reactions, unified_writer
+from origin.services.activity_minimal_card import (
+    activities_wire as activities_wire_for_recipients,
+)
 from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
 from origin.services.task_assignment_notice import notify_task_assigned
-from origin.services.task_attachment_manage import delete_attachment, next_attachment_id
+from origin.services.task_attachment_manage import (
+    add_attachment,
+    delete_attachment,
+    next_attachment_id,
+)
 from origin.services.task_cache import (
     get_cached_project_tasks,
     invalidate_for_task,
@@ -2297,7 +2303,9 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
             serializer = TaskAttachmentsSerializer(data=data)
             if serializer.is_valid():
-                instance = serializer.save()
+                # The file, then the row and the task's stamp in one transaction: teammates'
+                # caches learn of the new file as they do of a delete (MIP-1595).
+                instance = add_attachment(serializer)
 
                 # Echo the bytes back through the FileField's storage API.
                 # The previous `open("." + url.replace("/media/", "/uploads/"))`
@@ -2499,8 +2507,9 @@ class TaskCommentsView(AuthenticatedAPIView):
             # task_comment handler can broadcast `activity.created`
             # (mirrors the message-send proxy contract).
             fanout = fan_out_task_comment(comment_obj)
+            # A recipient who cannot open the task is shown the minimal card (MIP-1593).
             activities_wire = (
-                ActivitySerializer(fanout.activities, many=True).data if fanout.activities else []
+                activities_wire_for_recipients(fanout.activities) if fanout.activities else []
             )
             comment_mentioned_ids = fanout.mentioned_user_ids
             # A task comment IS delivered to a non-project-member, and
@@ -2841,6 +2850,10 @@ class TaskCommentReactionView(AuthenticatedAPIView):
             {
                 **TaskCommentReactionFactSerializer(added.reaction).data,
                 **_reaction_broadcast_context(task.task_id, comment_id, request.user),
+                # The status code says it too (201 / 200), but the sockets handler's HTTP client
+                # returns the body of any 2xx alike: this is what it reads to announce a live toast
+                # for a NEW reaction only (MIP-1595). Additive; the row's own keys are unchanged.
+                "created": added.created,
             },
             status=status.HTTP_201_CREATED if added.created else status.HTTP_200_OK,
         )

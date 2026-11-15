@@ -12,7 +12,7 @@ loses it: guests and the participants of a shared project (a `ProjectMembers` ro
 row), the team owner (no rows at all), the system user and the demo users (both hold team rows).
 
 Pinned here, for every place the rule is stated (`can_access_task`, `task_reader_ids`, the feed's
-`_readable_tasks`, the collaborator prune's `unreadable_collaborator_rows`, the notification
+`_readable_tasks` and the live card's `task_reader_pairs`, the collaborator prune's `unreadable_collaborator_rows`, the notification
 fan-outs built on `task_readers_among`):
 
   * who keeps access and who loses it, per kind of person;
@@ -30,6 +30,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.services import account_deletion, v3_activity
+from origin.services.activity_minimal_card import task_reader_pairs
 from origin.services.activity_surface_access import unreadable_surface_activity_ids
 from origin.services.task_collaborator_revoke import unreadable_collaborator_rows
 from origin.services.task_collaborators import notifiable_collaborator_ids, task_readers_among
@@ -99,6 +100,7 @@ class Base(BaseAPITestCase):
                 t.project_id, t.assignee_id, t.reporter_id, [person.id], team_id=t.team_id
             ),
             "task_readers_among": pid in task_readers_among(t.task_id, [person.id]),
+            "minimal card": (pid, t.task_id) in task_reader_pairs([person.id], [t.task_id]),
             "feed": not unreadable_surface_activity_ids(
                 person.id, [(1, v3_activity.SURFACE_TASK_BODY, {"taskId": t.task_id})]
             ),
@@ -376,6 +378,14 @@ class QueryCountTests(Base):
             return self.count(lambda: unreadable_surface_activity_ids(self.holder.id, rows))
 
         self.assertEqual(feed(1), feed(6))
+
+        def pairs(n):
+            tasks = [self.task(assignee=self.holder) for _ in range(n)]
+            ids = [t.task_id for t in tasks]
+            who = [self.holder.id, self.member.id, self.user.id]
+            return self.count(lambda: task_reader_pairs(who, ids))
+
+        self.assertEqual(pairs(1), pairs(6))
 
         def prune(n):
             for _ in range(n):

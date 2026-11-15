@@ -537,11 +537,13 @@ def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
     refuses its holders.
 
     Close to `search_engine/agent/acl.task_acl_user_ids`, which decides whether the task
-    appears in search, and never narrower than it for a member. It is still wider in the cases
-    pinned by `tests/test_task_collaborator_cleanup.py`, on purpose: the project's owner who
-    left the team (their member row goes, `owner` stays) and, in a task with no project, a
-    holder who left (search applies no team test without a project). Making either follow the
-    other would change who can open a task or which tasks search returns (MIP-1579).
+    appears in search, and never narrower than it for a member of a project (the project's
+    owner is on both since MIP-1591). It still differs in two cases, pinned by
+    `tests/test_task_collaborator_cleanup.py`, on purpose: the project's owner who has left the
+    team (their member row goes, `owner` stays: REST lets them in, search does not) and, in a
+    task with no project, a holder who left (search applies no team test without a project, so
+    it is the wider one there). Making either follow the other would change who can open a task
+    or which tasks search returns.
 
     Note this is the READ audience and the WRITE audience at once. Task
     editing has always been open to anyone who can see the task; adding
@@ -613,25 +615,27 @@ def _project_readers_and_team(project_id, wanted):
     return _no_such(_query, default=(set(), None))
 
 
-def active_team_ids(user_id, team_ids) -> set[str]:
-    """The teams among `team_ids` that `user_id` is on: a live `TeamMembers` row or the owner
-    (`member_removal.active_team_member_ids` for one person and many teams), as strings. Two
-    queries however many teams; the batch form of the team half of `can_access_task`."""
-    wanted = {str(t) for t in team_ids if t}
-    if not wanted or user_id is None:
+def active_team_pairs(people, team_ids) -> set[tuple[str, str]]:
+    """The `(person, team)` pairs among `people` x `team_ids` where the person is on the team: a
+    live `TeamMembers` row or the team's owner (`member_removal.active_team_member_ids` for many
+    people and many teams), as strings. Two queries however many of either; the batch form of
+    the team half of `can_access_task`."""
+    who = {str(p) for p in people if p}
+    teams = {str(t) for t in team_ids if t}
+    if not who or not teams:
         return set()
 
     def _query():
         live = {
-            str(t)
-            for t in TeamMembers.objects.filter(
-                team_id__in=wanted, attendee_id=user_id, is_deleted=False
-            ).values_list("team_id", flat=True)
+            (str(a), str(t))
+            for a, t in TeamMembers.objects.filter(
+                team_id__in=teams, attendee_id__in=who, is_deleted=False
+            ).values_list("attendee_id", "team_id")
         }
         owned = {
-            str(t)
-            for t in TeamMaster.objects.filter(team_id__in=wanted, owner_id=user_id).values_list(
-                "team_id", flat=True
+            (str(o), str(t))
+            for o, t in TeamMaster.objects.filter(team_id__in=teams, owner_id__in=who).values_list(
+                "owner_id", "team_id"
             )
         }
         return live | owned

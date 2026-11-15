@@ -30,6 +30,7 @@ from collections import Counter
 from datetime import date, timedelta
 from unittest import mock
 
+from django.conf import settings
 from django.test import SimpleTestCase
 
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
@@ -39,6 +40,7 @@ from origin.models.common.member_importance_models import (
 )
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.controller import _build_tool_declarations
+from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import ToolError
 from origin.services import briefing, importance, item_activity
@@ -870,8 +872,22 @@ class TestTheTools(Base):
         tools = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
         mark = tools["set_item_importance"]["inputSchema"]
         self.assertEqual(set(mark["required"]), {"task_id", "mark"})
+        # Flag off (the default): the three values of the tool as it was. With `AGENT_PARITY_TOOLS` on it also offers `on_it`
+        # (MIP-1588, `test_mcp_on_it`), laid over a copy: the same listing, asked again, shows both.
         self.assertEqual(
             mark["properties"]["mark"]["enum"], ["not_important", "priority_is_right", "clear"]
+        )
+        with mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: True}):
+            on = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        self.assertEqual(
+            on["set_item_importance"]["inputSchema"]["properties"]["mark"]["enum"],
+            ["not_important", "priority_is_right", "clear", "on_it"],
+        )
+        with mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: False}):
+            off = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
+        self.assertEqual(
+            off["set_item_importance"]["inputSchema"]["properties"]["mark"]["enum"],
+            ["not_important", "priority_is_right", "clear"],
         )
         weights = tools["tune_my_importance"]["inputSchema"]["properties"]["weights"]
         self.assertEqual(set(weights["properties"]), set(importance.SIGNALS))

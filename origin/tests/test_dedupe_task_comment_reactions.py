@@ -14,6 +14,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskCommentReactionFact, TaskComments, TaskMaster
 from origin.services import task_comment_reactions
+from origin.tests.reaction_repeats import allow_repeated_reactions
 from origin.tests.test_base import BaseAPITestCase
 
 #: The snippet pasted into the PR body for a production shell: one read-only transaction, counts only.
@@ -42,6 +43,8 @@ with transaction.atomic():
 class DedupeBase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        # rows that doubled up before the route was guarded (and before the table refused them)
+        allow_repeated_reactions()
         self.project = ProjectMaster.objects.create(
             team=self.team, project_name="P", owner=self.user, project_system_user=self.user
         )

@@ -24,6 +24,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskCommentReactionFact, TaskComments, TaskMaster
 from origin.services import task_comment_reactions
+from origin.tests.reaction_repeats import allow_repeated_reactions
 from origin.tests.test_base import BaseAPITestCase
 
 REACTION = "/api/v2/task/comment/reaction/"
@@ -81,7 +82,9 @@ class ReactionViewBase(BaseAPITestCase):
         return TaskCommentReactionFact.objects.filter(task=self.task, **filters)
 
     def double_up(self, emoji="👍", sender=None, times=2):
-        """Rows as the old view left them: the same person's same emoji, once per counter value."""
+        """Rows as the old view left them: the same person's same emoji, once per counter value.
+        (The table refuses them now, MIP-1595, so the constraint is dropped for this test.)"""
+        allow_repeated_reactions()
         for _ in range(times):
             TaskCommentReactionFact.objects.create(
                 team=self.team,
@@ -104,6 +107,25 @@ class DuplicateTests(ReactionViewBase):
         # the socket layer reads the project and the comment's author off the answer
         self.assertEqual(again.data["projectId"], self.project.project_id)
         self.assertEqual(again.data["commentSenderId"], str(self.user2.id))
+
+    def test_the_body_says_whether_the_reaction_is_new(self):
+        """`created` (MIP-1595): the sockets handler reads it, so a repeat is not announced as a
+        live toast again. The status code says the same, but a client library that treats every
+        2xx alike (the handler's does) cannot see it. Additive: every other key is as before."""
+        first = self.react()
+        self.assertIs(first.data["created"], True)
+        again = self.react()
+        self.assertIs(again.data["created"], False)
+        self.assertEqual(
+            set(again.data) - {"created"},
+            set(first.data) - {"created"},
+        )
+        # a different emoji is new again
+        self.assertIs(self.react("🎉").data["created"], True)
+
+    def test_the_delete_answer_carries_no_created(self):
+        self.react()
+        self.assertNotIn("created", self.unreact().data)
 
     def test_a_repeat_post_tells_the_author_nothing_again(self):
         with mock.patch.object(task_comment_reactions, "announce_reaction") as announce:

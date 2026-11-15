@@ -23,6 +23,10 @@ from __future__ import annotations
 from django.conf import settings
 
 from origin.search_engine.agent.parity import PARITY_FLAG
+from origin.search_engine.agent.tool_flag_params import (
+    ON_IT_CLEAR_SENTENCE,
+    ON_IT_CLEAR_SENTENCE_ON,
+)
 from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
@@ -106,6 +110,8 @@ MCP_REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
         _milestone_convert.MCP_MOVE_SENTENCE,
         _milestone_convert.MCP_MOVE_SENTENCE_ON,
     ),
+    # MIP-1588: the MCP-only tool that keeps the member's marks offers "On it" too.
+    ("set_item_importance", PARITY_FLAG, ON_IT_CLEAR_SENTENCE, ON_IT_CLEAR_SENTENCE_ON),
 )
 
 

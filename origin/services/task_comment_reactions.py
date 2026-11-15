@@ -191,7 +191,8 @@ def store_reaction(*, team_id, task_id, comment_id, user_id, emoji: str) -> Adde
             return Added(reaction, True)
         except IntegrityError:
             # Another writer took the same counter between the read and the write: take the next
-            # one.
+            # one. (The same retry also meets the person-and-emoji unique index, MIP-1595, if a
+            # writer that skips the comment lock got in first: the next pass finds that row.)
             if attempt == _ADD_ATTEMPTS - 1:
                 raise
     raise AssertionError("unreachable")  # pragma: no cover
@@ -247,8 +248,8 @@ def repeated_reaction_rows():
     """The reaction rows that repeat an earlier one: the same person's same emoji on the same
     comment, the later copies (the lowest `reaction_id` of each is the one that stays).
 
-    There is no unique constraint on `(task, comment, sender, emoji)`, so the REST route's missing
-    guard (fixed in MIP-1582) could leave pairs. Rows whose sender is gone (`sender` is NULL, the
+    The REST route's missing guard (fixed in MIP-1582) could leave pairs; the table refuses new
+    ones since migration 0246 (MIP-1595), which also refuses to run over rows that already repeat. Rows whose sender is gone (`sender` is NULL, the
     account was deleted) are never a repeat of each other: different people share the NULL.
     """
     return (

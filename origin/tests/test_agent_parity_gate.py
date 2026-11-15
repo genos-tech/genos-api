@@ -29,7 +29,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent import tool_flag_params, tool_flag_text
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.parity import PARITY_FLAG, ignore_unless_parity
-from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY, ToolContext
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.create_task import (
     CREATE_TASK,
@@ -42,6 +42,12 @@ from origin.views.public.mcp import tools as mcp
 
 from .test_base import BaseAPITestCase
 from .test_mcp_endpoint import McpBase
+
+
+def registered(name):
+    """A tool a parameter row names: an in-app tool, or an MCP-only one (`set_item_importance`, MIP-1588)."""
+    return REGISTRY.get(name) or MCP_ONLY_REGISTRY[name]
+
 
 ON = {PARITY_FLAG: True}
 OFF = {PARITY_FLAG: False}
@@ -108,8 +114,10 @@ class RegistryIsUntouchedTests(SimpleTestCase):
     def test_no_added_name_is_already_in_the_base_schema(self):
         # An addition that shadowed a real parameter would replace it while the flag is on.
         for addition in tool_flag_params.ADDITIONS:
-            props = REGISTRY[addition.tool].parameters_schema["properties"]
+            props = registered(addition.tool).parameters_schema["properties"]
             self.assertFalse(set(addition.properties) & set(props), addition.tool)
+            for name, values in addition.enum_values.items():
+                self.assertFalse(set(values) & set(props[name]["enum"]), (addition.tool, name))
             for array_name, row_props in addition.nested:
                 row = props[array_name]["items"]["properties"]
                 self.assertFalse(set(row_props) & set(row), addition.tool)

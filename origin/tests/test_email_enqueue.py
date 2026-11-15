@@ -18,6 +18,8 @@ from origin.models.common.notification_models import (
     EmailNotificationEvent,
     NotificationPreference,
 )
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.task_models import TaskMaster
 from origin.services.email_enqueue import (
     _email_spec,
     enqueue_email_for_inbox_item,
@@ -39,6 +41,27 @@ NO_VAPID = {
 
 
 class EnqueueTestBase(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        # The task `_mention_activity` is about, which its recipient (`user2`, the reporter) can
+        # open: a recipient who cannot gets the minimal card (`test_nonmember_mention_card`).
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P",
+            code="WRD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.task = TaskMaster.objects.create(
+            team=self.team,
+            project=project,
+            reporter=self.user2,
+            assignee=self.user2,
+            title="T",
+            status="WIP",
+        )
+        self.task_url = f"/workspace/tasks/project/{project.project_id}/task/{self.task.task_id}"
+
     def _mention_activity(self, **overrides):
         fields = {
             "team": self.team,
@@ -46,7 +69,11 @@ class EnqueueTestBase(BaseAPITestCase):
             "actor": self.user,
             "activity_type": ActivityType.MENTION,
             "surface_type": SURFACE_TASK_BODY,
-            "meta": {"displayId": "WRD-7", "projectId": "p1", "taskId": "t1"},
+            "meta": {
+                "displayId": self.task.display_id,
+                "projectId": self.task.project_id,
+                "taskId": self.task.task_id,
+            },
         }
         fields.update(overrides)
         return Activity.objects.create(**fields)
@@ -74,7 +101,7 @@ class ActivityEnqueueTests(EnqueueTestBase):
         row = rows[0]
         self.assertEqual(str(row.user_id), str(self.user2.id))
         self.assertEqual(row.category, "mention_task")
-        self.assertEqual(row.url, "/workspace/tasks/project/p1/task/t1")
+        self.assertEqual(row.url, self.task_url)
         self.assertEqual(row.actor_name, "testuser")
         self.assertEqual(row.activity_id, act.id)
         self.assertIsNone(row.inbox_item_id)
@@ -117,7 +144,7 @@ class ActivityEnqueueTests(EnqueueTestBase):
         rows = self._rows()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].category, "task_assign")
-        self.assertEqual(rows[0].url, "/workspace/tasks/project/p1/task/t1")
+        self.assertEqual(rows[0].url, self.task_url)
 
 
 @override_settings(EMAIL_NOTIFICATIONS_ENABLED=True)
@@ -160,7 +187,7 @@ class ActivityMuteTests(EnqueueTestBase):
     def test_muted_task_blocks_the_activity_path(self):
         NotificationPreference.objects.create(
             user=self.user2,
-            muted_targets=[{"target_type": "task", "target_id": "t1"}],
+            muted_targets=[{"target_type": "task", "target_id": str(self.task.task_id)}],
         )
         act = self._mention_activity()
         with self.captureOnCommitCallbacks(execute=True):
@@ -173,7 +200,7 @@ class ActivityMuteTests(EnqueueTestBase):
         the shared predicate, this row would still be written."""
         NotificationPreference.objects.create(
             user=self.user2,
-            muted_targets=[{"target_type": "task", "target_id": "t1"}],
+            muted_targets=[{"target_type": "task", "target_id": str(self.task.task_id)}],
         )
         act = self._mention_activity(activity_type=ActivityType.TASK_ASSIGN, surface_type=None)
         with self.captureOnCommitCallbacks(execute=True):
@@ -198,7 +225,11 @@ class ActivityMuteTests(EnqueueTestBase):
         NotificationPreference.objects.create(
             user=self.user2,
             muted_targets=[
-                {"target_type": "task", "target_id": "t1", "categories": ["mention_task"]}
+                {
+                    "target_type": "task",
+                    "target_id": str(self.task.task_id),
+                    "categories": ["mention_task"],
+                }
             ],
         )
         act = self._mention_activity()

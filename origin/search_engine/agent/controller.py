@@ -4946,7 +4946,11 @@ def _rebuild_messages(run: AgentRun) -> tuple[list[AgentMessage], AgentStep | No
     no row matching the pending shape — the caller should treat that
     as an error.
     """
-    messages: list[AgentMessage] = [_user_turn(run.query)]
+    # The question as the model read it on the first leg (MIP-1585): with the parity flag on, a mention token is
+    # its bracketed id here too, not the member's visible label (`mention_tokens.model_query_of`).
+    from origin.search_engine.agent.mention_tokens import model_query_of  # noqa: PLC0415
+
+    messages: list[AgentMessage] = [_user_turn(model_query_of(run))]
     pending: AgentStep | None = None
 
     for step in run.steps.order_by("step_index", "step_id"):

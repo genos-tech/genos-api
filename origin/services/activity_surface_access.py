@@ -8,9 +8,10 @@ open that thing, so the feed must not hand back its `meta`.
 
 The rule per row is the one the product applies to open the thing itself, not a new one:
 
-  * 5 task body   `scope_guards.can_access_task`: on the project (member or owner), or the assignee
-                  or the reporter while still on the task's team (MIP-1592). A task that no longer exists, or was soft-deleted, is not
-                  readable (MIP-1566), which `can_access_task` itself now says too (MIP-1572).
+  * 5 task body   `scope_guards.can_access_task`: on the project (member or owner), or the
+                  assignee or the reporter while still on the task's team (MIP-1592). A task
+                  that no longer exists, or was soft-deleted, is not readable (MIP-1566), which
+                  `can_access_task` itself now says too (MIP-1572).
   * 6 / 7 / 8     `note_role.get_effective_role` (an explicit grant, project membership for a
                   task note, the chat's readers for a chat note, a team folder for a personal
                   note), in its batch form `readable_note_ids`. A personal note's owner reads it
@@ -28,8 +29,7 @@ from collections import defaultdict
 from typing import Iterable
 
 from origin.models.note.personal_note_models import PersonalNoteMaster
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.task.task_models import TaskMaster
+from origin.services.activity_minimal_card import task_reader_pairs
 from origin.services.v3_activity import (
     SURFACE_CHAT_NOTE,
     SURFACE_PERSONAL_NOTE,
@@ -42,7 +42,6 @@ from origin.views.utils.note_role import (
     NOTE_TYPE_TASK,
     readable_note_ids,
 )
-from origin.views.utils.scope_guards import active_team_ids
 
 # The surfaces this module judges, and the note type each note surface is.
 COVERED_SURFACES = (SURFACE_TASK_BODY, SURFACE_PERSONAL_NOTE, SURFACE_TASK_NOTE, SURFACE_CHAT_NOTE)
@@ -66,38 +65,10 @@ def _as_int(value):
 def _readable_tasks(user_id, task_ids: set[int]) -> set[int]:
     """The subset of `task_ids` `can_access_task(task_id, user_id)` says yes to: the project's
     owner or a project member, or the assignee or reporter while still on the task's team
-    (MIP-1592; a project's team, else the task's own), and not soft-deleted (MIP-1566; the
-    same rule as `can_access_task`'s since MIP-1572). Four queries however many tasks."""
-    me = str(user_id)
-    tasks = list(
-        TaskMaster.objects.filter(task_id__in=task_ids, is_deleted=False).values(
-            "task_id", "project_id", "assignee_id", "reporter_id", "team_id", "project__team_id"
-        )
-    )
-    projects = {t["project_id"] for t in tasks if t["project_id"] is not None}
-    on_project = set(
-        ProjectMembers.objects.filter(attendee=user_id, project_id__in=projects).values_list(
-            "project_id", flat=True
-        )
-    ) | set(
-        ProjectMaster.objects.filter(owner=user_id, project_id__in=projects).values_list(
-            "project_id", flat=True
-        )
-    )
-
-    def team_of(t):
-        return t["project__team_id"] or t["team_id"]
-
-    held = [
-        t
-        for t in tasks
-        if t["project_id"] not in on_project
-        and me in {str(t["assignee_id"]), str(t["reporter_id"])}
-    ]
-    on_team = active_team_ids(user_id, {team_of(t) for t in held})
-    return {t["task_id"] for t in tasks if t["project_id"] in on_project} | {
-        t["task_id"] for t in held if str(team_of(t)) in on_team
-    }
+    (MIP-1592), and not soft-deleted (MIP-1566; the same rule as `can_access_task`'s since
+    MIP-1572). Five queries at most (the rule is `activity_minimal_card.task_reader_pairs`,
+    which the live card shares)."""
+    return {task for _, task in task_reader_pairs([user_id], task_ids)}
 
 
 def _readable_notes(user_id, surface: int, note_ids: set[int]) -> set[int]:

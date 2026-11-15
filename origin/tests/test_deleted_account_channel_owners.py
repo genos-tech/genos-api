@@ -200,6 +200,19 @@ class ProjectChatOwnerFollowsDeletionTests(_Fixtures, CrossTeamTestCase):
         ).get()
         self.assertEqual(event.metadata["to_user_id"], str(self.a_owner.id))
 
+    def test_the_hand_over_marks_the_project_for_a_search_refresh(self):
+        """The owner is on the task search ACL with no member row (MIP-1591), so the change of
+        owner is not seen by any membership write."""
+        from origin.search_engine.acl_dirty import claim
+        from origin.search_engine.models import SearchAclDirty
+
+        project = self.make_project(self.leaver, [self.leaver, self.a_owner, self.a_viewer])
+        SearchAclDirty.objects.all().delete()
+        service.reassign_owned_channels(self.leaver.pk)
+        project.refresh_from_db()
+        self.assertEqual(project.owner_id, self.a_owner.id)
+        self.assertIn(project.project_id, claim().project_ids)
+
     def test_a_team_owner_already_on_the_project_gets_no_second_row(self):
         project = self.make_project(self.leaver, [self.leaver, self.a_owner])
         delete_account(self.leaver)

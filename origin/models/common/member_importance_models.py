@@ -37,8 +37,8 @@ from origin.models.common.user_models import CustomUser
 MARK_NOT_IMPORTANT = "not_important"
 MARK_PRIORITY_IS_RIGHT = "priority_is_right"
 MARK_ON_IT = "on_it"
-# The marks the MCP tool offers (unchanged); the Settings page and a report's two buttons also
-# have `on_it` (MIP-1211).
+# The marks the MCP tool offers; the Settings page and a report's two buttons also have `on_it`
+# (MIP-1211), and the tool offers it too while `AGENT_PARITY_TOOLS` is on (MIP-1588).
 MARKS = (MARK_NOT_IMPORTANT, MARK_PRIORITY_IS_RIGHT)
 ALL_MARKS = (*MARKS, MARK_ON_IT)
 MARK_SOURCES = ("report", "mcp", "settings")
