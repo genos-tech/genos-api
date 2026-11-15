@@ -26,6 +26,7 @@ from origin.search_engine.quota import get_mcp_enabled
 from origin.services import mcp_notice, member_events, security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
+from origin.views.public.anonymous_throttle import McpAnonymousThrottle
 from origin.views.public.credentials import credential_of
 from origin.views.public.mcp import prompts, protocol, request_guard, tools
 from origin.views.public.mcp.protocol import JsonRpcError
@@ -116,8 +117,32 @@ class McpView(PublicApiView):
 
     def handle_exception(self, exc):
         if isinstance(exc, (exceptions.NotAuthenticated, exceptions.AuthenticationFailed)):
-            return self.unauthorized_response(exc)
+            # A refused call is counted per address; past the limit the answer is a 429, not
+            # another 401 (MIP-1367). Authenticated calls never pass through here.
+            return self.anonymous_limit_response() or self.unauthorized_response(exc)
         return super().handle_exception(exc)
+
+    def anonymous_limit_response(self) -> Response | None:
+        """The 429 for an address that keeps presenting no valid credential, or None.
+
+        JSON-RPC shaped like every other refusal here, and with the body unread: the point of
+        the limit is that a refused caller costs next to nothing. `data` tells a client it was a
+        limit and which one (`limit_reached` / `category`, as the plan limits do).
+        """
+        throttle = McpAnonymousThrottle()
+        if throttle.allow_request(self.request, self):
+            return None
+        wait = max(1, int(throttle.wait() or 60))
+        error = JsonRpcError(
+            protocol.INVALID_REQUEST,
+            "Too many requests without a valid credential from this address. "
+            f"Wait {wait} seconds, then connect again.",
+            data={"limit_reached": True, "category": McpAnonymousThrottle.scope},
+            http_status=429,
+        )
+        response = Response(error.as_response(None), status=429)
+        response["Retry-After"] = str(wait)
+        return response
 
     def unauthorized_response(self, exc) -> Response:
         """A 401 an MCP client can act on (MIP-1078).
