@@ -2144,7 +2144,11 @@ SEARCH_ENGINE["AGENT_PARITY_TOOLS"] = os.environ.get("AGENT_PARITY_TOOLS", "true
 
 # MIP-578 parity batch, model-visible follow-ups (MIP-1589, MIP-1607, MIP-1590): a SECOND flag, because
 # `AGENT_PARITY_TOOLS` is on in production and can no longer protect a new model-visible change.
-# Dark-shipped OFF, measured in one grouped paid run (arm `followups`). ON =
+# DEFAULT ON since 2026-11-15 (two grouped paid runs, arm `followups`, gemini-3.6-flash: the field-rule cases 12/12 once
+# the wording fix of api #912 told the model a required field is the member's; all-accounts calendar reads 3/3 at 2.0
+# calls against 4.3 before; one-account members 8 of 9; the deleted-project case passes its shipped check 6/6; the flag
+# adds about 250 characters of declarations and nothing measurable per ask; "OFF" below is the env value `false`,
+# the rollback). ON =
 # (1) MIP-1589: the agent's and MCP's `create_task`, `update_task` and `create_task_plan` refuse a task the
 # app's own form would refuse because a field its project REQUIRES (the owner's field rules) is missing, with
 # a sentence that names the fields and says nothing was changed; `list_project_tags` also returns the
@@ -2154,13 +2158,16 @@ SEARCH_ENGINE["AGENT_PARITY_TOOLS"] = os.environ.get("AGENT_PARITY_TOOLS", "true
 # (3) MIP-1590: the title or name in a mention bullet of the system prompt is fenced and cleaned like message
 # text, the objects a mention names are read again with the asker's CURRENT access when an approval resumes,
 # and `fetch_task` and the mention resolver answer a task of a soft-deleted project, and a deleted task, exactly
-# as a missing one. OFF = what the model, an MCP client and every tool saw before: the declarations, the
-# prompt and the results are byte-identical (the fingerprint golden), and a call that sends `account: "all"` is
-# refused as the unknown account it always was. Rollback: leave it unset or `AGENT_PARITY_FOLLOWUPS=false`.
-# Flip criterion: the `followups` arm shows no case that creates a task without a required field unasked, one
-# calendar event call for a member with several accounts, and no extra call for a member with one.
+# as a missing one, and so do `search_knowledge_base`, `get_task_history` and `get_task_blockers`. OFF = what the
+# model, an MCP client and every tool saw before: the declarations, the prompt and the results are byte-identical,
+# and a call that sends `account: "all"` is refused as the unknown account it always was. Rollback:
+# `AGENT_PARITY_FOLLOWUPS=false` on the service and redeploy (nothing to migrate back).
+# Flip criterion (met): the `followups` arm shows no case that creates a task without a required field unasked, one
+# calendar event call for a member with several accounts, and no extra call for a member with one. Known and
+# accepted: `list_tasks` still reaches a task of a soft-deleted project through a mention path (production has no
+# soft-deleted project; filed as a follow-up).
 SEARCH_ENGINE["AGENT_PARITY_FOLLOWUPS"] = (
-    os.environ.get("AGENT_PARITY_FOLLOWUPS", "false").lower() == "true"
+    os.environ.get("AGENT_PARITY_FOLLOWUPS", "true").lower() == "true"
 )
 
 SEARCH_ENGINE["CLAUDE_PROMPT_CACHE"] = (

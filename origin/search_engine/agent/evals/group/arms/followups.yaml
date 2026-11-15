@@ -1,5 +1,7 @@
-# MIP-578 parity batch, model-visible follow-ups behind the SECOND flag AGENT_PARITY_FOLLOWUPS (default off).
-# AGENT_PARITY_TOOLS is already on in production, so this arm turns on only the new flag; arm0 is production.
+# MIP-578 parity batch, model-visible follow-ups behind the SECOND flag AGENT_PARITY_FOLLOWUPS (ON by default since the
+# 2026-11-15 flip; env `false` is the rollback). The arm turns on only that flag: it measured the flip, and against a
+# production that already has the flag on it would change nothing (the harness says so), so it is kept for the all-on
+# arm and for a run of the rollback (arm0 with the flag set to false).
 #   MIP-1589: a create/update that the app's own form would refuse (a field the project's rules REQUIRE is
 #     missing) is refused with a sentence naming the fields; `list_project_tags` also returns the project's
 #     field rules and the names of its task templates.
