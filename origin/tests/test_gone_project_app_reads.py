@@ -478,6 +478,52 @@ class ListTests(World):
         self.assertFalse(gone_ms.is_deleted)
 
 
+    def test_the_other_milestone_doors_answer_a_gone_project_as_a_missing_milestone(self):
+        gone_ms = MilestoneMaster.objects.create(
+            team=self.team, project=self.gone, title="M", reporter=self.user
+        )
+        converted = MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.gone,
+            title="C",
+            reporter=self.user,
+            is_deleted=True,
+            converted_to_task=self.gone_task,
+        )
+        live_converted = MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.live,
+            title="C",
+            reporter=self.user,
+            is_deleted=True,
+            converted_to_task=self.live_task,
+        )
+        for who in ("owner", "member"):
+            self.authenticate(self.people[who])
+            calls = {
+                "convert to task": lambda m: self.client.post(
+                    "/api/v2/milestone/convert-to-task/", {"milestone_id": m}, format="json"
+                ),
+                "assignee add": lambda m: self.client.post(
+                    f"/api/v2/milestone/{m}/assignees/", {"user_id": str(self.user2.id)}, format="json"
+                ),
+                "assignee remove": lambda m: self.client.delete(
+                    f"/api/v2/milestone/{m}/assignees/{self.user2.id}/"
+                ),
+                "the 410 of a converted milestone": lambda m: self.client.get(
+                    f"/api/v2/milestone/{m}/"
+                ),
+            }
+            for name, call in calls.items():
+                with self.subTest(f"{name} as {who}"):
+                    target = converted if name.startswith("the 410") else gone_ms
+                    self.assertEqual(_answer(call(target.milestone_id)), _answer(call(MISSING)))
+        self.authenticate(self.user2)
+        self.assertEqual(
+            self.client.get(f"/api/v2/milestone/{live_converted.milestone_id}/").status_code, 410
+        )
+
+
 class PublicApiTests(World):
     def test_the_public_list_and_its_total_leave_the_gone_project_out(self):
         raw = generate_key()
@@ -578,3 +624,26 @@ class SearchFilterTests(World):
                 exclude_project_ids=["9"],
             )
         self.assertEqual(seen, [["9"]])
+
+    def test_search_hands_the_exclusion_to_the_filter(self):
+        class Stop(Exception):
+            pass
+
+        seen = {}
+
+        def spy(*args, **kw):
+            seen.update(kw)
+            raise Stop
+
+        with (
+            mock.patch.object(search_module, "_build_filter", spy),
+            mock.patch.object(search_module, "get_client", return_value=mock.MagicMock()),
+        ):
+            with self.assertRaises(Stop):
+                search_module.search(
+                    query="harbour",
+                    team_id=str(self.team.team_id),
+                    user_id=str(self.user.id),
+                    exclude_project_ids=["9"],
+                )
+        self.assertEqual(seen["exclude_project_ids"], ["9"])
