@@ -126,6 +126,23 @@ class CutText(SimpleTestCase):
         cut, _ = rl.cut_text(text, 100)  # ends inside the opener tag
         self.assertTrue(balanced(cut))
 
+    def test_hostile_text_does_not_make_the_cut_quadratic(self):
+        # `<` and a long run of spaces, again and again, and an opener with no end: the cut must
+        # stay linear however the text is shaped (a worker is what it would pin)
+        import time  # noqa: PLC0415
+
+        shapes = [
+            "<workspace_content>" + "x" * 100 + "<" + " " * 400_000 + "y",
+            "< " * 200_000,
+            "</" + " " * 400_000,
+            ("<" + " " * 50 + "/" + " " * 50) * 4_000,
+            "<workspace_content " * 40_000,
+        ]
+        for text in shapes:
+            started = time.perf_counter()
+            rl.cut_text(text, 20_000)
+            self.assertLess(time.perf_counter() - started, 1.0, text[:30])
+
     def test_a_text_that_quotes_a_lone_tag_is_cut_where_it_is_not_thrown_away(self):
         text = "see <workspace_content> in " + "q" * 3_000
         cut, removed = rl.cut_text(text, 500)

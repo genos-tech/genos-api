@@ -97,7 +97,11 @@ _FENCE_TAGS = ("workspace_content", "web_content")
 # A fence tag as the model would read it (`agent/fence.py`): a `<`, optional space, an optional
 # `/`, the name, and whatever follows up to a `>`. The tail is bounded so a hostile string with a
 # long run of text and no `>` costs nothing.
-_TAG_AT = re.compile(r"<\s*(/?)\s*(?:workspace_content|web_content)[^<>\n]{0,100}>?", re.IGNORECASE)
+# `(/)` sits inside its own optional group so that two `\s*` never meet: `\s*/?\s*` is quadratic on a
+# `<` followed by a long run of spaces (the same trap `agent/fence.py` documents, MIP-914).
+_TAG_AT = re.compile(
+    r"<\s*(?:(/)\s*)?(?:workspace_content|web_content)[^<>\n]{0,100}>?", re.IGNORECASE
+)
 
 
 def _marker(removed: int) -> str:
