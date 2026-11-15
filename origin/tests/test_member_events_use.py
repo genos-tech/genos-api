@@ -154,7 +154,10 @@ class TestTheBriefing(Markers, BriefingBase):
         task = self.make_task("Was mine")
         self.marker(self.user, "task", task.task_id)
         self.assertEqual(len(self.looked()), 1)
+        # Off the project and no longer its owner (the owner reads its tasks with no member row,
+        # MIP-1609), and no longer holding the task.
         ProjectMembers.objects.filter(project=self.project, attendee=self.user).delete()
+        ProjectMaster.objects.filter(pk=self.project.pk).update(owner=self.user2)
         TaskMaster.objects.filter(pk=task.pk).update(assignee=self.user2, reporter=self.user2)
         self.assertEqual(self.looked(), [])
         self.assertNotIn("Was mine", json.dumps(self.brief()))
