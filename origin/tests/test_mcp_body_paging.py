@@ -380,3 +380,109 @@ class TaskParts(McpBase):
         self.assertEqual(s["body_hash"], body_hash(small.content), "the body was read whole")
         self.assertEqual(s["content_markdown"], blocks_to_markdown(small.content))
         self.assertLess(len(s["comments"]), 20, "the generic cap drops what does not fit")
+
+
+class PartialWrites(McpBase):
+    """A write that replaces a body must not follow a read of only part of it."""
+
+    def setUp(self):
+        super().setUp()
+        self._key(scope=SCOPE_WRITE)
+        self.long_note = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Long", body=mcp_big_seed.blocks(30_000)
+        )
+        self.note_args = {"note_id": self.long_note.note_id, "note_type": "personal"}
+        self.task = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            assignee=self.user,
+            title="Long",
+            status="Open",
+            project_task_number=60,
+            content=mcp_big_seed.blocks(30_000),
+        )
+
+    def call(self, tool, args, flag=True):
+        if flag:
+            with on():
+                return self._result(self._call(tool, args))
+        return self._result(self._call(tool, args))
+
+    def note_markdown(self):
+        self.long_note.refresh_from_db()
+        return blocks_to_markdown(self.long_note.body)
+
+    def test_replacing_a_note_after_reading_only_a_part_of_it_is_refused(self):
+        before = self.note_markdown()
+        self.call("get_note", self.note_args)  # the first 20,000 of 30,000 characters
+        result = self.call("update_note", {**self.note_args, "content_text": "only this"})
+        self.assertTrue(result["isError"])
+        text = text_of(result)
+        self.assertIn("read only part of this note", text)
+        self.assertIn("Nothing was changed", text)
+        self.assertEqual(self.note_markdown(), before)
+
+    def test_a_title_change_is_not_a_replacement_of_the_body(self):
+        self.call("get_note", self.note_args)
+        result = self.call("update_note", {**self.note_args, "title": "Renamed"})
+        self.assertFalse(result["isError"], text_of(result))
+        self.long_note.refresh_from_db()
+        self.assertEqual(self.long_note.title, "Renamed")
+
+    def test_a_complete_read_lifts_it(self):
+        small = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="S", body=mcp_big_seed.blocks(3_000)
+        )
+        args = {"note_id": small.note_id, "note_type": "personal"}
+        self.call("get_note", {**args, "max_chars": 1_000})  # a part of a short note
+        refused = self.call("update_note", {**args, "content_text": "new text"})
+        self.assertTrue(refused["isError"])
+        self.call("get_note", args)  # the whole of it
+        ok = self.call("update_note", {**args, "content_text": "new text"})
+        self.assertFalse(ok["isError"], text_of(ok))
+
+    def test_a_note_never_read_is_not_refused(self):
+        other = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="O", body=mcp_big_seed.blocks(3_000)
+        )
+        ok = self.call(
+            "update_note", {"note_id": other.note_id, "note_type": "personal", "content_text": "x"}
+        )
+        self.assertFalse(ok["isError"], text_of(ok))
+
+    def test_replacing_a_task_body_after_a_part_is_refused_but_a_partial_edit_is_not(self):
+        self.call("get_task", {"task_id": self.task.task_id})
+        refused = self.call(
+            "update_task", {"task_id": self.task.task_id, "content_text": "only this"}
+        )
+        self.assertTrue(refused["isError"])
+        self.assertIn("read only part of this task description", text_of(refused))
+        self.assertIn("body_append", text_of(refused))
+        ok = self.call(
+            "update_task", {"task_id": self.task.task_id, "body_append": "one more line"}
+        )
+        self.assertFalse(ok["isError"], text_of(ok))
+
+    def test_it_is_remembered_per_person_and_per_item(self):
+        self.assertNotEqual(
+            bp._marker("u1", "note:personal:1"), bp._marker("u2", "note:personal:1")
+        )
+        self.assertNotEqual(
+            bp._marker("u1", "note:personal:1"), bp._marker("u1", "note:personal:2")
+        )
+        self.assertNotEqual(bp._marker("u1", "note:personal:1"), bp._marker("u1", "task:1"))
+
+    def test_with_the_switch_off_nothing_is_refused(self):
+        self.call("get_note", self.note_args)  # a part, switch on
+        ok = self.call("update_note", {**self.note_args, "content_text": "replaced"}, flag=False)
+        self.assertFalse(ok["isError"], text_of(ok))
+
+    def test_a_cache_that_fails_does_not_fail_the_write_or_the_read(self):
+        with mock.patch.object(bp, "cache") as broken:
+            broken.get.side_effect = RuntimeError("redis down")
+            broken.set.side_effect = RuntimeError("redis down")
+            read = self.call("get_note", self.note_args)
+            self.assertFalse(read["isError"])
+            ok = self.call("update_note", {**self.note_args, "content_text": "replaced"})
+            self.assertFalse(ok["isError"], text_of(ok))

@@ -140,6 +140,7 @@ from origin.services.security_events import (
 )
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
+    body_paging,
     note_threads,
     progress,
     result_limits,
@@ -2856,6 +2857,13 @@ def call(
             return _text_result(str(exc), is_error=True)
     try:
         args = resolve_references(tool, args, ctx.team_id)
+        if (
+            limits
+            and tool.write
+            and (why := body_paging.refusal_for_write(tool.name, args, ctx.user_id))
+        ):
+            # MIP-1367: a write that replaces a body this caller has only partly read.
+            raise ToolError(why)
         payload = _registered(tool).run(args, ctx)
         if tool.augment is not None:
             payload = tool.augment(dict(payload or {}), args, mcp_args, ctx)
@@ -2926,6 +2934,8 @@ def call(
             # After the tool's own access checks, so it says the same for a note that is missing
             # and one that is not the caller's.
             return _text_result(str(exc), is_error=True)
+        if tool.name in result_limits.BODY_FIELDS:
+            body_paging.remember_read(tool.name, args, payload, ctx.user_id)
     text = render(payload)
     result: dict[str, Any] = {
         "content": [{"type": "text", "text": text}],

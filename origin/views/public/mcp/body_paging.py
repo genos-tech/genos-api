@@ -28,7 +28,11 @@ what a reader acts on) and the notice says how many.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from typing import Any, Callable
+
+from django.core.cache import cache
 
 from origin.search_engine.agent.tools.base import ToolError
 from origin.views.public.mcp.result_limits import (
@@ -37,6 +41,8 @@ from origin.views.public.mcp.result_limits import (
     Cuts,
     _env_int,
 )
+
+log = logging.getLogger(__name__)
 
 MIN_PAGE_CHARS = 1_000
 DEFAULT_PAGE_CHARS = _env_int("MCP_BODY_PAGE_CHARS", 20_000, MIN_PAGE_CHARS)
@@ -214,3 +220,84 @@ def page_body(
             f" {comments_left_out} older comment(s) are left out; they are in the Genos app."
         )
     cuts.next_call = sentence
+
+
+# --------------------------------------------------------------------------
+# a partial read is not written back
+# --------------------------------------------------------------------------
+
+#: How long "this caller has read only part of that body" is remembered, in seconds.
+PARTIAL_READ_TTL = 3_600
+#: The write tools, and the argument of each that REPLACES the whole body.
+_REPLACES_BODY = {"update_note": "content_text", "update_task": "content_text"}
+_READ_OF = {"update_note": "get_note", "update_task": "get_task"}
+_WRITE_ALTERNATIVE = {
+    "update_task": (
+        "or change one part of it with `body_append`, `body_prepend` or `body_replace`, which do "
+        "not need the rest"
+    ),
+    "update_note": "or make the change in the Genos app (a note has no partial edit over MCP)",
+}
+
+
+def _ident(tool: str, args: dict[str, Any]) -> str | None:
+    if tool in ("get_task", "update_task"):
+        return f"task:{args.get('task_id')}"
+    if tool in ("get_note", "update_note"):
+        return f"note:{str(args.get('note_type') or '').lower()}:{args.get('note_id')}"
+    return None
+
+
+def _marker(user_id: str, ident: str) -> str:
+    return "mcp:partial-body:" + hashlib.sha256(f"{user_id}|{ident}".encode()).hexdigest()[:32]
+
+
+def is_partial(tool: str, payload: dict[str, Any]) -> bool:
+    """Is this answer less than the whole body? A part (it says `body_total_chars`), or a body the
+    generic guard cut (the notice lists the field)."""
+    if "body_total_chars" in payload:
+        return True
+    notice = payload.get("truncated")
+    if isinstance(notice, dict) and "original_chars" in notice:
+        fields = BODY_FIELDS.get(tool, ())
+        return any(str(f).split(" ")[0] in fields for f in notice.get("fields") or ())
+    return False
+
+
+def remember_read(tool: str, args: dict[str, Any], payload: dict[str, Any], user_id: str) -> None:
+    """After a read of a note or task: remember, for this caller and this item, whether what they
+    were shown was partial. A complete read forgets it. A cache that fails changes nothing (the
+    refusal below is then simply not made, as on a deployment without the switch)."""
+    ident = _ident(tool, args)
+    if ident is None:
+        return
+    try:
+        if is_partial(tool, payload):
+            cache.set(_marker(user_id, ident), 1, PARTIAL_READ_TTL)
+        else:
+            cache.delete(_marker(user_id, ident))
+    except Exception:  # noqa: BLE001 - a marker never fails a read
+        log.warning("MCP partial-read marker not stored for %s", tool, exc_info=True)
+
+
+def refusal_for_write(tool: str, args: dict[str, Any], user_id: str) -> str | None:
+    """The sentence that refuses a write which would REPLACE a body this caller has only partly
+    read (`update_note` or `update_task` with `content_text`), else None. Nothing is changed."""
+    field = _REPLACES_BODY.get(tool)
+    if field is None or args.get(field) is None:
+        return None
+    ident = _ident(tool, args)
+    try:
+        partial = ident is not None and bool(cache.get(_marker(user_id, ident)))
+    except Exception:  # noqa: BLE001 - fail open, as the rest of the layer does
+        log.warning("MCP partial-read marker not read for %s", tool, exc_info=True)
+        return None
+    if not partial:
+        return None
+    what = _WHAT[_READ_OF[tool]]
+    return (
+        f"You have read only part of this {what} (`{_READ_OF[tool]}` answered in parts), and "
+        f"`{field}` replaces the WHOLE body, so this write would delete the rest. Nothing was "
+        f"changed. Read it completely first (a body of about 20,000 characters or less comes back "
+        f"whole), {_WRITE_ALTERNATIVE[tool]}."
+    )
