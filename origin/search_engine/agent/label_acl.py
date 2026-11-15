@@ -95,17 +95,20 @@ class LabelAccess:
             )
         return self._member_project_ids
 
-    def _owns_project(self, project_id: int | None) -> bool:
+    def _owns_project(self, project: Any) -> bool:
         """The caller is the project's owner, with no member row, and still on its team: the
         owner `acl.active_project_owners` lists (an owner who left the team is not one; REST
-        lets them in, search does not, and neither does this). MIP-1609."""
-        if project_id is None:
+        lets them in, search does not, and neither does this). MIP-1609.
+
+        `project` is the row the caller already holds (`select_related("project")`): a person who
+        is not its owner is refused with no query, so a denied read costs what it did."""
+        if project is None or str(project.owner_id or "") != self.user_id:
             return False
-        if project_id not in self._owns:
-            self._owns[project_id] = (
-                active_project_owners([project_id]).get(project_id) == self.user_id
+        if project.project_id not in self._owns:
+            self._owns[project.project_id] = (
+                active_project_owners([project.project_id]).get(project.project_id) == self.user_id
             )
-        return self._owns[project_id]
+        return self._owns[project.project_id]
 
     def _on_run_team(self) -> bool:
         """The caller is still on the run's team (a live member row, or its owner)."""
@@ -129,7 +132,7 @@ class LabelAccess:
             task.project_id in self._projects()
             or str(task.assignee_id or "") == self.user_id
             or str(task.reporter_id or "") == self.user_id
-            or self._owns_project(task.project_id)
+            or self._owns_project(task.project)
         )
 
     def tasks(self, raw_ids: Iterable[Any]) -> dict[int, TaskMaster]:
@@ -163,7 +166,7 @@ class LabelAccess:
             return False
         if str(getattr(milestone, "team_id", "") or "") != self.team_id:
             return False
-        if milestone.project_id in self._projects() or self._owns_project(milestone.project_id):
+        if milestone.project_id in self._projects() or self._owns_project(milestone.project):
             return True
         if str(milestone.reporter_id or "") == self.user_id and self._on_run_team():
             return True
@@ -178,7 +181,7 @@ class LabelAccess:
             return {}
         return {
             m.milestone_id: m.title
-            for m in MilestoneMaster.objects.filter(milestone_id__in=ids)
+            for m in MilestoneMaster.objects.select_related("project").filter(milestone_id__in=ids)
             if self.milestone_readable(m)
         }
 
