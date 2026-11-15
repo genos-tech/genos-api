@@ -97,9 +97,16 @@ def valid_task_id(raw: Any) -> int | None:
     """`raw` as a task id (a positive integer that fits the column), or None. A bool is not one."""
     if isinstance(raw, bool):
         return None
-    try:
-        value = int(str(raw).strip()) if not isinstance(raw, int) else raw
-    except (TypeError, ValueError):
+    if isinstance(raw, str):
+        # Plain ASCII digits only: `int()` would also take "+5", "1_0" and other scripts' digits, and a
+        # task would then be reachable under several spellings.
+        text = raw.strip()
+        if not (text.isascii() and text.isdigit()) or len(text) > 19:
+            return None
+        value = int(text)
+    elif isinstance(raw, int):
+        value = raw
+    else:
         return None
     return value if 0 < value < 2**63 else None
 

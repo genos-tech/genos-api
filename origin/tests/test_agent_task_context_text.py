@@ -41,6 +41,14 @@ class IdTests(TaskWorld):
             ("", None),
             ("abc", None),
             ("5.0", None),
+            ("+5", None),
+            ("-5", None),
+            ("1_0", None),
+            ("0x10", None),
+            ("\u0663", None),  # an Arabic-Indic digit: int() takes it, a task id is ASCII
+            ("\uff15", None),  # a full-width digit
+            ("1" * 20, None),
+            ("1" * 19, int("1" * 19)),
             (5.0, None),
             ([5], None),
             ({"a": 1}, None),

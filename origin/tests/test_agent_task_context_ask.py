@@ -518,12 +518,40 @@ class SessionScopeTests(TaskWorld):
         self.assertIn("Fix the login flow", extra)
         self.assertEqual(captured["kwargs"]["session_id"], first)
 
-    def test_a_task_that_cannot_be_read_any_more_is_dropped_from_such_a_continuation_quietly(self):
+    def test_a_task_that_cannot_be_read_any_more_gives_a_fresh_conversation_not_its_old_memory(
+        self,
+    ):
         task = self.make_task()
         first = self.ask_about(task)["kwargs"]["session_id"]
-        TaskMaster.objects.filter(pk=task.pk).update(is_deleted=True)
+        AgentRun.objects.filter(session_id=first).update(
+            final_answer_text="The description says: SECRET-ANSWER", status="done"
+        )
+        # While the task can be read, the conversation carries its earlier turns.
         resp, captured = self.ask(session_id=first, query="and the owner?")
+        self.assertEqual(captured["kwargs"]["session_id"], first)
+        self.assertEqual(len(captured["kwargs"]["prior_turns"]), 1)
+        TaskMaster.objects.filter(pk=task.pk).update(is_deleted=True)
+        resp, captured = self.ask(session_id=first, query="repeat what you said")
         self.assertEqual(resp.status_code, 200)  # nothing was named, so nothing is refused
+        self.assertIsNone(captured["kwargs"]["system_extra"])
+        # ...and what it held about the task is NOT handed to the model again: it reads like a session that
+        # is not there, and this ask starts a fresh one.
+        self.assertNotEqual(captured["kwargs"]["session_id"], first)
+        self.assertEqual(captured["kwargs"]["prior_turns"], [])
+        # The old conversation is untouched, in the person's history.
+        self.assertTrue(AgentSession.objects.filter(pk=first, task_id=task.task_id).exists())
+
+    def test_access_lost_reads_the_same_as_the_task_deleted(self):
+        task = self.make_task()
+        first = self.ask_about(task)["kwargs"]["session_id"]
+        AgentRun.objects.filter(session_id=first).update(
+            final_answer_text="SECRET-ANSWER", status="done"
+        )
+        ProjectMembers.objects.filter(project=self.project, attendee=self.a_owner).delete()
+        TaskMaster.objects.filter(pk=task.pk).update(assignee=None, reporter=None)
+        _, captured = self.ask(session_id=first, query="repeat what you said")
+        self.assertNotEqual(captured["kwargs"]["session_id"], first)
+        self.assertEqual(captured["kwargs"]["prior_turns"], [])
         self.assertIsNone(captured["kwargs"]["system_extra"])
 
     def test_an_explicit_thread_context_is_not_given_a_task_block_by_the_session_id(self):
@@ -537,6 +565,8 @@ class SessionScopeTests(TaskWorld):
         extra = captured["kwargs"]["system_extra"]
         self.assertIn("<thread_summary>", extra)
         self.assertNotIn(BLOCK, extra)
+        # The task's conversation is set aside under a thread (or a note), as under another task.
+        self.assertNotEqual(captured["kwargs"]["session_id"], first)
 
     def test_a_plain_session_continued_by_id_gets_no_block(self):
         general = AgentSession.objects.create(
@@ -544,6 +574,35 @@ class SessionScopeTests(TaskWorld):
         )
         _, captured = self.ask(session_id=str(general.session_id))
         self.assertIsNone(captured["kwargs"]["system_extra"])
+
+
+class CompletionLinkTests(TaskWorld):
+    """The deep link of the "your answer is ready" push (`_run_complete_url`)."""
+
+    def link(self, session):
+        from origin.search_engine import agent_views
+
+        return agent_views._run_complete_url(session)
+
+    def test_a_task_conversation_links_to_the_task_page(self):
+        task = self.make_task()
+        self.ask(task_context=self.ctx(task))
+        self.assertEqual(
+            self.link(AgentSession.objects.get()),
+            f"/workspace/tasks/project/{self.project.project_id}/task/{task.task_id}",
+        )
+
+    def test_a_deleted_task_a_plain_session_and_a_flag_that_is_off_get_the_generic_link(self):
+        task = self.make_task()
+        self.ask(task_context=self.ctx(task))
+        session = AgentSession.objects.get()
+        with mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: False}):
+            self.assertEqual(self.link(session), "/workspace/genos")
+        plain = AgentSession.objects.create(team_id=session.team_id, user_id=session.user_id)
+        self.assertEqual(self.link(plain), "/workspace/genos")
+        self.assertEqual(self.link(None), "/workspace/genos")
+        TaskMaster.objects.filter(pk=task.pk).update(is_deleted=True)
+        self.assertEqual(self.link(session), "/workspace/genos")
 
 
 class AskShapeTests(TaskWorld):

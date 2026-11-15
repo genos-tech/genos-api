@@ -316,7 +316,9 @@ def _get_or_create_session(
     With `task_ctx` a session named by `session_id` is used only if it is
     bound to THAT task: a general session (the Cmd-K one) or another task's is
     set aside, so asking about a task never writes into a conversation about
-    something else, and the general session is left as it was.
+    something else, and the general session is left as it was. A session bound
+    to a task is likewise set aside under a thread or note context, and, when
+    the ask names no object at all, while the person can no longer open the task.
     """
     ttl_minutes = int(settings.SEARCH_ENGINE.get("SESSION_TTL_MINUTES", 30))
     if not force_new:
@@ -329,6 +331,19 @@ def _get_or_create_session(
                 )
                 if task_ctx is not None and session.task_id != task_ctx["task_id"]:
                     raise AgentSession.DoesNotExist  # another conversation: not this task's
+                if session.task_id is not None and (thread_context or note_context):
+                    raise AgentSession.DoesNotExist  # a task's conversation is not a thread's or a note's
+                if (
+                    session.task_id is not None
+                    and task_ctx is None
+                    and parity_on()
+                    and not task_context.can_read(session.task_id, team_id, user_id)
+                ):
+                    # Continued with the session id alone, and the person can no longer open the task
+                    # (deleted, or they lost access): the conversation reads like one that is not there,
+                    # so what it holds about the task (the earlier turns, the recap) is not handed to the
+                    # model again. It stays in their history; this ask starts a fresh conversation.
+                    raise AgentSession.DoesNotExist
                 cutoff = timezone.now() - timedelta(minutes=ttl_minutes)
                 # Entity-scoped sessions (thread, note OR task) bypass TTL —
                 # same rationale as the per-thread / per-note / per-task
@@ -2507,8 +2522,8 @@ _CHAT_KIND_TOKEN = {1: "dm", 2: "gm", 3: "pm", 4: "mdm"}
 def _run_complete_url(session) -> str:
     """Best-effort deep link for the completion push.
 
-    A thread- or note-scoped session links back to the surface the ask was
-    made from; the Ask modal there restores its conversation from the
+    A thread-, note- or task-scoped session links back to the surface the ask
+    was made from; the Ask modal there restores its conversation from the
     server on open. A plain Genos/Spotlight run deep-links to the Genos
     page (/workspace/genos) — the full-page surface over the same
     conversation, which restores its turns from localStorage on landing.
@@ -2524,6 +2539,18 @@ def _run_complete_url(session) -> str:
         return f"{base}/thread/{session.thread_id}" if session.thread_id else base
     if session.note_type == 1 and session.note_id:
         return f"/workspace/notes/my/{session.note_id}"
+    if session.task_id is not None and parity_on():
+        # The task's own page (the route `todo_source` already links a to-do's task by), where the Ask
+        # opened from it restores its conversation. A task that is gone has no page: the generic link.
+        from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
+
+        project_id = (
+            TaskMaster.objects.filter(task_id=session.task_id, is_deleted=False)
+            .values_list("project_id", flat=True)
+            .first()
+        )
+        if project_id is not None:
+            return f"/workspace/tasks/project/{project_id}/task/{session.task_id}"
     return "/workspace/genos"
 
 
