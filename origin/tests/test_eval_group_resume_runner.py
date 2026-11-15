@@ -376,7 +376,10 @@ class EveryCaseFileTests(RunnerBase):
         problems: list[str] = []
         seen = 0
         for case in cases():
-            tag = next(t for t in case["tags"] if t in MY_TAGS)
+            # Another item's resume cases (t1057 and the arm it shares) have their own shape test.
+            tag = next((t for t in case["tags"] if t in MY_TAGS), None)
+            if tag is None:
+                continue
             seen += 1
             arm0 = self.run_case(case, {})
             arm = self.run_case(case, arm_overrides(tag))
