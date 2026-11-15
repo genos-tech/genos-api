@@ -612,7 +612,8 @@ class HintTable(SimpleTestCase):
         for tool in mcp_tools.CATALOG:
             if tool.write or tool.name not in rl.HINTS:
                 continue
-            declared = set((mcp_tools.input_schema(tool).get("properties") or {}))
+            with on():
+                declared = set((mcp_tools.input_schema(tool).get("properties") or {}))
             for name in re.findall(r"`([a-z_]+)`", rl.HINTS[tool.name]):
                 self.assertIn(name, declared | {"next_offset"}, f"{tool.name}: `{name}`")
 

@@ -169,6 +169,8 @@ class Cuts:
     #: a sentence that replaces the tool's hint (a page of a list says "Showing 100 of 847 ...")
     next_call: str | None = None
     next_cursor: str | None = None
+    #: Is there more to read? None = "work it out": true when items were left out.
+    has_more: bool | None = None
 
     def field(self, path: str, n: int = 1) -> None:
         self.fields[path] = self.fields.get(path, 0) + n
@@ -300,8 +302,8 @@ DROP_FROM_START: frozenset[str] = frozenset({"get_chat_thread"})
 #: The narrower call, per read tool, said in the `truncated` notice. A new read tool MUST be
 #: added here (`test_every_read_tool_has_a_hint`): the generic words are the fallback, not the plan.
 HINTS: dict[str, str] = {
-    "get_task": "Older comments and the rest of a long description are in the Genos app; get_note reads a task's note.",
-    "get_note": "Search for the passage you need with search_workspace, or open the note in the Genos app.",
+    "get_task": "Pass `offset` (the `next_offset` of the answer) to read the next part of a long description; older comments are in the Genos app.",
+    "get_note": "Pass `offset` (the `next_offset` of the answer) to read the next part of a long note.",
     "get_note_history": "The newest versions are listed first; pass version_no to read one version.",
     "get_chat_thread": "Call again with a smaller `limit`, or pass `before` (the oldest message shown) to read older messages; for a thread, call without thread_id for the channel.",
     "list_tasks": "Pass a smaller `limit`, or narrow with project_id, status, assignee_id, milestone_id or due_from/due_to; page with `cursor`.",
@@ -357,6 +359,36 @@ HINTS: dict[str, str] = {
     "list_my_schedules": "Nothing narrower exists; this answer is small.",
 }
 GENERIC_HINT = "Ask for less: a smaller `limit` or a narrower filter on the same tool."
+
+
+def paging_arg_names(tool: str) -> tuple[str, ...]:
+    """The arguments `tool` takes only while the switch is on (taken out of the call before the
+    registry tool runs: it does not have them)."""
+    if tool in BODY_FIELDS:
+        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+
+        return body_paging.PAGE_ARGS
+    return ()
+
+
+def extra_properties(tool: str) -> dict[str, dict[str, Any]]:
+    """The schema of those arguments, published with the tool while the switch is on. Empty with
+    it off, so `tools/list` and every input schema are what they were."""
+    if not limits_on():
+        return {}
+    if tool in BODY_FIELDS:
+        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+
+        return body_paging.schema_properties(tool)
+    return {}
+
+
+def check_args(tool: str, args: dict[str, Any]) -> None:
+    """Refuse a malformed paging argument in words, before the tool runs (`ToolError`)."""
+    if tool in BODY_FIELDS:
+        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+
+        body_paging.validate(args)
 
 
 def is_notice(value: Any) -> bool:
@@ -514,7 +546,8 @@ def _notice(tool: str, cuts: Cuts, original: int, shown: int) -> dict[str, Any]:
     }
     if cuts.omitted:
         block["omitted_items"] = dict(cuts.omitted)
-        block["has_more"] = True
+    if cuts.omitted or cuts.has_more is not None:
+        block["has_more"] = True if cuts.has_more is None else cuts.has_more
     if cuts.next_cursor:
         block["next_cursor"] = cuts.next_cursor
     block["next_call"] = cuts.next_call or hint_for(tool)
@@ -629,6 +662,7 @@ def apply(
     *,
     cuts: Cuts | None = None,
     cap: int | None = None,
+    args: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """The whole policy for one answer: the per-item caps, then the generic guard. Returns the
     payload to send and whether anything was cut (so the caller sets `_meta`). `render` turns a
@@ -638,6 +672,11 @@ def apply(
     cuts = cuts if cuts is not None else Cuts()
     original = len(render(payload))
     apply_item_caps(tool, payload, cuts)
+    if tool in BODY_FIELDS:
+        # Lazily: the paging modules import this one.
+        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+
+        body_paging.page_body(tool, payload, args or {}, render, cuts, cap)
     if len(render(_with_notice(payload, tool, cuts, original, cap) if cuts else payload)) > cap:
         payload = shrink_to(tool, payload, render, cap, original, cuts)
     elif cuts:

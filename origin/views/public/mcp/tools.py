@@ -2302,6 +2302,10 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         array_schema["items"] = items
         properties[list_arg] = array_schema
         schema = {**schema, "properties": properties}
+    # The paging arguments of MIP-1367, published only while `MCP_RESULT_LIMITS` is on: with it
+    # off this adds nothing and the schema is what it was.
+    if extra := result_limits.extra_properties(tool.name):
+        schema = {**schema, "properties": {**(schema.get("properties") or {}), **extra}}
     return schema
 
 
@@ -2837,6 +2841,17 @@ def call(
     # argument, and the in-app agent's copy of it must stay as it is.
     sent = dict(args)
     mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
+    # MIP-1367: the paging arguments (`offset`, `max_chars`, `limit`, `cursor`) belong to this layer,
+    # not to the registry tool, so they are taken out here; checked in words before anything runs.
+    limit_args: dict[str, Any] = {}
+    if result_limits.limits_on():
+        limit_args = {
+            k: args.pop(k) for k in result_limits.paging_arg_names(tool.name) if k in args
+        }
+        try:
+            result_limits.check_args(tool.name, limit_args)
+        except ToolError as exc:
+            return _text_result(str(exc), is_error=True)
     try:
         args = resolve_references(tool, args, ctx.team_id)
         payload = _registered(tool).run(args, ctx)
@@ -2903,7 +2918,12 @@ def call(
     # said in a `truncated` block and in `_meta`.
     truncated = False
     if result_limits.limits_on():
-        payload, truncated = result_limits.apply(tool.name, payload, render)
+        try:
+            payload, truncated = result_limits.apply(tool.name, payload, render, args=limit_args)
+        except ToolError as exc:
+            # After the tool's own access checks, so it says the same for a note that is missing
+            # and one that is not the caller's.
+            return _text_result(str(exc), is_error=True)
     text = render(payload)
     result: dict[str, Any] = {
         "content": [{"type": "text", "text": text}],
