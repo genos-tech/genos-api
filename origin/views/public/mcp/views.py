@@ -30,6 +30,7 @@ from origin.views.public.anonymous_throttle import McpAnonymousThrottle
 from origin.views.public.credentials import credential_of
 from origin.views.public.mcp import prompts, protocol, request_guard, tools
 from origin.views.public.mcp.protocol import JsonRpcError
+from origin.views.public.mcp.result_log import note_result
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
 from origin.views.utils.scope_guards import participates_in_team
@@ -553,7 +554,7 @@ class McpView(PublicApiView):
         # with no author.
         with metered_request(surface="mcp", user_id=ctx.user_id, team_id=ctx.team_id):
             try:
-                return tools.call(
+                result = tools.call(
                     name,
                     arguments,
                     ctx,
@@ -565,6 +566,10 @@ class McpView(PublicApiView):
                     record_use=record_use,
                     notify=notify,
                 )
+                # Size and name for the `perf.request` line, and the shadow cap's log line
+                # (MIP-1367). Observes only: `result` goes back exactly as built.
+                note_result(request, name, result)
+                return result
             except JsonRpcError:
                 raise
             except Exception:  # noqa: BLE001 — an unexpected bug is ours, not the caller's
