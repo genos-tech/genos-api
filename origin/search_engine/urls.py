@@ -10,6 +10,7 @@ from origin.search_engine.agent_views import (
     AgentSessionPinView,
     AgentSessionsListView,
     AgentStepUndoView,
+    AgentTaskSessionView,
     AgentUsageView,
     NoteSummaryView,
     SharedAnswerDetailView,
@@ -59,6 +60,11 @@ urlpatterns = [
         "api/v2/agent/sessions/<str:session_id>/pin/",
         AgentSessionPinView.as_view(),
         name="agent_session_pin",
+    ),
+    path(
+        "api/v2/agent/task-session/",
+        AgentTaskSessionView.as_view(),
+        name="agent_task_session",
     ),
     path(
         "api/v2/agent/shared-answers/",

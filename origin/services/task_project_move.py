@@ -167,6 +167,11 @@ def relocate_task_satellites(task_ids, *, project_id, team_id) -> None:
     for old_team_id in {old for _, old, _ in moved} | {team_id}:
         change_feed.bump_notes(old_team_id, task=True)
     _settle_dependencies(task_ids, team_id=team_id)
+    # A collaborator is told about a task only while they can open it (MIP-1567); in the
+    # destination that is its members and owner, and the task's own assignee and reporter.
+    from origin.services.task_collaborator_revoke import drop_unreadable_collaborators
+
+    drop_unreadable_collaborators(task_ids)
     # A move is the one thing in the product that changes which team an
     # object belongs to, and the request-scoping layer caches that answer
     # for five minutes on the premise that nothing does. Left stale, it
