@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMembers
 from origin.models.project.prj_models import *
+from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
@@ -153,6 +154,9 @@ class ProjectMasterView(AuthenticatedAPIView):
             previous_owner_id = project.owner_id
             project.owner_id = new_owner_id
             project.save(update_fields=["owner", "ts_updated_at"])
+            # The owner is on the search ACL of the project's tasks with no member row of their
+            # own (MIP-1591): the hand-over changes who that is, and no member row moved.
+            mark_projects_dirty([project.project_id])
             record_security_event(
                 SecurityAction.OWNER_TRANSFERRED,
                 request=request,

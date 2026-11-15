@@ -30,6 +30,7 @@ from django.db.models import Q
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.search_engine.acl_dirty import DirtyScopes
+from origin.search_engine.agent.acl import active_project_owners
 from origin.search_engine.agent.tools.template_prompts import without_untouched_prompts
 from origin.search_engine.chunkers.base import (
     Chunk,
@@ -70,6 +71,10 @@ def iter_milestone_chunks(
         if row["attendee_id"] is not None:
             members_by_project[row["project_id"]].append(str(row["attendee_id"]))
 
+    # The project's owner reads its milestones with no member row of their own, while they are
+    # on the team (MIP-1591).
+    owner_by_project = active_project_owners(project_ids)
+
     # Pre-load multi-assignees per milestone.
     milestone_ids = [m.milestone_id for m in milestones]
     assignees_by_ms: dict[int, list[str]] = defaultdict(list)
@@ -86,6 +91,8 @@ def iter_milestone_chunks(
         project_id = str(m.project_id) if m.project_id else None
 
         acl = set(members_by_project.get(m.project_id, [])) if m.project_id else set()
+        if m.project_id in owner_by_project:
+            acl.add(owner_by_project[m.project_id])
         acl.update(assignees_by_ms.get(m.milestone_id, []))
         if m.reporter_id:
             acl.add(str(m.reporter_id))
