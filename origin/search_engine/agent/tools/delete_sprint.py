@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from apis.request_id import log_failure
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.sprint_access import load_sprint
 from origin.services.sprint_manage import delete_sprint
@@ -33,7 +34,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             ref = log_failure("delete_sprint tool failed", e)
             raise ToolError(f"Failed to delete the sprint (ref {ref}).")
-    return {
+    result = {
         "sprint_id": sprint.sprint_id,
         "name": sprint.name,
         "deleted": True,
@@ -50,6 +51,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             )
         ),
     }
+    if parity_on():
+        # The project the sprint belonged to (MIP-1059), so the approved delete gets the chip every
+        # other sprint write has: the sprint is gone, and its project is the place to go.
+        result["project_id"] = sprint.project_id
+    return result
 
 
 DELETE_SPRINT = Tool(

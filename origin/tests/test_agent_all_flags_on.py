@@ -43,7 +43,10 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # with a Long member's block), so 144,500: 166 characters left.
 # MIP-1564: +769 more (`manage_milestone`'s convert action, `task_id` and project move; 143,648 all-on,
 # 145,103 with a Long member's block), so 145,500: 397 characters left.
-ALL_ON_BUDGET_CHARS = 145_500
+# MIP-1059: +1,791 more (`account` on five calendar tools, `get_calendar_event`, three sentences: +1,701 in
+# declarations, and the event citation line of the prompt: +90; 145,439 all-on, 146,894 with a Long member's
+# block), so 147,000: 106 characters left.
+ALL_ON_BUDGET_CHARS = 147_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.
@@ -138,8 +141,9 @@ class AllOnDeclarationTests(SimpleTestCase):
         off, on = self._off_and_on()
         self.assertEqual([d.name for d in on[: len(off)]], [d.name for d in off])
         extra = [d.name for d in on[len(off) :]]
-        # The timeline tool, then MIP-1563's write tool (flag-gated with the parity batch).
-        self.assertEqual(extra, ["get_timeline", "delete_task_attachment"])
+        # The timeline tool, then MIP-1563's write tool and MIP-1059's calendar read (both flag-gated with
+        # the parity batch).
+        self.assertEqual(extra, ["get_timeline", "delete_task_attachment", "get_calendar_event"])
         self.assertEqual(len({d.name for d in on}), len(on), "a tool is declared twice")
 
     def test_schemas_only_gain_the_declared_parameters_and_descriptions_only_grow(self):
@@ -214,10 +218,12 @@ class AllOnDeclarationTests(SimpleTestCase):
         with settings_with(ALL_ON):
             self.assertIsNotNone(_app_tool("get_timeline"))
             self.assertEqual(
-                [t.name for t in flagged_tools()], ["get_timeline", "delete_task_attachment"]
+                [t.name for t in flagged_tools()],
+                ["get_timeline", "delete_task_attachment", "get_calendar_event"],
             )
         self.assertNotIn("get_timeline", REGISTRY)
         self.assertNotIn("delete_task_attachment", REGISTRY)
+        self.assertNotIn("get_calendar_event", REGISTRY)
 
     def test_the_operator_kill_switch_still_hides_the_flagged_tool_with_all_on(self):
         with settings_with({**ALL_ON, "AGENT_DISABLED_TOOLS": frozenset({"get_timeline"})}):
@@ -246,18 +252,27 @@ class AllOnDeclarationTests(SimpleTestCase):
         self.assertLessEqual(on_total, ALL_ON_BUDGET_CHARS)
         self.assertLessEqual(on_total, BUDGET_CHARS, "all-on no longer fits the production budget")
 
-    def test_only_the_reject_reason_flag_edits_the_system_prompt(self):
-        # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; every other
-        # flag edits declarations or what a resume carries. So all-on == reject-reason-only != off.
+    def test_only_the_reject_reason_and_parity_flags_edit_the_system_prompt(self):
+        # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; the parity flag
+        # adds the calendar event's citation shape (MIP-1059); every other flag edits declarations or what
+        # a resume carries. So all-on == those two alone != off, and neither alone is all-on.
         # (The per-level and locale prompts are in the fingerprint test below.)
         with settings_with({k: False for k in ALL_ON}):
             off = agent_system_prompt()
         with settings_with({k: False for k in ALL_ON} | {"AGENT_REJECT_REASON": True}):
             reason_only = agent_system_prompt()
+        with settings_with({k: False for k in ALL_ON} | {"AGENT_PARITY_TOOLS": True}):
+            parity_only = agent_system_prompt()
+        with settings_with(
+            {k: False for k in ALL_ON} | {"AGENT_REJECT_REASON": True, "AGENT_PARITY_TOOLS": True}
+        ):
+            both = agent_system_prompt()
         with settings_with(ALL_ON):
             on = agent_system_prompt()
         self.assertNotEqual(off, on)
-        self.assertEqual(reason_only, on)
+        self.assertNotEqual(reason_only, on)
+        self.assertNotEqual(parity_only, on)
+        self.assertEqual(both, on)
 
 
 class AllOnProviderTests(SimpleTestCase):
@@ -281,7 +296,9 @@ class AllOnProviderTests(SimpleTestCase):
             tools = _request_kwargs(client_cls, path, decls)["tools"]
             names = [t.get("name") or t["function"]["name"] for t in tools]
             self.assertEqual(names, [d.name for d in decls], client_cls)
-            self.assertEqual(names[-2:], ["get_timeline", "delete_task_attachment"])
+            self.assertEqual(
+                names[-3:], ["get_timeline", "delete_task_attachment", "get_calendar_event"]
+            )
 
 
 class AllOnFingerprintTests(TestCase):
@@ -499,9 +516,11 @@ class AllOnLoopTests(LoopBase):
     def test_the_other_flags_are_in_what_the_model_is_sent(self):
         calls = transcript(self.run_all_on("plain", "long").calls)
         system = calls[0]["system"]
-        with settings_with({"AGENT_REJECT_REASON": True}):
+        with settings_with({"AGENT_REJECT_REASON": True, "AGENT_PARITY_TOOLS": True}):
             rule = agent_system_prompt()
-        self.assertTrue(system.startswith(rule), "the all-on prompt is the reject-reason one")
+        self.assertTrue(
+            system.startswith(rule), "the all-on prompt is the reject-reason and parity one"
+        )
         names = [t["name"] if isinstance(t, dict) else t for t in calls[0]["tools"]]
         self.assertIn("get_timeline", str(names))
 

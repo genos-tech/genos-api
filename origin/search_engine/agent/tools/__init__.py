@@ -83,6 +83,7 @@ from origin.search_engine.agent.tools.fetch_note_history import FETCH_NOTE_HISTO
 from origin.search_engine.agent.tools.fetch_pr import FETCH_PR
 from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
+from origin.search_engine.agent.tools.get_calendar_event import GET_CALENDAR_EVENT
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
 from origin.search_engine.agent.tools.get_milestone_assignee_counts import (
     GET_MILESTONE_ASSIGNEE_COUNTS,
@@ -331,6 +332,9 @@ register_flagged_tool(GET_TIMELINE_INAPP, "AGENT_INAPP_TIMELINE_TOOL")
 # MIP-1563: a task's files can be deleted by the agent and MCP, behind the parity batch's flag. A
 # WRITE tool: filed here so that with the flag off it is declared, runnable and published nowhere.
 register_flagged_tool(DELETE_TASK_ATTACHMENT, PARITY_FLAG)
+# MIP-1059: one calendar event by id, on any of the member's connected Google accounts. A READ tool the
+# parity flag publishes, in the app and (through `McpTool.flag`) over MCP.
+register_flagged_tool(GET_CALENDAR_EVENT, PARITY_FLAG)
 
 
 __all__ = [
@@ -346,6 +350,7 @@ __all__ = [
     "ADD_TASK_DELIVERY",
     "DELETE_SPRINT",
     "DELETE_TASK_ATTACHMENT",
+    "GET_CALENDAR_EVENT",
     "MANAGE_PROJECT",
     "MANAGE_PROJECT_MEMBERS",
     "ADD_PROJECT_TAG",

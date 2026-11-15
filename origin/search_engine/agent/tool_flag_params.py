@@ -27,8 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
+from origin.search_engine.agent.tools.create_calendar_event import (
+    PARITY_PROPERTIES as _CALENDAR_ACCOUNT,
+)
 from origin.search_engine.agent.tools.create_task import PARITY_PROPERTIES as _CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import PARITY_ROW_PROPERTIES as _PLAN_ROWS
+from origin.search_engine.agent.tools.list_calendars import PARITY_PROPERTIES as _CALENDARS_ACCOUNT
 from origin.search_engine.agent.tools.milestone_convert import (
     PARITY_DESCRIPTIONS as _MILESTONE_DESCRIPTIONS,
 )
@@ -80,6 +84,17 @@ ADDITIONS: tuple[ParamAddition, ...] = (
         properties=_MILESTONE_PROPERTIES,
         enum_values=_MILESTONE_ENUM,
         descriptions=_MILESTONE_DESCRIPTIONS,
+    ),
+    # MIP-1059: which of the member's Google accounts a calendar tool uses.
+    ParamAddition("list_calendars", PARITY_FLAG, properties=_CALENDARS_ACCOUNT),
+    *(
+        ParamAddition(name, PARITY_FLAG, properties=_CALENDAR_ACCOUNT)
+        for name in (
+            "list_calendar_events",
+            "create_calendar_event",
+            "update_calendar_event",
+            "delete_calendar_event",
+        )
     ),
 )
 

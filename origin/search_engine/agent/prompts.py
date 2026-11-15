@@ -573,6 +573,22 @@ def _with_reject_reason_rule(prompt: str) -> str:
     return prompt.replace(_RULE_7, _RULE_7_WITH_REASON, 1)
 
 
+# MIP-1059: with `AGENT_PARITY_TOOLS` on, a calendar event can be cited. The prompt says "cite ONLY the
+# id shapes shown above", so the new shape has to be listed there and not only in a tool result: one line
+# after the to-do shape, nothing else moves.
+_TODO_SHAPE_END = "     copy local_date and item_id verbatim from the todo tool results) —\n"
+_TODO_SHAPE_END_WITH_EVENT = (
+    "     copy local_date and item_id verbatim from the todo tool results),\n"
+    '     "calendar_event:<account_id>:<event_id>" (an event\'s `cite` value, copied verbatim) —\n'
+)
+
+
+def _with_calendar_event_citation(prompt: str) -> str:
+    if _TODO_SHAPE_END not in prompt:
+        raise RuntimeError("system prompt citation shapes moved: update _TODO_SHAPE_END (MIP-1059)")
+    return prompt.replace(_TODO_SHAPE_END, _TODO_SHAPE_END_WITH_EVENT, 1)
+
+
 def agent_system_prompt() -> str:
     """The active system prompt — flag-gated, model-visible.
 
@@ -590,7 +606,9 @@ def agent_system_prompt() -> str:
         else AGENT_SYSTEM_PROMPT
     )
     if settings.SEARCH_ENGINE.get("AGENT_REJECT_REASON", False):
-        return _with_reject_reason_rule(prompt)
+        prompt = _with_reject_reason_rule(prompt)
+    if settings.SEARCH_ENGINE.get("AGENT_PARITY_TOOLS", False):
+        prompt = _with_calendar_event_citation(prompt)
     return prompt
 
 

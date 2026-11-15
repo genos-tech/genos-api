@@ -80,12 +80,18 @@ log = logging.getLogger(__name__)
 # Keep the prefix set in sync with `CITATION_PATTERN` / `CITATION_LINK_PATTERN`
 # in the frontend's citationUtils.ts: a type the frontend strips but this
 # resolver can't back-fill would be silently dropped (no chip) when cited from
-# context rather than retrieved.
+# context rather than retrieved. A calendar event is the one such type on purpose
+# (MIP-1059): it lives in Google, not in our database, and the answer's post-processing
+# must not make a Google call. It is scanned here so the chip ranking sees it, and
+# `resolve_unresolved_citations` has no branch for it.
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _CITATION_TOKEN_RE = re.compile(
     r"(?<![\w:/.-])(?:"
     r"(?P<typed>(?:chat|task|note|project|todo|milestone):[\w:-]*\d[\w:-]*)"
     rf"|(?P<chat>(?:dm|gm|pm|mdm):[\w:-]*{_UUID}[\w:-]*)"
+    # A calendar event (MIP-1059): `calendar_event:<account_id>:<event_id>`. The account id is a UUID,
+    # which is what keeps "calendar_event: standup" in prose from counting.
+    rf"|(?P<event>calendar_event:{_UUID}:[\w-]+)"
     r")",
     re.ASCII,
 )
@@ -101,7 +107,7 @@ def extract_citation_tokens(answer: str) -> set[str]:
     tokens: set[str] = set()
     for m in _CITATION_TOKEN_RE.finditer(answer):
         # A sentence can end on the id ("task:42: blocked", "note:x-").
-        token = (m.group("typed") or "chat:" + m.group("chat")).rstrip(":-")
+        token = (m.group("typed") or m.group("event") or "chat:" + m.group("chat")).rstrip(":-")
         tokens.add(token)
     return tokens
 

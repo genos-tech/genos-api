@@ -140,7 +140,8 @@ class FlagOnTests(SimpleTestCase):
             self.assertIs(get_app_tool(NAME), DELETE_TASK_ATTACHMENT)
             self.assertIs(_app_tool(NAME), DELETE_TASK_ATTACHMENT)
             names = [d.name for d in _build_tool_declarations()]
-            self.assertEqual(names[-1], NAME)
+            # After every registered tool, and ahead of the calendar read MIP-1059 files behind the flag.
+            self.assertEqual(names[-2:], [NAME, "get_calendar_event"])
             self.assertEqual(names.count(NAME), 1)
             self.assertEqual({t.name for t in app_write_tools()}, registered_writes() | {NAME})
 

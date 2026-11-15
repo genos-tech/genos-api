@@ -23,14 +23,25 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import re
+import uuid
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
 from apis.request_id import describe_upstream
 from origin.models.common.user_models import ConnectedAccount, CustomUser
-from origin.search_engine.agent.tools.base import ToolError, wrap_workspace_content
+from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.tools.base import (
+    ToolContext,
+    ToolError,
+    ToolForbidden,
+    wrap_workspace_content,
+)
+from origin.services.oauth.accounts import accounts_for
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
+from origin.services.user_time import zone_for_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +53,108 @@ CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 
 
-def resolve_google_calendar_account(user_id: str) -> ConnectedAccount:
+#: The parameter the calendar tools take while `AGENT_PARITY_TOOLS` is on (MIP-1059): the
+#: `account_id` of one of the member's connected Google accounts, as `list_calendars` lists it.
+ACCOUNT_ARG = "account"
+
+#: The ONE sentence for every "no" on a named account: a made-up id, an id that is another
+#: member's, and a value that is not an id at all (MIP-1059). Nothing of the value is echoed (it can
+#: be an e-mail address the model copied, and an error is logged), and nothing tells the three apart,
+#: so an account id cannot be probed for existence.
+ACCOUNT_REFUSAL = (
+    "`account` is not one of this member's connected Google accounts. Call `list_calendars` and "
+    "pass an `account_id` it lists, or leave `account` out for the default account."
+)
+
+
+#: What `AGENT_PARITY_TOOLS` adds to the schema of `create_`, `update_` and `delete_calendar_event` and
+#: of `get_calendar_event` (`tool_flag_params`).
+PARITY_ACCOUNT_PROPERTIES: dict[str, dict[str, Any]] = {
+    ACCOUNT_ARG: {
+        "type": "STRING",
+        "description": "account_id from list_calendars. Omit for the default account.",
+    },
+}
+
+#: Appended to a "not found" while the flag is on: with several accounts the likeliest cause.
+NOT_FOUND_ACCOUNT_HINT = (
+    " If the member has several Google accounts it may be on another one: pass its `account`."
+)
+
+
+def named_google_account(user: CustomUser, raw: Any) -> ConnectedAccount:
+    """The member's OWN Google account whose id is `raw`, or a refusal (MIP-1059).
+
+    The whole authorization check for `account`: the lookup is scoped to `user` (the same
+    `accounts_for` the app's calendar endpoints resolve through), so an id that belongs to someone
+    else finds nothing. The value is parsed as a UUID BEFORE any query: a UUID column raises
+    a `ValidationError` that quotes the value, and the controller logs a tool's crash.
+
+    An id that exists but is not the member's is a `ToolForbidden` (the MCP refusal alarm counts
+    it, as it does for every "found but not yours"); a made-up one is a `ToolError`. The words are
+    the same.
+    """
+    try:
+        wanted = uuid.UUID(str(raw).strip())
+    except (ValueError, AttributeError):
+        raise ToolError(ACCOUNT_REFUSAL) from None
+    account = accounts_for(user, "google").filter(id=wanted).first()
+    if account is not None:
+        return account
+    if ConnectedAccount.objects.filter(id=wanted).exists():
+        raise ToolForbidden(ACCOUNT_REFUSAL)
+    raise ToolError(ACCOUNT_REFUSAL)
+
+
+def member_google_accounts(user_id: str) -> tuple[CustomUser, list[ConnectedAccount]]:
+    """The member and every Google account they have connected, the default (the first) leading.
+    Raises the same ToolErrors `resolve_google_calendar_account` does for "no user" and "not
+    connected"."""
+    try:
+        user = CustomUser.objects.get(id=user_id)
+    except CustomUser.DoesNotExist:
+        raise ToolError("Current user record not found.")
+    accounts = list(accounts_for(user, "google"))
+    if not accounts:
+        raise ToolError(
+            "Google is not connected for this user. Direct them to "
+            "Settings → Integrations to connect Google."
+        )
+    return user, accounts
+
+
+def account_arg(args: dict[str, Any], *, write: bool) -> str | None:
+    """The `account` a call names, or None for "the default account" (MIP-1059).
+
+    While `AGENT_PARITY_TOOLS` is off the parameter does not exist. A READ that carries one anyway
+    (a model that invents it, an MCP client holding yesterday's tool list) ignores it, as an unknown
+    argument always was. A WRITE refuses it: an approval paused while the flag was on says "personal
+    account" on its card, and dropping the argument would put the event on the default account
+    instead, silently, when the person approves after the flag went off.
+    """
+    raw = args.get(ACCOUNT_ARG)
+    if raw is None or raw == "":
+        return None
+    if not parity_on():
+        if write:
+            raise ToolError(
+                "Choosing a Google account is not available, so nothing was changed. "
+                "Ask again without naming an account."
+            )
+        return None
+    return str(raw)
+
+
+def resolve_google_calendar_account(user_id: str, account: str | None = None) -> ConnectedAccount:
     """Resolve the user's Google ConnectedAccount, requiring calendar scope.
+
+    `account` (MIP-1059, only ever passed while `AGENT_PARITY_TOOLS` is on) names one of the
+    member's accounts by its id; without it the answer is exactly what it always was: the first.
 
     Raises ToolError on:
       - user not found (defensive — shouldn't happen post-auth)
       - Google not connected for the user
+      - `account` is not one of the user's Google accounts (`named_google_account`)
       - account connected but missing the events scope
     """
     try:
@@ -55,19 +162,29 @@ def resolve_google_calendar_account(user_id: str) -> ConnectedAccount:
     except CustomUser.DoesNotExist:
         raise ToolError("Current user record not found.")
 
-    account = ConnectedAccount.objects.filter(user=user, provider="google").first()
-    if account is None:
+    if account:
+        # "Not connected" comes first, so a member with no Google account is told that, and the
+        # refusal for a bad id never says whether anyone has an account.
+        if not ConnectedAccount.objects.filter(user=user, provider="google").exists():
+            raise ToolError(
+                "Google is not connected for this user. Direct them to "
+                "Settings → Integrations to connect Google."
+            )
+        chosen = named_google_account(user, account)
+    else:
+        chosen = ConnectedAccount.objects.filter(user=user, provider="google").first()
+    if chosen is None:
         raise ToolError(
             "Google is not connected for this user. Direct them to "
             "Settings → Integrations to connect Google."
         )
-    if CALENDAR_EVENTS_SCOPE not in (account.scopes or []):
+    if CALENDAR_EVENTS_SCOPE not in (chosen.scopes or []):
         raise ToolError(
             "Google is connected but Calendar access hasn't been granted. "
             "Direct the user to Settings → Tasks → Grant Calendar access "
             "(or the matching button in Integrations)."
         )
-    return account
+    return chosen
 
 
 def google_calendar_request(
@@ -91,9 +208,23 @@ def google_calendar_request(
     headers = kwargs.pop("headers", {}) or {}
     headers["Authorization"] = f"Bearer {token}"
     headers.setdefault("Accept", "application/json")
+    timeout = kwargs.pop("timeout", 15)
     return requests.request(
-        method, f"{CALENDAR_API_BASE}{path}", headers=headers, timeout=15, **kwargs
+        method, f"{CALENDAR_API_BASE}{path}", headers=headers, timeout=timeout, **kwargs
     )
+
+
+def segment(value: Any) -> str:
+    """A calendar id or an event id as ONE URL path segment, percent-encoded as the app's calendar
+    endpoints do (`calendar_views._cal`). Ids are usually e-mail-like and pass through, but Google's
+    holiday calendars carry a literal `#` ("en.japanese#holiday@group.v.calendar.google.com"), which
+    interpolated raw starts a URL fragment and cuts the path, and a value with a `/` or `?` would
+    reach another endpoint with the member's token. A value that is only dots survives the encoding
+    and a client resolves it as a step up the path, so it is refused."""
+    text = str(value)
+    if text.strip(".") == "":
+        raise ToolError("That is not a valid calendar or event id.")
+    return quote(text, safe="")
 
 
 def _is_date_only(value: str) -> bool:
@@ -113,6 +244,38 @@ def build_time_endpoint(value: str, time_zone: str | None) -> dict[str, Any]:
     if time_zone:
         body["timeZone"] = time_zone
     return body
+
+
+#: The end of a timed ISO value that carries its own UTC offset: `Z`, `+09:00`, `-0800`, `+09`.
+_UTC_OFFSET = re.compile(r"(?:[Zz]|[+-]\d{2}(?::?\d{2})?)$")
+
+
+def is_naive_datetime(value: Any) -> bool:
+    """True for a TIMED ISO value with no UTC offset ("2026-12-03T10:00:00"). A date-only value is an
+    all-day date, not a naive time."""
+    if not isinstance(value, str) or _is_date_only(value):
+        return False
+    time_part = value.strip().replace(" ", "T").partition("T")[2]
+    return _UTC_OFFSET.search(time_part) is None
+
+
+def effective_time_zone(time_zone: str | None, values: tuple[Any, ...], user_id: str) -> str | None:
+    """The `timeZone` a calendar write sends (MIP-1059, only while `AGENT_PARITY_TOOLS` is on).
+
+    Google's rule (events.insert / events.patch, `start.dateTime`): "A time zone offset is required
+    unless a time zone is explicitly specified in `timeZone`". The tools were told to pass a naive
+    "YYYY-MM-DDTHH:MM:SS" and, when the model gave no `time_zone`, sent it with neither: a request Google
+    rejects (HTTP 400), where it is not read in some other zone. The app never sends one (its form turns
+    the local time into an instant with `toISOString()`), so there is nothing to mirror: the member's own
+    zone is the reading the approval card states (`member_time_zone`), and it is what is sent.
+
+    A zone the model named wins; a value with an offset needs none; with the flag off the call is what
+    it always was."""
+    if time_zone or not parity_on():
+        return time_zone
+    if any(is_naive_datetime(v) for v in values):
+        return zone_for_user_id(user_id).key
+    return None
 
 
 def validate_time_pair(start_iso: str, end_iso: str) -> None:
@@ -176,3 +339,58 @@ def calendar_api_error(resp: requests.Response, context: str) -> ToolError:
     """
     logger.warning("calendar tool %s failed: %s", context, describe_upstream(resp))
     return ToolError(f"Google Calendar {context} failed: HTTP {resp.status_code}.")
+
+
+# --------------------------------------------------------------------------- #
+# A calendar event as a source (MIP-1059)                                      #
+# --------------------------------------------------------------------------- #
+
+#: The `entity_type` of an event's chip and the prefix of its citation token. A calendar event is not
+#: in our database, so it is named by what addresses it in the app: the connected account and the
+#: event's id (the calendar rides on the chip as data, never in the token: its id carries `@`, `.` and
+#: `#`, which a citation token cannot).
+EVENT_SOURCE = "calendar_event"
+
+#: What an event id may hold to be written into a token: Google's own alphabet (base32hex) plus the
+#: `_` and the time of a recurring instance (`T`, `Z`). No `-`: the citation scanner strips a token's
+#: trailing `-` and `:`, so an id ending in one would never match its chip. Anything else gets no token and
+#: no chip.
+_TOKEN_SAFE = re.compile(r"^[A-Za-z0-9_]{1,1024}$")
+
+
+def event_cite(account_id: Any, event_id: Any) -> str | None:
+    """`calendar_event:<account_id>:<event_id>`: the token the model cites an event with, and the
+    `entity_id` of its chip. None when the event id cannot be part of one."""
+    if not account_id or not isinstance(event_id, str) or not _TOKEN_SAFE.match(event_id):
+        return None
+    return f"{EVENT_SOURCE}:{account_id}:{event_id}"
+
+
+def account_fields(account: ConnectedAccount, *, defaulted: bool, label: bool = False) -> dict:
+    """What a result says of the account it was made on, while `AGENT_PARITY_TOOLS` is on.
+
+    `account_id` always (the handle the next call passes); `account_label` (the address the member
+    knows it by) on the reads, once per call. When the call took the default and the member has more
+    accounts, `other_accounts` counts them: a read of "what is on my calendar" covered one account
+    and the model has to be able to tell."""
+    out: dict[str, Any] = {"account_id": str(account.id)}
+    if label:
+        out["account_label"] = account.label
+    if defaulted:
+        others = (
+            ConnectedAccount.objects.filter(user_id=account.user_id, provider="google")
+            .exclude(id=account.id)
+            .count()
+        )
+        if others:
+            out["other_accounts"] = others
+    return out
+
+
+def cite_event(row: dict[str, Any], account_id: Any, ctx: ToolContext) -> dict[str, Any]:
+    """`row` (a shaped event) with the token to cite it by, while the flag is on. MCP has no citation
+    grammar, so its client is not given one."""
+    if ctx.surface == "mcp":
+        return row
+    token = event_cite(account_id, row.get("id"))
+    return {**row, "cite": token} if token else row

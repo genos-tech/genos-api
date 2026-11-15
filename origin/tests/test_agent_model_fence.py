@@ -273,6 +273,7 @@ class FenceByToolTests(SimpleTestCase):
                 "list_calendars": ["summary"],
                 "create_calendar_event": ["displayName", "summary"],
                 "list_calendar_events": ["displayName"],
+                "get_calendar_event": ["displayName"],
                 "update_calendar_event": ["displayName"],
                 "get_my_schedule": ["displayName"],
             },
@@ -280,7 +281,7 @@ class FenceByToolTests(SimpleTestCase):
 
     def test_every_listed_tool_exists(self):
         """A renamed or mistyped tool would silently fence nothing."""
-        from origin.search_engine.agent.tools import REGISTRY
+        from origin.search_engine.agent.tools import FLAGGED_REGISTRY, REGISTRY
 
         names = (
             set(FENCED_KEYS_BY_TOOL)
@@ -288,7 +289,8 @@ class FenceByToolTests(SimpleTestCase):
             | {tool for tool, _key in FENCED_IN_TOOL}
         )
 
-        self.assertEqual(sorted(names - set(REGISTRY)), [])
+        # A flag-gated tool (`get_calendar_event`, MIP-1059) is fenced like any other once its flag is on.
+        self.assertEqual(sorted(names - set(REGISTRY) - set(FLAGGED_REGISTRY)), [])
 
 
 class RealToolOutputIsFencedTests(BaseAPITestCase):

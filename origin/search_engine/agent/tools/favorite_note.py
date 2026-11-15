@@ -14,6 +14,7 @@ from typing import Any
 
 from apis.request_id import log_failure
 from origin.models.note.personal_note_models import PersonalNoteFolder
+from origin.search_engine.agent.parity import parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.note_access import load_readable_note
 from origin.services.note_favorites import (
@@ -65,7 +66,13 @@ def _note(args: dict[str, Any], ctx: ToolContext, favorite: bool) -> dict[str, A
         ref_id = log_failure("favorite_note note failed", e)
         raise ToolError(f"Failed to update the favorite (ref {ref_id}).")
     title = getattr(ref.note, "title", "") or "Untitled"
-    return _result(f'the note "{title}"', favorite, changed, note_id=ref.note_id)
+    ids: dict[str, Any] = {"note_id": ref.note_id}
+    if parity_on():
+        # The note's family (MIP-1059), so the approved write gets a chip that opens it: an id alone
+        # names a row in one of three tables. The family, not the argument: `team` and `shared` are
+        # personal notes, and the citation grammar knows `personal`, `task` and `chat`.
+        ids["note_type"] = ref.family
+    return _result(f'the note "{title}"', favorite, changed, **ids)
 
 
 def _result(what: str, favorite: bool, changed: bool, **ids: Any) -> dict[str, Any]:

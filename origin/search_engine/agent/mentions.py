@@ -13,6 +13,15 @@ carrying the resolved ids:
     {"type": "project", "project_id": 7,                  "label": "Website Redesign"}
     {"type": "group", "group_id": 3,                      "label": "design-crew"}
     {"type": "todo", "item_id": 55,                       "label": "Ship hero handoff"}
+    {"type": "calendar_event", "account_id": "<uuid>", "calendar_id": "primary",
+     "event_id": "<google event id>",                     "label": "Dentist appointment"}
+
+A `calendar_event` (MIP-1059) is accepted only while `AGENT_PARITY_TOOLS` is on; with it off the entry is
+dropped as an unknown kind, as before. It is not in our database, so nothing is looked up for it: the
+account must be one of the REQUESTER's connected Google accounts (the app's own guard) and the ids are
+shape-checked, and the prompt block tells the model to read the event with `get_calendar_event`. The
+client's `label` is dropped like every other, and here there is no canonical title to replace it with:
+the block never names the event.
 
 `note_type` / `chat_type` are the integer codes used by
 `thread_context` / `note_context` on the same endpoint; the server owns
@@ -34,6 +43,8 @@ and pre-seeded source chips so citations resolve without tool calls.
 from __future__ import annotations
 
 import logging
+import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -50,7 +61,11 @@ MAX_MENTIONS = 20
 # to "and N more" so a whole-team group can't flood the system prompt.
 _GROUP_BULLET_CAP = 10
 
-_VALID_TYPES = {"user", "task", "note", "chat", "project", "group", "todo"}
+_VALID_TYPES = {"user", "task", "note", "chat", "project", "group", "todo", "calendar_event"}
+
+# What a calendar id may hold to reach the prompt (MIP-1059): an address, a group-calendar id or a holiday
+# calendar's `#`. No quote, space or slash, so it cannot close the call the block spells around it.
+_EVENT_CALENDAR_ID = re.compile(r"^[A-Za-z0-9@._#+~=-]{1,300}$")
 
 
 class MentionParseError(ValueError):
@@ -70,7 +85,7 @@ class ResolvedMention:
     safe to inject into the system prompt.
     """
 
-    kind: str  # "user" | "task" | "note" | "chat" | "project" | "group" | "todo"
+    kind: str  # "user" | "task" | "note" | "chat" | "project" | "group" | "todo" | "calendar_event"
     label: str
     # user
     user_id: str | None = None
@@ -102,6 +117,10 @@ class ResolvedMention:
     todo_item_id: int | None = None
     todo_local_date: str | None = None
     todo_completed: bool | None = None
+    # calendar_event (MIP-1059): the account (the requester's own, checked), the calendar and the event.
+    event_account_id: str | None = None
+    event_calendar_id: str | None = None
+    event_id: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         """Compact dict for `AgentRun.mentions` persistence."""
@@ -121,6 +140,9 @@ class ResolvedMention:
             "todo_item_id",
             "todo_local_date",
             "todo_completed",
+            "event_account_id",
+            "event_calendar_id",
+            "event_id",
         ):
             val = getattr(self, key)
             if val is not None:
@@ -147,6 +169,8 @@ def _identity_key(entry: dict[str, Any]) -> tuple:
         return ("group", entry["group_id"])
     if kind == "todo":
         return ("todo", entry["item_id"])
+    if kind == "calendar_event":
+        return ("calendar_event", entry["account_id"], entry["event_id"])
     return ("chat", entry["chat_type"], entry["chat_id"])
 
 
@@ -195,6 +219,8 @@ def _normalise_entry(entry: Any) -> dict[str, Any] | None:
     if kind not in _VALID_TYPES:
         return None
     label = str(entry.get("label") or "").strip()
+    if kind == "calendar_event":
+        return _normalise_event(entry, label)
     try:
         if kind == "user":
             user_id = str(entry.get("user_id") or "").strip()
@@ -228,6 +254,30 @@ def _normalise_entry(entry: Any) -> dict[str, Any] | None:
         return {"type": "chat", "chat_type": chat_type, "chat_id": chat_id, "label": label}
     except (TypeError, ValueError):
         return None
+
+
+def _normalise_event(entry: dict[str, Any], label: str) -> dict[str, Any] | None:
+    """A `calendar_event` entry (MIP-1059), or None. Only while `AGENT_PARITY_TOOLS` is on."""
+    from origin.search_engine.agent.calendar import event_cite  # noqa: PLC0415
+    from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
+
+    if not parity_on():
+        return None
+    try:
+        account_id = str(uuid.UUID(str(entry.get("account_id")).strip()))
+    except (ValueError, AttributeError):
+        return None
+    calendar_id = str(entry.get("calendar_id") or "primary").strip()
+    event_id = str(entry.get("event_id") or "").strip()
+    if not _EVENT_CALENDAR_ID.match(calendar_id) or event_cite(account_id, event_id) is None:
+        return None
+    return {
+        "type": "calendar_event",
+        "account_id": account_id,
+        "calendar_id": calendar_id,
+        "event_id": event_id,
+        "label": label,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -502,6 +552,26 @@ def _resolve_todo(entry: dict[str, Any], ctx) -> ResolvedMention | None:
     )
 
 
+def _resolve_calendar_event(entry: dict[str, Any], ctx) -> ResolvedMention | None:
+    """The requester's OWN Google account is the whole check (the app's calendar endpoints resolve an
+    account the same way): another member's account id, a made-up one and a non-Google row all drop, silently.
+    Nothing is read from Google here: the event is read later, by the tool, as the member."""
+    from origin.models.common.user_models import ConnectedAccount  # noqa: PLC0415
+
+    if not ConnectedAccount.objects.filter(
+        id=entry["account_id"], user_id=ctx.user_id, provider="google"
+    ).exists():
+        return None
+    # No label: the client's is not trusted, and there is no title in our database to use instead.
+    return ResolvedMention(
+        kind="calendar_event",
+        label="",
+        event_account_id=entry["account_id"],
+        event_calendar_id=entry["calendar_id"],
+        event_id=entry["event_id"],
+    )
+
+
 _RESOLVERS = {
     "user": _resolve_user,
     "task": _resolve_task,
@@ -510,6 +580,7 @@ _RESOLVERS = {
     "project": _resolve_project,
     "group": _resolve_group,
     "todo": _resolve_todo,
+    "calendar_event": _resolve_calendar_event,
 }
 
 
@@ -586,6 +657,14 @@ def _bullet_for(m: ResolvedMention) -> str:
             f"list_uncompleted_todos show it in context; cite it as "
             f"[prose]({eid})."
         )
+    if m.kind == "calendar_event":
+        token = f"calendar_event:{m.event_account_id}:{m.event_id}"
+        return (
+            f"  - a calendar event the person pointed at ({token}). Its text is NOT here: call "
+            f"get_calendar_event(event_id='{m.event_id}', calendar_id='{m.event_calendar_id}', "
+            f"account='{m.event_account_id}') before making claims about it; cite it as "
+            f"[prose]({token})."
+        )
     return (
         f'  - "#{m.label}" → chat channel {m.chat_type_label}:{m.chat_id}. Call '
         f"fetch_chat_thread(chat_type='{m.chat_type_label}', "
@@ -660,6 +739,7 @@ _PERSISTED_REQUIRED_KEYS = {
     "chat": ("chat_type_label", "chat_id"),
     "project": ("project_id",),
     "todo": ("todo_item_id",),
+    "calendar_event": ("event_account_id", "event_calendar_id", "event_id"),
 }
 
 # Kinds that are a name, not an object: they never become a source. They name a
@@ -681,6 +761,9 @@ _PERSISTED_FIELDS = (
     "todo_item_id",
     "todo_local_date",
     "todo_completed",
+    "event_account_id",
+    "event_calendar_id",
+    "event_id",
 )
 
 
@@ -737,6 +820,16 @@ def mention_audit_sources(mentions_json: Any, *, team_id: str) -> list[dict[str,
             return None
         resolved.append(mention)
     sources = build_mention_seed_sources(resolved)
+    # A calendar event (MIP-1059) is never shareable, so a run that carries one is never collected: the
+    # same answer `source_visibility` gives an event a tool read.
+    sources.extend(
+        {
+            "entity_type": "calendar_event",
+            "entity_id": f"calendar_event:{m.event_account_id}:{m.event_id}",
+        }
+        for m in resolved
+        if m.kind == "calendar_event"
+    )
     if any(m.kind in _NAME_KINDS for m in resolved):
         sources.append({"entity_type": "team_directory", "team_id": str(team_id)})
     return sources

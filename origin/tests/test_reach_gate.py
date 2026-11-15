@@ -13,7 +13,7 @@ from django.test import override_settings
 
 from origin.search_engine import quota
 from origin.search_engine.agent import tool_tiers
-from origin.search_engine.agent.tools import REGISTRY, web_search
+from origin.search_engine.agent.tools import FLAGGED_REGISTRY, REGISTRY, app_write_tools, web_search
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 
 from .test_base import BaseAPITestCase
@@ -45,7 +45,8 @@ class ReachGateTests(BaseAPITestCase):
         # Rename guard: a stale name here would silently stop gating
         # the renamed tool.
         for name in _ALL_INTEGRATION_TOOLS:
-            self.assertIn(name, REGISTRY, name)
+            # A flag-gated tool (`get_calendar_event`, MIP-1059) is filed beside the registry.
+            self.assertTrue(name in REGISTRY or name in FLAGGED_REGISTRY, name)
 
     def test_empty_allowlist_disables_every_integration_tool(self):
         with override_settings(
@@ -54,6 +55,43 @@ class ReachGateTests(BaseAPITestCase):
             self.assertEqual(
                 tool_tiers.reach_disabled_tools(self.uid), set(_ALL_INTEGRATION_TOOLS)
             )
+
+    def test_the_flag_gated_calendar_read_is_held_by_the_google_calendar_reach(self):
+        # MIP-1059: a Free member (no integrations) must not be declared `get_calendar_event` while the
+        # parity flag is on, as they are not declared the other calendar tools.
+        from django.conf import settings  # noqa: PLC0415
+
+        from origin.search_engine.agent.controller import _build_tool_declarations  # noqa: PLC0415
+
+        with override_settings(
+            SEARCH_ENGINE=_search_engine_with_quotas(_quotas_with_integrations([]))
+        ):
+            disabled = tool_tiers.reach_disabled_tools(self.uid)
+            self.assertIn("get_calendar_event", disabled)
+            with mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True}):
+                declared = {d.name for d in _build_tool_declarations(disabled)}
+        self.assertNotIn("get_calendar_event", declared)
+        self.assertNotIn("list_calendar_events", declared)
+        with override_settings(
+            SEARCH_ENGINE=_search_engine_with_quotas(
+                _quotas_with_integrations(["web", "google_calendar"])
+            )
+        ):
+            self.assertNotIn("get_calendar_event", tool_tiers.reach_disabled_tools(self.uid))
+            with mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True}):
+                allowed = {
+                    d.name
+                    for d in _build_tool_declarations(tool_tiers.reach_disabled_tools(self.uid))
+                }
+        self.assertIn("get_calendar_event", allowed)
+
+    def test_the_read_tier_keeps_the_calendar_read_and_hides_no_new_write(self):
+        # `get_calendar_event` is a read: the agency ladder never hides it, and it is no write.
+        from django.conf import settings  # noqa: PLC0415
+
+        with mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True}):
+            self.assertNotIn("get_calendar_event", tool_tiers.disabled_tools_for_level("read"))
+            self.assertNotIn("get_calendar_event", {t.name for t in app_write_tools()})
 
     def test_partial_allowlist_disables_the_complement(self):
         with override_settings(

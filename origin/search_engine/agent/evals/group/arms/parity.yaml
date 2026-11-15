@@ -4,7 +4,9 @@
 # template; MIP-1562: update_comment: reaction, remove_reaction, flag; create_todo_item: task_id,
 # comment_id; MIP-1563: fetch_task lists a task's files as metadata, and a new write tool,
 # delete_task_attachment, is declared; MIP-1564: manage_milestone takes the action `convert` and, on `update`,
-# a `project_id` that moves the milestone). Later parity tasks add their parameters behind the same flag.
+# a `project_id` that moves the milestone; MIP-1059: the calendar tools take `account` (any connected Google account),
+# `get_calendar_event` reads one event, a calendar event can be cited and chipped, and the three calendar writes get a real
+# approval card). Later parity tasks add their parameters behind the same flag.
 # Model-visible: the declarations grow by the parameters, one sentence per tool and the delete tool.
 arm: parity
 overrides:
