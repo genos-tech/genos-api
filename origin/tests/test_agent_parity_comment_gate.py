@@ -24,7 +24,7 @@ from origin.models.task.task_models import TaskCommentReactionFact
 from origin.search_engine.agent import tool_flag_params, tool_flag_text
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.parity import PARITY_FLAG
-from origin.search_engine.agent.tools import REGISTRY
+from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
 from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.todo_source import PARITY_PROPERTIES as TODO_NEW
 from origin.search_engine.agent.tools.update_comment import PARITY_PROPERTIES as COMMENT_NEW
@@ -37,6 +37,11 @@ ON = {PARITY_FLAG: True}
 OFF = {PARITY_FLAG: False}
 TOOLS = ("update_comment", "create_todo_item")
 NEW = {"update_comment": set(COMMENT_NEW), "create_todo_item": set(TODO_NEW)}
+
+
+def _registered(name):
+    """A tool a parameter row names: an in-app tool, or an MCP-only one (`set_item_importance`, MIP-1588)."""
+    return REGISTRY.get(name) or MCP_ONLY_REGISTRY[name]
 
 
 class RegistryIsUntouchedTests(SimpleTestCase):
@@ -62,10 +67,11 @@ class RegistryIsUntouchedTests(SimpleTestCase):
         for addition in tool_flag_params.ADDITIONS:
             self.assertFalse(
                 set(addition.properties)
-                & set(REGISTRY[addition.tool].parameters_schema["properties"])
+                & set(_registered(addition.tool).parameters_schema["properties"])
             )
             self.assertLessEqual(
-                set(addition.optional), set(REGISTRY[addition.tool].parameters_schema["required"])
+                set(addition.optional),
+                set(_registered(addition.tool).parameters_schema["required"]),
             )
 
 
