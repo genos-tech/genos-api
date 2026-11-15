@@ -2,7 +2,7 @@
 # every connected Google account of the member (each event carries its `account_id`; an account that cannot be read is
 # listed under `failed_accounts`). The paid run of 2026-11-15 measured a Japanese "what is on my calendar" at 4.3 calls
 # instead of 2.3: with two accounts the model read each account separately. The flag-on description tells the model to pass
-# "all" when `list_calendars` (`accounts`) or an earlier read (`other_accounts`) showed several accounts, and a default read
+# "all" when `list_calendars` (`accounts`) or an earlier read (`other_accounts`) showed several accounts, and to OMIT `account` unless the member names one or asks for all of them (the first paid run: a one-account member was sent an `account` in most runs), and a default read
 # of such a member says in its result how to read the rest (`hint`). It must NOT make a one-account member's call longer.
 #
 # Judged on what the model READS: `tool_calls_match` (case keys: group/content_checks.py) counts the `list_calendar_events`
@@ -15,7 +15,7 @@
 # an explicit range in March 2027 rather than "this week" (which would ask the model about a week the fake cannot answer).
 #
 # The positives `requires_arm: followups` (the value "all" is not accepted without the flag). The negatives run on arm0 too
-# and carry the arm's tag, `followups`: a member with ONE account must send no `account` and must not be sent to
+# and carry the arm's tag, `followups`: a member with ONE account must name no specific account (`all` reads the same single account, so it is allowed) and must not be sent to
 # `list_calendars` to look the count up (the hint must add no call for the member who has nothing to choose between).
 
 - id: t1607.all-accounts.en
@@ -104,7 +104,7 @@
   fixture: sequence
   viewer: c
   seed: [calendar_one_account]
-  note: "Negative (arm0 and followups): a member with ONE Google account. One events call that sends no `account`, and no trip to list_calendars to count accounts."
+  note: "Negative (arm0 and followups): a member with ONE Google account. One events call that names no specific account (`account: all` is allowed: with one account it reads the same events at the same cost), and no trip to list_calendars to count accounts."
   query: 'What is on my calendar between March 1 and March 5, 2027?'
   expect:
     no_errors: true
@@ -113,7 +113,7 @@
     tool_calls_match:
       - tool: list_calendar_events
         count: 1
-        args_absent: [account]
+        args_not_match: {account: "^(?!all$)"}
     pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
     answer_contains_all: ["Sprint planning"]
 
@@ -123,7 +123,7 @@
   fixture: sequence
   viewer: ja
   seed: [calendar_one_account]
-  note: "Negative (arm0 and followups): a member with ONE Google account. One events call that sends no `account`, and no trip to list_calendars to count accounts."
+  note: "Negative (arm0 and followups): a member with ONE Google account. One events call that names no specific account (`account: all` is allowed: with one account it reads the same events at the same cost), and no trip to list_calendars to count accounts."
   query: '2027年3月1日から3月5日までのカレンダーの予定を教えてください。'
   expect:
     no_errors: true
@@ -132,7 +132,7 @@
     tool_calls_match:
       - tool: list_calendar_events
         count: 1
-        args_absent: [account]
+        args_not_match: {account: "^(?!all$)"}
     pending_tools_excludes: [create_calendar_event, update_calendar_event, delete_calendar_event]
     answer_contains_all: ["スプリント計画"]
 

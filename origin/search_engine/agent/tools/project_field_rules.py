@@ -160,10 +160,27 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
+#: Said in the `list_project_tags` result, next to `required`, where the model decides (dynamic: it costs a
+#: declaration nothing). The first paid run showed the model reading the rules and then FILLING the required fields
+#: with values it made up (priority Normal, a due date a week out), which no server check can tell from the member's.
+REQUIRED_NOTE = (
+    "A required field comes from the member. If they did not give it, ask them; do not choose a value. "
+    "Only a value in `defaults` may be filled in without asking."
+)
+
+#: Appended to the `create_task` and `create_task_plan` descriptions while the flag is on (`tool_flag_text`).
+REQUIRED_SENTENCE = (
+    " A field the project requires (`list_project_tags`) must come from the member: ask, never guess."
+)
+
+
 def rules_block(project: ProjectMaster) -> dict[str, Any]:
     """`task_field_rules` of the `list_project_tags` result."""
     required = [param for _key, param in required_params(project)]
-    return {"required": required, "defaults": defaults(project)}
+    block: dict[str, Any] = {"required": required, "defaults": defaults(project)}
+    if required:
+        block["note"] = REQUIRED_NOTE
+    return block
 
 
 def templates_block(project: ProjectMaster) -> dict[str, Any]:

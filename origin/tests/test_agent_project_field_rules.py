@@ -435,10 +435,29 @@ class ListProjectTagsTests(Base):
         out = self.read()
         self.assertEqual(
             out["task_field_rules"],
-            {"required": ["priority", "due_date"], "defaults": {"priority": "High"}},
+            {
+                "required": ["priority", "due_date"],
+                "defaults": {"priority": "High"},
+                "note": rules.REQUIRED_NOTE,
+            },
         )
         self.assertIn("Bug report", json.dumps(out["task_templates"]))
         self.assertNotIn("secret", json.dumps(out))  # never a body
+
+    def test_the_note_tells_the_model_a_required_field_is_the_members_and_only_defaults_are_filled(
+        self,
+    ):
+        # The first paid run: the model read the rules and then filled the required fields with values it made up.
+        self.assertIn("comes from the member", rules.REQUIRED_NOTE)
+        self.assertIn("ask them", rules.REQUIRED_NOTE)
+        self.assertIn("do not choose a value", rules.REQUIRED_NOTE)
+        self.assertIn("`defaults`", rules.REQUIRED_NOTE)
+        self.assertEqual(self.read()["task_field_rules"]["note"], rules.REQUIRED_NOTE)
+
+    def test_the_note_is_only_there_when_something_is_required(self):
+        self.set_rules({"priority": {"default": "High"}})
+        block = self.read()["task_field_rules"]
+        self.assertEqual(block, {"required": [], "defaults": {"priority": "High"}})
 
     def test_with_the_flag_off_the_result_is_what_it_was(self):
         on = self.read()
@@ -514,6 +533,27 @@ class DeclarationTests(Base):
         self.assertIn("task_field_rules", tool_flag_text.declared_description(tool))
         with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
             self.assertEqual(tool_flag_text.declared_description(tool), tool.description)
+
+    def test_create_task_and_the_plan_say_a_required_field_comes_from_the_member_only_with_the_flag(
+        self,
+    ):
+        for name in ("create_task", "create_task_plan"):
+            tool = REGISTRY[name]
+            on = tool_flag_text.declared_description(tool)
+            self.assertTrue(on.endswith(rules.REQUIRED_SENTENCE), name)
+            self.assertEqual(on.count(rules.REQUIRED_SENTENCE), 1, name)
+            with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
+                self.assertNotIn(
+                    "must come from the member", tool_flag_text.declared_description(tool)
+                )
+        self.assertIn("ask, never guess", rules.REQUIRED_SENTENCE)
+
+    def test_the_mcp_descriptions_of_the_two_create_tools_carry_it_with_the_flag(self):
+        for name in ("create_task", "create_task_plan"):
+            tool = next(t for t in mcp.CATALOG if t.registry_name == name)
+            self.assertIn("must come from the member", mcp.description_for(tool))
+            with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
+                self.assertNotIn("must come from the member", mcp.description_for(tool))
 
     def test_the_mcp_description_follows_the_flag(self):
         tool = next(t for t in mcp.CATALOG if t.registry_name == "list_project_tags")
