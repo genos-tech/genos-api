@@ -22,6 +22,7 @@ from origin.services.milestone_manage import (
     delete_milestone,
     folder_name_taken,
     lock_live_milestone,
+    move_assignee_problem,
     update_milestone,
 )
 from origin.services.milestone_rollup import milestone_work_counts
@@ -519,6 +520,22 @@ class MilestoneView(AuthenticatedAPIView):
             milestone, project_move or milestone.project, request.data
         ):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        # The people already on the milestone and its tasks are judged against the destination
+        # too (MIP-1583), by the save's own assignee list when it sends one.
+        if project_move is not None and (
+            message := move_assignee_problem(
+                milestone,
+                project_move,
+                assignee_ids=(request.data.get("assignee_ids") or [])
+                if "assignee_ids" in request.data
+                else UNSET,
+            )
+        ):
+            return Response(
+                {"error": message, "code": "assignee_not_on_destination"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Validate custom field values BEFORE the transaction below —
         # rejecting them mid-transaction (after milestone.save()) would

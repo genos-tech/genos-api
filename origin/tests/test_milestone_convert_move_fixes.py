@@ -12,6 +12,8 @@ from django.contrib.auth import get_user_model
 
 from origin.models.chat.unified_models import Message
 from origin.models.common.member_event_models import MemberEvent
+from origin.models.common.team_models import TeamMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services import member_events
@@ -322,3 +324,117 @@ class UseMarkerOfAConversionTests(ToolBase):
             MemberEvent.objects.filter(user=self.owner).values_list("object_type", "object_id")
         )
         self.assertEqual(rows, [("task", str(m.task_id))])
+
+
+# --------------------------------------------------------------------------------------------
+# item 2: a move re-checks the people already assigned against the destination
+# --------------------------------------------------------------------------------------------
+
+
+class MoveRechecksAssigneesTests(ToolBase):
+    """An assignee reads the task (`can_access_task`), so a task that moves to a project its
+    assignee is not on, and whose team they are not on, would stay open to them. The move judges
+    the people who are ALREADY on the milestone and its tasks by the bar assigning someone there
+    uses: a member of the destination project or of its team (`may_name_person`). A same-team
+    move is not newly refused."""
+
+    def elsewhere(self):
+        """A project of a team that only the owner is on."""
+        team = TeamMaster.objects.create(
+            team_name="Elsewhere", team_email="else@test.com", owner=self.owner
+        )
+        project = ProjectMaster.objects.create(
+            team=team,
+            project_name="Elsewhere",
+            code="ELS",
+            owner=self.owner,
+            project_system_user=self.owner,
+        )
+        ProjectMembers.objects.create(team=team, project=project, attendee=self.owner)
+        return project
+
+    def own(self, m):
+        """The milestone's people and its tasks' assignee are the owner's: nobody to refuse."""
+        MilestoneAssignees.objects.filter(milestone=m).delete()
+        MilestoneAssignees.objects.create(milestone=m, team=self.team, user=self.owner)
+        TaskMaster.objects.filter(milestone=m).update(assignee=self.owner)
+
+    def patch(self, m, **body):
+        return self.client.patch(f"{MILESTONE_URL}{m.milestone_id}/", body, format="json")
+
+    def assert_not_moved(self, m):
+        self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).project_id, self.project.project_id)
+        self.assertEqual(
+            set(TaskMaster.objects.filter(milestone=m).values_list("project_id", flat=True)),
+            {self.project.project_id},
+        )
+
+    def test_a_milestone_assignee_who_is_not_on_the_destination_refuses_the_move(self):
+        m = self.roadmap_milestone()  # alice and bob
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(res.data["code"], "assignee_not_on_destination")
+        self.assertIn("Nothing was changed", res.data["error"])
+        self.assert_not_moved(m)
+        self.assertEqual(MilestoneAssignees.objects.filter(milestone=m).count(), 2)
+
+    def test_a_task_assignee_who_is_not_on_the_destination_refuses_the_move(self):
+        m = self.roadmap_milestone()
+        self.own(m)
+        TaskMaster.objects.filter(title="Second").update(assignee=self.alice)
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.status_code, 400, res.data)
+        self.assertEqual(res.data["code"], "assignee_not_on_destination")
+        second = TaskMaster.objects.get(title="Second")
+        self.assertIn(second.display_id, res.data["error"])  # the tasks are named by their ids
+        self.assert_not_moved(m)
+
+    def test_a_deleted_task_does_not_block_the_move(self):
+        m = self.roadmap_milestone()
+        self.own(m)
+        TaskMaster.objects.filter(title="Second").update(
+            assignee=self.alice, is_deleted=True, status="Deleted"
+        )
+        TaskMaster.objects.filter(title="First's child").update(
+            assignee=self.alice, status="Deleted"
+        )
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_the_assignees_the_same_save_sets_are_the_ones_judged(self):
+        m = self.roadmap_milestone()  # alice and bob, and tasks of alice
+        TaskMaster.objects.filter(milestone=m).update(assignee=self.owner)
+        elsewhere = self.elsewhere()
+        # keeping an outsider in the new list does not get past it
+        kept = self.patch(m, project_id=elsewhere.project_id, assignee_ids=[str(self.alice.id)])
+        self.assertEqual(kept.status_code, 400, kept.data)
+        # replacing them with someone who can be on it does
+        moved = self.patch(m, project_id=elsewhere.project_id, assignee_ids=[str(self.owner.id)])
+        self.assertEqual(moved.status_code, 200, moved.data)
+        self.assertEqual(
+            set(MilestoneAssignees.objects.filter(milestone=m).values_list("user_id", flat=True)),
+            {self.owner.id},
+        )
+        self.assertEqual(
+            set(TaskMaster.objects.filter(milestone=m).values_list("project_id", flat=True)),
+            {elsewhere.project_id},
+        )
+
+    def test_a_same_team_move_is_not_newly_refused(self):
+        # bob is on the team but not on DST: assigned there is allowed, as creating a task there is
+        m = self.roadmap_milestone()
+        res = self.patch(m, project_id=self.dest.project_id)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(MilestoneAssignees.objects.filter(milestone=m).count(), 2)
+
+    def test_a_save_that_is_not_a_move_does_not_judge_anybody(self):
+        m = self.roadmap_milestone()
+        res = self.patch(m, title="Renamed", project_id=self.project.project_id)
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_nobody_is_assigned_anywhere_without_assignees(self):
+        m = self.roadmap_milestone()
+        MilestoneAssignees.objects.filter(milestone=m).delete()
+        TaskMaster.objects.filter(milestone=m).update(assignee=None)
+        res = self.patch(m, project_id=self.elsewhere().project_id)
+        self.assertEqual(res.status_code, 200, res.data)

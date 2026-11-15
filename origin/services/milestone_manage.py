@@ -96,6 +96,72 @@ def lock_live_milestone(
     return milestone
 
 
+def move_assignee_problem(
+    milestone: MilestoneMaster, destination: ProjectMaster, *, assignee_ids: Any = UNSET
+) -> str | None:
+    """Why `milestone` may not move to `destination` because of who is assigned, or None (MIP-1583).
+
+    An assignee reads the task they hold (`can_access_task`), so a task that moves to a project
+    its assignee is not on, and whose team they are not on, would stay open to them. The new
+    people a save names are already judged against the destination (`refuse_new_milestone_people`);
+    this judges the ones ALREADY there, by the same bar an assignment there uses
+    (`may_name_person`: a member of the destination project or of its team), so a move inside
+    one team, the common case, is not refused. A refusal is the safe answer and not a silent
+    unassignment: the caller reassigns and moves again.
+
+    Judged: the milestone's assignees as they will be after this save (`assignee_ids` when the save
+    sends them, else the stored ones), and the assignee of every task that moves with it that a
+    person still sees (a deleted one moves too, silently, and is not judged). The reporter is not.
+    The caller must have checked that the milestone is going to another project.
+    """
+    from origin.services.task_collaborators import may_name_person  # noqa: PLC0415
+
+    if assignee_ids is UNSET:
+        milestone_people = {
+            str(uid)
+            for uid in MilestoneAssignees.objects.filter(milestone=milestone).values_list(
+                "user_id", flat=True
+            )
+        }
+    else:
+        milestone_people = {str(uid) for uid in assignee_ids or [] if uid not in (None, "")}
+    members = milestone_subtree_task_ids(milestone) - {milestone.task_id}
+    task_people: dict[str, list[str]] = {}
+    for task in (
+        TaskMaster.objects.filter(task_id__in=members, is_deleted=False, assignee__isnull=False)
+        .exclude(status="Deleted")
+        .select_related("project")
+        .order_by("task_id")
+    ):
+        task_people.setdefault(str(task.assignee_id), []).append(
+            task.display_id or str(task.task_id)
+        )
+
+    verdicts: dict[str, bool] = {}
+    for person in milestone_people | set(task_people):
+        verdicts[person] = may_name_person(destination, person)
+    on_milestone = sorted(p for p in milestone_people if not verdicts[p])
+    on_tasks = sorted(
+        {ref for person, refs in task_people.items() if not verdicts[person] for ref in refs}
+    )
+    if not on_milestone and not on_tasks:
+        return None
+    parts = []
+    if on_milestone:
+        parts.append(f"{len(on_milestone)} of the milestone's assignees")
+    if on_tasks:
+        shown = ", ".join(on_tasks[:5]) + (
+            f" and {len(on_tasks) - 5} more" if len(on_tasks) > 5 else ""
+        )
+        parts.append(f"the assignee of {shown}")
+    return (
+        f"This milestone can't move to {destination.project_name}: {' and '.join(parts)} "
+        "is not on that project or its team, so they would keep opening tasks that are no longer "
+        "theirs to see. Reassign them first (or send `assignee_ids` with the move). "
+        "Nothing was changed."
+    )
+
+
 def update_milestone(
     milestone: MilestoneMaster,
     *,
