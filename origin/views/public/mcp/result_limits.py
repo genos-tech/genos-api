@@ -336,7 +336,7 @@ HINTS: dict[str, str] = {
     "get_chat_thread": "Call again with a smaller `limit`, or pass `before` (the oldest message shown) to read older messages; for a thread, call without thread_id for the channel.",
     "list_tasks": "Pass a smaller `limit`, or narrow with project_id, status, assignee_id, milestone_id or due_from/due_to; page with `cursor`.",
     "list_my_tasks": "Pass a smaller `limit`, or `delivery` to list only tasks with a branch or PR.",
-    "list_projects": "Narrow with `name_filter`.",
+    "list_projects": "Pass `cursor` (the `next_cursor` of the answer) for the next page, or narrow with `name_filter`.",
     "list_milestones": "Pass a smaller `limit`, or narrow with project_id, status or assignee_id.",
     "get_milestone_summary": "Ask for one milestone at a time with milestone_id.",
     "list_sprints": "Pass a smaller `limit`, or narrow with project_id or status.",
@@ -347,16 +347,16 @@ HINTS: dict[str, str] = {
     "search_workspace": "Pass a smaller `limit`, narrow with entity_types, project_id, person_id or updated_after/updated_before, or ask a more specific query.",
     "list_my_chats": "Pass a smaller `limit`, narrow with chat_type or query, or page with `cursor`.",
     "list_my_mentions": "Pass a smaller `limit`, or `since` to read only newer mentions.",
-    "list_channel_members": "Ask in the Genos app for a long member list, or read one person with get_team_members.",
+    "list_channel_members": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",
     "get_current_user": "Nothing narrower exists; this answer is small.",
-    "get_team_members": "Nothing narrower exists; ask for one project's people with list_project_members.",
-    "list_project_members": "Nothing narrower exists; the list is cut at the end, so name the person you look for.",
-    "list_project_tags": "Nothing narrower exists; the lists are cut at the end.",
+    "get_team_members": "Pass `cursor` (the `next_cursor` of the answer) for the next page, or ask for one project's people with list_project_members.",
+    "list_project_members": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",
+    "list_project_tags": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",
     "list_task_dependencies": "Narrow with project_id or milestone_id.",
     "list_note_folders": "Nothing narrower exists; open a folder's notes with search_workspace.",
-    "list_note_access": "Nothing narrower exists; the list is cut at the end.",
+    "list_note_access": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",
     "list_uncompleted_todos": "Pass a smaller date_range_days.",
-    "list_today_todos": "Nothing narrower exists; list_uncompleted_todos takes a date range.",
+    "list_today_todos": "Pass `cursor` (the `next_cursor` of the answer) for the next page, or use list_uncompleted_todos with a date range.",
     "list_calendar_events": "Pass a smaller `max_results`, a narrower from/to, or a `query`.",
     "list_calendars": "Nothing narrower exists; this answer is small.",
     "get_my_blockers": "Ask about one task at a time with get_task_blockers.",
@@ -389,13 +389,21 @@ HINTS: dict[str, str] = {
 GENERIC_HINT = "Ask for less: a smaller `limit` or a narrower filter on the same tool."
 
 
+def _paged_lists() -> frozenset[str]:
+    from origin.views.public.mcp import list_paging  # noqa: PLC0415
+
+    return frozenset(list_paging.SPECS)
+
+
 def paging_arg_names(tool: str) -> tuple[str, ...]:
     """The arguments `tool` takes only while the switch is on (taken out of the call before the
     registry tool runs: it does not have them)."""
-    if tool in BODY_FIELDS:
-        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+    from origin.views.public.mcp import body_paging, list_paging  # noqa: PLC0415
 
+    if tool in BODY_FIELDS:
         return body_paging.PAGE_ARGS
+    if tool in list_paging.SPECS:
+        return list_paging.PAGE_ARGS
     return ()
 
 
@@ -404,19 +412,45 @@ def extra_properties(tool: str) -> dict[str, dict[str, Any]]:
     it off, so `tools/list` and every input schema are what they were."""
     if not limits_on():
         return {}
-    if tool in BODY_FIELDS:
-        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+    from origin.views.public.mcp import body_paging, list_paging  # noqa: PLC0415
 
+    if tool in BODY_FIELDS:
         return body_paging.schema_properties(tool)
+    if tool in list_paging.SPECS:
+        return list_paging.schema_properties()
     return {}
 
 
-def check_args(tool: str, args: dict[str, Any]) -> None:
-    """Refuse a malformed paging argument in words, before the tool runs (`ToolError`)."""
-    if tool in BODY_FIELDS:
-        from origin.views.public.mcp import body_paging  # noqa: PLC0415
+@dataclass(frozen=True)
+class Caller:
+    """Who is asking, for a cursor (bound to the person and the team) and the call's other
+    arguments (bound to the list)."""
 
+    user_id: str
+    team_id: str
+    other_args: dict[str, Any]
+
+
+def check_args(tool: str, args: dict[str, Any], caller: Caller) -> tuple[int, int] | None:
+    """Refuse a malformed paging argument in words, before the tool runs (`ToolError`). For a list
+    it also returns `(limit, offset)`, which `apply` takes."""
+    from origin.views.public.mcp import body_paging, list_paging  # noqa: PLC0415
+
+    if tool in BODY_FIELDS:
         body_paging.validate(args)
+    elif tool in list_paging.SPECS:
+        return list_paging.validate(tool, args, caller.user_id, caller.team_id, caller.other_args)
+    return None
+
+
+def run_override(registry_name: str):
+    """A function that runs a tool in place of the registry's while the switch is on, or None.
+    Only `list_projects`: its per-project member count is a query of its own (the N+1)."""
+    if registry_name == "list_projects":
+        from origin.views.public.mcp import list_paging  # noqa: PLC0415
+
+        return list_paging.run_list_projects
+    return None
 
 
 def is_notice(value: Any) -> bool:
@@ -715,6 +749,8 @@ def apply(
     cuts: Cuts | None = None,
     cap: int | None = None,
     args: dict[str, Any] | None = None,
+    caller: Caller | None = None,
+    page: tuple[int, int] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """The whole policy for one answer: the per-item caps, then the generic guard. Returns the
     payload to send and whether anything was cut (so the caller sets `_meta`). `render` turns a
@@ -729,6 +765,26 @@ def apply(
         from origin.views.public.mcp import body_paging  # noqa: PLC0415
 
         body_paging.page_body(tool, payload, args or {}, render, cuts, cap)
+    elif tool in _paged_lists():
+        if page is None or caller is None:
+            # A caller that forgot them would get the old cut-at-the-end answer with no cursor,
+            # presented as the new behaviour. Loud instead.
+            raise RuntimeError(f"`apply` needs `page` and `caller` for the paged tool {tool}")
+        from origin.views.public.mcp import list_paging  # noqa: PLC0415
+
+        limit, offset = page
+        list_paging.page_lists(
+            tool,
+            payload,
+            limit,
+            offset,
+            caller.user_id,
+            caller.team_id,
+            caller.other_args,
+            render,
+            cuts,
+            cap,
+        )
     if len(render(_with_notice(payload, tool, cuts, original, cap) if cuts else payload)) > cap:
         payload = shrink_to(tool, payload, render, cap, original, cuts)
     elif cuts:

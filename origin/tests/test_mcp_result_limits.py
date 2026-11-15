@@ -693,7 +693,9 @@ class HintTable(SimpleTestCase):
             with on():
                 declared = set((mcp_tools.input_schema(tool).get("properties") or {}))
             for name in re.findall(r"`([a-z_]+)`", rl.HINTS[tool.name]):
-                self.assertIn(name, declared | {"next_offset"}, f"{tool.name}: `{name}`")
+                self.assertIn(
+                    name, declared | {"next_offset", "next_cursor"}, f"{tool.name}: `{name}`"
+                )
 
 
 class BigCalendarBriefing(McpBase):
