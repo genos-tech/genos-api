@@ -132,11 +132,16 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
                 len(raw),
             )
         else:
+            items = ""
+            if kind == "non_string_items":
+                found = _find_list(raw) or []
+                items = f", items={_describe_items(found)}"
             log.warning(
-                "Query rewriter returned unparseable output (%d chars, kind=%s, stop=%s%s); "
+                "Query rewriter returned unparseable output (%d chars, kind=%s%s, stop=%s%s); "
                 "using original query only",
                 len(raw),
                 kind,
+                items,
                 sink.stop_reason or "n/a",
                 ", truncated" if sink.truncated else "",
             )
@@ -208,7 +213,9 @@ def _parse_reply(raw: str) -> tuple[list[str], str]:
       no_array          no `[` at all (prose, a refusal, a bulleted list)
       bad_json          brackets, but not a list of any shape we read
       empty_array       a list with no usable string (`[]`, blank strings)
-      non_string_items  a list of objects or arrays rather than strings
+      non_string_items  a list whose items are not strings we can read (objects with
+                        several strings, numbers; one string per object and one level
+                        of nesting are read)
     """
     if not raw:
         return [], "empty_reply"
@@ -217,12 +224,44 @@ def _parse_reply(raw: str) -> tuple[list[str], str]:
     parsed = _find_list(raw)
     if parsed is None:
         return [], "bad_json"
-    out = [x.strip() for x in parsed if isinstance(x, str) and x.strip()]
+    out: list[str] = []
+    flat = [y for x in parsed for y in (x if isinstance(x, list) else [x])]
+    for item in flat:
+        text = _item_text(item)
+        if text:
+            out.append(text)
     if out:
         return out, "ok"
     if any(not isinstance(x, str) for x in parsed):
         return [], "non_string_items"
     return [], "empty_array"
+
+
+def _item_text(item: object) -> str:
+    """The variant an array item stands for, or "".
+
+    A string is itself. An object that holds exactly one non-blank string
+    (`{"query": "..."}`) is that string (a nested array is flattened one level
+    by the caller). Anything else is not guessed at: the PR #875 CI run showed the model answering with
+    non-string items in a few percent of the queries.
+    """
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        strings = [v.strip() for v in item.values() if isinstance(v, str) and v.strip()]
+        return strings[0] if len(strings) == 1 else ""
+    return ""
+
+
+def _describe_items(parsed: list) -> str:
+    """The types of a list's items, with no content: `dict(1 key)x2, int`."""
+    counts: dict[str, int] = {}
+    for x in parsed:
+        name = type(x).__name__
+        if isinstance(x, dict):
+            name += f"({len(x)} key{'' if len(x) == 1 else 's'})"
+        counts[name] = counts.get(name, 0) + 1
+    return ", ".join(f"{k}x{n}" if n > 1 else k for k, n in sorted(counts.items()))
 
 
 def _parse_variants(raw: str) -> list[str]:

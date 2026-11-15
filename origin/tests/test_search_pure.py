@@ -1422,6 +1422,22 @@ class ParseVariantsTests(SimpleTestCase):
     def test_the_fallback_reads_literals_only(self):
         self.assertEqual(query_rewriter._parse_variants("[__import__('os').getcwd()]"), [])
 
+    def test_objects_with_one_string_value_give_that_string(self):
+        # PR #875's CI run: the rewriter answered with non-string items (kind=non_string_items,
+        # stop=STOP) in 3 of 75 retrieval cases. An object that holds one string is that variant.
+        self.assertEqual(
+            query_rewriter._parse_variants('[{"query": "a b"}, {"variant": " c d "}]'),
+            ["a b", "c d"],
+        )
+
+    def test_objects_with_several_strings_are_not_guessed(self):
+        self.assertEqual(
+            query_rewriter._parse_variants('[{"query": "a", "reason": "because"}]'), []
+        )
+
+    def test_a_nested_array_is_flattened_one_level(self):
+        self.assertEqual(query_rewriter._parse_variants('[["a b", "c d"]]'), ["a b", "c d"])
+
     def test_unquoted_words_still_fail(self):
         self.assertEqual(query_rewriter._parse_variants("[foo, bar]"), [])
 
@@ -1452,11 +1468,17 @@ class ParseReplyKindTests(SimpleTestCase):
         self.assertEqual(len('["", "", ""]'), 12)
         self.assertEqual(self.kind('["", "", ""]'), "empty_array")
 
-    def test_objects_instead_of_strings(self):
-        self.assertEqual(self.kind('[{"query": "a"}, {"query": "b"}]'), "non_string_items")
+    def test_objects_that_hold_no_single_string(self):
+        self.assertEqual(self.kind('[{"q": 1}, {"a": "x", "b": "y"}]'), "non_string_items")
 
-    def test_nested_array(self):
-        self.assertEqual(self.kind('[["a", "b"]]'), "non_string_items")
+    def test_numbers_only(self):
+        self.assertEqual(self.kind("[1, 2]"), "non_string_items")
+
+    def test_item_shape_is_described_without_content(self):
+        describe = query_rewriter._describe_items
+        self.assertEqual(describe([{"query": "secret"}, {"query": "x"}]), "dict(1 key)x2")
+        self.assertEqual(describe([["secret"], 3]), "int, list")
+        self.assertNotIn("secret", describe([{"query": "secret"}, ["secret"]]))
 
 
 # --------------------------------------------------------------------------- #
@@ -1533,6 +1555,16 @@ class RewriteQueryTests(SimpleTestCase):
         self.assertIn("(23 chars", line)
         # MIP-622: the variants restate the member's question, so no content in the log.
         self.assertNotIn("cannot help", line)
+
+    def test_the_warning_says_what_the_unusable_items_were(self):
+        client = _client_yielding('[{"q": 1}, {"q": 2}]')
+        with patch(
+            "origin.search_engine.query_rewriter.get_model_client", return_value=client
+        ):
+            with self.assertLogs("origin.search_engine.query_rewriter", level="WARNING") as cm:
+                query_rewriter.rewrite_query("q", num_variants=3)
+        self.assertIn("kind=non_string_items", cm.output[0])
+        self.assertIn("items=dict(1 key)x2", cm.output[0])
 
     def test_the_warning_names_how_the_call_stopped(self):
         def step(**kwargs):
