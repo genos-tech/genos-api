@@ -46,6 +46,11 @@ CASE SCHEMA (`origin/search_engine/agent/evals/group/<tag>.yaml`, `kind: resume`
       # a task row may also say (MIP-1057): due_date, start_date ("2026-11-21"), body (its
       # description), assignee ("other": the colleague; default the asker), milestone: true (its
       # backing row and a milestone on it)
+      # MIP-1609: a task row may also say assignee "gone" (someone who LEFT the team: a soft-deleted
+      # team row and no project row) or reporter "gone", and note_by "other" (a task note by the
+      # colleague, with the Owner row the app's own writer gives its author)
+      destination: {name: Archive} # MIP-1609: a second project of the team, the asker its only
+                                   # member; `{destination_id}` in the proposal is its id
       task_context: login          # the ask is "about this task or milestone" (a key of `tasks`):
                                    # sent as `task_context`, and again on `follow_up`
       follow_up_task: report       # the follow-up is about THIS task instead: a new conversation
@@ -213,6 +218,9 @@ class World:
         for member in (self.user, self.other):
             ProjectMembers.objects.create(team=self.team, project=self.project, attendee=member)
         self.tasks: dict[str, Any] = {}
+        self.gone: Any = None  # MIP-1609: made only when a row names them
+        self.destination: Any = None
+        self.note_ids: list[int] = []
         self.thread_context: dict[str, Any] | None = None
         self.note_context: dict[str, Any] | None = None
         self.summaries: dict[str, str] = {}
@@ -224,9 +232,13 @@ class World:
         from origin.models.task.milestone_models import MilestoneMaster  # noqa: PLC0415
         from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
+        destination = case.get("destination")
+        if destination:
+            self._build_destination(destination)
         for spec in case.get("tasks") or []:
-            # The optional keys are MIP-1057's (a task or milestone as the context of an ask); a row
-            # without them is what it always was.
+            # The optional keys are MIP-1057's (a task or milestone as the context of an ask) and
+            # MIP-1609's (`assignee`/`reporter` "gone", `note_by`); a row without them is what it
+            # always was.
             extra: dict[str, Any] = {}
             for column in ("due_date", "start_date"):
                 if spec.get(column):
@@ -236,8 +248,8 @@ class World:
             task = TaskMaster.objects.create(
                 team=self.team,
                 project=self.project,
-                reporter=self.user,
-                assignee=self.other if spec.get("assignee") == "other" else self.user,
+                reporter=self._person(spec.get("reporter")),
+                assignee=self._person(spec.get("assignee")),
                 title=spec["title"],
                 status=spec.get("status", "Open"),
                 priority=spec.get("priority", "Low"),
@@ -252,6 +264,8 @@ class World:
                     task=task,
                     reporter=self.user,
                 )
+            if spec.get("note_by"):
+                self._task_note(task, self._person(spec["note_by"]))
             self.tasks[spec["key"]] = task
         thread = case.get("thread")
         if thread:
@@ -296,6 +310,70 @@ class World:
             self.note_context = {"note_type": 1, "note_id": row.note_id}
             self.summaries["note"] = note["summary"]
 
+    def _person(self, who: Any) -> Any:
+        """A task row's `assignee` / `reporter`: "other" (the colleague), "gone" (someone who left
+        the team, MIP-1609), or the asker (the default, as it always was)."""
+        if who == "other":
+            return self.other
+        if who == "gone":
+            return self._gone()
+        return self.user
+
+    def _gone(self) -> Any:
+        """Someone who LEFT the team: a soft-deleted team row (as `remove_team_member` leaves it)
+        and no project row. Their open tasks were not unassigned (the removal's choice)."""
+        if self.gone is None:
+            from django.contrib.auth import get_user_model  # noqa: PLC0415
+
+            from origin.models.common.team_models import TeamMembers  # noqa: PLC0415
+
+            tag = uuid.uuid4().hex[:8]
+            self.gone = get_user_model().objects.create_user(
+                username=f"evalresume-gone-{tag}",
+                email=f"evalresume-gone-{tag}@example.invalid",
+                password=None,
+            )
+            TeamMembers.objects.create(team=self.team, attendee=self.gone, is_deleted=True)
+        return self.gone
+
+    def _build_destination(self, spec: dict[str, Any]) -> None:
+        """A second project of the same team; the asker is its only member, so the colleague is on
+        the team but not on it (MIP-1609)."""
+        from origin.models.project.prj_models import ProjectMaster, ProjectMembers  # noqa: PLC0415
+
+        self.destination = ProjectMaster.objects.create(
+            team=self.team,
+            project_name=spec.get("name") or "Archive",
+            code=f"D{uuid.uuid4().hex[:4].upper()}",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=self.destination, attendee=self.user)
+
+    def _task_note(self, task: Any, author: Any) -> None:
+        """A task note by `author` with the Owner row the app's writer gives its author (`POST
+        /api/v2/note/task/`), the row a move to a project they are not on ends (MIP-1493)."""
+        from origin.models.note.common_note_models import NotePermissionMaster  # noqa: PLC0415
+        from origin.models.note.task_note_models import TaskNoteMaster  # noqa: PLC0415
+        from origin.views.utils.note_role import NOTE_TYPE_TASK, ROLE_OWNER  # noqa: PLC0415
+
+        note = TaskNoteMaster.objects.create(
+            team=self.team,
+            project=task.project,
+            task=task,
+            owner=author,
+            title="Working notes",
+            body=_blocks("Notes for the task."),
+        )
+        NotePermissionMaster.objects.create(
+            team=self.team,
+            user=author,
+            note_type=NOTE_TYPE_TASK,
+            note_id=note.note_id,
+            role_id=ROLE_OWNER,
+        )
+        self.note_ids.append(note.note_id)
+
     def mentions(self) -> list[dict[str, Any]]:
         out = []
         for spec in self.case.get("mentions") or []:
@@ -311,6 +389,8 @@ class World:
         """`{project_id}` / `{task:<key>}` placeholders in a case's proposal arguments."""
         if value == "{project_id}":
             return self.project.project_id
+        if value == "{destination_id}" and self.destination is not None:
+            return self.destination.project_id
         if isinstance(value, str):
             value = value.replace("{project_id}", str(self.project.project_id))
             for key, task in self.tasks.items():
@@ -339,9 +419,21 @@ class World:
             Message.objects.filter(channel__team=self.team, is_thread_reply=True).delete()
             Message.objects.filter(channel__team=self.team).delete()
             Channel.objects.filter(team=self.team).delete()
+            if self.note_ids:
+                # `NotePermissionMaster.team` is SET_NULL: the rows would outlive the team.
+                from origin.models.note.common_note_models import (  # noqa: PLC0415
+                    NotePermissionMaster,
+                )
+                from origin.views.utils.note_role import NOTE_TYPE_TASK  # noqa: PLC0415
+
+                NotePermissionMaster.objects.filter(
+                    note_type=NOTE_TYPE_TASK, note_id__in=self.note_ids
+                ).delete()
             TeamMaster.objects.filter(pk=self.team.pk).delete()
             self.user.delete()
             self.other.delete()
+            if self.gone is not None:
+                self.gone.delete()
         except Exception:  # noqa: BLE001
             log.warning(
                 "eval resume: teardown of team %s failed",

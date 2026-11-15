@@ -133,6 +133,8 @@ RESUME_KEYS = frozenset(
         # follow-up is about instead
         "task_context",
         "follow_up_task",
+        # MIP-1609: a second project of the team to move a task to (`{destination_id}`)
+        "destination",
         "expect",
         # `scenario: closing_line` (no resume at all) and its own keys
         "scenario",

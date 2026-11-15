@@ -19,6 +19,10 @@ MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with 
 (`task_links`), and `reporter_id` changes the reporter under `assign_task`'s rule (a member of the
 team, or someone the task's own ACL already covers; a reporter already on the task is not judged
 again). Neither is something undo can put back (`undo.UPDATE_TASK_UNRESTORABLE_ARGS`).
+
+MIP-1609 (flag `AGENT_TASK_MOVE_PARITY`, default off): a `project_id` move judges who is already assigned
+(`task_project_move.task_move_assignee_problem`) and says what it did (`moved.notes_narrowed`,
+`moved.reporters_outside_destination`), as `manage_milestone`'s move and the app's task PUT do.
 """
 
 from __future__ import annotations
@@ -35,7 +39,12 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.parity import followups_on, ignore_unless_parity, parity_on
+from origin.search_engine.agent.parity import (
+    followups_on,
+    ignore_unless_parity,
+    parity_on,
+    task_move_on,
+)
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -68,6 +77,11 @@ from origin.services.collab_push import push_task_body
 from origin.services.milestone_service import sync_backing_task
 from origin.services.task_collaborators import sync_task_collaborators
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
+from origin.services.task_project_move import (
+    move_report_clauses,
+    move_report_said,
+    task_move_assignee_problem,
+)
 from origin.services.task_reparent import (
     move_task_to_parent,
     move_task_to_project,
@@ -476,6 +490,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "`milestone_id`, `parent_task_id` and `project_id` each decide where the task "
             "sits; send one of them per call. Nothing was changed."
         )
+    # MIP-1609 (flag `AGENT_TASK_MOVE_PARITY`): the people already assigned to the task and to the
+    # sub-tasks that go with it are judged against the destination, as the milestone move
+    # (MIP-1583) and the app's task PUT (MIP-1597) judge them, by the same helper and in the same
+    # sentence; only the way out differs, as this tool takes no assignee. Before anything is
+    # written, and after the not-found answers above, so a stranger learns nothing.
+    destination = (
+        ProjectMaster.objects.get(project_id=target_project_id)
+        if move_project and task_move_on()
+        else None
+    )
+    if destination is not None and (
+        problem := task_move_assignee_problem(task, destination, way_out=TOOL_WAY_OUT)
+    ):
+        raise ToolError(problem)
 
     if (
         not update_fields
@@ -491,6 +519,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "__summary__": f"No changes applied to task {task.display_id}.",
         }
 
+    # What the move did, for the model to say and not to guess (flag on only; None keeps the move
+    # from counting anything).
+    move_report: dict[str, Any] | None = {} if destination is not None else None
     try:
         milestone = (
             MilestoneMaster.objects.filter(task_id=task.task_id, is_deleted=False).first()
@@ -563,7 +594,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 if move_parent and move_task_to_parent(task, target_parent_id):
                     changed.append("parent" if target_parent_id is not None else "parent(cleared)")
                 if move_project:
-                    move_task_to_project(task, target_project_id)
+                    move_task_to_project(task, target_project_id, report=move_report)
                     changed.append("project")
     except ToolError:
         raise
@@ -614,9 +645,23 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             + (f" (was {display_id_before})" if task.display_id != display_id_before else "")
         ),
     }
+    if move_report and (said := move_report_said(move_report)):
+        # Task notes whose author is not on the destination lost their Owner role (a move back
+        # writes it again), and who filed a moved task without being on the destination keeps
+        # reading it: said only when it happened, in the milestone move's words (MIP-1609).
+        result["moved"] = said
+        result["__summary__"] += move_report_clauses(move_report, destination.project_name)
     if undo_capture is not None and (image := undo_capture.finish(update_fields)):
         result[UNDO_KEY] = image
     return result
+
+
+#: What a refused move tells the model to do instead (MIP-1609). The app's PUT says "send
+#: `assignee` with the move"; this tool takes no assignee, and a model told to send one would
+#: retry the same call blindly.
+TOOL_WAY_OUT = (
+    "Ask the member who should take over, reassign with `assign_task`, then move it again."
+)
 
 
 #: What `AGENT_PARITY_TOOLS` adds to this tool's schema (`tool_flag_params`); the tool takes

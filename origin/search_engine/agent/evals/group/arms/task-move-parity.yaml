@@ -1,0 +1,15 @@
+# MIP-1609: `update_task`'s own project move behaves like the milestone move (MIP-1583) and the app's task PUT
+# (MIP-1597), behind the THIRD flag AGENT_TASK_MOVE_PARITY (default OFF; both batch flags are already on in production).
+#   ON: a move whose task, or a sub-task that goes with it, is assigned to someone on neither the destination project
+#     nor its team (someone who left the team) is refused before anything is written ("This task can't move to
+#     <project>: the assignee of <display id> is not on that project or its team ... Ask the member who should take
+#     over, reassign with `assign_task`, then move it again. Nothing was changed."); a move that goes through adds
+#     `moved: {notes_narrowed, reporters_outside_destination}` (each only when not zero) and the matching summary
+#     clauses.
+# Model-visible: tool RESULTS only (a refusal and fields). No declaration or prompt changes, so the prefix is the
+# same with the flag on and off. The flag-off results are byte-identical (`test_agent_task_move_parity`).
+# Cases: `t1609-task-move.yaml` (all `kind: resume`: the refusal comes after the approval, as for the milestone move).
+arm: task-move-parity
+overrides:
+    AGENT_TASK_MOVE_PARITY: true
+requires: []
