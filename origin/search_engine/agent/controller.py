@@ -1173,7 +1173,7 @@ def _milestone_move_facts(
     would refuse."""
     from origin.search_engine.agent.parity import parity_on  # noqa: PLC0415
     from origin.search_engine.agent.tools.task_tags import tag_names  # noqa: PLC0415
-    from origin.services.task_project_move import milestone_subtree_task_ids  # noqa: PLC0415
+    from origin.services.task_project_move import milestone_move_task_count  # noqa: PLC0415
 
     raw = args.get("project_id")
     if not parity_on() or raw in (None, "") or access.project_name(raw) is None:
@@ -1185,14 +1185,9 @@ def _milestone_move_facts(
         return None
     if any(args.get(key) is not None for key in ("sprint_id", "milestone_folder_id", "tags")):
         return None
-    from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
-
     return {
         "from_project": from_project,
-        "tasks": TaskMaster.objects.filter(
-            task_id__in=milestone_subtree_task_ids(milestone) - {milestone.task_id},
-            is_deleted=False,
-        ).count(),
+        "tasks": milestone_move_task_count(milestone),
         "sprint": (
             (access.sprint_name(milestone.sprint_id) or milestone.sprint_id)
             if milestone.sprint_id
@@ -1285,12 +1280,13 @@ def _backing_display(milestone: Any) -> str | None:
 
 def _milestone_task_count(milestone: Any) -> int:
     """The live tasks that stay under a converted milestone's row as sub-tasks: those filed in it
-    (`milestone_id`), not its own row. The conversion service counts every row, deleted ones too;
-    the card says what a person would still see."""
+    (`milestone_id`), not its own row, and not one the app deleted (status "Deleted", MIP-1597) or
+    soft-deleted: what the conversion's own `subTasksKept` says and a person would still see."""
     from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
 
     return (
         TaskMaster.objects.filter(milestone=milestone, is_deleted=False)
+        .exclude(status="Deleted")
         .exclude(task_id=milestone.task_id)
         .count()
     )
