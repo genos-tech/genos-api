@@ -449,10 +449,16 @@ class TaskMasterView(AuthenticatedAPIView):
         if serializer.is_valid():
             serializer.save()
             # Collaborators ride outside the serializer (M2M) — set them
-            # once the row exists. Absent key => no collaborators.
+            # once the row exists. Absent key => no collaborators. Anyone who could not open the
+            # task is left out (MIP-1567): its assignee and reporter can, a teammate who is not
+            # on the project cannot.
             sync_task_collaborators(
                 serializer.instance,
-                _people_allowed_on(project, request.data.get("collaborators")),
+                _people_allowed_on(
+                    project,
+                    request.data.get("collaborators"),
+                    (request.data.get("assignee"), request.data.get("reporter")),
+                ),
             )
             increment_usage(str(request.user.id), TASK_CREATE_KEY)
             # Drop the project-tasks cache so the next sidebar fetch
