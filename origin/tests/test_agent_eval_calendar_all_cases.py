@@ -94,13 +94,23 @@ class CaseFileTests(SimpleTestCase):
                 by_tool["list_calendars"], {"tool": "list_calendars", "count_at_most": 1}
             )
 
-    def test_a_member_with_one_account_sends_no_account_and_is_not_sent_to_list_calendars(self):
+    def test_a_member_with_one_account_names_no_specific_account_and_is_not_sent_to_list_calendars(
+        self,
+    ):
+        # `account: all` is allowed for a member with one account (it reads the same single account at the same
+        # cost, first paid run: the model sent one in most runs); a specific account id is not.
         for lang in ("en", "ja"):
             expect = self.by_id[f"t1607.one-account.{lang}"].raw["expect"]
             self.assertEqual(expect["tools_used_excludes"], ["list_calendars"])
             self.assertEqual(
                 expect["tool_calls_match"],
-                [{"tool": "list_calendar_events", "count": 1, "args_absent": ["account"]}],
+                [
+                    {
+                        "tool": "list_calendar_events",
+                        "count": 1,
+                        "args_not_match": {"account": "^(?!all$)"},
+                    }
+                ],
             )
 
     def test_the_member_who_names_an_account_must_not_be_answered_with_all_of_them(self):
@@ -176,6 +186,36 @@ class ToolCallChecksTests(SimpleTestCase):
         ok, out = self.verdict(self.ONE_ALL, [])
         self.assertFalse(ok)
         self.assertEqual([c["name"] for c in out], ["tool_calls_match.list_calendar_events.count"])
+
+    def test_args_not_match_allows_all_and_nothing_but_fails_a_specific_account(self):
+        spec = [
+            {
+                "tool": "list_calendar_events",
+                "count": 1,
+                "args_not_match": {"account": "^(?!all$)"},
+            }
+        ]
+        for sent in (
+            {},
+            {"account": ""},
+            {"account": None},
+            {"account": "all"},
+            {"account": "ALL"},
+        ):
+            self.assertTrue(
+                self.verdict(spec, [self.call("list_calendar_events", **sent)])[0], sent
+            )
+        for sent in ("uuid-1", "default", "work@example.com"):
+            ok, out = self.verdict(spec, [self.call("list_calendar_events", account=sent)])
+            self.assertFalse(ok, sent)
+            self.assertIn("args_not_match", out[-1]["name"])
+        # still one call, and a call of another tool is not judged
+        self.assertFalse(
+            self.verdict(
+                spec,
+                [self.call("list_calendar_events", account="all")] * 2,
+            )[0]
+        )
 
     def test_args_absent_fails_a_member_with_one_account_who_was_sent_an_account(self):
         spec = [{"tool": "list_calendar_events", "count": 1, "args_absent": ["account"]}]

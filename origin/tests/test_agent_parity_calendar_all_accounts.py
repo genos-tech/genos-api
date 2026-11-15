@@ -512,7 +512,22 @@ class DeclarationTests(FollowupsBase):
             len(events_tool.FOLLOWUPS_ACCOUNT_DESCRIPTION)
             - len("account_id from list_calendars. Omit for the default account.")
         )
-        self.assertLessEqual(added, 175)
+        # 157 when the sentence was first measured; the first paid run added "omit `account` unless ..." for the member
+        # with one account (+~60): the budget numbers in `test_agent_prefix_budget` hold the total.
+        self.assertLessEqual(added, 230)
+
+    def test_the_sentence_tells_the_model_to_omit_account_unless_it_is_named_or_all_are_wanted(
+        self,
+    ):
+        # First paid run: a member with ONE account was sent an `account` in most runs.
+        sentence = events_tool.FOLLOWUPS_DESCRIPTION_ADDITION
+        self.assertIn(
+            "Omit `account` unless the member names an account or asks for all of them", sentence
+        )
+        with mock.patch.dict(settings.SEARCH_ENGINE, {FOLLOWUPS_FLAG: False}):
+            self.assertNotIn(
+                "Omit `account` unless", self.declared()["list_calendar_events"].description
+            )
 
     def test_the_registry_and_its_schema_are_not_edited(self):
         before = copy.deepcopy(REGISTRY["list_calendar_events"].parameters_schema)
