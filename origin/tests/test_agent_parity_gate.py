@@ -1,6 +1,8 @@
 """The gate of the MIP-578 parity batch: `AGENT_PARITY_TOOLS` (MIP-1561).
 
-The flag ships OFF, and with it off everything the model or an MCP client is shown is what it was,
+The flag ships ON (default since 2026-11-15, the flip PR; env `AGENT_PARITY_TOOLS=false` is the rollback).
+The key-free test settings keep it OFF (`apis/settings_test.py`), so the "off" tests below describe the
+rollback arm, not production. With it off everything the model or an MCP client is shown is what it was,
 byte for byte. The committed fingerprint golden (`test_agent_fingerprint_golden`) is the proof over
 the whole surface; this file pins the mechanism behind it and what the flag publishes when it is on:
 
@@ -24,6 +26,7 @@ from django.conf import settings
 from django.test import SimpleTestCase
 
 from apis import settings as production
+from apis import settings_test as test_settings
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent import tool_flag_params, tool_flag_text
@@ -90,11 +93,15 @@ def canon(declaration):
 
 
 class FlagDefaultTests(SimpleTestCase):
-    def test_it_ships_off(self):
-        self.assertIs(production.SEARCH_ENGINE["AGENT_PARITY_TOOLS"], False)
+    def test_it_ships_on(self):
+        # The production default (`apis.settings`); the rollback is the env value `false`.
+        self.assertIs(production.SEARCH_ENGINE["AGENT_PARITY_TOOLS"], True)
 
     def test_the_test_suite_runs_with_it_off(self):
+        # Every other test assumes the unflagged behaviour and turns the flag on explicitly; the
+        # "off" tests of this batch therefore describe the non-production (rollback) arm.
         self.assertFalse(settings.SEARCH_ENGINE.get(PARITY_FLAG))
+        self.assertIn(PARITY_FLAG, test_settings.AGENT_FLAGS_ON_IN_PRODUCTION)
 
 
 class RegistryIsUntouchedTests(SimpleTestCase):

@@ -50,11 +50,11 @@ class ArmTests(SimpleTestCase):
     def test_the_all_on_arm_includes_it(self):
         self.assertTrue(harness.all_on_arm(harness.load_arms()).effective[FLAG])
 
-    def test_the_flag_is_a_real_setting_that_ships_off(self):
+    def test_the_flag_is_a_real_setting_that_ships_on(self):
         from apis import settings as production  # noqa: PLC0415
 
         self.assertIn(FLAG, production.SEARCH_ENGINE)
-        self.assertIs(production.SEARCH_ENGINE[FLAG], False)
+        self.assertIs(production.SEARCH_ENGINE[FLAG], True)
 
 
 class CaseFileTests(SimpleTestCase):

@@ -14,7 +14,7 @@ Approval flow (Phase 7): like all write tools, `requires_approval=True`.
 The user sees the proposed argument set in the Approve / Reject card
 and decides whether to execute.
 
-MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF; with it off neither exists, see
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with it off neither exists, see
 `parity.ignore_unless_parity`): `links` replaces the task's links as the app's task page saves them
 (`task_links`), and `reporter_id` changes the reporter under `assign_task`'s rule (a member of the
 team, or someone the task's own ACL already covers; a reporter already on the task is not judged

@@ -430,8 +430,10 @@ class ParityOffTests(TaskLoopBase):
 
 
 class ProductionDefaultsParityOffTests(TaskLoopBase):
-    """Flag off under what production runs: the twelve shipped flags on (the key-free test settings keep them
-    off), `AGENT_PARITY_TOOLS` off. A `task_context` must change nothing the model is sent or the row keeps."""
+    """Flag off under what production ran before the 2026-11-15 flip, and what the rollback
+    (`AGENT_PARITY_TOOLS=false`) runs now: the other shipped flags on (the key-free test settings keep them
+    off; the list now includes the parity flag, so it is switched off again below), `AGENT_PARITY_TOOLS` off.
+    A `task_context` must change nothing the model is sent or the row keeps."""
 
     flags = {
         **{flag: True for flag in settings_test.AGENT_FLAGS_ON_IN_PRODUCTION},

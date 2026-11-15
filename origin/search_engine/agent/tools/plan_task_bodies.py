@@ -19,7 +19,7 @@ equals what is created: the approval card (`controller._friendly_task_plan_argum
 `create_task_plan._run` (which MCP also reaches). It always works on a copy: the persisted
 `arguments_json`, which is replayed to the model as its own call, stays as the model sent it.
 
-MIP-1561 (flag `AGENT_PARITY_TOOLS`, default OFF; with it off everything above is unchanged, byte
+MIP-1561 (flag `AGENT_PARITY_TOOLS`, default ON since the 2026-11-15 flip; with it off everything above is unchanged, byte
 for byte): the same fill reaches `create_task` (`new_task_body`), a task can NAME its template
 (`template`: a built-in or one of the project's own, by name), and a project whose default is a
 built-in id gets that built-in. The app's create form starts from exactly that choice. The built-in
