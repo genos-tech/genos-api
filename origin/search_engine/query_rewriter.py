@@ -12,12 +12,15 @@ Reuses the Phase-5 `ModelClient` abstraction so it works on both
 Gemini and Claude.
 
 Graceful degradation: any error path (LLM failure, malformed
-output, empty variants list) silently returns `[query]` so the
-caller's pipeline runs exactly as if rewriting was disabled.
+output, empty variants list) returns `[query]` so the caller's
+pipeline runs exactly as if rewriting was disabled. A reply that
+cannot be read logs a WARNING with its length, shape (`kind=`) and
+stop reason, never its text; an empty list is an INFO.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -31,6 +34,7 @@ from origin.search_engine.llm.choice import (
     subprocess_params,
 )
 from origin.search_engine.llm.spend import spend_purpose
+from origin.search_engine.llm.types import CallUsage
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +85,7 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
     user_prompt = f"Query: {query}\n\nReturn {num_variants} variants."
     msgs = [AgentMessage(role="user", text=user_prompt)]
 
+    sink = CallUsage()
     try:
         client = get_model_client()
         # Model precedence for this trivial emit-a-few-variants task:
@@ -100,6 +105,7 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
             tools=[],
             system_instruction=_SYSTEM_PROMPT,
             model_override=model_override,
+            usage_sink=sink,
             params=subprocess_params("rewrite"),
         ):
             if text:
@@ -114,13 +120,26 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
         log.exception("Query rewriter LLM call failed; using original query only")
         return [query]
 
-    variants = _parse_variants(raw)
+    variants, kind = _parse_reply(raw)
     if not variants:
-        log.warning(
-            # Its length only: the variants restate the user's question (MIP-622).
-            "Query rewriter returned unparseable output (%d chars); using original query only",
-            len(raw),
-        )
+        # Its length and shape only: the variants restate the user's question (MIP-622).
+        if kind == "empty_array":
+            # Valid JSON with nothing in it (`[]`, or blank strings): the model had no
+            # variant to offer, as for the query "a". The fallback is the designed
+            # answer, so this is not a warning.
+            log.info(
+                "Query rewriter offered no variants (%d chars); using original query only",
+                len(raw),
+            )
+        else:
+            log.warning(
+                "Query rewriter returned unparseable output (%d chars, kind=%s, stop=%s%s); "
+                "using original query only",
+                len(raw),
+                kind,
+                sink.stop_reason or "n/a",
+                ", truncated" if sink.truncated else "",
+            )
         return [query]
 
     # Deduplicate (case-insensitive) while preserving order. The
@@ -141,25 +160,71 @@ def rewrite_query(query: str, *, num_variants: int = 3) -> list[str]:
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
 
-# Match the first JSON array of strings anywhere in the model's reply.
-# `[.*?]` is non-greedy so a fenced response with code blocks before the
-# array still picks up the array itself. DOTALL allows newlines inside.
-_JSON_ARRAY_RE = re.compile(r"\[.*?\]", re.DOTALL)
+# Match the first bracketed span, for the single-quote fallback below only.
+_BRACKET_RE = re.compile(r"\[.*?\]", re.DOTALL)
+
+# Bound on the `[` positions tried: replies are a few hundred characters, and a
+# pathological one must not make the scan quadratic.
+_MAX_ARRAY_STARTS = 20
+
+_DECODER = json.JSONDecoder()
+
+
+def _find_list(raw: str) -> list | None:
+    """The first JSON array in `raw`, decoded from its opening `[` to its real end.
+
+    Walking the text with `raw_decode` (not a `\\[.*?\\]` slice) keeps a `]` inside a
+    string and a nested array whole, and skips bracketed prose ("[draft]") before the
+    array. When no `[` starts valid JSON, a python-style list (single quotes, a trailing
+    comma) is read as a literal: `ast.literal_eval` evaluates nothing.
+    """
+    pos = -1
+    for _ in range(_MAX_ARRAY_STARTS):
+        pos = raw.find("[", pos + 1)
+        if pos < 0:
+            break
+        try:
+            parsed, _end = _DECODER.raw_decode(raw, pos)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            return parsed
+    match = _BRACKET_RE.search(raw)
+    if match:
+        try:
+            parsed = ast.literal_eval(match.group(0))
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            return None
+        if isinstance(parsed, list):
+            return parsed
+    return None
+
+
+def _parse_reply(raw: str) -> tuple[list[str], str]:
+    """`(variants, kind)`. `kind` is "ok" or why there are none, so a log line can say
+    which failure this is without printing the model's text:
+
+      empty_reply       nothing came back
+      no_array          no `[` at all (prose, a refusal, a bulleted list)
+      bad_json          brackets, but not a list of any shape we read
+      empty_array       a list with no usable string (`[]`, blank strings)
+      non_string_items  a list of objects or arrays rather than strings
+    """
+    if not raw:
+        return [], "empty_reply"
+    if "[" not in raw:
+        return [], "no_array"
+    parsed = _find_list(raw)
+    if parsed is None:
+        return [], "bad_json"
+    out = [x.strip() for x in parsed if isinstance(x, str) and x.strip()]
+    if out:
+        return out, "ok"
+    if any(not isinstance(x, str) for x in parsed):
+        return [], "non_string_items"
+    return [], "empty_array"
 
 
 def _parse_variants(raw: str) -> list[str]:
     """Best-effort extraction of a JSON string array from the model output."""
-    match = _JSON_ARRAY_RE.search(raw)
-    if not match:
-        return []
-    try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    out: list[str] = []
-    for x in parsed:
-        if isinstance(x, str) and x.strip():
-            out.append(x.strip())
-    return out
+    return _parse_reply(raw)[0]
