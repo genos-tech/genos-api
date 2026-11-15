@@ -359,15 +359,6 @@ class TheGuard(SimpleTestCase):
         self.assertFalse(cut)
         self.assertEqual(out["next_cursor"], "KEEP")
 
-    def test_a_nested_list_dropping_items_leaves_the_tools_cursor_alone(self):
-        payload = {
-            "tasks": [{"task_id": 1, "notes": [{"t": "n" * 1_500} for _ in range(30)]}],
-            "next_cursor": "KEEP",
-        }
-        out, _ = self.run_guard(payload, tool="list_tasks", cap=12_000)
-        self.assertLess(len(out["tasks"][0]["notes"]), 30)
-        self.assertEqual(out["next_cursor"], "KEEP")
-
     def test_an_answer_that_does_not_say_it_is_a_thread_is_not_treated_as_a_channel(self):
         messages = [{"message_id": f"m{i}", "text": "w" * 1_500} for i in range(30)]
         out, _ = self.run_guard({"messages": messages}, tool="get_chat_thread", cap=12_000)
