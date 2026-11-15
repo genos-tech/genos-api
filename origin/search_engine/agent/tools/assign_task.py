@@ -35,6 +35,7 @@ from origin.models.common.user_models import CustomUser
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.views.utils.scope_guards import is_team_member
 
@@ -48,7 +49,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(f"`task_id` must be an integer (got {raw_task_id!r}).")
 
     try:
-        task = TaskMaster.objects.get(task_id=task_id)
+        task = TaskMaster.objects.select_related("project").get(task_id=task_id)
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
 
@@ -56,6 +57,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # The words of a missing one, so a guessed id does not say which tasks exist in other
         # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
         raise ToolForbidden(f"Task {task_id} not found.")
+    if task_is_gone(task):
+        # MIP-1621 (`AGENT_PARITY_FOLLOWUPS`): a deleted task and a task of a soft-deleted project read as a
+        # missing task, before the ACL check, so no refusal says the task exists.
+        raise ToolError(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
 

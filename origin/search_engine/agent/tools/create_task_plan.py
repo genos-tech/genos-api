@@ -64,6 +64,7 @@ from origin.search_engine.agent.tools.field_limits import (
 )
 from origin.search_engine.agent.tools.plan_task_bodies import fill_plan_task_bodies
 from origin.search_engine.agent.tools.project_field_rules import PLAN_ADVICE, plan_refusals
+from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
     PRIORITY_ENUM,
@@ -273,6 +274,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if str(getattr(parent_task, "team_id", "") or "") != ctx.team_id:
             # The words of a missing one (MIP-1531), and before the "deleted" answer.
             raise ToolForbidden(f"Task {parent_id} not found.")
+        if task_is_gone(parent_task):
+            # MIP-1621: a deleted task or a task of a soft-deleted project is a missing parent.
+            raise ToolError(f"Task {parent_id} not found.")
         if parent_task.is_deleted:
             raise ToolError(f"Task {parent_id} has been deleted.")
         if parent_task.project_id != project_id:

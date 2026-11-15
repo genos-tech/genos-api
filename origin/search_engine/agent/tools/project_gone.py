@@ -12,8 +12,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db.models import Q
+
 from origin.models.project.prj_models import ProjectMaster
 from origin.search_engine.agent.parity import followups_on
+from origin.services.live_projects import not_in_gone_project
 
 
 def in_deleted_project(task: Any) -> bool:
@@ -24,6 +27,27 @@ def in_deleted_project(task: Any) -> bool:
         and task.project_id is not None
         and (task.project is None or task.project.is_deleted)
     )
+
+
+def task_is_gone(task: Any) -> bool:
+    """Whether a by-id load must answer `task` as a MISSING task: it is soft-deleted, or it is in
+    a soft-deleted project (MIP-1621). False while the flag is off, so a caller keeps the answers it
+    always gave ("has been deleted", or the load itself). `task` came from a query with
+    `select_related("project")`, so this costs no query.
+
+    Call it AFTER the team check and BEFORE the ACL check, and raise `ToolError(f"Task {id} not
+    found.")`: the words and the class of the lookup that finds nothing. A refusal that names the
+    task ("Not authorized to ...", "has been deleted") says it exists."""
+    return bool(followups_on() and (task.is_deleted or in_deleted_project(task)))
+
+
+def live_tasks_q(prefix: str = "") -> Q:
+    """A `Q` for a task QUERY that leaves out the tasks of soft-deleted projects, as `Q()` (no
+    filter, no join) while the flag is off. `prefix` names the path to the task, e.g. `"task__"`.
+    The list tools add it to the base queryset, so counts, totals and pages are computed on the
+    live set; `member_project_ids` alone is not enough because the ACL also admits the assignee and
+    the reporter of a task, wherever it is."""
+    return not_in_gone_project(prefix) if followups_on() else Q()
 
 
 def drop_deleted_projects(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:

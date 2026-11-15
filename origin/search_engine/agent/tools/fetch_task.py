@@ -74,6 +74,7 @@ def _hierarchy(task: TaskMaster, ctx: ToolContext) -> dict[str, Any]:
         if (
             parent is not None
             and str(parent.team_id or "") == ctx.team_id
+            and not in_deleted_project(parent)
             and ctx.user_id
             in task_acl_user_ids(parent.project_id, parent.assignee_id, parent.reporter_id)
         ):

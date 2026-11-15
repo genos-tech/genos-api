@@ -28,6 +28,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.sprint_status import derive_status
 from origin.services.user_time import today_for_user_id
@@ -56,6 +57,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # MCP refusal counter sees the probe.
     if str(getattr(sprint, "team_id", "") or "") != ctx.team_id:
         raise ToolForbidden(not_found)
+    if in_deleted_project(sprint):
+        # MIP-1621 (flag `AGENT_PARITY_FOLLOWUPS`): a sprint of a soft-deleted project reads as a missing one.
+        raise ToolError(not_found)
     is_member = ProjectMembers.objects.filter(
         project_id=sprint.project_id,
         attendee_id=ctx.user_id,

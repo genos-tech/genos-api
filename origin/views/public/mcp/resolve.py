@@ -46,6 +46,7 @@ import re
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import ToolError
+from origin.search_engine.agent.tools.project_gone import live_tasks_q
 
 # `/workspace/tasks/project/5/task/42`, with or without a trailing
 # `/comment/3`. Anchored on `/task/` so the project id can't be mistaken
@@ -105,6 +106,10 @@ def resolve_task_ref(ref, team_id: str) -> int:
         number = int(display.group("number"))
         task_id = (
             TaskMaster.objects.filter(
+                # A task of a soft-deleted project has no display id to find, as a missing one has none
+                # (MIP-1621, flag `AGENT_PARITY_FOLLOWUPS`): the tool it is passed to would otherwise answer
+                # "not found" where this answers with a task, and the difference would say it exists.
+                live_tasks_q(),
                 team_id=team_id,
                 project__code__iexact=code,
                 project_task_number=number,

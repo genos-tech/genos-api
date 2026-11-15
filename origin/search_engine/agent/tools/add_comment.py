@@ -28,6 +28,7 @@ from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.search_engine.agent.undo import UNDO_KEY, comment_capture
 from origin.services.task_comment_fanout import fan_out_task_comment
 
@@ -85,13 +86,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError("`body_text` is required and must be non-empty.")
 
     try:
-        task = TaskMaster.objects.get(task_id=task_id)
+        task = TaskMaster.objects.select_related("project").get(task_id=task_id)
     except TaskMaster.DoesNotExist:
         raise ToolError(f"Task {task_id} not found.")
     if str(getattr(task, "team_id", "") or "") != ctx.team_id:
         # The words of a missing one, so a guessed id does not say which tasks exist in other
         # teams (MIP-1531); the class still counts toward the MCP refusal alarm.
         raise ToolForbidden(f"Task {task_id} not found.")
+    if task_is_gone(task):
+        # MIP-1621 (`AGENT_PARITY_FOLLOWUPS`): a deleted task and a task of a soft-deleted project read as a
+        # missing task, before the ACL check, so no refusal says the task exists.
+        raise ToolError(f"Task {task_id} not found.")
     if task.is_deleted:
         raise ToolError(f"Task {task_id} has been deleted.")
 

@@ -11,14 +11,16 @@ from __future__ import annotations
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import ToolContext, ToolForbidden
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 
 
 def require_readable_parent(parent_task_id: int, ctx: ToolContext) -> None:
     """Raise `ToolForbidden` when `parent_task_id` is a task in the caller's
     team that the caller can't read. A task that doesn't exist, or sits in
     another team, is left to the structural checks, which answer for it."""
-    parent = TaskMaster.objects.filter(task_id=parent_task_id).first()
-    if parent is None or str(parent.team_id or "") != ctx.team_id:
+    parent = TaskMaster.objects.select_related("project").filter(task_id=parent_task_id).first()
+    # A parent of a soft-deleted project is left to `find_parent` too (MIP-1621), which answers it as a missing one.
+    if parent is None or str(parent.team_id or "") != ctx.team_id or in_deleted_project(parent):
         return
     if ctx.user_id not in task_acl_user_ids(
         parent.project_id, parent.assignee_id, parent.reporter_id

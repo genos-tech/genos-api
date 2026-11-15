@@ -48,6 +48,7 @@ from origin.search_engine.agent.acl import (
     task_acl_user_ids,
     task_note_acl_user_ids,
 )
+from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.chunkers.base import (
     CHAT_TYPE_LABEL,
     NOTE_TYPE_CHAT,
@@ -300,6 +301,7 @@ def _resolve_tasks(
     try:
         rows = list(
             TaskMaster.objects.filter(
+                live_tasks_q(),  # MIP-1621: not a soft-deleted project's (flag `AGENT_PARITY_FOLLOWUPS`)
                 task_id__in=task_ids,
                 team_id=team_id,
                 is_deleted=False,
@@ -596,6 +598,7 @@ def _resolve_milestones(
     try:
         rows = list(
             MilestoneMaster.objects.filter(
+                live_tasks_q(),  # MIP-1621: not a soft-deleted project's (flag `AGENT_PARITY_FOLLOWUPS`)
                 milestone_id__in=milestone_ids,
                 team_id=team_id,
                 is_deleted=False,

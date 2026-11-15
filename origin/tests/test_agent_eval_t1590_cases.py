@@ -23,6 +23,9 @@ KNOWN_EXPECT = {
     "answer_contains_all",
     "answer_does_not_contain",
     "answer_chars_at_least",
+    # The harness's own keys (`harness.GROUP_EXPECT_KEYS`), read by `group_checks` (MIP-1621).
+    "answer_does_not_match",
+    "no_tool_results_contain",
 }
 
 
@@ -92,6 +95,49 @@ class CaseFileTests(SimpleTestCase):
             case = self.by_id[f"t1590.deleted-project-task.{lang}"]
             for word in case.raw["expect"]["answer_does_not_contain"]:
                 self.assertIn(word, body)
+
+    def test_the_deleted_project_cases_forbid_the_task_id_and_the_project_name_in_the_answer_and_the_tools(
+        self,
+    ):
+        """MIP-1621: the paid run saw the model reach the task through `list_tasks` and name its id (EMD-1) and
+        its project. The case fails on either, in the answer and in any tool result; the keys are ones the
+        harness reads (`GROUP_EXPECT_KEYS`), and a fake answer that names them fails the real check."""
+        for lang in ("en", "ja"):
+            case = self.by_id[f"t1590.deleted-project-task.{lang}"]
+            expect = case.raw["expect"]
+            self.assertLessEqual({"answer_does_not_match", "no_tool_results_contain"}, set(expect))
+            self.assertLessEqual(
+                {"answer_does_not_match", "no_tool_results_contain"}, harness.GROUP_EXPECT_KEYS
+            )
+            self.assertIn("EMD-1", expect["no_tool_results_contain"])
+            self.assertIn("Eval wound-down project", expect["no_tool_results_contain"])
+
+            def verdict(answer, tool_text="[]"):
+                checks = harness.group_checks(
+                    expect, answer=answer, tools=[], tool_text=tool_text, calls=1
+                )
+                return {c["name"]: c["ok"] for c in checks}
+
+            clean = "I could not find that task, so I cannot say what it holds."
+            self.assertTrue(all(verdict(clean).values()), verdict(clean))
+            for answer in (
+                "The task EMD-1 says the lease is renewed.",
+                "emd 1 is the lease task",
+                "It is in the Eval wound-down project.",
+                "It is in the wound-down project.",
+            ):
+                self.assertFalse(verdict(answer)["answer_does_not_match"], answer)
+            for tool_text in (
+                '[{"display_id": "EMD-1"}]',
+                '[{"project_name": "Eval wound-down project"}]',
+            ):
+                self.assertFalse(verdict(clean, tool_text)["no_tool_results_contain"], tool_text)
+
+    def test_the_other_t1590_cases_are_not_loosened_by_it(self):
+        for c in self.cases:
+            if "deleted-project-task" in c.id:
+                continue
+            self.assertNotIn("no_tool_results_contain", c.raw["expect"], c.id)
 
     def test_the_deleted_project_cases_say_the_mention_is_expected_to_drop_and_no_other_does(self):
         # Without the key the runner raised "mention resolution dropped entries" before any model call (first paid

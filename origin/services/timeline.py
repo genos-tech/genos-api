@@ -87,6 +87,7 @@ from origin.search_engine.agent.tools.base import (
     ToolForbidden,
     wrap_workspace_content,
 )
+from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.agent.tools.task_enums import VALID_STATUSES
 from origin.services import briefing, item_lines, member_events, note_scope, plain_text
 from origin.services.channel_scope import can_read_chat, readable_chats_qs
@@ -312,6 +313,7 @@ def _task_id_from(ref: Any, team_id: str) -> int | None:
     if display:
         return (
             TaskMaster.objects.filter(
+                live_tasks_q(),
                 team_id=team_id,
                 project__code__iexact=display.group("code"),
                 project_task_number=int(display.group("number")),
@@ -352,7 +354,11 @@ def _open_task(ctx: ToolContext, access: LabelAccess, ref: Any) -> Anchor:
     task_id = _task_id_from(ref, str(ctx.team_id))
     task = access.tasks([task_id]).get(task_id) if task_id else None
     if task is None or task.is_init_task:
-        exists = bool(task_id) and TaskMaster.objects.filter(task_id=task_id).exists()
+        # A task of a soft-deleted project does not "exist" here (MIP-1621; `Q()` while the flag
+        # `AGENT_PARITY_FOLLOWUPS` is off): the refusal class is a missing task's.
+        exists = (
+            bool(task_id) and TaskMaster.objects.filter(live_tasks_q(), task_id=task_id).exists()
+        )
         raise _refuse("task", exists)
     return Anchor(
         "task", str(task.task_id), task.title or "", task.status, task.ts_created_at, task=task
@@ -1091,7 +1097,7 @@ def _claiming_task(sc: Scope) -> TaskMaster | None:
     if len(ids) != 1:
         return None
     task = TaskMaster.objects.filter(
-        task_id=ids[0], team_id=sc.team, is_deleted=False, is_init_task=False
+        live_tasks_q(), task_id=ids[0], team_id=sc.team, is_deleted=False, is_init_task=False
     ).first()
     if (
         task is None

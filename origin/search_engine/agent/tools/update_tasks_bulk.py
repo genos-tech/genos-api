@@ -35,6 +35,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
+from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.search_engine.agent.tools.task_custom_fields import parse_iso_date
 from origin.search_engine.agent.tools.task_enums import (
     EFFORT_ENUM,
@@ -176,6 +177,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             continue
         if str(getattr(task, "team_id", "") or "") != ctx.team_id:
             # The words of a missing one (MIP-1531), and before the "deleted" answer.
+            errors.append(f"{where}: task {tid} not found.")
+            continue
+        if task_is_gone(task):
+            # MIP-1621: a deleted task and a task of a soft-deleted project read as a missing one, before the
+            # ACL answer (flag `AGENT_PARITY_FOLLOWUPS`).
             errors.append(f"{where}: task {tid} not found.")
             continue
         if task.is_deleted:

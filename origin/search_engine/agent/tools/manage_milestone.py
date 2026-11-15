@@ -40,7 +40,7 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
-from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.parity import followups_on, parity_on
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
@@ -722,7 +722,13 @@ def _already_gone(milestone: MilestoneMaster, ctx: ToolContext) -> str:
         if milestone.converted_to_task_id
         else None
     )
-    if task is None or task.is_deleted or not can_access_task(task.task_id, ctx.user_id):
+    if (
+        task is None
+        or task.is_deleted
+        # A task of a soft-deleted project is not one the caller may open (MIP-1621); the old answer,
+        # which named it, stays while the flag is off.
+        or not can_access_task(task.task_id, ctx.user_id, include_gone_project=not followups_on())
+    ):
         return gone + "has been deleted."
     return gone + converted_hint(
         task.display_id, task.task_id, task.milestone_id if task.is_milestone else None

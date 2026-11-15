@@ -34,6 +34,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.milestone_order import order_of_work
+from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.template_prompts import has_written_body
 from origin.services.milestone_rollup import milestone_tasks_q, milestone_work_q
@@ -66,6 +67,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if str(getattr(m, "team_id", "") or "") != ctx.team_id:
         # The words of a missing one (MIP-1531).
         raise ToolForbidden(f"Milestone {milestone_id} not found.")
+    if in_deleted_project(m):
+        # MIP-1621 (flag `AGENT_PARITY_FOLLOWUPS`): a milestone of a soft-deleted project reads as a missing one,
+        # before the membership answer, and its rollup names none of the project's tasks.
+        raise ToolError(f"Milestone {milestone_id} not found.")
 
     is_member = ProjectMembers.objects.filter(
         project_id=m.project_id,
