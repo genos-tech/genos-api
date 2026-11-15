@@ -151,7 +151,7 @@ class CutText(SimpleTestCase):
 
     def test_a_string_over_the_floor_by_less_than_its_marker_is_not_cut_by_the_guard(self):
         work = {"a": "x" * (rl.LONG_STRING_FLOOR + 30), "b": "y" * 9_000}
-        changed = rl._cut_long_strings(work, 5_000, rl.Cuts())
+        changed = rl._cut_long_strings(work, 50_000, rl.Cuts())  # so much that the level is the floor
         self.assertTrue(changed)
         self.assertEqual(work["a"], "x" * (rl.LONG_STRING_FLOOR + 30))
         self.assertIn("more characters not shown", work["b"])
