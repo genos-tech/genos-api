@@ -22,6 +22,11 @@ from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.search_engine.agent.parity import ignore_unless_parity
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError
 from origin.search_engine.agent.tools.body_limits import check_body_size
+from origin.search_engine.agent.tools.field_limits import (
+    TODO_CATEGORY_MAX,
+    TODO_TITLE_MAX,
+    check_text_length,
+)
 from origin.search_engine.agent.tools.todo_args import (
     NOTES_TEXT_DESCRIPTION,
     REMIND_AT_SCHEMA,
@@ -56,6 +61,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     title = (args.get("title") or "").strip()
     if not title:
         raise ToolError("`title` is required.")
+    check_text_length(
+        title, "title", TODO_TITLE_MAX, nothing="Nothing was created.", body="notes_text"
+    )
 
     target_date = _parse_date(args.get("target_date"), today_for_user_id(ctx.user_id))
     # Resolved before the first write: a reminder that can't be honoured must
@@ -64,6 +72,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     remind_at = reminder_from_args(args, zone)
     notes_text = (args.get("notes_text") or "").strip()
     category_name = (args.get("category") or "").strip()
+    check_text_length(category_name, "category", TODO_CATEGORY_MAX, nothing="Nothing was created.")
     # Checked before the first write, like the reminder: a comment the caller cannot open leaves no
     # to-do behind.
     source = source_from(args, ctx)

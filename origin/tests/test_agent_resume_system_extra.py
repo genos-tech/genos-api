@@ -860,6 +860,10 @@ class NormalAskUnchangedTests(TestCase):
             mock.patch.object(
                 agent_views, "load_or_generate_note_for_ask", return_value=("NOTE SUMMARY", record)
             ),
+            # The summaries are faked and the thread and note ids are made up: the access
+            # check that comes before them (MIP-1590) is not what these goldens are about.
+            mock.patch.object(agent_views, "check_thread_for_ask"),
+            mock.patch.object(agent_views, "check_note_for_ask"),
             mock.patch.object(agent_views, "resolve_mentions", return_value=[mention]),
         ):
             payload = {"query": "q", "team_id": str(self.team.team_id), **extra}

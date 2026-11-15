@@ -26,9 +26,11 @@ from origin.search_engine.quota import get_mcp_enabled
 from origin.services import mcp_notice, member_events, security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
+from origin.views.public.anonymous_throttle import McpAnonymousThrottle
 from origin.views.public.credentials import credential_of
-from origin.views.public.mcp import prompts, protocol, tools
+from origin.views.public.mcp import prompts, protocol, request_guard, tools
 from origin.views.public.mcp.protocol import JsonRpcError
+from origin.views.public.mcp.result_log import note_result
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
 from origin.views.public.v1_views import PublicApiView
 from origin.views.utils.scope_guards import participates_in_team
@@ -75,6 +77,30 @@ class McpView(PublicApiView):
     # answer `[1]` with a bare 400 `{"error": ...}` instead.
     object_body_required = False
 
+    def dispatch(self, request, *args, **kwargs):
+        # Before DRF authenticates or parses anything: an oversized request is refused on its
+        # `Content-Length` alone, so it costs no key lookup and no JSON parse (`request_guard`).
+        refusal = request_guard.refusal_for(request)
+        if refusal is not None:
+            return refusal
+        return super().dispatch(request, *args, **kwargs)
+
+    def _echoable_id(self) -> Any:
+        """The JSON-RPC `id` to echo in an answer made before the call is read, or None.
+
+        An unreadable body just has no id, and a large one is not parsed for it: that would
+        spend a full parse of up to the request limit on a caller who has not authenticated.
+        """
+        if request_guard.too_big_to_echo_id(self.request):
+            return None
+        try:
+            data = self.request.data
+            if isinstance(data, dict):
+                return data.get("id")
+        except Exception:  # noqa: BLE001 - an unreadable body just has no id
+            pass
+        return None
+
     def disabled_message(self) -> str | None:
         # `PUBLIC_API_DISABLED` (all key access) or `MCP_DISABLED` (this
         # endpoint only), MIP-865.
@@ -86,20 +112,38 @@ class McpView(PublicApiView):
         # The transport's own convention is a JSON-RPC error body, so a
         # client shows the message instead of a bare HTTP failure. 503
         # is the HTTP half. The id is echoed when the body is readable.
-        request_id = None
-        try:
-            data = self.request.data
-            if isinstance(data, dict):
-                request_id = data.get("id")
-        except Exception:
-            pass
+        request_id = self._echoable_id()
         error = JsonRpcError(protocol.SERVICE_UNAVAILABLE, message, http_status=503)
         return Response(error.as_response(request_id), status=error.http_status)
 
     def handle_exception(self, exc):
         if isinstance(exc, (exceptions.NotAuthenticated, exceptions.AuthenticationFailed)):
-            return self.unauthorized_response(exc)
+            # A refused call is counted per address; past the limit the answer is a 429, not
+            # another 401 (MIP-1367). Authenticated calls never pass through here.
+            return self.anonymous_limit_response() or self.unauthorized_response(exc)
         return super().handle_exception(exc)
+
+    def anonymous_limit_response(self) -> Response | None:
+        """The 429 for an address that keeps presenting no valid credential, or None.
+
+        JSON-RPC shaped like every other refusal here, and with the body unread: the point of
+        the limit is that a refused caller costs next to nothing. `data` tells a client it was a
+        limit and which one (`limit_reached` / `category`, as the plan limits do).
+        """
+        throttle = McpAnonymousThrottle()
+        if throttle.allow_request(self.request, self):
+            return None
+        wait = max(1, int(throttle.wait() or 60))
+        error = JsonRpcError(
+            protocol.INVALID_REQUEST,
+            "Too many requests without a valid credential from this address. "
+            f"Wait {wait} seconds, then connect again.",
+            data={"limit_reached": True, "category": McpAnonymousThrottle.scope},
+            http_status=429,
+        )
+        response = Response(error.as_response(None), status=429)
+        response["Retry-After"] = str(wait)
+        return response
 
     def unauthorized_response(self, exc) -> Response:
         """A 401 an MCP client can act on (MIP-1078).
@@ -114,13 +158,7 @@ class McpView(PublicApiView):
         The body half is the transport's own convention, a JSON-RPC error, so a client shows
         a message instead of DRF's bare `{"detail": ...}`. The id is echoed when readable.
         """
-        request_id = None
-        try:
-            data = self.request.data
-            if isinstance(data, dict):
-                request_id = data.get("id")
-        except Exception:  # noqa: BLE001 - an unreadable body just has no id
-            pass
+        request_id = self._echoable_id()
         # The authenticator's own words, as before: the API-key one says "Invalid or
         # revoked API key." for an unknown, a revoked and an expired key alike, and an
         # OAuth authenticator will say its own. Only the shape of the body is new.
@@ -516,7 +554,7 @@ class McpView(PublicApiView):
         # with no author.
         with metered_request(surface="mcp", user_id=ctx.user_id, team_id=ctx.team_id):
             try:
-                return tools.call(
+                result = tools.call(
                     name,
                     arguments,
                     ctx,
@@ -528,6 +566,10 @@ class McpView(PublicApiView):
                     record_use=record_use,
                     notify=notify,
                 )
+                # Size and name for the `perf.request` line, and the shadow cap's log line
+                # (MIP-1367). Observes only: `result` goes back exactly as built.
+                note_result(request, name, result)
+                return result
             except JsonRpcError:
                 raise
             except Exception:  # noqa: BLE001 — an unexpected bug is ours, not the caller's

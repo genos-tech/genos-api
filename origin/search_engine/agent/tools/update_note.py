@@ -45,6 +45,7 @@ from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
+from origin.search_engine.agent.tools.field_limits import NOTE_TITLE_MAX, check_text_length
 from origin.search_engine.agent.tools.note_access import has_write_permission, note_not_found
 from origin.search_engine.agent.tools.note_targets import (
     PERSONAL_FAMILY,
@@ -301,6 +302,7 @@ def _apply_changes(
         new_title = (args.get("title") or "").strip()
         if not new_title:
             raise ToolError("`title` must be non-empty if provided.")
+        check_text_length(new_title, "title", NOTE_TITLE_MAX, body="content_text")
         if new_title != (note.title or ""):
             note.title = new_title
             update_fields.append("title")

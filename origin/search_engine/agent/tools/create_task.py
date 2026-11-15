@@ -65,6 +65,7 @@ from origin.search_engine.agent.tools.blocknote_md import task_body_blocks
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_task_body_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
+from origin.search_engine.agent.tools.field_limits import TASK_TITLE_MAX, check_text_length
 from origin.search_engine.agent.tools.plan_task_bodies import new_task_body
 from origin.search_engine.agent.tools.project_field_rules import create_refusal
 from origin.search_engine.agent.tools.task_custom_fields import (
@@ -186,6 +187,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     title = (args.get("title") or "").strip()
     if not title:
         raise ToolError("`title` is required.")
+    check_text_length(
+        title, "title", TASK_TITLE_MAX, nothing="Nothing was created.", body="content_text"
+    )
 
     raw_project_id = args.get("project_id")
     try:
