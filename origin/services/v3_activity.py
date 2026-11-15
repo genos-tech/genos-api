@@ -54,6 +54,7 @@ from origin.models.chat.unified_models import (
     Message,
 )
 from origin.models.common.user_models import CustomUser
+from origin.services import inbox_via
 from origin.services.channel_scope import can_read_chat, chat_member_rows
 
 logger = logging.getLogger(__name__)
@@ -239,7 +240,10 @@ def create_surface_mention_activities(
     """
     from origin.models.common.team_models import TeamMembers
 
-    meta = meta or {}
+    # A client's `meta` (REST, or the sockets handlers that proxy it) never carries a `via`: it
+    # would draw an official app's icon on something a person typed (MIP-1573). The one stamped
+    # here is the write's own source, when a connected app made it (an agent tool run over MCP).
+    meta = inbox_via.stamped(inbox_via.without_via(meta or {}))
 
     # Backfill task routing fields the emit path couldn't compute from the
     # task FK alone — resolved at the single convergence point for every
@@ -309,7 +313,8 @@ def create_surface_mention_activities(
 
 def _task_stakeholders(task_id) -> set:
     """Assignee + collaborators of a task — who to tell about a comment
-    left on the task BODY (surface 5) even without an @-mention.
+    left on the task BODY (surface 5) even without an @-mention. A collaborator who cannot
+    open the task is not told (MIP-1567).
 
     Prior *task-comment* senders (the separate legacy task-comment feature)
     are intentionally NOT included: a BlockNote inline comment's own prior
@@ -318,6 +323,7 @@ def _task_stakeholders(task_id) -> set:
     "the task's assigned user plus stakeholders", exactly the report's ask.
     """
     from origin.models.task.task_models import TaskMaster
+    from origin.services.task_collaborators import notifiable_collaborator_ids
 
     out: set = set()
     if task_id is None:
@@ -327,13 +333,8 @@ def _task_stakeholders(task_id) -> set:
     )
     if assignee_id is not None:
         out.add(str(assignee_id))
-    for collab_id in (
-        TaskMaster.objects.filter(task_id=task_id)
-        .values_list("collaborators__id", flat=True)
-        .distinct()
-    ):
-        if collab_id is not None:
-            out.add(str(collab_id))
+    # Only the collaborators who can open the task (MIP-1567).
+    out |= notifiable_collaborator_ids(task_id)
     return out
 
 
@@ -472,7 +473,9 @@ def create_surface_comment_activities(
     """
     from origin.models.common.team_models import TeamMembers
 
-    meta = dict(meta or {})
+    # Never a client's `via` (MIP-1573); no stamp either: this producer is only the client's
+    # forward of a person's own comment, never a connected app's write.
+    meta = dict(inbox_via.without_via(meta or {}))
     # Tags the row for the "commented" FE render + the comment push wording,
     # and (with surface_type) routes it to the host note/task. Rides the host
     # surface exactly like a comment mention.
@@ -585,6 +588,8 @@ def create_mention_activities(
         if not targets:
             return []
     channel = message.channel
+    # The connected app that made this write, if one did (MIP-1573): its kind and family only.
+    meta = inbox_via.stamped({})
     rows = [
         Activity(
             team_id=_team_id_for_channel(channel),
@@ -593,7 +598,7 @@ def create_mention_activities(
             activity_type=ActivityType.MENTION,
             channel=channel,
             message=message,
-            meta={},
+            meta=dict(meta),
         )
         for uid in targets
     ]
@@ -688,7 +693,7 @@ def create_task_assign_activity(
         activity_type=ActivityType.MENTION,
         channel=channel,
         message=message,
-        meta={"taskAssign": True},
+        meta=inbox_via.stamped({"taskAssign": True}),
     )
     logger.info(
         "[v3_activity] task-assign mention created: id=%s recipient=%s task=%s",
@@ -897,6 +902,7 @@ def create_comment_participant_activities(
     if not targets:
         return []
     channel = message.channel
+    meta = inbox_via.stamped({})  # the connected app that made this write, if any (MIP-1573)
     rows = [
         Activity(
             team_id=_team_id_for_channel(channel),
@@ -905,7 +911,7 @@ def create_comment_participant_activities(
             activity_type=ActivityType.THREAD_REPLY,
             channel=channel,
             message=message,
-            meta={},
+            meta=dict(meta),
         )
         for uid in targets
     ]

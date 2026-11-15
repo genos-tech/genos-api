@@ -7,6 +7,7 @@ from origin.models.note.personal_note_models import *
 from origin.models.note.recent_note_models import *
 from origin.models.note.task_note_models import *
 from origin.models.note.version_note_models import NoteVersionMaster
+from origin.views.public.mcp.via_privacy import via_for_viewer
 
 
 class PersonalNoteMasterSerializer(serializers.ModelSerializer):
@@ -104,6 +105,7 @@ class NoteVersionListItemSerializer(serializers.ModelSerializer):
     )
     tsCreatedAt = serializers.DateTimeField(source="ts_created_at", read_only=True)
     tsUpdatedAt = serializers.DateTimeField(source="ts_updated_at", read_only=True)
+    via = serializers.SerializerMethodField()
 
     class Meta:
         model = NoteVersionMaster
@@ -114,10 +116,19 @@ class NoteVersionListItemSerializer(serializers.ModelSerializer):
             "restoredFromVersionNo",
             "tsCreatedAt",
             "tsUpdatedAt",
+            "via",
         ]
 
     def get_editor(self, obj):
         return _editor_payload(obj.editor)
+
+    def get_via(self, obj):
+        """How the write arrived (MIP-1488): `null` for the web app and every older row. A key's
+        or connected app's NAME is its owner's, and a key writes as its owner, so the actor is the
+        `editor`: they read it whole; anyone else reads `{kind}` and a connected app's `app`
+        family. The caller names the reader in `context["viewer_id"]`; with none, nobody is the
+        owner."""
+        return via_for_viewer(obj.via, obj.editor_id, self.context.get("viewer_id"))
 
 
 class NoteVersionDetailSerializer(NoteVersionListItemSerializer):
