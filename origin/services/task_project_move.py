@@ -90,6 +90,80 @@ def milestone_move_task_count(milestone) -> int:
     return live_tasks(milestone_subtree_task_ids(milestone) - {milestone.task_id}).count()
 
 
+def people_outside(destination, people) -> set[str]:
+    """The ids among `people` who may not be put on a task in `destination`: not a member of the
+    project, nor of its team (`may_name_person`). The bar an assignment there uses, so a move
+    inside one team, the common case, has nobody outside."""
+    from origin.services.task_collaborators import may_name_person  # noqa: PLC0415
+
+    return {
+        person
+        for person in {str(p) for p in people if p not in (None, "")}
+        if not may_name_person(destination, person)
+    }
+
+
+def moving_assignees(task_ids) -> dict[str, list[str]]:
+    """Who is assigned to the live tasks among `task_ids`, as `{person id: [display ids]}`."""
+    people: dict[str, list[str]] = {}
+    for task in (
+        live_tasks(task_ids)
+        .filter(assignee__isnull=False)
+        .select_related("project")
+        .order_by("task_id")
+    ):
+        people.setdefault(str(task.assignee_id), []).append(task.display_id or str(task.task_id))
+    return people
+
+
+def assignee_problem_sentence(subject: str, destination, parts: list[str], *, way_out: str) -> str:
+    """The refusal a move gives when an assignee is not on the destination: one wording for the
+    milestone and the task, so the app and the tool say the same (`way_out` is the part that
+    differs: what to change)."""
+    return (
+        f"This {subject} can't move to {destination.project_name}: {' and '.join(parts)} "
+        "is not on that project or its team, so they would keep opening tasks that are no longer "
+        f"theirs to see. {way_out} Nothing was changed."
+    )
+
+
+def shown_refs(refs: list[str]) -> str:
+    """Up to five display ids, then how many more."""
+    return ", ".join(refs[:5]) + (f" and {len(refs) - 5} more" if len(refs) > 5 else "")
+
+
+def task_move_assignee_problem(task, destination, *, assignee=None) -> str | None:
+    """Why `task` may not move to `destination` because of who is assigned, or None (MIP-1597).
+
+    The single-task PUT's side of `milestone_manage.move_assignee_problem` (MIP-1583), by the same
+    bar: an assignee reads the task they hold (`can_access_task`), so a task, or one of the
+    sub-tasks that move with it, whose assignee is not on the destination project or its team would
+    stay open to them. A move inside one team is not refused. `assignee` is the one this save sets
+    (a save that sends none, or a null, keeps the stored one: `task.assignee_id`). A deleted
+    sub-task moves too and is not judged. The caller must have checked that the task is going to
+    another project, and that the caller is on the destination (a stranger gets a not-found
+    first).
+    """
+    moving = {task.task_id} | collect_descendant_task_ids(task.task_id)
+    people = moving_assignees(moving - {task.task_id})
+    # The task itself: the assignee it will have after this save.
+    holder = assignee or task.assignee_id
+    if holder not in (None, ""):
+        people.setdefault(str(holder), []).insert(0, task.display_id or str(task.task_id))
+    outside = people_outside(destination, people)
+    refs = sorted(
+        {ref for person, person_refs in people.items() if person in outside for ref in person_refs}
+    )
+    if not refs:
+        return None
+    return assignee_problem_sentence(
+        "task",
+        destination,
+        [f"the assignee of {shown_refs(refs)}"],
+        way_out="Reassign them first (or send `assignee` with the move).",
+    )
+
+
 def relocate_tasks(
     task_ids,
     *,
