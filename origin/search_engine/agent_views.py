@@ -120,6 +120,9 @@ from origin.search_engine.agent.mentions import (
     resolve_selected_from,
     selection_marker,
 )
+from origin.search_engine.agent.mentions import (
+    rebuild_block as rebuild_mention_block,
+)
 from origin.search_engine.agent.multi_turn import PriorContext
 from origin.search_engine.agent.note_summary import (
     NOTE_NOT_FOUND,
@@ -138,7 +141,7 @@ from origin.search_engine.agent.note_summary import (
 from origin.search_engine.agent.note_summary import (
     regenerate_summary as regenerate_note_summary,
 )
-from origin.search_engine.agent.parity import parity_on
+from origin.search_engine.agent.parity import followups_on, parity_on
 from origin.search_engine.agent.thread_summary import (
     ThreadSummaryError,
     check_thread_for_ask,
@@ -1928,6 +1931,8 @@ class AgentAskView(AuthenticatedAPIView):
                 scoped_extra=scoped_extra,
                 mention_extra=mention_extra,
                 tier_extra=tier_extra,
+                # MIP-1590 (`AGENT_PARITY_FOLLOWUPS`): the references are read again at `/decide/`, not replayed.
+                live_mentions=followups_on(),
                 refs=resume_refs(ref_messages, selection),
                 dropped=dropped_references,
                 # The task's id, never its text: `/decide/` reads it again (MIP-1057).
@@ -2083,6 +2088,7 @@ def _resume_context_for(
     scoped_extra: str | None,
     mention_extra: str | None,
     tier_extra: str | None,
+    live_mentions: bool = False,
     refs: dict[str, Any] | None = None,
     object_ref: dict[str, Any] | None = None,
     prior_summary: str | None = None,
@@ -2142,6 +2148,12 @@ def _resume_context_for(
     kept so the `done` of the resumed leg can say them again beside what was lost while the card waited. Absent
     from the row when nothing was dropped.
 
+    `live_mentions` (MIP-1590, `AGENT_PARITY_FOLLOWUPS`) says the references block of `rest` is not to be replayed:
+    `/decide/` builds it again from the run's `mentions` with the asker's access of that moment
+    (`mentions.rebuild_block`), so an object that was deleted or lost while the card waited is not named. The row then
+    also keeps the tier block alone (`tier`), to put behind it; `rest` stays as sent, for a flag switched off in
+    between. Absent from the row when the flag was off (or there was no references block), so that row is what it was.
+
     `object_ref` (MIP-1057) is the task or milestone the conversation is about: its ID alone
     (`task_context.resume_object`), never its text. `/decide/` reads the task again as the person may
     read it by then, so one deleted or lost to them while the card waited is not replayed, a change
@@ -2176,6 +2188,9 @@ def _resume_context_for(
     }
     if dropped:
         kept["dropped"] = dropped
+    if live_mentions and mention_extra:
+        kept["mentions_live"] = True
+        kept["tier"] = tier_extra or None
     if refs:
         kept["refs"] = refs
     if object_ref:
@@ -2275,9 +2290,30 @@ def _resumed_context(run: AgentRun) -> tuple[str | None, list[str]]:
         )
         if refs_block:
             parts.append(refs_block)
+        mentions_lost: list[str] = []
+        if followups_on() and kept.get("mentions_live") is True:
+            # MIP-1590: the references block is built again from the run's mentions, each read with the person's
+            # access now, in front of the tier block (the order `/ask/` joined them in). An object deleted or lost
+            # to them while the card waited has no bullet and is reported by its kind.
+            object_row = kept.get("object")
+            mention_block, mentions_lost = rebuild_mention_block(
+                run.mentions,
+                team_id=str(run.team_id or ""),
+                user_id=str(run.user_id or ""),
+                skip_task_id=object_row.get("task_id") if isinstance(object_row, dict) else None,
+            )
+            tier = kept.get("tier")
+            rest = (
+                "\n\n".join(
+                    b for b in (mention_block, tier if isinstance(tier, str) else None) if b
+                )
+                or None
+            )
         if isinstance(rest, str) and rest:
             parts.append(rest)
-        dropped += [kind for kind in (*object_lost, *refs_lost) if kind not in dropped]
+        dropped += [
+            kind for kind in (*object_lost, *refs_lost, *mentions_lost) if kind not in dropped
+        ]
         return "\n\n".join(parts) or None, dropped
     except Exception:  # noqa: BLE001 — see the docstring
         log.exception("Could not rebuild the system prompt context of run %s", run.run_id)
