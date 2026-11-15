@@ -26,6 +26,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+from origin.models.common.member_importance_models import MARK_ON_IT
 from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
 from origin.search_engine.agent.tools.create_calendar_event import (
     PARITY_PROPERTIES as _CALENDAR_ACCOUNT,
@@ -67,6 +68,24 @@ class ParamAddition:
     descriptions: dict[str, str] = field(default_factory=dict)
 
 
+# MIP-1588: `set_item_importance` (an MCP-only tool) offers the "On it" mark of a report row. `on_it` joins the `mark` enum, and
+# the property is worded for it. The tool applies the same gate (it refuses `on_it` while the flag is off, as it always did).
+ON_IT_MARK = MARK_ON_IT
+ON_IT_MARK_DESCRIPTION = (
+    "not_important: never offer it as a top item or suggestion. "
+    "priority_is_right: stop asking whether to change its priority. "
+    "on_it: the member is on it, so leave it out of their reports for 7 days, or until its status, priority, due date "
+    "or overdue state changes (weaker than not_important; nothing else about the task changes). "
+    "clear: remove the mark."
+)
+#: The sentence of the MCP catalog text it replaces while the flag is on (`tool_flag_text.MCP_REPLACEMENTS`).
+ON_IT_CLEAR_SENTENCE = "'clear': remove the mark."
+ON_IT_CLEAR_SENTENCE_ON = (
+    "'on_it': they are on it, so the task leaves their reports for 7 days, or until its status, priority, due date or "
+    "overdue state changes; it is weaker than 'not_important' and changes nothing on the task. Use it when they say "
+    "'I'm on it' or 'stop reminding me about this one'. 'clear': remove the mark."
+)
+
 #: Append, never reorder: a tool's added properties follow the order of the rows.
 ADDITIONS: tuple[ParamAddition, ...] = (
     ParamAddition("create_task", PARITY_FLAG, properties=_CREATE_TASK),
@@ -84,6 +103,13 @@ ADDITIONS: tuple[ParamAddition, ...] = (
         properties=_MILESTONE_PROPERTIES,
         enum_values=_MILESTONE_ENUM,
         descriptions=_MILESTONE_DESCRIPTIONS,
+    ),
+    # MIP-1588: the "On it" mark of a report row, offered by the MCP tool `set_item_importance`.
+    ParamAddition(
+        "set_item_importance",
+        PARITY_FLAG,
+        enum_values={"mark": (ON_IT_MARK,)},
+        descriptions={"mark": ON_IT_MARK_DESCRIPTION},
     ),
     # MIP-1059: which of the member's Google accounts a calendar tool uses.
     ParamAddition("list_calendars", PARITY_FLAG, properties=_CALENDARS_ACCOUNT),

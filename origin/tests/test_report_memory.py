@@ -22,6 +22,7 @@ import json
 from datetime import date, timedelta
 from unittest import mock
 
+from django.conf import settings
 from django.test import SimpleTestCase
 
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
@@ -33,6 +34,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskDependency, TaskMaster
+from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.list_my_inbox import _model_body
 from origin.services import importance, report_memory, schedule_delivery, schedules
@@ -761,19 +763,37 @@ class TestTheEndpoint(MemoryBase):
         self.assertEqual([m["mark"] for m in res.data["marks"]], ["on_it"])
         self.assertIn("on_it", [m["key"] for m in res.data["catalog"]["marks"]])
 
-    def test_the_connected_app_tool_is_unchanged(self):
+    def test_the_connected_app_tool_is_unchanged_with_the_flag_off(self):
+        from origin.views.public.mcp.secretary.set_item_importance import SET_ITEM_IMPORTANCE
+
+        with mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: False}):
+            enum = SET_ITEM_IMPORTANCE.parameters_schema["properties"]["mark"]["enum"]
+            self.assertEqual(enum, ["not_important", "priority_is_right", "clear"])
+            out = SET_ITEM_IMPORTANCE.run(
+                {"task_id": self.task.task_id, "mark": "not_important"}, self.ctx
+            )
+            self.assertNotIn("previous", out)
+            row = MemberImportanceMark.objects.get(task_id=self.task.task_id)
+            self.assertEqual(row.source, "mcp")
+            with self.assertRaises(ToolError):
+                SET_ITEM_IMPORTANCE.run({"task_id": self.task.task_id, "mark": "on_it"}, self.ctx)
+
+    def test_the_connected_app_tool_offers_on_it_while_the_flag_is_on(self):
+        """MIP-1588. The registry's own schema is never edited (the published one is a copy, see `test_mcp_on_it`); the
+        tool takes `on_it` and answers with the mark it replaced."""
         from origin.views.public.mcp.secretary.set_item_importance import SET_ITEM_IMPORTANCE
 
         enum = SET_ITEM_IMPORTANCE.parameters_schema["properties"]["mark"]["enum"]
         self.assertEqual(enum, ["not_important", "priority_is_right", "clear"])
-        out = SET_ITEM_IMPORTANCE.run(
-            {"task_id": self.task.task_id, "mark": "not_important"}, self.ctx
-        )
-        self.assertNotIn("previous", out)
+        with mock.patch.dict(settings.SEARCH_ENGINE, {PARITY_FLAG: True}):
+            out = SET_ITEM_IMPORTANCE.run({"task_id": self.task.task_id, "mark": "on_it"}, self.ctx)
+            self.assertEqual((out["mark"], out["previous"]), ("on_it", None))
+            out = SET_ITEM_IMPORTANCE.run(
+                {"task_id": self.task.task_id, "mark": "not_important"}, self.ctx
+            )
+            self.assertEqual((out["mark"], out["previous"]), ("not_important", "on_it"))
         row = MemberImportanceMark.objects.get(task_id=self.task.task_id)
-        self.assertEqual(row.source, "mcp")
-        with self.assertRaises(ToolError):
-            SET_ITEM_IMPORTANCE.run({"task_id": self.task.task_id, "mark": "on_it"}, self.ctx)
+        self.assertEqual((row.mark, row.source), ("not_important", "mcp"))
 
     def test_recording_off_purges_on_it_and_so_does_account_deletion(self):
         self.put("on_it")
