@@ -18,6 +18,7 @@ owner, an assignee who is not on the project, a teammate with no part in it, a s
 from __future__ import annotations
 
 import json
+import logging
 import re
 from unittest import mock
 
@@ -32,11 +33,13 @@ from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
+from origin.search_engine.agent.evals.group import seeds
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.parity import FOLLOWUPS_FLAG
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError, project_gone
 from origin.services import item_lines
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
+from origin.tests.test_base import BaseAPITestCase
 
 from .test_mcp_endpoint import McpBase
 
@@ -48,6 +51,34 @@ GONE_TITLE = "Renew the harbour lease"
 GONE_PROJECT = "Wound-down harbour"
 LIVE_TITLE = "Repaint the lighthouse"
 MISSING = 987_654_321
+
+
+class _Records(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.lines: list[str] = []
+
+    def emit(self, record):
+        if not record.name.startswith("django.db"):  # the query log the capture itself switches on
+            self.lines.append(
+                re.sub(r"\d+", "N", f"{record.name} {record.levelname} {record.getMessage()}")
+            )
+
+
+def observed(fn):
+    """`(result, number of queries, log lines)` of `fn()`: the three things a caller can tell a gone task from a
+    missing one by, besides the answer itself."""
+    handler, root = _Records(), logging.getLogger()
+    previous = root.level
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        with CaptureQueriesContext(connection) as queries:
+            out = fn()
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(previous)
+    return out, len(queries), handler.lines
 
 
 class World(McpBase):
@@ -362,13 +393,21 @@ class ByIdWriteTests(World):
         for who, (person, team) in self.people.items():
             for label, (name, build) in self.calls().items():
                 with self.subTest(f"{label} as {who}"):
-                    gone = self.call_exc(name, build, self.gone_task.task_id, person, team)
-                    missing = self.call_exc(name, build, MISSING, person, team)
+                    gone, gone_queries, gone_logs = observed(
+                        lambda: self.call_exc(name, build, self.gone_task.task_id, person, team)
+                    )
+                    missing, missing_queries, missing_logs = observed(
+                        lambda: self.call_exc(name, build, MISSING, person, team)
+                    )
                     self.assertIsNotNone(gone)
                     self.assertIs(type(gone), type(missing))
                     self.assertEqual(
                         self.norm(gone, self.gone_task.task_id), self.norm(missing, MISSING)
                     )
+                    # The same query class (the refusal takes the lookup and nothing more) and the same
+                    # log lines (none that says which one it was).
+                    self.assertLessEqual(gone_queries, missing_queries + 2)
+                    self.assertEqual(gone_logs, missing_logs)
         self.assertEqual(TaskMaster.objects.filter(pk=self.gone_task.pk).values().first(), before)
         self.assertEqual(TaskComments.objects.count(), comments)
 
@@ -737,3 +776,72 @@ class ThreadClaimedByAGoneTaskTests(SequenceScenario):
             )
         )
         self.assertNotIn('"anchor_type": "task"', text)
+
+
+class PaidEvalSeedTests(BaseAPITestCase):
+    """The world of the paid case `t1590.deleted-project-task` (`seed_mention_hardening`, project EMD, a task
+    EMD-1 whose reporter is the viewer), read as the viewer with every read tool the model plausibly reaches for.
+    The case now fails when the answer or ANY tool result names the task id or the project, so this is the
+    $0 check that no path left alone by this change hands the model one of them."""
+
+    FORBIDDEN = ("EMD-1", "Eval wound-down project", "Kestrel", "4,200", "Renew the harbour lease")
+    TOOLS = (
+        ("list_tasks", {}),
+        ("list_tasks", {"status": ["Open", "WIP", "Blocked", "Pending", "Closed"]}),
+        ("get_my_focus_tasks", {}),
+        ("get_stale_tasks", {}),
+        ("get_my_task_summary", {}),
+        ("get_team_task_summary", {}),
+        ("list_projects", {}),
+        ("list_my_chats", {}),
+        ("list_my_unread", {}),
+        ("list_my_mentions", {}),
+        ("list_my_inbox", {}),
+        ("get_current_user", {}),
+        ("get_my_blockers", {}),
+        ("get_my_schedule", {}),
+        ("list_today_todos", {}),
+        ("list_uncompleted_todos", {}),
+    )
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(settings.SEARCH_ENGINE, ON)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.info = {
+            "team": "v1",
+            "person": "b",
+            "team_id": str(self.team.team_id),
+            "user_id": str(self.user.id),
+        }
+        seeds.apply(["mention_hardening"], self.info)
+        self.ctx = ToolContext(team_id=self.info["team_id"], user_id=self.info["user_id"])
+        self.gone = ProjectMaster.objects.get(team=self.team, code="EMD")
+        self.task = TaskMaster.objects.get(project=self.gone)
+
+    def test_the_seed_is_what_the_case_assumes(self):
+        self.assertTrue(self.gone.is_deleted)
+        self.assertEqual(self.task.display_id, "EMD-1")
+        self.assertEqual(str(self.task.reporter_id), str(self.user.id))
+
+    def test_no_read_tool_hands_the_model_the_task_or_the_project(self):
+        for name, args in self.TOOLS:
+            with self.subTest(f"{name} {args}"):
+                try:
+                    text = json.dumps(REGISTRY[name].run(dict(args), self.ctx), default=str)
+                except ToolError as exc:
+                    text = str(exc)
+                self.assertEqual([w for w in self.FORBIDDEN if w in text], [], text[:400])
+
+    def test_the_tools_that_take_the_id_say_it_is_not_found(self):
+        for name in ("fetch_task", "get_task_history", "get_task_blockers"):
+            with self.subTest(name):
+                with self.assertRaises(ToolError) as raised:
+                    REGISTRY[name].run({"task_id": self.task.task_id}, self.ctx)
+                self.assertEqual(str(raised.exception), f"Task {self.task.task_id} not found.")
+
+    def test_the_flag_off_arm_still_reaches_it_which_is_why_the_case_needs_the_arm(self):
+        with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
+            text = json.dumps(REGISTRY["list_tasks"].run({}, self.ctx), default=str)
+        self.assertIn("EMD-1", text)
