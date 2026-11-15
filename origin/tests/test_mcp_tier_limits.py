@@ -860,6 +860,56 @@ class TestPageSize(LimitsBase):
 # ---------------------------------------------------------------------------------------------
 
 
+class TestWithTheResultLimitsOn(LimitsBase):
+    """Phase 2's paging is real here: the lists declare `limit` and default to 100."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {"MCP_RESULT_LIMITS": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+        from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+
+        for i in range(4):
+            p = ProjectMaster.objects.create(
+                team=self.team,
+                project_name=f"Extra {i}",
+                code=f"X{i}",
+                owner=self.user,
+                project_system_user=self.user,
+            )
+            ProjectMembers.objects.create(team=self.team, project=p, attendee=self.user)
+
+    def projects(self, **args):
+        result = self._result(self._call("list_projects", args))
+        return result, result["structuredContent"]
+
+    def test_a_list_that_would_default_to_100_is_paged_at_the_plans_page_size(self):
+        _, whole = self.projects()
+        self.assertGreaterEqual(len(whole["projects"]), 5)
+        self.rig(mcp_list_page_max=2)
+        result, paged = self.projects()
+        self.assertFalse(result["isError"])
+        self.assertEqual(len(paged["projects"]), 2)
+        self.assertIn("next_cursor", paged["truncated"])
+
+    def test_a_page_over_the_plans_is_refused_before_the_paging_checks(self):
+        self.rig(mcp_list_page_max=2)
+        result, _ = self.projects(limit=3)
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["_meta"]["genos/limit"]["category"], "mcp_list_page")
+        ok, page = self.projects(limit=2)
+        self.assertFalse(ok["isError"])
+        self.assertEqual(len(page["projects"]), 2)
+
+    def test_with_no_plan_limit_the_paged_list_is_what_phase_two_gives(self):
+        before, a = self.projects()
+        self.rig(mcp_list_page_max=None)
+        after, b = self.projects()
+        self.assertEqual(before["content"], after["content"])
+        self.assertEqual(a, b)
+
+
 class TestACallNothingLimitsCostsNothing(LimitsBase):
     def test_a_plain_read_gets_no_limit_evaluation_at_all_in_prepare(self):
         self.rig(mcp_list_page_max=5, mcp_bulk_max_tasks=1)
