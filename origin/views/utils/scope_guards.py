@@ -528,12 +528,13 @@ def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
     decides whether the task appears in search, and never narrower than it:
     an assignee with no `ProjectMembers` row can find the task, so a
     narrower rule here would let someone open a task from search and then
-    be refused. It is wider in exactly two ways, pinned by
-    `tests/test_task_collaborator_cleanup.py`: the owner of a project with no
-    `ProjectMembers` row, and an assignee or reporter who has left the team
-    (the search rule drops both, MIP-1371). They are not one rule on
-    purpose: making either follow the other would change who can open a task
-    or which tasks search returns (MIP-1579).
+    be refused. It is wider in one way, pinned by
+    `tests/test_task_collaborator_cleanup.py`: an assignee, reporter or
+    project owner who has left the team (the search rule drops them,
+    MIP-1371). The project's owner with no `ProjectMembers` row was the other
+    difference; search lists them too since MIP-1591. They are not one rule
+    on purpose: making REST follow search would change who can open a task
+    (MIP-1592).
 
     Note this is the READ audience and the WRITE audience at once. Task
     editing has always been open to anyone who can see the task; adding
@@ -602,9 +603,9 @@ def task_reader_ids(project_id, assignee_id, reporter_id, candidates) -> set:
     The batch form of the rule above, for fan-outs and write gates that ask about a handful
     of people at once: two queries however many candidates, never one per person.
     `tests/test_task_collaborator_read_rule.py` pins it equal to `can_access_task` for every kind of
-    person. It is NOT `acl.task_acl_user_ids`, which also drops an assignee or reporter who has
-    left the team (MIP-1371) and omits the project's owner (`test_task_collaborator_cleanup`
-    pins the two differences). It takes the people of a task, not its id, so it cannot see
+    person. It is NOT `acl.task_acl_user_ids`, which also drops an assignee, reporter or
+    project owner who has left the team (MIP-1371; `test_task_collaborator_cleanup` pins the
+    difference). It takes the people of a task, not its id, so it cannot see
     `is_deleted`: a caller holding a task row decides that.
     """
     wanted = {str(c) for c in candidates if c}
