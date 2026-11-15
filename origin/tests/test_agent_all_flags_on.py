@@ -60,6 +60,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-1589 (the follow-ups flag, default off): +146 more (`list_project_tags`' sentence). Together with MIP-1607's +157 the
 # flag-on prefix is 146,172 all-on and 147,627 with a Long member's block: over 147,500, so the constant goes up to the
 # next 500, 148,000 (373 characters left).
+# The first paid run's wording fixes (+249: 146,421 all-on, 147,876 with a Long member's block): 124 characters left, the
+# constant stays.
 ALL_ON_BUDGET_CHARS = 148_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the

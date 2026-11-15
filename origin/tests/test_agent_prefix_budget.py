@@ -92,6 +92,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # measure of the flag-on prefix is `test_the_prefix_with_the_followups_flag_on_stays_inside_its_budget`.
 # MIP-1589 (same flag): `list_project_tags` gains one more description sentence (+146). Both together: 146,172 with the
 # flag on over the production flags, still inside the 146,500 above.
+# The first paid run's wording fixes (`AGENT_PARITY_FOLLOWUPS`, still default off): a sentence on `create_task` and on
+# `create_task_plan` (a required field comes from the member: ask, never guess) and the calendar sentence's "omit `account`
+# unless ..." add +249 (146,421 with the flag on over the production flags; production with the flag off is still
+# 145,869). Nothing is raised: 79 characters are left under the 146,500 above. (The note on the rules is a RESULT field, so
+# it costs a call that reads a project with required fields, not the declarations.)
 BUDGET_CHARS = 146_500
 
 
