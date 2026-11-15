@@ -186,6 +186,65 @@ def readable_team_folder_roles(user_id, team_id, folders=None):
     return out
 
 
+def team_folder_reader_pairs(user_ids, folder_ids) -> set[tuple[str, int]]:
+    """The `(user id, folder id)` pairs, among these users and TEAM folders, where
+    `get_folder_role(user, folder)` is not None (MIP-1599): for many people and folders at once.
+
+    One shared index per team (`load_team_folder_index`), the people's grants and their team
+    membership in one query each, then the same `resolve_role_in_index` walk in memory: three
+    or four queries per team however many people and folders. A folder that is not a team
+    folder (or whose team is gone) has no readers here, as in `get_folder_role`.
+    """
+    who = {str(u) for u in user_ids if u}
+    wanted = set()
+    for f in folder_ids:
+        try:
+            wanted.add(int(f))
+        except (TypeError, ValueError):
+            continue
+    if not who or not wanted:
+        return set()
+    team_of = {
+        folder: team
+        for folder, team in PersonalNoteFolder.objects.filter(
+            folder_id__in=wanted, scope=SCOPE_TEAM, team__isnull=False
+        ).values_list("folder_id", "team_id")
+    }
+    out: set[tuple[str, int]] = set()
+    for team_id in set(team_of.values()):
+        index = load_team_folder_index(team_id)
+        grants: dict[str, dict] = {}
+        for user, folder, role in NoteFolderPermission.objects.filter(
+            team=team_id, user__in=who
+        ).values_list("user_id", "folder_id", "role_id"):
+            grants.setdefault(str(user), {})[folder] = role
+        members = {
+            str(u)
+            for u in TeamMembers.objects.filter(
+                team=team_id, attendee__in=who, is_deleted=False
+            ).values_list("attendee_id", flat=True)
+        } | {
+            str(u)
+            for u in TeamMaster.objects.filter(team_id=team_id, owner__in=who).values_list(
+                "owner_id", flat=True
+            )
+        }
+        for folder in (f for f, t in team_of.items() if t == team_id and f in index):
+            for user in who:
+                if (
+                    resolve_role_in_index(
+                        folder,
+                        folders=index,
+                        grants=grants.get(user, {}),
+                        member=user in members,
+                        user_id=user,
+                    )
+                    is not None
+                ):
+                    out.add((user, folder))
+    return out
+
+
 def folder_ancestor_grant_user_ids(folder_id, folders_by_id):
     """User ids that reach `folder_id` through folder grants, plus a
     ``team:<team_id>`` sentinel when it resolves public.

@@ -401,11 +401,13 @@ class FailClosedAndCost(NoteCards):
         self.assertEqual(len(got), 2)
         self.assertLessEqual(len(ctx), 6)
 
-    def test_personal_and_chat_note_rows_are_not_judged_here(self):
+    def test_a_row_of_a_surface_this_does_not_cover_is_not_judged_here(self):
+        # Personal and chat notes (6, 8) were left out here by #889 and are covered since MIP-1599
+        # (`test_mention_leftovers`); what stays out is any other surface, such as the AI-app notice.
         row = v3_activity.create_surface_mention_activities(
             team_id=self.team.team_id,
             actor=self.user,
-            surface_type=6,
+            surface_type=10,
             entity_key="note:1:1",
             newly_mentioned_user_ids=[str(self.user2.id)],
             meta={"noteId": 1, "noteType": 1},

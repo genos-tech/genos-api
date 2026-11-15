@@ -21,12 +21,14 @@ Who can open the task is `can_access_task`'s rule, in batch form: the project's 
 the assignee, the reporter. It is asked once for all the rows of a write, never per row.
 
 Rows covered: an @mention whose host is a task body (surface 5, `meta.taskId`), a task comment
-(the project-chat mirror, `message.task_id`) or a task NOTE (surface 7, `meta.noteId`, MIP-1598).
-A task note is judged by the NOTE's rule (`note_role.get_effective_role`: an explicit grant or a
-project member row, in batch form `task_note_reader_pairs`), not the task's: the assignee who is
-not on the project opens the task and not its note, so a note mention shows them the minimal
-card, in which the note's title, the task's display id and a link naming either are gone. A
-personal or chat note's mention (6, 8) is not changed here.
+(the project-chat mirror, `message.task_id`) or a NOTE (surfaces 6, 7 and 8, `meta.noteId`,
+MIP-1598, MIP-1599). A note is judged by the NOTE's rule (`note_role.get_effective_role`, in batch
+form `note_reader_pairs`), not the task's: the assignee who is not on the project opens the task
+and not its note, so a note mention shows them the minimal card, in which the note's title, the
+task's display id, the chat's ids and a link naming any of them are gone. The rule per kind of
+note: a task note, an explicit grant or a project member row; a personal note, its owner, an
+explicit grant or a reader of the team folder it is filed in; a chat note, an explicit grant or
+a member of its chat by the chat rule (`chat_note_member_q`).
 
 A comment mention is a row of the task's project chat, which the recipient may not be able to open
 although they can open the TASK (the assignee or reporter who is not on the project). The mention
@@ -43,7 +45,12 @@ from typing import Any, Iterable
 from django.db.models import Q
 
 from origin.models.chat.unified_models import ActivityType
-from origin.services.v3_activity import SURFACE_TASK_BODY, SURFACE_TASK_NOTE
+from origin.services.v3_activity import (
+    SURFACE_CHAT_NOTE,
+    SURFACE_PERSONAL_NOTE,
+    SURFACE_TASK_BODY,
+    SURFACE_TASK_NOTE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +75,12 @@ _KEPT_META = ("tsSent", "isComment", "via")
 
 
 def minimal_title(actor_name: str | None, surface_type: int | None = None) -> str:
-    what = "note" if surface_type == SURFACE_TASK_NOTE else "task"
+    what = "note" if surface_type in NOTE_SURFACES else "task"
     return f"{actor_name or 'Someone'} mentioned you in a {what} you can't open"
 
 
 def minimal_url(surface_type: int | None) -> str:
-    return MINIMAL_NOTE_URL if surface_type == SURFACE_TASK_NOTE else MINIMAL_URL
+    return MINIMAL_NOTE_URL if surface_type in NOTE_SURFACES else MINIMAL_URL
 
 
 def _as_int(value: Any) -> int | None:
@@ -87,11 +94,15 @@ def _as_int(value: Any) -> int | None:
 
 _NO_TARGET = object()
 _TASK = "task"
-_NOTE = "note"
+
+# The note surfaces, and the note type each is (`note_role.NOTE_TYPE_*`).
+_NOTE_TYPE = {SURFACE_PERSONAL_NOTE: 1, SURFACE_TASK_NOTE: 2, SURFACE_CHAT_NOTE: 3}
+NOTE_SURFACES = frozenset(_NOTE_TYPE)
 
 
 def _target_of(act) -> Any:
-    """What an @mention row is about, as `(kind, id)` (`kind` is "task" or "note"), the id None
+    """What an @mention row is about, as `(kind, id)` (`kind` is "task", or a note type: 1
+    personal, 2 task note, 3 chat note), the id None
     when its host names none that parses (the row is then judged unreadable, as the feed does),
     or `_NO_TARGET` for a row this does not cover."""
     if getattr(act, "activity_type", None) != ActivityType.MENTION:
@@ -100,8 +111,8 @@ def _target_of(act) -> Any:
         meta = act.meta if isinstance(act.meta, dict) else {}
         if act.surface_type == SURFACE_TASK_BODY:
             return (_TASK, _as_int(meta.get("taskId")))
-        if act.surface_type == SURFACE_TASK_NOTE:
-            return (_NOTE, _as_int(meta.get("noteId")))
+        if act.surface_type in _NOTE_TYPE:
+            return (_NOTE_TYPE[act.surface_type], _as_int(meta.get("noteId")))
         return _NO_TARGET
     if not act.message_id:
         return _NO_TARGET
@@ -109,10 +120,10 @@ def _target_of(act) -> Any:
     return _NO_TARGET if task_id is None else (_TASK, _as_int(task_id))
 
 
-def _candidates(activities: Iterable[Any]) -> dict[Any, tuple[str, str, int | None]]:
+def _candidates(activities: Iterable[Any]) -> dict[Any, tuple[str, Any, int | None]]:
     """`{activity id: (recipient id, kind, task or note id)}` for the rows this covers. No query
     for a row whose message is already loaded (every producer builds its rows with it)."""
-    out: dict[Any, tuple[str, str, int | None]] = {}
+    out: dict[Any, tuple[str, Any, int | None]] = {}
     for act in activities:
         if act is None:
             continue
@@ -181,23 +192,26 @@ def task_reader_pairs(
 
 
 def minimal_card_activity_ids(activities: Iterable[Any]) -> set:
-    """The ids, among `activities`, of the task and task-note @mentions whose recipient cannot
-    open the task (the task's rule) or the note (the note's rule).
+    """The ids, among `activities`, of the task and note @mentions whose recipient cannot open
+    the task (the task's rule) or the note (the note's rule).
 
-    A fixed number of queries: none when no row is such a mention, three for the task rows and
-    three for the note rows."""
+    A fixed number of queries: none when no row is such a mention, at most five for the task
+    rows and, for each type of note present, at most seven (`note_reader_pairs`), however many
+    rows, recipients and notes."""
     candidates = _candidates(activities)
     if not candidates:
         return set()
-    readable: dict[str, set] = {_TASK: set(), _NOTE: set()}
-    tasks = [(r, i) for r, k, i in candidates.values() if k == _TASK]
-    notes = [(r, i) for r, k, i in candidates.values() if k == _NOTE]
-    if tasks:
-        readable[_TASK] = task_reader_pairs({r for r, _ in tasks}, {i for _, i in tasks})
-    if notes:
-        from origin.views.utils.note_role import task_note_reader_pairs
+    from origin.views.utils.note_role import note_reader_pairs
 
-        readable[_NOTE] = task_note_reader_pairs({r for r, _ in notes}, {i for _, i in notes})
+    readable: dict[Any, set] = {}
+    for kind in {k for _, k, _ in candidates.values()}:
+        wanted = [(r, i) for r, k, i in candidates.values() if k == kind]
+        who, things = {r for r, _ in wanted}, {i for _, i in wanted}
+        readable[kind] = (
+            task_reader_pairs(who, things)
+            if kind == _TASK
+            else note_reader_pairs(who, kind, things)
+        )
     return {
         act_id
         for act_id, (recipient, kind, target) in candidates.items()
@@ -326,7 +340,7 @@ def minimal_wire(data: dict) -> dict:
     else:
         kept["firstLineContent"] = (
             MINIMAL_NOTE_FIRST_LINE
-            if out.get("surfaceType") == SURFACE_TASK_NOTE
+            if out.get("surfaceType") in NOTE_SURFACES
             else MINIMAL_FIRST_LINE
         )
     out["meta"] = kept

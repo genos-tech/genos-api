@@ -229,6 +229,142 @@ def task_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
     return pairs
 
 
+def _users_and_notes(user_ids, note_ids):
+    """`(user ids as strings, note ids as ints)`, dropping what is not an id."""
+    who = {str(u) for u in user_ids if u}
+    wanted = set()
+    for n in note_ids:
+        try:
+            wanted.add(int(n))
+        except (TypeError, ValueError):
+            continue
+    return who, wanted
+
+
+def _explicit_pairs(who, note_type, wanted) -> set[tuple[str, int]]:
+    return {
+        (str(user), note)
+        for user, note in NotePermissionMaster.objects.filter(
+            user__in=who, note_type=note_type, note_id__in=wanted
+        ).values_list("user_id", "note_id")
+    }
+
+
+def personal_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
+    """The `(user id, note id)` pairs, among these users and PERSONAL notes, where the user can
+    read the note, in a fixed number of queries however many people and notes (MIP-1599).
+
+    The rule is the feed's (`activity_surface_access`) and the product's: an explicit grant, the
+    note's owner (a personal note's whole ACL, `acl.may_read_note`), or a reader of the TEAM
+    folder the note is filed in (`get_effective_role`, which resolves the folder chain).
+    `tests/test_mention_leftovers.py` pins it equal to both over every kind of person.
+    """
+    who, wanted = _users_and_notes(user_ids, note_ids)
+    if not who or not wanted:
+        return set()
+    pairs = _explicit_pairs(who, NOTE_TYPE_PERSONAL, wanted)
+    filed: dict[int, int] = {}
+    for note, owner, folder in PersonalNoteMaster.objects.filter(note_id__in=wanted).values_list(
+        "note_id", "owner_id", "folder_id"
+    ):
+        if owner is not None and str(owner) in who:
+            pairs.add((str(owner), note))
+        if folder is not None:
+            filed[note] = folder
+    if filed:
+        # Local import: note_folder_role imports the ROLE_* constants from this module.
+        from origin.views.utils.note_folder_role import team_folder_reader_pairs  # noqa: PLC0415
+
+        readers = team_folder_reader_pairs(who, set(filed.values()))
+        pairs |= {
+            (user, note)
+            for note, folder in filed.items()
+            for user in who
+            if (user, folder) in readers
+        }
+    return pairs
+
+
+def chat_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
+    """The `(user id, note id)` pairs, among these users and CHAT notes, where the user can read
+    the note, in at most five queries however many people and notes (MIP-1599).
+
+    An explicit grant, or the chat's own readers by `channel_scope.chat_note_member_q` written
+    over many people: the note's channel is live and of the kind the note was filed under, and
+    the person is a live member of it, a project chat being read by the PROJECT's people (its
+    channel-member row only mirrors that). The note's author is no exception (#766).
+    `tests/test_mention_leftovers.py` pins it equal to `get_effective_role` and the feed's gate.
+    """
+    from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+
+    who, wanted = _users_and_notes(user_ids, note_ids)
+    if not who or not wanted:
+        return set()
+    pairs = _explicit_pairs(who, NOTE_TYPE_CHAT, wanted)
+    notes = list(
+        ChatNoteMaster.objects.filter(note_id__in=wanted, channel_id__isnull=False).values_list(
+            "note_id", "channel_id", "chat_type"
+        )
+    )
+    if not notes:
+        return pairs
+    channels = {
+        channel: (kind, project)
+        for channel, kind, project in Channel.objects.filter(
+            id__in={c for _, c, _ in notes}, is_deleted=False
+        ).values_list("id", "kind", "project_id")
+    }
+    # The note's chat, when it is live and of the kind the note was filed under.
+    chat_of = {
+        note: channel
+        for note, channel, chat_type in notes
+        if channel in channels and channels[channel][0] == chat_type
+    }
+    plain = {c for c in chat_of.values() if channels[c][0] != ChannelKind.PM}
+    projects = {channels[c][1] for c in chat_of.values() if channels[c][0] == ChannelKind.PM}
+    in_channel = (
+        {
+            (str(user), channel)
+            for channel, user in ChannelMember.objects.filter(
+                channel_id__in=plain, user_id__in=who, is_deleted=False
+            ).values_list("channel_id", "user_id")
+        }
+        if plain
+        else set()
+    )
+    on_project = (
+        {
+            (str(user), project)
+            for user, project in ProjectMembers.objects.filter(
+                attendee_id__in=who, project_id__in={p for p in projects if p is not None}
+            ).values_list("attendee_id", "project_id")
+        }
+        if projects - {None}
+        else set()
+    )
+    for note, channel in chat_of.items():
+        kind, project = channels[channel]
+        for user in who:
+            if (kind == ChannelKind.PM and (user, project) in on_project) or (
+                kind != ChannelKind.PM and (user, channel) in in_channel
+            ):
+                pairs.add((user, note))
+    return pairs
+
+
+def note_reader_pairs(user_ids, note_type, note_ids) -> set[tuple[str, int]]:
+    """The `(user id, note id)` pairs where the user can read the note, whatever its type: the
+    batch form of `get_effective_role(...) is not None` for many people and notes at once.
+    Ids come back as strings (users) and ints (notes)."""
+    if note_type == NOTE_TYPE_TASK:
+        return task_note_reader_pairs(user_ids, note_ids)
+    if note_type == NOTE_TYPE_CHAT:
+        return chat_note_reader_pairs(user_ids, note_ids)
+    if note_type == NOTE_TYPE_PERSONAL:
+        return personal_note_reader_pairs(user_ids, note_ids)
+    return set()
+
+
 def note_exists(note_type, note_id):
     if note_type == NOTE_TYPE_PERSONAL:
         return PersonalNoteMaster.objects.filter(note_id=note_id).exists()
