@@ -169,9 +169,7 @@ REQUIRED_NOTE = (
 )
 
 #: Appended to the `create_task` and `create_task_plan` descriptions while the flag is on (`tool_flag_text`).
-REQUIRED_SENTENCE = (
-    " A field the project requires (`list_project_tags`) must come from the member: ask, never guess."
-)
+REQUIRED_SENTENCE = " A field the project requires (`list_project_tags`) must come from the member: ask, never guess."
 
 
 def rules_block(project: ProjectMaster) -> dict[str, Any]:
