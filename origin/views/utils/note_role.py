@@ -345,8 +345,10 @@ def chat_note_reader_pairs(user_ids, note_ids) -> set[tuple[str, int]]:
     for note, channel in chat_of.items():
         kind, project = channels[channel]
         for user in who:
-            if (kind == ChannelKind.PM and (user, project) in on_project) or (
-                kind != ChannelKind.PM and (user, channel) in in_channel
+            if (
+                (user, project) in on_project
+                if kind == ChannelKind.PM
+                else (user, channel) in in_channel
             ):
                 pairs.add((user, note))
     return pairs

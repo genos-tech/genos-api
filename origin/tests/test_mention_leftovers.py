@@ -34,17 +34,33 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from origin.models.chat.unified_models import Activity, Channel, ChannelKind, ChannelMember
+from origin.models.chat.unified_models import (
+    Activity,
+    ActivityType,
+    Channel,
+    ChannelKind,
+    ChannelMember,
+    Message,
+)
+from origin.models.common.notification_models import EmailNotificationEvent
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NoteFolderPermission, NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMembers
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import briefing, unread_digest, v3_activity
 from origin.services.activity_minimal_card import minimal_card_activity_ids
 from origin.services.activity_surface_access import unreadable_surface_activity_ids
-from origin.tests.test_nonmember_mention_card import FEED, SURFACE, Cards
+from origin.tests.test_nonmember_mention_card import (
+    COMMENT,
+    COMMENT_TEXT,
+    FEED,
+    SURFACE,
+    Cards,
+    comment_body,
+)
 from origin.views.utils.note_role import (
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
@@ -641,3 +657,219 @@ class NoteReaderPairsAreTheNoteRule(PrivateNotes):
             self.assertEqual(note_reader_pairs([self.user.id], NOTE_TYPE_CHAT, []), set())
             self.assertEqual(note_reader_pairs([self.user.id], NOTE_TYPE_CHAT, ["x"]), set())
         self.assertEqual(len(ctx), 0)
+
+
+# -- item 2: the participant "X commented" row ------------------------------------------------ #
+
+
+class ParticipantRowOfAHolder(Cards):
+    """`self.assignee` is the assignee of `self.held` and `self.rep` the reporter of
+    `self.rep_task` (who commented on it before): neither is on the project, so both can open
+    their task and neither can open the project chat the comment is mirrored into. A plain
+    comment (no @mention) gives each of them the participant row."""
+
+    def setUp(self):
+        super().setUp()
+        self.rep = User.objects.create_user(
+            username="rep", email="rep@m1599.test", password="pass12345"
+        )
+        TeamMembers.objects.create(team=self.team, attendee=self.rep)
+        self.rep_task = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.rep,
+            assignee=self.user,
+            title="Reported elsewhere",
+            status="WIP",
+        )
+        TaskComments.objects.create(
+            task=self.rep_task, sender=self.rep, comment_id=1, comment_body=comment_body()
+        )
+        self.aid, self.rid, self.mid = (str(u.id) for u in (self.assignee, self.rep, self.member))
+        self.authenticate(self.user)
+        self.wire, self.pushes, self.emails = self.plain_comment(self.held)
+        self.rep_wire, self.rep_pushes, self.rep_emails = self.plain_comment(self.rep_task)
+        self.mirror = Message.objects.get(
+            task_id=self.held.task_id, metadata__has_key="taskCommentId"
+        )
+        self.url = f"/workspace/tasks/project/{self.project.project_id}/task/{self.held.task_id}"
+
+    def plain_comment(self, task):
+        EmailNotificationEvent.objects.all().delete()
+
+        def call():
+            return self.client.post(
+                COMMENT,
+                {"task_id": str(task.task_id), "comment_body": comment_body()},
+                format="json",
+            )
+
+        res, pushes, emails = self.fan_out(call)
+        self.assertEqual(res.status_code, 201, res.content)
+        wire = {a["recipientUserId"]: a for a in res.json()["_v3_activities"]}
+        return wire, pushes, emails
+
+    def feed(self, user):
+        self.authenticate(user)
+        res = self.client.get(FEED, {"team_id": self.team_id})
+        self.assertEqual(res.status_code, 200)
+        return res.json()
+
+    def test_the_holders_get_the_participant_row_in_their_feed(self):
+        for user, task in ((self.assignee, self.held), (self.rep, self.rep_task)):
+            with self.subTest(user=user.username):
+                got = self.feed(user)
+
+                (row,) = got["activities"]
+                self.assertEqual(row["activityType"], int(ActivityType.THREAD_REPLY))
+                self.assertEqual(row["message"]["taskId"], task.task_id)
+                self.assertIn(COMMENT_TEXT, row["message"]["bodyText"])
+                self.assertEqual(got["tombstones"], [])
+
+    def test_the_row_is_written_for_them_as_before(self):
+        self.assertEqual(set(self.wire), {self.aid})
+        self.assertEqual(set(self.rep_wire), {self.rid})
+
+    def test_the_push_and_the_email_link_to_the_task_not_to_a_chat_they_cannot_open(self):
+        rep_url = f"/workspace/tasks/project/{self.project.project_id}/task/{self.rep_task.task_id}"
+
+        self.assertEqual(self.pushes[self.aid]["url"], self.url)
+        self.assertEqual(self.emails[self.aid][0].url, self.url)
+        self.assertEqual(self.rep_pushes[self.rid]["url"], rep_url)
+        self.assertEqual(self.rep_emails[self.rid][0].url, rep_url)
+        # what else the push says is as before: its group, its title, the comment's own text
+        self.assertEqual(self.pushes[self.aid]["category"], "task_comments")
+        self.assertEqual(
+            self.pushes[self.aid]["title"], f"{self.user.username} commented on a task"
+        )
+        self.assertIn(COMMENT_TEXT, self.pushes[self.aid]["body"])
+
+    def test_the_daily_digest_line_links_to_the_task(self):
+        from origin.management.commands.email_digest import Command
+
+        _, lines = Command()._collect(self.aid, None, timezone.now() + timedelta(seconds=1))
+
+        (line,) = lines
+        self.assertEqual(line["title"], f"{self.user.username} commented on a task")
+        self.assertTrue(line["url"].endswith(self.url))
+
+    def test_a_project_member_keeps_the_link_to_the_chat(self):
+        mine = TaskMaster.objects.create(
+            team=self.team,
+            project=self.project,
+            reporter=self.user,
+            assignee=self.colleague,
+            title="Mine",
+            status="WIP",
+        )
+
+        _, pushes, emails = self.plain_comment(mine)
+
+        cid = str(self.colleague.id)
+        self.assertIn("/workspace/chat/pm/", pushes[cid]["url"])
+        self.assertIn("/workspace/chat/pm/", emails[cid][0].url)
+
+    def test_the_chat_and_its_messages_stay_closed_to_them(self):
+        self.authenticate(self.assignee)
+
+        chat = self.client.get(f"/api/v3/channels/{self.channel.id}/messages/")
+        one = self.client.get(f"/api/v3/messages/{self.mirror.id}/")
+
+        for res in (chat, one):
+            self.assertIn(res.status_code, (403, 404))
+            self.assertNotIn(COMMENT_TEXT, res.content.decode())
+
+    def test_a_reply_that_is_not_a_task_comment_stays_out(self):
+        """The task rule reaches the comment mirror and nothing else of the project chat: a
+        thread reply under the task's card is the chat's content."""
+        card = Message.objects.get(
+            channel=self.channel, task_id=self.held.task_id, thread_root__isnull=True
+        )
+        reply = Message.objects.create(
+            channel=self.channel,
+            sender=self.user,
+            seq=60,
+            body=[],
+            body_text="a reply on the card",
+            task_id=self.held.task_id,
+            thread_root=card,
+            is_thread_reply=True,
+        )
+        Activity.objects.create(
+            team=self.team,
+            recipient=self.assignee,
+            actor=self.user,
+            activity_type=ActivityType.THREAD_REPLY,
+            channel=self.channel,
+            message=reply,
+            meta={},
+        )
+
+        got = self.feed(self.assignee)
+
+        self.assertEqual({a["messageId"] for a in got["activities"]}, {str(self.mirror.id)})
+        self.assertEqual(len(got["tombstones"]), 1)
+
+    def test_it_is_judged_when_the_feed_is_read(self):
+        TaskMaster.objects.filter(task_id=self.held.task_id).update(assignee=self.user)
+
+        got = self.feed(self.assignee)
+
+        self.assertEqual(got["activities"], [])
+        self.assertEqual(len(got["tombstones"]), 1)
+
+    def test_a_deleted_task_gives_no_row(self):
+        TaskMaster.objects.filter(task_id=self.held.task_id).update(is_deleted=True)
+
+        got = self.feed(self.assignee)
+
+        self.assertEqual(got["activities"], [])
+        self.assertEqual(len(got["tombstones"]), 1)
+
+    def test_someone_who_lost_the_task_is_given_no_link_to_it(self):
+        from origin.services.activity_minimal_card import task_links
+
+        row = Activity.objects.get(recipient=self.assignee, message=self.mirror)
+        self.assertEqual(task_links([row]), {row.id: self.url})
+        TaskMaster.objects.filter(task_id=self.held.task_id).update(assignee=self.user)
+
+        self.assertEqual(task_links([row]), {})
+
+    def test_unread_and_the_feed_agree(self):
+        ctx = ToolContext(team_id=self.team_id, user_id=self.aid)
+
+        (item,) = unread_digest.build_unread(ctx)["items"]
+
+        self.assertEqual(item["task_id"], self.held.task_id)
+        self.assertEqual(len(self.feed(self.assignee)["activities"]), 1)
+
+    def test_the_feed_costs_the_same_for_one_such_row_as_for_many(self):
+        def feed_queries():
+            self.authenticate(self.assignee)
+            with CaptureQueriesContext(connection) as ctx:
+                self.assertEqual(self.client.get(FEED, {"team_id": self.team_id}).status_code, 200)
+            return len(ctx)
+
+        before = feed_queries()
+        self.authenticate(self.user)
+        for _ in range(4):
+            self.plain_comment(self.held)
+
+        self.assertEqual(len(self.feed(self.assignee)["activities"]), 5)
+        self.assertEqual(feed_queries(), before)
+
+    def test_the_links_cost_the_same_for_one_row_as_for_many(self):
+        from origin.services.activity_minimal_card import task_links
+
+        one = list(Activity.objects.filter(recipient=self.assignee).select_related("message"))
+        for _ in range(4):
+            self.plain_comment(self.held)
+        many = list(Activity.objects.filter(recipient=self.assignee).select_related("message"))
+
+        with CaptureQueriesContext(connection) as small:
+            task_links(one)
+        with CaptureQueriesContext(connection) as large:
+            got = task_links(many)
+
+        self.assertEqual((len(one), len(many), len(got)), (1, 5, 5))
+        self.assertEqual(len(small), len(large))

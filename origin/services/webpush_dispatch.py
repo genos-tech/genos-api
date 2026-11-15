@@ -150,8 +150,9 @@ def _push_spec(act, *, minimal: bool = False, task_link: str | None = None) -> d
     (so the same preferences and mute apply), a title that says so, no display id and no link
     into the project or the note. A comment's own text, which the sender wrote to them, stays.
 
-    `task_link`: a comment mention of someone who can open the task but not the project chat it
-    sits in (MIP-1598): the link is the task's, not the chat's."""
+    `task_link`: a comment mention, or a participant's "X commented", of someone who can open the
+    task but not the project chat it sits in (MIP-1598, MIP-1599): the link is the task's, not the
+    chat's."""
     spec = _full_push_spec(act)
     if spec is not None and act.activity_type == ActivityType.MENTION:
         if minimal:
@@ -164,6 +165,8 @@ def _push_spec(act, *, minimal: bool = False, task_link: str | None = None) -> d
             }
         elif task_link:
             spec = {**spec, "url": task_link}
+    elif spec is not None and task_link and act.activity_type == ActivityType.THREAD_REPLY:
+        spec = {**spec, "url": task_link}
     return spec
 
 
