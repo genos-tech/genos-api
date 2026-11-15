@@ -46,7 +46,10 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # MIP-1059: +1,791 more (`account` on five calendar tools, `get_calendar_event`, three sentences: +1,701 in
 # declarations, and the event citation line of the prompt: +90; 145,439 all-on, 146,894 with a Long member's
 # block), so 147,000: 106 characters left.
-ALL_ON_BUDGET_CHARS = 147_000
+# MIP-1533: +209 more (the plan tool's description sentence and `content_markdown` no longer "Optional";
+# 145,648 all-on, 147,103 with a Long member's block; measured in the paid run of 2026-11-15), so 147,500:
+# 397 characters left.
+ALL_ON_BUDGET_CHARS = 147_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read). Everything else in ALL_ON is held.

@@ -82,7 +82,7 @@ print("DECL", sha(decl), len(decl))
 print("PROMPT", sha(AGENT_SYSTEM_PROMPT), "REGISTRY_PROMPT", sha(AGENT_SYSTEM_PROMPT_REGISTRY), "SELECTED", sha(agent_system_prompt()))
 """
 # Recorded on a pristine origin/main (09f52388), every flag off.
-GOLDEN_DECLARATIONS = "14fa800b5126b2ada95aceeeee1bb573eb18a9c791758b30c07130436aae6f5a"
+GOLDEN_DECLARATIONS = "9f9f2f1025351a6c0f524d27c8e65b256b3dfa0686cf4125dc30de391650ac1c"
 GOLDEN_PROMPT = "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df"
 GOLDEN_REGISTRY_PROMPT = "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c"
 

@@ -68,7 +68,13 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # (which also holds the reject-reason rule the shipped defaults turn on) and 145,439 with EVERY flag on.
 # Raised to 145,500, the measurement rounded up to the next 500: 61 characters are left, so the next parity
 # task raises it with its own measurement. With the flag off production still sends 138,938.
-BUDGET_CHARS = 145_500
+# MIP-1533 (NOT flag-gated, but the fixed +209 lands in `create_task_plan`'s declaration; production's
+# flags-off prefix test below still passes unchanged): the plan tool's description gains one sentence and
+# `content_markdown` stops saying "Optional": +209, 145,648 measured with the parity flag on over the shipped
+# flags. Measured in the paid run of 2026-11-15 (plan bodies: skeleton 30 of 30 on main, content 30 of 30 with
+# the nudge; no regression on t905 / section W). Raised to 146,000, the measurement rounded up to the next 500:
+# 352 characters are left, so the next parity task raises it with its own measurement.
+BUDGET_CHARS = 146_000
 
 
 def _declared_chars() -> int:
