@@ -21,7 +21,7 @@ from origin.models.chat.unified_models import (
 from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services.v3_activity import create_thread_reply_activity
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.chat.message_views import _valid_mention_user_ids
@@ -63,9 +63,7 @@ class ChatGroupMentionExpansionTests(BaseAPITestCase):
 
     def test_group_member_outside_channel_is_dropped(self):
         ChannelMember.objects.filter(channel=self.channel, user=self.user3).update(is_deleted=True)
-        self.assertEqual(
-            _valid_mention_user_ids(self.channel, self._body()), {str(self.user2.id)}
-        )
+        self.assertEqual(_valid_mention_user_ids(self.channel, self._body()), {str(self.user2.id)})
 
 
 class ThreadParticipantFanoutTests(BaseAPITestCase):
@@ -120,8 +118,10 @@ class TaskCommentReactionV3Tests(BaseAPITestCase):
         )
         # The PM channel is auto-created by the pm_channel signal on project
         # save — reuse it (a second PM channel would violate the 1:1 unique).
-        self.channel = Channel.objects.get(
-            project_id=self.project.project_id, kind=ChannelKind.PM
+        self.channel = Channel.objects.get(project_id=self.project.project_id, kind=ChannelKind.PM)
+        # The comment itself: a reaction to a comment that is not there is refused (MIP-1582).
+        TaskComments.objects.create(
+            task=self.task, sender=self.user2, comment_id=1, comment_body=[]
         )
         # The PM task header message the comment mirror threads under.
         header = Message.objects.create(
