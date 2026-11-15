@@ -10,15 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import requests
-
 from origin.search_engine.agent.calendar import (
-    CALENDAR_EVENTS_SCOPE,
     account_arg,
     calendar_api_error,
     google_calendar_request,
     member_google_accounts,
     named_google_account,
+    read_from_account,
     resolve_google_calendar_account,
 )
 from origin.search_engine.agent.parity import parity_on
@@ -63,34 +61,11 @@ def _run_accounts(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     calendars: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for account in accounts:
-        if CALENDAR_EVENTS_SCOPE not in (account.scopes or []):
-            failed.append({"account_id": str(account.id), "reason": "Calendar access not granted"})
+        body, failure = read_from_account(account, "/users/me/calendarList")
+        if failure is not None:
+            failed.append(failure)
             continue
-        try:
-            resp = google_calendar_request(account, "GET", "/users/me/calendarList")
-        except ToolError:
-            # A sign-in Google no longer honours (`google_calendar_request`).
-            failed.append({"account_id": str(account.id), "reason": "Google access expired"})
-            continue
-        except requests.RequestException:
-            failed.append({"account_id": str(account.id), "reason": "Google could not be reached"})
-            continue
-        if not resp.ok:
-            failed.append(
-                {
-                    "account_id": str(account.id),
-                    "reason": f"Google answered HTTP {resp.status_code}",
-                }
-            )
-            continue
-        try:
-            items = (resp.json() or {}).get("items", [])
-        except ValueError:
-            failed.append(
-                {"account_id": str(account.id), "reason": "Google sent an unreadable reply"}
-            )
-            continue
-        for c in items:
+        for c in (body or {}).get("items", []):
             if isinstance(c, dict) and c.get("id"):
                 calendars.append(_calendar_row(c, str(account.id)))
     if failed and not calendars:

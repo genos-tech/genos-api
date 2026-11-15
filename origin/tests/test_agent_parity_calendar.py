@@ -657,9 +657,17 @@ class DeclarationTests(CalendarBase):
         self.assertIn("you can skip this", declared["list_calendars"])
 
     def test_the_additions_are_filed_once_per_tool(self):
-        added = [a.tool for a in tool_flag_params.ADDITIONS if a.tool in CALENDAR_TOOLS]
+        # The parity flag's rows. MIP-1607's `AGENT_PARITY_FOLLOWUPS` row rewords the one property of the events
+        # read and is held by `test_agent_parity_calendar_all_accounts`.
+        added = [
+            a.tool
+            for a in tool_flag_params.ADDITIONS
+            if a.tool in CALENDAR_TOOLS and a.flag == PARITY_FLAG
+        ]
         self.assertEqual(sorted(added), sorted(CALENDAR_TOOLS))
-        sentences = [t for t, f, _s in tool_flag_text.ADDITIONS if t in CALENDAR_TOOLS]
+        sentences = [
+            t for t, f, _s in tool_flag_text.ADDITIONS if t in CALENDAR_TOOLS and f == PARITY_FLAG
+        ]
         self.assertEqual(len(sentences), len(set(sentences)))
 
     def test_the_new_tool_reads_and_asks_no_approval(self):

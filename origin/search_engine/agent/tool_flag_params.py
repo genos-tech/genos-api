@@ -27,12 +27,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from origin.models.common.member_importance_models import MARK_ON_IT
-from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
+from origin.search_engine.agent.parity import FOLLOWUPS_FLAG, PARITY_FLAG, flag_on
 from origin.search_engine.agent.tools.create_calendar_event import (
     PARITY_PROPERTIES as _CALENDAR_ACCOUNT,
 )
 from origin.search_engine.agent.tools.create_task import PARITY_PROPERTIES as _CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import PARITY_ROW_PROPERTIES as _PLAN_ROWS
+from origin.search_engine.agent.tools.list_calendar_events import (
+    FOLLOWUPS_ACCOUNT_DESCRIPTION as _ALL_ACCOUNTS_DESCRIPTION,
+)
 from origin.search_engine.agent.tools.list_calendars import PARITY_PROPERTIES as _CALENDARS_ACCOUNT
 from origin.search_engine.agent.tools.milestone_convert import (
     PARITY_DESCRIPTIONS as _MILESTONE_DESCRIPTIONS,
@@ -121,6 +124,13 @@ ADDITIONS: tuple[ParamAddition, ...] = (
             "update_calendar_event",
             "delete_calendar_event",
         )
+    ),
+    # MIP-1607 (AGENT_PARITY_FOLLOWUPS): `account` of the events read also takes "all". Only the description of
+    # the property the row above declares changes (with the parity flag off there is no property to reword).
+    ParamAddition(
+        "list_calendar_events",
+        FOLLOWUPS_FLAG,
+        descriptions={"account": _ALL_ACCOUNTS_DESCRIPTION},
     ),
 )
 

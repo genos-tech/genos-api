@@ -1,0 +1,15 @@
+# MIP-578 parity batch, model-visible follow-ups behind the SECOND flag AGENT_PARITY_FOLLOWUPS (default off).
+# AGENT_PARITY_TOOLS is already on in production, so this arm turns on only the new flag; arm0 is production.
+#   MIP-1589: a create/update that the app's own form would refuse (a field the project's rules REQUIRE is
+#     missing) is refused with a sentence naming the fields; `list_project_tags` also returns the project's
+#     field rules and the names of its task templates.
+#   MIP-1607: `list_calendar_events` takes `account: "all"` (every connected Google account in one call).
+#   MIP-1590: mention bullets are fenced and cleaned; a task of a deleted project and a deleted task read like a
+#     missing one in `fetch_task` and in the mention resolver; an approval re-reads the mentioned objects with the
+#     asker's current access.
+# Model-visible: descriptions of `list_project_tags` and `list_calendar_events` grow by a sentence, and the
+# results gain fields. The flag-off prompt, declarations and results are byte-identical (fingerprint golden).
+arm: followups
+overrides:
+    AGENT_PARITY_FOLLOWUPS: true
+requires: []

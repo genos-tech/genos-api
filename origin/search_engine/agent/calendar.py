@@ -187,6 +187,36 @@ def resolve_google_calendar_account(user_id: str, account: str | None = None) ->
     return chosen
 
 
+def read_from_account(
+    account: ConnectedAccount, path: str, params: dict[str, Any] | None = None
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """One GET on ONE of the member's accounts for a read that spans several (MIP-1059, MIP-1607).
+
+    `(body, None)` when Google answered, else `(None, {"account_id", "reason"})`: an account that cannot
+    be read (Calendar never granted, its sign-in expired, Google down, an unreadable reply) must not hide
+    the others, as in the app's own picker. The reasons are fixed sentences: no address, no calendar id
+    and no body of Google's is ever put in one."""
+    failed = str(account.id)
+    if CALENDAR_EVENTS_SCOPE not in (account.scopes or []):
+        return None, {"account_id": failed, "reason": "Calendar access not granted"}
+    try:
+        resp = google_calendar_request(
+            account, "GET", path, **({"params": params} if params else {})
+        )
+    except ToolError:
+        # A sign-in Google no longer honours (`google_calendar_request`).
+        return None, {"account_id": failed, "reason": "Google access expired"}
+    except requests.RequestException:
+        return None, {"account_id": failed, "reason": "Google could not be reached"}
+    if not resp.ok:
+        return None, {"account_id": failed, "reason": f"Google answered HTTP {resp.status_code}"}
+    try:
+        body = resp.json() or {}
+    except ValueError:
+        return None, {"account_id": failed, "reason": "Google sent an unreadable reply"}
+    return (body if isinstance(body, dict) else {}), None
+
+
 def google_calendar_request(
     account: ConnectedAccount,
     method: str,

@@ -1598,14 +1598,18 @@ class ProjectTemplateDefaultsView(AuthenticatedAPIView):
 
 
 class ProjectTaskFieldRulesView(AuthenticatedAPIView):
-    """Owner-configured required/default rules for the metadata fields of
-    tasks and milestones created under a project (ProjectMaster.
-    task_field_rules). GET is member-gated — every member's create form
-    needs the rules (and ownerUserId, so the client can gate the
-    customize UI without a second fetch). PUT is OWNER-gated and
-    shape-validates the whole blob, which it replaces atomically (an
-    empty dict clears all rules). Enforcement is UI-only: task/milestone
-    creation endpoints never consult these rules.
+    """Required/default rules for the metadata fields of tasks and
+    milestones created under a project (ProjectMaster.task_field_rules).
+    GET is member-gated — every member's create form needs the rules
+    (and ownerUserId, so the client can gate the customize UI without a
+    second fetch). PUT is gated on `can_manage(resolve_project_role(...))`:
+    the project's OWNER or an EDITOR may configure the rules (not only the
+    owner: `ownerUserId` is the client's hint for the menu, the gate is the
+    role). It shape-validates the whole blob, which it replaces atomically
+    (an empty dict clears all rules). Enforcement is by the app's forms:
+    this endpoint and the task/milestone creation endpoints never consult
+    the rules. The agent and MCP tools hold their callers to them while the
+    flag `AGENT_PARITY_FOLLOWUPS` is on (`agent/tools/project_field_rules.py`).
     """
 
     ALLOWED_PRIORITY = {"Minimal", "Low", "Normal", "High", "Critical"}

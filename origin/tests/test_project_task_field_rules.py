@@ -1,10 +1,12 @@
 """Project-scoped task/milestone field rules (required + defaults).
 
 Covers the `ProjectTaskFieldRulesView` contract: any project member may
-READ the rules (plus ownerUserId, which gates the customize UI), only
-the project OWNER may write them, the blob is whitelist-validated, and
-— the load-bearing invariant — the rules are UI-only: task creation is
-never rejected by them.
+READ the rules (plus ownerUserId, which hints the customize UI), only
+the project OWNER or an EDITOR (`can_manage`) may write them, the blob is
+whitelist-validated, and — the load-bearing invariant — the REST create
+endpoint never consults them: it is never rejected by them (the app's
+forms enforce them; so do the agent and MCP tools behind
+`AGENT_PARITY_FOLLOWUPS`, `test_agent_project_field_rules`).
 """
 
 from django.urls import reverse
@@ -104,6 +106,20 @@ class PermissionTests(ProjectTaskFieldRulesTestBase):
         self.assertEqual(self.get_rules().status_code, status.HTTP_200_OK)
         resp = self.put_rules({"priority": {"required": True}})
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_an_editor_can_write_the_rules_and_a_viewer_cannot(self):
+        # The gate is `can_manage(resolve_project_role(...))`: owner OR editor (MIP-1589 fixed the docstrings
+        # that said owner-only).
+        row = ProjectMembers.objects.get(project=self.project, attendee=self.user2)
+        self.authenticate(self.user2)
+        self.assertEqual(
+            self.put_rules({"priority": {"required": True}}).status_code, status.HTTP_403_FORBIDDEN
+        )
+        row.member_role = "editor"
+        row.save(update_fields=["member_role"])
+        resp = self.put_rules({"priority": {"required": True}})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["rules"], {"priority": {"required": True}})
 
     def test_non_member_cannot_read(self):
         outsider_project = ProjectMaster.objects.create(
