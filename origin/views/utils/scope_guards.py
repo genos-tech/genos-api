@@ -523,11 +523,17 @@ def external_visible_user_ids(team_id, user_id) -> set:
 def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
     """May `user_id` see (and therefore edit) this task?
 
-    Project members, plus the assignee and the reporter. Deliberately the
-    same rule as `search_engine/agent/acl.task_acl_user_ids`, which is
-    what decides whether the task appears in search: an assignee with no
-    `ProjectMembers` row can already find the task, so a narrower rule
-    here would let someone open a task from search and then be refused.
+    Project members and the project's owner, plus the assignee and the
+    reporter. Close to `search_engine/agent/acl.task_acl_user_ids`, which
+    decides whether the task appears in search, and never narrower than it:
+    an assignee with no `ProjectMembers` row can find the task, so a
+    narrower rule here would let someone open a task from search and then
+    be refused. It is wider in exactly two ways, pinned by
+    `tests/test_task_collaborator_cleanup.py`: the owner of a project with no
+    `ProjectMembers` row, and an assignee or reporter who has left the team
+    (the search rule drops both, MIP-1371). They are not one rule on
+    purpose: making either follow the other would change who can open a task
+    or which tasks search returns (MIP-1579).
 
     Note this is the READ audience and the WRITE audience at once. Task
     editing has always been open to anyone who can see the task; adding
@@ -558,42 +564,54 @@ def can_access_task(task_id, user_id, *, include_deleted: bool = False) -> bool:
     return is_project_member(row["project_id"], user_id)
 
 
+def project_reader_ids(project_id, candidates) -> set:
+    """The ids among `candidates` that are a member or the owner of `project_id`, as canonical
+    strings: `is_project_member` for many people at once, two queries however many.
+
+    The project half of `can_access_task`'s rule, for callers that judge the holders of the
+    task (assignee, reporter) themselves, per task (`task_reader_ids`, the cleanup of
+    collaborators in `task_collaborator_revoke`).
+    """
+    wanted = {str(c) for c in candidates if c}
+    if not wanted or project_id is None:
+        return set()
+
+    def _query():
+        found = {
+            str(pk)
+            for pk in ProjectMembers.objects.filter(
+                project=project_id, attendee__in=wanted
+            ).values_list("attendee_id", flat=True)
+        }
+        owner = (
+            ProjectMaster.objects.filter(project_id=project_id)
+            .values_list("owner_id", flat=True)
+            .first()
+        )
+        if owner is not None and str(owner) in wanted:
+            found.add(str(owner))
+        return found
+
+    return _no_such(_query, default=set())
+
+
 def task_reader_ids(project_id, assignee_id, reporter_id, candidates) -> set:
     """The ids among `candidates` that `can_access_task` would say yes to, for a task in
     `project_id` held by `assignee_id` / `reporter_id`, as canonical strings.
 
     The batch form of the rule above, for fan-outs and write gates that ask about a handful
     of people at once: two queries however many candidates, never one per person.
-    `tests/test_task_reader_ids.py` pins it equal to `can_access_task` for every kind of
+    `tests/test_task_collaborator_read_rule.py` pins it equal to `can_access_task` for every kind of
     person. It is NOT `acl.task_acl_user_ids`, which also drops an assignee or reporter who has
-    left the team (MIP-1371) and omits the project's owner. It takes the people of a
-    task, not its id, so it cannot see `is_deleted`: a caller holding a task row decides that.
+    left the team (MIP-1371) and omits the project's owner (`test_task_collaborator_cleanup`
+    pins the two differences). It takes the people of a task, not its id, so it cannot see
+    `is_deleted`: a caller holding a task row decides that.
     """
     wanted = {str(c) for c in candidates if c}
     if not wanted:
         return set()
     readers = wanted & {str(assignee_id), str(reporter_id)}
-    rest = wanted - readers
-    if rest and project_id is not None:
-
-        def _query():
-            found = {
-                str(pk)
-                for pk in ProjectMembers.objects.filter(
-                    project=project_id, attendee__in=rest
-                ).values_list("attendee_id", flat=True)
-            }
-            owner = (
-                ProjectMaster.objects.filter(project_id=project_id)
-                .values_list("owner_id", flat=True)
-                .first()
-            )
-            if owner is not None and str(owner) in rest:
-                found.add(str(owner))
-            return found
-
-        readers |= _no_such(_query, default=set())
-    return readers
+    return readers | project_reader_ids(project_id, wanted - readers)
 
 
 def team_ids_for_user(user_id) -> list:
