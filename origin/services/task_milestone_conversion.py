@@ -188,7 +188,10 @@ def convert_milestone_to_task(milestone_id: int) -> tuple[TaskMaster, MilestoneM
         # The tasks that cite the milestone leave it, with its sprint; their place
         # in the tree is not touched. (The row itself is done above.)
         staying = TaskMaster.objects.filter(milestone=milestone).exclude(task_id=row.task_id)
-        kept = staying.count()
+        # Every row lets go of the milestone, a deleted one too (it is not left citing a retired
+        # milestone), but the count is what a person still sees under the task: a task deleted in
+        # the app (`status` "Deleted") or a soft-deleted row is not "kept" (MIP-1583).
+        kept = staying.filter(is_deleted=False).exclude(status="Deleted").count()
         update_tasks_recorded(staying, cascade="milestone_to_task", milestone=None, sprint=None)
 
         # While the row is still linked, so removing each assignee is in its history.
