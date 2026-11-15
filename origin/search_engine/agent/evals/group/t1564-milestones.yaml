@@ -1,0 +1,229 @@
+# MIP-1564 (flag AGENT_PARITY_TOOLS, arm `parity`): convert a root task into a milestone and a milestone back into a
+# task, and move a milestone to another project, as the milestone page's "..." menu and project field do.
+# `manage_milestone` gains the action `convert` (`task_id` for the task, `milestone_id` for the milestone) and a
+# `project_id` on `update`. Judged on what the model READS and PROPOSES: nothing is ever approved here, so the seeded
+# rows stay. Favorites stay UI-only (MIP-1052), so a request to favorite a milestone must end in words and no write.
+#
+# Seed `milestone_convert` (projects EMC and EMA, the viewer alone): the root task "Draft the vendor questionnaire"
+# (EMC-1), the milestone "Customer onboarding launch" (EMC-2, with two tasks) and the milestone "Spring campaign"
+# (EMC-5), and the second project "Eval archive" (EMA). The Japanese team's are 「ベンダー向けアンケートを下書きする」,
+# 「顧客オンボーディングの公開」, 「春のキャンペーン」 and 「評価アーカイブ」. Each item is named by its title AND by
+# its display id, so the cases measure the tool and not whether a model can find a row no search index has seen.
+#
+# The positives `requires_arm: parity` (they cannot pass without the action and the parameter being declared). The
+# negatives run on arm0 too: asking to SEE a milestone, or to favorite one, must never become a convert, a move or any
+# other write (`pending_tools_excludes`, `evals/runner.py`: a proposal pauses the run, but the words before the call are
+# streamed as the answer, so only the proposal check can tell a model that said "done" and proposed from one that
+# declined). Moving a TASK keeps using `update_task` on every arm, which is what `move-task-update` holds.
+
+- id: t1564.convert-to-milestone.en
+  lang: en
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: b
+  seed: [milestone_convert]
+  requires_arm: parity
+  note: "Positive: turn a root task into a milestone: manage_milestone convert with task_id and no milestone_id."
+  query: 'Turn the task "Draft the vendor questionnaire" (EMC-1) into a milestone.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [manage_milestone]
+    pending_write:
+      tool: manage_milestone
+      args_present: [task_id]
+      args_absent: [milestone_id, project_id]
+      args_match:
+        action: "^convert$"
+        current: "Draft the vendor questionnaire"
+
+- id: t1564.convert-to-milestone.ja
+  lang: ja
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: ja-b
+  seed: [milestone_convert]
+  requires_arm: parity
+  note: "Positive: turn a root task into a milestone: manage_milestone convert with task_id and no milestone_id."
+  query: 'タスク「ベンダー向けアンケートを下書きする」(EMC-1)をマイルストーンに変換してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [manage_milestone]
+    pending_write:
+      tool: manage_milestone
+      args_present: [task_id]
+      args_absent: [milestone_id, project_id]
+      args_match:
+        action: "^convert$"
+        current: "ベンダー向けアンケートを下書きする"
+
+- id: t1564.convert-to-task.en
+  lang: en
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: b
+  seed: [milestone_convert]
+  requires_arm: parity
+  note: "Positive: turn a milestone back into a task: manage_milestone convert with milestone_id and no task_id."
+  query: 'Convert the milestone "Customer onboarding launch" (EMC-2) back into an ordinary task.'
+  expect:
+    no_errors: true
+    pending_tools_contains: [manage_milestone]
+    pending_write:
+      tool: manage_milestone
+      args_present: [milestone_id]
+      args_absent: [task_id, project_id]
+      args_match:
+        action: "^convert$"
+        current: "Customer onboarding launch"
+
+- id: t1564.convert-to-task.ja
+  lang: ja
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: ja-b
+  seed: [milestone_convert]
+  requires_arm: parity
+  note: "Positive: turn a milestone back into a task: manage_milestone convert with milestone_id and no task_id."
+  query: 'マイルストーン「顧客オンボーディングの公開」(EMC-2)を通常のタスクに戻してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [manage_milestone]
+    pending_write:
+      tool: manage_milestone
+      args_present: [milestone_id]
+      args_absent: [task_id, project_id]
+      args_match:
+        action: "^convert$"
+        current: "顧客オンボーディングの公開"
+
+- id: t1564.move-milestone.en
+  lang: en
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: b
+  seed: [milestone_convert]
+  requires_arm: parity
+  note: "Positive: move a milestone to another project: manage_milestone update with project_id, and none of what a move clears."
+  query: 'Move the milestone "Spring campaign" (EMC-5) to the project "Eval archive".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [manage_milestone]
+    pending_write:
+      tool: manage_milestone
+      args_present: [milestone_id, project_id]
+      args_absent: [task_id, sprint_id, milestone_folder_id, tags]
+      args_match:
+        action: "^update$"
+        project_id: "Eval archive"
+        current: "Eval milestones"
+
+- id: t1564.move-milestone.ja
+  lang: ja
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: ja-b
+  seed: [milestone_convert]
+  requires_arm: parity
+  note: "Positive: move a milestone to another project: manage_milestone update with project_id, and none of what a move clears."
+  query: 'マイルストーン「春のキャンペーン」(EMC-5)をプロジェクト「評価アーカイブ」に移動してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [manage_milestone]
+    pending_write:
+      tool: manage_milestone
+      args_present: [milestone_id, project_id]
+      args_absent: [task_id, sprint_id, milestone_folder_id, tags]
+      args_match:
+        action: "^update$"
+        project_id: "評価アーカイブ"
+        current: "評価マイルストーン"
+
+- id: t1564.show-not-convert.en
+  lang: en
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: b
+  seed: [milestone_convert]
+  note: "Negative (arm0 and parity): asking to see a milestone must not convert, move or change it."
+  query: 'What is the status of the milestone "Customer onboarding launch" (EMC-2), and which tasks are in it?'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [manage_milestone, update_task, delete_milestone]
+    answer_chars_at_least: 20
+    answer_contains_any: [Write the welcome email, Record the demo video]
+
+- id: t1564.show-not-convert.ja
+  lang: ja
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: ja-b
+  seed: [milestone_convert]
+  note: "Negative (arm0 and parity): asking to see a milestone must not convert, move or change it."
+  query: 'マイルストーン「顧客オンボーディングの公開」(EMC-2)の状態と、その中にあるタスクを教えてください。'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [manage_milestone, update_task, delete_milestone]
+    answer_chars_at_least: 20
+    answer_contains_any: [ウェルカムメールを書く, デモ動画を録画する]
+
+- id: t1564.favorite-no-tool.en
+  lang: en
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: b
+  seed: [milestone_convert]
+  note: "Negative (arm0 and parity): favorites are UI-only (MIP-1052), so the model says so and proposes no write."
+  query: 'Add the milestone "Customer onboarding launch" (EMC-2) to my favorites so I can open it quickly.'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [manage_milestone, update_task, update_tasks_bulk, favorite_note]
+    answer_chars_at_least: 20
+
+- id: t1564.favorite-no-tool.ja
+  lang: ja
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: ja-b
+  seed: [milestone_convert]
+  note: "Negative (arm0 and parity): favorites are UI-only (MIP-1052), so the model says so and proposes no write."
+  query: 'マイルストーン「顧客オンボーディングの公開」(EMC-2)をお気に入りに追加して、すぐ開けるようにしてください。'
+  expect:
+    no_errors: true
+    pending_tools_excludes: [manage_milestone, update_task, update_tasks_bulk, favorite_note]
+    answer_chars_at_least: 20
+
+- id: t1564.move-task-update.en
+  lang: en
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: b
+  seed: [milestone_convert]
+  note: "Not new (arm0 and parity): moving a TASK to another project is update_task, not manage_milestone."
+  query: 'Move the task "Draft the vendor questionnaire" (EMC-1) to the project "Eval archive".'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_tools_excludes: [manage_milestone]
+    pending_write:
+      tool: update_task
+      args_present: [task_id, project_id]
+      args_match:
+        project_id: "Eval archive"
+
+- id: t1564.move-task-update.ja
+  lang: ja
+  tags: [eval-group, t1564]
+  fixture: sequence
+  viewer: ja-b
+  seed: [milestone_convert]
+  note: "Not new (arm0 and parity): moving a TASK to another project is update_task, not manage_milestone."
+  query: 'タスク「ベンダー向けアンケートを下書きする」(EMC-1)をプロジェクト「評価アーカイブ」に移動してください。'
+  expect:
+    no_errors: true
+    pending_tools_contains: [update_task]
+    pending_tools_excludes: [manage_milestone]
+    pending_write:
+      tool: update_task
+      args_present: [task_id, project_id]
+      args_match:
+        project_id: "評価アーカイブ"

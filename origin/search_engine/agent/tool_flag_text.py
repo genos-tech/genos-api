@@ -26,6 +26,7 @@ from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.tools import ancestor_rule as _rule
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
+from origin.search_engine.agent.tools import milestone_convert as _milestone_convert
 from origin.search_engine.agent.tools import task_attachments as _task_attachments
 from origin.search_engine.agent.tools import todo_source as _todo_source
 from origin.search_engine.agent.tools import update_comment as _update_comment
@@ -59,6 +60,8 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("create_todo_item", PARITY_FLAG, _todo_source.DESCRIPTION_ADDITION),
     # MIP-1563: a task's files, as metadata, in the result of the task read.
     ("fetch_task", PARITY_FLAG, _task_attachments.DESCRIPTION_ADDITION),
+    # MIP-1564 has no row here: `manage_milestone`'s sentence REPLACES the one that said a move is not
+    # supported (`REPLACEMENTS` below), so it sits where that one was.
 )
 
 #: `(tool name, SEARCH_ENGINE flag, sentence in the description, its wording while the flag is on)`
@@ -71,6 +74,12 @@ REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
         _update_comment.REQUIRED_SENTENCE_ON,
     ),
     ("update_comment", PARITY_FLAG, _update_comment.OWN_SENTENCE, _update_comment.OWN_SENTENCE_ON),
+    (
+        "manage_milestone",
+        PARITY_FLAG,
+        _milestone_convert.MOVE_SENTENCE,
+        _milestone_convert.MOVE_SENTENCE_ON,
+    ),
 )
 
 #: `REPLACEMENTS` for the MCP catalog, whose descriptions are worded for MCP: the same swap, for a
@@ -82,6 +91,12 @@ MCP_REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
         PARITY_FLAG,
         _update_comment.MCP_OWN_SENTENCE,
         _update_comment.MCP_OWN_SENTENCE_ON,
+    ),
+    (
+        "manage_milestone",
+        PARITY_FLAG,
+        _milestone_convert.MCP_MOVE_SENTENCE,
+        _milestone_convert.MCP_MOVE_SENTENCE_ON,
     ),
 )
 

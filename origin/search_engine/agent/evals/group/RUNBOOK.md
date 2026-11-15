@@ -258,3 +258,17 @@ the model.
   (the tool returns neither). The delete cases only PROPOSE: nothing is approved, so the seeded files stay.
   `delete` judges the card too (`current` carries the file's name). The server side (who may delete, what the
   delete removes, the MCP opt-in) is pinned by free tests, not here.
+* **Parity: convert and move a milestone (MIP-1564, tag `t1564`, the same arm `parity`).** `t1564-milestones.yaml`
+  (EN and JA per case), on the sequence fixture with the seed `milestone_convert` (projects EMC and EMA, the viewer
+  alone: the root task "Draft the vendor questionnaire" EMC-1, the milestone "Customer onboarding launch" EMC-2 with
+  two tasks, the milestone "Spring campaign" EMC-5 and the second project "Eval archive"; the Japanese team's are
+  `ベンダー向けアンケートを下書きする`, `顧客オンボーディングの公開`, `春のキャンペーン` and `評価アーカイブ`). The
+  positives (`convert-to-milestone`, `convert-to-task`, `move-milestone`) have `requires_arm: parity` (the action
+  `convert`, `task_id` and a `project_id` on `update` are declared only with the flag); the negatives
+  (`show-not-convert`, `favorite-no-tool`) run on arm0 too: asking to see a milestone is never a write, and a
+  milestone favorite is UI-only (MIP-1052) so the model must decline in words and propose nothing.
+  `move-task-update` is not new and runs on arm0 as well: moving a TASK is still `update_task`. They judge the
+  PROPOSAL (`pending_write`), including the card's `current` (the converted item's title, the project a milestone
+  leaves) and that a move sends none of `sprint_id`, `milestone_folder_id`, `tags`, which a move clears. Nothing is
+  approved, so the seeded rows stay. The server side (the rules of both, the refusal sentences, the approval card, MCP)
+  is pinned by free tests, not here.

@@ -29,7 +29,8 @@ from typing import Any
 from django.db.models import BigIntegerField, Case, Q, Value, When
 from django.utils import timezone
 
-from origin.models.task.milestone_models import MilestoneFolder, MilestoneMaster
+from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.purge import purge_milestone, purge_task
 from origin.services.milestone_service import (
@@ -38,7 +39,11 @@ from origin.services.milestone_service import (
     sync_milestone_assignees,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
-from origin.services.task_project_move import collect_descendant_task_ids
+from origin.services.task_project_move import (
+    collect_descendant_task_ids,
+    milestone_subtree_task_ids,
+    relocate_tasks,
+)
 from origin.services.task_reparent import resolve_root_task_id
 from origin.signals.task_signals import update_tasks_recorded
 
@@ -74,10 +79,12 @@ def update_milestone(
     folder: Any = UNSET,
     assignee_ids: Any = UNSET,
     after_sync: Callable[[], None] | None = None,
+    project_move: ProjectMaster | None = None,
 ) -> list[str]:
     """Apply a milestone PATCH. The caller owns the transaction and the
-    `invalidate_project_tasks_cache` call. Returns the ids of the people it ADDED as
-    assignees, for the caller to tell once the transaction commits (MIP-1464).
+    `invalidate_project_tasks_cache` call (for the project it left too, on a move). Returns the
+    ids of the people it ADDED as assignees, for the caller to tell once the transaction commits
+    (MIP-1464).
 
     `fields` holds the plain columns to set (`PATCHABLE_FIELDS`); `sprint` is a
     `Sprint` or None, `folder` a `MilestoneFolder` or None, both already checked
@@ -93,8 +100,36 @@ def update_milestone(
       4. a sprint change is pushed to the milestone's tasks, so the sprint
          board and analytics stay in step;
       5. the assignee join is reconciled, and the backing task mirrored once
-         more so it shows the new first assignee.
+         more so it shows the new first assignee;
+      6. a project move (`project_move`, MIP-1564): carries the milestone's world into the
+         destination, LAST (see below).
+
+    `project_move` is the project the milestone goes to, already checked by the caller (it is
+    one the caller may use). A milestone is the top of its own hierarchy, so unlike a sub-task
+    it may change project, and everything filed under it moves with it
+    (`milestone_subtree_task_ids`). What a move does to what the milestone carries:
+
+      * its sprint is cleared (sprints are per project, no mapping between two is meaningful;
+        cleared through the `sprint` parameter, which also fans the clearing out to its tasks), so
+        any `sprint` passed with a move is ignored;
+      * its folder is cleared (folders belong to one project), so any `folder` is ignored;
+      * its tags are cleared, on the milestone and on every task that moves (tags are project-
+        scoped rows), AFTER the payload's own fields, so a `tags` in `fields` can't bring the
+        source project's labels back;
+      * every moved row gets a new `<CODE>-<n>` display id in the destination;
+      * the backing task, the tasks filed under it and their sub-trees, their notes and their
+        dependency edges follow (`relocate_tasks`), and the assignee join takes the new team.
+
+    The backing row and the project / team / numbers have to be written after
+    `sync_backing_task` (which may only just have created the backing row for a legacy
+    milestone, and writes it wholesale), so the relocation is the last step.
     """
+    if project_move is not None:
+        milestone.project = project_move
+        milestone.team_id = project_move.team_id
+        sprint = None
+        folder = None
+        fields = {**fields, "tags": None}
     sprint_changed = sprint is not UNSET
     if sprint_changed:
         milestone.sprint = sprint
@@ -136,6 +171,16 @@ def update_milestone(
         # still showed the reporter (MIP-916). Mirror once more. Same as the
         # per-person endpoint, and a no-op for every other column.
         sync_backing_task(milestone)
+
+    if project_move is not None:
+        relocate_tasks(
+            milestone_subtree_task_ids(milestone),
+            project_id=milestone.project_id,
+            team_id=milestone.team_id,
+            clear_sprint=True,
+        )
+        # The assignee join denormalizes the team for scoped reads.
+        MilestoneAssignees.objects.filter(milestone=milestone).update(team_id=milestone.team_id)
     return added
 
 

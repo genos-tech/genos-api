@@ -126,7 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
-from origin.search_engine.agent.parity import PARITY_FLAG, flag_on
+from origin.search_engine.agent.parity import PARITY_FLAG, flag_on, parity_on
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
@@ -207,6 +207,10 @@ class McpTool:
     # Argument names whose value is a task reference to resolve before
     # the underlying tool sees it.
     task_ref_args: tuple[str, ...] = ()
+    # Task-reference arguments that exist only while `AGENT_PARITY_TOOLS` is on (MIP-1564: `manage_milestone`'s
+    # `task_id`, for `convert`). Resolved like `task_ref_args`, but only while the flag is on, so with it off
+    # such a value reaches the tool untouched and is refused in the tool's own words, as it always was.
+    parity_task_ref_args: tuple[str, ...] = ()
     # Task-reference arguments where '' is a real value ("no task": make it
     # top-level) and passes through unresolved. Every other blank is refused.
     clearable_task_ref_args: tuple[str, ...] = ()
@@ -1487,6 +1491,9 @@ CATALOG: tuple[McpTool, ...] = (
         name="manage_milestone",
         registry_name="manage_milestone",
         milestone_ref_args=("milestone_id",),
+        parity_task_ref_args=("task_id",),
+        # '' is "not sent" for a convert (a model filling an optional slot), so it is not resolved.
+        clearable_task_ref_args=("task_id",),
         description=(
             "Create or change a milestone, or manage a project's milestone "
             "folders; `action` says which. 'create' makes a milestone with no "
@@ -2293,7 +2300,7 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
     Raises `ToolError` for a reference that names nothing. `args` is untouched.
     """
     args = dict(args)
-    for arg in tool.task_ref_args:
+    for arg in (*tool.task_ref_args, *(tool.parity_task_ref_args if parity_on() else ())):
         if arg in args and args[arg] is not None:
             if args[arg] == "" and arg in tool.clearable_task_ref_args:
                 continue
@@ -2449,6 +2456,34 @@ DELETING_ARGUMENTS = {
 # FOLDER is only a grouping. Deleting one leaves every milestone in it (they go back to
 # "no folder") and nothing in it is lost that creating a folder again does not restore.
 ARGUMENT_DELETES_WITHOUT_THE_OPT_IN = {("manage_milestone", "delete_folder")}
+
+
+def dropping_call(name: str, arguments: dict[str, Any]) -> str | None:
+    """`field=value, field` when this call deletes nothing but DROPS what no undo brings back, and so
+    is held to the same opt-in a delete is (MIP-1564), else None.
+
+    `manage_milestone`, only while `AGENT_PARITY_TOOLS` is on (with it off these arguments are refused
+    or do not exist, so nothing here moves):
+
+      * `convert` with a `milestone_id` turns a milestone into a task: its folder is dropped and
+        recorded nowhere, its sprint and its tasks' sprint are dropped, the milestone is retired and
+        leaves the search index;
+      * `update` that names a `project_id` moves it to another project: the folder, sprint and tags
+        are cleared, the display ids are replaced, and a task note's author who is not on the
+        destination loses the Owner role (recorded nowhere, not restored by moving back).
+
+    `convert` with a `task_id` drops nothing and is not held. The gate reads the CALL, not the
+    row, so an `update` that names the milestone's own project is held too (it changes nothing; the
+    opt-in is for the key, and a model that sends it is moving the milestone in its head).
+    """
+    if name != "manage_milestone" or not parity_on() or not isinstance(arguments, dict):
+        return None
+    action = arguments.get("action")
+    if action == "convert" and arguments.get("milestone_id") not in (None, ""):
+        return "action=convert, milestone_id"
+    if action == "update" and arguments.get("project_id") not in (None, ""):
+        return "action=update, project_id"
+    return None
 
 
 def deleting_argument(name: str, arguments: dict[str, Any]) -> str | None:
@@ -2673,10 +2708,18 @@ def _read_only_message(name: str, credential_kind: str) -> str:
     )
 
 
-def _destructive_message(name: str, credential_kind: str, detail: str | None = None) -> str:
+def _destructive_message(
+    name: str, credential_kind: str, detail: str | None = None, *, drops: bool = False
+) -> str:
     # A delete tool "can't be undone"; an argument that deletes (a task's status) is said to
-    # delete, which is true whether or not it could be put back.
-    what = f"`{name}` with `{detail}` deletes, and" if detail else f"`{name}` can't be undone, and"
+    # delete, which is true whether or not it could be put back. A call that deletes nothing but
+    # drops what undo cannot return (`dropping_call`) says exactly that and not "deletes".
+    if drops:
+        what = f"`{name}` with `{detail}` drops what can't be put back, and"
+    else:
+        what = (
+            f"`{name}` with `{detail}` deletes, and" if detail else f"`{name}` can't be undone, and"
+        )
     if credential_kind == "api_key":
         return (
             f"{what} this API key wasn't opted into "
@@ -2739,9 +2782,10 @@ def call(
 
     args = dict(arguments or {})
     deleting = deleting_argument(name, args)
-    # A call that deletes, by its tool or by an argument: the security log keeps a trace of
-    # each, whatever became of it (MIP-1140).
-    destroys = tool.destructive or deleting is not None
+    dropping = None if deleting else dropping_call(name, args)
+    # A call that deletes, by its tool or by an argument, or drops what no undo brings back: the
+    # security log keeps a trace of each, whatever became of it (MIP-1140).
+    destroys = tool.destructive or deleting is not None or dropping is not None
 
     if tool.write and scope != SCOPE_WRITE:
         # A refusal that is HTTP 200, so the burst alert would never see it
@@ -2759,6 +2803,13 @@ def call(
         note_refusal()
         _audit_destructive(audit, tool, DESTRUCTIVE_REFUSED, args)
         return _text_result(_destructive_message(name, credential_kind, deleting), is_error=True)
+    if not allow_destructive and dropping:
+        # Not a delete, but it drops what nothing can put back: the same opt-in (MIP-1564).
+        note_refusal()
+        _audit_destructive(audit, tool, DESTRUCTIVE_REFUSED, args)
+        return _text_result(
+            _destructive_message(name, credential_kind, dropping, drops=True), is_error=True
+        )
 
     # Before anything is resolved or run, so a refused call changes nothing.
     if unknown := _unknown_arguments(tool, args):
