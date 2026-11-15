@@ -74,6 +74,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # flags. Measured in the paid run of 2026-11-15 (plan bodies: skeleton 30 of 30 on main, content 30 of 30 with
 # the nudge; no regression on t905 / section W). Raised to 146,000, the measurement rounded up to the next 500:
 # 352 characters are left, so the next parity task raises it with its own measurement.
+# The calendar account hint (a follow-up to MIP-1059, the same flag): one sentence on `create_calendar_event`
+# (221 characters: a member who names a specific calendar or account gets `list_calendars` first, a write
+# proposes before it reads), +221, 145,869 measured with the flag on over the shipped flags. The constant
+# stays: 131 characters are left, so the next parity task raises it with its own measurement. With the flag
+# off production still sends 139,147.
 BUDGET_CHARS = 146_000
 
 

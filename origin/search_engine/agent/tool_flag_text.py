@@ -28,6 +28,7 @@ from origin.search_engine.agent.tool_flag_params import (
     ON_IT_CLEAR_SENTENCE_ON,
 )
 from origin.search_engine.agent.tools import ancestor_rule as _rule
+from origin.search_engine.agent.tools import create_calendar_event as _create_calendar_event
 from origin.search_engine.agent.tools import create_task as _create_task
 from origin.search_engine.agent.tools import create_task_plan as _create_task_plan
 from origin.search_engine.agent.tools import delete_calendar_event as _delete_calendar_event
@@ -73,6 +74,10 @@ ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # what an unknown event on the wrong account looks like.
     ("list_calendars", PARITY_FLAG, _list_calendars.DESCRIPTION_ADDITION),
     ("list_calendar_events", PARITY_FLAG, _list_calendar_events.DESCRIPTION_ADDITION),
+    # A write proposes before it reads, so a member's "personal calendar" needs the account looked up first
+    # (the model skipped it in Japanese, 2 of 3). On create only: the reads say `other_accounts`, an update
+    # and a delete have found their event first.
+    ("create_calendar_event", PARITY_FLAG, _create_calendar_event.DESCRIPTION_ADDITION),
     ("delete_calendar_event", PARITY_FLAG, _delete_calendar_event.DESCRIPTION_ADDITION),
 )
 

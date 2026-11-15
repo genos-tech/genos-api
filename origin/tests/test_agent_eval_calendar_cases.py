@@ -37,10 +37,11 @@ from .test_base import BaseAPITestCase
 
 FLAG = "AGENT_PARITY_TOOLS"
 POSITIVES = ("read-second", "cite-event", "create-named", "delete-second")
-NEGATIVES = ("look-only", "one-account")
+NEGATIVES = ("look-only", "one-account", "one-account-named")
 SLUGS = (*POSITIVES, *NEGATIVES)
 WRITES = ["create_calendar_event", "update_calendar_event", "delete_calendar_event"]
 PERSONAL = "eval.personal@genos-eval.example"
+WORK = "eval.work@genos-eval.example"
 
 
 def cases():
@@ -85,7 +86,11 @@ class CaseFileTests(SimpleTestCase):
             self.assertIn(c.raw["viewer"], sequence.VIEWERS, c.id)
             self.assertEqual(c.raw["fixture"], "sequence", c.id)
             slug = c.id.split(".")[1]
-            wanted = "calendar_one_account" if slug == "one-account" else "calendar_two_accounts"
+            wanted = (
+                "calendar_one_account"
+                if slug.startswith("one-account")
+                else "calendar_two_accounts"
+            )
             self.assertEqual(c.raw["seed"], [wanted], c.id)
             _team, person = sequence.VIEWERS[c.raw["viewer"]]
             self.assertIn(person, seeds.VISIBLE_TO[wanted], c.id)
@@ -112,7 +117,7 @@ class CaseFileTests(SimpleTestCase):
         for c in self.cases:
             slug = c.id.split(".")[1]
             expect = c.raw["expect"]
-            if slug in ("create-named", "one-account"):
+            if slug in ("create-named", "one-account", "one-account-named"):
                 self.assertEqual(expect["pending_tools_contains"], ["create_calendar_event"], c.id)
                 self.assertEqual(expect["pending_write"]["tool"], "create_calendar_event", c.id)
             elif slug == "delete-second":
@@ -125,6 +130,28 @@ class CaseFileTests(SimpleTestCase):
             spec = self.by_id[f"t1059.one-account.{lang}"].raw["expect"]["pending_write"]
             self.assertEqual(spec["args_absent"], ["account"])
 
+    def test_a_member_with_one_account_who_names_it_must_land_on_it_whatever_the_model_looks_up(
+        self,
+    ):
+        # The hint can send this member to `list_calendars` (it cannot know the count before it looks): the
+        # case allows that and holds the proposal to the one account, by the card, not by an argument.
+        for lang in ("en", "ja"):
+            spec = self.by_id[f"t1059.one-account-named.{lang}"].raw["expect"]["pending_write"]
+            self.assertEqual(spec["args_match"]["account_label"], WORK, lang)
+            self.assertEqual(spec["args_match"]["account_count"], "^1$", lang)
+            self.assertNotIn("args_absent", spec, lang)
+            self.assertNotIn("account", spec["args_present"], lang)
+            expect = self.by_id[f"t1059.one-account-named.{lang}"].raw["expect"]
+            self.assertNotIn("tools_used_excludes", expect, lang)
+            self.assertIn("parity", self.by_id[f"t1059.one-account-named.{lang}"].tags)
+
+    def test_a_member_with_one_account_is_not_sent_to_list_calendars(self):
+        # The account hint (`create_calendar_event`'s flag-on sentence) must add no call for a member who names
+        # no account: the guard that fails when it makes the model look up an account nobody asked for.
+        for lang in ("en", "ja"):
+            expect = self.by_id[f"t1059.one-account.{lang}"].raw["expect"]
+            self.assertEqual(expect["tools_used_excludes"], ["list_calendars"], lang)
+
     def test_the_named_account_cases_quote_the_personal_address_the_card_will_carry(self):
         for slug in ("create-named", "delete-second"):
             for lang in ("en", "ja"):
@@ -136,7 +163,11 @@ class CaseFileTests(SimpleTestCase):
     def test_the_cases_quote_only_titles_the_seeds_have(self):
         for c in self.cases:
             slug = c.id.split(".")[1]
-            name = "calendar_one_account" if slug == "one-account" else "calendar_two_accounts"
+            name = (
+                "calendar_one_account"
+                if slug.startswith("one-account")
+                else "calendar_two_accounts"
+            )
             texts = set(seeds.seed_texts(name, c.lang))
             # The "Team lunch" and "Standup" events are what the member asks to ADD: not seeded.
             added = {"Team lunch", "チームランチ", "Standup", "朝会"}
@@ -215,6 +246,16 @@ class ChecksAreNotVacuousTests(SimpleTestCase):
                 self.assertTrue(
                     [r for r in bad if r.startswith("pending_tools_excludes")], (case_id, bad)
                 )
+
+    def test_one_account_fails_a_model_that_looked_up_accounts_it_was_not_asked_about(self):
+        for lang in ("en", "ja"):
+            case_id = f"t1059.one-account.{lang}"
+            looked = self.reasons(
+                case_id, answer="", proposed=("create_calendar_event",), used=("list_calendars",)
+            )
+            self.assertTrue([r for r in looked if r.startswith("tools_used_excludes")], looked)
+            straight = self.reasons(case_id, answer="", proposed=("create_calendar_event",))
+            self.assertEqual([r for r in straight if r.startswith("tools_used_excludes")], [])
 
     def test_read_second_needs_the_time_in_the_answer_and_a_calendar_read(self):
         ok = self.reasons(
@@ -381,6 +422,27 @@ class SeedAndCardTests(BaseAPITestCase):
             {"event_id": "evalhome1", "account": str(home.id)},
         )
         self.assertTrue(all(checks.values()), (checks, card))
+
+    def test_one_account_named_passes_with_or_without_its_id_and_fails_on_a_made_up_one(self):
+        ConnectedAccount.objects.filter(user=self.user, provider="google").delete()
+        seeds.apply(["calendar_one_account"], dict(self.info, person="c"))
+        (only,) = accounts_for(self.user, "google")
+        base = {
+            "summary": "Standup",
+            "start_iso": "2027-03-12T09:00:00",
+            "end_iso": "2027-03-12T09:15:00",
+            "time_zone": "Asia/Tokyo",
+        }
+        for proposal in (base, {**base, "account": str(only.id)}):
+            checks, card = self.check(
+                "t1059.one-account-named.en", "create_calendar_event", proposal
+            )
+            self.assertTrue(all(checks.values()), (checks, card))
+            self.assertEqual(card["account_label"], WORK)
+            self.assertEqual(card["account_count"], 1)
+        made_up = {**base, "account": "11111111-1111-4111-8111-111111111111"}
+        checks, _ = self.check("t1059.one-account-named.en", "create_calendar_event", made_up)
+        self.assertFalse(all(checks.values()))
 
     def test_one_account_passes_without_an_account_and_fails_with_one(self):
         ConnectedAccount.objects.filter(user=self.user, provider="google").delete()

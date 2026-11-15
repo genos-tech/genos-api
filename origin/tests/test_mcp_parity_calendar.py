@@ -16,6 +16,9 @@ from django.conf import settings
 from origin.models.common.api_key_models import SCOPE_READ, SCOPE_WRITE
 from origin.search_engine.agent.calendar import ACCOUNT_REFUSAL
 from origin.search_engine.agent.parity import PARITY_FLAG
+from origin.search_engine.agent.tools.create_calendar_event import (
+    DESCRIPTION_ADDITION as CREATE_ACCOUNT_HINT,
+)
 from origin.views.public.mcp import tools as mcp
 
 from .calendar_fakes import FakeGoogle, connect_google, token_for
@@ -177,6 +180,14 @@ class FlagOnTests(CalendarMcpBase):
         self.assertIn("EVERY connected Google account", listed["list_calendars"]["description"])
         self.assertIn("ONE account", listed["list_calendar_events"]["description"])
         self.assertIn("already gone", listed["delete_calendar_event"]["description"])
+        # The in-app sentence that sends a named account through `list_calendars` is the MCP one too, on create only.
+        self.assertTrue(
+            listed["create_calendar_event"]["description"].endswith(
+                "Requires a write-scoped API key." + CREATE_ACCOUNT_HINT
+            )
+        )
+        for name in ("update_calendar_event", "delete_calendar_event", "list_calendar_events"):
+            self.assertNotIn(CREATE_ACCOUNT_HINT, listed[name]["description"], name)
         self.assertIn("account", listed["get_calendar_event"]["description"])
         self.assertNotIn("cite", listed["get_calendar_event"]["description"])
 
@@ -202,6 +213,13 @@ class FlagOffTests(CalendarMcpBase):
         for name in CALENDAR_TOOLS:
             self.assertNotIn("account", listed[name]["inputSchema"]["properties"], name)
             self.assertNotIn("account", listed[name]["description"].split("Requires")[0][-60:])
+
+    def test_no_description_carries_the_account_hint(self):
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
+        for name, tool in self.listed().items():
+            with self.subTest(tool=name):
+                self.assertNotIn(CREATE_ACCOUNT_HINT, tool["description"])
+                self.assertNotIn("names a specific calendar or account", tool["description"])
 
     def test_an_account_argument_is_refused_as_unknown_so_nothing_is_sent(self):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)

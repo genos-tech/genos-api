@@ -38,7 +38,12 @@ from origin.search_engine.agent.calendar import (
 from origin.search_engine.agent.parity import PARITY_FLAG
 from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system_prompt
 from origin.search_engine.agent.tools import REGISTRY, ToolContext, ToolError, ToolForbidden
-from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
+from origin.search_engine.agent.tools.create_calendar_event import (
+    CREATE_CALENDAR_EVENT,
+)
+from origin.search_engine.agent.tools.create_calendar_event import (
+    DESCRIPTION_ADDITION as CREATE_ACCOUNT_HINT,
+)
 from origin.search_engine.agent.tools.delete_calendar_event import DELETE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.get_calendar_event import GET_CALENDAR_EVENT
 from origin.search_engine.agent.tools.list_calendar_events import LIST_CALENDAR_EVENTS
@@ -514,6 +519,19 @@ class FlagOffTests(CalendarBase):
                 self.assertNotIn("account", declared[name].parameters_schema["properties"])
                 self.assertEqual(declared[name].description, REGISTRY[name].description)
 
+    def test_the_create_description_has_no_account_hint(self):
+        # The hint that sends a member's "personal calendar" through `list_calendars` is the flag's: off, the
+        # declared text is the registry's own, byte for byte, and nothing of the sentence is in it.
+        declared = {d.name: d.description for d in controller._build_tool_declarations()}
+        self.assertEqual(
+            declared["create_calendar_event"], REGISTRY["create_calendar_event"].description
+        )
+        for name in CALENDAR_TOOLS:
+            with self.subTest(tool=name):
+                self.assertNotIn(CREATE_ACCOUNT_HINT, declared[name])
+                self.assertNotIn("names a specific calendar or account", declared[name])
+                self.assertNotIn("names a specific calendar or account", REGISTRY[name].description)
+
     def test_a_read_that_names_an_account_reads_the_default_as_before(self):
         out = LIST_CALENDAR_EVENTS.run({"account": str(self.home.id)}, self.ctx)
         self.assertEqual([c.token for c in self.google.calls], [token_for(self.work)])
@@ -603,6 +621,40 @@ class DeclarationTests(CalendarBase):
         self.assertIn("other_accounts", declared["list_calendar_events"])
         self.assertIn("already gone", declared["delete_calendar_event"])
         self.assertNotIn("account", REGISTRY["update_calendar_event"].description)
+
+    def test_create_tells_the_model_to_look_up_a_named_account_first(self):
+        # Paid run 2026-11-15: "put it on my personal Google calendar", asked in Japanese, was proposed on the
+        # DEFAULT account with no `account` and no `list_calendars` (2 of 3; the English twin looked it up 3 of 3),
+        # and the approval card showed the work address. One sentence, on the one tool that proposes before it
+        # reads anything, in no one language, that leaves a member who names nothing alone.
+        declared = {d.name: d.description for d in controller._build_tool_declarations()}
+        self.assertEqual(
+            declared["create_calendar_event"],
+            REGISTRY["create_calendar_event"].description + CREATE_ACCOUNT_HINT,
+        )
+        for needle in (
+            "names a specific calendar or account",
+            "any language",
+            "call `list_calendars` first",
+            "pass that `account`, or the event goes to the default one",
+            "Names none: leave `account` out",
+        ):
+            self.assertIn(needle, CREATE_ACCOUNT_HINT)
+        self.assertIn("list_calendars", declared)  # the tool it names is declared
+        self.assertTrue(CREATE_ACCOUNT_HINT.isascii(), "worded for any language, not one")
+        # The prefix has about 350 characters of headroom (`test_agent_prefix_budget`): this is one sentence.
+        self.assertLessEqual(len(CREATE_ACCOUNT_HINT), 260)
+
+    def test_the_hint_is_on_create_only_the_tools_that_read_first_do_not_carry_it(self):
+        declared = {d.name: d.description for d in controller._build_tool_declarations()}
+        for name in CALENDAR_TOOLS:
+            if name == "create_calendar_event":
+                continue
+            with self.subTest(tool=name):
+                self.assertNotIn("names a specific calendar or account", declared[name])
+        # `list_calendars` is still told it may be skipped for a request that names nothing: the hint adds a
+        # call only when the member names an account, never for everyone.
+        self.assertIn("you can skip this", declared["list_calendars"])
 
     def test_the_additions_are_filed_once_per_tool(self):
         added = [a.tool for a in tool_flag_params.ADDITIONS if a.tool in CALENDAR_TOOLS]
