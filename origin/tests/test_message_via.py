@@ -95,7 +95,9 @@ class _Base(BaseAPITestCase):
     def make_task(self, source=None):
         """A task with its card, made through `source` (a connected app, a key, nothing)."""
         if source is None:
-            out = CREATE_TASK.run({"title": "Ship", "project_id": self.project.project_id}, self.ctx)
+            out = CREATE_TASK.run(
+                {"title": "Ship", "project_id": self.project.project_id}, self.ctx
+            )
         else:
             with via_override(source):
                 out = CREATE_TASK.run(
@@ -104,7 +106,9 @@ class _Base(BaseAPITestCase):
         return TaskMaster.objects.get(task_id=out["task_id"])
 
     def card_of(self, task):
-        return Message.objects.get(channel=self.channel, task_id=task.task_id, is_thread_reply=False)
+        return Message.objects.get(
+            channel=self.channel, task_id=task.task_id, is_thread_reply=False
+        )
 
     def comment(self, task, source=None, sender=None):
         """Save a task comment and run the fan-out that mirrors it, as `source` wrote it."""
@@ -135,7 +139,8 @@ class TheMirroredCommentIsStamped(_Base):
     def test_a_comment_written_through_claude_carries_the_reduced_via(self):
         _, mirror = self.comment(self.make_task(), CLAUDE)
         self.assertEqual(
-            mirror.metadata, {"taskCommentId": mirror.metadata["taskCommentId"], "via": REDUCED_CLAUDE}
+            mirror.metadata,
+            {"taskCommentId": mirror.metadata["taskCommentId"], "via": REDUCED_CLAUDE},
         )
 
     def test_chatgpt_and_an_unofficial_connected_app(self):
@@ -271,7 +276,11 @@ class TheSerializerReducesAgain(_Base):
 
     def test_an_old_message_is_served_exactly_as_it_was(self):
         _, mirror = self.comment(self.make_task(), None)
-        for stored in ({}, {"taskCommentId": 1}, {"taskId": 4, "displayId": "A-1", "x": [1, {"y": 2}]}):
+        for stored in (
+            {},
+            {"taskCommentId": 1},
+            {"taskId": 4, "displayId": "A-1", "x": [1, {"y": 2}]},
+        ):
             Message.objects.filter(pk=mirror.pk).update(metadata=stored)
             self.assertEqual(self.wire(mirror)["metadata"], stored)
 
@@ -294,7 +303,9 @@ class AClientCannotPlantOne(_Base):
 
     def _post(self, metadata, **extra):
         res = self.client.post(
-            self.url, {"body": BODY, "body_text": "hi", "metadata": metadata, **extra}, format="json"
+            self.url,
+            {"body": BODY, "body_text": "hi", "metadata": metadata, **extra},
+            format="json",
         )
         self.assertEqual(res.status_code, 201, res.content)
         return res
@@ -333,11 +344,17 @@ class AClientCannotPlantOne(_Base):
         for planted in PLANTS:
             res = self.client.patch(
                 url,
-                {"body": BODY, "body_text": "x", "metadata": {"taskId": self.task.task_id, "via": planted}},
+                {
+                    "body": BODY,
+                    "body_text": "x",
+                    "metadata": {"taskId": self.task.task_id, "via": planted},
+                },
                 format="json",
             )
             self.assertEqual(res.status_code, 200, res.content)
-            self.assertEqual(Message.objects.get(pk=self.card.pk).metadata, {"taskId": self.task.task_id})
+            self.assertEqual(
+                Message.objects.get(pk=self.card.pk).metadata, {"taskId": self.task.task_id}
+            )
             self.assertNotIn("via", res.data["metadata"])
 
     def test_the_card_patch_with_no_metadata_does_not_keep_an_old_stamp(self):
@@ -352,7 +369,9 @@ class AClientCannotPlantOne(_Base):
         stamped = self.card_of(self.make_task(CLAUDE))
         url = reverse("v3_task_card_message", args=[stamped.task_id])
         res = self.client.patch(
-            url, {"body": BODY, "body_text": "e", "metadata": {"taskId": stamped.task_id}}, format="json"
+            url,
+            {"body": BODY, "body_text": "e", "metadata": {"taskId": stamped.task_id}},
+            format="json",
         )
         self.assertEqual(res.status_code, 200, res.content)
         self.assertNotIn("via", Message.objects.get(pk=stamped.pk).metadata)
@@ -391,7 +410,8 @@ class AnEditByAPersonDropsTheStamp(_Base):
         )
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(
-            Message.objects.get(pk=mirror.pk).metadata, {"taskCommentId": mirror.metadata["taskCommentId"]}
+            Message.objects.get(pk=mirror.pk).metadata,
+            {"taskCommentId": mirror.metadata["taskCommentId"]},
         )
         self.assertNotIn("via", res.data["metadata"])
 
