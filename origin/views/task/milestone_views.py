@@ -21,6 +21,7 @@ from origin.services.milestone_manage import (
     create_folder,
     delete_milestone,
     folder_name_taken,
+    lock_live_milestone,
     update_milestone,
 )
 from origin.services.milestone_rollup import milestone_work_counts
@@ -566,6 +567,11 @@ class MilestoneView(AuthenticatedAPIView):
 
         added_assignee_ids: list[str] = []
         with transaction.atomic():
+            # The copy above is a moment old: lock the row and write from what is stored, so a
+            # milestone converted, deleted or moved by another tab in that moment is not written
+            # back over (MIP-1583). Answered as a missing one is.
+            if lock_live_milestone(milestone, project_id=source_project_id) is None:
+                return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
             # A project move clears the milestone's sprint, folder and tags and carries its tasks
             # into the destination; `update_milestone` does all of it, LAST (`project_move`).
             fields = {f: request.data.get(f) for f in PATCHABLE_FIELDS if f in request.data}
@@ -711,14 +717,19 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        _row, created = MilestoneAssignees.objects.get_or_create(
-            milestone=milestone,
-            user=user,
-            defaults={"team": milestone.team},
-        )
-        # Mirror the picked assignee onto the backing task so the
-        # project task table reflects the change without a reload.
-        _sync_backing_task(milestone)
+        with transaction.atomic():
+            # Locked and re-read: a milestone converted a moment ago must not be mirrored back
+            # onto the task it became (MIP-1583).
+            if lock_live_milestone(milestone, project_id=milestone.project_id) is None:
+                return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+            _row, created = MilestoneAssignees.objects.get_or_create(
+                milestone=milestone,
+                user=user,
+                defaults={"team": milestone.team},
+            )
+            # Mirror the picked assignee onto the backing task so the
+            # project task table reflects the change without a reload.
+            _sync_backing_task(milestone)
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         if created:
             # Someone just added to an existing milestone is told (MIP-1464).
@@ -744,10 +755,13 @@ class MilestoneAssigneesView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
-        MilestoneAssignees.objects.filter(milestone=milestone, user_id=user_id).delete()
-        # Backing task assignee may need to fall back to the reporter
-        # when the removed user was the previously synced assignee.
-        _sync_backing_task(milestone)
+        with transaction.atomic():
+            if lock_live_milestone(milestone, project_id=milestone.project_id) is None:
+                return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
+            MilestoneAssignees.objects.filter(milestone=milestone, user_id=user_id).delete()
+            # Backing task assignee may need to fall back to the reporter
+            # when the removed user was the previously synced assignee.
+            _sync_backing_task(milestone)
         invalidate_project_tasks_cache(milestone.team_id, milestone.project_id)
         milestone = (
             MilestoneMaster.objects.prefetch_related(
