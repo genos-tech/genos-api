@@ -444,7 +444,17 @@ class TaskCommentReactionFact(models.Model):
             models.UniqueConstraint(
                 fields=["task", "comment_id", "reaction_id"],
                 name="unique_task_comment_reaction",
-            )
+            ),
+            # One reaction per person and emoji on a comment (MIP-1595; the routes have held that
+            # since MIP-1582, this makes the table hold it too). PARTIAL: a reaction whose sender's
+            # account was deleted has a NULL sender, and different people share the NULL, so those
+            # rows are left out (a plain unique index would treat NULLs as distinct on Postgres,
+            # but the condition says it outright and does not depend on that).
+            models.UniqueConstraint(
+                fields=["task", "comment_id", "sender", "reaction_emoji"],
+                condition=models.Q(sender__isnull=False),
+                name="unique_task_comment_reaction_per_sender_emoji",
+            ),
         ]
 
     def save(self, *args, **kwargs):

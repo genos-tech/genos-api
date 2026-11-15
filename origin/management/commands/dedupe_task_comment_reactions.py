@@ -14,8 +14,10 @@ anyone), and the comment's counter simply has a gap, which nothing reads.
 
 Output is COUNTS ONLY: no task, comment or person id and no emoji. Safe to re-run.
 
-Once it has run (and `apply` finds nothing), a unique constraint on `(task, comment_id, sender,
-reaction_emoji)` is possible: it needs a migration, which is its own task.
+Migration 0246 (MIP-1595) adds the unique index on `(task, comment_id, sender, reaction_emoji)` where
+the sender is not NULL, and refuses to run while rows repeat: run this first. After it, a repeat
+cannot be written at all, so this command only ever has something to do on a database not yet
+migrated.
 """
 
 from __future__ import annotations
