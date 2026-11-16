@@ -204,8 +204,9 @@ register_job(
         description=(
             "Where one milestone stands and what changed in it lately: task counts by status, "
             "what changed in the last days by anyone, what is ready to start and what waits on "
-            "blockers. Choose the milestone by its id."
+            "blockers."
         ),
+        agent_note="`milestone_id` is the milestone's numeric id, from `list_milestones`.",
         run=run,
         params_schema={
             "properties": {

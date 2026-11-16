@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 BROADCAST_PATH = "/internal/broadcast/task-comment"
 ACTIVITY_PATH = "/internal/broadcast/activity"
 MESSAGE_PATH = "/internal/broadcast/message"
+INBOX_PATH = "/internal/broadcast/inbox"
 MEMBERSHIP_PATH = "/internal/membership/removed"
 # Must match genos-sockets `utils/internal_auth`.
 TIMESTAMP_HEADER = "X-Genos-Timestamp"
@@ -179,6 +180,31 @@ def push_activity(activity) -> None:
         transaction.on_commit(lambda: _post(payload, ACTIVITY_PATH, "activity"), robust=True)
     except Exception:  # noqa: BLE001 — the activity is saved; an observer must not break it
         logger.warning("sockets activity push could not be scheduled", exc_info=True)
+
+
+def push_inbox_changed(user_id, team_id=None) -> None:
+    """Say that `user_id`'s Inbox changed, so their open app syncs it now instead of at the
+    next refocus, push or reload (MIP-1627).
+
+    Rows are filed here with no browser to relay them (a digest, reminder or report from a cron,
+    an approved agent write) and a read flag flipped on one device is news to the member's
+    others. genos-sockets sends `inbox.changed` to the member's `/v3` user room; it carries ids
+    only, never a row, and the app answers with the delta sync it already has, with its own token.
+    Sends once the current transaction commits, or at once when there is none. A no-op when
+    `SOCKETS_INTERNAL_URL` is unset. Never raises: the row is saved and the next sync finds it.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets inbox push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        payload: dict[str, Any] = {"userId": str(user_id)}
+        if team_id:
+            payload["teamId"] = str(team_id)
+        transaction.on_commit(lambda: _post(payload, INBOX_PATH, "inbox"), robust=True)
+    except Exception:  # noqa: BLE001 — the row is saved; an observer must not break it
+        logger.warning("sockets inbox push could not be scheduled", exc_info=True)
 
 
 def push_message(message, event) -> None:
