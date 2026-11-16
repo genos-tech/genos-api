@@ -14,6 +14,8 @@ import logging
 from datetime import timedelta
 from unittest import mock
 
+from django.conf import settings
+from django.test import override_settings
 from rest_framework import status
 
 from origin.models.common.inbox_models import (
@@ -22,6 +24,7 @@ from origin.models.common.inbox_models import (
     InboxItems,
 )
 from origin.models.common.schedule_models import MemberSchedule
+from origin.search_engine.agent.tools.inbox_report import FLAG as REPORT_LABEL_FLAG
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
 from origin.services import schedule_delivery, schedules
 from origin.services.account_deletion import delete_account
@@ -176,10 +179,12 @@ class OwnerOnlyTests(ScheduleBase):
         other = LIST_MY_INBOX.run({"category": "all", "include_read": True}, self.ctx2)
         self.assertEqual(other["items"], [])
 
+    @override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, REPORT_LABEL_FLAG: False})
     def test_what_the_agents_inbox_tool_returns_for_the_new_type(self):
-        """Documents today's behaviour (the tool is not changed here): the item is an
-        activity, its body is returned whole (title, text, sections), and its label is the
-        generic `type_10` because the label map does not know the type yet."""
+        """With AGENT_INBOX_REPORT_LABEL off (the flag is pinned here, so the test does not depend
+        on which settings module runs it): the item is an activity, its body is returned whole
+        (title, text, sections), and its label is the generic `type_10`. The `genos_report` label
+        with the flag on is pinned by `test_agent_inbox_report_label.FlagOnTests`."""
         (row,) = LIST_MY_INBOX.run({"category": "activity"}, self.ctx)["items"]
         self.assertEqual(row["item_type"], 10)
         self.assertEqual(row["item_type_label"], "type_10")
