@@ -56,12 +56,19 @@ class CheapFlushTests(CheapFlushTransactionTestCase):
         self.assertTrue(Permission.objects.filter(content_type__app_label="origin").exists())
 
     def test_a_failing_cheap_path_falls_back_to_the_full_flush_and_says_so(self):
-        with mock.patch.object(
-            transaction_support, "delete_rows_of_nonempty_tables", side_effect=RuntimeError("boom")
+        # `_full_flush` is replaced by a spy (the real one is the test above, and costs ~100 MB of
+        # disk writes): the point here is that it is asked for, and that the failure is not silent.
+        with (
+            mock.patch.object(
+                transaction_support,
+                "delete_rows_of_nonempty_tables",
+                side_effect=RuntimeError("boom"),
+            ),
+            mock.patch.object(CheapFlushTests, "_full_flush") as full_flush,
         ):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 self._fixture_teardown()
 
+        full_flush.assert_called_once_with("default")
         self.assertTrue(any("cheap flush failed" in str(w.message) for w in caught))
-        self._only_post_migrate_rows_left()
