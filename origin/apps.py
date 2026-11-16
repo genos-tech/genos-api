@@ -24,4 +24,5 @@ class OriginConfig(AppConfig):
             note_satellite_signals,  # noqa: F401
             pm_channel_signals,  # noqa: F401
             task_signals,  # noqa: F401
+            todo_push_signals,  # noqa: F401
         )
