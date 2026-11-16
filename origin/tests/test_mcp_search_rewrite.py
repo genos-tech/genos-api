@@ -26,6 +26,7 @@ from origin.search_engine import search as S
 from origin.search_engine.agent.tools import search_kb
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.search_window import skip_rewrite
+from origin.services import agent_pins
 
 from .test_mcp_endpoint import McpBase
 
@@ -58,10 +59,10 @@ RESULTS = {
     ]
 }
 
-# sha256 of {search() kwargs, tool result} for the stub above, with the server's default
-# settings, recorded on pristine `origin/main` with the same snippet.
-GOLDEN_MCP = "2e8697301b89f5284b6693419c0b9cac549b23fea11f6caf75f8e864279b20ef"
-GOLDEN_APP = "1542c07858aa7a8bc1a309be57a5517883ca2011aab1df7cc1e501923e4b8464"
+# sha256 of {search() kwargs, tool result} for the stub above, with the server's default settings, first
+# recorded on pristine `origin/main` with the same snippet: keys `mcp` and `app` of
+# origin/tests/golden/agent_pins.json (`python manage.py record_agent_goldens` re-records them).
+PINS = agent_pins.Pins(__name__)
 
 
 def _default(value):
@@ -134,14 +135,14 @@ class ToolPassesItOnTests(SimpleTestCase):
         s.assert_not_called()
 
     def test_the_default_is_byte_identical_to_origin_main(self):
-        self.assertEqual(_golden(MCP_CTX, {}), GOLDEN_MCP)
-        self.assertEqual(_golden(APP_CTX, {}), GOLDEN_APP)
+        PINS.check(self, "mcp", _golden(MCP_CTX, {}))
+        PINS.check(self, "app", _golden(APP_CTX, {}))
         # Arguments that mean "the default" produce the very same call and result.
         for args in ({"rewrite": True}, {"rewrite": None}, {"rewrite": ""}):
             with self.subTest(args=args):
-                self.assertEqual(_golden(MCP_CTX, args), GOLDEN_MCP)
+                PINS.check(self, "mcp", _golden(MCP_CTX, args))
         # And an in-app call with the argument invented is the in-app call.
-        self.assertEqual(_golden(APP_CTX, {"rewrite": False}), GOLDEN_APP)
+        PINS.check(self, "app", _golden(APP_CTX, {"rewrite": False}))
 
     def test_false_changes_only_the_rewrite_kwarg(self):
         with mock.patch.object(search_kb, "search", return_value=RESULTS) as s:

@@ -1,0 +1,114 @@
+{
+  "about": "sha256 pins on what the in-app agent's model is sent, one object per pin module. Do not edit by hand: re-record all of them with `python manage.py record_agent_goldens` (origin/services/agent_pins.py lists the modules).",
+  "pins": {
+    "test_agent_closed_ancestor_rule": {
+      "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
+      "tool/fetch_task": "ed42299a027f7691caddc6436558e294a1facd301fd221d195ba1abce30297bf",
+      "tool/get_milestone_summary": "2df239fbc82dcbb0b1fa2b014ac5f1f8f5f504aac2fb89a331e9408a31f0550f",
+      "tool/get_milestone_summary_closed": "a1fcff416e4c3bb81a32a8ecdfa6b521939f32fd9dfd30c5ef556180c83039fa",
+      "tool/get_my_focus_tasks": "ec54fa70ed07ba54ba2ecc966db9709f7fa7ce067e4c2d9daffbc286286fcbf3",
+      "tool/get_my_task_summary": "5bdfd24aeac57b5d80064f7b1648dccc21804aa48f5df4e3c4ced910021523d1",
+      "tool/get_sprint_summary": "0ee30c0bcba6e0518b4a963182a42a9db1adb7471b0e6a0a260d265d0fdb04c2",
+      "tool/list_milestones": "8818a28365be09d7777bb53722affc682f81369485cd4feb9f24aacb0c340c92",
+      "tool/list_my_milestones": "34fd1ff2378de073a423d84e8c751d8d68028cb914c3e072188ecd6c92f5a33a",
+      "tool/list_tasks": "8c20725757cd5cee1b4c3c5d1ae9a7dabb0bf6cf8cf597d05607d36c28e7d9ae",
+      "tool/list_tasks_overdue": "5514d527ce3f8604ce6f4b412586e7a286fa052a3987ca070bada3e776a6052c"
+    },
+    "test_agent_content_length_pins": {
+      "digest-like": "264c650056a9a57553446df29282232cb5d8aeb714ecdc197d82bef074f6f6cd",
+      "effort-low-thinking/gemini": "e6176d693d773e9f0daed96c58861185a7a52ff0ad7701278c839519efed9818",
+      "effort-low/gemini": "c87c9ad1507d5aa987bed07bc1f9b357b222a0160af1b87624dce9eceeaf73bd",
+      "effort-medium/gemini": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
+      "plain": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
+      "plain-ja": "f2c78bb2ad55a5610411454936f9fe4f0ef09e3fa84ddc631e5b791ad649a0e2",
+      "two-tier-write": "5b04513e75097c29184a5587977bc7a3336246c35d98e63948cbfb2a7587e08f"
+    },
+    "test_agent_fetch_task_anchors": {
+      "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
+      "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
+      "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c",
+      "result/client": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
+      "result/dev": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
+      "result/pm": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0"
+    },
+    "test_agent_inbox_report_label": {
+      "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
+      "inbox/activity": "d9e1938fa41cc6f8a4b2060bddff28612112845e0fcae08adf593b359e0fa769",
+      "inbox/all": "3b8c6ad4cb42d1c9a5ce80f1116d9c572e4fe5ace60e4526d19a9c8539794e1d",
+      "inbox/limit-1": "df5493ac8c0e0128c606a9a8a5144ec1a91316510075316309565c8660de0ed9",
+      "inbox/requests": "ea7240167db1c3a878fcc951c7a2e5e8851bf5789a3fe000fe472821cb1e74ac"
+    },
+    "test_agent_note_threads_in_get_note": {
+      "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
+      "note/chat": "b0f5d9c91710855e966508fcb8c5aca955f595242f72149169a79f4b705002d0",
+      "note/personal": "aa59ecc86ceeb706c4ac5a6d9db2215a4063e497269daceeebd848212c8926fd",
+      "note/task": "ad6e3e528a723ff873c8697bff048df07118f7dc7429aef14333361b9528697f"
+    },
+    "test_agent_reject_reason": {
+      "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
+      "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c",
+      "reject/plain": "9b7aa41657fb037374a3c850064089fbee6b88f94da161e3ccb59fb839852df4",
+      "reject/twice": "22126c9d1c23a04fc7b9506f5388ac844688f23cdd403abe918efa97c7701dc1",
+      "reject/with-reason": "9b7aa41657fb037374a3c850064089fbee6b88f94da161e3ccb59fb839852df4"
+    },
+    "test_agent_resume_flag_pins": {
+      "followup+recap/approve": "b29aaecf910d5c64e64abe1bbcdc12d4338b13dff3315f068606dbf79a3eb430",
+      "followup+recap/reject": "ac59116517d31ccabd341029b5b735cce9c5fe02fce74ad1553d1b838080fb02",
+      "followup+thread/approve": "7f451881f6ea13c7e2241877d432251b877e3c13f7453612e19d327462f9ddde",
+      "followup+thread/reject": "5787a91008c3f12d437fd4212cbadb03663ddaa25673580e92eccc25c7c1d789",
+      "followup/approve": "c0fd39bb041be29711ff4ccf5ebb8d675c4720a566d70c78320c7bf702cde4e6",
+      "followup/reject": "160273162d4f17745d870a7bcbf31837801aeb6937ffe29defa7f5dd5a1914fa",
+      "mention/approve": "0ad49cdb0a5ba38bfeffd8d9eac215340682343f1b283affb17ed15198b55ad5",
+      "mention/reject": "a8a4728520f467f74208d7cf5262967e473076d8412d3db8faf3bde7a36df904",
+      "note/approve": "3f7533ccdbba17381b995fbd2e2f6b7a3c221a708f6c8135cf49aa708899c831",
+      "note/reject": "55a459f38b20d6ae075301ac388e17fbd4e3193201f93108a4df2dcaa8d385cb",
+      "plain/approve": "d207f4cbcea6328a577943e6772b7996fecf82b89a189482691154d1fcbd4661",
+      "plain/reject": "9b7aa41657fb037374a3c850064089fbee6b88f94da161e3ccb59fb839852df4",
+      "thread+mention/approve": "23b99b170b63d572c333b24a37d7859594f3befb88b0bf561e0ee617ef950986",
+      "thread+mention/reject": "18ae0d3edd0dc0c152ef598ff30028e1adc1e3389da59b22d05463f8cd459c60",
+      "thread/approve": "8c3c8d1558ff4fb79093680439fa7bd10fe6b9357aaa8301ed005b856b6bf6ac",
+      "thread/reject": "5adf98b6ebafff9fa750085718bc46415e677fea32068b54f7e5e11f5f2fb118"
+    },
+    "test_agent_resume_system_extra": {
+      "mention": "85d377367310a2917d0be64ef91a617323a8ea033fe5279e9e8f030dcb4d0b7f",
+      "note": "bea024d6c0c06bac8dc3ebff6bb83f062b4ce597ffdc17cff5add22256da6ebb",
+      "thread": "32acfcf83b77cac4f3c31dad72b175b866810ab0cb3c3e7b6d8738604373f21a",
+      "thread+mention": "35a4e6a3995cbb3e5ba314b3fbf04da3060dd9f25d844587cf6b35a552bb7ccf"
+    },
+    "test_agent_team_in_current_user": {
+      "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
+      "result/member": "9a8ffecb982f1ab142da6608ff25f7f1d032911976862fc36a366b3db9caa6f9",
+      "result/owner": "91a01881c34e868d2257b1f11afb209b317007ca145186b88719b72e46e03aae"
+    },
+    "test_agent_tell_model_undo": {
+      "edit/approve": "d207f4cbcea6328a577943e6772b7996fecf82b89a189482691154d1fcbd4661",
+      "edit/twice": "39b0912c7405dd00d79fb4db161bf5882e1cafc1d8e02b65860232e2ded00600",
+      "undo/next-turn": "18d9ba20edde859d29fdb86501580c043d1162de90049fb3a1851a478fdccc94"
+    },
+    "test_agent_truncation_pins": {
+      "digest-like": "264c650056a9a57553446df29282232cb5d8aeb714ecdc197d82bef074f6f6cd",
+      "effort-low-thinking/gemini": "e6176d693d773e9f0daed96c58861185a7a52ff0ad7701278c839519efed9818",
+      "effort-low/gemini": "c87c9ad1507d5aa987bed07bc1f9b357b222a0160af1b87624dce9eceeaf73bd",
+      "effort-medium/gemini": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
+      "plain": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
+      "plain-ja": "f2c78bb2ad55a5610411454936f9fe4f0ef09e3fa84ddc631e5b791ad649a0e2",
+      "two-tier-write": "5b04513e75097c29184a5587977bc7a3336246c35d98e63948cbfb2a7587e08f"
+    },
+    "test_inapp_timeline_tool": {
+      "declarations": "c2304aa7680f57852bcab03f60164f1ff10c7ecbdff6ca19c74bf2ef9d939e94",
+      "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
+      "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c"
+    },
+    "test_mcp_search_rewrite": {
+      "app": "1542c07858aa7a8bc1a309be57a5517883ca2011aab1df7cc1e501923e4b8464",
+      "mcp": "2e8697301b89f5284b6693419c0b9cac549b23fea11f6caf75f8e864279b20ef"
+    },
+    "test_mcp_search_window": {
+      "search_knowledge_base/declaration": "a2cfb0b2c22515072f7b557911d9104203101e6d41898d763c455d45e865260c"
+    },
+    "test_task_close_notice": {
+      "thread/closed": "21192f28aee0f436195f6f96f695a8e14486b85901e71ae9a0deff90574c7f0d"
+    }
+  },
+  "version": 1
+}

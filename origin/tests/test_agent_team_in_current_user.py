@@ -8,10 +8,8 @@ conversation is in (`ctx.team_id`, set by the server), and only when the user be
 PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), where the flag does
 not exist:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_team_in_current_user.py <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_team_in_current_user.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/services/agent_pins.py)
 
 `result/*` hash the tool's result (the user's id replaced by its order of appearance) for a member
 and for the team's owner; `declarations` hashes every tool declaration the model is sent.
@@ -22,7 +20,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import asdict
 
@@ -33,15 +30,14 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import wrap_workspace_content
+from origin.services import agent_pins
 from origin.tests.test_base import BaseAPITestCase
 
 FLAG = "AGENT_TEAM_IN_CURRENT_USER"
 
-GOLDEN: dict[str, str] = {
-    "result/member": "9a8ffecb982f1ab142da6608ff25f7f1d032911976862fc36a366b3db9caa6f9",
-    "result/owner": "91a01881c34e868d2257b1f11afb209b317007ca145186b88719b72e46e03aae",
-    "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -73,11 +69,7 @@ class FlagOffTests(Base):
     """What the model is sent with the flag off: main's, byte for byte (hashes from main)."""
 
     def pin(self, key, text):
-        digest = digest_text(text)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, digest_text(text))
 
     def test_the_result_for_a_member_and_for_the_owner(self):
         self.pin("result/owner", normalised(self.run_tool(self.user)))

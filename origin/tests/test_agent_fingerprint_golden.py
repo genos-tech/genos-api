@@ -8,8 +8,9 @@ by itself it detects nothing, because no run is compared with an earlier one. Th
 
 It is the free counterpart of the billed `agent-evals` retrieval gate, which cannot see any of this.
 A failing line names the surface that moved. The author either did not mean to change what the model
-reads (fix the change) or did (re-record with `--write-golden`, say so in the PR body: the change is
-then owed a real eval, the grouped paid run).
+reads (fix the change) or did (re-record with `python manage.py record_agent_goldens`, which also
+re-records every other model-visible pin, and say so in the PR body: the change is then owed a real
+eval, the grouped paid run).
 
 Two states are recorded, both from the production defaults of `apis/settings.py` (the suite's own
 settings keep the ten flags MIP-1089 turned on OFF, so they are laid over, as
@@ -28,7 +29,7 @@ from pathlib import Path
 from unittest import mock
 
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from origin.search_engine.agent import prompts
 from origin.search_engine.agent.controller import _build_tool_declarations
@@ -184,7 +185,9 @@ class MutationTests(TestCase):
             r"tools\.gemini\.full: [0-9a-f]{12} -> [0-9a-f]{12} \(\d+ -> \d+ bytes, [+-]\d+\)",
         )
         self.assertIn("This changes what the model sees: re-record with", message)
-        self.assertIn("`python manage.py agent_fingerprint --write-golden`", message)
+        self.assertIn("`python manage.py record_agent_goldens`", message)
+        self.assertIn("PIN_MODULES in origin/services/agent_pins.py", message)
+        self.assertIn("genos-platform/docker/dt.sh", message)
         self.assertIn("say so in the PR body", message)
         with self.assertRaises(AssertionError) as ctx:
             self.fail(message)
@@ -285,8 +288,62 @@ class WriteGoldenTests(TestCase):
             with self.subTest(extra=extra), self.assertRaises(CommandError):
                 call_command("agent_fingerprint", "--write-golden", extra, stdout=io.StringIO())
 
+    def test_the_golden_names_the_one_command_that_re_records_it(self):
+        self.assertIn("`python manage.py record_agent_goldens`", fp.golden_record()["about"])
+        self.assertIn("`python manage.py record_agent_goldens`", committed()["about"])
+
     def test_the_normal_output_is_unchanged(self):
         sink = io.StringIO()
         call_command("agent_fingerprint", "--no-results", stdout=sink)
         for line in sink.getvalue().strip().splitlines():
             self.assertRegex(line, r"^\S+\s+[0-9a-f]{64}(\s+\d+)?$")
+
+
+class MigratedDatabaseTests(TestCase):
+    """MIP-1653: `--write-golden` under dt.sh, where the configured database has no tables."""
+
+    def test_a_database_with_tables_is_used_as_it_is(self):
+        self.assertTrue(fp.schema_present())  # the test database is migrated
+        with mock.patch("django.test.utils.setup_databases") as setup:
+            with fp.migrated_database():
+                pass
+        setup.assert_not_called()
+
+    def test_without_tables_the_test_settings_build_and_drop_a_throwaway_database(self):
+        with (
+            mock.patch.object(fp, "schema_present", return_value=False),
+            mock.patch("django.test.utils.setup_databases", return_value="cfg") as setup,
+            mock.patch("django.test.utils.teardown_databases") as teardown,
+        ):
+            with fp.migrated_database():
+                setup.assert_called_once()
+                teardown.assert_not_called()
+        teardown.assert_called_once_with("cfg", verbosity=0)
+
+    def test_the_throwaway_database_is_dropped_when_the_body_raises(self):
+        with (
+            mock.patch.object(fp, "schema_present", return_value=False),
+            mock.patch("django.test.utils.setup_databases", return_value="cfg"),
+            mock.patch("django.test.utils.teardown_databases") as teardown,
+        ):
+            with self.assertRaises(RuntimeError), fp.migrated_database():
+                raise RuntimeError("boom")
+        teardown.assert_called_once_with("cfg", verbosity=0)
+
+    def test_only_a_result_selection_needs_a_database(self):
+        self.assertTrue(fp.selects_results(None))
+        self.assertTrue(fp.selects_results([]))
+        self.assertTrue(fp.selects_results(["result."]))
+        self.assertTrue(fp.selects_results(["result.b.", "prompt."]))
+        self.assertTrue(fp.selects_results(["r"]))
+        self.assertFalse(fp.selects_results(["prompt.", "tools."]))
+
+    def test_other_settings_refuse_instead_of_creating_databases(self):
+        with (
+            mock.patch.object(fp, "schema_present", return_value=False),
+            mock.patch("django.test.utils.setup_databases") as setup,
+            override_settings(SETTINGS_MODULE="apis.settings"),
+        ):
+            with self.assertRaisesRegex(CommandError, "dt.sh"), fp.migrated_database():
+                pass
+        setup.assert_not_called()

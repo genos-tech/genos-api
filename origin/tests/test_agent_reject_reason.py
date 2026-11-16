@@ -6,16 +6,11 @@ the rejected call is `{"error": "user_rejected", "reason": "..."}` and system-pr
 gains one line. Off (the rollback; the flag has been ON by default since api #772) the model is
 sent exactly what `origin/main` sent before the flag existed.
 
-PINS. The off-state goldens were recorded on PRISTINE `origin/main` (346816f2), where a
-`reason` in the body is simply ignored, with the same harness (the flag-pin harness of
-MIP-977, which touches nothing this change adds):
+PINS. The off-state goldens (origin/tests/golden/agent_pins.json) were first recorded on PRISTINE
+`origin/main` (346816f2), where a `reason` in the body is simply ignored, with the same harness (the
+flag-pin harness of MIP-977, which touches nothing this change adds). Re-record them all with:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_reject_reason.py origin/tests/test_agent_resume_flag_pins.py \\
-       origin/tests/test_agent_resume_system_extra.py origin/tests/test_agent_resume_prior_turns.py \\
-       <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_reject_reason.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
 `prompt/*` hash `agent_system_prompt()` (both cheat-sheet variants); `reject/*` hash every
 model call of a whole run (system instruction and messages) that is rejected, with and
@@ -26,25 +21,21 @@ is in the hash).
 from __future__ import annotations
 
 import hashlib
-import os
 
 from django.conf import settings
 from django.test import TestCase, override_settings
 
 from origin.search_engine.agent.prompts import agent_system_prompt
 from origin.search_engine.models import AgentStep
+from origin.services import agent_pins
 from origin.tests.test_agent_resume_flag_pins import NO_DATE, Recorder
 from origin.tests.test_agent_resume_system_extra import DECIDE_URL, ResumeBase
 
 REASON = "Wrong project: put it in Website Redesign, and make it High priority."
 
-GOLDEN: dict[str, str] = {
-    "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
-    "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c",
-    "reject/plain": "9b7aa41657fb037374a3c850064089fbee6b88f94da161e3ccb59fb839852df4",
-    "reject/with-reason": "9b7aa41657fb037374a3c850064089fbee6b88f94da161e3ccb59fb839852df4",
-    "reject/twice": "22126c9d1c23a04fc7b9506f5388ac844688f23cdd403abe918efa97c7701dc1",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 ON = {"AGENT_REJECT_REASON": True}
 
@@ -62,11 +53,7 @@ class PromptPins(TestCase):
             return agent_system_prompt()
 
     def pin(self, key: str, registry: bool):
-        digest = digest_text(self.prompt(registry))
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key])
+        PINS.check(self, key, digest_text(self.prompt(registry)))
 
     def test_the_legacy_prompt_is_unchanged_with_the_flag_off(self):
         self.pin("prompt/legacy", registry=False)
@@ -115,10 +102,7 @@ class RejectBase(Recorder, ResumeBase):
 
 class FlagOffTests(RejectBase):
     def pin(self, key):
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{self.digest()}"')
-            return
-        self.assertEqual(self.digest(), GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, self.digest())
 
     def test_a_rejection_without_a_reason(self):
         run_id, token = self.ask()

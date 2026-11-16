@@ -5,15 +5,23 @@ equal, line by line. A line that differs names the surface that moved.
 
     python manage.py agent_fingerprint                 # one line per surface
     python manage.py agent_fingerprint --dump out_dir  # also write each surface's text (diff -r)
-    python manage.py agent_fingerprint --write-golden  # re-record the committed golden (see below)
+    python manage.py agent_fingerprint --write-golden  # re-record ONLY this golden (see below)
+    python manage.py record_agent_goldens              # re-record this golden AND every other pin (MIP-1653)
+
+Both commands need a migrated database. Under the test settings (`genos-platform/docker/dt.sh`, or
+`DJANGO_SETTINGS_MODULE=apis.settings_test`) they build a throwaway test database when the configured
+one has no tables, and drop it afterwards, so they run in one go there:
+
+    genos-platform/docker/dt.sh <worktree> <db-suffix> 'python manage.py record_agent_goldens'
 
 THE GOLDEN (MIP-1527). `origin/tests/golden/agent_fingerprint.json` holds every surface's sha256 and
 size, recorded twice: `production` (every flag at the default `apis/settings.py` ships, with no
 environment override: the ten flags MIP-1089 turned on are ON) and `flags_off` (every boolean
 `AGENT_*` flag off). `origin/tests/test_agent_fingerprint_golden.py` fails, in the normal required
 test run, when any line moves, and names the surface. A change that moves a line changes what the
-model sees: re-record with `--write-golden` IN THE SAME PR and say so in the PR body, so a reviewer
-knows an eval is owed (the grouped paid run). The record does not depend on the shell it is made in:
+model sees: re-record IN THE SAME PR with `python manage.py record_agent_goldens` (this golden plus the
+sha256 pins of the other model-visible test modules; `origin/services/agent_pins.py` lists them) and say so in the PR
+body, so a reviewer knows an eval is owed (the grouped paid run). The record does not depend on the shell it is made in:
 the settings it needs are rebuilt from `apis/settings.py` with the model/flag environment removed.
 
 SELF-CONTAINED ON PURPOSE. It imports only modules that exist on `origin/main` (nothing from
@@ -70,6 +78,7 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -78,6 +87,7 @@ from unittest import mock
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.utils import OperationalError
 
 FROZEN = datetime(2026, 11, 2, 0, 0, 0, tzinfo=UTC)
 TODAY_LINE = "Today's date is 2026-11-02 (Monday) in the UTC timezone."
@@ -182,6 +192,8 @@ _THREADS = [
 GOLDEN_PATH = Path(__file__).resolve().parents[3] / "tests" / "golden" / "agent_fingerprint.json"
 GOLDEN_STATES = ("production", "flags_off")
 GOLDEN_VERSION = 1
+# The one command that re-records this golden and every other model-visible pin.
+RECORD_COMMAND = "python manage.py record_agent_goldens"
 
 # Environment that steers what the model is shown: removed while the production defaults are rebuilt,
 # so the golden is the same on a laptop, in the dev stack and in CI.
@@ -927,6 +939,58 @@ def _extra_result_surfaces() -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 
 
+def schema_present() -> bool:
+    """True when the configured database has the app's tables (the result surfaces need them)."""
+    from django.db import connection  # noqa: PLC0415
+
+    from origin.models.common.team_models import TeamMaster  # noqa: PLC0415
+
+    try:
+        return TeamMaster._meta.db_table in connection.introspection.table_names()
+    except OperationalError:  # the database itself does not exist (yet)
+        return False
+
+
+@contextmanager
+def migrated_database() -> Iterator[None]:
+    """A database that has the tables, for the result surfaces (MIP-1653).
+
+    The configured one when it has them (the dev stack's, a developer's, a test run's). Otherwise,
+    under the test settings only, a throwaway test database built the way `manage.py test` builds
+    it (migrated; named by `DJANGO_TEST_DB_NAME`, which `dt.sh` sets) and dropped afterwards: the
+    `origin` database of the tmpfs Postgres under `dt.sh` is empty, and this command used to die
+    there with `relation "origin_teammaster" does not exist`. Under any other settings it refuses:
+    it only creates the database `manage.py test` would create under the same settings, named by
+    `DJANGO_TEST_DB_NAME` (use your own suffix: like `manage.py test --noinput` it replaces a test
+    database of that name that already exists).
+    """
+    if schema_present():
+        yield
+        return
+    from django.conf import settings  # noqa: PLC0415
+
+    if settings.SETTINGS_MODULE != "apis.settings_test":
+        raise CommandError(
+            "The database has no tables, and the result surfaces need them. Migrate it "
+            "(`python manage.py migrate`), or run this under the test settings, which build a "
+            "throwaway test database: `DJANGO_SETTINGS_MODULE=apis.settings_test python manage.py "
+            "...`, or through genos-platform/docker/dt.sh <worktree> <db-suffix> 'python manage.py "
+            "...'."
+        )
+    from django.test.utils import setup_databases, teardown_databases  # noqa: PLC0415
+
+    old_config = setup_databases(verbosity=0, interactive=False)
+    try:
+        yield
+    finally:
+        teardown_databases(old_config, verbosity=0)
+
+
+def selects_results(only: list[str] | None) -> bool:
+    """False when `--only` names prefixes that no `result...` surface can match: no database needed."""
+    return not only or any(p.startswith("result") or "result".startswith(p) for p in only)
+
+
 def compute_surfaces(*, results: bool = True, only: list[str] | None = None) -> dict[str, str]:
     """`surface name -> text` under the settings in force right now."""
     surfaces: dict[str, str] = {}
@@ -1041,9 +1105,11 @@ def golden_failure_message(lines: list[str]) -> str:
         f"What the in-app model is shown changed: {len(lines)} surface line(s) differ from "
         f"origin/tests/golden/agent_fingerprint.json.\n{shown}\n\n"
         "This changes what the model sees: re-record with "
-        "`python manage.py agent_fingerprint --write-golden` and say so in the PR body (a change "
-        "to the model's input is owed an eval: the grouped paid run). If you did NOT mean to "
-        "change it, the diff above names the surface; see the text with "
+        f"`{RECORD_COMMAND}` (it re-records this golden AND every other model-visible pin, the "
+        "list is PIN_MODULES in origin/services/agent_pins.py; under dt.sh: "
+        f"genos-platform/docker/dt.sh <worktree> <suffix> '{RECORD_COMMAND}') and say so in the PR "
+        "body (a change to the model's input is owed an eval: the grouped paid run). If you did NOT "
+        "mean to change it, the diff above names the surface; see the text with "
         "`python manage.py agent_fingerprint --dump <dir>` here and on origin/main, then `diff -r`."
     )
 
@@ -1055,8 +1121,8 @@ def golden_record() -> dict[str, Any]:
         "version": GOLDEN_VERSION,
         "about": (
             "sha256 of every surface the in-app agent's model is shown. Re-record with "
-            "`python manage.py agent_fingerprint --write-golden` when a change is MEANT to move "
-            "one, in the same PR, and say so in the PR body."
+            f"`{RECORD_COMMAND}` when a change is MEANT to move one, in the same PR, and say so "
+            "in the PR body."
         ),
         "states": states,
     }
@@ -1087,9 +1153,10 @@ class Command(BaseCommand):
             "--write-golden",
             action="store_true",
             help=(
-                "Re-record origin/tests/golden/agent_fingerprint.json (production defaults and "
-                "all-flags-off). Needs the database (rolled back). Commit it in the PR that "
-                "changed what the model sees, and say so in the PR body."
+                "Re-record ONLY origin/tests/golden/agent_fingerprint.json (production defaults and "
+                "all-flags-off); `record_agent_goldens` re-records it together with every other "
+                "model-visible pin and is the command to use. Needs a migrated database (rolled "
+                "back); under the test settings a throwaway one is built when there is none."
             ),
         )
 
@@ -1099,7 +1166,8 @@ class Command(BaseCommand):
                 raise CommandError(
                     "--write-golden records everything: no --only/--no-results/--dump"
                 )
-            record = golden_record()
+            with migrated_database():
+                record = golden_record()
             GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
             GOLDEN_PATH.write_text(
                 json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -1111,7 +1179,11 @@ class Command(BaseCommand):
                 )
             self.stdout.write(f"wrote {GOLDEN_PATH}")
             return
-        surfaces = compute_surfaces(results=not options["no_results"], only=options["only"])
+        if options["no_results"] or not selects_results(options["only"]):
+            surfaces = compute_surfaces(results=False, only=options["only"])
+        else:
+            with migrated_database():
+                surfaces = compute_surfaces(results=True, only=options["only"])
         dump = Path(options["dump"]) if options.get("dump") else None
         if dump:
             dump.mkdir(parents=True, exist_ok=True)

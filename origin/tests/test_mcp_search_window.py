@@ -23,8 +23,11 @@ from origin.search_engine import search as S
 from origin.search_engine.agent.tools import search_kb
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.search_window import SearchWindow
+from origin.services import agent_pins
 
 from .test_mcp_endpoint import McpBase
+
+PINS = agent_pins.Pins(__name__)
 
 MCP_CTX = ToolContext(team_id="t", user_id="u", surface="mcp")
 APP_CTX = ToolContext(team_id="t", user_id="u")
@@ -195,15 +198,13 @@ class InAppAgentIsUnchangedTests(SimpleTestCase):
         )
 
     def test_the_shared_declaration_hash_is_pinned(self):
-        # sha256 of the tool's name, description and schema as `origin/main` declares them.
+        # sha256 of the tool's name, description and schema as `origin/main` declares them
+        # (origin/tests/golden/agent_pins.json; `python manage.py record_agent_goldens` re-records it).
         tool = search_kb.SEARCH_KNOWLEDGE_BASE
         blob = json.dumps(
             [tool.name, tool.description, tool.parameters_schema], sort_keys=True
         ).encode()
-        self.assertEqual(hashlib.sha256(blob).hexdigest(), DECLARATION_SHA256)
-
-
-DECLARATION_SHA256 = "a2cfb0b2c22515072f7b557911d9104203101e6d41898d763c455d45e865260c"
+        PINS.check(self, "search_knowledge_base/declaration", hashlib.sha256(blob).hexdigest())
 
 
 class RealSearchCarriesTheWindowTests(SimpleTestCase):

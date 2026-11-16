@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from unittest import mock
 
@@ -26,9 +25,11 @@ from origin.models.chat.unified_models import (
 from origin.models.common.team_models import TeamMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskMaster
-from origin.services import task_close_notice
+from origin.services import agent_pins, task_close_notice
 from origin.tests.test_briefing import BriefingBase
 
+# The pin's hash: origin/tests/golden/agent_pins.json (python manage.py record_agent_goldens).
+PINS = agent_pins.Pins(__name__)
 TITLE = "Quarterly figures (confidential)"
 
 
@@ -254,19 +255,15 @@ class TestFlagOffIsMain(BriefingBase):
     """`AGENT_CLOSING_LINE_IN_ORIGIN_THREAD` off (the default): closing a task posts
     nothing, and what the in-app agent reads in the thread is what `origin/main` serves.
 
-    PIN. `GOLDEN` was recorded on pristine `origin/main` (346816f2: no flag, no notice
-    service) with the same test body, by copying this class into a clean worktree:
+    PIN. The hash (key `thread/closed` of `test_task_close_notice` in origin/tests/golden/agent_pins.json)
+    was first recorded on pristine `origin/main` (346816f2: no flag, no notice service) with the same
+    test body. Re-record it with the other pins:
 
-        git -C <genos-api> worktree add --detach <wt> origin/main
-        # copy this file's `TestFlagOffIsMain` + its imports into <wt>/origin/tests/ as a module
-        RECORD_GOLDEN=1 python manage.py test <module>.TestFlagOffIsMain --noinput
-        # prints `GOLDEN = "<sha256>"`
+        python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
     The hash is over `fetch_chat_thread`'s result for the thread after the close (ids and
     times replaced by placeholders), the thread's message rows and its reply count.
     """
-
-    GOLDEN = "21192f28aee0f436195f6f96f695a8e14486b85901e71ae9a0deff90574c7f0d"
 
     def snapshot(self):
         from origin.search_engine.agent.tools import REGISTRY, ToolContext
@@ -308,11 +305,7 @@ class TestFlagOffIsMain(BriefingBase):
         self.assertEqual(Message.objects.filter(metadata__systemNotice="task_closed").count(), 0)
         blob = self.normalised([out, [list(r) for r in rows]])
         digest = hashlib.sha256(blob.encode()).hexdigest()
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN = "{digest}"')
-            print("BLOB", blob)
-            return
-        self.assertEqual(digest, self.GOLDEN)
+        PINS.check(self, "thread/closed", digest)
 
     def test_with_the_flag_on_the_thread_differs_by_exactly_the_line(self):
         with override_settings(
@@ -330,5 +323,5 @@ class TestFlagOffIsMain(BriefingBase):
         self.assertIn("is now Closed.", json.dumps(out))
         self.assertNotEqual(
             hashlib.sha256(self.normalised([out, [list(r) for r in rows]]).encode()).hexdigest(),
-            self.GOLDEN,
+            PINS.require("thread/closed"),
         )

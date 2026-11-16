@@ -64,7 +64,10 @@ from origin.search_engine.agent.tool_tiers import READ_LEVEL_SYSTEM_EXTRA, disab
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm.types import FunctionCall
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
+from origin.services import agent_pins
 from origin.tests.transaction_support import CheapFlushTransactionTestCase
+
+PINS = agent_pins.Pins(__name__)
 
 ASK_URL = "/api/v2/agent/ask/"
 DECIDE_URL = "/api/v2/agent/decide/"
@@ -793,23 +796,16 @@ class ReadTierTests(TestCase):
 class NormalAskUnchangedTests(TestCase):
     """What a normal (non-resumed) ask hands the model, byte for byte.
 
-    The hashes were recorded on `origin/main` (a89531c1, the merge of #572, 2026-11-04)
-    BEFORE this change, over inputs this test fixes (ids, summaries, mention). They have
-    not been re-recorded since (`git log -S` shows the four values unchanged from the
-    first commit) and still hold on main, so a89531c1 is the true recording point. The
-    ask path is only read, never rewritten, by the fix; these fail if that stops being
-    true. If one must move, record again on a pristine main worktree (see
-    `test_agent_resume_flag_pins.py` for the recipe) and say the new commit here.
+    The hashes (origin/tests/golden/agent_pins.json) were first recorded on `origin/main` (a89531c1, the
+    merge of #572, 2026-11-04) BEFORE this change, over inputs this test fixes (ids, summaries, mention).
+    The ask path is only read, never rewritten, by the fix; these fail if that stops being true, and when
+    the text of a thread, note or tier block in `system_extra` is edited on purpose. Re-record them with
+    the other pins: `python manage.py record_agent_goldens` (the list: origin/services/agent_pins.py).
     """
 
     CHAT = "00000000-0000-0000-0000-00000000c0de"
     THREAD = "00000000-0000-0000-0000-0000000070ad"
-    GOLDEN = {
-        "thread": "32acfcf83b77cac4f3c31dad72b175b866810ab0cb3c3e7b6d8738604373f21a",
-        "note": "bea024d6c0c06bac8dc3ebff6bb83f062b4ce597ffdc17cff5add22256da6ebb",
-        "mention": "85d377367310a2917d0be64ef91a617323a8ea033fe5279e9e8f030dcb4d0b7f",
-        "thread+mention": "35a4e6a3995cbb3e5ba314b3fbf04da3060dd9f25d844587cf6b35a552bb7ccf",
-    }
+    GOLDEN = PINS.golden
 
     def setUp(self):
         user_model = get_user_model()
@@ -884,23 +880,21 @@ class NormalAskUnchangedTests(TestCase):
         self.assertIsNone(self.post())
 
     def test_a_thread_ask(self):
-        self.assertEqual(
-            self.digest(self.post(thread_context=self.thread_context())), self.GOLDEN["thread"]
-        )
+        PINS.check(self, "thread", self.digest(self.post(thread_context=self.thread_context())))
 
     def test_a_note_ask(self):
         extra = self.post(note_context={"note_type": 1, "note_id": 4242})
-        self.assertEqual(self.digest(extra), self.GOLDEN["note"])
+        PINS.check(self, "note", self.digest(extra))
 
     def test_a_mention_ask(self):
         extra = self.post(mentions=[{"type": "task", "task_id": 123}])
-        self.assertEqual(self.digest(extra), self.GOLDEN["mention"])
+        PINS.check(self, "mention", self.digest(extra))
 
     def test_a_thread_ask_with_a_mention(self):
         extra = self.post(
             thread_context=self.thread_context(), mentions=[{"type": "task", "task_id": 123}]
         )
-        self.assertEqual(self.digest(extra), self.GOLDEN["thread+mention"])
+        PINS.check(self, "thread+mention", self.digest(extra))
 
     def test_a_free_tier_ask_ends_in_the_read_block(self):
         self.user.tier = "free"
@@ -909,9 +903,12 @@ class NormalAskUnchangedTests(TestCase):
         self.assertEqual(self.post(), READ_LEVEL_SYSTEM_EXTRA)
         extra = self.post(thread_context=self.thread_context())
         self.assertTrue(extra.endswith("\n\n" + READ_LEVEL_SYSTEM_EXTRA))
-        self.assertEqual(
-            self.digest(extra[: -len("\n\n" + READ_LEVEL_SYSTEM_EXTRA)]), self.GOLDEN["thread"]
-        )
+        if (
+            not agent_pins.record_mode()
+        ):  # compares with the recorded thread hash, which recording replaces
+            self.assertEqual(
+                self.digest(extra[: -len("\n\n" + READ_LEVEL_SYSTEM_EXTRA)]), self.GOLDEN["thread"]
+            )
 
 
 class ResumeAgentForwardsTests(TestCase):

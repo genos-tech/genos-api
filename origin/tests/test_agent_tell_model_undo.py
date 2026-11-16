@@ -8,39 +8,32 @@ note at the end of the earlier answer in the next ask's conversation). Off, it i
 the write tool's result already carries the applied values), and the edit pins below hold with the
 flag ON too.
 
-PINS (off state). The goldens were recorded on PRISTINE `origin/main` (346816f2) with the same
-harness (the MIP-977 flag-pin one; the undo is simulated with `undone_at`, which main has):
+PINS (off state). The goldens (origin/tests/golden/agent_pins.json) were first recorded on PRISTINE
+`origin/main` (346816f2) with the same harness (the MIP-977 flag-pin one; the undo is simulated with
+`undone_at`, which main has). Re-record them all with:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_tell_model_undo.py origin/tests/test_agent_resume_flag_pins.py \\
-       origin/tests/test_agent_resume_system_extra.py origin/tests/test_agent_resume_prior_turns.py \\
-       <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_tell_model_undo.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
 Each hash covers every model call of the whole scenario (system instruction and messages).
 """
 
 from __future__ import annotations
 
-import os
-
 from django.conf import settings
 from django.test import override_settings
 from django.utils import timezone
 
 from origin.search_engine.models import AgentRun, AgentStep
+from origin.services import agent_pins
 from origin.tests.test_agent_resume_flag_pins import NO_DATE, Recorder
 from origin.tests.test_agent_resume_system_extra import ASK_URL, ResumeBase
 
 EDIT = {"title": "Ship it v2", "priority": "High"}
 ON = {"AGENT_TELL_MODEL_UNDO": True}
 
-GOLDEN: dict[str, str] = {
-    "edit/approve": "d207f4cbcea6328a577943e6772b7996fecf82b89a189482691154d1fcbd4661",
-    "edit/twice": "39b0912c7405dd00d79fb4db161bf5882e1cafc1d8e02b65860232e2ded00600",
-    "undo/next-turn": "18d9ba20edde859d29fdb86501580c043d1162de90049fb3a1851a478fdccc94",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 
 class Base(Recorder, ResumeBase):
@@ -88,10 +81,7 @@ class Base(Recorder, ResumeBase):
         return start
 
     def pin(self, key, since=0):
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{self.digest(since)}"')
-            return
-        self.assertEqual(self.digest(since), GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, self.digest(since))
 
 
 UNDO_OUTCOME = {
