@@ -351,6 +351,7 @@ REGISTRY = {
         "get_effective_role"
     ),
     "origin.views.common.inbox_views.InboxItemView": checked("is_team_member"),
+    "origin.views.common.inbox_views.InboxMarkReadView": checked("is_team_member"),
     "origin.views.common.inbox_views.JoinGMFromInboxView": self_only(_INBOX),
     # views.common.mention_group_views
     "origin.views.common.mention_group_views.MentionGroupMembersView": checked("is_team_member"),

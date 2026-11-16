@@ -172,23 +172,35 @@ class _Fixture(BaseAPITestCase):
 # Term 1: unread Requests
 # ----------------------------------------------------------------------
 class InboxTermTests(_Fixture):
-    def test_activity_half_of_the_inbox_does_not_count(self):
-        # A digest, a reminder and a plain notice are things that HAPPENED.
-        # The app puts them on the Activities tab and keeps them out of the
-        # Requests badge.
+    def test_the_activity_half_of_the_inbox_counts_while_unread(self):
+        # MIP-1627: a digest, a reminder and a plain notice are on the Activities tab, and the
+        # app marks them read once looked at, so they count until then (the sidebar badge adds
+        # them; `useInboxManagement`).
         for item_type in (ACTIVITY_NOTICE, DIGEST, MSG_REMINDER):
             self.inbox(item_type)
-        self.assertEqual(self.badge(), 0)
+        self.assertEqual(self.badge(), 3)
 
     def test_every_request_type_counts_once(self):
         for item_type in REQUEST_TYPES:
             self.inbox(item_type)
         self.assertEqual(self.badge(), len(REQUEST_TYPES))
 
-    def test_the_production_shape(self):
-        # Ken's account on 2026-11-02: 92 unread digests, 17 message
-        # reminders, 12 activity notices, no requests. The icon said 121;
-        # the open app said 0.
+    def test_requests_and_activities_add_up(self):
+        for _ in range(5):
+            self.inbox(DIGEST)
+        self.inbox(JOIN_TEAM)
+        self.assertEqual(self.badge(), 6)
+
+    def test_reading_an_activity_takes_it_off_the_count(self):
+        for item_type in (ACTIVITY_NOTICE, DIGEST, MSG_REMINDER):
+            self.inbox(item_type)
+        InboxItems.objects.filter(item_type=DIGEST).update(is_read=True)
+        self.assertEqual(self.badge(), 2)
+
+    def test_the_production_shape_is_what_the_release_backfill_exists_for(self):
+        # Ken's account on 2026-11-02: 92 unread digests, 17 message reminders, 12 notices, no
+        # requests. Counted as it stands the icon says 121, for a pile nobody could clear: the
+        # release backfill (migration 0247) reads what exists, so the count starts at 0.
         InboxItems.objects.bulk_create(
             [
                 InboxItems(
@@ -202,30 +214,28 @@ class InboxTermTests(_Fixture):
                 for _ in range(n)
             ]
         )
-        self.assertEqual(InboxItems.objects.filter(receiver=self.me, is_read=False).count(), 121)
+        self.assertEqual(self.badge(), 121)
+        InboxItems.objects.filter(item_type__in=ACTIVITY_INBOX_ITEM_TYPES).update(is_read=True)
         self.assertEqual(self.badge(), 0)
         self.assertEqual(self.badge(team=None), 0)
 
-    def test_a_request_among_the_digests_is_the_whole_count(self):
-        for _ in range(5):
-            self.inbox(DIGEST)
-        self.inbox(JOIN_TEAM)
-        self.assertEqual(self.badge(), 1)
-
-    def test_a_request_in_the_other_team_does_not_count(self):
+    def test_an_item_in_the_other_team_does_not_count(self):
         self.inbox(JOIN_TEAM, team=self.team_b)
+        self.inbox(DIGEST, team=self.team_b)
         self.assertEqual(self.badge("a"), 0)
-        self.assertEqual(self.badge("b"), 1)
+        self.assertEqual(self.badge("b"), 2)
 
-    def test_read_deleted_and_other_peoples_requests_do_not_count(self):
-        self.inbox(JOIN_TEAM, is_read=True)
-        self.inbox(JOIN_TEAM, is_deleted=True)
-        self.inbox(JOIN_TEAM, receiver=self.other)
+    def test_read_deleted_and_other_peoples_items_do_not_count(self):
+        for item_type in (JOIN_TEAM, DIGEST):
+            self.inbox(item_type, is_read=True)
+            self.inbox(item_type, is_deleted=True)
+            self.inbox(item_type, receiver=self.other)
         self.assertEqual(self.badge(), 0)
 
     def test_the_activity_types_include_what_the_server_files_there(self):
-        # The sets the writers use must stay inside the one the badge
-        # excludes, or a new digest/reminder would count as a request.
+        # The set the app, the backfill and "mark all as read" use for the Activities half must
+        # keep covering what the server files there, or a new digest/reminder would be offered
+        # approve/reject and left out of mark-all.
         self.assertTrue(
             {agent_digest.ITEM_TYPE_DIGEST, ITEM_TYPE_MESSAGE_REMINDER, ITEM_TYPE_REMINDER, 0}
             <= set(ACTIVITY_INBOX_ITEM_TYPES)
@@ -379,8 +389,8 @@ class TotalTests(_Fixture):
         self.inbox(DIGEST)
         self.say(self.chat(), 1)
         self.say(self.chat(), 1)
-        # one request + two chats with something new
-        self.assertEqual(self.badge(), 1 + 2)
+        # one request + one digest + two chats with something new
+        self.assertEqual(self.badge(), 1 + 1 + 2)
 
     def test_the_activity_feed_is_not_counted(self):
         # The app adds its Activity topics; the server leaves them out on
@@ -409,7 +419,7 @@ class TotalTests(_Fixture):
         self.assertEqual(unread_badge_total(self.me.id, team_id=""), 2)
 
     def test_a_failure_is_none_not_an_exception(self):
-        with mock.patch.object(unread_badge, "_unread_requests", side_effect=RuntimeError("db")):
+        with mock.patch.object(unread_badge, "_unread_inbox", side_effect=RuntimeError("db")):
             self.assertIsNone(self.badge())
 
     def test_a_few_queries_whatever_the_size(self):
@@ -465,13 +475,14 @@ class PushCarriesTheTeamTests(_Fixture):
         return send.call_args.kwargs["payload"].get("badge_count")
 
     def _requests_for_other(self):
-        # Team A: 1 request. Team B: 2 requests. Digests everywhere.
+        # Team A: 1 request. Team B: 2 requests. READ digests everywhere: an activity counts
+        # only while unread (MIP-1627), so these are the noise the count must step over.
         self.inbox(JOIN_TEAM, receiver=self.other)
         for _ in range(2):
             self.inbox(JOIN_TEAM, receiver=self.other, team=self.team_b)
         for team in (self.team_a, self.team_b):
             for _ in range(4):
-                self.inbox(DIGEST, receiver=self.other, team=team)
+                self.inbox(DIGEST, receiver=self.other, team=team, is_read=True)
 
     def test_the_badge_follows_the_team_of_the_push(self):
         self._requests_for_other()

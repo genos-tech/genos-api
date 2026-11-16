@@ -625,6 +625,8 @@ urlpatterns = [
     path("api/v2/team-emoji/", TeamEmojiView.as_view(), name="team_emoji"),
     # Inbox
     path("api/v2/inbox/", InboxItemView.as_view(), name="inbox_item"),
+    # Mark every Activity up to an item read in one call (MIP-1627).
+    path("api/v2/inbox/mark-read/", InboxMarkReadView.as_view(), name="inbox_mark_read"),
     # What an AI-made item cost is on the item; these turn its source off and back on (MIP-1209).
     path("api/v2/inbox/<int:item_id>/ai/", InboxAiSourceView.as_view(), name="inbox_ai_source"),
     path("api/v2/inbox/<int:item_id>/ai/off/", InboxAiOffView.as_view(), name="inbox_ai_off"),

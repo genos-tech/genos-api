@@ -5,9 +5,10 @@ from origin.models.common.user_models import CustomUser
 
 # The Activities half of the inbox: things that HAPPENED and need no answer
 # (0 notice, 6 Genos digest, 9 reminder, 10 Genos report). Every other item_type is a REQUEST
-# somebody is waiting on. The split decides which inbox tab an item lands on
-# and whether it counts toward the Requests badge, on screen and on the app
-# icon (`services/unread_badge`). Mirrors `ACTIVITY_ITEM_TYPES` in the
+# somebody is waiting on. The split decides which inbox tab an item lands on, whether the card
+# offers approve/reject, what "mark all as read" touches (`InboxMarkReadView`: Activities only)
+# and which tab's count it adds to. Unread items of BOTH halves count toward the sidebar badge and
+# the app icon (`services/unread_badge`, MIP-1627). Mirrors `ACTIVITY_ITEM_TYPES` in the
 # frontend's `features/inbox/utils/inboxItemTypes.ts`: change both together.
 ACTIVITY_INBOX_ITEM_TYPES = frozenset({0, 6, 9, 10})
 
