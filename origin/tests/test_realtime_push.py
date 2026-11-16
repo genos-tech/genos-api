@@ -78,17 +78,22 @@ class RealtimePushTests(BaseAPITestCase):
             task=self.task, sender=self.user, comment_id=1, comment_body=_body(text)
         )
 
+    def _room_calls(self):
+        """The pushes to the PROJECT ROOM broadcast. An MCP/agent comment also tells its
+        recipients' own rooms about their activity rows (MIP-1660, `test_agent_writes_push_activities`),
+        which is a different route and a different audience."""
+        return [c for c in self.post.call_args_list if c.args[0] == URL]
+
     def _sent(self):
-        """The JSON body of each push, in order."""
-        return [json.loads(c.kwargs["data"]) for c in self.post.call_args_list]
+        """The JSON body of each project-room push, in order."""
+        return [json.loads(c.kwargs["data"]) for c in self._room_calls()]
 
     # ---- what is sent ----
 
     def test_a_new_comment_pushes_the_facts_the_room_needs(self):
         self._tool(ADD_COMMENT, body_text="hi there")
 
-        self.post.assert_called_once()
-        self.assertEqual(self.post.call_args.args[0], URL)
+        self.assertEqual(len(self._room_calls()), 1)
         self.assertEqual(
             self._sent()[0],
             {
@@ -106,8 +111,12 @@ class RealtimePushTests(BaseAPITestCase):
         self.assertTrue(self._sent()[0]["isPrivate"])
 
     def test_no_comment_text_leaves_the_api(self):
+        # Not in the project-room broadcast, which everyone in the room receives. (A recipient's
+        # own activity row, sent to their room alone, carries the text as the app's relay does.)
         self._tool(ADD_COMMENT, body_text="a very private remark")
-        self.assertNotIn("private remark", self.post.call_args.kwargs["data"].decode())
+        for call in self._room_calls():
+            self.assertNotIn("private remark", call.kwargs["data"].decode())
+        self.assertTrue(self._room_calls())
 
     def test_the_push_is_signed_with_the_sockets_secret_over_timestamp_and_body(self):
         self._tool(ADD_COMMENT, body_text="hi")

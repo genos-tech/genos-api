@@ -81,6 +81,11 @@ def _file(
     )
     # Only genuinely-new rows come back, so a re-save never re-pushes.
     schedule_push_for_activities(rows)
+    # And to the recipients' open apps: these paths have no sockets handler to relay them
+    # (MIP-1660); the editor's own save is announced by the `note_mention` socket hop.
+    from origin.services.realtime_push import push_activities  # noqa: PLC0415
+
+    push_activities(rows)
     return len(rows)
 
 

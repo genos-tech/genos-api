@@ -207,6 +207,51 @@ def push_inbox_changed(user_id, team_id=None) -> None:
         logger.warning("sockets inbox push could not be scheduled", exc_info=True)
 
 
+def push_activities(activities) -> None:
+    """Announce the `Activity` rows an API-side write made (a task comment, an @mention in a
+    task body or a note) to each recipient's open app, when no socket handler will (MIP-1660).
+
+    The app's own writes go through a sockets handler, which calls this API and emits the
+    activities the API hands back. An MCP or in-app-agent write has no such handler, so its
+    comment and mention rows were stored and announced to nobody: no toast, and the Activity
+    feed filled in only at the next refetch. Call this ONLY from those paths, never from a view
+    a sockets handler relays (that would deliver twice).
+
+    Each activity is sent as the recipient may see it (`activity_minimal_card.activities_wire`:
+    a recipient who cannot open the task gets the minimal card, MIP-1593), the shape the sockets
+    handlers relay. Sent after commit, or at once with no transaction. Best-effort and never
+    raises: the rows are saved, and the Web Push and the next refetch still find them. A row
+    sockets refuses (its body limit) is logged and simply not live.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets activity push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        rows = [a for a in (activities or []) if a is not None]
+        if not rows:
+            return
+        from rest_framework.renderers import JSONRenderer  # noqa: PLC0415
+
+        from origin.services.activity_minimal_card import activities_wire  # noqa: PLC0415
+
+        payloads: list[dict[str, Any]] = []
+        for wire in json.loads(JSONRenderer().render(activities_wire(rows))):
+            recipient = wire.get("recipientUserId") if isinstance(wire, dict) else None
+            if recipient:
+                payloads.append({"userId": str(recipient), "activity": wire})
+
+        def send_all() -> None:
+            for payload in payloads:
+                _post(payload, ACTIVITY_PATH, "activity")
+
+        if payloads:
+            transaction.on_commit(send_all, robust=True)
+    except Exception:  # noqa: BLE001 — the rows are saved; an observer must not break them
+        logger.warning("sockets activities push could not be scheduled", exc_info=True)
+
+
 def push_message(message, event) -> None:
     """Announce a chat `Message` this API wrote with no socket handler to relay it, so a
     colleague who has that chat open sees it now instead of at their next sync (MIP-1459:

@@ -30,6 +30,7 @@ from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.search_engine.agent.undo import UNDO_KEY, comment_capture
+from origin.services import realtime_push
 from origin.services.task_comment_fanout import fan_out_task_comment
 
 _PARA_PROPS = {
@@ -134,7 +135,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # missing from the thread entirely, and the assignee found out only
     # by opening the task. Best-effort inside; the comment is already
     # committed and must not be undone by an observer failing.
-    fan_out_task_comment(comment)
+    fanout = fan_out_task_comment(comment)
+    # No sockets handler relays a comment written here, so announce its activities to the
+    # recipients' open apps ourselves (MIP-1660); the in-app write path does it in sockets.
+    realtime_push.push_activities(fanout.activities)
 
     result = {
         "task_id": task_id,

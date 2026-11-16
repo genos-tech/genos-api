@@ -92,6 +92,9 @@ def edit_comment(comment: TaskComments, body: list[dict[str, Any]]) -> list[str]
             skip_actor=False,
         )
         schedule_push_for_activities(list(activities))
+        # Only the agent's and MCP's `update_comment` edit here, with no sockets handler to
+        # relay the new mentions, so announce them to the recipients' open apps (MIP-1660).
+        realtime_push.push_activities(list(activities))
     except Exception as exc:  # noqa: BLE001 — the edit is already saved
         logger.warning("task-comment edit mention fan-out failed: %s", exc)
     return added
