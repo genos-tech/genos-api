@@ -66,6 +66,8 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # (re-measured on the merged tree; all-on equals production now except for the held flags, which add no declarations).
 # Nothing is raised: 147,876 with a Long member's block fits the 148,000 constant (124 left), and `BUDGET_CHARS`
 # (146,500) holds the production number (79 left). Evidence: the second grouped run of 2026-11-15, see `apis/settings.py`.
+# The collaborator wording (+36, see `test_agent_prefix_budget`): 146,457 all-on, 147,912 with a Long member's block, so 88
+# characters are left and the constant stays.
 ALL_ON_BUDGET_CHARS = 148_000
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the

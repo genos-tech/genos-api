@@ -201,6 +201,17 @@ class CollaboratorsTests(WriteBase):
     def _collaborators(self, task):
         return sorted(str(u) for u in task.collaborators.values_list("id", flat=True))
 
+    def test_the_declarations_tell_the_model_the_read_rule_not_the_team_rule(self):
+        # What the model is told must be what `may_collaborate` enforces (MIP-1567): a teammate who is not on
+        # the project is refused, so the declaration must not say "on the team". The rule: a member of the
+        # task's project, or its assignee or reporter.
+        for tool in (CREATE_TASK, UPDATE_TASK):
+            text = tool.parameters_schema["properties"]["collaborators"]["description"]
+            self.assertIn(
+                "a member of the task's project, or its assignee or reporter", text, tool.name
+            )
+            self.assertNotIn("team", text, tool.name)
+
     def test_setting_collaborators_matches_the_uis_put(self):
         by_tool, by_ui = self._task("by tool"), self._task("by ui")
         before = {t.pk: t.ts_updated_at for t in (by_tool, by_ui)}
