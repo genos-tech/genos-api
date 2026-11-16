@@ -2,7 +2,7 @@
 
 import importlib
 
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase
 
 from origin.models.common.security_event_models import (
     AppendOnlyError,
@@ -73,7 +73,7 @@ class MaskEmailTests(SimpleTestCase):
         self.assertTrue(has_email("k@gmail.com"))
 
 
-class BackfillMigrationTests(TransactionTestCase):
+class BackfillMigrationTests(TestCase):
     """0207 masks the rows written before the writer did, and only those.
 
     Runs the migration's function with the HISTORICAL models, exactly what
@@ -188,7 +188,7 @@ class BackfillMigrationTests(TransactionTestCase):
         self.assertEqual(updates, [])
 
 
-class AlertCopiesNoAddressTests(TransactionTestCase):
+class AlertCopiesNoAddressTests(TestCase):
     def test_an_alert_for_a_cause_written_before_masking_holds_no_address(self):
         """`_alert` copies its cause's label into a NEW row. A cause stored
         before MIP-765 (or before 0207 ran) still holds the address, so the

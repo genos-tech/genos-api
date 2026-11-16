@@ -47,7 +47,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connections
-from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -64,6 +64,7 @@ from origin.search_engine.agent.tool_tiers import READ_LEVEL_SYSTEM_EXTRA, disab
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm.types import FunctionCall
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 ASK_URL = "/api/v2/agent/ask/"
 DECIDE_URL = "/api/v2/agent/decide/"
@@ -113,7 +114,7 @@ class ScriptedModel:
             yield ("All done.", None)
 
 
-class ResumeBase(TransactionTestCase):
+class ResumeBase(CheapFlushTransactionTestCase):
     script = ("write", "answer")
     # The flags this fix is behind (default OFF in settings). These tests are about what
     # the fix does, so they run with it ON; `test_agent_resume_flag_pins` runs the same
