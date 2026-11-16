@@ -4,16 +4,11 @@
 What is pinned, in order:
 
   1. FLAG OFF is byte-identical to origin/main: the tool declarations, the three system prompts,
-     and "not declared, not runnable, not in REGISTRY". The two sha256 goldens were recorded on a
-     pristine `origin/main` worktree (09f52388, "Merge pull request #739"):
-
-         cp _t3_golden.py <main worktree>/   # the 8-line snippet in `GOLDEN_RECIPE` below
-         python manage.py shell < _t3_golden.py
-
-     They are over `_build_tool_declarations()` (name, description, schema, sorted keys) and over
-     the legacy prompt, the registry-generated prompt and `agent_system_prompt()`. When the
-     tool surface changes on purpose (a new tool on main), re-record them the same way, on a
-     pristine main, and say so in the PR.
+     and "not declared, not runnable, not in REGISTRY". The sha256 goldens (origin/tests/golden/agent_pins.json)
+     were first recorded on a pristine `origin/main` worktree (09f52388, "Merge pull request #739"). They are
+     over `_build_tool_declarations()` (name, description, schema, sorted keys) and over the legacy prompt
+     and the registry-generated prompt. When the tool surface changes on purpose, re-record every pin
+     with `python manage.py record_agent_goldens` (the list: origin/tests/agent_pins.py) and say so in the PR.
   2. FLAG ON: exactly one declaration more (the last one), `get_timeline`, in every provider's
      request shape; nothing else moved; the prompt is the same; the MCP tool of the same name
      is untouched.
@@ -64,6 +59,7 @@ from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.get_timeline import APP_ANCHOR_TYPES, GET_TIMELINE_INAPP
 from origin.search_engine.llm.types import ToolDeclaration
 from origin.services import timeline
+from origin.tests import agent_pins
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_item_lines import body_with, text_inline
 from origin.tests.test_timeline import fences_only_where_text_is
@@ -72,19 +68,13 @@ from origin.views.public.mcp import tools as mcp_tools
 User = get_user_model()
 FLAG = "AGENT_INAPP_TIMELINE_TOOL"
 
-GOLDEN_RECIPE = """
-import hashlib, json
-from origin.search_engine.agent.controller import _build_tool_declarations
-from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT_REGISTRY, agent_system_prompt
-def sha(s): return hashlib.sha256(s.encode("utf-8")).hexdigest()
-decl = json.dumps([[d.name, d.description, d.parameters_schema] for d in _build_tool_declarations()], sort_keys=True, ensure_ascii=False)
-print("DECL", sha(decl), len(decl))
-print("PROMPT", sha(AGENT_SYSTEM_PROMPT), "REGISTRY_PROMPT", sha(AGENT_SYSTEM_PROMPT_REGISTRY), "SELECTED", sha(agent_system_prompt()))
-"""
-# Recorded on a pristine origin/main (09f52388), every flag off.
-GOLDEN_DECLARATIONS = "c2304aa7680f57852bcab03f60164f1ff10c7ecbdff6ca19c74bf2ef9d939e94"
-GOLDEN_PROMPT = "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df"
-GOLDEN_REGISTRY_PROMPT = "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c"
+# The hashes (every flag off): origin/tests/golden/agent_pins.json, re-recorded with
+# `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
+GOLDEN_DECLARATIONS = GOLDEN.get("declarations")
+GOLDEN_PROMPT = GOLDEN.get("prompt/legacy")
+GOLDEN_REGISTRY_PROMPT = GOLDEN.get("prompt/registry")
 
 
 def sha(text: str) -> str:
@@ -130,13 +120,14 @@ def flag(on: bool, **more):
 class TestFlagOffIsByteIdenticalToMain(SimpleTestCase):
     def test_the_declarations_are_what_origin_main_declares(self):
         with flag(False):
-            self.assertEqual(sha(declarations_json()), GOLDEN_DECLARATIONS)
+            PINS.check(self, "declarations", sha(declarations_json()))
 
     def test_the_three_prompts_are_what_origin_main_serves(self):
         with flag(False):
-            self.assertEqual(sha(AGENT_SYSTEM_PROMPT), GOLDEN_PROMPT)
-            self.assertEqual(sha(AGENT_SYSTEM_PROMPT_REGISTRY), GOLDEN_REGISTRY_PROMPT)
-            self.assertEqual(sha(agent_system_prompt()), GOLDEN_PROMPT)
+            PINS.check(self, "prompt/legacy", sha(AGENT_SYSTEM_PROMPT))
+            PINS.check(self, "prompt/registry", sha(AGENT_SYSTEM_PROMPT_REGISTRY))
+            # and the prompt that is served is the legacy one (what the third golden said)
+            self.assertEqual(sha(agent_system_prompt()), sha(AGENT_SYSTEM_PROMPT))
 
     def test_the_tool_is_not_declared_not_in_the_registry_and_not_runnable(self):
         with flag(False):

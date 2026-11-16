@@ -10,10 +10,8 @@ what they claim or become null. Resolved threads are counted, not shown. MCP `ge
 PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), where the flag does
 not exist:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_note_threads_in_get_note.py <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_note_threads_in_get_note.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
 
 `note/*` hash the tool's result for a personal note, a task note and a chat note (ids replaced by their
 order of appearance); `declarations` hashes every tool declaration the model is sent. FlagOffTests
@@ -25,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import asdict
 from unittest import mock
@@ -40,17 +37,15 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import ToolForbidden, wrap_workspace_content
+from origin.tests import agent_pins
 from origin.tests.test_mcp_endpoint import McpBase
 
 FLAG = "AGENT_NOTE_THREADS_IN_GET_NOTE"
 READER = "origin.services.note_comments.read_note_threads"
 
-GOLDEN: dict[str, str] = {
-    "note/personal": "aa59ecc86ceeb706c4ac5a6d9db2215a4063e497269daceeebd848212c8926fd",
-    "note/task": "ad6e3e528a723ff873c8697bff048df07118f7dc7429aef14333361b9528697f",
-    "note/chat": "b0f5d9c91710855e966508fcb8c5aca955f595242f72149169a79f4b705002d0",
-    "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 AT = "2026-11-06T09:00:00.000Z"
@@ -160,11 +155,7 @@ class FlagOffTests(NoteBase):
     """What the model is sent with the flag off: main's, byte for byte (hashes from main)."""
 
     def pin(self, key, text):
-        digest = digest_text(text)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, digest_text(text))
 
     def test_the_result_for_each_note_family(self):
         with mock.patch(READER, side_effect=AssertionError("collab must not be asked")):

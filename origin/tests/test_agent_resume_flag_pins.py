@@ -6,17 +6,12 @@ leg of a run that follows an approve or reject sends the model. Their contract i
 with sha256 goldens that were recorded on PRISTINE `origin/main` (346816f2, a clean
 worktree with none of the change), and pins the flag-on shapes against them.
 
-THE RECORDING (how `GOLDEN` below was made; run it again after anything that moves the
-prompt on main, and compare, rather than editing a hash to make a test pass):
+THE RECORDING. The hashes live in `origin/tests/golden/agent_pins.json` (MIP-1653); they were first
+recorded on PRISTINE `origin/main` (346816f2). After a change that is MEANT to move what the model
+sees, re-record them all (this module's, the others', the fingerprint golden) with one command, and
+compare the diff rather than editing a hash to make a test pass:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_resume_flag_pins.py origin/tests/test_agent_resume_system_extra.py \\
-       origin/tests/test_agent_resume_prior_turns.py <wt>/origin/tests/
-    # (the pin module imports only the harnesses of the two fix modules, which touch no
-    #  `resume_context`, so it runs on code that has never heard of the flags)
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_resume_flag_pins.FlagOffTests \\
-       origin.tests.test_agent_resume_flag_pins.FollowUpFlagOffTests --noinput
-    # prints  GOLDEN <shape>/<decision> = <sha256>  for every shape; paste them below
+    python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
 
 What is hashed, per shape and decision: EVERY model call of the whole run (the ask leg
 and the resumed leg), each as its system instruction (the date line is switched off, ids
@@ -36,7 +31,6 @@ import copy
 import dataclasses
 import hashlib
 import json
-import os
 import re
 from unittest import mock
 
@@ -47,6 +41,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.search_engine import agent_views
 from origin.search_engine.agent.mentions import ResolvedMention
 from origin.search_engine.models import AgentRun
+from origin.tests import agent_pins
 from origin.tests.test_agent_resume_prior_turns import ResumePriorBase, shape
 from origin.tests.test_agent_resume_system_extra import (
     NOTE_SUMMARY,
@@ -60,26 +55,10 @@ ON_977 = {"AGENT_RESUME_KEEPS_BLOCKS": True}
 ON_991 = {**ON_977, "AGENT_RESUME_KEEPS_TURNS": True}
 NO_DATE = {"AGENT_INJECT_CURRENT_DATE": False}
 
-# sha256 of every model call of one ask + decision, per shape/decision, recorded on
-# pristine origin/main 346816f2 (see the module docstring for the recipe).
-GOLDEN: dict[str, str] = {
-    "followup+recap/approve": "b29aaecf910d5c64e64abe1bbcdc12d4338b13dff3315f068606dbf79a3eb430",
-    "followup+recap/reject": "ac59116517d31ccabd341029b5b735cce9c5fe02fce74ad1553d1b838080fb02",
-    "followup+thread/approve": "7f451881f6ea13c7e2241877d432251b877e3c13f7453612e19d327462f9ddde",
-    "followup+thread/reject": "5787a91008c3f12d437fd4212cbadb03663ddaa25673580e92eccc25c7c1d789",
-    "followup/approve": "c0fd39bb041be29711ff4ccf5ebb8d675c4720a566d70c78320c7bf702cde4e6",
-    "followup/reject": "160273162d4f17745d870a7bcbf31837801aeb6937ffe29defa7f5dd5a1914fa",
-    "mention/approve": "0ad49cdb0a5ba38bfeffd8d9eac215340682343f1b283affb17ed15198b55ad5",
-    "mention/reject": "a8a4728520f467f74208d7cf5262967e473076d8412d3db8faf3bde7a36df904",
-    "note/approve": "3f7533ccdbba17381b995fbd2e2f6b7a3c221a708f6c8135cf49aa708899c831",
-    "note/reject": "55a459f38b20d6ae075301ac388e17fbd4e3193201f93108a4df2dcaa8d385cb",
-    "plain/approve": "d207f4cbcea6328a577943e6772b7996fecf82b89a189482691154d1fcbd4661",
-    "plain/reject": "9b7aa41657fb037374a3c850064089fbee6b88f94da161e3ccb59fb839852df4",
-    "thread+mention/approve": "23b99b170b63d572c333b24a37d7859594f3befb88b0bf561e0ee617ef950986",
-    "thread+mention/reject": "18ae0d3edd0dc0c152ef598ff30028e1adc1e3389da59b22d05463f8cd459c60",
-    "thread/approve": "8c3c8d1558ff4fb79093680439fa7bd10fe6b9357aaa8301ed005b856b6bf6ac",
-    "thread/reject": "5adf98b6ebafff9fa750085718bc46415e677fea32068b54f7e5e11f5f2fb118",
-}
+# sha256 of every model call of one ask + decision, per shape/decision (origin/tests/golden/agent_pins.json,
+# re-recorded with `python manage.py record_agent_goldens`).
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 MENTION = ResolvedMention(
     kind="task", label="Fix login flow", task_id=123, display_id="WRD-5", project_id="77"
@@ -142,11 +121,7 @@ class Recorder:
         return hashlib.sha256(blob.encode()).hexdigest()
 
     def assert_golden(self, key: str, since: int = 0):
-        digest = self.digest(since)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed for {key}")
+        PINS.check(self, key, self.digest(since))
 
 
 class PinBase(Recorder, ResumeBase):
@@ -246,7 +221,7 @@ class FlagOnTests(PinBase):
     def resumed_system(self, shape, decision="approve") -> str:
         self.run_shape(shape, decision)
         self.assertEqual(len(self.calls), 2)
-        if not os.environ.get("RECORD_GOLDEN"):
+        if not agent_pins.record_mode():
             self.assertNotEqual(self.digest(), GOLDEN[f"{shape}/{decision}"])
         return self.calls[1][0]
 
@@ -263,7 +238,7 @@ class FlagOnTests(PinBase):
 
     def test_a_plain_ask_is_unchanged_with_the_flag_on(self):
         self.run_shape("plain", "approve")
-        if not os.environ.get("RECORD_GOLDEN"):
+        if not agent_pins.record_mode():
             self.assertEqual(self.digest(), GOLDEN["plain/approve"])
 
 

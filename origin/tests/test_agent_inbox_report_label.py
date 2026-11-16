@@ -9,10 +9,8 @@ PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), 
 does not exist, over a fixed inbox (a small and a very large report, an unversioned report, a
 digest, a reminder, an activity and three requests):
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_inbox_report_label.py <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_inbox_report_label.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
 
 `inbox/*` hash `list_my_inbox`'s result (ids replaced by their order of appearance, the rest
 verbatim: key order, labels, bodies, timestamps); `declarations` hashes every tool declaration
@@ -23,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -34,17 +31,14 @@ from django.test import SimpleTestCase, override_settings
 from origin.models.common.inbox_models import InboxItems
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
+from origin.tests import agent_pins
 from origin.tests.test_base import BaseAPITestCase
 
 FLAG = "AGENT_INBOX_REPORT_LABEL"
 
-GOLDEN: dict[str, str] = {
-    "inbox/all": "3b8c6ad4cb42d1c9a5ce80f1116d9c572e4fe5ace60e4526d19a9c8539794e1d",
-    "inbox/activity": "d9e1938fa41cc6f8a4b2060bddff28612112845e0fcae08adf593b359e0fa769",
-    "inbox/requests": "ea7240167db1c3a878fcc951c7a2e5e8851bf5789a3fe000fe472821cb1e74ac",
-    "inbox/limit-1": "df5493ac8c0e0128c606a9a8a5144ec1a91316510075316309565c8660de0ed9",
-    "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -164,11 +158,7 @@ class FlagOffTests(InboxBase):
     """What the model is sent with the flag off: main's, byte for byte (hashes from main)."""
 
     def pin(self, key, text):
-        digest = digest_text(text)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, digest_text(text))
 
     def test_the_inbox_as_the_model_reads_it(self):
         self.fill()

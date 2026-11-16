@@ -17,10 +17,8 @@ PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), 
 exist, over one fixed tree (a Closed parent with open children, a Deleted parent, a Closed milestone, a
 sprint) with the clock frozen around the calls:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_closed_ancestor_rule.py <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_closed_ancestor_rule.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
 
 `tool/*` hash each tool's result (ids by order of appearance, the rest verbatim); `declarations` hashes every
 tool declaration the model is sent. FlagOffTests imports nothing this change adds, so it runs on main.
@@ -30,7 +28,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import asdict
 from datetime import date, datetime, timezone
@@ -49,6 +46,7 @@ from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY
 from origin.services.milestone_rollup import milestone_work_counts
 from origin.services.task_ancestry import effective_statuses
+from origin.tests import agent_pins
 from origin.tests.test_task_ancestry import AncestryBase
 
 FLAG = "AGENT_CLOSED_ANCESTOR_RULE"
@@ -56,19 +54,9 @@ NOW = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
 TODAY = date(2026, 11, 2)
 PAST = date(2020, 1, 1)
 
-GOLDEN: dict[str, str] = {
-    "tool/get_my_focus_tasks": "ec54fa70ed07ba54ba2ecc966db9709f7fa7ce067e4c2d9daffbc286286fcbf3",
-    "tool/get_my_task_summary": "5bdfd24aeac57b5d80064f7b1648dccc21804aa48f5df4e3c4ced910021523d1",
-    "tool/get_milestone_summary": "2df239fbc82dcbb0b1fa2b014ac5f1f8f5f504aac2fb89a331e9408a31f0550f",
-    "tool/get_milestone_summary_closed": "a1fcff416e4c3bb81a32a8ecdfa6b521939f32fd9dfd30c5ef556180c83039fa",
-    "tool/list_milestones": "8818a28365be09d7777bb53722affc682f81369485cd4feb9f24aacb0c340c92",
-    "tool/list_my_milestones": "34fd1ff2378de073a423d84e8c751d8d68028cb914c3e072188ecd6c92f5a33a",
-    "tool/get_sprint_summary": "0ee30c0bcba6e0518b4a963182a42a9db1adb7471b0e6a0a260d265d0fdb04c2",
-    "tool/list_tasks": "8c20725757cd5cee1b4c3c5d1ae9a7dabb0bf6cf8cf597d05607d36c28e7d9ae",
-    "tool/list_tasks_overdue": "5514d527ce3f8604ce6f4b412586e7a286fa052a3987ca070bada3e776a6052c",
-    "tool/fetch_task": "ed42299a027f7691caddc6436558e294a1facd301fd221d195ba1abce30297bf",
-    "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -171,11 +159,7 @@ class FlagOffTests(Tree):
     """What the model is sent with the flag off: main's, byte for byte (hashes from main)."""
 
     def pin(self, key, text):
-        digest = digest_text(text)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, digest_text(text))
 
     def test_every_tool_result(self):
         for key, result in self.results().items():

@@ -6,15 +6,12 @@ flag also "flag on + a Standard member = the same bytes". This module pins that 
 goldens recorded on PRISTINE `origin/main` (09f52388, a clean worktree with none of the change)
 and pins the on-states against them.
 
-THE RECORDING (how `GOLDEN` below was made; run it again after anything that moves the prompt on
-main, and compare, rather than editing a hash to make a test pass):
+THE RECORDING. The hashes live in `origin/tests/golden/agent_pins.json` (MIP-1653), first recorded on
+PRISTINE `origin/main` (09f52388). After a change that is MEANT to move the prompt, a declaration or a
+request parameter, re-record them all with one command, and compare the diff rather than editing a hash
+to make a test pass:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_content_length_pins.py <wt>/origin/tests/
-    # this module imports nothing the change adds (`agent.content_length` is imported lazily,
-    # inside the on-state tests only), so it runs on code that has never heard of the flags
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_content_length_pins.FlagOffPins --noinput
-    # prints  GOLDEN <scenario> = "<sha256>"  for every scenario; paste them below
+    python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
 
 What is hashed, per scenario: EVERY model call of one `_drive_loop` run, each as what the
 provider adapter is handed: the system instruction (date line off, ids normalised), the full
@@ -30,7 +27,6 @@ import copy
 import dataclasses
 import hashlib
 import json
-import os
 import re
 from unittest import mock
 
@@ -43,21 +39,12 @@ from origin.search_engine.agent import controller
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm.choice import LlmChoice, reset_llm_choice, set_llm_choice
 from origin.search_engine.llm.types import AgentMessage, FunctionCall
+from origin.tests import agent_pins
 
-# sha256 of every model call of one run, per scenario, recorded on pristine origin/main
-# (see the module docstring for the recipe).
-# MIP-1533: the plan-bearing scenarios (all but `digest-like`) were re-recorded after the
-# `create_task_plan` declaration gained its body nudge (tool description + `content_markdown`).
-# The collaborator wording (create_task / update_task `collaborators`): every scenario but `digest-like` re-recorded.
-GOLDEN: dict[str, str] = {
-    "plain": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
-    "plain-ja": "f2c78bb2ad55a5610411454936f9fe4f0ef09e3fa84ddc631e5b791ad649a0e2",
-    "effort-low/gemini": "c87c9ad1507d5aa987bed07bc1f9b357b222a0160af1b87624dce9eceeaf73bd",
-    "effort-low-thinking/gemini": "e6176d693d773e9f0daed96c58861185a7a52ff0ad7701278c839519efed9818",
-    "effort-medium/gemini": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
-    "digest-like": "264c650056a9a57553446df29282232cb5d8aeb714ecdc197d82bef074f6f6cd",
-    "two-tier-write": "5b04513e75097c29184a5587977bc7a3336246c35d98e63948cbfb2a7587e08f",
-}
+# sha256 of every model call of one run, per scenario (origin/tests/golden/agent_pins.json, re-recorded with
+# `python manage.py record_agent_goldens`).
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 PLAN_BODY = "### Summary\nShip it.\n\n### Acceptance criteria\n- done\n"
 TASK_WITH_BODY = {"title": "T", "project_id": 1, "content_text": PLAN_BODY}
@@ -285,11 +272,7 @@ class FlagOffPins(LoopBase):
     """Every flag at its default (off): exactly what origin/main sends."""
 
     def pin(self, key: str, client: RecordingClient):
-        digest = digest_of(client.calls)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, digest_of(client.calls))
 
     def test_pins(self):
         for key, scenario in SCENARIOS.items():

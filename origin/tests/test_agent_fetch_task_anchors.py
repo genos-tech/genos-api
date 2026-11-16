@@ -8,10 +8,8 @@ open it, and the declaration gains one sentence.
 PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), where the flag does
 not exist, over the 12-step sequence fixture with a fixed clock:
 
-    git -C <genos-api> worktree add --detach <wt> origin/main
-    cp origin/tests/test_agent_fetch_task_anchors.py <wt>/origin/tests/
-    RECORD_GOLDEN=1 python manage.py test origin.tests.test_agent_fetch_task_anchors.FlagOffTests --noinput
-    # prints `GOLDEN <key> = "<sha256>"`; paste below
+    python manage.py record_agent_goldens
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
 
 `result/*` hash `fetch_task`'s result (ids and uuids replaced by their order of appearance, the
 rest verbatim: titles, texts, timestamps, key order) as the PM, the developer and the client;
@@ -23,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import asdict
 from datetime import datetime
@@ -41,19 +38,15 @@ from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.prompts import agent_system_prompt
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import ToolError, ToolForbidden
+from origin.tests import agent_pins
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 
 FLAG = "AGENT_FETCH_TASK_ANCHORS"
 JST = ZoneInfo("Asia/Tokyo")
 
-GOLDEN: dict[str, str] = {
-    "result/pm": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
-    "result/dev": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
-    "result/client": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
-    "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
-    "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
-    "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c",
-}
+# The hashes: origin/tests/golden/agent_pins.json, re-recorded with `python manage.py record_agent_goldens`.
+PINS = agent_pins.Pins(__name__)
+GOLDEN = PINS.golden
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -110,11 +103,7 @@ class FlagOffTests(Base):
     """What the model is sent with the flag off: main's, byte for byte (hashes from main)."""
 
     def pin(self, key, text):
-        digest = digest_text(text)
-        if os.environ.get("RECORD_GOLDEN"):
-            print(f'GOLDEN {key} = "{digest}"')
-            return
-        self.assertEqual(digest, GOLDEN[key], f"what the model is sent changed: {key}")
+        PINS.check(self, key, digest_text(text))
 
     def test_the_tool_result_as_the_pm_the_dev_and_the_client(self):
         seq = self.build_sequence()

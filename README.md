@@ -95,6 +95,37 @@ flags on, the schedule plan gate shut for Free users), so tests run on them fail
 sees. Every other command keeps `apis.settings`. A test run with live model/billing keys in the
 environment is refused; use `genos-platform/docker/dt.sh` (key-free).
 
+### Re-recording the model-visible goldens (one command)
+
+Changing what the in-app agent's model is sent (a tool description or schema, a prompt line, a cap, a
+tool result) fails a set of free sha256 tests on purpose. They are two kinds of file, and ONE command
+re-records both:
+
+```bash
+genos-platform/docker/dt.sh <your-worktree> <your-db-suffix> 'python manage.py record_agent_goldens'
+# or, where manage.py test already works:  python manage.py record_agent_goldens
+```
+
+It takes about 40 seconds, writes nothing unless every recording class passes, and prints which pin keys and
+fingerprint surfaces moved (name them in the PR body: the change is model-visible and owed the grouped
+paid run, never a per-PR `agent-evals`). Commit the two files it writes:
+
+| File | Holds | Read by |
+| ---- | ----- | ------- |
+| `origin/tests/golden/agent_fingerprint.json` | every surface the model is shown (declarations per provider, prompts, ten read tools' results), in the production and flags-off states | `test_agent_fingerprint_golden` |
+| `origin/tests/golden/agent_pins.json` | the sha256 pins of 12 test modules ("flag off sends what main sent"): declarations, system prompts, whole request shapes, some tool results | the modules in `PIN_MODULES` |
+
+**The list of pin modules is `PIN_MODULES` in `origin/tests/agent_pins.py`.** `test_agent_pins_registry`
+fails when a test module holds a sha256 literal and is neither on it nor on its short allowlist of hashes
+that are not about the model's input, so a new pin cannot be forgotten. To add a pin: in the new module,
+`PINS = agent_pins.Pins(__name__)` and `PINS.check(self, key, digest)` instead of an `assertEqual` against
+a literal; list the module and its recording class; run the command.
+
+`agent_fingerprint --write-golden` still exists and re-records ONLY the fingerprint golden. Both commands
+need a migrated database: under the test settings (dt.sh sets them) they build a throwaway test database
+when the configured one has no tables (the `origin` database of the tmpfs Postgres has none), and drop it
+afterwards; under any other settings they refuse and say how to migrate.
+
 ## Deployment (Railway)
 
 Built from the root `Dockerfile` (`railway.toml`, `builder = "DOCKERFILE"`). The
@@ -166,7 +197,8 @@ repo variable `RUN_AGENT_EVALS` (or `DEPLOY_TO_GCP`) to be `true`.
 
 What the model reads (prompts, tool declarations, tool results) is guarded by a free test in the normal
 CI run instead: `origin.tests.test_agent_fingerprint_golden` fails when any of it changes (re-record
-with `manage.py agent_fingerprint --write-golden`).
+with `manage.py record_agent_goldens`, which also re-records the other model-visible pins; see
+"Re-recording the model-visible goldens" above).
 
 The pass / mrr / recall floors live only in `scripts/retrieval_gate.py`.
 Tests: `origin.tests.test_agent_eval_gate`, `origin.tests.test_retrieval_gate`.
