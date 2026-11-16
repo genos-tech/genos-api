@@ -206,7 +206,7 @@ register_job(
             "what changed in the last days by anyone, what is ready to start and what waits on "
             "blockers."
         ),
-        agent_note="`milestone_id` is the milestone's id, from `list_milestones`.",
+        agent_note="`milestone_id` is the milestone's numeric id, from `list_milestones`.",
         run=run,
         params_schema={
             "properties": {
