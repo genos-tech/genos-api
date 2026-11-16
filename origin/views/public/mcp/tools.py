@@ -150,6 +150,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
 )
 from origin.views.public.mcp.history_window import hide_old_messages  # noqa: E402
 from origin.views.public.mcp.resolve import (
+    block_in_note_link,
     resolve_milestone_ref,
     resolve_note_ref,
     resolve_task_ref,
@@ -196,6 +197,24 @@ _NOTE_REF_SCHEMA = {
 }
 
 
+# `edit_note_block`'s version: the same link also names the block when it came from "Copy link to block".
+_BLOCK_NOTE_REF_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The note: its Genos URL, or its numeric id (then pass `note_type`). A block link, from "
+        "'Copy link to block' (`…/notes/my/12?block=<id>`), names the note AND the block, so it "
+        "is enough on its own."
+    ),
+}
+_BLOCK_ID_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The block: `block_id` from `blocks` in `get_note` (with `include_blocks: true`). Not "
+        "needed when `note_id` is a block link. If both are given they must name the same block."
+    ),
+}
+
+
 @dataclass(frozen=True)
 class McpTool:
     """One published tool: what to call it, and what it maps to."""
@@ -221,6 +240,14 @@ class McpTool:
     # Argument names holding a note reference. Resolving one may also
     # determine `note_type`, so it is resolved as a pair.
     note_ref_args: tuple[str, ...] = ()
+    # The argument that takes the block a pasted note link names (`…/12?block=<id>`, MIP-1655):
+    # `resolve_references` fills it from the note reference, and refuses a link and an explicit value
+    # that name different blocks. "" = the link's query is ignored, as it is for every other note tool.
+    block_link_arg: str = ""
+    # Arguments the registry marks required that a client may leave out: the tool, or the reference
+    # resolver, still insists on them when nothing else supplies them. Only the PUBLISHED `required`
+    # changes, so a client that validates it can send what a person pasted and nothing more.
+    optional_args: tuple[str, ...] = ()
     # `(list_arg, item_key)` pairs: a task reference nested inside an
     # array of objects, as `update_tasks_bulk` takes. A reference a
     # person can type has to work everywhere one is accepted, and a
@@ -1808,11 +1835,16 @@ CATALOG: tuple[McpTool, ...] = (
             "for a change to one paragraph, list or heading; use `update_note` to rewrite the "
             "whole note. You must be able to edit the note. Returns `new_block_ids` and the "
             "note's new `body_hash`. Name the note by its Genos URL, or by its numeric id with "
-            "`note_type`. Requires a write-scoped API key."
+            "`note_type`. When a person pastes a block link (the note's URL ending `?block=<id>`, "
+            "from 'Copy link to block'), pass it as `note_id`: it names the note and the block, so "
+            "`note_type` and `block_id` can be left out; a `block_id` that names another block is "
+            "refused. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
-        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+        block_link_arg="block_id",
+        optional_args=("note_type", "block_id"),
+        schema_overrides={"note_id": _BLOCK_NOTE_REF_SCHEMA, "block_id": _BLOCK_ID_SCHEMA},
     ),
     McpTool(
         name="resolve_note_comment",
@@ -2374,6 +2406,11 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
     # off this adds nothing and the schema is what it was.
     if extra := result_limits.extra_properties(tool.name):
         schema = {**schema, "properties": {**(schema.get("properties") or {}), **extra}}
+    if tool.optional_args and schema.get("required"):
+        schema = {
+            **schema,
+            "required": [r for r in schema["required"] if r not in tool.optional_args],
+        }
     return schema
 
 
@@ -2393,6 +2430,17 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
     for arg in tool.note_ref_args:
         if arg in args and args[arg] is not None:
             note_id, note_type = resolve_note_ref(args[arg], team_id)
+            if tool.block_link_arg:
+                linked = block_in_note_link(args[arg])
+                if linked is not None:
+                    given = args.get(tool.block_link_arg)
+                    if given not in (None, "") and str(given).strip() != linked:
+                        raise ToolError(
+                            f"The link names block {linked} but `{tool.block_link_arg}` names a "
+                            f"different one. Pass the link or `{tool.block_link_arg}`, or make "
+                            "them agree. Nothing was changed."
+                        )
+                    args[tool.block_link_arg] = linked
             args[arg] = note_id
             # Only a reference that actually determined the family
             # overrides what the caller passed. A bare id determines
