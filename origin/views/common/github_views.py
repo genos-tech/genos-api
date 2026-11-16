@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import permissions, status
@@ -538,6 +539,65 @@ def _other_open_prs(task, pr_url: str) -> list[str]:
     )
 
 
+# A task's display id is "<project code>-<number>", so wherever it appears in a
+# branch name the name also contains "-<number>" ending at a non-alphanumeric
+# boundary (the same boundary `_branch_match_re` requires). Lookahead, not a
+# consumed character, so "-12-34" yields both numbers.
+_BRANCH_NUMBER_RE = re.compile(r"-([0-9]+)(?![A-Za-z0-9])")
+# TaskMaster.project_task_number is an IntegerField (Postgres int4).
+_MAX_TASK_NUMBER = 2**31 - 1
+
+
+def _branch_task_numbers(head_ref: str) -> set[int]:
+    """Every task number a branch name could be naming (MIP-1661).
+
+    A superset of what `_branch_match_re` accepts, never a replacement for it:
+    "-0012" yields 12 and `_branch_match_re("X-12")` then rejects it, exactly
+    as before. Its job is only to let the database name the few tasks worth
+    that regex, instead of loading the whole tenant to find them.
+    """
+    numbers: set[int] = set()
+    for match in _BRANCH_NUMBER_RE.finditer(head_ref or ""):
+        digits = match.group(1)
+        if len(digits) > 10:  # more digits than any int4, and keeps int() cheap
+            continue
+        number = int(digits)
+        if 0 < number <= _MAX_TASK_NUMBER:
+            numbers.add(number)
+    return numbers
+
+
+def _branch_candidate_tasks(head_ref: str, team_ids: list, *select_related: str, also_task_ids=()):
+    """Tasks in `team_ids` that a PR's head branch might name: the ones whose
+    project task number appears in the branch, plus `also_task_ids`.
+
+    The webhook runs this for every `opened`, `edited`, `closed` and comment
+    event, and used to read EVERY task of the tenant (full rows, twice per
+    merge) just to run a regex over each display id. On the production tenant
+    that was 4-6 s of the 10 s GitHub allows, so a burst of events or a slow
+    query turned into a 500 / 502 the sender never retries (MIP-1661). Callers
+    still verify the display id with `_branch_match_re`.
+
+    `team_id__in` is the tenant boundary: see `_repo_team_ids`.
+    """
+    numbers = _branch_task_numbers(head_ref)
+    task_ids = list(also_task_ids)
+    if not numbers and not task_ids:
+        return TaskMaster.objects.none()
+    match = Q()
+    if numbers:
+        match |= Q(project_task_number__in=numbers)
+    if task_ids:
+        match |= Q(task_id__in=task_ids)
+    return TaskMaster.objects.select_related(*select_related).filter(
+        match,
+        team_id__in=team_ids,
+        is_deleted=False,
+        project__code__isnull=False,
+        project_task_number__isnull=False,
+    )
+
+
 def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") -> int:
     """Auto-close tasks referenced by a merged PR's head branch name.
 
@@ -579,29 +639,15 @@ def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") 
                 team_id__in=team_ids, pr_url=canonical_pr_url(*ref)
             ).values_list("task_id", flat=True)
         )
-    # Pre-filter to tasks that *could* have a display ID matched.
-    # `select_related("project", "assignee")` keeps the per-row lookup
-    # cheap; for a workspace with thousands of tasks this iterates in
-    # SQL once, then the regex pass runs in memory.
-    #
-    # `team_id__in` is the tenant boundary — see `_repo_team_ids`. It is
-    # first in the filter because without it this loop closes tasks in
-    # any customer's install that happens to share a project code.
-    candidates = (
-        TaskMaster.objects.select_related("project", "assignee")
-        .filter(
-            team_id__in=team_ids,
-            is_deleted=False,
-            project__code__isnull=False,
-            project_task_number__isnull=False,
-        )
-        .exclude(status__in=DONE_STATUSES)
-    )
+    # Only tasks whose number the branch contains, plus the ones a delivery
+    # row links to this PR (`_branch_candidate_tasks`, MIP-1661); the regex
+    # below stays the judge of the first group. `team_id__in` inside it is the
+    # tenant boundary: without it this loop closes tasks in any customer's
+    # install that happens to share a project code.
+    candidates = _branch_candidate_tasks(
+        head_ref, team_ids, "project", "assignee", also_task_ids=linked_ids
+    ).exclude(status__in=DONE_STATUSES)
     updated = 0
-    # We don't know up front which task's display ID matches — but for
-    # any given head ref the matching display IDs are bounded by the
-    # branch name's content, so this loop is fast in practice (most
-    # tasks fail the regex check immediately).
     for task in candidates:
         if task.task_id not in linked_ids:
             display_id = task.display_id
@@ -704,12 +750,7 @@ def _record_pr_comment_activity(
     # `team_id__in` is the tenant boundary — see `_repo_team_ids`. The
     # comment body is attacker-controlled and lands in the task's audit
     # feed, so an unscoped match wrote into someone else's tenant.
-    candidates = TaskMaster.objects.select_related("project", "team").filter(
-        team_id__in=team_ids,
-        is_deleted=False,
-        project__code__isnull=False,
-        project_task_number__isnull=False,
-    )
+    candidates = _branch_candidate_tasks(head_ref, team_ids, "project", "team")
     user = comment.get("user") or {}
     body = comment.get("body") or ""
     metadata = {
@@ -771,12 +812,7 @@ def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str, tea
     # row this writes carries an attacker-controlled `pr_title` into the
     # task's audit feed, so an unscoped match was stored content in
     # someone else's tenant.
-    candidates = TaskMaster.objects.select_related("project", "team").filter(
-        team_id__in=team_ids,
-        is_deleted=False,
-        project__code__isnull=False,
-        project_task_number__isnull=False,
-    )
+    candidates = _branch_candidate_tasks(head_ref, team_ids, "project", "team")
     metadata = {
         "pr_url": pr_url,
         "pr_number": number,
@@ -812,8 +848,8 @@ def _record_pr_link_activity(head_ref: str, pr_url: str, number, title: str, tea
 
 # `pull_request` actions that change something a `TaskDelivery` row
 # records: whether the PR exists, its state, its title. `synchronize`
-# (every push) is left out — it changes none of them, and each delivery
-# sync scans the tenant's tasks for a display id.
+# (every push) is left out — it changes none of them, so there is nothing
+# for a delivery sync to record.
 _DELIVERY_ACTIONS = frozenset({"opened", "reopened", "closed", "edited"})
 
 
@@ -822,12 +858,7 @@ def _tasks_for_branch(head_ref: str, team_ids: list) -> list:
     branch-naming auto-link rule, as `_record_pr_link_activity` applies it."""
     if not head_ref or not team_ids:
         return []
-    candidates = TaskMaster.objects.select_related("project").filter(
-        team_id__in=team_ids,
-        is_deleted=False,
-        project__code__isnull=False,
-        project_task_number__isnull=False,
-    )
+    candidates = _branch_candidate_tasks(head_ref, team_ids, "project")
     return [
         task
         for task in candidates
