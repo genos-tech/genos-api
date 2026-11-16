@@ -47,14 +47,15 @@ from origin.search_engine.llm.types import AgentMessage, FunctionCall
 # (see the module docstring for the recipe).
 # MIP-1533: the plan-bearing scenarios (all but `digest-like`) were re-recorded after the
 # `create_task_plan` declaration gained its body nudge (tool description + `content_markdown`).
+# The collaborator wording (create_task / update_task `collaborators`): every scenario but `digest-like` re-recorded.
 GOLDEN: dict[str, str] = {
-    "plain": "686a8bf3ffe810cb56eae326ba8ebea4804024392a9e058bf6b56071046358bb",
-    "plain-ja": "a6737ba19e81b7a233d008f34ee6635de1f7479b389fa76291afdc7a016319e6",
-    "effort-low/gemini": "0ea5dac2b5b81ba6330a598b1e3c27e380ee69b7b918d234cc000c489d6dee44",
-    "effort-low-thinking/gemini": "4e3ab24144dbad4bb5f3e9141fbd861cb7601ced68b22e884f90f65b0f3f187d",
-    "effort-medium/gemini": "686a8bf3ffe810cb56eae326ba8ebea4804024392a9e058bf6b56071046358bb",
+    "plain": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
+    "plain-ja": "f2c78bb2ad55a5610411454936f9fe4f0ef09e3fa84ddc631e5b791ad649a0e2",
+    "effort-low/gemini": "c87c9ad1507d5aa987bed07bc1f9b357b222a0160af1b87624dce9eceeaf73bd",
+    "effort-low-thinking/gemini": "e6176d693d773e9f0daed96c58861185a7a52ff0ad7701278c839519efed9818",
+    "effort-medium/gemini": "c771a3b72ce342dae897ef35ffaf983cc7f281ba45f884759be34c6173be8f3e",
     "digest-like": "264c650056a9a57553446df29282232cb5d8aeb714ecdc197d82bef074f6f6cd",
-    "two-tier-write": "8cd611641eb86bb62e567112953e4359da58e949db4289fd20aa366a026f6ea6",
+    "two-tier-write": "5b04513e75097c29184a5587977bc7a3336246c35d98e63948cbfb2a7587e08f",
 }
 
 PLAN_BODY = "### Summary\nShip it.\n\n### Acceptance criteria\n- done\n"

@@ -40,7 +40,7 @@ FLAG = "AGENT_TEAM_IN_CURRENT_USER"
 GOLDEN: dict[str, str] = {
     "result/member": "9a8ffecb982f1ab142da6608ff25f7f1d032911976862fc36a366b3db9caa6f9",
     "result/owner": "91a01881c34e868d2257b1f11afb209b317007ca145186b88719b72e46e03aae",
-    "declarations": "ed62ffd3efdd82d34a5205126a75ef8bb637d435288e1f1251e095112420dd28",
+    "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
 }
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")

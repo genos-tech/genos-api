@@ -868,9 +868,10 @@ UPDATE_TASK = Tool(
                 "items": {"type": "STRING"},
                 "description": (
                     "The task's full new set of collaborator user ids "
-                    "(get_team_members / list_project_members). Replaces the current "
-                    "set: include any you are keeping. New ones must be on the team "
-                    "or project. Pass [] to clear. Omit to leave unchanged."
+                    "(list_project_members). Replaces the current "
+                    "set: include any you are keeping. New ones must be a member of the "
+                    "task's project, or its assignee or reporter. Pass [] to clear. "
+                    "Omit to leave unchanged."
                 ),
             },
             "custom_fields": CUSTOM_FIELDS_SCHEMA,

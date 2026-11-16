@@ -103,6 +103,9 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # stays 146,500 (79 characters left) and `ALL_ON_BUDGET_CHARS` (148,000; 147,876 with a Long member's block) holds too.
 # THE FLIP OF THE TASK-MOVE PARITY (2026-11-16, `AGENT_TASK_MOVE_PARITY` on by default): it changes tool RESULTS only, so no
 # declaration or prompt moves and the prefix stays 146,421 characters; nothing is raised.
+# The collaborator wording (create_task / update_task `collaborators`: "a member of the task's project, or its assignee or
+# reporter" instead of "on the team or project", and no pointer to get_team_members): -2 x 19 + 74 = +36, 146,457 measured
+# with the production flags and with every flag on. Nothing is raised: 43 characters are left.
 BUDGET_CHARS = 146_500
 
 
