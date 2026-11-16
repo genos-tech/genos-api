@@ -7,7 +7,7 @@ That makes tests asserting caching behavior fail in a Redis-less environment
 in-process LocMemCache makes caching real and deterministic, so the only
 external service the test suite needs is Postgres.
 
-Run with: manage.py test --settings=apis.settings_test
+`manage.py test` selects this module by default (MIP-1634), as does CI (`--settings=apis.settings_test`).
 """
 
 import os
