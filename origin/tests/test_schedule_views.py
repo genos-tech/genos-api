@@ -117,6 +117,21 @@ class TestListAndCreate(ScheduleViewBase):
         self.assertEqual(jobs["fake_day"]["title"], "Fake day")
         self.assertEqual(jobs["fake_day"]["params"]["day"]["enum"], ["today", "yesterday"])
 
+    def test_no_job_description_tells_the_member_to_type_an_id(self):
+        # MIP-1630: the form shows `description` under the Report select, and a member picks a
+        # project or a milestone by NAME there. Where an id comes from is for the AI client, in
+        # `agent_note` of `list_my_schedules`; the page's job never carries it.
+        res = self.client.get(LIST + self.q)
+        self.assertEqual(res.status_code, 200)
+        jobs = {j["job"]: j for j in res.data["jobs"]}
+        self.assertTrue({"project_updates", "milestone_updates"} <= set(jobs))
+        for key, job in jobs.items():
+            with self.subTest(job=key):
+                self.assertNotRegex(job["description"], r"(?i)\bids?\b")
+                self.assertNotIn("agent_note", job)
+                for name, spec in job["params"].items():
+                    self.assertNotRegex(spec.get("description", ""), r"(?i)\bids?\b", name)
+
     def test_the_list_says_whether_ai_reports_can_run_here(self):
         # MIP-1309: the form hides the AI switch, effort and cost while this is false.
         from origin.services.report_ai import llm  # noqa: PLC0415
