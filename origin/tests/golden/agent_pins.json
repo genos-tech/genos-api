@@ -69,6 +69,12 @@
       "thread/approve": "8c3c8d1558ff4fb79093680439fa7bd10fe6b9357aaa8301ed005b856b6bf6ac",
       "thread/reject": "5adf98b6ebafff9fa750085718bc46415e677fea32068b54f7e5e11f5f2fb118"
     },
+    "test_agent_resume_system_extra": {
+      "mention": "85d377367310a2917d0be64ef91a617323a8ea033fe5279e9e8f030dcb4d0b7f",
+      "note": "bea024d6c0c06bac8dc3ebff6bb83f062b4ce597ffdc17cff5add22256da6ebb",
+      "thread": "32acfcf83b77cac4f3c31dad72b175b866810ab0cb3c3e7b6d8738604373f21a",
+      "thread+mention": "35a4e6a3995cbb3e5ba314b3fbf04da3060dd9f25d844587cf6b35a552bb7ccf"
+    },
     "test_agent_team_in_current_user": {
       "declarations": "bcc8c467313a79059235c59153a9a6f401aee92d460627ce3ab042d6b9365377",
       "result/member": "9a8ffecb982f1ab142da6608ff25f7f1d032911976862fc36a366b3db9caa6f9",
@@ -92,6 +98,10 @@
       "declarations": "c2304aa7680f57852bcab03f60164f1ff10c7ecbdff6ca19c74bf2ef9d939e94",
       "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
       "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c"
+    },
+    "test_mcp_search_rewrite": {
+      "app": "1542c07858aa7a8bc1a309be57a5517883ca2011aab1df7cc1e501923e4b8464",
+      "mcp": "2e8697301b89f5284b6693419c0b9cac549b23fea11f6caf75f8e864279b20ef"
     },
     "test_mcp_search_window": {
       "search_knowledge_base/declaration": "a2cfb0b2c22515072f7b557911d9104203101e6d41898d763c455d45e865260c"

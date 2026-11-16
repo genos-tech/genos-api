@@ -130,7 +130,9 @@ a literal; list the module and its recording class; run the command.
 `agent_fingerprint --write-golden` still exists and re-records ONLY the fingerprint golden. Both commands
 need a migrated database: under the test settings (dt.sh sets them) they build a throwaway test database
 when the configured one has no tables (the `origin` database of the tmpfs Postgres has none), and drop it
-afterwards; under any other settings they refuse and say how to migrate.
+afterwards, named by `DJANGO_TEST_DB_NAME` (dt.sh sets `test_origin_<db-suffix>`). Like `manage.py test
+--noinput` this replaces a test database of that name that already exists, so use your own suffix, never one
+a test run is using. Under any other settings they refuse and say how to migrate.
 
 ## Deployment (Railway)
 

@@ -330,6 +330,14 @@ class MigratedDatabaseTests(TestCase):
                 raise RuntimeError("boom")
         teardown.assert_called_once_with("cfg", verbosity=0)
 
+    def test_only_a_result_selection_needs_a_database(self):
+        self.assertTrue(fp.selects_results(None))
+        self.assertTrue(fp.selects_results([]))
+        self.assertTrue(fp.selects_results(["result."]))
+        self.assertTrue(fp.selects_results(["result.b.", "prompt."]))
+        self.assertTrue(fp.selects_results(["r"]))
+        self.assertFalse(fp.selects_results(["prompt.", "tools."]))
+
     def test_other_settings_refuse_instead_of_creating_databases(self):
         with (
             mock.patch.object(fp, "schema_present", return_value=False),

@@ -959,8 +959,10 @@ def migrated_database() -> Iterator[None]:
     under the test settings only, a throwaway test database built the way `manage.py test` builds
     it (migrated; named by `DJANGO_TEST_DB_NAME`, which `dt.sh` sets) and dropped afterwards: the
     `origin` database of the tmpfs Postgres under `dt.sh` is empty, and this command used to die
-    there with `relation "origin_teammaster" does not exist`. Under any other settings it refuses
-    rather than create databases on a server it was not told is disposable.
+    there with `relation "origin_teammaster" does not exist`. Under any other settings it refuses:
+    it only creates the database `manage.py test` would create under the same settings, named by
+    `DJANGO_TEST_DB_NAME` (use your own suffix: like `manage.py test --noinput` it replaces a test
+    database of that name that already exists).
     """
     if schema_present():
         yield
@@ -982,6 +984,11 @@ def migrated_database() -> Iterator[None]:
         yield
     finally:
         teardown_databases(old_config, verbosity=0)
+
+
+def selects_results(only: list[str] | None) -> bool:
+    """False when `--only` names prefixes that no `result...` surface can match: no database needed."""
+    return not only or any(p.startswith("result") or "result".startswith(p) for p in only)
 
 
 def compute_surfaces(*, results: bool = True, only: list[str] | None = None) -> dict[str, str]:
@@ -1172,7 +1179,7 @@ class Command(BaseCommand):
                 )
             self.stdout.write(f"wrote {GOLDEN_PATH}")
             return
-        if options["no_results"]:
+        if options["no_results"] or not selects_results(options["only"]):
             surfaces = compute_surfaces(results=False, only=options["only"])
         else:
             with migrated_database():

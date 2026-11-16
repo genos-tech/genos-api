@@ -60,11 +60,13 @@ PIN_MODULES: dict[str, tuple[str, ...]] = {
     "test_agent_inbox_report_label": ("FlagOffTests",),
     "test_agent_note_threads_in_get_note": ("FlagOffTests",),
     "test_agent_reject_reason": ("PromptPins", "FlagOffTests"),
+    "test_agent_resume_system_extra": ("NormalAskUnchangedTests",),
     "test_agent_resume_flag_pins": ("FlagOffTests", "FollowUpFlagOffTests"),
     "test_agent_team_in_current_user": ("FlagOffTests",),
     "test_agent_tell_model_undo": ("FlagOffTests",),
     "test_agent_truncation_pins": ("NormalRunPins",),
     "test_inapp_timeline_tool": ("TestFlagOffIsByteIdenticalToMain",),
+    "test_mcp_search_rewrite": ("ToolPassesItOnTests",),
     "test_mcp_search_window": ("InAppAgentIsUnchangedTests",),
     "test_task_close_notice": ("TestFlagOffIsMain",),
 }
@@ -119,7 +121,12 @@ class Pins:
     def require(self, key: str) -> str:
         """The recorded hash for `key`, for a test that compares with it some other way than
         `check` (an `assertNotEqual` on the flag-on side); a missing key fails loudly, so such a
-        comparison can never pass against nothing."""
+        comparison can never pass against nothing. While the command records, it returns the digest
+        recorded so far for `key` (else the old hash, or "" for a pin that is new): the recording run
+        does not judge these comparisons, only the new value it stores."""
+        if record_mode():
+            recorded = RECORDED.get(self.module, {}).get(key)
+            return recorded[-1] if recorded else self.golden.get(key, "")
         try:
             return self.golden[key]
         except KeyError:

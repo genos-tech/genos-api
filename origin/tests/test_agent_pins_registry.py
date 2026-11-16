@@ -8,6 +8,10 @@ description, a prompt line or a cap, and show up only as a failure in a whole-su
     below, with the reason it is not about what the model is sent;
   * every listed module exists, uses the helper, has a recording class that loads, and has an entry
     in `origin/tests/golden/agent_pins.json` (and the file has no entry for an unlisted module);
+    a key a pin reads through a helper or a loop is checked when the pin test runs (a key the file lacks
+    fails it with a message naming the command, which adds it), not by the static scan here;
+  * `test_agent_content_length` and `test_agent_body_on_user_model` hold no hash of their own: they read
+    `GOLDEN` of `test_agent_content_length_pins`, which the command records;
   * `Pins.check` asserts normally, stores while the command records, and refuses `RECORD_GOLDEN`
     set by hand (it would silently record nothing).
 """
@@ -35,8 +39,6 @@ OTHER_HASHES = {
     "test_agent_eval_sequence_fixture.py": "the eval fixture's own source and setup output, not a model input",
     "test_builtin_task_templates.py": "the built-in task templates a person picks from, not the agent's input",
     "test_demo_v1_golden.py": "the demo workspace seeder's output",
-    "test_mcp_search_rewrite.py": "the search rewrite stub's kwargs and result, not a declaration or prompt",
-    "test_agent_resume_system_extra.py": "the ask path's system_extra for four fixed inputs: code that builds it, never edited with a prompt",
 }
 
 
@@ -97,9 +99,10 @@ class TheListIsComplete(SimpleTestCase):
             for key, digest in keys.items():
                 self.assertRegex(digest, r"^[0-9a-f]{64}$", f"{module} {key}")
 
-    def test_every_key_a_module_reads_is_in_the_file(self):
-        # The recording classes call `PINS.check(..., "<key>", ...)` or `pin("<key>")`; a key the file
-        # lacks would fail only when that test runs, so check the literal keys against the file.
+    def test_every_key_written_as_a_literal_is_in_the_file(self):
+        # A PARTIAL static check: only `PINS.check(self, "<key>", ...)` with a literal key. Keys passed
+        # through a helper or a loop are covered when the pin test runs (a key the file lacks fails it
+        # with a message naming the command, which adds the key).
         recorded = agent_pins.read_all()
         for module in agent_pins.PIN_MODULES:
             source = (TESTS / f"{module}.py").read_text(encoding="utf-8")
@@ -137,6 +140,14 @@ class PinsHelper(SimpleTestCase):
         with self.assertRaises(AssertionError) as ctx:
             self.pins.require("missing")
         self.assertIn("record_agent_goldens", str(ctx.exception))
+
+    def test_require_while_recording_returns_what_was_recorded_so_far(self):
+        with mock.patch.dict("os.environ", {"RECORD_GOLDEN": "1"}):
+            self.assertEqual(self.pins.require("a"), "1" * 64)  # the old hash until re-recorded
+            self.assertEqual(self.pins.require("new"), "")  # a new pin: nothing to compare with
+            with mock.patch.object(agent_pins, "COMMAND_ACTIVE", True):
+                self.pins.check(self, "a", "2" * 64)
+            self.assertEqual(self.pins.require("a"), "2" * 64)
 
     def test_a_key_the_file_lacks_fails_naming_the_command(self):
         with self.assertRaises(AssertionError) as ctx:
@@ -183,6 +194,39 @@ class TheCommandsGuards(SimpleTestCase):
             command.settle(missing)
         with self.assertRaisesRegex(CommandError, "not in PIN_MODULES"):
             command.settle({**full, "test_stray": {"k": ["1" * 64]}})
+
+    def test_settle_refuses_a_key_that_silently_disappears_unless_told(self):
+        modules = list(agent_pins.PIN_MODULES)
+        full = {m: {"k": ["1" * 64]} for m in modules}
+        previous = {m: {"k": "1" * 64} for m in modules}
+        previous[modules[0]]["old"] = "2" * 64
+        with self.assertRaisesRegex(CommandError, "no longer recorded: old"):
+            command.settle(full, previous)
+        self.assertNotIn("old", command.settle(full, previous, drop_missing=True)[modules[0]])
+
+    def test_the_files_are_written_together_or_not_at_all(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / "a.json", Path(tmp) / "sub" / "b.json"
+            command.write_atomically({a: "A", b: "B"})
+            self.assertEqual((a.read_text(), b.read_text()), ("A", "B"))
+            with mock.patch.object(command.os, "replace", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    command.write_atomically({a: "A2", b: "B2"})
+            self.assertEqual((a.read_text(), b.read_text()), ("A", "B"))
+
+    def test_an_unwritable_target_leaves_no_temp_file_and_no_partial_write(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "a.json"
+            blocked = Path(tmp) / "file"
+            blocked.write_text("x")
+            with self.assertRaises(OSError):
+                command.write_atomically({a: "A", blocked / "b.json": "B"})
+            self.assertFalse(a.exists())
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["file"])
 
     def test_moved_names_the_keys_that_changed_appeared_or_vanished(self):
         before = {"m": {"a": "1", "b": "1", "c": "1"}, "same": {"x": "1"}}

@@ -16,9 +16,12 @@ database, the test environment), so it works wherever `manage.py test` does, `dt
 the recording classes of each listed module with `RECORD_GOLDEN=1`, which makes `Pins.check` store
 the digest instead of asserting it, then computes the fingerprint golden in the same database.
 
-It writes NOTHING unless the whole run is clean: a recording class that fails, errors or skips, a key
-that was recorded twice with two different values (a nondeterministic pin), or a module that recorded
-no key stops it, and the files stay as they were. On success it says, per module, which keys moved;
+It writes NOTHING unless the whole run is clean: a recording class that fails or errors, a key that was
+recorded twice with two different values (a nondeterministic pin), a module that recorded no key, or a key
+in the file that was not recorded this time (`--drop-missing` if removing it is the point) stops it, and
+the files stay as they were; the two files are written together or not at all. A test database is built
+and dropped the way `manage.py test --noinput` does it (named by `DJANGO_TEST_DB_NAME`, which `dt.sh`
+sets): use your own suffix, never one a test run is using. On success it says, per module, which keys moved;
 that list, and `git diff origin/tests/golden`, are what the PR body names.
 
 Like `manage.py test` it needs the test settings (`apis.settings_test`) and refuses live model or
@@ -30,6 +33,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from django.conf import settings
@@ -49,12 +54,19 @@ def labels() -> list[str]:
     ]
 
 
-def settle(recorded: dict[str, dict[str, list[str]]]) -> dict[str, dict[str, str]]:
+def settle(
+    recorded: dict[str, dict[str, list[str]]],
+    previous: dict[str, dict[str, str]] | None = None,
+    *,
+    drop_missing: bool = False,
+) -> dict[str, dict[str, str]]:
     """One digest per key, or a `CommandError` naming what cannot be recorded.
 
     A key recorded more than once (a pin called in a loop, or a test class run twice) must have
     produced the same digest every time: otherwise the pin depends on something that changes, and
-    recording either value would make the pin flaky. A module with no key at all did not run.
+    recording either value would make the pin flaky. A module with no key at all did not run. A key
+    that is in the file but was not recorded this time (its test was deleted, or skipped) would
+    silently disappear from the file, so it stops the run unless `drop_missing` says it is on purpose.
     """
     problems: list[str] = []
     pins: dict[str, dict[str, str]] = {}
@@ -68,6 +80,12 @@ def settle(recorded: dict[str, dict[str, list[str]]]) -> dict[str, dict[str, str
             if len(set(digests)) != 1:
                 problems.append(f"{module}: {key!r} produced {len(set(digests))} different digests")
             pins[module][key] = digests[0]
+        gone = sorted(set((previous or {}).get(module, {})) - set(keys))
+        if gone and not drop_missing:
+            problems.append(
+                f"{module}: no longer recorded: {', '.join(gone)} (a deleted or skipped test? "
+                "pass --drop-missing if removing them is the point)"
+            )
     stray = sorted(set(recorded) - set(agent_pins.PIN_MODULES))
     if stray:
         problems.append(f"recorded by modules that are not in PIN_MODULES: {', '.join(stray)}")
@@ -112,11 +130,36 @@ def refuse_unless_safe() -> None:
         )
 
 
+def write_atomically(files: dict[Path, str]) -> None:
+    """Write every file, or none of them: each goes to a temp file first, then they are renamed."""
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for path, text in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            staged.append((Path(tmp), path))
+    except BaseException:
+        for tmp, _ in staged:
+            tmp.unlink(missing_ok=True)
+        raise
+    for tmp, path in staged:
+        os.replace(tmp, path)
+
+
 class Command(BaseCommand):
     help = (
         "Re-record the fingerprint golden and every model-visible sha256 pin "
         "(origin/tests/agent_pins.py lists them) in one run. Test settings only; no model call."
     )
+
+    def add_arguments(self, parser: Any) -> None:
+        parser.add_argument(
+            "--drop-missing",
+            action="store_true",
+            help="Let a key that is in the file but was not recorded this time disappear from it.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         refuse_unless_safe()
@@ -124,7 +167,7 @@ class Command(BaseCommand):
         old_fingerprint = (
             json.loads(fp.GOLDEN_PATH.read_text(encoding="utf-8"))
             if fp.GOLDEN_PATH.exists()
-            else {}
+            else None
         )
 
         agent_pins.RECORDED.clear()
@@ -132,7 +175,9 @@ class Command(BaseCommand):
         previous = os.environ.get("RECORD_GOLDEN")
         os.environ["RECORD_GOLDEN"] = "1"
         runner = get_runner(settings)(interactive=False, verbosity=0)
-        record = None
+        pins: dict[str, dict[str, str]] = {}
+        record: dict[str, Any] = {}
+        skipped = 0
         logging.disable(logging.CRITICAL)  # the app's request/perf log lines would bury the report
         try:
             runner.setup_test_environment()
@@ -140,17 +185,19 @@ class Command(BaseCommand):
                 suite = runner.build_suite(labels())
                 old_config = runner.setup_databases(aliases={"default"})
                 try:
+                    # The fingerprint first, before any test class has run in this process.
+                    record = fp.golden_record()
                     result = runner.run_suite(suite)
-                    if result.errors or result.failures or result.skipped:
+                    if result.errors or result.failures:
                         raise CommandError(
                             "Not recording anything: a recording class did not pass cleanly "
-                            f"({len(result.errors)} errors, {len(result.failures)} failures, "
-                            f"{len(result.skipped)} skipped). The output above names the test."
+                            f"({len(result.errors)} errors, {len(result.failures)} failures). "
+                            "The output above names the test."
                         )
                     if result.testsRun == 0:
                         raise CommandError("Not recording anything: no test ran.")
-                    pins = settle(agent_pins.RECORDED)
-                    record = fp.golden_record()
+                    skipped = len(result.skipped)
+                    pins = settle(agent_pins.RECORDED, before, drop_missing=options["drop_missing"])
                 finally:
                     runner.teardown_databases(old_config)
             finally:
@@ -163,37 +210,47 @@ class Command(BaseCommand):
             else:
                 os.environ["RECORD_GOLDEN"] = previous
 
-        assert record is not None
-        agent_pins.PINS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        agent_pins.PINS_PATH.write_text(agent_pins.render(pins), encoding="utf-8")
-        fp.GOLDEN_PATH.write_text(
-            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        write_atomically(
+            {
+                agent_pins.PINS_PATH: agent_pins.render(pins),
+                fp.GOLDEN_PATH: json.dumps(record, indent=2, sort_keys=True) + "\n",
+            }
         )
-        self.report(before, pins, old_fingerprint, record)
+        self.report(before, pins, old_fingerprint, record, skipped)
 
     def report(
         self,
         before: dict[str, dict[str, str]],
         pins: dict[str, dict[str, str]],
-        old_fingerprint: dict[str, Any],
+        old_fingerprint: dict[str, Any] | None,
         record: dict[str, Any],
+        skipped: int,
     ) -> None:
         out = self.stdout.write
         changed = moved(before, pins)
         out(f"pins: {len(pins)} test modules, {sum(len(v) for v in pins.values())} keys")
+        if not before:
+            out("  the pins file did not exist: every key is new")
         for module, keys in changed.items():
             out(f"  moved  {module}: {', '.join(keys)}")
-        if not changed:
+        if before and not changed:
             out("  no pin moved")
-        lines = fp.golden_diff(old_fingerprint, record["states"]) if old_fingerprint else []
         out(
             f"fingerprint: {len(fp.GOLDEN_STATES)} states, "
             f"{len(record['states'][fp.GOLDEN_STATES[0]]['surfaces'])} surfaces each"
         )
-        for line in lines:
-            out(f"  moved  {line}")
-        if not lines:
-            out("  no surface moved")
+        if old_fingerprint is None:
+            out("  the fingerprint golden did not exist: every surface is new")
+        else:
+            lines = fp.golden_diff(old_fingerprint, record["states"])
+            for line in lines:
+                out(f"  moved  {line}")
+            if not lines:
+                out("  no surface moved")
+        if skipped:
+            out(
+                f"note: {skipped} test(s) in the recording classes were skipped (they record no key)"
+            )
         out(f"wrote {agent_pins.PINS_PATH}")
         out(f"wrote {fp.GOLDEN_PATH}")
         out(
