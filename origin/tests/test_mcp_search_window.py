@@ -23,7 +23,7 @@ from origin.search_engine import search as S
 from origin.search_engine.agent.tools import search_kb
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.search_window import SearchWindow
-from origin.tests import agent_pins
+from origin.services import agent_pins
 
 from .test_mcp_endpoint import McpBase
 

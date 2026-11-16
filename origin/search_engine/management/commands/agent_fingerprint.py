@@ -20,7 +20,7 @@ environment override: the ten flags MIP-1089 turned on are ON) and `flags_off` (
 `AGENT_*` flag off). `origin/tests/test_agent_fingerprint_golden.py` fails, in the normal required
 test run, when any line moves, and names the surface. A change that moves a line changes what the
 model sees: re-record IN THE SAME PR with `python manage.py record_agent_goldens` (this golden plus the
-sha256 pins of the other model-visible test modules; `origin/tests/agent_pins.py` lists them) and say so in the PR
+sha256 pins of the other model-visible test modules; `origin/services/agent_pins.py` lists them) and say so in the PR
 body, so a reviewer knows an eval is owed (the grouped paid run). The record does not depend on the shell it is made in:
 the settings it needs are rebuilt from `apis/settings.py` with the model/flag environment removed.
 
@@ -1106,7 +1106,7 @@ def golden_failure_message(lines: list[str]) -> str:
         f"origin/tests/golden/agent_fingerprint.json.\n{shown}\n\n"
         "This changes what the model sees: re-record with "
         f"`{RECORD_COMMAND}` (it re-records this golden AND every other model-visible pin, the "
-        "list is PIN_MODULES in origin/tests/agent_pins.py; under dt.sh: "
+        "list is PIN_MODULES in origin/services/agent_pins.py; under dt.sh: "
         f"genos-platform/docker/dt.sh <worktree> <suffix> '{RECORD_COMMAND}') and say so in the PR "
         "body (a change to the model's input is owed an eval: the grouped paid run). If you did NOT "
         "mean to change it, the diff above names the surface; see the text with "

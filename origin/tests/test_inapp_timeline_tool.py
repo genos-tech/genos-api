@@ -8,7 +8,7 @@ What is pinned, in order:
      were first recorded on a pristine `origin/main` worktree (09f52388, "Merge pull request #739"). They are
      over `_build_tool_declarations()` (name, description, schema, sorted keys) and over the legacy prompt
      and the registry-generated prompt. When the tool surface changes on purpose, re-record every pin
-     with `python manage.py record_agent_goldens` (the list: origin/tests/agent_pins.py) and say so in the PR.
+     with `python manage.py record_agent_goldens` (the list: origin/services/agent_pins.py) and say so in the PR.
   2. FLAG ON: exactly one declaration more (the last one), `get_timeline`, in every provider's
      request shape; nothing else moved; the prompt is the same; the MCP tool of the same name
      is untouched.
@@ -58,8 +58,7 @@ from origin.search_engine.agent.tools import (
 from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.get_timeline import APP_ANCHOR_TYPES, GET_TIMELINE_INAPP
 from origin.search_engine.llm.types import ToolDeclaration
-from origin.services import timeline
-from origin.tests import agent_pins
+from origin.services import agent_pins, timeline
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 from origin.tests.test_item_lines import body_with, text_inline
 from origin.tests.test_timeline import fences_only_where_text_is

@@ -11,7 +11,7 @@ PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), 
 not exist:
 
     python manage.py record_agent_goldens
-    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/services/agent_pins.py)
 
 `note/*` hash the tool's result for a personal note, a task note and a chat note (ids replaced by their
 order of appearance); `declarations` hashes every tool declaration the model is sent. FlagOffTests
@@ -37,7 +37,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import ToolForbidden, wrap_workspace_content
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.test_mcp_endpoint import McpBase
 
 FLAG = "AGENT_NOTE_THREADS_IN_GET_NOTE"

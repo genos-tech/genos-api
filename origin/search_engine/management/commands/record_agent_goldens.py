@@ -7,7 +7,7 @@ for it is a set of sha256 goldens that must be re-recorded in the same PR:
 
   * the fingerprint golden, `origin/tests/golden/agent_fingerprint.json` (every surface, in the two
     golden states; `agent_fingerprint --write-golden` writes only this one);
-  * the pins of the test modules listed in `PIN_MODULES` (`origin/tests/agent_pins.py`), stored in
+  * the pins of the test modules listed in `PIN_MODULES` (`origin/services/agent_pins.py`), stored in
     `origin/tests/golden/agent_pins.json`: "with the flag off the model is sent exactly this" for the
     declarations, the system prompt, whole request shapes and a few tool results.
 
@@ -42,7 +42,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.test.utils import get_runner
 
 from origin.search_engine.management.commands import agent_fingerprint as fp
-from origin.tests import agent_pins
+from origin.services import agent_pins
 
 
 def labels() -> list[str]:
@@ -151,7 +151,7 @@ def write_atomically(files: dict[Path, str]) -> None:
 class Command(BaseCommand):
     help = (
         "Re-record the fingerprint golden and every model-visible sha256 pin "
-        "(origin/tests/agent_pins.py lists them) in one run. Test settings only; no model call."
+        "(origin/services/agent_pins.py lists them) in one run. Test settings only; no model call."
     )
 
     def add_arguments(self, parser: Any) -> None:

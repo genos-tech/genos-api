@@ -25,8 +25,7 @@ from origin.models.chat.unified_models import (
 from origin.models.common.team_models import TeamMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskMaster
-from origin.services import task_close_notice
-from origin.tests import agent_pins
+from origin.services import agent_pins, task_close_notice
 from origin.tests.test_briefing import BriefingBase
 
 # The pin's hash: origin/tests/golden/agent_pins.json (python manage.py record_agent_goldens).
@@ -260,7 +259,7 @@ class TestFlagOffIsMain(BriefingBase):
     was first recorded on pristine `origin/main` (346816f2: no flag, no notice service) with the same
     test body. Re-record it with the other pins:
 
-        python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
+        python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
     The hash is over `fetch_chat_thread`'s result for the thread after the close (ids and
     times replaced by placeholders), the thread's message rows and its reply count.

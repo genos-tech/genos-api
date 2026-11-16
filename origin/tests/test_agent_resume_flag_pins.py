@@ -11,7 +11,7 @@ recorded on PRISTINE `origin/main` (346816f2). After a change that is MEANT to m
 sees, re-record them all (this module's, the others', the fingerprint golden) with one command, and
 compare the diff rather than editing a hash to make a test pass:
 
-    python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
+    python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
 What is hashed, per shape and decision: EVERY model call of the whole run (the ask leg
 and the resumed leg), each as its system instruction (the date line is switched off, ids
@@ -41,7 +41,7 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.search_engine import agent_views
 from origin.search_engine.agent.mentions import ResolvedMention
 from origin.search_engine.models import AgentRun
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.test_agent_resume_prior_turns import ResumePriorBase, shape
 from origin.tests.test_agent_resume_system_extra import (
     NOTE_SUMMARY,

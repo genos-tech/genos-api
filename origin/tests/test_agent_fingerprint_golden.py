@@ -186,7 +186,7 @@ class MutationTests(TestCase):
         )
         self.assertIn("This changes what the model sees: re-record with", message)
         self.assertIn("`python manage.py record_agent_goldens`", message)
-        self.assertIn("PIN_MODULES in origin/tests/agent_pins.py", message)
+        self.assertIn("PIN_MODULES in origin/services/agent_pins.py", message)
         self.assertIn("genos-platform/docker/dt.sh", message)
         self.assertIn("say so in the PR body", message)
         with self.assertRaises(AssertionError) as ctx:

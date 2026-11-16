@@ -10,7 +10,7 @@ PINS. The off-state goldens (origin/tests/golden/agent_pins.json) were first rec
 `origin/main` (346816f2), where a `reason` in the body is simply ignored, with the same harness (the
 flag-pin harness of MIP-977, which touches nothing this change adds). Re-record them all with:
 
-    python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
+    python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
 `prompt/*` hash `agent_system_prompt()` (both cheat-sheet variants); `reject/*` hash every
 model call of a whole run (system instruction and messages) that is rejected, with and
@@ -27,7 +27,7 @@ from django.test import TestCase, override_settings
 
 from origin.search_engine.agent.prompts import agent_system_prompt
 from origin.search_engine.models import AgentStep
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.test_agent_resume_flag_pins import NO_DATE, Recorder
 from origin.tests.test_agent_resume_system_extra import DECIDE_URL, ResumeBase
 

@@ -18,7 +18,7 @@ exist, over one fixed tree (a Closed parent with open children, a Deleted parent
 sprint) with the clock frozen around the calls:
 
     python manage.py record_agent_goldens
-    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/services/agent_pins.py)
 
 `tool/*` hash each tool's result (ids by order of appearance, the rest verbatim); `declarations` hashes every
 tool declaration the model is sent. FlagOffTests imports nothing this change adds, so it runs on main.
@@ -44,9 +44,9 @@ from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY
+from origin.services import agent_pins
 from origin.services.milestone_rollup import milestone_work_counts
 from origin.services.task_ancestry import effective_statuses
-from origin.tests import agent_pins
 from origin.tests.test_task_ancestry import AncestryBase
 
 FLAG = "AGENT_CLOSED_ANCESTOR_RULE"

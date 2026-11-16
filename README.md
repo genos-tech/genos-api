@@ -121,7 +121,7 @@ sees with the flag off, has to end with "no pin moved" and "no surface moved"; a
 exactly the leak the pins exist to catch, so fix the code instead of re-recording. A PR that means to
 change the declarations names every key that moved.
 
-**The list of pin modules is `PIN_MODULES` in `origin/tests/agent_pins.py`.** `test_agent_pins_registry`
+**The list of pin modules is `PIN_MODULES` in `origin/services/agent_pins.py`.** `test_agent_pins_registry`
 fails when a test module holds a sha256 literal and is neither on it nor on its short allowlist of hashes
 that are not about the model's input, so a new pin cannot be forgotten. To add a pin: in the new module,
 `PINS = agent_pins.Pins(__name__)` and `PINS.check(self, key, digest)` instead of an `assertEqual` against

@@ -27,6 +27,10 @@ pin fails on the same kind of change as before. Only where the expected value is
 `PIN_MODULES` nor on its short allowlist of hashes that are not about what the model is sent, so a new
 pin cannot be forgotten.
 
+WHY HERE, NOT IN origin/tests: the management command imports it, and the production image leaves
+`origin/tests` out (`test_dockerignore`: nothing the app imports may live there). It imports nothing
+from Django.
+
 ADDING A PIN. In the new module: `PINS = agent_pins.Pins(__name__)`, `GOLDEN = PINS.golden`, and
 `PINS.check(self, key, digest)` where the test used to `assertEqual(digest, GOLDEN[key])`. Add the module
 and the class that records it to `PIN_MODULES`, run the command, commit the JSON.
@@ -43,7 +47,7 @@ import json
 import os
 from pathlib import Path
 
-PINS_PATH = Path(__file__).resolve().parent / "golden" / "agent_pins.json"
+PINS_PATH = Path(__file__).resolve().parents[1] / "tests" / "golden" / "agent_pins.json"
 PINS_VERSION = 1
 
 # Set by `record_agent_goldens` while it runs the recording classes; the only thing that may switch
@@ -77,7 +81,7 @@ RE_RECORD_HINT = (
     "If this change is MEANT to move what the model sees, re-record every pin and the fingerprint "
     f"golden in one go with `{RECORD_COMMAND}` (under dt.sh: genos-platform/docker/dt.sh <worktree> "
     f"<suffix> '{RECORD_COMMAND}') and say so in the PR body; the list of pin modules is "
-    "PIN_MODULES in origin/tests/agent_pins.py."
+    "PIN_MODULES in origin/services/agent_pins.py."
 )
 
 
@@ -99,7 +103,7 @@ def render(pins: dict[str, dict[str, str]]) -> str:
         "about": (
             "sha256 pins on what the in-app agent's model is sent, one object per pin module. "
             f"Do not edit by hand: re-record all of them with `{RECORD_COMMAND}` "
-            "(origin/tests/agent_pins.py lists the modules)."
+            "(origin/services/agent_pins.py lists the modules)."
         ),
         "pins": {module: dict(sorted(keys.items())) for module, keys in sorted(pins.items())},
     }

@@ -12,7 +12,7 @@ PINS (off state). The goldens (origin/tests/golden/agent_pins.json) were first r
 `origin/main` (346816f2) with the same harness (the MIP-977 flag-pin one; the undo is simulated with
 `undone_at`, which main has). Re-record them all with:
 
-    python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
+    python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
 Each hash covers every model call of the whole scenario (system instruction and messages).
 """
@@ -24,7 +24,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from origin.search_engine.models import AgentRun, AgentStep
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.test_agent_resume_flag_pins import NO_DATE, Recorder
 from origin.tests.test_agent_resume_system_extra import ASK_URL, ResumeBase
 

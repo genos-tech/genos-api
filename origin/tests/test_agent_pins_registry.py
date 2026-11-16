@@ -1,6 +1,6 @@
 """MIP-1653: the list of model-visible sha256 pins is complete, and the pin helper does what it says.
 
-`origin/tests/agent_pins.py` holds `PIN_MODULES`, the one list that `manage.py record_agent_goldens`
+`origin/services/agent_pins.py` holds `PIN_MODULES`, the one list that `manage.py record_agent_goldens`
 re-records. A pin that is not on it would be left stale by the next deliberate change to a tool
 description, a prompt line or a cap, and show up only as a failure in a whole-suite run. So:
 
@@ -27,7 +27,7 @@ from django.core.management import CommandError
 from django.test import SimpleTestCase, override_settings
 
 from origin.search_engine.management.commands import record_agent_goldens as command
-from origin.tests import agent_pins
+from origin.services import agent_pins
 
 TESTS = Path(__file__).resolve().parent
 HASH = re.compile(r"[\"'][0-9a-f]{64}[\"']")
@@ -62,7 +62,7 @@ class TheListIsComplete(SimpleTestCase):
             [],
             "A test module holds a sha256 literal and is neither a pin nor allowed: if it pins what "
             "the in-app model is sent, give it `PINS = agent_pins.Pins(__name__)` and add it (and the "
-            "class that records it) to PIN_MODULES in origin/tests/agent_pins.py; if not, add it to "
+            "class that records it) to PIN_MODULES in origin/services/agent_pins.py; if not, add it to "
             "OTHER_HASHES in this file with the reason.",
         )
 

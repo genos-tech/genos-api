@@ -9,7 +9,7 @@ PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), 
 not exist, over the 12-step sequence fixture with a fixed clock:
 
     python manage.py record_agent_goldens
-    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/services/agent_pins.py)
 
 `result/*` hash `fetch_task`'s result (ids and uuids replaced by their order of appearance, the
 rest verbatim: titles, texts, timestamps, key order) as the PM, the developer and the client;
@@ -38,7 +38,7 @@ from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.prompts import agent_system_prompt
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import ToolError, ToolForbidden
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.fixtures.sequence_scenario import SequenceScenario
 
 FLAG = "AGENT_FETCH_TASK_ANCHORS"

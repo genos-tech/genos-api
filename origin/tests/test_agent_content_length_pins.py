@@ -11,7 +11,7 @@ PRISTINE `origin/main` (09f52388). After a change that is MEANT to move the prom
 request parameter, re-record them all with one command, and compare the diff rather than editing a hash
 to make a test pass:
 
-    python manage.py record_agent_goldens        # the list of pin modules: origin/tests/agent_pins.py
+    python manage.py record_agent_goldens        # the list of pin modules: origin/services/agent_pins.py
 
 What is hashed, per scenario: EVERY model call of one `_drive_loop` run, each as what the
 provider adapter is handed: the system instruction (date line off, ids normalised), the full
@@ -39,7 +39,7 @@ from origin.search_engine.agent import controller
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm.choice import LlmChoice, reset_llm_choice, set_llm_choice
 from origin.search_engine.llm.types import AgentMessage, FunctionCall
-from origin.tests import agent_pins
+from origin.services import agent_pins
 
 # sha256 of every model call of one run, per scenario (origin/tests/golden/agent_pins.json, re-recorded with
 # `python manage.py record_agent_goldens`).

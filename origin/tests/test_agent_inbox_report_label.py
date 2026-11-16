@@ -10,7 +10,7 @@ does not exist, over a fixed inbox (a small and a very large report, an unversio
 digest, a reminder, an activity and three requests):
 
     python manage.py record_agent_goldens
-    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/services/agent_pins.py)
 
 `inbox/*` hash `list_my_inbox`'s result (ids replaced by their order of appearance, the rest
 verbatim: key order, labels, bodies, timestamps); `declarations` hashes every tool declaration
@@ -31,7 +31,7 @@ from django.test import SimpleTestCase, override_settings
 from origin.models.common.inbox_models import InboxItems
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.test_base import BaseAPITestCase
 
 FLAG = "AGENT_INBOX_REPORT_LABEL"

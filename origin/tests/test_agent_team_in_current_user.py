@@ -9,7 +9,7 @@ PINS. The off-state goldens were recorded on PRISTINE `origin/main` (09f52388), 
 not exist:
 
     python manage.py record_agent_goldens
-    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/tests/agent_pins.py)
+    # re-records every pin into origin/tests/golden/agent_pins.json (the list: origin/services/agent_pins.py)
 
 `result/*` hash the tool's result (the user's id replaced by its order of appearance) for a member
 and for the team's owner; `declarations` hashes every tool declaration the model is sent.
@@ -30,7 +30,7 @@ from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.agent.tools.base import wrap_workspace_content
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.test_base import BaseAPITestCase
 
 FLAG = "AGENT_TEAM_IN_CURRENT_USER"

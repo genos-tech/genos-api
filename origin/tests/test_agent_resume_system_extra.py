@@ -64,7 +64,7 @@ from origin.search_engine.agent.tool_tiers import READ_LEVEL_SYSTEM_EXTRA, disab
 from origin.search_engine.agent.tools import REGISTRY, ToolContext
 from origin.search_engine.llm.types import FunctionCall
 from origin.search_engine.models import AgentRun, AgentSession, AgentStep
-from origin.tests import agent_pins
+from origin.services import agent_pins
 from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 PINS = agent_pins.Pins(__name__)
@@ -800,7 +800,7 @@ class NormalAskUnchangedTests(TestCase):
     merge of #572, 2026-11-04) BEFORE this change, over inputs this test fixes (ids, summaries, mention).
     The ask path is only read, never rewritten, by the fix; these fail if that stops being true, and when
     the text of a thread, note or tier block in `system_extra` is edited on purpose. Re-record them with
-    the other pins: `python manage.py record_agent_goldens` (the list: origin/tests/agent_pins.py).
+    the other pins: `python manage.py record_agent_goldens` (the list: origin/services/agent_pins.py).
     """
 
     CHAT = "00000000-0000-0000-0000-00000000c0de"
