@@ -9,7 +9,8 @@ scans `origin/tests/` and fails when a class reaches Django's transactional base
 through the cheap one.
 
 It is a STATIC scan (`ast`, no import of the scanned modules, no database), so it also runs when a
-test module would not import. It follows what a class inherits from:
+test module would not import (a file that does not even parse fails it with the parser's error).
+It follows what a class inherits from:
 
   * `TransactionTestCase` / `LiveServerTestCase` / `StaticLiveServerTestCase` / DRF's
     `APILiveServerTestCase` (a live server needs real commits, so these are transactional too;
@@ -28,8 +29,11 @@ Opt-out for a class that really needs Django's own full flush: a class attribute
 `transaction_support.py`). A subclass inherits it, like any attribute. An empty or non-string
 reason is a failure of its own.
 
-What it cannot see: a base built dynamically (`type(...)`, a factory function, `getattr`), and a
-base class from a third-party package other than the roots listed below.
+What it cannot see: a base built dynamically (`type(...)`, a factory function, `getattr`), a base
+class from a third-party package other than the roots listed in TRANSACTIONAL_ROOTS (a test below
+fails when the installed Django or DRF has a transactional class that is missing there), and which
+of two same-named imports or assignments in one module is the live one (names are resolved per
+module, not per scope or flow).
 """
 
 from __future__ import annotations
@@ -59,6 +63,8 @@ TRANSACTIONAL_ROOTS = frozenset(
         "django.test.testcases.LiveServerTestCase",
         "django.test.selenium.SeleniumTestCase",
         "django.contrib.staticfiles.testing.StaticLiveServerTestCase",
+        "django.contrib.admin.tests.AdminSeleniumTestCase",
+        "rest_framework.test.APITransactionTestCase",
         "rest_framework.test.APILiveServerTestCase",
         "channels.testing.ChannelsLiveServerTestCase",
     }
@@ -188,7 +194,8 @@ class Scanner:
             return self._modules[name]
         module = None
         if name in self._sources:
-            module = _Module(name, self._sources[name], self._paths.get(name, f"{name}.py"), False)
+            path = self._paths.get(name, f"{name}.py")
+            module = _Module(name, self._sources[name], path, path.endswith("__init__.py"))
         elif self._root is not None and name.partition(".")[0] in _REPO_PACKAGES:
             base = Path(self._root, *name.split("."))
             for candidate, is_package in (
@@ -362,6 +369,9 @@ class TransactionalTestsUseTheCheapFlush(SimpleTestCase):
         self.assertIn(
             ("origin/tests/test_member_events.py", "TestConcurrency"), found, "direct subclass"
         )
+        self.assertGreater(
+            result.classes, len(found), "TestCase classes are scanned and not flagged"
+        )
         self.assertIn(
             ("origin/tests/test_agent_decide_edits.py", "DecideEditBase"), found, "base class"
         )
@@ -370,8 +380,32 @@ class TransactionalTestsUseTheCheapFlush(SimpleTestCase):
             found,
             "compliant through CaptureBase -> DecideEditBase (a relative import of another module)",
         )
-        # TestCase subclasses are not transactional: far more classes are scanned than found
-        self.assertGreater(result.classes, 5 * len(found))
+
+    def test_the_root_list_covers_every_transactional_class_of_django_and_drf(self):
+        """An upgrade that adds a transactional test base must not slip past the name match."""
+        import importlib
+
+        from django.test import TestCase, TransactionTestCase
+
+        missing = set()
+        for module_name in (
+            "django.test.testcases",
+            "django.test.selenium",
+            "django.contrib.staticfiles.testing",
+            "django.contrib.admin.tests",
+            "rest_framework.test",
+        ):
+            module = importlib.import_module(module_name)
+            for name, obj in vars(module).items():
+                if (
+                    isinstance(obj, type)
+                    and obj.__module__ == module_name
+                    and issubclass(obj, TransactionTestCase)
+                    and not issubclass(obj, TestCase)
+                    and f"{module_name}.{name}" not in TRANSACTIONAL_ROOTS
+                ):
+                    missing.add(f"{module_name}.{name}")
+        self.assertEqual(missing, set(), "add these to TRANSACTIONAL_ROOTS")
 
     def test_the_sanctioned_base_and_the_docs_name_the_same_things(self):
         text = (ROOT / TRANSACTION_SUPPORT_PATH).read_text()
@@ -455,7 +489,7 @@ class ScannerFlagsDjangoTransactionBases(SimpleTestCase):
             "Bad",
         )
 
-    def test_live_server_cases_are_transactional_too(self):
+    def test_live_server_and_drf_transaction_cases_are_transactional_too(self):
         for imp, name in (
             ("from django.test import LiveServerTestCase", "LiveServerTestCase"),
             (
@@ -463,6 +497,7 @@ class ScannerFlagsDjangoTransactionBases(SimpleTestCase):
                 "StaticLiveServerTestCase",
             ),
             ("from rest_framework.test import APILiveServerTestCase", "APILiveServerTestCase"),
+            ("from rest_framework.test import APITransactionTestCase", "APITransactionTestCase"),
         ):
             with self.subTest(name):
                 self.assertFlags(f"{imp}\nclass Bad({name}):\n    pass\n", "Bad", name)
@@ -484,11 +519,14 @@ class ScannerFlagsDjangoTransactionBases(SimpleTestCase):
             "Bad",
         )
 
-    def test_a_syntactically_odd_base_does_not_crash_the_scan(self):
-        result = scan(
+    def test_a_call_among_the_bases_is_skipped_and_the_other_bases_still_count(self):
+        self.assertFlags(
             "from django.test import TransactionTestCase\n"
-            "class Odd(make_base(), metaclass=type):\n    pass\n"
+            "class Bad(make_base(), TransactionTestCase, metaclass=type):\n    pass\n",
+            "Bad",
         )
+        # a base the scan cannot see is the documented hole, not a crash
+        result = scan("class Odd(make_base(), metaclass=type):\n    pass\n")
         self.assertEqual(result.violations, [])
 
 
@@ -525,6 +563,20 @@ class ScannerFollowsIntermediateBases(SimpleTestCase):
         result = scan(sources)
 
         self.assertEqual(sorted(v.cls for v in result.violations), ["A", "B", "C", "D", "RawBase"])
+
+    def test_a_relative_import_inside_a_package_init_is_resolved_from_that_package(self):
+        sources = {
+            "origin.tests.base_mod": (
+                "from django.test import TransactionTestCase\nclass RawBase(TransactionTestCase):\n"
+                "    pass\n"
+            ),
+            "origin.tests": "from .base_mod import RawBase\n",
+            "origin.tests.test_x": "from origin.tests import RawBase\nclass X(RawBase):\n    pass\n",
+        }
+
+        result = Scanner(sources, paths={"origin.tests": "origin/tests/__init__.py"}).scan()
+
+        self.assertEqual(sorted(v.cls for v in result.violations), ["RawBase", "X"])
 
     def test_an_intermediate_base_derived_from_cheap_is_fine_in_every_import_style(self):
         sources = {
