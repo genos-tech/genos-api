@@ -325,3 +325,135 @@ def resolve_note_thread(
         },
         "resolved",
     )
+
+
+READ_BLOCKS_PATH = "/internal/documents/read-blocks"
+EDIT_BLOCK_PATH = "/internal/documents/edit-block"
+
+
+def read_note_blocks(
+    note_type: str, note_id: int, *, timeout: float = TIMEOUT_SECONDS
+) -> dict[str, Any] | None:
+    """The blocks of one note as its LIVE Yjs doc holds them (MIP-1646):
+    `{"exists": bool, "blocks": [{id, type, depth, parentId, text, hash, hasChildren}]}`.
+
+    `exists` is false for a note nobody has opened (no doc, so the stored `body` is the truth and
+    the caller reads that). `None` means it could not be read at all: collab is not configured,
+    unreachable, refused, or an older one that answers the unknown path with a plain "OK". The
+    caller says so; "no blocks" and "could not read" must not look alike.
+    """
+    if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
+        return None
+    document_name = f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}"
+    try:
+        resp = requests.post(
+            f"{settings.COLLAB_INTERNAL_URL}{READ_BLOCKS_PATH}",
+            json={"documentName": document_name},
+            headers={"Authorization": f"Bearer {_internal_token()}"},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "collab block read refused doc=%s status=%s", document_name, resp.status_code
+            )
+            return None
+        body = resp.json()
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        logger.warning("collab block read failed doc=%s: %s", document_name, exc)
+        return None
+    if not isinstance(body, dict) or not isinstance(body.get("exists"), bool):
+        return None
+    if not isinstance(body.get("blocks"), list):
+        return None
+    return body
+
+
+class BlockEditError(Exception):
+    """A block edit that did not happen (or whose outcome is not known).
+
+    `kind` says what the caller should tell the person:
+    - `unavailable`: collab is not configured, not reachable, or answered 5xx. Nothing was written.
+    - `unsupported`: collab answered something that is not this endpoint's JSON (an older collab
+      answers every unknown path "200 OK"): block edits are not deployed there yet.
+    - `no_document`: the note has no live doc (nobody ever opened it), so there is nothing to edit
+      live; the caller edits the stored body, which is the truth for such a note.
+    - `block_not_found`: no block with that id in the note.
+    - `stale`: `base_block_hash` no longer names the block.
+    - `refused`: collab rejected the request (a bad op, or a block the editor schema cannot hold).
+    - `unknown`: the request went out and the answer did not come back, so the edit may or may not
+      have been made. Never retried here: a second insert would be a second block.
+    """
+
+    def __init__(self, kind: str, message: str = ""):
+        super().__init__(message or kind)
+        self.kind = kind
+
+
+def edit_note_block(
+    note_type: str,
+    note_id: int,
+    *,
+    block_id: str,
+    op: str,
+    blocks: list[dict[str, Any]] | None = None,
+    base_block_hash: str | None = None,
+) -> dict[str, Any]:
+    """Replace, insert after, or delete ONE block of a note's live doc (MIP-1646).
+
+    collab splices only that block, in one Yjs transaction, so what other people typed a moment
+    ago is in what it reads and nothing else is rewritten. The answer is collab's:
+    `{ok, op, blockId, newBlockIds, blocks}`, `blocks` being the whole document after the edit.
+    Synchronous and never retried (an insert is not idempotent). The 200 is not trusted by itself
+    (an older collab answers any unknown path "OK").
+    """
+    if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
+        raise BlockEditError("unavailable", "collab is not configured")
+    document_name = f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}"
+    payload: dict[str, Any] = {"documentName": document_name, "blockId": block_id, "op": op}
+    if blocks is not None:
+        payload["blocks"] = blocks
+    if base_block_hash:
+        payload["baseBlockHash"] = base_block_hash
+    try:
+        resp = requests.post(
+            f"{settings.COLLAB_INTERNAL_URL}{EDIT_BLOCK_PATH}",
+            json=payload,
+            headers={"Authorization": f"Bearer {_internal_token()}"},
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    except requests.ConnectTimeout as exc:
+        logger.warning("collab block edit not sent doc=%s: %s", document_name, exc)
+        raise BlockEditError("unavailable", "collab could not be reached") from exc
+    except requests.RequestException as exc:
+        logger.warning("collab block edit outcome unknown doc=%s: %s", document_name, exc)
+        raise BlockEditError("unknown", "no answer from collab") from exc
+
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    status = resp.status_code
+    if status == 200:
+        if (
+            isinstance(body, dict)
+            and body.get("ok") is True
+            and isinstance(body.get("blocks"), list)
+        ):
+            return body
+        logger.warning("collab block edit answered 200 without ok doc=%s", document_name)
+        raise BlockEditError("unsupported", "collab does not have this endpoint yet")
+    logger.warning("collab block edit refused doc=%s status=%s", document_name, status)
+    if status == 404 and error == "document not found":
+        raise BlockEditError("no_document", str(error))
+    if status == 404 and error == "block not found":
+        raise BlockEditError("block_not_found", str(error))
+    if status == 409 and error:
+        raise BlockEditError("stale", str(error))
+    if status == 400 and error:
+        raise BlockEditError("refused", str(error))
+    if status in (404, 405):
+        raise BlockEditError("unsupported", "collab does not have this endpoint yet")
+    raise BlockEditError("unavailable", f"collab answered {status}")

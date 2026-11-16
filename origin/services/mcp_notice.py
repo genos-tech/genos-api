@@ -305,6 +305,8 @@ RULES: dict[str, Callable[[dict, dict], Notice | None]] = {
     "add_comment": _comment,
     "create_note": _created_note,
     "update_note": _edited_note,
+    # One block of a note is still an edit of the note: the same notice, under the same switch.
+    "edit_note_block": _edited_note,
     "create_todo_item": _created_todo,
     "delete_comment": _deleted("comment", _deleted_comment_item),
     "delete_note": _deleted("note", lambda a, p: {**_note_item(p, a), "url": ""}),
