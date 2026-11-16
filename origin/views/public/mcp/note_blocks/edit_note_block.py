@@ -38,7 +38,8 @@ def _block_id(raw: Any) -> str:
     if not _BLOCK_ID.match(text):
         raise ToolError(
             "`block_id` is the id of one block: take it from `blocks` in `get_note` "
-            "(call it with `include_blocks: true`)."
+            "(call it with `include_blocks: true`), or pass the block's link (the note's URL "
+            "ending `?block=<id>`) as `note_id`."
         )
     return text
 

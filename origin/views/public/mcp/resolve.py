@@ -42,6 +42,7 @@ error message rather than one invented here.
 from __future__ import annotations
 
 import re
+from urllib.parse import parse_qs
 
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
@@ -220,6 +221,43 @@ _BUCKET_TO_NOTE_TYPE = {
     "task": "task",
     "chat": "chat",
 }
+
+
+# A BlockNote block id as the editor keeps it, and the only shape `?block=` may carry. The
+# frontend checks the same pattern before it reads the parameter (`noteTarget.ts`), because the id
+# ends up in a selector and a document lookup; here it ends up in an edit.
+BLOCK_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def block_in_note_link(ref) -> str | None:
+    """The block a note link points at, or None when it points at none (MIP-1655).
+
+    "Copy link to block" makes the note's own URL plus ONE query parameter,
+    `/workspace/notes/my/12?block=<blockId>` (MIP-146). `resolve_note_ref` reads
+    the note from the path and ignores the query, so a caller who wants the block
+    too asks here. A bare id, or a link with no `block` (a `?comment=` link names
+    a thread, not a block), names none.
+
+    A `block` that is present but not a block id, or that appears twice with
+    different values, is refused rather than ignored: the caller meant a block, and
+    falling back to "no block" could let a stray `block_id` argument edit another.
+    """
+    if not isinstance(ref, str):
+        return None
+    text = _checked_text(ref)
+    query = text.partition("#")[0].partition("?")[2]
+    if not query:
+        return None
+    values = parse_qs(query, keep_blank_values=True).get("block")
+    if not values:
+        return None
+    if len(set(values)) > 1 or not BLOCK_ID.match(values[0]):
+        raise ToolError(
+            "The `block` in that link is not one block id. Copy the link again with "
+            "'Copy link to block', or pass `block_id` from `get_note` (with "
+            "`include_blocks: true`)."
+        )
+    return values[0]
 
 
 def resolve_note_ref(ref, _team_id: str) -> tuple[int, str | None]:
