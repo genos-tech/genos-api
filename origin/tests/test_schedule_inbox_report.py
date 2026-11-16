@@ -104,9 +104,13 @@ class DeliverTests(ScheduleBase):
     def test_it_is_an_activity_not_a_request(self):
         self.assertIn(ITEM_TYPE_GENOS_REPORT, ACTIVITY_INBOX_ITEM_TYPES)
 
-    def test_it_does_not_count_toward_the_requests_badge(self):
+    def test_it_counts_until_it_is_read(self):
+        # MIP-1627: the Activities half counts toward the badge while unread, and the app marks a
+        # report read once it has been on screen (`useMarkReadOnView`).
         sched = self.make()
         schedule_delivery.deliver(sched, self.report())
+        self.assertEqual(unread_badge_total(self.user.id, self.team.team_id), 1)
+        reports(self.user).update(is_read=True)
         self.assertEqual(unread_badge_total(self.user.id, self.team.team_id), 0)
 
     def test_the_tick_delivers_through_the_runner(self):
@@ -335,6 +339,9 @@ class PushTests(ScheduleBase):
             item = schedule_delivery.deliver(sched, self.REPORT)
         push.assert_called_once_with(item, title="Overdue", body="Two tasks.")
 
+    # The row's own `inbox.changed` push to sockets (MIP-1627) is a second on-commit callback
+    # whenever SOCKETS_INTERNAL_URL is set; this test counts the WEB push's, so leave it out.
+    @override_settings(SOCKETS_INTERNAL_URL="")
     def test_the_push_waits_for_the_commit(self):
         sched = self.make(deliver_push=True)
         with mock.patch(PUSH) as push, self.captureOnCommitCallbacks(execute=False) as callbacks:

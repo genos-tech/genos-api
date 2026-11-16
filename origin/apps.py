@@ -19,8 +19,10 @@ class OriginConfig(AppConfig):
             change_feed_signals,  # noqa: F401
             dependency_signals,  # noqa: F401
             email_suppression_signals,  # noqa: F401
+            inbox_signals,  # noqa: F401
             note_role_signals,  # noqa: F401
             note_satellite_signals,  # noqa: F401
             pm_channel_signals,  # noqa: F401
             task_signals,  # noqa: F401
+            todo_push_signals,  # noqa: F401
         )

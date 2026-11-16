@@ -1,14 +1,16 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
 from origin.models.common.team_models import *
 from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
-from origin.services import inbox_ai, inbox_via
+from origin.services import inbox_ai, inbox_via, realtime_push
 from origin.services.deleted_account_channel_owners import join_request_receiver
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
@@ -361,6 +363,49 @@ class InboxItemView(AuthenticatedAPIView):
             body["has_more"] = has_more
             body["next_cursor"] = str(rows[-1].item_id) if has_more else None
         return Response(body, status=status.HTTP_200_OK)
+
+
+class InboxMarkReadView(AuthenticatedAPIView):
+    """`POST /inbox/mark-read/`: mark the caller's Activities read in one call (MIP-1627).
+
+    `{team_id, scope: "activities", up_to_item_id}`. Only the Activities half: a request is
+    something somebody is waiting on, and "read" must not make a pending one look dealt with.
+    `up_to_item_id` is the newest item the client had when the button was pressed, so a row that
+    arrived since, and was never on screen, stays unread. The rows are the CALLER's own (the
+    receiver filter is the check, as in `PUT /inbox/`) and the team's.
+
+    `QuerySet.update()` does not run `auto_now`, so `ts_updated_at` is set here: the member's
+    other devices find the change through the delta sync, which is bounded by it.
+    """
+
+    def post(self, request):
+        data = body_object(request)
+        team_id = as_uuid(data.get("team_id"))
+        if team_id is None:
+            return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if data.get("scope") != "activities":
+            return Response(
+                {"error": 'scope must be "activities".'}, status=status.HTTP_400_BAD_REQUEST
+            )
+        up_to = as_int(data.get("up_to_item_id"))
+        if up_to is None or up_to < 0:
+            return Response(
+                {"error": "up_to_item_id is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if res := _require_team(request, team_id):
+            return res
+
+        updated = InboxItems.objects.filter(
+            team_id=team_id,
+            receiver=request.user,
+            item_type__in=ACTIVITY_INBOX_ITEM_TYPES,
+            item_id__lte=up_to,
+            is_read=False,
+            is_deleted=False,
+        ).update(is_read=True, ts_updated_at=timezone.now())
+        if updated:
+            realtime_push.push_inbox_changed(request.user.id, team_id)
+        return Response({"updated": updated}, status=status.HTTP_200_OK)
 
 
 class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
