@@ -567,7 +567,9 @@ CATALOG: tuple[McpTool, ...] = (
             "`markdown`) and whether it is `resolved`. Open threads come "
             "first; resolved ones are left out unless `include_resolved` is "
             "true. Answer a thread with `reply_to_note_comment`, settle it with "
-            "`resolve_note_comment`; both take its `thread_id`."
+            "`resolve_note_comment`; both take its `thread_id`. Returns `body_hash`: "
+            "pass it to `update_note` as `base_body_hash` to refuse an edit that "
+            "would overwrite text added since you read the note."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -1398,11 +1400,25 @@ CATALOG: tuple[McpTool, ...] = (
             "history, so a change can be rolled back in the Genos UI. You must "
             "be the note's owner, an editor on it, an editor of a team note's "
             "folder, a member of a task note's project, or a member of a chat "
-            "note's chat. Requires a write-scoped API key."
+            "note's chat. Pass `base_body_hash` (the `body_hash` `get_note` returned) "
+            "to refuse the edit if the body changed since you read it; the result "
+            "carries the new `body_hash`. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+        # Read by the registry tool only over MCP (MIP-1647), so the in-app model's
+        # `update_note` declaration is untouched.
+        surface_args={
+            "base_body_hash": {
+                "type": "string",
+                "description": (
+                    "The `body_hash` that get_note returned when you read the note. If the "
+                    "body has changed since, the whole call is refused and nothing is "
+                    "written. Omit to skip the check."
+                ),
+            }
+        },
     ),
     McpTool(
         name="create_todo_item",

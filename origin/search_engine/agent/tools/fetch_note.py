@@ -35,6 +35,7 @@ from origin.search_engine.agent.tools.base import (
 )
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.search_engine.agent.tools.note_access import note_not_found
+from origin.search_engine.agent.tools.note_body_hash import note_body_hash
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL, NOTE_TYPE_PERSONAL
 from origin.search_engine.text_extraction import extract_text
 
@@ -253,6 +254,10 @@ def _shape_note(
     if not (surface == "mcp" and body_markdown):
         body_fields["body_text"] = wrap_workspace_content(body_text)
     body_fields["body_markdown"] = wrap_workspace_content(body_markdown)
+    # Over MCP only (MIP-1647): what `update_note(base_body_hash=...)` checks a later write against.
+    # Of the STORED body, not of what this page of it shows, so a paged read hashes the same.
+    if surface == "mcp":
+        body_fields["body_hash"] = note_body_hash(body)
     return {
         "note_id": note_id,
         "note_type": note_type,
