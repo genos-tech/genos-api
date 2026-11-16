@@ -47,6 +47,7 @@ from origin.search_engine.agent_views import (
 from origin.search_engine.llm import spend
 from origin.search_engine.models import AiCreditEntry, AiRequestCost
 from origin.tests.test_base import BaseAPITestCase
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 
 def _se(**overrides):
@@ -65,7 +66,6 @@ SHADOW_ONLY = override_settings(
 NO_LEDGER = override_settings(
     SEARCH_ENGINE=_se(AI_COST_METER=True, AI_CREDITS_SHADOW=False, AI_CREDITS_AUTHORITATIVE=True)
 )
-from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 
 class _CacheClearing(TestCase):

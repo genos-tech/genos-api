@@ -55,6 +55,17 @@ class CheapFlushTests(CheapFlushTransactionTestCase):
         self.assertTrue(ContentType.objects.filter(app_label="origin").exists())
         self.assertTrue(Permission.objects.filter(content_type__app_label="origin").exists())
 
+    def test_an_edited_permission_gets_django_full_flush_too(self):
+        # Same count and ids, one column changed: the fingerprint covers whole rows.
+        perm = Permission.objects.order_by("id").first()
+        original = perm.name
+        Permission.objects.filter(pk=perm.pk).update(name="edited by a test")
+
+        self._fixture_teardown()
+
+        self._only_post_migrate_rows_left()
+        self.assertEqual(Permission.objects.order_by("id").first().name, original)
+
     def test_a_failing_cheap_path_falls_back_to_the_full_flush_and_says_so(self):
         # `_full_flush` is replaced by a spy (the real one is the test above, and costs ~100 MB of
         # disk writes): the point here is that it is asked for, and that the failure is not silent.

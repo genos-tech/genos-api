@@ -18,9 +18,9 @@ wrote 22.3 GB between them (VM disk counter) on a disk-backed Postgres.
     rows) skipping its rows and letting them leak into the next test.
   * `django_content_type` and `auth_permission` are left alone while nothing changed them, which
     is what `flush` + `post_migrate` ends up with anyway (the same rows, new ids). If a test did
-    change either (their row count, lowest, highest or summed id differ from when the class
-    started), or anything in the cheap path fails, the teardown is Django's own full flush
-    (with a warning for the failure case), so the next test never sees a difference.
+    change either (their rows differ in any column from when the class started), or anything in
+    the cheap path fails, the teardown is Django's own full flush (with a warning for the failure
+    case), so the next test never sees a difference.
 
 It keeps Django's `_fixture_teardown` contract: `reset_sequences` stays off in both (ids keep
 counting up), and nothing here touches `available_apps` or `serialized_rollback` (the classes
@@ -63,12 +63,14 @@ def _nonempty_tables(connection, tables):
 
 
 def _fingerprints(connection, tables):
-    """(rows, lowest id, highest id, sum of ids) per table: any insert or delete changes it."""
+    """(rows, md5 of every row's text in id order) per table: any insert, delete or edit changes it."""
     with connection.cursor() as cursor:
         prints = {}
         for table in tables:
+            quoted = _quote(connection, table)
             cursor.execute(
-                f"SELECT count(*), min(id), max(id), sum(id) FROM {_quote(connection, table)}"
+                f"SELECT count(*), md5(coalesce(string_agg(t::text, ',' ORDER BY id), '')) "
+                f"FROM {quoted} AS t"
             )
             prints[table] = cursor.fetchone()
         return prints
@@ -154,7 +156,5 @@ class CheapFlushTransactionTestCase(TransactionTestCase):
                 f"{type(self).__name__}: cheap flush failed ({exc!r}); using Django's full flush",
                 stacklevel=2,
             )
-            if connection.in_atomic_block:  # pragma: no cover - defensive
-                transaction.set_rollback(True, using=db_name)
             return False
         return True
