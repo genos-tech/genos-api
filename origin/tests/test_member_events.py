@@ -24,7 +24,7 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.db import connection, connections, transaction
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -38,6 +38,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.services import member_events
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.tests.test_mcp_oauth_flow import FlowBase
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 from origin.views.public.mcp import tools
 
 User = get_user_model()
@@ -644,7 +645,7 @@ class TestPreferenceEndpoint(Base):
         self.assertEqual(other.get(PREF).json(), {"member_events_enabled": True})
 
 
-class TestConcurrency(TransactionTestCase):
+class TestConcurrency(CheapFlushTransactionTestCase):
     """Real connections: threads, not a wrapping transaction."""
 
     def setUp(self):

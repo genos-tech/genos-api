@@ -33,7 +33,7 @@ from unittest.mock import patch
 from django.conf import settings as dj_settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -65,6 +65,7 @@ SHADOW_ONLY = override_settings(
 NO_LEDGER = override_settings(
     SEARCH_ENGINE=_se(AI_COST_METER=True, AI_CREDITS_SHADOW=False, AI_CREDITS_AUTHORITATIVE=True)
 )
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 
 class _CacheClearing(TestCase):
@@ -489,7 +490,7 @@ class FeaturesEndpointTests(BaseAPITestCase):
         self.assertIn("web_search", resp.data)
 
 
-class _StreamingBase(TransactionTestCase):
+class _StreamingBase(CheapFlushTransactionTestCase):
     """Ask-path tests: the fake agent runs on the real worker thread."""
 
     def setUp(self):

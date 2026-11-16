@@ -30,17 +30,17 @@ invisible under TestCase.
 """
 
 from django.contrib.auth import get_user_model
-from django.test import TransactionTestCase
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services.demo_seeder import delete_demo_environment
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 User = get_user_model()
 
 
-class DemoCleanupActivityOrphanTests(TransactionTestCase):
+class DemoCleanupActivityOrphanTests(CheapFlushTransactionTestCase):
     def _demo_env_with_blocked_dependency(self):
         user = User.objects.create_user(
             username="demo_cleanup_user",

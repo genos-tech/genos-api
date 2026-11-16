@@ -36,7 +36,6 @@ from unittest import mock
 from django.contrib.auth import get_user_model
 from django.db import DatabaseError, connections
 from django.db.models.query import QuerySet
-from django.test import TransactionTestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -46,6 +45,7 @@ from origin.search_engine.agent import controller
 from origin.search_engine.agent.controller import PENDING_APPROVAL_MARKER
 from origin.search_engine.agent.tools import REGISTRY
 from origin.search_engine.models import AgentRun, AgentStep
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 URL = "/api/v2/agent/decide/"
 
@@ -121,7 +121,7 @@ def _begin(resp):
     return chunks
 
 
-class DecideRaceBase(TransactionTestCase):
+class DecideRaceBase(CheapFlushTransactionTestCase):
     def setUp(self):
         super().setUp()
         user_model = get_user_model()
