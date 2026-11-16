@@ -338,6 +338,158 @@ class ReplaceTests(Base):
         self.assertEqual(self._texts(), ["First paragraph.", "Second paragraph.", ""])
 
 
+class ReplaceKeepsEveryOtherBlockTests(Base):
+    """MIP-1645: `body_replace` rebuilds only the blocks the match sits in. Before, the whole body went
+    through markdown and every block came back with a new id, which breaks anything that names a block
+    (a block link, `edit_note_block`) and discards marks and props markdown cannot hold."""
+
+    def bullet(self, text, block_id, **kw):
+        return {**para(text, block_id, **kw), "type": "bulletListItem"}
+
+    def setUp(self):
+        super().setUp()
+        # Marks and props markdown does not carry: colour, background, a custom prop value.
+        self.styled = {
+            **para("Styled middle.", "styled", textColor="red"),
+            "props": {"textColor": "red", "textAlignment": "center", "backgroundColor": "yellow"},
+        }
+        self.task.content = [
+            para("Alpha opening.", "first"),
+            self.styled,
+            para("Gamma closing.", "last"),
+            blank("tail"),
+        ]
+        self.task.save(update_fields=["content"])
+
+    def stored(self):
+        self.task.refresh_from_db()
+        return self.task.content
+
+    def test_every_block_but_the_one_with_the_match_is_stored_exactly_as_it_was(self):
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "Alpha", "new_text": "Omega"})
+        after = self.stored()
+        self.assertEqual(self._texts()[0], "Omega opening.")
+        self.assertEqual(after[1:], before[1:], "ids, props and marks of the other blocks survive")
+
+    def test_the_replaced_block_keeps_its_id(self):
+        self._update(body_replace={"old_text": "Alpha", "new_text": "Omega"})
+        self.assertEqual(self.stored()[0]["id"], "first")
+
+    def test_a_match_in_the_middle_leaves_both_neighbours_alone(self):
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "Styled middle.", "new_text": "Plain middle."})
+        after = self.stored()
+        self.assertEqual(self._texts()[1], "Plain middle.")
+        self.assertEqual((after[0], after[2], after[3]), (before[0], before[2], before[3]))
+        self.assertEqual(after[1]["id"], "styled")
+
+    def test_a_match_across_two_paragraphs_rebuilds_just_those_two(self):
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "opening.\n\nStyled", "new_text": "opening, then"})
+        after = self.stored()
+        self.assertEqual(self._texts()[0], "Alpha opening, then middle.")
+        self.assertEqual(len(after), 3)
+        self.assertEqual(after[0]["id"], "first")
+        self.assertEqual(after[1:], before[2:], "the blocks after the run are untouched")
+
+    def test_replacing_a_paragraph_with_two_keeps_the_first_id_and_the_rest_alone(self):
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "Alpha opening.", "new_text": "One.\n\nTwo."})
+        after = self.stored()
+        self.assertEqual(self._texts()[:2], ["One.", "Two."])
+        self.assertEqual(after[0]["id"], "first")
+        self.assertNotEqual(after[1]["id"], "first")
+        self.assertEqual(after[2:], before[1:])
+
+    def test_deleting_a_paragraph_leaves_the_others_as_they_were(self):
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "\n\nGamma closing.", "new_text": ""})
+        after = self.stored()
+        self.assertEqual(self._texts(), ["Alpha opening.", "Styled middle.", ""])
+        self.assertEqual((after[0], after[1], after[2]), (before[0], before[1], before[3]))
+
+    def test_one_item_of_a_bullet_list_does_not_rebuild_its_neighbours(self):
+        self.task.content = [
+            self.bullet("alpha", "x"),
+            self.bullet("beta", "y"),
+            self.bullet("gamma", "z"),
+            blank("tail"),
+        ]
+        self.task.save(update_fields=["content"])
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "beta", "new_text": "BETA"})
+        after = self.stored()
+        self.assertEqual(self._texts(), ["alpha", "BETA", "gamma", ""])
+        self.assertEqual((after[0], after[2], after[3]), (before[0], before[2], before[3]))
+        self.assertEqual(after[1]["id"], "y")
+
+    def test_a_numbered_list_item_is_found_by_its_number_and_the_rest_is_untouched(self):
+        def numbered(text, bid):
+            return {**para(text, bid), "type": "numberedListItem"}
+
+        self.task.content = [numbered("one", "n1"), numbered("two", "n2"), numbered("three", "n3")]
+        self.task.save(update_fields=["content"])
+        before = [dict(b) for b in self.stored()]
+        self.assertIn("2. two", self._fetch()["content_markdown"])
+        self._update(body_replace={"old_text": "2. two", "new_text": "2. TWO"})
+        after = self.stored()
+        self.assertEqual(self._texts(), ["one", "TWO", "three"])
+        self.assertEqual((after[0], after[2]), (before[0], before[2]))
+        self.assertEqual(after[1]["id"], "n2")
+
+    def test_if_no_run_can_be_found_the_whole_body_is_rebuilt_as_before(self):
+        # The old behaviour is the fallback: every block is rebuilt, ids included, and the editor's
+        # trailing blank paragraph is added.
+        with mock.patch(
+            "origin.search_engine.agent.tools.task_body_edit._smallest_window", return_value=None
+        ):
+            self._update(body_replace={"old_text": "Alpha", "new_text": "Omega"})
+        self.assertEqual(self._texts()[0], "Omega opening.")
+        self.assertEqual(len(self.stored()), 4)
+        self.assertNotEqual(self.stored()[1], self.styled)
+
+    def test_a_nested_blocks_whole_top_level_block_is_the_unit(self):
+        parent = {**self.bullet("parent", "p"), "children": [self.bullet("child", "c")]}
+        self.task.content = [para("Before.", "before"), parent, blank("tail")]
+        self.task.save(update_fields=["content"])
+        before = [dict(b) for b in self.stored()]
+        self._update(body_replace={"old_text": "child", "new_text": "kid"})
+        after = self.stored()
+        self.assertEqual(after[0], before[0])
+        self.assertEqual(after[-1], before[-1])
+        self.assertEqual(after[1]["id"], "p")
+        self.assertEqual(
+            "".join(r["text"] for r in after[1]["children"][0]["content"])
+            if after[1]["children"]
+            else "",
+            "kid",
+        )
+
+    def test_the_whole_body_one_block_case_and_a_changed_body_hash(self):
+        self.task.content = [para("Only line.", "only")]
+        self.task.save(update_fields=["content"])
+        hash_before = self._fetch()["body_hash"]
+        result = self._update(body_replace={"old_text": "Only", "new_text": "Single"})
+        self.assertEqual(self._texts(), ["Single line."])
+        self.assertEqual(self.stored()[0]["id"], "only")
+        self.assertNotEqual(result["body_hash"], hash_before)
+
+    def test_a_template_prompt_is_still_dropped_and_the_blocks_after_it_are_untouched(self):
+        self.task.content = [prompt_block(), *self.stored()]
+        self.task.save(update_fields=["content"])
+        shown = self._fetch()["body_hash"]
+        self._update(base_body_hash=shown, body_replace={"old_text": "Alpha", "new_text": "Omega"})
+        after = self.stored()
+        self.assertNotIn(PROMPT, self._texts())
+        self.assertEqual(after[1], self.styled)
+
+    def test_the_editor_doc_gets_a_body_that_differs_only_in_the_changed_block(self):
+        self._update(body_replace={"old_text": "Alpha", "new_text": "Omega"})
+        pushed = self.push.call_args.args[1]
+        self.assertEqual([b["id"] for b in pushed], ["first", "styled", "last", "tail"])
+
+
 class BackingTaskTests(Base):
     """A milestone's body lives on `MilestoneMaster.description`; its backing
     task row is a mirror `sync_backing_task` re-derives on every write."""

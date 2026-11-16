@@ -141,6 +141,7 @@ from origin.services.security_events import (
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
     body_paging,
+    note_blocks,
     note_threads,
     progress,
     result_limits,
@@ -290,6 +291,21 @@ def _with_comment_threads(
         **payload,
         **note_comment_fields(note_type, note_id, ctx, include_resolved=include_resolved),
     }
+
+
+def _with_blocks(
+    payload: dict[str, Any], args: dict[str, Any], mcp_args: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any]:
+    """`get_note(include_blocks=true)` on MCP also lists the note's blocks (MIP-1646)."""
+    wanted = mcp_args.get("include_blocks")
+    if not (wanted is True or str(wanted).lower() == "true"):
+        return payload
+    note_type = str(args.get("note_type") or "").lower().strip()
+    try:
+        note_id = int(args.get("note_id"))
+    except (TypeError, ValueError):
+        return payload
+    return {**payload, **note_blocks.read.note_block_fields(note_type, note_id, ctx)}
 
 
 def _rewrite_refs(text: str) -> str:
@@ -569,7 +585,10 @@ CATALOG: tuple[McpTool, ...] = (
             "true. Answer a thread with `reply_to_note_comment`, settle it with "
             "`resolve_note_comment`; both take its `thread_id`. Returns `body_hash`: "
             "pass it to `update_note` as `base_body_hash` to refuse an edit that "
-            "would overwrite text added since you read the note."
+            "would overwrite text added since you read the note. Pass "
+            "`include_blocks: true` to also list the note's blocks (`blocks`: "
+            "`block_id`, `type`, `text`, its place in the tree and a `block_hash`), which "
+            "`edit_note_block` needs to change just one of them."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -577,9 +596,16 @@ CATALOG: tuple[McpTool, ...] = (
             "include_resolved": {
                 "type": "boolean",
                 "description": "Also return the resolved comment threads. Default false.",
-            }
+            },
+            "include_blocks": {
+                "type": "boolean",
+                "description": (
+                    "Also list the note's blocks with their ids and hashes, for "
+                    "`edit_note_block`. Default false."
+                ),
+            },
         },
-        augment=_with_comment_threads,
+        augment=_chain(_with_comment_threads, _with_blocks),
     ),
     # ---- chats: read only (MIP-885). No chat write is published. ----
     McpTool(
@@ -1767,6 +1793,28 @@ CATALOG: tuple[McpTool, ...] = (
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
     McpTool(
+        name="edit_note_block",
+        registry_name="edit_note_block",
+        description=(
+            "Change ONE block of a note without rewriting the rest: `op` is `replace` (the "
+            "block and its children become `content_text`), `insert_after` (`content_text` "
+            "becomes its next siblings) or `delete`. Take `block_id` (and `block_hash`) from "
+            "`blocks` in `get_note` called with `include_blocks: true`. `content_text` is "
+            "markdown, as for `update_note`; one or several blocks. Pass `base_block_hash` to "
+            "refuse the edit if the block changed since you read it. Made on the note's live "
+            "document, so every other block, and anything a person is typing into the note, "
+            "is left alone; a replaced block keeps its id, so a link to it still works. Every "
+            "edit is snapshotted into the note's version history. Prefer this to `update_note` "
+            "for a change to one paragraph, list or heading; use `update_note` to rewrite the "
+            "whole note. You must be able to edit the note. Returns `new_block_ids` and the "
+            "note's new `body_hash`. Name the note by its Genos URL, or by its numeric id with "
+            "`note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+    ),
+    McpTool(
         name="resolve_note_comment",
         registry_name="resolve_note_comment",
         description=(
@@ -2441,6 +2489,7 @@ OVERWRITE_TOOLS = frozenset(
         "restore_note_version",
         "restore_task_body",
         "update_calendar_event",
+        "edit_note_block",  # replaces or removes one block; the note's history keeps the old one
         "update_comment",
         "update_note",
         "update_task",
@@ -2487,6 +2536,9 @@ OPEN_WORLD_TOOLS = frozenset(
 # such value appears, so it is decided here, not found later.
 DELETING_ARGUMENTS = {
     "update_task": ("status", "Deleted"),
+    # Removing a block of a note (MIP-1646). The note's history keeps what it held, so this is
+    # recoverable, but a member who only allowed "make changes" was promised deleting needs its own yes.
+    "edit_note_block": ("op", "delete"),
 }
 
 # Delete-looking values that are deliberately allowed with write scope alone: a milestone
