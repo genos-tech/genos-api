@@ -263,3 +263,35 @@ def push_membership_removed(
         transaction.on_commit(lambda: _post(payload, MEMBERSHIP_PATH, "membership"), robust=True)
     except Exception:  # noqa: BLE001 — the removal is done; an observer must not break it
         logger.warning("sockets membership push could not be scheduled", exc_info=True)
+
+
+TODO_PATH = "/internal/broadcast/todo"
+
+
+def push_todo_changed(user_id, team_id=None) -> None:
+    """Tell genos-sockets that `user_id`'s to-dos changed (MIP-1626), so their open To-do page
+    re-reads its list now instead of at the next reload.
+
+    A to-do made over MCP, by the in-app agent or by any REST client other than the open page was
+    saved and announced to nobody. genos-sockets sends `todo.changed` to that person's own `/v3`
+    user room, so every tab of the OWNER hears it and nobody else does. The body is facts only
+    (`userId`, `teamId`): a to-do is private to one person, and no title or note ever leaves the
+    API; the app re-reads its list with its own token. Sends once the current transaction commits,
+    or at once when there is none. A no-op when `SOCKETS_INTERNAL_URL` is unset. Never raises: the
+    to-do is saved, and the next load still finds it.
+
+    Callers do not call this per row: `origin.services.todo_push` collects what changed in a
+    transaction and sends one push per owner.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets todo push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        payload: dict[str, Any] = {"userId": str(user_id)}
+        if team_id is not None:
+            payload["teamId"] = str(team_id)
+        transaction.on_commit(lambda: _post(payload, TODO_PATH, "todo"), robust=True)
+    except Exception:  # noqa: BLE001 — the to-do is saved; an observer must not break it
+        logger.warning("sockets todo push could not be scheduled", exc_info=True)

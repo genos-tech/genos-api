@@ -43,6 +43,7 @@ from django.utils import timezone
 
 from origin.models.chat.todo_models import ToDoItemReminder
 from origin.models.common.inbox_models import InboxItems
+from origin.services import todo_push
 from origin.services.reminder_window import (  # noqa: F401 — re-exported for the views
     MAX_HORIZON,
     PAST_TOLERANCE,
@@ -111,13 +112,23 @@ def cancel_pending(*, item=None, item_ids=None, user=None) -> int:
     path must stay cheap.
     """
     qs = ToDoItemReminder.objects.filter(fired_at__isnull=True, cancelled_at__isnull=True)
+    # Read once: a generator would be spent by the filter before the push below.
+    ids = None if item_ids is None else list(item_ids)
     if item is not None:
         qs = qs.filter(item=item)
-    if item_ids is not None:
-        qs = qs.filter(item_id__in=item_ids)
+    if ids is not None:
+        qs = qs.filter(item_id__in=ids)
     if user is not None:
         qs = qs.filter(item__group__user=user)
-    return qs.update(cancelled_at=timezone.now())
+    cancelled = qs.update(cancelled_at=timezone.now())
+    if cancelled:
+        # A queryset `.update()` fires no signal, and a row that shows "reminder set for ..."
+        # has to stop doing so on the owner's other open apps (MIP-1626).
+        if item is not None:
+            todo_push.note_item(item.item_id)
+        for item_id in ids or ():
+            todo_push.note_item(item_id)
+    return cancelled
 
 
 def pending_for_user(user):
