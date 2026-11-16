@@ -13,6 +13,7 @@ result, so a test that deliberately provokes and catches an OperationalError is 
 import sys
 import unittest
 
+from django.db import DEFAULT_DB_ALIAS, connections
 from django.db.utils import OperationalError
 from django.test.runner import DiscoverRunner
 
@@ -59,6 +60,14 @@ class PostgresCrashMixin:
 
     def addError(self, test, err):
         super().addError(test, err)
+        self._check_postgres_restart(test, err)
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            self._check_postgres_restart(subtest, err)
+
+    def _check_postgres_restart(self, test, err):
         if self.postgres_crash is not None:
             return
         reason = postgres_restart_reason(err)
@@ -96,8 +105,9 @@ class PostgresCrashAwareRunner(DiscoverRunner):
             if not self.postgres_crash:
                 raise
             # The server is still recovering, so the DROP cannot run; the banner above says why.
+            name = connections[DEFAULT_DB_ALIAS].settings_dict["NAME"]
             print(
-                "!! Could not drop the test database (Postgres is down); it is left behind, "
-                "drop it by hand.",
+                f"!! Could not drop the test database {name} (Postgres is down); it is left "
+                "behind, drop it by hand before the next run with the same suffix.",
                 file=sys.stderr,
             )

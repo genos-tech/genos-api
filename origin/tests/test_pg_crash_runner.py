@@ -65,8 +65,6 @@ class RestartReasonTests(SimpleTestCase):
 
 
 class _Broken(unittest.TestCase):
-    outcome = None
-
     def test_x(self):
         pass
 
