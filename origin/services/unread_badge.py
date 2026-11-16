@@ -13,8 +13,8 @@ Activities) and every unread message of every chat of every team, so a
 pile of unread digests held the icon at 121 while the open app said 0.
 This module counts the two terms of the app's number that have simple rules, for ONE team:
 
-  * unread REQUESTS in the inbox: item types outside
-    `ACTIVITY_INBOX_ITEM_TYPES` (`useInboxManagement`);
+  * unread INBOX items, requests and activities alike (`useInboxManagement`, MIP-1627: the
+    Activities half of the inbox used to be left out, and nothing marked it read);
   * CHATS (DM, GM, PM; not MDM) with something new, one per chat, not per
     message (`countUnreadChats`, over the channel list the app builds from
     `ChannelListView`).
@@ -45,7 +45,7 @@ from django.db.models import Exists, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce
 
 from origin.models.chat.unified_models import ChannelKind, Message, ReadCursor
-from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
+from origin.models.common.inbox_models import InboxItems
 from origin.services.channel_scope import team_scope_q, user_channels_qs
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def unread_badge_total(user_id, team_id=None) -> int | None:
     """
     try:
         team_id = _team_uuid(team_id)
-        return int(_unread_requests(user_id, team_id) + _unread_chats(user_id, team_id))
+        return int(_unread_inbox(user_id, team_id) + _unread_chats(user_id, team_id))
     except Exception as exc:  # noqa: BLE001 — badge must never break push
         logger.warning("[webpush] badge count failed for %s: %s", user_id, exc)
         return None
@@ -83,16 +83,13 @@ def _team_uuid(team_id) -> str | None:
         return None
 
 
-def _unread_requests(user_id, team_id) -> int:
-    """Unread, live requests addressed to the user (`useInboxManagement`).
-
-    A digest, a message reminder and a plain notice are things that
-    happened, not things somebody is waiting on; the app lists them under
-    Activities and keeps them out of this badge.
+def _unread_inbox(user_id, team_id) -> int:
+    """Unread, live inbox items addressed to the user (`useInboxManagement`): the requests
+    somebody is waiting on AND what merely happened (a notice, the digest, a reminder, a
+    report). Since MIP-1627 the app marks an activity read when it has been looked at, so the
+    number can come back down; before that nothing did, which is why it was left out.
     """
-    items = InboxItems.objects.filter(receiver_id=user_id, is_read=False, is_deleted=False).exclude(
-        item_type__in=ACTIVITY_INBOX_ITEM_TYPES
-    )
+    items = InboxItems.objects.filter(receiver_id=user_id, is_read=False, is_deleted=False)
     if team_id:
         items = items.filter(team_id=team_id)
     return items.count()
