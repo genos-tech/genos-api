@@ -36,7 +36,7 @@ messaging and editor collaboration live in the sibling
 | ----------------------- | -------- | ------------------------------------------------------------------ |
 | `DJANGO_DEBUG`          | dev      | Off unless exactly `true`. Local dev sets it; production leaves it unset or `false`. |
 | `DATABASE_URL`          | **Yes**  | Postgres URL. With DEBUG off the process refuses to start without it. Outside DEBUG it connects with `sslmode=require` unless the URL names a stricter mode, and refuses `disable` / `allow` / `prefer`; a loopback host is exempt. |
-| `DJANGO_SETTINGS_MODULE`| —        | `apis.settings` (prod, default) or `apis.settings_test` (tests).   |
+| `DJANGO_SETTINGS_MODULE`| —        | `apis.settings` (prod, default) or `apis.settings_test` (tests; the default of `manage.py test`). |
 | `DJANGO_SECRET_KEY`     | prod     | Django secret key.                                                 |
 | `JWT_SECRET_KEY`        | prod     | Shared with genos-collab (as `JWT_SECRET`) for token verification. genos-sockets has none: it forwards the token here. |
 | `ALLOWED_HOSTS`         | web      | The API's public host. Not `*`, not just `localhost`.              |
@@ -84,10 +84,16 @@ pipenv run python manage.py runserver 0.0.0.0:8890
 ## Tests, lint
 
 ```bash
-pipenv run coverage run manage.py test origin.tests --settings=apis.settings_test
+pipenv run coverage run manage.py test origin.tests
 pipenv run coverage report
 ruff check origin apis            # import sort + pyflakes/pycodestyle (see ruff.toml)
 ```
+
+`manage.py test` runs on `apis.settings_test` (what CI uses) unless `DJANGO_SETTINGS_MODULE` is set or
+you pass `--settings=...`, and prints one line to stderr saying so. Production settings differ (agent
+flags on, the schedule plan gate shut for Free users), so tests run on them fail in ways CI never
+sees. Every other command keeps `apis.settings`. A test run with live model/billing keys in the
+environment is refused; use `genos-platform/docker/dt.sh` (key-free).
 
 ## Deployment (Railway)
 
