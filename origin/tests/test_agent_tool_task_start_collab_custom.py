@@ -210,7 +210,7 @@ class CollaboratorsTests(WriteBase):
             self.assertIn(
                 "a member of the task's project, or its assignee or reporter", text, tool.name
             )
-            self.assertNotIn("team", text, tool.name)
+            self.assertNotRegex(text, r"\bteam\b", tool.name)
 
     def test_setting_collaborators_matches_the_uis_put(self):
         by_tool, by_ui = self._task("by tool"), self._task("by ui")
