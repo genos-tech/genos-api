@@ -121,7 +121,7 @@ class TestTheCatalog(Base):
         self.assertEqual(lows, sorted(lows))
 
     def test_a_job_with_no_ai_says_so_and_has_no_default_or_cost(self):
-        for job in ("what_you_did", "what_is_left", "milestone_updates"):
+        for job in ("what_you_did", "what_is_left", "milestone_updates", "project_updates"):
             row = self.entry(job)
             self.assertEqual(
                 (row["uses_ai"], row["effort_default"], row["effort_cost"]), (False, None, None)
