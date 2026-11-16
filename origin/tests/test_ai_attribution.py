@@ -29,7 +29,7 @@ from unittest.mock import patch
 from django.conf import settings as dj_settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -41,6 +41,7 @@ from origin.search_engine.llm import spend
 from origin.search_engine.llm.types import CallUsage
 from origin.search_engine.models import AgentRun, AiRequestCost, AiSpendEvent
 from origin.tests.test_base import BaseAPITestCase
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 
 def _se(**overrides):
@@ -53,7 +54,7 @@ METER_ON = override_settings(SEARCH_ENGINE=_se(AI_COST_METER=True))
 METER_OFF = override_settings(SEARCH_ENGINE=_se(AI_COST_METER=False))
 
 
-class _StreamingAPIBase(TransactionTestCase):
+class _StreamingAPIBase(CheapFlushTransactionTestCase):
     """`BaseAPITestCase`'s fixture on a `TransactionTestCase`.
 
     The streaming flows (`/ask/`, `/decide/`) run their fake agent on

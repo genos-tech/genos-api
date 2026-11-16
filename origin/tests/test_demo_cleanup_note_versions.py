@@ -16,7 +16,6 @@ it is only checked at a real COMMIT, which TestCase never reaches.
 """
 
 from django.contrib.auth import get_user_model
-from django.test import TransactionTestCase
 from rest_framework.test import APIClient
 
 from origin.models.common.team_models import TeamMaster
@@ -25,13 +24,14 @@ from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.services.demo_seeder import create_demo_environment, delete_demo_environment
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 User = get_user_model()
 
 PERSONAL, TASK, CHAT = 1, 2, 3
 
 
-class DemoCleanupNoteVersionTests(TransactionTestCase):
+class DemoCleanupNoteVersionTests(CheapFlushTransactionTestCase):
     def _seeded_demo_user(self):
         """The product's own path: a seeded demo workspace, no hand-built rows."""
         user = User.objects.create_user(

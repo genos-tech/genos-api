@@ -33,7 +33,7 @@ from unittest.mock import patch
 from django.conf import settings as dj_settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -47,6 +47,7 @@ from origin.search_engine.agent_views import (
 from origin.search_engine.llm import spend
 from origin.search_engine.models import AiCreditEntry, AiRequestCost
 from origin.tests.test_base import BaseAPITestCase
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 
 def _se(**overrides):
@@ -489,7 +490,7 @@ class FeaturesEndpointTests(BaseAPITestCase):
         self.assertIn("web_search", resp.data)
 
 
-class _StreamingBase(TransactionTestCase):
+class _StreamingBase(CheapFlushTransactionTestCase):
     """Ask-path tests: the fake agent runs on the real worker thread."""
 
     def setUp(self):

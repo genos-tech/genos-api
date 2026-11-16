@@ -30,7 +30,6 @@ import yaml
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import TransactionTestCase
 
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine import agent_views
@@ -39,6 +38,7 @@ from origin.search_engine.agent.evals.group import resume_runner
 from origin.search_engine.agent.languages import language_directive
 from origin.search_engine.llm import spend
 from origin.search_engine.llm.types import CallUsage, FunctionCall
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 GROUP_DIR = Path(resume_runner.__file__).parent
 MY_TAGS = ("t977", "t991", "t1283", "t889-reason", "t889-undo", "t1530")
@@ -94,7 +94,7 @@ class StubModel:
             )
 
 
-class RunnerBase(TransactionTestCase):
+class RunnerBase(CheapFlushTransactionTestCase):
     def setUp(self):
         super().setUp()
         self.model = StubModel()

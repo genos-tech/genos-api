@@ -18,7 +18,6 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
-from django.test import TransactionTestCase
 from django.utils import timezone
 
 from origin.management.commands.cleanup_stale_chat_note_roles import read_only
@@ -31,6 +30,7 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.services import chat_note_stale_roles as stale
 from origin.services.chat_note_access import membership_derived_rows, row_is_membership_derived
 from origin.tests.test_chat_note_one_rule import CHAT, ChatNoteFixtures
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
 
 T0 = timezone.now() - timedelta(days=100)
@@ -387,7 +387,7 @@ class DryRunIsReadOnly(Base):
         self.assertEqual(got["would_revoke"], 1)
 
 
-class TheDatabaseHoldsTheDryRunReadOnly(TransactionTestCase):
+class TheDatabaseHoldsTheDryRunReadOnly(CheapFlushTransactionTestCase):
     """Outside the test runner's own transaction, `read_only` makes Postgres refuse any write."""
 
     def test_a_write_inside_the_dry_run_is_refused_by_the_database(self):

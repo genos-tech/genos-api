@@ -17,7 +17,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, connections
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase
 from django.test.utils import CaptureQueriesContext
 
 from origin.models.common.ops_models import CronHeartbeat
@@ -30,6 +30,7 @@ from origin.services.account_deletion import delete_account
 from origin.services.account_export import build_export
 from origin.services.schedule_jobs import JOBS, Job, register_job
 from origin.tests.test_base import BaseAPITestCase
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 UTC = timezone.utc
 TOKYO = ZoneInfo("Asia/Tokyo")  # UTC+9 all year
@@ -1413,7 +1414,7 @@ def timezone_now():
     return datetime.now(UTC)
 
 
-class TwoCreatesAtOnceTests(TransactionTestCase):
+class TwoCreatesAtOnceTests(CheapFlushTransactionTestCase):
     """Real threads on real transactions (a `TestCase` wraps everything in one the threads
     cannot see). The check is slowed down AFTER it has looked, so without the member's row lock
     both creates would pass it and both would insert."""

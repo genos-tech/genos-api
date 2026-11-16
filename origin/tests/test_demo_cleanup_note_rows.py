@@ -20,7 +20,6 @@ only checked at a real COMMIT.
 """
 
 from django.contrib.auth import get_user_model
-from django.test import TransactionTestCase
 
 from origin.models.chat.unified_models import (
     Activity,
@@ -40,6 +39,7 @@ from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMembers
 from origin.search_engine.models import NoteSummary
 from origin.services.demo_seeder import create_demo_environment, delete_demo_environment
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_OWNER
 
 User = get_user_model()
@@ -48,7 +48,7 @@ PERSONAL, TASK, CHAT = 1, 2, 3
 SURFACE = {PERSONAL: 6, TASK: 7, CHAT: 8}
 
 
-class DemoTeardownNoteRows(TransactionTestCase):
+class DemoTeardownNoteRows(CheapFlushTransactionTestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             username="demo_nr", email="demo_nr@example.com", password="x", is_demo=True

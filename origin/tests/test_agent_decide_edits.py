@@ -32,7 +32,7 @@ from unittest import mock
 from django.contrib.auth import get_user_model
 from django.db import DatabaseError, connections
 from django.db.models.query import QuerySet
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -50,6 +50,7 @@ from origin.search_engine.agent.tools.add_comment import ADD_COMMENT
 from origin.search_engine.agent.tools.base import wrap_workspace_content
 from origin.search_engine.llm.types import AgentMessage, FunctionCall
 from origin.search_engine.models import AgentRun, AgentStep
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 from .test_agent_decide_race import _begin, _HookedAgentRun
 
@@ -89,7 +90,7 @@ class FakeWrite:
         return len(self.calls) >= n
 
 
-class DecideEditBase(TransactionTestCase):
+class DecideEditBase(CheapFlushTransactionTestCase):
     def setUp(self):
         super().setUp()
         user_model = get_user_model()
