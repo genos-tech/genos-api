@@ -47,6 +47,7 @@ from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.agent.tools.field_limits import NOTE_TITLE_MAX, check_text_length
 from origin.search_engine.agent.tools.note_access import has_write_permission, note_not_found
+from origin.search_engine.agent.tools.note_body_hash import note_body_hash
 from origin.search_engine.agent.tools.note_targets import (
     PERSONAL_FAMILY,
     chat_note_parent_context,
@@ -280,6 +281,25 @@ def _note_parent_context(note, note_type: str) -> dict[str, Any] | None:
     return {k: v for k, v in pc.items() if v is not None}
 
 
+def _base_body_hash(args: dict[str, Any], ctx: ToolContext) -> str | None:
+    """The `body_hash` the caller read, or None when none applies (not MCP, or not sent)."""
+    if ctx.surface != "mcp" or args.get("base_body_hash") is None:
+        return None
+    value = args["base_body_hash"]
+    if not isinstance(value, str) or not value.strip():
+        raise ToolError("`base_body_hash` must be the `body_hash` string from get_note.")
+    return value.strip()
+
+
+def _with_body_hash(
+    result: dict[str, Any], note, ctx: ToolContext, *, wanted: bool
+) -> dict[str, Any]:
+    """Add the body's NEW hash over MCP, so the next edit can chain on it without a re-read."""
+    if wanted and ctx.surface == "mcp":
+        result["body_hash"] = note_body_hash(note.body)
+    return result
+
+
 def _apply_changes(
     *,
     note,
@@ -294,6 +314,15 @@ def _apply_changes(
 ) -> dict[str, Any]:
     update_fields: list[str] = []
     changed: list[str] = []
+    # Over MCP only (MIP-1647): refuse the WHOLE call, before anything is written, when the body is
+    # no longer the one the caller read. `surface` is set by the server, never by the caller; the
+    # in-app agent does not declare the argument, so a value sent without it is ignored.
+    base_hash = _base_body_hash(args, ctx)
+    if base_hash is not None and note_body_hash(note.body) != base_hash:
+        raise ToolError(
+            "The note body changed since you read it (`base_body_hash` is stale). Read it again "
+            "with get_note and redo the edit on the new text. Nothing was changed."
+        )
     # What the note holds now, before this edit changes it in memory: the text
     # an agent edit is about to replace, which the version history must keep.
     title_before, body_before = note.title, note.body
@@ -330,7 +359,7 @@ def _apply_changes(
         }
         if parent_context:
             result["parent_context"] = parent_context
-        return result
+        return _with_body_hash(result, note, ctx, wanted=base_hash is not None)
 
     # The version rows that hold what this edit replaced and what it leaves
     # (`agent/undo.py` puts the first back).
@@ -410,6 +439,7 @@ def _apply_changes(
     result["__summary__"] = summary
     if parent_context:
         result["parent_context"] = parent_context
+    _with_body_hash(result, note, ctx, wanted="body" in update_fields or base_hash is not None)
     # Undo (`agent/undo.py`): the version this edit replaced, put back while the
     # note is still the one this edit wrote. A folder move is not covered.
     if (
