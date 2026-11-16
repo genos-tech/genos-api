@@ -53,6 +53,10 @@ CACHES = {
     }
 }
 
+# MIP-1633: stop at the first sign that Postgres crashed/restarted instead of reporting every
+# later test class as a setUpClass error ("in recovery mode").
+TEST_RUNNER = "apis.test_runner.PostgresCrashAwareRunner"
+
 # Opt-in isolated test database, so several test runners can execute in
 # parallel against the same Postgres server without colliding on the shared
 # `test_origin` database. Inert in CI (the var is unset there → default
