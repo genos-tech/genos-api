@@ -69,12 +69,8 @@ User = get_user_model()
 FLAG = "AGENT_INAPP_TIMELINE_TOOL"
 
 # The hashes (every flag off): origin/tests/golden/agent_pins.json, re-recorded with
-# `python manage.py record_agent_goldens`.
+# `python manage.py record_agent_goldens`. The flag-on tests read them through `PINS.require`.
 PINS = agent_pins.Pins(__name__)
-GOLDEN = PINS.golden
-GOLDEN_DECLARATIONS = GOLDEN.get("declarations")
-GOLDEN_PROMPT = GOLDEN.get("prompt/legacy")
-GOLDEN_REGISTRY_PROMPT = GOLDEN.get("prompt/registry")
 
 
 def sha(text: str) -> str:
@@ -161,13 +157,13 @@ class TestFlagOn(SimpleTestCase):
         self.assertEqual(len(on), len(off) + 1)
         self.assertEqual(on[:-1], off)
         self.assertEqual(on[-1].name, "get_timeline")
-        self.assertNotEqual(sha(declarations_json(on)), GOLDEN_DECLARATIONS)
+        self.assertNotEqual(sha(declarations_json(on)), PINS.require("declarations"))
 
     def test_the_prompt_does_not_move(self):
         with flag(True):
-            self.assertEqual(sha(agent_system_prompt()), GOLDEN_PROMPT)
+            self.assertEqual(sha(agent_system_prompt()), PINS.require("prompt/legacy"))
             with mock.patch.dict(settings.SEARCH_ENGINE, {"AGENT_CHEATSHEET_FROM_REGISTRY": True}):
-                self.assertEqual(sha(agent_system_prompt()), GOLDEN_REGISTRY_PROMPT)
+                self.assertEqual(sha(agent_system_prompt()), PINS.require("prompt/registry"))
 
     def test_the_tool_is_runnable_only_with_the_flag_on(self):
         with flag(True):

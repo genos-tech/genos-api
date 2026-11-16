@@ -65,6 +65,7 @@ PIN_MODULES: dict[str, tuple[str, ...]] = {
     "test_agent_tell_model_undo": ("FlagOffTests",),
     "test_agent_truncation_pins": ("NormalRunPins",),
     "test_inapp_timeline_tool": ("TestFlagOffIsByteIdenticalToMain",),
+    "test_mcp_search_window": ("InAppAgentIsUnchangedTests",),
     "test_task_close_notice": ("TestFlagOffIsMain",),
 }
 
@@ -114,6 +115,18 @@ class Pins:
         self.module = module_name.rsplit(".", 1)[-1]
         # Read at import: importers (`from ..._pins import GOLDEN`) get a plain dict.
         self.golden: dict[str, str] = dict(read_all().get(self.module, {}))
+
+    def require(self, key: str) -> str:
+        """The recorded hash for `key`, for a test that compares with it some other way than
+        `check` (an `assertNotEqual` on the flag-on side); a missing key fails loudly, so such a
+        comparison can never pass against nothing."""
+        try:
+            return self.golden[key]
+        except KeyError:
+            raise AssertionError(
+                f"{self.module}: no recorded hash for {key!r} in origin/tests/golden/agent_pins.json. "
+                f"{RE_RECORD_HINT}"
+            ) from None
 
     def check(self, test, key: str, digest: str, message: str | None = None) -> None:
         """Assert `digest` is what was recorded for `key`; while recording, store it instead."""

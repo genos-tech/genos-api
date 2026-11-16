@@ -113,7 +113,13 @@ paid run, never a per-PR `agent-evals`). Commit the two files it writes:
 | File | Holds | Read by |
 | ---- | ----- | ------- |
 | `origin/tests/golden/agent_fingerprint.json` | every surface the model is shown (declarations per provider, prompts, ten read tools' results), in the production and flags-off states | `test_agent_fingerprint_golden` |
-| `origin/tests/golden/agent_pins.json` | the sha256 pins of 12 test modules ("flag off sends what main sent"): declarations, system prompts, whole request shapes, some tool results | the modules in `PIN_MODULES` |
+| `origin/tests/golden/agent_pins.json` | the sha256 pins of the test modules in `PIN_MODULES` ("flag off sends what main sent"): declarations, system prompts, whole request shapes, some tool results | the modules in `PIN_MODULES` |
+
+The command records whatever the tree sends, so it cannot tell an intended change from a leak: its
+report is the check. A PR that adds a default-off flag, or any change that must not move what the model
+sees with the flag off, has to end with "no pin moved" and "no surface moved"; a key that moves there is
+exactly the leak the pins exist to catch, so fix the code instead of re-recording. A PR that means to
+change the declarations names every key that moved.
 
 **The list of pin modules is `PIN_MODULES` in `origin/tests/agent_pins.py`.** `test_agent_pins_registry`
 fails when a test module holds a sha256 literal and is neither on it nor on its short allowlist of hashes

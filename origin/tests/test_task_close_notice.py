@@ -266,8 +266,6 @@ class TestFlagOffIsMain(BriefingBase):
     times replaced by placeholders), the thread's message rows and its reply count.
     """
 
-    GOLDEN = PINS.golden.get("thread/closed")
-
     def snapshot(self):
         from origin.search_engine.agent.tools import REGISTRY, ToolContext
 
@@ -326,5 +324,5 @@ class TestFlagOffIsMain(BriefingBase):
         self.assertIn("is now Closed.", json.dumps(out))
         self.assertNotEqual(
             hashlib.sha256(self.normalised([out, [list(r) for r in rows]]).encode()).hexdigest(),
-            self.GOLDEN,
+            PINS.require("thread/closed"),
         )

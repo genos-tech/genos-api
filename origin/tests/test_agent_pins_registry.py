@@ -37,7 +37,6 @@ OTHER_HASHES = {
     "test_demo_v1_golden.py": "the demo workspace seeder's output",
     "test_mcp_search_rewrite.py": "the search rewrite stub's kwargs and result, not a declaration or prompt",
     "test_agent_resume_system_extra.py": "the ask path's system_extra for four fixed inputs: code that builds it, never edited with a prompt",
-    "test_mcp_search_window.py": "one MCP search tool's declaration as main has it (see its own docstring)",
 }
 
 
@@ -130,6 +129,14 @@ class PinsHelper(SimpleTestCase):
             self.pins.check(self, "a", "2" * 64, "what the model is sent changed")
         self.assertIn("record_agent_goldens", str(ctx.exception))
         self.assertIn("PIN_MODULES", str(ctx.exception))
+
+    def test_require_returns_the_hash_and_a_missing_key_fails_instead_of_comparing_with_nothing(
+        self,
+    ):
+        self.assertEqual(self.pins.require("a"), "1" * 64)
+        with self.assertRaises(AssertionError) as ctx:
+            self.pins.require("missing")
+        self.assertIn("record_agent_goldens", str(ctx.exception))
 
     def test_a_key_the_file_lacks_fails_naming_the_command(self):
         with self.assertRaises(AssertionError) as ctx:

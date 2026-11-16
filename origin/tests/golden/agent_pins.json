@@ -93,6 +93,9 @@
       "prompt/legacy": "5aa0aeaa405f8b1b0759c04a4c99422b2778731d470ad9bfff8a2e30e936c6df",
       "prompt/registry": "f5a822b4a2ff2aba264e11ab94840f240bd94433449ebb8f2dff5acc1dc0477c"
     },
+    "test_mcp_search_window": {
+      "search_knowledge_base/declaration": "a2cfb0b2c22515072f7b557911d9104203101e6d41898d763c455d45e865260c"
+    },
     "test_task_close_notice": {
       "thread/closed": "21192f28aee0f436195f6f96f695a8e14486b85901e71ae9a0deff90574c7f0d"
     }
