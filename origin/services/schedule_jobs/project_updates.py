@@ -330,8 +330,9 @@ register_job(
         description=(
             "What moved, what slipped and what is blocked in one project lately: tasks done "
             "and moved in the last days, tasks that went overdue or had their due date pushed "
-            "later, and tasks that are blocked. Choose the project by its id."
+            "later, and tasks that are blocked."
         ),
+        agent_note="`project_id` is the project's numeric id, from `list_projects`.",
         run=run,
         params_schema={
             "properties": {

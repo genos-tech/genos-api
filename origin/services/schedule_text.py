@@ -144,7 +144,9 @@ def _catalog_params(job: Any) -> dict[str, Any]:
 
 def job_catalog() -> list[dict[str, Any]]:
     """What a schedule can run: key, title, what it does and the parameters it takes, and
-    (MIP-1212) whether it uses AI, the effort it defaults to and what a run costs at each level."""
+    (MIP-1212) whether it uses AI, the effort it defaults to and what a run costs at each level.
+    A job with an `agent_note` (where an id comes from, MIP-1630) lists it for the AI client; the
+    REST page picks its own keys and never shows it."""
     return [
         {
             "job": job.key,
@@ -154,6 +156,7 @@ def job_catalog() -> list[dict[str, Any]]:
             "uses_ai": job.uses_ai,
             "effort_default": job.effort_default if job.uses_ai else None,
             "effort_cost": _effort_cost(job),
+            **({"agent_note": job.agent_note} if job.agent_note else {}),
         }
         for job in sorted(JOBS.values(), key=lambda j: j.key)
     ]

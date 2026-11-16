@@ -157,6 +157,22 @@ class TestCreateAndList(ScheduleToolBase):
         self.assertEqual(jobs["fake_day"]["description"], "A job for the tests.")
         self.assertIn("day", jobs["fake_day"]["params"])
 
+    def test_the_list_tells_the_agent_where_a_project_or_milestone_id_comes_from(self):
+        # MIP-1630: the job's `description` is member-facing (the form shows it), so the id
+        # wording is `agent_note`, which only this result carries.
+        jobs = {j["job"]: j for j in self.ok("list_my_schedules")["jobs"]}
+        for key, param, lister in (
+            ("project_updates", "project_id", "list_projects"),
+            ("milestone_updates", "milestone_id", "list_milestones"),
+        ):
+            with self.subTest(job=key):
+                self.assertNotRegex(jobs[key]["description"], r"(?i)\bids?\b")
+                self.assertIn(param, jobs[key]["params"])
+                self.assertIn(f"`{param}` is the", jobs[key]["agent_note"])
+                self.assertIn(" id, from `" + lister + "`", jobs[key]["agent_note"])
+        # A job with nothing of the kind to say lists no note at all.
+        self.assertNotIn("agent_note", jobs["fake_day"])
+
     def test_the_list_offers_the_suggested_schedules_the_member_does_not_have(self):
         with mock.patch.dict(
             JOBS,

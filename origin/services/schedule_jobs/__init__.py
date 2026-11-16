@@ -162,6 +162,11 @@ class Job:
     # that only reads a few facts, "medium" for one that summarises many comments. Only read for
     # a job with `uses_ai`; it is `None` in the catalog for any other.
     effort_default: str = "low"
+    # What only an AI client needs to read the parameters, such as where a parameter's id comes
+    # from (MIP-1630). `description` is shown to the member under the Report select, and a
+    # member picks a project or a milestone by NAME there, so an id instruction does not belong
+    # in it. The catalog carries this beside it for `list_my_schedules`; the REST page leaves it out.
+    agent_note: str = ""
 
     def ai_applies(self, params: dict[str, Any] | None) -> bool:
         """Whether a run with `params` spends AI usage, and so must name what it cost."""
