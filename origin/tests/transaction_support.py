@@ -31,6 +31,24 @@ skips `post_migrate`. 103 of the schema's 129 tables are reached by following fo
 the user table (recursive query on the dev database), which every one of these tests writes, so
 the cascade truncates most of the schema again anyway, and a test that reads content types or
 permissions loses the rows `post_migrate` made.
+
+New transactional tests use this class (MIP-1649)
+-------------------------------------------------
+Every class under `origin/tests/` that is transactional (Django's `TransactionTestCase`,
+`LiveServerTestCase`, `StaticLiveServerTestCase`, DRF's `APILiveServerTestCase`), directly, under
+an import alias, or through a base class of any module, must derive from
+`CheapFlushTransactionTestCase`. `origin.tests.test_transactional_test_guard` checks it with a
+static scan (no database) in the normal suite and fails naming the class, the file and this
+module. Django's `TestCase` is not affected: it rolls back and never flushes.
+
+A class that really needs Django's own full flush (for example, it asserts on rows that only
+`post_migrate` makes) opts out with a class attribute carrying the reason, and subclasses inherit it:
+
+    class NeedsDjangosFlush(TransactionTestCase):
+        full_flush_reason = "asserts the content types are rebuilt by post_migrate after a test"
+
+The reason must be a non-empty string literal; an empty or non-string value fails the guard.
+The attribute is greppable (`grep -rn full_flush_reason origin/tests`) and has no runtime effect.
 """
 
 from __future__ import annotations
