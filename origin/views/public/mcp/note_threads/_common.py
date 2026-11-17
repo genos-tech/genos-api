@@ -111,8 +111,20 @@ def create_refusal(err: ThreadWriteError) -> ToolError:
     if kind == "not_found" and code == "no_document":
         return ToolError(
             "Nobody has opened this note in the editor yet, so it has no live document to hold "
-            "a comment. Open it once in Genos (or ask its owner to), then try again. Nothing was "
-            "changed."
+            "a comment, and it has no text to make one from. Open it once in Genos (or ask its "
+            "owner to), then try again. Nothing was changed."
+        )
+    if kind == "refused" and code == "seed_invalid":
+        return ToolError(
+            "This note has never been opened in the editor and its stored text could not be turned "
+            "into a document, so it cannot be commented on yet. Open it once in Genos (or ask its "
+            "owner to), then try again. Nothing was changed."
+        )
+    if kind == "refused" and code == "too_large":
+        return ToolError(
+            "This note has never been opened in the editor and is too large to make a document "
+            "from over MCP. Open it once in Genos (or ask its owner to), then try again. Nothing "
+            "was changed."
         )
     if kind == "conflict" and code == "anchor_ambiguous":
         matches = facts.get("matches")

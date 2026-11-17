@@ -20,6 +20,7 @@ from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.note_access import load_readable_note
 from origin.services import collab_push
 from origin.services.note_comment_notify import notify_note_comment
+from origin.views.public.mcp.note_blocks import _stored
 from origin.views.public.mcp.note_threads._common import (
     actor_id,
     create_refusal,
@@ -98,8 +99,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     block_id = _block_id(args.get("block_id"))
     occurrence = _occurrence(args.get("occurrence"))
     ref = load_readable_note(args, ctx)
-    try:
-        done = collab_push.create_note_thread(
+
+    def ask(seed_blocks=None):
+        return collab_push.create_note_thread(
             ref.family,
             ref.note_id,
             user_id=actor_id(ctx),
@@ -108,7 +110,20 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             block_id=block_id,
             occurrence=occurrence,
             via=reduced_via(ctx),
+            seed_blocks=seed_blocks,
         )
+
+    try:
+        try:
+            done = ask()
+        except collab_push.ThreadWriteError as err:
+            # A note nobody has opened has no document. The refusal wrote nothing, so asking again is
+            # safe, ONCE and with the note's stored body for collab to make the document from
+            # (MIP-1670). Nothing else is retried: a second POST of anything else is a second thread.
+            stored = getattr(ref.note, "body", None)
+            if err.code != "no_document" or not isinstance(stored, list) or not stored:
+                raise
+            done = ask(seed_blocks=_stored.with_effective_ids(stored))
     except collab_push.ThreadWriteError as err:
         raise create_refusal(err)
     # The comment is in the note: tell the people it reaches, as the editor's own comment would
@@ -131,6 +146,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "block_id": done.get("blockId"),
         "occurrence": done.get("occurrence"),
         "matches": done.get("matches"),
+        # True when the note had never been opened and its document was made from its stored body for
+        # this comment (MIP-1670).
+        "document_created": done.get("seeded") is True,
         "__summary__": (
             f"Started a comment thread on note {ref.note_id}, on text in block "
             f"{done.get('blockId')}."

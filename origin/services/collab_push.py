@@ -278,6 +278,9 @@ def _write_thread(path: str, payload: dict[str, Any], expect: str) -> dict[str, 
         raise ThreadWriteError("not_found", str(error), code=code, facts=body)
     if status == 403 and error:
         raise ThreadWriteError("forbidden", str(error))
+    if status == 413:
+        # The note's body is too big to send for a document to be made from it (MIP-1670).
+        raise ThreadWriteError("refused", "request too large", code="too_large", facts=body)
     if status == 409 and error:
         raise ThreadWriteError("conflict", str(error), code=code, facts=body)
     if status == 400 and error:
@@ -297,6 +300,7 @@ def create_note_thread(
     block_id: str | None = None,
     occurrence: int | None = None,
     via: dict[str, Any] | None = None,
+    seed_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Start a comment thread on a passage of a note (MIP-1644), as `user_id`.
 
@@ -307,6 +311,11 @@ def create_note_thread(
     `occurrence`, is a `ThreadWriteError` (`not_found` / `conflict`, with a `code` and the facts),
     and nothing is written. `via` is how it arrived, ALREADY reduced as for `reply_note_thread`.
     Never retried: a second POST would be a second thread.
+
+    A note nobody has opened has no document and collab answers `no_document` (404). `seed_blocks`, the
+    note's stored body with an id on every block, lets collab make the document from it and write the
+    thread in the same transaction (MIP-1670); collab checks everything on a scratch document first, so a
+    refusal still creates nothing. The caller sends it only after `no_document`, never up front.
     """
     payload: dict[str, Any] = {
         "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
@@ -320,6 +329,8 @@ def create_note_thread(
         payload["occurrence"] = occurrence
     if via:
         payload["metadata"] = {"via": via}
+    if seed_blocks:
+        payload["seedBlocks"] = seed_blocks
     return _write_thread(CREATE_THREAD_PATH, payload, "threadId")
 
 
