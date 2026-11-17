@@ -1936,6 +1936,21 @@ SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
     os.environ.get("AGENT_INAPP_TIMELINE_TOOL", "true").lower() == "true"
 )
 
+# MIP-1671 (model-visible, dark-shipped OFF, NOT yet evaluated): publish `comment_on_note` to the in-app agent, the
+# twin of the MCP tool of MIP-1644. ON = one more tool declaration (a write: the member answers an approval card
+# before a comment is posted under their name) that starts a comment thread on a passage of a note, by the same
+# code MCP runs; the note's readers are told, as for a person's own comment. OFF = the tool is neither declared nor
+# runnable (`tools/base.py::FLAGGED_REGISTRY`), and the prompt and the declarations are byte-identical to before.
+# NOT in any arm file yet, on purpose: an arm adds the flag to the "all flags on" union, whose prompt budget
+# (`ALL_ON_BUDGET_CHARS`, 88 characters of headroom) the declaration would exceed before an eval has justified
+# raising it. The flip criterion, for the PR that adds the arm and the cases: on "comment on this passage" the tool
+# is chosen after `fetch_note`; the ambiguous and not-found answers are relayed, not papered over; no case is taken
+# from `add_comment` (a TASK comment) or `update_note` that they should keep (`agent_eval_routing` with this env
+# var set).
+SEARCH_ENGINE["AGENT_INAPP_NOTE_COMMENT_TOOL"] = (
+    os.environ.get("AGENT_INAPP_NOTE_COMMENT_TOOL", "false").lower() == "true"
+)
+
 # MIP-977 (model-visible, dark-shipped OFF, DEFAULT ON since MIP-1089 (eval 2026-11-14; "OFF" below is the env value `false`, the rollback), measured by the grouped eval arm `t977`):
 # a run resumed after an approve or reject keeps the prompt context its first leg
 # had (the thread / note summary of "Ask about this ...", the @/# references block,

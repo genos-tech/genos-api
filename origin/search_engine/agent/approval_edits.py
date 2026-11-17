@@ -173,6 +173,12 @@ EDITABLE_FIELDS: dict[str, dict[str, Field]] = {
         "updates[*].start_date": Field(DATE, "Start date", allow_empty=True),
     },
     "add_comment": {"body_text": Field(BODY, "Comment", required=True)},
+    # MIP-1671 (flag `AGENT_INAPP_NOTE_COMMENT_TOOL`): a comment thread on a passage of a note. Nothing is
+    # editable on the card: the comment's rules (4,000 characters, 50 lines, plain text) are the tool's own and
+    # no field type here enforces the line limit, so an edit could pass the card and be refused after the
+    # approval is spent; `anchor_text` is a reference into the note, never an editable value. A person who
+    # wants other words rejects the card, with the reason (`AGENT_REJECT_REASON`).
+    "comment_on_note": _NONE,
     "update_comment": {"body_text": Field(BODY, "Comment", required=True)},
     # --- notes ---
     "create_note": {

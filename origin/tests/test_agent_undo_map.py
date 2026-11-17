@@ -91,6 +91,9 @@ class MapCompletenessTests(SimpleTestCase):
                 "decline_join_request",
                 "create_calendar_event",
                 "assign_task",
+                # MIP-1671: running it files the "commented" activity for the people the note reaches
+                # (`test_inapp_note_comment_tool.test_the_people_the_comment_reaches_are_told`).
+                "comment_on_note",
             },
         )
 
