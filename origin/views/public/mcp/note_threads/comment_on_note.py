@@ -19,6 +19,7 @@ from origin.search_engine.agent.tools import Tool, ToolContext
 from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.note_access import load_readable_note
 from origin.services import collab_push
+from origin.services.note_comment_notify import notify_note_comment
 from origin.views.public.mcp.note_threads._common import (
     actor_id,
     create_refusal,
@@ -110,9 +111,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
     except collab_push.ThreadWriteError as err:
         raise create_refusal(err)
+    # The comment is in the note: tell the people it reaches, as the editor's own comment would
+    # (best-effort, never fails this call; the key's owner gets their own switchable notice).
+    notify_note_comment(
+        ref.note,
+        note_type=ref.code,
+        actor_id=actor_id(ctx),
+        comment_id=str(done.get("commentId") or ""),
+        text=text,
+    )
     return {
         "note_id": ref.note_id,
         "note_type": ref.family,
+        # What the owner's notice names (`mcp_notice`): the note's title and, for a task note, its task.
+        "title": getattr(ref.note, "title", None),
+        "task_id": getattr(ref.note, "task_id", None),
         "thread_id": done.get("threadId"),
         "comment_id": done.get("commentId"),
         "block_id": done.get("blockId"),

@@ -248,8 +248,8 @@ class TheSwitchAndTheFailureModeTests(NoticeBase):
         self.assertEqual(
             [k for k, on in switches.DEFAULTS.items() if not on], ["ai_app_note_edited"]
         )
-        self.assertEqual(len(switches.KEYS), 12)
-        self.assertEqual(len(set(switches.KEYS)), 12)
+        self.assertEqual(len(switches.KEYS), 13)
+        self.assertEqual(len(set(switches.KEYS)), 13)
 
     def test_on_by_default_and_another_category_does_not_turn_it_off(self):
         NotificationPreference.objects.create(user=self.user, category_settings={"chats": False})
@@ -284,16 +284,19 @@ class TheOldSwitchIsCarriedOverTests(NoticeBase):
         from django.apps import apps  # noqa: PLC0415
 
         module = importlib.import_module("origin.migrations.0241_notification_enable_ai_apps")
-        self.assertEqual(set(module.AI_APP_KEYS), set(switches.KEYS))
+        # The table has grown since (0248 carries the opt-out to "note commented"): 0241 itself only
+        # ever knew the twelve it spells out, and must not change when the table does.
+        self.assertEqual(set(module.AI_APP_KEYS), set(switches.KEYS) - {"ai_app_note_commented"})
         module.carry_the_old_switch(apps, None)
+        return module
 
     def test_a_member_who_turned_it_off_starts_with_every_switch_off(self):
         NotificationPreference.objects.create(
             user=self.user, category_settings={"ai_app": False, "chats": False}
         )
-        self.carry()
+        module = self.carry()
         settings = NotificationPreference.objects.get(user=self.user).category_settings
-        self.assertEqual(settings, {"chats": False, **dict.fromkeys(switches.KEYS, False)})
+        self.assertEqual(settings, {"chats": False, **dict.fromkeys(module.AI_APP_KEYS, False)})
 
     def test_a_member_who_left_it_on_is_untouched(self):
         NotificationPreference.objects.create(
@@ -302,6 +305,75 @@ class TheOldSwitchIsCarriedOverTests(NoticeBase):
         self.carry()
         settings = NotificationPreference.objects.get(user=self.user).category_settings
         self.assertEqual(settings, {"chats": False, "ai_app": True})
+
+
+class TheNewSwitchFollowsAnOptOutTests(NoticeBase):
+    """0248 (MIP-1669): a member who switched every earlier AI-app notice off starts "note commented"
+    off too, instead of getting a new kind of notice they never agreed to."""
+
+    def carry(self):
+        import importlib  # noqa: PLC0415
+
+        from django.apps import apps  # noqa: PLC0415
+
+        module = importlib.import_module("origin.migrations.0248_ai_app_note_commented_carry")
+        self.assertEqual(
+            set(module.EARLIER_KEYS) | {module.NEW_KEY},
+            set(switches.KEYS),
+            "the table and the migration agree",
+        )
+        module.carry_the_opt_out(apps, None)
+        return module
+
+    def stored(self, user=None):
+        return NotificationPreference.objects.get(user=user or self.user).category_settings
+
+    def test_everything_switched_off_starts_the_new_switch_off(self):
+        everything_off = dict.fromkeys(self.carry_keys(), False)
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"chats": False, **everything_off}
+        )
+        self.carry()
+        self.assertIs(self.stored()["ai_app_note_commented"], False)
+        self.assertIs(self.stored()["chats"], False)
+
+    def test_leaving_even_one_on_keeps_the_default_for_the_new_one(self):
+        settings = dict.fromkeys(self.carry_keys(), False)
+        settings["ai_app_todo_created"] = True
+        NotificationPreference.objects.create(user=self.user, category_settings=settings)
+        self.carry()
+        self.assertNotIn("ai_app_note_commented", self.stored())
+
+    def test_only_the_default_off_one_being_off_is_not_an_opt_out(self):
+        NotificationPreference.objects.create(
+            user=self.user, category_settings={"ai_app_note_edited": False}
+        )
+        self.carry()
+        self.assertNotIn("ai_app_note_commented", self.stored())
+
+    def test_a_stored_value_for_the_new_switch_is_never_touched(self):
+        settings = {**dict.fromkeys(self.carry_keys(), False), "ai_app_note_commented": True}
+        NotificationPreference.objects.create(user=self.user, category_settings=settings)
+        self.carry()
+        self.assertIs(self.stored()["ai_app_note_commented"], True)
+
+    def test_a_member_with_no_ai_app_settings_is_untouched_and_a_second_run_changes_nothing(self):
+        NotificationPreference.objects.create(user=self.user, category_settings={"chats": False})
+        NotificationPreference.objects.create(
+            user=self.user2, category_settings=dict.fromkeys(self.carry_keys(), False)
+        )
+        self.carry()
+        first = (self.stored(), self.stored(self.user2))
+        self.carry()
+        self.assertEqual((self.stored(), self.stored(self.user2)), first)
+        self.assertEqual(self.stored(), {"chats": False})
+
+    def carry_keys(self):
+        import importlib  # noqa: PLC0415
+
+        return importlib.import_module(
+            "origin.migrations.0248_ai_app_note_commented_carry"
+        ).EARLIER_KEYS
 
 
 class NoteEditTests(NoticeBase):
@@ -484,8 +556,8 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "manage_note_folder",
         "favorite_note",
         "delete_note_folder",
-        "comment_on_note",
-        "reply_to_note_comment",
+        # (`comment_on_note` and `reply_to_note_comment` left this list in MIP-1669: a comment an AI app
+        # writes on a note tells the key's owner, as a task comment does; resolving stays silent.)
         "resolve_note_comment",
         "manage_note_sharing",
         "restore_note_version",
