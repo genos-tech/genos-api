@@ -323,16 +323,26 @@ def _with_comment_threads(
 def _with_blocks(
     payload: dict[str, Any], args: dict[str, Any], mcp_args: dict[str, Any], ctx: ToolContext
 ) -> dict[str, Any]:
-    """`get_note(include_blocks=true)` on MCP also lists the note's blocks (MIP-1646)."""
+    """`get_note(include_blocks=true)` on MCP also lists the note's blocks (MIP-1646).
+
+    `blocks_matching` and `blocks_offset` (MIP-1666) are a request for blocks too: a caller who finds
+    a block by its text, or pages to the next ones, has said what it wants."""
+    matching = note_blocks.read.blocks_matching_arg(mcp_args.get("blocks_matching"))
+    offset = note_blocks.read.blocks_offset_arg(mcp_args.get("blocks_offset"))
     wanted = mcp_args.get("include_blocks")
-    if not (wanted is True or str(wanted).lower() == "true"):
+    if not (wanted is True or str(wanted).lower() == "true" or matching is not None or offset):
         return payload
     note_type = str(args.get("note_type") or "").lower().strip()
     try:
         note_id = int(args.get("note_id"))
     except (TypeError, ValueError):
         return payload
-    return {**payload, **note_blocks.read.note_block_fields(note_type, note_id, ctx)}
+    return {
+        **payload,
+        **note_blocks.read.note_block_fields(
+            note_type, note_id, ctx, matching=matching, offset=offset
+        ),
+    }
 
 
 def _rewrite_refs(text: str) -> str:
@@ -615,7 +625,9 @@ CATALOG: tuple[McpTool, ...] = (
             "would overwrite text added since you read the note. Pass "
             "`include_blocks: true` to also list the note's blocks (`blocks`: "
             "`block_id`, `type`, `text`, its place in the tree and a `block_hash`), which "
-            "`edit_note_block` needs to change just one of them."
+            "`edit_note_block` needs to change just one of them. In a long note find the "
+            "block by a phrase it contains with `blocks_matching`, or read the list a page at "
+            "a time with `blocks_offset` (each page says `blocks_next_offset`)."
         ),
         note_ref_args=("note_id",),
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
@@ -629,6 +641,22 @@ CATALOG: tuple[McpTool, ...] = (
                 "description": (
                     "Also list the note's blocks with their ids and hashes, for "
                     "`edit_note_block`. Default false."
+                ),
+            },
+            "blocks_matching": {
+                "type": "string",
+                "description": (
+                    "List only the blocks whose text contains this word or phrase (ignoring "
+                    "case), to find the block to change in a long note. Implies "
+                    "`include_blocks`."
+                ),
+            },
+            "blocks_offset": {
+                "type": "integer",
+                "description": (
+                    "Start the block list this many blocks in: the `blocks_next_offset` of the "
+                    "previous page. A long note lists its blocks a page at a time. Implies "
+                    "`include_blocks`."
                 ),
             },
         },
@@ -1455,7 +1483,9 @@ CATALOG: tuple[McpTool, ...] = (
             "folder, a member of a task note's project, or a member of a chat "
             "note's chat. Pass `base_body_hash` (the `body_hash` `get_note` returned) "
             "to refuse the edit if the body changed since you read it; the result "
-            "carries the new `body_hash`. Requires a write-scoped API key."
+            "carries the new `body_hash`. To change one paragraph, list or heading, "
+            "especially in a long note, use `edit_note_block` instead: it leaves the "
+            "rest alone. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
