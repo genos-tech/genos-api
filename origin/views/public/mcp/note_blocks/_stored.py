@@ -77,6 +77,25 @@ def effective_ids(body: Any) -> dict[int, str]:
     return out
 
 
+def with_effective_ids(body: Any) -> list[dict[str, Any]]:
+    """A COPY of `body` in which every block carries its effective id (the stored one, else the derived one)
+    that `summarize` lists, children included. For making a live document from the stored body (MIP-1670): the
+    blocks keep the ids they are sent with, so the ids a caller was shown are the document's ids."""
+    working = copy.deepcopy(body) if isinstance(body, list) else []
+    ids = effective_ids(working)
+
+    def walk(blocks: list[Any]) -> None:
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            block["id"] = ids[id(block)]
+            if isinstance(block.get("children"), list):
+                walk(block["children"])
+
+    walk(working)
+    return working
+
+
 def block_hash(block: dict[str, Any]) -> str:
     canonical = json.dumps(block, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
