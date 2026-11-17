@@ -37,7 +37,8 @@ def clean_thread_id(raw: Any) -> str:
     if not _THREAD_ID.match(text):
         raise ToolError(
             "`thread_id` is the id of a comment thread: take it from `comment_threads` in "
-            "`get_note`."
+            "`get_note`, or pass the thread's link (the note's URL ending `?comment=<id>`) as "
+            "`note_id`."
         )
     return text
 

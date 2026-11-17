@@ -151,6 +151,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
 from origin.views.public.mcp.history_window import hide_old_messages  # noqa: E402
 from origin.views.public.mcp.resolve import (
     block_in_note_link,
+    comment_in_note_link,
     resolve_milestone_ref,
     resolve_note_ref,
     resolve_task_ref,
@@ -223,6 +224,22 @@ _COMMENT_BLOCK_ID_SCHEMA = {
         "they must name the same block."
     ),
 }
+# The thread tools' version: the same link also names the thread when it came from "Copy link to comment".
+_COMMENT_LINK_NOTE_REF_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The note: its Genos URL, or its numeric id (then pass `note_type`). A comment link, from "
+        "'Copy link to comment' (`…/notes/my/12?comment=<id>`), names the note AND the thread, so "
+        "it is enough on its own."
+    ),
+}
+_THREAD_ID_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The thread: `thread_id` from `comment_threads` in `get_note`. Not needed when `note_id` "
+        "is a comment link. If both are given they must name the same thread."
+    ),
+}
 _BLOCK_ID_SCHEMA = {
     "type": "string",
     "description": (
@@ -261,6 +278,10 @@ class McpTool:
     # `resolve_references` fills it from the note reference, and refuses a link and an explicit value
     # that name different blocks. "" = the link's query is ignored, as it is for every other note tool.
     block_link_arg: str = ""
+    # The same for a COMMENT link (`…/12?comment=<threadId>`, MIP-1662): the argument that takes the
+    # thread a pasted note link names. A block link handed to such a tool is refused in words that say
+    # which link it wants; "" = the link's query is ignored.
+    comment_link_arg: str = ""
     # Arguments the registry marks required that a client may leave out: the tool, or the reference
     # resolver, still insists on them when nothing else supplies them. Only the PUBLISHED `required`
     # changes, so a client that validates it can send what a person pasted and nothing more.
@@ -1881,18 +1902,20 @@ CATALOG: tuple[McpTool, ...] = (
         name="reply_to_note_comment",
         registry_name="reply_to_note_comment",
         description=(
-            "Reply to a comment thread on a note, as the caller: it shows in the "
-            "note's editor next to the other replies, marked as written through a "
-            "connected app. Take `thread_id` from `comment_threads` in `get_note`. "
-            "`text` is plain text, one paragraph per line; no formatting, no "
-            "@-mentions; to start a new thread on a passage use `comment_on_note`. Anyone who "
-            "can open the note may reply, viewers included. Returns `comment_id`, "
-            "`comment_count` and `thread_resolved`. Name the note by its Genos URL, "
-            "or by its numeric id with `note_type`. Requires a write-scoped API key."
+            "Reply to a comment thread on a note, as the caller: it shows in the note's editor next to "
+            "the other replies, marked as written through a connected app. Take `thread_id` from "
+            "`comment_threads` in `get_note`, or paste a comment link (`…?comment=<id>`, from 'Copy link "
+            "to comment') as `note_id`: it names the note and the thread. `text` is plain text, one "
+            "paragraph per line; no formatting or @-mentions; to start a thread use `comment_on_note`. "
+            "Anyone who can open the note may reply. Returns `comment_id`, `comment_count`, "
+            "`thread_resolved`. Name the note by its Genos URL, or its id with `note_type`. Requires a "
+            "write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
-        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+        comment_link_arg="thread_id",
+        optional_args=("note_type", "thread_id"),
+        schema_overrides={"note_id": _COMMENT_LINK_NOTE_REF_SCHEMA, "thread_id": _THREAD_ID_SCHEMA},
     ),
     McpTool(
         name="edit_note_block",
@@ -1925,17 +1948,19 @@ CATALOG: tuple[McpTool, ...] = (
         name="resolve_note_comment",
         registry_name="resolve_note_comment",
         description=(
-            "Mark a comment thread on a note resolved. Stricter than the editor: only "
-            "the thread's author or the note's owner can; anyone else is refused (use "
-            "`reply_to_note_comment` instead). Resolving a resolved thread changes "
-            "nothing. Take `thread_id` from `comment_threads` in `get_note`. Returns "
-            "`resolved`, `already_resolved` and `resolved_by` (a user id). Reopening a "
-            "thread is done in the editor. Name the note by its Genos URL, or by its "
-            "numeric id with `note_type`. Requires a write-scoped API key."
+            "Mark a comment thread on a note resolved. Stricter than the editor: only the thread's "
+            "author or the note's owner can; anyone else is refused (use `reply_to_note_comment`). "
+            "Resolving a resolved thread changes nothing. Take `thread_id` from `comment_threads` in "
+            "`get_note`, or paste a comment link (`…?comment=<id>`, from 'Copy link to comment') as "
+            "`note_id`: it names the note and the thread. Returns `resolved`, `already_resolved`, "
+            "`resolved_by` (a user id). Reopening a thread is done in the editor. Name the note by its "
+            "Genos URL, or its id with `note_type`. Requires a write-scoped API key."
         ),
         write=True,
         note_ref_args=("note_id",),
-        schema_overrides={"note_id": _NOTE_REF_SCHEMA},
+        comment_link_arg="thread_id",
+        optional_args=("note_type", "thread_id"),
+        schema_overrides={"note_id": _COMMENT_LINK_NOTE_REF_SCHEMA, "thread_id": _THREAD_ID_SCHEMA},
     ),
     McpTool(
         name="delete_note",
@@ -2489,6 +2514,39 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
     return schema
 
 
+def _fill_from_comment_link(tool: McpTool, args: dict[str, Any], ref: Any) -> None:
+    """Take the thread a pasted comment link names into `tool.comment_link_arg` (MIP-1662).
+
+    A link and an explicit value that name different threads are refused, as for a block. A link
+    that names a BLOCK (and no thread) while no thread was given is refused in words that say which
+    link this tool takes; with a thread given it is harmless and ignored.
+    """
+    name = tool.comment_link_arg
+    given = args.get(name)
+    has_given = given not in (None, "")
+    linked = comment_in_note_link(ref)
+    if linked is not None:
+        if has_given and str(given).strip() != linked:
+            raise ToolError(
+                f"The link names thread {linked} but `{name}` names a different one. Pass the "
+                f"link or `{name}`, or make them agree. Nothing was changed."
+            )
+        args[name] = linked
+        return
+    if has_given:
+        return
+    try:
+        names_a_block = block_in_note_link(ref) is not None
+    except ToolError:
+        names_a_block = False
+    if names_a_block:
+        raise ToolError(
+            "That link names a block, not a comment thread. Paste the link from 'Copy link to "
+            f"comment', or pass `{name}` from `comment_threads` in `get_note`. To comment on that "
+            "block's text, use `comment_on_note`."
+        )
+
+
 def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dict[str, Any]:
     """`args` with every reference `tool` takes turned into the id it wants.
 
@@ -2516,6 +2574,8 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
                             "them agree. Nothing was changed."
                         )
                     args[tool.block_link_arg] = linked
+            if tool.comment_link_arg:
+                _fill_from_comment_link(tool, args, args[arg])
             args[arg] = note_id
             # Only a reference that actually determined the family
             # overrides what the caller passed. A bare id determines

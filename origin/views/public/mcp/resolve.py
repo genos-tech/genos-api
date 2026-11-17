@@ -229,6 +229,42 @@ _BUCKET_TO_NOTE_TYPE = {
 BLOCK_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+def _one_link_param(ref, name: str, malformed: str) -> str | None:
+    """The single value of query parameter `name` in a note link, or None when it has none.
+
+    Refused (`malformed`) rather than ignored when the value is not an id or the parameter appears
+    twice with different values: the caller meant something, and falling back to "nothing" could let
+    a stray argument act on another block or thread.
+    """
+    if not isinstance(ref, str):
+        return None
+    text = _checked_text(ref)
+    query = text.partition("#")[0].partition("?")[2]
+    if not query:
+        return None
+    values = parse_qs(query, keep_blank_values=True).get(name)
+    if not values:
+        return None
+    if len(set(values)) > 1 or not BLOCK_ID.match(values[0]):
+        raise ToolError(malformed)
+    return values[0]
+
+
+def comment_in_note_link(ref) -> str | None:
+    """The comment thread a note link points at, or None when it points at none (MIP-1662).
+
+    "Copy link to comment" makes the note's own URL plus ONE query parameter,
+    `/workspace/notes/my/12?comment=<threadId>` (MIP-146); a thread id has the same shape as a block
+    id (the frontend checks both with one pattern). A `?block=` link names a block, never a thread.
+    """
+    return _one_link_param(
+        ref,
+        "comment",
+        "The `comment` in that link is not one thread id. Copy the link again with 'Copy link to "
+        "comment', or pass `thread_id` from `comment_threads` in `get_note`.",
+    )
+
+
 def block_in_note_link(ref) -> str | None:
     """The block a note link points at, or None when it points at none (MIP-1655).
 
@@ -242,22 +278,13 @@ def block_in_note_link(ref) -> str | None:
     different values, is refused rather than ignored: the caller meant a block, and
     falling back to "no block" could let a stray `block_id` argument edit another.
     """
-    if not isinstance(ref, str):
-        return None
-    text = _checked_text(ref)
-    query = text.partition("#")[0].partition("?")[2]
-    if not query:
-        return None
-    values = parse_qs(query, keep_blank_values=True).get("block")
-    if not values:
-        return None
-    if len(set(values)) > 1 or not BLOCK_ID.match(values[0]):
-        raise ToolError(
-            "The `block` in that link is not one block id. Copy the link again with "
-            "'Copy link to block', or pass `block_id` from `get_note` (with "
-            "`include_blocks: true`)."
-        )
-    return values[0]
+    return _one_link_param(
+        ref,
+        "block",
+        "The `block` in that link is not one block id. Copy the link again with "
+        "'Copy link to block', or pass `block_id` from `get_note` (with "
+        "`include_blocks: true`).",
+    )
 
 
 def resolve_note_ref(ref, _team_id: str) -> tuple[int, str | None]:

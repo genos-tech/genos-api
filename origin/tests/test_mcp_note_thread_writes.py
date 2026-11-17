@@ -500,13 +500,14 @@ class McpOnlyTests(NoteThreadWriteBase):
         tools = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
         reply = tools[REPLY]["inputSchema"]
         self.assertEqual(sorted(reply["properties"]), ["note_id", "note_type", "text", "thread_id"])
-        self.assertEqual(reply["required"], ["note_type", "note_id", "thread_id", "text"])
+        # A comment link names the note and the thread (MIP-1662), so neither half is required.
+        self.assertEqual(reply["required"], ["note_id", "text"])
         self.assertEqual(reply["properties"]["thread_id"]["type"], "string")
         self.assertEqual(reply["properties"]["text"]["type"], "string")
         self.assertEqual(reply["properties"]["note_id"]["type"], "string")
         resolve = tools[RESOLVE]["inputSchema"]
         self.assertEqual(sorted(resolve["properties"]), ["note_id", "note_type", "thread_id"])
-        self.assertEqual(resolve["required"], ["note_type", "note_id", "thread_id"])
+        self.assertEqual(resolve["required"], ["note_id"])
         for name in (REPLY, RESOLVE):
             self.assertLess(len(tools[name]["description"]), 700, "short, per the MCP rules")
         self.assertIn("reply", tools[REPLY]["description"].lower())
