@@ -234,16 +234,14 @@ class PublishedSchemaTests(LinkBase):
         self.assertIn("must name the same block", schema["properties"]["block_id"]["description"])
         self.assertIn("block link", self.tools()[EDIT]["description"])
 
-    def test_only_this_tool_relaxed_what_it_requires(self):
+    def test_only_the_tools_that_take_a_link_relaxed_what_they_require(self):
+        # `reply_to_note_comment` and `resolve_note_comment` were the control here until MIP-1662 let
+        # them take a comment link too (test_mcp_note_comment_link). These take no link and still
+        # need both halves of a note's name.
         tools = self.tools()
-        self.assertEqual(
-            tools["reply_to_note_comment"]["inputSchema"]["required"],
-            ["note_type", "note_id", "thread_id", "text"],
-        )
-        self.assertEqual(
-            tools["resolve_note_comment"]["inputSchema"]["required"],
-            ["note_type", "note_id", "thread_id"],
-        )
+        for name in ("update_note", "get_note", "list_note_access"):
+            with self.subTest(tool=name):
+                self.assertIn("note_type", tools[name]["inputSchema"]["required"])
 
 
 class ParserTests(LinkBase):
