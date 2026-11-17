@@ -61,6 +61,7 @@ from origin.search_engine.agent.tools.base import (
     get_app_tool,
     get_mcp_tool,
 )
+from origin.search_engine.agent.tools.comment_on_note import COMMENT_ON_NOTE_INAPP
 from origin.search_engine.agent.tools.create_calendar_event import CREATE_CALENDAR_EVENT
 from origin.search_engine.agent.tools.create_note import CREATE_NOTE
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
@@ -329,6 +330,10 @@ for _t in (
 
 # Flag-gated in-app tools (default off; NOT in REGISTRY, see `base.FLAGGED_REGISTRY`).
 register_flagged_tool(GET_TIMELINE_INAPP, "AGENT_INAPP_TIMELINE_TOOL")
+# MIP-1671: starting a comment thread on a passage of a note, the in-app twin of the MCP tool of the same name.
+# A WRITE tool (it asks for approval), dark until its eval: with the flag off it is declared and runnable
+# nowhere in the app, and MCP's own `comment_on_note` is untouched (`get_mcp_tool` prefers the MCP-only one).
+register_flagged_tool(COMMENT_ON_NOTE_INAPP, "AGENT_INAPP_NOTE_COMMENT_TOOL")
 # MIP-1563: a task's files can be deleted by the agent and MCP, behind the parity batch's flag. A
 # WRITE tool: filed here so that with the flag off it is declared, runnable and published nowhere.
 register_flagged_tool(DELETE_TASK_ATTACHMENT, PARITY_FLAG)

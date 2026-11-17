@@ -142,8 +142,11 @@ class TestFlagOffIsByteIdenticalToMain(SimpleTestCase):
     def test_the_registries_are_what_they_were(self):
         self.assertEqual(set(REGISTRY) & set(MCP_ONLY_REGISTRY), set())
         self.assertNotIn("get_timeline", REGISTRY)
-        # the only name the app registry shares with the MCP-only one is this tool's
-        self.assertEqual(set(FLAGGED_REGISTRY) & set(MCP_ONLY_REGISTRY), {"get_timeline"})
+        # the names the flagged app registry shares with the MCP-only one are the in-app twins: this
+        # tool's, and (MIP-1671, `AGENT_INAPP_NOTE_COMMENT_TOOL`) `comment_on_note`'s
+        self.assertEqual(
+            set(FLAGGED_REGISTRY) & set(MCP_ONLY_REGISTRY), {"get_timeline", "comment_on_note"}
+        )
         self.assertEqual(set(FLAGGED_REGISTRY) & set(REGISTRY), set())
 
 

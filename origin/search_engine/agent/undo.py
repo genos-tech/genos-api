@@ -163,6 +163,8 @@ UNDO_SUPPORT: dict[str, str] = {
     "delete_project": NONE,
     # --- a task's files (MIP-1563; flag-gated in the app, `register_flagged_tool`) ---
     "delete_task_attachment": NONE,
+    # --- a comment thread on a passage of a note (MIP-1671; flag-gated in the app) ---
+    "comment_on_note": NONE,
 }
 
 # tool name -> (reason code, one line) for every tool that is not `full`. The
@@ -247,6 +249,11 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
         IRREVERSIBLE_DELETE,
         "a hard delete: the file leaves storage and the row goes, and no snapshot of either is kept; "
         "only the task's history records that the file was removed, by name",
+    ),
+    "comment_on_note": (
+        NOTIFIED_PEOPLE,
+        "the people the note reaches are told (an activity, a push), and removing the thread and its "
+        "mark from the note's document is not built",
     ),
 }
 
