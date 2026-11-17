@@ -237,7 +237,10 @@ _WRITE_ALTERNATIVE = {
         "or change one part of it with `body_append`, `body_prepend` or `body_replace`, which do "
         "not need the rest"
     ),
-    "update_note": "or make the change in the Genos app (a note has no partial edit over MCP)",
+    "update_note": (
+        "or change just one block of it with `edit_note_block`: find the block with `get_note` and "
+        "`blocks_matching` (a phrase it contains), which needs no part of the rest"
+    ),
 }
 
 
