@@ -484,6 +484,7 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "manage_note_folder",
         "favorite_note",
         "delete_note_folder",
+        "comment_on_note",
         "reply_to_note_comment",
         "resolve_note_comment",
         "manage_note_sharing",
