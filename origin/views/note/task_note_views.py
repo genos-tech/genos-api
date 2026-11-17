@@ -46,6 +46,73 @@ TASK_NOTE_SERVER_OWNED_FIELDS = (
 )
 
 
+# MIP-1667: a note's row names EVERY task above its own, not only the immediate parent, so the sidebar
+# can put a sub-task's folder inside its parent's, at any depth. The server's own tree walkers stop
+# at 64 levels (`task_tree_consistency`); so does this.
+MAX_ANCESTOR_DEPTH = 64
+
+
+def _ancestor_nodes(team_id, task_ids):
+    """`{task_id: node}` for each of `task_ids` and for every task above them.
+
+    One query per LEVEL of the tree (a handful), never one per note. A task that is not there (deleted,
+    or another team's) is simply missing from the map; a cycle ends the walk because a task already
+    read is not read again.
+    """
+    nodes = {}
+    frontier = {task_id for task_id in task_ids if task_id is not None}
+    for _ in range(MAX_ANCESTOR_DEPTH):
+        frontier -= nodes.keys()
+        if not frontier:
+            break
+        parents = set()
+        rows = (
+            TaskMaster.objects.filter(team=team_id, task_id__in=frontier)
+            .select_related("project")
+            .only(
+                "task_id",
+                "title",
+                "is_milestone",
+                "project",
+                "project_task_number",
+                "parent_task_id",
+            )
+        )
+        for task in rows:
+            nodes[task.task_id] = {
+                "taskId": task.task_id,
+                "title": task.title,
+                "displayId": task.display_id,
+                "isMilestone": task.is_milestone,
+                "parentTaskId": task.parent_task_id,
+            }
+            if task.parent_task_id is not None:
+                parents.add(task.parent_task_id)
+        frontier = parents
+    return nodes
+
+
+def _ancestor_chain(task_id, parent_task_id, nodes):
+    """The task's ancestors, ROOT FIRST and ending at its parent: `[{taskId, title, displayId,
+    isMilestone}]`. A milestone's tasks hang off its backing task, so that task is the first entry
+    for any task in a milestone.
+
+    Stops at a task `nodes` does not hold and at a cycle (the task itself counts), so a damaged tree
+    gives a shorter chain, never a loop. `[]` for a task with no parent.
+    """
+    chain, seen = [], {task_id}
+    current = parent_task_id
+    while current is not None and current not in seen and current in nodes:
+        seen.add(current)
+        node = nodes[current]
+        chain.append({key: node[key] for key in ("taskId", "title", "displayId", "isMilestone")})
+        if len(chain) >= MAX_ANCESTOR_DEPTH:
+            break
+        current = node["parentTaskId"]
+    chain.reverse()
+    return chain
+
+
 def _task_hierarchy_fields(team_id, task_id):
     """Resolve the Project → Milestone → Task → Subtask fields the meta
     endpoint exposes for one task. Shared by POST (so the sidebar can
@@ -63,6 +130,7 @@ def _task_hierarchy_fields(team_id, task_id):
         "parentTaskTitle": None,
         "parentTaskIsMilestone": None,
         "parentTaskDisplayId": None,
+        "ancestors": [],
     }
     try:
         task = TaskMaster.objects.select_related("milestone", "project").get(task_id=task_id)
@@ -81,20 +149,12 @@ def _task_hierarchy_fields(team_id, task_id):
     fields["milestoneId"] = task.milestone_id
     fields["milestoneTitle"] = task.milestone.title if task.milestone else None
     if task.parent_task_id is not None:
-        parent = (
-            TaskMaster.objects.filter(team=team_id, task_id=task.parent_task_id)
-            .select_related("project")
-            .only(
-                "title",
-                "is_milestone",
-                "project",
-                "project_task_number",
-            )
-            .first()
-        )
-        fields["parentTaskTitle"] = parent.title if parent else None
-        fields["parentTaskIsMilestone"] = parent.is_milestone if parent else None
-        fields["parentTaskDisplayId"] = parent.display_id if parent else None
+        nodes = _ancestor_nodes(team_id, [task.parent_task_id])
+        parent = nodes.get(task.parent_task_id)
+        fields["parentTaskTitle"] = parent["title"] if parent else None
+        fields["parentTaskIsMilestone"] = parent["isMilestone"] if parent else None
+        fields["parentTaskDisplayId"] = parent["displayId"] if parent else None
+        fields["ancestors"] = _ancestor_chain(task.task_id, task.parent_task_id, nodes)
     return fields
 
 
@@ -266,25 +326,17 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
         # — without it, the sidebar would show a duplicate "Task N" folder
         # underneath the milestone folder that already represents task N.
         parent_ids = {row["parentTaskId"] for row in notes if row["parentTaskId"] is not None}
-        # Pull `project` alongside title/is_milestone so each parent's
-        # `display_id` (computed from project.code + project_task_number)
-        # is resolvable without an extra query — the sidebar uses it as
-        # the L3-subtask folder's label.
-        parent_info_map = (
-            {
-                t.task_id: (t.title, t.is_milestone, t.display_id)
-                for t in TaskMaster.objects.filter(team=data["team_id"], task_id__in=parent_ids)
-                .select_related("project")
-                .only("task_id", "title", "is_milestone", "project", "project_task_number")
-            }
-            if parent_ids
-            else {}
-        )
+        # One read per LEVEL of the task tree gives the parent AND every ancestor above it
+        # (MIP-1667): `ancestors` is the chain root first, so the sidebar can nest a sub-task's
+        # folder inside its parent's, at any depth. Each node carries its `displayId` (computed
+        # from project.code + project_task_number), the label of its folder.
+        nodes = _ancestor_nodes(data["team_id"], parent_ids)
         for row in notes:
-            info = parent_info_map.get(row["parentTaskId"])
-            row["parentTaskTitle"] = info[0] if info else None
-            row["parentTaskIsMilestone"] = info[1] if info else None
-            row["parentTaskDisplayId"] = info[2] if info else None
+            parent = nodes.get(row["parentTaskId"])
+            row["parentTaskTitle"] = parent["title"] if parent else None
+            row["parentTaskIsMilestone"] = parent["isMilestone"] if parent else None
+            row["parentTaskDisplayId"] = parent["displayId"] if parent else None
+            row["ancestors"] = _ancestor_chain(row["taskId"], row["parentTaskId"], nodes)
 
         return Response(notes, status=status.HTTP_200_OK)
 
