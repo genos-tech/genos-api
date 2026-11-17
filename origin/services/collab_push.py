@@ -203,6 +203,7 @@ def read_note_threads(
     return threads if isinstance(threads, list) else None
 
 
+CREATE_THREAD_PATH = "/internal/documents/create-thread"
 REPLY_THREAD_PATH = "/internal/documents/reply-thread"
 RESOLVE_THREAD_PATH = "/internal/documents/resolve-thread"
 
@@ -217,13 +218,19 @@ class ThreadWriteError(Exception):
     - `not_found`: no such open thread on that note.
     - `forbidden`: collab refused the actor (only the thread's author or the note's owner may resolve).
     - `refused`: collab rejected the request (a malformed field).
+    - `conflict`: the request was understood and cannot be done as asked (an anchor found more than
+      once, MIP-1644). Nothing was written.
     - `unknown`: the request went out and the answer did not come back, so a reply may or may not
       have been added. Never retried here: a second POST would be a second reply.
     """
 
-    def __init__(self, kind: str, message: str = ""):
+    def __init__(self, kind: str, message: str = "", *, code: str | None = None, facts=None):
         super().__init__(message or kind)
         self.kind = kind
+        # What collab said beyond a sentence: a `code` naming why (`anchor_not_found`,
+        # `anchor_ambiguous`, ...) and its answer's other fields (how many matches, which blocks).
+        self.code = code
+        self.facts: dict[str, Any] = facts if isinstance(facts, dict) else {}
 
 
 def _write_thread(path: str, payload: dict[str, Any], expect: str) -> dict[str, Any]:
@@ -257,6 +264,9 @@ def _write_thread(path: str, payload: dict[str, Any], expect: str) -> dict[str, 
     except ValueError:
         body = None
     error = body.get("error") if isinstance(body, dict) else None
+    code = (
+        body.get("code") if isinstance(body, dict) and isinstance(body.get("code"), str) else None
+    )
     status = resp.status_code
     if status == 200:
         if isinstance(body, dict) and body.get("ok") is True and expect in body:
@@ -265,14 +275,52 @@ def _write_thread(path: str, payload: dict[str, Any], expect: str) -> dict[str, 
         raise ThreadWriteError("unsupported", "collab does not have this endpoint yet")
     logger.warning("collab thread write refused path=%s doc=%s status=%s", path, document, status)
     if status == 404 and error:
-        raise ThreadWriteError("not_found", str(error))
+        raise ThreadWriteError("not_found", str(error), code=code, facts=body)
     if status == 403 and error:
         raise ThreadWriteError("forbidden", str(error))
+    if status == 409 and error:
+        raise ThreadWriteError("conflict", str(error), code=code, facts=body)
     if status == 400 and error:
-        raise ThreadWriteError("refused", str(error))
+        raise ThreadWriteError("refused", str(error), code=code, facts=body)
     if status in (404, 405):
         raise ThreadWriteError("unsupported", "collab does not have this endpoint yet")
     raise ThreadWriteError("unavailable", f"collab answered {status}")
+
+
+def create_note_thread(
+    note_type: str,
+    note_id: int,
+    *,
+    user_id: str,
+    text: str,
+    anchor_text: str,
+    block_id: str | None = None,
+    occurrence: int | None = None,
+    via: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Start a comment thread on a passage of a note (MIP-1644), as `user_id`.
+
+    collab finds `anchor_text` (exact plain text, inside one run of one block), writes the thread
+    with the editor's own store and puts the `comment` mark on those characters, in one
+    transaction. The answer is collab's: `threadId`, `commentId`, `blockId`, `occurrence`,
+    `matches`. A passage it cannot place, or finds more than once without `block_id` /
+    `occurrence`, is a `ThreadWriteError` (`not_found` / `conflict`, with a `code` and the facts),
+    and nothing is written. `via` is how it arrived, ALREADY reduced as for `reply_note_thread`.
+    Never retried: a second POST would be a second thread.
+    """
+    payload: dict[str, Any] = {
+        "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
+        "userId": user_id,
+        "text": text,
+        "anchorText": anchor_text,
+    }
+    if block_id:
+        payload["blockId"] = block_id
+    if occurrence is not None:
+        payload["occurrence"] = occurrence
+    if via:
+        payload["metadata"] = {"via": via}
+    return _write_thread(CREATE_THREAD_PATH, payload, "threadId")
 
 
 def reply_note_thread(

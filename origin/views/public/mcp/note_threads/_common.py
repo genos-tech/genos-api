@@ -78,6 +78,81 @@ def reduced_via(ctx: ToolContext) -> dict[str, Any] | None:
     return out
 
 
+def create_refusal(err: ThreadWriteError) -> ToolError:
+    """Why a new comment thread was not started, as the sentence the caller reads (MIP-1644).
+
+    Every case writes nothing, except `unknown`, where the request went out and no answer came
+    back. The passage is never echoed: it is the caller's own text, but a refusal is also logged
+    and shown in approval cards, and the note's text has no business in either.
+    """
+    kind, code, facts = err.kind, err.code, err.facts
+    if kind == "not_found" and code == "anchor_not_found":
+        blocked = facts.get("blockedBlocks")
+        extra = (
+            " The text does appear in a code, math or diagram block, which cannot hold a comment."
+            if isinstance(blocked, int) and blocked > 0
+            else ""
+        )
+        return ToolError(
+            "That text was not found in the note. `anchor_text` must appear exactly as written "
+            "(same case and spacing, without markdown marks like ** or #), inside one paragraph, "
+            "heading, list item, quote or table cell, and not run across an @mention or other "
+            "chip. Read the note with `get_note` and copy a passage from it."
+            + extra
+            + " Nothing was changed."
+        )
+    if kind == "not_found" and code == "block_not_found":
+        return ToolError(
+            "That block was not found in this note (it may have been deleted or replaced). "
+            "Read the note with `get_note` and `include_blocks: true` to see its current blocks. "
+            "Nothing was changed."
+        )
+    if kind == "not_found" and code == "no_document":
+        return ToolError(
+            "Nobody has opened this note in the editor yet, so it has no live document to hold "
+            "a comment. Open it once in Genos (or ask its owner to), then try again. Nothing was "
+            "changed."
+        )
+    if kind == "conflict" and code == "anchor_ambiguous":
+        matches = facts.get("matches")
+        blocks = [b for b in (facts.get("blockIds") or []) if isinstance(b, str)]
+        count = facts.get("blockCount")
+        where = (
+            f" in {count} blocks ({', '.join(blocks)}{', ...' if isinstance(count, int) and count > len(blocks) else ''})"
+            if blocks
+            else ""
+        )
+        return ToolError(
+            f"That text appears {matches if isinstance(matches, int) else 'more than once'} "
+            f"times in the note{where}. Pass `block_id` to say which block (from `blocks` in "
+            "`get_note` with `include_blocks: true`, or paste that block's link as `note_id`), "
+            "and `occurrence` (1 = the first) if it repeats inside one block. Nothing was changed."
+        )
+    if kind == "refused" and code == "occurrence_out_of_range":
+        matches = facts.get("matches")
+        return ToolError(
+            f"`occurrence` is past the last match: the text appears "
+            f"{matches if isinstance(matches, int) else 'fewer times'} time(s). Nothing was changed."
+        )
+    if kind == "unsupported":
+        return ToolError(
+            "Starting a comment thread is not available on this server yet: the comment service "
+            "has not been updated. Nothing was changed."
+        )
+    if kind == "unknown":
+        return ToolError(
+            "The comment was sent but no answer came back, so it may or may not have been "
+            "added. Read the note with `get_note` before trying again, or the thread may appear "
+            "twice."
+        )
+    if kind == "refused":
+        return ToolError(f"The comment service rejected the request: {err}.")
+    return ToolError(
+        "This note's comments could not be reached right now. Nothing was changed; "
+        "try again in a moment."
+    )
+
+
 def refusal(err: ThreadWriteError, *, thread_id: str, resolving: bool = False) -> ToolError:
     """A collab "no" as the sentence the caller reads. Nothing here echoes a note's text."""
     kind = err.kind

@@ -121,6 +121,7 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "update_note": ("note", "note_id"),
     "restore_note_version": ("note", "note_id"),
     "edit_note_block": ("note", "note_id"),
+    "comment_on_note": ("note", "note_id"),
     "reply_to_note_comment": ("note", "note_id"),
     "resolve_note_comment": ("note", "note_id"),
     "manage_note_sharing": ("note", "note_id"),

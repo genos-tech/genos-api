@@ -28,21 +28,21 @@ from origin.views.public.mcp.tools import CATALOG, published
 # (`get_calendar_event`, the same flag): `FLAGGED_READS`. The flag has been ON by default in production
 # since the 2026-11-15 flip, so a client is offered `OFFERED` = `PUBLISHED` + `FLAGGED` = 102 (55 reads,
 # 47 writes) by default and `PUBLISHED` = 100 with `AGENT_PARITY_TOOLS=false` (the rollback).
-PUBLISHED = 100
+PUBLISHED = 101
 FLAGGED = 2
 FLAGGED_WRITES = 1
 FLAGGED_READS = 1
-OFFERED = 102
+OFFERED = 103
 OFFERED_READS = 55
-OFFERED_WRITES = 47
+OFFERED_WRITES = 48
 FROM_REGISTRY = (
     83  # published tools backed by a tool in the agent registry (some under another name)
 )
 FROM_REGISTRY_READS = 47
 FROM_REGISTRY_WRITES = 36
-MCP_ONLY = 17
+MCP_ONLY = 18
 MCP_ONLY_READS = 7
-MCP_ONLY_WRITES = 10
+MCP_ONLY_WRITES = 11
 REGISTRY_SIZE = 88
 # Registry tools with no MCP tool at all: 4 reads, and `delete_project` (a write that is in the app only).
 LEFT_OUT = {

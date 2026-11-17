@@ -206,6 +206,23 @@ _BLOCK_NOTE_REF_SCHEMA = {
         "is enough on its own."
     ),
 }
+# `comment_on_note`'s version: a block link names the note and NARROWS the passage search to that block.
+_COMMENT_NOTE_REF_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The note: its Genos URL, or its numeric id (then pass `note_type`). A block link, from "
+        "'Copy link to block' (`…/notes/my/12?block=<id>`), names the note AND limits the search "
+        "for `anchor_text` to that block."
+    ),
+}
+_COMMENT_BLOCK_ID_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Only look for `anchor_text` in this block: `block_id` from `blocks` in `get_note` (with "
+        "`include_blocks: true`). Not needed when `note_id` is a block link. If both are given "
+        "they must name the same block."
+    ),
+}
 _BLOCK_ID_SCHEMA = {
     "type": "string",
     "description": (
@@ -1803,6 +1820,34 @@ CATALOG: tuple[McpTool, ...] = (
         schema_overrides={"note_id": _NOTE_REF_SCHEMA},
     ),
     McpTool(
+        name="comment_on_note",
+        registry_name="comment_on_note",
+        description=(
+            "Start a new comment thread on a passage of a note, as the caller: it shows in the "
+            "note's editor as a comment on those words, marked as written through a connected "
+            "app. `anchor_text` is the passage, copied exactly from the note's text (same case "
+            "and spacing, no markdown marks), inside one paragraph, heading, list item, quote or "
+            "table cell and not across an @mention; `text` is the comment, plain text, one "
+            "paragraph per line, no formatting or @-mentions. A passage that is not found, or "
+            "that appears more than once, is refused with nothing written: say which with "
+            "`block_id` (from `blocks` in `get_note` with `include_blocks: true`, or a block "
+            "link as `note_id`) and `occurrence` (1 = the first). Code, math and diagram blocks "
+            "cannot hold a comment. A note nobody has opened in the editor has no live document "
+            "yet and is refused. Anyone who can open the note may comment, viewers included. "
+            "Returns `thread_id` (answer it with `reply_to_note_comment`), `comment_id`, "
+            "`block_id` and how many places matched. Name the note by its Genos URL, or by its "
+            "numeric id with `note_type`. Requires a write-scoped API key."
+        ),
+        write=True,
+        note_ref_args=("note_id",),
+        block_link_arg="block_id",
+        optional_args=("note_type",),
+        schema_overrides={
+            "note_id": _COMMENT_NOTE_REF_SCHEMA,
+            "block_id": _COMMENT_BLOCK_ID_SCHEMA,
+        },
+    ),
+    McpTool(
         name="reply_to_note_comment",
         registry_name="reply_to_note_comment",
         description=(
@@ -1810,7 +1855,7 @@ CATALOG: tuple[McpTool, ...] = (
             "note's editor next to the other replies, marked as written through a "
             "connected app. Take `thread_id` from `comment_threads` in `get_note`. "
             "`text` is plain text, one paragraph per line; no formatting, no "
-            "@-mentions, and it cannot start a new thread on a passage. Anyone who "
+            "@-mentions; to start a new thread on a passage use `comment_on_note`. Anyone who "
             "can open the note may reply, viewers included. Returns `comment_id`, "
             "`comment_count` and `thread_resolved`. Name the note by its Genos URL, "
             "or by its numeric id with `note_type`. Requires a write-scoped API key."
@@ -2565,6 +2610,7 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "create_todo_item",
         "favorite_note",
         "manage_project_labels",
+        "comment_on_note",  # adds a thread and marks the words it is about; no text changes
         "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
     }
