@@ -246,6 +246,17 @@ def _comment(args, payload) -> Notice | None:
     return Notice(VERB_COMMENTED, "comment", 1, [task])
 
 
+def _commented_note(args, payload) -> Notice | None:
+    """A comment thread started or answered on a note: one notice, linking the thread so a click
+    opens the note with its comment card (`?comment=`, MIP-146)."""
+    if not payload.get("note_id") or not payload.get("thread_id"):
+        return None
+    item = _note_item(payload, args)
+    if item["url"] and item["url"] != "/workspace/notes":
+        item["url"] = f"{item['url']}?comment={payload['thread_id']}"
+    return Notice(VERB_COMMENTED, "note", 1, [item])
+
+
 def _created_note(args, payload) -> Notice | None:
     if not payload.get("note_id"):
         return None
@@ -304,6 +315,10 @@ RULES: dict[str, Callable[[dict, dict], Notice | None]] = {
     "manage_milestone": _milestone,
     "add_comment": _comment,
     "create_note": _created_note,
+    # A comment on a note by an AI app: the key's owner is told, as for a task comment. Starting a
+    # thread and answering one are the same act to the person reading the feed, so one switch.
+    "comment_on_note": _commented_note,
+    "reply_to_note_comment": _commented_note,
     "update_note": _edited_note,
     # One block of a note is still an edit of the note: the same notice, under the same switch.
     "edit_note_block": _edited_note,
@@ -343,6 +358,8 @@ def sentence(meta: dict[str, Any]) -> str:
     verb = meta.get("verb")
     if verb == VERB_CREATED:
         return f"created {noun}" + (f" {label}" if count == 1 and label else "")
+    if verb == VERB_COMMENTED and kind == "note":
+        return f"commented on note {label}" if label else "commented on a note"
     if verb == VERB_COMMENTED:
         return f"commented on {first.get('displayId') or 'a task'}"
     if verb == VERB_EDITED:

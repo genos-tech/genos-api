@@ -15,11 +15,13 @@ from __future__ import annotations
 
 from typing import Any
 
-# (verb, kind) -> the switch. A `comment` kind is a comment on a task.
+# (verb, kind) -> the switch. A `comment` kind is a comment on a task; ("commented", "note") is a
+# comment thread started or answered on a note (MIP-1669).
 ACTIONS: dict[tuple[str, str], str] = {
     ("created", "task"): "ai_app_task_created",
     ("status", "task"): "ai_app_task_status",
     ("commented", "comment"): "ai_app_task_commented",
+    ("commented", "note"): "ai_app_note_commented",
     ("deleted", "comment"): "ai_app_comment_deleted",
     ("created", "milestone"): "ai_app_milestone_created",
     ("status", "milestone"): "ai_app_milestone_status",
