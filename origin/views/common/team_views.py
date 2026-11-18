@@ -117,7 +117,11 @@ class TeamMasterView(AuthenticatedAPIView):
         try:
             departments = parse_departments(body.get("departments"))
         except DepartmentsRefused as refused:
-            return Response({"error": str(refused)}, status=status.HTTP_400_BAD_REQUEST)
+            # `code` lets the app tell this refusal from the duplicate-name 400 below.
+            return Response(
+                {"error": str(refused), "code": "invalid_departments"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Only the fields the body carries: a missing one then gets the
         # serializer's "This field is required." 400 instead of a KeyError.

@@ -171,6 +171,7 @@ class TeamSetupTests(BaseAPITestCase):
 
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, label)
             self.assertIn("error", response.data, label)
+            self.assertEqual(response.data["code"], "invalid_departments", label)
             self.assertEqual(TeamMaster.objects.count(), before, label)
 
     def test_a_name_at_the_length_limit_is_accepted(self):
