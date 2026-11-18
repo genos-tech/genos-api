@@ -32,7 +32,11 @@ optional `_drive_loop_with_critique` wrapper (gated on
 `RAG_AGENT_SELF_CRITIQUE`).
 """
 
+import logging
+
 from origin.search_engine.agent.chip_syntax import CHIP_SYNTAX_HINT
+
+logger = logging.getLogger(__name__)
 
 AGENT_SYSTEM_PROMPT = """\
 You are an internal assistant for a workspace app containing the user's
@@ -567,10 +571,33 @@ _RULE_7_WITH_REASON = _RULE_7 + (
 )
 
 
+_ANCHORS_REPORTED: set[str] = set()
+
+
+def _splice(prompt: str, anchor: str, replacement: str, *, what: str) -> str:
+    """Replace `anchor` in the system prompt, or leave the prompt as it is if it is not there.
+
+    The two flag-gated splices below (rule 7, the to-do shape line) both ship ON. When someone
+    edits the sentence they anchor on, the old code raised on EVERY ask, in production: a 500 on
+    the whole agent for a wording edit (MIP-1658). Now the prompt is served without the extra
+    line (what it was before the flag) and the miss is logged once per process; the miss is
+    caught in CI by `test_agent_prompt_anchors`, which names the sentence, so it does not reach
+    production in the first place.
+    """
+    if anchor not in prompt:
+        if what not in _ANCHORS_REPORTED:
+            _ANCHORS_REPORTED.add(what)
+            logger.error(
+                "agent system prompt: %s moved, so its flag-gated line is NOT added; "
+                "update the anchor in origin/search_engine/agent/prompts.py",
+                what,
+            )
+        return prompt
+    return prompt.replace(anchor, replacement, 1)
+
+
 def _with_reject_reason_rule(prompt: str) -> str:
-    if _RULE_7 not in prompt:
-        raise RuntimeError("system prompt rule 7 moved: update _RULE_7 (MIP-889)")
-    return prompt.replace(_RULE_7, _RULE_7_WITH_REASON, 1)
+    return _splice(prompt, _RULE_7, _RULE_7_WITH_REASON, what="rule 7 (_RULE_7, MIP-889)")
 
 
 # MIP-1059: with `AGENT_PARITY_TOOLS` on, a calendar event can be cited. The prompt says "cite ONLY the
@@ -584,9 +611,12 @@ _TODO_SHAPE_END_WITH_EVENT = (
 
 
 def _with_calendar_event_citation(prompt: str) -> str:
-    if _TODO_SHAPE_END not in prompt:
-        raise RuntimeError("system prompt citation shapes moved: update _TODO_SHAPE_END (MIP-1059)")
-    return prompt.replace(_TODO_SHAPE_END, _TODO_SHAPE_END_WITH_EVENT, 1)
+    return _splice(
+        prompt,
+        _TODO_SHAPE_END,
+        _TODO_SHAPE_END_WITH_EVENT,
+        what="the to-do citation shape (_TODO_SHAPE_END, MIP-1059)",
+    )
 
 
 def agent_system_prompt() -> str:
