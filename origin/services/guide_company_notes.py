@@ -196,7 +196,10 @@ _SETUP_EN = _body(
         [
             "A short list, the same spelling everywhere (payments, billing, growth). A name "
             "becomes the tag, the @group, the folder and the chat, so keep it short and "
-            "lowercase. You can rename any of them later.",
+            "lowercase. You can rename any of them later. If you are creating the team now, type "
+            "the list into the “Departments” box on the create-team page: Genos then makes the "
+            "project tag, the mention group, the team folder and the open chat of each one, "
+            "and you can skip steps 2 to 4 for them.",
         ],
     ),
     (
@@ -217,9 +220,10 @@ _SETUP_EN = _body(
     (
         "4. Make the group chats",
         [
-            "One open chat per department (“payments · general”) and one for the whole company "
-            "(“general”); Genos does not make one for you. Add private chats only where a "
-            "small group needs them.",
+            "Every team starts with an open chat for the whole company called “general”. Add one "
+            "open chat per department (“payments · general”), unless the “Departments” box "
+            "already did. Add private chats only where a small group needs them. Nobody is "
+            "added to a chat for you: people find the open ones by name in the chat search.",
         ],
     ),
     (
@@ -417,7 +421,10 @@ _SETUP_JA = _body(
         [
             "短いリストにし、表記はどこでも同じにします（payments、billing、growth）。名前は"
             "タグ、@グループ、フォルダ、チャットになるので、短く、小文字にします。あとから"
-            "どれも変更できます。",
+            "どれも変更できます。いまチームを作るところなら、このリストをチーム作成ページの"
+            "「部署」欄に入力してください。それぞれの部署について、プロジェクトのタグ、メンション"
+            "グループ、チームフォルダ、オープンなチャットを自動で作ります（手順2〜4は"
+            "省略できます）。",
         ],
     ),
     (
@@ -438,9 +445,11 @@ _SETUP_JA = _body(
     (
         "4. グループチャットを作る",
         [
-            "部署ごとにオープンなチャットをひとつ（「payments · general」）、会社全体用にひとつ"
-            "（「general」）。Genosは自動では作りません。非公開のチャットは、小さなグループが"
-            "必要とするところだけに作ります。",
+            "どのチームにも、会社全体用のオープンなチャット「general」が最初からあります。"
+            "部署ごとにオープンなチャットをひとつ（「payments · general」）作ります（「部署」欄で"
+            "作った場合は不要です）。非公開のチャットは、小さなグループが必要とするところだけに"
+            "作ります。誰かが自動で追加されることはなく、公開のチャットは名前でチャット検索して"
+            "見つけます。",
         ],
     ),
     (

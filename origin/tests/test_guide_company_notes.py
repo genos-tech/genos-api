@@ -300,3 +300,16 @@ class AddCompanyGuideNotesTests(BaseAPITestCase):
         call_command("add_company_guide_notes", "--apply", stdout=out)
         self.assertIn("added", out.getvalue())
         self.assertEqual(self._count(), 8)
+
+
+class CompanyNotesDescribeTheSetupAsItIs(BaseAPITestCase):
+    """The checklist must match what team creation does (MIP-1691): a `general` chat exists, and
+    a "Departments" box makes the four things of each department."""
+
+    def test_the_setup_note_says_general_exists_and_points_to_the_departments_box(self):
+        for locale, box in (("en", "“Departments” box"), ("ja", "「部署」欄")):
+            text = _text(COMPANY_NOTES[locale][1][1])
+            self.assertIn(box, text)
+            self.assertNotIn("does not make one for you", text)
+            self.assertNotIn("Genosは自動では作りません", text)
+        self.assertIn("Every team starts with an open chat", _text(COMPANY_NOTES["en"][1][1]))
