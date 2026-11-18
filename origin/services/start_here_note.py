@@ -75,6 +75,8 @@ _COPY: dict[str, dict] = {
             "Notes: private notes for yourself, and folders you share with your team.",
             "Spotlight: the AI assistant. Press Cmd-K (Ctrl-K on Windows) and ask about "
             "anything you can see.",
+            "A company with many departments: once you have a team, open “Organising a large "
+            "workspace: one team, many departments” in your Genos Guide folder.",
         ],
         "h_connect": "Connect your AI app",
         "connect_intro": (
@@ -110,6 +112,7 @@ _COPY: dict[str, dict] = {
             "タスク：プロジェクト、マイルストーン、ボードで管理。各タスクに専用のノートとやり取りが付きます。",
             "ノート：自分だけのノートと、チームで共有するフォルダ。",
             "Spotlight：AI アシスタント。Cmd-K（Windows は Ctrl-K）で開き、見える範囲のことを質問できます。",
+            "たくさんの部署がある会社：チームを作ったら、Genos ガイドフォルダの「大きな組織でGenosを整える：ひとつのチーム、たくさんの部署」を開いてください。",
         ],
         "h_connect": "AI アプリをつなぐ",
         "connect_intro": (
@@ -147,6 +150,7 @@ _COPY: dict[str, dict] = {
             "Notas: notas privadas para ti y carpetas que compartes con tu equipo.",
             "Spotlight: el asistente de IA. Pulsa Cmd-K (Ctrl-K en Windows) y pregunta sobre "
             "todo lo que puedes ver.",
+            "Una empresa con muchos departamentos: cuando tengas un equipo, abre «Organising a large workspace: one team, many departments» en la carpeta Genos Guide.",
         ],
         "h_connect": "Conecta tu app de IA",
         "connect_intro": (
@@ -184,6 +188,7 @@ _COPY: dict[str, dict] = {
             "Notes : des notes privées pour vous et des dossiers partagés avec votre équipe.",
             "Spotlight : l'assistant IA. Appuyez sur Cmd-K (Ctrl-K sous Windows) et posez vos "
             "questions sur tout ce que vous pouvez voir.",
+            "Une entreprise avec plusieurs départements : une fois votre équipe créée, ouvrez « Organising a large workspace: one team, many departments » dans le dossier Genos Guide.",
         ],
         "h_connect": "Connectez votre app d'IA",
         "connect_intro": (
@@ -225,6 +230,7 @@ _COPY: dict[str, dict] = {
             "नोट्स: आपके निजी नोट्स और टीम के साथ साझा फ़ोल्डर।",
             "Spotlight: AI असिस्टेंट। Cmd-K (Windows पर Ctrl-K) दबाएँ और जो कुछ आप देख सकते हैं, "
             "उसके बारे में पूछें।",
+            "कई विभागों वाली कंपनी: टीम बनने के बाद Genos Guide फ़ोल्डर में “Organising a large workspace: one team, many departments” खोलें।",
         ],
         "h_connect": "अपना AI ऐप कनेक्ट करें",
         "connect_intro": (
@@ -259,6 +265,7 @@ _COPY: dict[str, dict] = {
             "任务：项目、里程碑和看板。每个任务都有自己的笔记和讨论。",
             "笔记：只属于你的私人笔记，以及与团队共享的文件夹。",
             "Spotlight：AI 助手。按 Cmd-K（Windows 为 Ctrl-K），即可询问你能看到的任何内容。",
+            "有多个部门的公司：创建团队后，请在 Genos Guide 文件夹中打开《Organising a large workspace: one team, many departments》。",
         ],
         "h_connect": "连接你的 AI 应用",
         "connect_intro": (
@@ -293,6 +300,7 @@ _COPY: dict[str, dict] = {
             "الملاحظات: ملاحظات خاصة بك ومجلدات تشاركها مع فريقك.",
             "Spotlight: مساعد الذكاء الاصطناعي. اضغط Cmd-K (أو Ctrl-K على Windows) واسأل عن "
             "أي شيء يمكنك رؤيته.",
+            "شركة بها أقسام كثيرة: بعد إنشاء فريقك، افتح «Organising a large workspace: one team, many departments» في مجلد Genos Guide.",
         ],
         "h_connect": "اربط تطبيق الذكاء الاصطناعي",
         "connect_intro": (

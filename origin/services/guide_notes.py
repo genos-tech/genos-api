@@ -53,6 +53,7 @@ from origin.models.note.personal_note_models import PersonalNoteFolder, Personal
 from origin.services import mcp_oauth, start_here_note
 from origin.services.collab_push import push_note_body_now
 from origin.services.demo_seeder import _body
+from origin.services.guide_company_notes import COMPANY_NOTES
 from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 
 log = logging.getLogger(__name__)
@@ -1887,6 +1888,15 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                     "later, and an empty workspace teaches you nothing.",
                 ],
             ),
+            (
+                "A whole company",
+                [
+                    "Setting Genos up for a company with many departments? Read "
+                    "“Organising a large workspace: one team, many departments” and "
+                    "“Setting up Genos for your company: an owner's checklist”, "
+                    "the last two notes in this folder.",
+                ],
+            ),
         ),
     ),
     (
@@ -3427,6 +3437,14 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                     "これらすべてに共通する仕組みとは、チャットでの議論、タスクとしてのコミットメント、ノートにまとめられた永続的な知識――そして、これら3つすべてをGenosが読み取ることで、自分で探し回る必要がなく、質問するだけで済むようにすることです。完璧な構造を目指すよりも、まずは実際のプロジェクトを1つ始めてみましょう。構造は後で簡単に変更できますし、空っぽのワークスペースからは何も学べないからです。",
                 ],
             ),
+            (
+                "会社全体で使う",
+                [
+                    "たくさんの部署がある会社でGenosを使い始めるときは、このフォルダの最後の2つのノート"
+                    "「大きな組織でGenosを整える：ひとつのチーム、たくさんの部署」と"
+                    "「会社でGenosを使い始める：オーナー向けチェックリスト」を読んでください。",
+                ],
+            ),
         ),
     ),
     (
@@ -3591,6 +3609,11 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
         ),
     ),
 ]
+
+# The two company notes (MIP-1689): how a company keeps one team tidy, and the owner's checklist.
+# They live in their own module; they are the last two notes of each edition.
+GUIDE_NOTES.extend(COMPANY_NOTES["en"])
+JAPANESE_GUIDE_NOTES.extend(COMPANY_NOTES["ja"])
 
 
 # ---------------------------------------------------------------------------
@@ -3906,3 +3929,62 @@ def seed_guide_notes(user, team, *, force: bool = False) -> bool:
         team.pk,
     )
     return notes_created > 0
+
+
+@dataclass
+class AddReport:
+    """What `add_company_guide_notes` found (and, with `apply`, did)."""
+
+    # Note ids made (or, on a dry run, the folders that are missing one).
+    added: list[int] = field(default_factory=list)
+    already_there: int = 0
+
+
+def add_company_guide_notes(*, apply: bool = False, team_id=None) -> AddReport:
+    """Give members who already have the guide the two company notes (MIP-1689).
+
+    The guide is seeded once per member and team (`guide_seeded_at`), so a note added to the
+    lists later never reaches anyone who already has the folder. For every existing guide
+    folder (English and Japanese) this makes each company note that is not in it yet; a folder
+    that has it is left alone, and nothing else in the folder is touched. Without `apply`
+    nothing is written. NOT idempotent against deletion: someone who deleted a company note
+    gets it again on the next run, so run it once, after the deploy.
+    """
+    report = AddReport()
+    for locale, (folder_name, _) in _EDITIONS.items():
+        folders = PersonalNoteFolder.objects.filter(
+            name=folder_name, scope=PersonalNoteFolder.SCOPE_PERSONAL, team__isnull=False
+        )
+        if team_id:
+            folders = folders.filter(team_id=team_id)
+        for folder in folders:
+            for title, body in COMPANY_NOTES[locale]:
+                if PersonalNoteMaster.objects.filter(
+                    owner_id=folder.owner_id,
+                    team_id=folder.team_id,
+                    folder_id=folder.folder_id,
+                    title=title,
+                ).exists():
+                    report.already_there += 1
+                    continue
+                if not apply:
+                    report.added.append(folder.folder_id)
+                    continue
+                with transaction.atomic():
+                    note = PersonalNoteMaster.objects.create(
+                        team_id=folder.team_id,
+                        owner_id=folder.owner_id,
+                        title=title,
+                        body=_with_fresh_ids(copy.deepcopy(body)),
+                        folder_id=folder.folder_id,
+                    )
+                    # The note APIs 403 without an explicit owner-role row (see seed_guide_notes).
+                    NotePermissionMaster.objects.create(
+                        team_id=folder.team_id,
+                        user_id=folder.owner_id,
+                        note_id=note.note_id,
+                        note_type=NOTE_TYPE_PERSONAL,
+                        role_id=1,
+                    )
+                report.added.append(note.note_id)
+    return report
