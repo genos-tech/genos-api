@@ -53,7 +53,8 @@ class StarterWorkspaceTests(BaseAPITestCase):
             (STARTER_BLUEPRINT, EXAMPLES_BLUEPRINT),
             (JAPANESE_STARTER_BLUEPRINT, JAPANESE_EXAMPLES_BLUEPRINT),
         )
-        self.assertEqual(ProjectMaster.objects.filter(team=team).count(), 2)
+        # The two starter projects, plus the example department's two (MIP-1690).
+        self.assertEqual(ProjectMaster.objects.filter(team=team).count(), 4)
         for starter_blueprint, examples_blueprint in project_blueprints:
             project = ProjectMaster.objects.get(team=team, project_name=starter_blueprint["name"])
             self.assertEqual(str(project.owner_id), str(self.user.id))
@@ -84,7 +85,8 @@ class StarterWorkspaceTests(BaseAPITestCase):
 
         self.assertEqual(
             PersonalNoteMaster.objects.filter(team=team, owner=self.user).count(),
-            len(GUIDE_NOTES) + len(JAPANESE_GUIDE_NOTES),
+            # The guide notes in both languages, plus the example department's three team notes.
+            len(GUIDE_NOTES) + len(JAPANESE_GUIDE_NOTES) + 3,
         )
         from origin.models.note.personal_note_models import PersonalNoteFolder
 
@@ -95,7 +97,9 @@ class StarterWorkspaceTests(BaseAPITestCase):
                 ).exists()
             )
         self.assertEqual(
-            ToDoItem.objects.filter(group__team=team, group__user=self.user).count(), 6
+            ToDoItem.objects.filter(group__team=team, group__user=self.user).count(),
+            # Six starter items, plus the example department's one.
+            7,
         )
         # Membership was seeded, so the client's follow-up join is a no-op.
         self.assertTrue(TeamMembers.objects.filter(team=team, attendee=self.user).exists())
@@ -195,7 +199,7 @@ class StarterWorkspaceTests(BaseAPITestCase):
         team = self._create_team(with_starter=True)
         delete_demo_environment(self.user)  # returns early: is_demo False
         self.assertTrue(TeamMaster.objects.filter(team_id=team.team_id).exists())
-        self.assertEqual(ProjectMaster.objects.filter(team=team).count(), 2)
+        self.assertEqual(ProjectMaster.objects.filter(team=team).count(), 4)
 
     def test_without_opt_in_nothing_is_seeded(self):
         team = self._create_team(with_starter=None)

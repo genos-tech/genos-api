@@ -54,6 +54,7 @@ from origin.services.demo_seeder import (
     kick_off_demo_reindex,
 )
 from origin.services.guide_notes import seed_guide_notes
+from origin.services.organisation_examples import create_organisation_examples
 from origin.services.user_time import user_today
 
 log = logging.getLogger(__name__)
@@ -930,6 +931,14 @@ def create_starter_workspace(user, team) -> None:
                 if notes is not None:
                     item_fields["notes"] = _text_body(notes)
                 ToDoItem.objects.create(**item_fields)
+
+        # The example department (MIP-1690): label, mention group, team folders, projects, chats.
+        # It runs in its own savepoint (inside the function), so if it fails it leaves nothing
+        # half-made, the starter above is kept and the team is not lost.
+        try:
+            create_organisation_examples(user, team)
+        except Exception:  # noqa: BLE001 — the rest of the starter must survive
+            log.exception("organisation examples failed for team=%s", team.team_id)
 
     # After commit, exactly like the demo path: content only becomes
     # searchable once OpenSearch has it, and the reindex must not run
