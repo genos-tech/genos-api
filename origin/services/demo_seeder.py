@@ -34,7 +34,7 @@ from importlib import import_module
 from typing import List
 
 from django.core.management import call_command
-from django.db import connection, transaction
+from django.db import connection, models, transaction
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -2802,6 +2802,25 @@ def _recompute_group_completion_for_demo(group):
 # ---------------------------------------------------------------------------
 
 
+def _delete_remaining_team_rows(team_id: uuid.UUID) -> None:
+    """Delete every row still pointing at the team through a FK that would NOT cascade (MIP-1702).
+
+    `TeamMaster.delete()` only removes rows whose FK is CASCADE. A row whose `team` FK is SET_NULL
+    (most of them here) survives it with `team = NULL`, and a PROTECT one blocks it. The list in
+    `delete_demo_team_data` is written by hand, so a table added later, or one a visitor can fill
+    but the seed never does (mention groups, note folder tags, invites, custom emojis), stayed in
+    the database for good: names, invited e-mail addresses and image files of a team that was
+    deleted. This sweeps whatever the explicit passes above did not, so a new team-scoped table
+    cannot be forgotten.
+
+    `_base_manager`: a model's default manager may hide soft-deleted rows, and those must go too.
+    """
+    for rel in TeamMaster._meta.related_objects:
+        if getattr(rel, "on_delete", None) in (None, models.CASCADE):
+            continue  # many-to-many reverse side, or removed by the team's own delete
+        rel.related_model._base_manager.filter(**{rel.field.name: team_id}).delete()
+
+
 def delete_demo_team_data(team_id: uuid.UUID) -> None:
     """Delete every row scoped to `team_id` across the team-scoped
     tables. Required because most FKs in this codebase are SET_NULL
@@ -2957,6 +2976,7 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
 
         # Common
         TeamMembers.objects.filter(team=team_id).delete()
+        _delete_remaining_team_rows(team_id)
         TeamMaster.objects.filter(team_id=team_id).delete()
         # NotificationPreference + UserFeatureAccess cascade on user
         # delete, so they get handled when the bot/demo users are
