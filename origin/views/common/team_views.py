@@ -55,6 +55,7 @@ from origin.services.team_membership import (
     accept_invite,
     remove_team_member,
 )
+from origin.services.team_setup import DepartmentsRefused, parse_departments, set_up_new_team
 from origin.services.throttles import InviteThrottle, RecordedThrottleMixin, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_INVITE_EMAILS, check_batch_size
@@ -111,6 +112,13 @@ class TeamMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # The departments the owner named (MIP-1691). Checked BEFORE anything is made: a bad list
+        # is a 400 and no team exists afterwards.
+        try:
+            departments = parse_departments(body.get("departments"))
+        except DepartmentsRefused as refused:
+            return Response({"error": str(refused)}, status=status.HTTP_400_BAD_REQUEST)
+
         # Only the fields the body carries: a missing one then gets the
         # serializer's "This field is required." 400 instead of a KeyError.
         data = {key: body[key] for key in ("team_name", "team_email") if key in body}
@@ -133,6 +141,15 @@ class TeamMasterView(AuthenticatedAPIView):
                 except Exception:  # noqa: BLE001 — team creation must survive
                     logger.exception("starter workspace seeding failed for team=%s", team.team_id)
 
+            # Every new team gets an open "general" chat, and the departments the owner named
+            # get a tag, a mention group, a team folder and an open chat each (MIP-1691).
+            # Best-effort like the starter: it must not lose the team.
+            summary = {"requested": len(departments), "created": 0}
+            try:
+                summary = set_up_new_team(team, request.user, departments)
+            except Exception:  # noqa: BLE001 — team creation must survive
+                logger.exception("new team setup failed for team=%s", team.team_id)
+
             data = {
                 "teamDetails": {
                     "teamId": serializer.data["team_id"],
@@ -142,6 +159,8 @@ class TeamMasterView(AuthenticatedAPIView):
                     "teamImgPath": serializer.data.get("profile_image_file_name"),
                 }
             }
+            if departments:
+                data["departments"] = summary
             return Response(data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors

@@ -234,7 +234,15 @@ class OrganisationExamplesTests(BaseAPITestCase):
 
         self.assertFalse(ProjectLabel.objects.filter(team=team).exists())
         self.assertFalse(MentionGroupMaster.objects.filter(team=team).exists())
-        self.assertFalse(Channel.objects.filter(team=team, kind=ChannelKind.GM).exists())
+        # Only the default "general" chat every new team gets (MIP-1691), none of the samples.
+        self.assertEqual(
+            list(
+                Channel.objects.filter(team=team, kind=ChannelKind.GM).values_list(
+                    "title", flat=True
+                )
+            ),
+            ["general"],
+        )
         self.assertFalse(PersonalNoteFolder.objects.filter(team=team, scope="team").exists())
 
     def test_a_failure_in_the_example_keeps_the_team_and_the_rest_of_the_starter(self):
