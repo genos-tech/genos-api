@@ -22,6 +22,7 @@ from rest_framework import status
 from origin.models.chat.todo_models import ToDoItem
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services.organisation_examples import COPY as EXAMPLE_COPY
 from origin.services.starter_seeder import JAPANESE_STARTER_BLUEPRINT, STARTER_BLUEPRINT
 from origin.tests.test_base import BaseAPITestCase
 
@@ -136,7 +137,13 @@ class ProjectNamePerTeamTests(BaseAPITestCase):
             )
             self.assertEqual(
                 names,
-                {STARTER_BLUEPRINT["name"], JAPANESE_STARTER_BLUEPRINT["name"]},
+                {
+                    STARTER_BLUEPRINT["name"],
+                    JAPANESE_STARTER_BLUEPRINT["name"],
+                    # The example department (MIP-1690), in the account's language.
+                    EXAMPLE_COPY["en"]["project"],
+                    EXAMPLE_COPY["en"]["private_project"],
+                },
                 f"{team.team_name} got {names}",
             )
             self.assertTrue(
