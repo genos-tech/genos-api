@@ -1180,6 +1180,14 @@ def create_demo_environment(
         # 16. Todos (demo user only — todos are personal-scoped)
         _create_todos(team, demo_user, content)
 
+        # 16b. v2 only: the company layer (MIP-1692), departments with their tags, groups,
+        #      folders and chats, more projects than the visitor joins, and a few private
+        #      things. Never for v1: that is the eval corpus.
+        if is_v2:
+            from origin.services.demo_company import create_company_layer
+
+            create_company_layer(team, demo_user, bots, lang, seeded_projects, content.SPRINT_NAME)
+
         # 17. Push DISPLAY timestamps into the past so the workspace reads
         #     as three months of real use instead of "created 8 seconds
         #     ago". Runs last, inside the same transaction, because it
