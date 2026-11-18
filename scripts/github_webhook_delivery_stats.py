@@ -5,6 +5,7 @@
     python3 scripts/github_webhook_delivery_stats.py --repo genos-docs
     python3 scripts/github_webhook_delivery_stats.py --since 2026-11-17T00:00:00Z   # after a fix
     python3 scripts/github_webhook_delivery_stats.py --deployments       # failure rate inside vs outside deploys
+    python3 scripts/github_webhook_delivery_stats.py --repo genos-docs --deployments   # still genos-api's deploys
 
 Reads GitHub's own delivery log through `gh` (needs `gh auth login`; the deliveries
 list needs no extra scope, reading a delivery's response BODY needs `admin:repo_hook`).
@@ -20,6 +21,10 @@ What to read in the output (MIP-1661 found all of this on 2026-11-13..16):
   one is expensive, because one gunicorn worker serves them all.
 * With --deployments, the rate inside a Railway deploy window (+-30 s) against
   outside it: ~13 % against ~12 % in that sample, so deploys were not the cause.
+  The windows are the RECEIVER's deploys, genos-api's, whichever repo's hook is being read
+  (every hook posts to genos-api, and it is its restarts that fail a delivery): `--repo
+  genos-docs --deployments` splits docs' deliveries by genos-api's deploys. A repo with its own
+  Railway deployments can be named with `--deployments-repo` (MIP-1674).
 """
 
 from __future__ import annotations
@@ -101,6 +106,16 @@ def deploy_windows(repo: str) -> list[tuple[datetime, datetime]]:
     return windows
 
 
+def split_by_deploys(
+    rows: list[dict], windows: list[tuple[datetime, datetime]], slack_seconds: int = 30
+) -> tuple[list[dict], list[dict]]:
+    """(deliveries during a deploy window +- slack, all the others)."""
+    slack = timedelta(seconds=slack_seconds)
+    inside = [r for r in rows if any(a - slack <= r["t"] <= b + slack for a, b in windows)]
+    inside_ids = {id(r) for r in inside}
+    return inside, [r for r in rows if id(r) not in inside_ids]
+
+
 def rate(bad: int, total: int) -> str:
     return f"{bad}/{total} ({bad / total:.1%})" if total else "n/a"
 
@@ -118,6 +133,11 @@ def main() -> None:
     ap.add_argument("--since", help="ISO time, e.g. 2026-11-17T00:00:00Z: only deliveries after it")
     ap.add_argument(
         "--deployments", action="store_true", help="compare against Railway deploy windows"
+    )
+    ap.add_argument(
+        "--deployments-repo",
+        default="genos-api",
+        help="whose Railway deploys --deployments reads (default genos-api, the receiver of every hook)",
     )
     args = ap.parse_args()
 
@@ -155,11 +175,9 @@ def main() -> None:
         print(f"  {key:4s} {rate(bad, ok + bad)}")
 
     if args.deployments:
-        windows = deploy_windows(args.repo)
-        slack = timedelta(seconds=30)
-        inside = [r for r in rows if any(a - slack <= r["t"] <= b + slack for a, b in windows)]
-        outside = [r for r in rows if r not in inside]
-        print(f"\nRailway deploys: {len(windows)} windows")
+        windows = deploy_windows(args.deployments_repo)
+        inside, outside = split_by_deploys(rows, windows)
+        print(f"\nRailway deploys of {args.deployments_repo}: {len(windows)} windows")
         print(
             f"  during a deploy (+-30 s): {rate(sum(r['code'] != 200 for r in inside), len(inside))}"
         )
