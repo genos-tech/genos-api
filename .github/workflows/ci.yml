@@ -292,7 +292,10 @@ jobs:
           python-version: "3.11"
       # ruff is a standalone binary; no project deps or DB needed. Pinned,
       # so a new ruff release can't change what this job reports overnight;
-      # keep it in step with requirements-dev.txt.
+      # keep it in step with requirements-dev.txt. Lints the whole repo
+      # (manage.py, scripts/, docs/*.py too), with the per-file exceptions in
+      # ruff.toml. A PR that touches only docs/ skips this job (the `changes`
+      # filter above); pushes to main always run it.
       - run: pip install ruff==0.17.1
       - run: ruff check .
 
