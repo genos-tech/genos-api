@@ -1,4 +1,4 @@
-"""Fire reminders that have come due — messages AND to-dos.
+"""Fire reminders that have come due — messages AND to-dos — and the first-month trial notices.
 
 Makes a pass every minute. Each pass takes the pending reminders whose
 `remind_at` has passed, files an Inbox item in the Activities section for
@@ -18,6 +18,14 @@ every half of a reminder's delivery is this job's work, so a second cron
 service would be a second way for a whole feature to fail silently — which
 is exactly how message reminders shipped broken the first time. One service
 to exist means one service to notice.
+
+The same reasoning put a third pass here (MIP-1764): the notices 5 days and
+1 day before the first month of Core ends (`services/first_month_trial_notices`).
+It is two indexed queries that are empty almost every minute, needs the database
+and the web push keys this service already has, and a new Railway service would
+start with no variables and never run. It runs LAST and its failures are logged
+and counted, never raised into the reminder passes, so a bad trial row cannot
+delay a reminder. No `railway-reminder-tick.toml` change.
 
 Modelled on `webhook_deliver_tick`, the proven outbox in this repo, minus
 the retry machinery: there is nobody else's server to be unavailable here,
@@ -42,7 +50,7 @@ import logging
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
-from origin.services import crypto, todo_reminders
+from origin.services import crypto, first_month_trial_notices, todo_reminders
 from origin.services.message_reminders import due_reminders, fire_due
 from origin.services.webpush_sender import vapid_configured
 
@@ -82,6 +90,8 @@ class Command(CronCommand):
             todo_due = todo_reminders.due_reminders(now=now, limit=limit)
             self.stdout.write(f"{len(due)} message reminder(s) due")
             self.stdout.write(f"{len(todo_due)} to-do reminder(s) due")
+            trials_due = first_month_trial_notices.due_trials(now=now, limit=limit)
+            self.stdout.write(f"{len(trials_due)} first-month trial notice(s) due")
             return
 
         # Push keys are encrypted (MIP-618). Without the key every push
@@ -125,4 +135,14 @@ class Command(CronCommand):
         self.stdout.write(
             f"todo_reminder: {todo_counts['fired']} fired, {todo_counts['skipped']} skipped "
             f"(of {todo_counts['due']} due, oldest {todo_counts['max_late_seconds']}s late){marker}"
+        )
+        # Last, and walled off: whatever this does, the reminders above are already delivered.
+        try:
+            trial_counts = first_month_trial_notices.fire_due(now=now, limit=limit)
+        except Exception:  # noqa: BLE001 - the query itself failed; reminders must not suffer
+            log.exception("trial_notice: pass failed")
+            return
+        self.stdout.write(
+            f"trial_notice: {trial_counts['sent']} sent, {trial_counts['skipped']} skipped "
+            f"(of {trial_counts['due']} due){marker}"
         )
