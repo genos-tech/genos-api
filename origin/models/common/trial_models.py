@@ -38,9 +38,30 @@ class CoreTrial(models.Model):
     # Fixed when the trial begins, so shortening or lengthening the offer later never moves the
     # end of a trial that is already running.
     ends_at = models.DateTimeField()
+    # The two notices before the end (MIP-1764, `services/first_month_trial_notices`). Each is set
+    # in the same transaction that files the notice, so a crashed tick redelivers and a second tick
+    # never repeats. A stage is also stamped when it was HANDLED without a notice (the plan was
+    # already paid, the 1-day notice made the 5-day one stale): the stamp means "this stage is
+    # done", not "a person was told", so the tick does not look at the row again. NULL = not yet.
+    notified_5d_at = models.DateTimeField(null=True, blank=True, editable=False)
+    notified_1d_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
-        indexes = [models.Index(fields=["ends_at"], name="coretrial_ends_at")]
+        indexes = [
+            models.Index(fields=["ends_at"], name="coretrial_ends_at"),
+            # What the notice tick reads: the rows whose stage is still to do. Partial, so a
+            # finished row (the common one) is not in the index at all.
+            models.Index(
+                fields=["ends_at"],
+                name="coretrial_due_5d",
+                condition=models.Q(notified_5d_at__isnull=True),
+            ),
+            models.Index(
+                fields=["ends_at"],
+                name="coretrial_due_1d",
+                condition=models.Q(notified_1d_at__isnull=True),
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"core trial of {self.user_id} until {self.ends_at:%Y-%m-%d}"
