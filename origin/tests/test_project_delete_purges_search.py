@@ -95,6 +95,9 @@ class _Seeded:
         ]
         return [c.chunk_id for c in chunks]
 
+    def task_id(self, tag):
+        return int(RagChunk.objects.get(chunk_id=f"{tag}-task").entity_id.split(":")[1])
+
     def left(self, chunk_ids):
         return set(
             RagChunk.objects.filter(chunk_id__in=chunk_ids).values_list("chunk_id", flat=True)
@@ -146,6 +149,20 @@ class _Contract(_Seeded):
         self.assertFalse(ProjectMaster.objects.filter(project_id=self.doomed_id).exists())
         # The tracking rows are kept so the next reindex's sweep retries.
         self.assertEqual(self.left(self.doomed_chunks), set(self.doomed_chunks))
+
+    def test_a_failed_purge_of_the_rows_does_not_stop_the_chat_purge(self):
+        # The first bulk call (tasks, milestones, notes) raises; the chat's own call still goes.
+        with (
+            mock.patch(_BULK, side_effect=[ConnectionError("blip"), (0, [])]),
+            mock.patch(_CLIENT),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.delete(self.doomed)
+
+        self.assertEqual(
+            self.left(self.doomed_chunks),
+            {"d-task", "task:%s:comment:7" % self.task_id("d"), "d-ms", "d-note", "d-notesum"},
+        )
 
     def test_a_bulk_that_reports_errors_does_not_undo_it_either(self):
         error = {"delete": {"_id": "d-task", "status": 500, "error": {"type": "boom"}}}

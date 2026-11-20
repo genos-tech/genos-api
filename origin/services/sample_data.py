@@ -695,7 +695,6 @@ def _remove_project(team, entry: Entry, planner: _Planner) -> None:
     from origin.models.task.milestone_models import MilestoneMaster
     from origin.models.task.sprint_models import Sprint
     from origin.models.task.task_models import TaskMaster
-    from origin.search_engine.purge import purge_chat, purge_milestone, purge_task
     from origin.services.project_delete import delete_project
     from origin.services.realtime_push import push_membership_removed
 
@@ -726,15 +725,7 @@ def _remove_project(team, entry: Entry, planner: _Planner) -> None:
                 project_ids=[project_id],
                 channels=[(kind, channel_id) for channel_id, kind in chats],
             )
-    # Search: a project delete cascades with no hook, so the chunks wait for the next reindex's
-    # orphan sweep. Dropped here so a removed sample task stops answering searches now.
-    # Best-effort (each `purge_*` swallows its own failure); outside the transaction.
-    for task_id in task_ids:
-        purge_task(task_id)
-    for milestone_id in milestone_ids:
-        purge_milestone(milestone_id)
-    for channel_id, kind in chats:
-        purge_chat(channel_id, kind)
+    # The search chunks of what went are dropped by `delete_project`, after its commit.
 
 
 def _remove_note(team, entry: Entry, planner: _Planner) -> None:
