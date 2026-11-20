@@ -21,15 +21,22 @@ carries the message and status the page answers with.
 
 from __future__ import annotations
 
+import logging
+
+from django.core.files.storage import default_storage
 from django.db import transaction
 
 from origin.models.chat.unified_models import Activity
-from origin.models.note.chat_note_models import ChatNoteMaster
+from origin.models.note.chat_note_models import ChatNoteAttachmentFact, ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.favorite_note_models import NoteFavoriteMaster
-from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.models.note.personal_note_models import (
+    PersonalNoteAttachmentFact,
+    PersonalNoteFolder,
+    PersonalNoteMaster,
+)
 from origin.models.note.recent_note_models import NoteRecentMaster
-from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.note.task_note_models import TaskNoteAttachmentFact, TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note, purge_note_folders
 from origin.services.note_satellites import batched_note_cleanup
@@ -48,11 +55,21 @@ from origin.views.utils.note_role import (
 )
 from origin.views.utils.note_version import delete_note_versions
 
+logger = logging.getLogger(__name__)
+
 # family label -> (table, the NOTE_TYPE_* the permission and version tables use)
 FAMILIES = {
     "personal": (PersonalNoteMaster, NOTE_TYPE_PERSONAL),
     "task": (TaskNoteMaster, NOTE_TYPE_TASK),
     "chat": (ChatNoteMaster, NOTE_TYPE_CHAT),
+}
+
+
+# the `NOTE_TYPE_*` -> the table of that family's uploaded files (`api/v2/note/<family>/attachment/`)
+ATTACHMENT_MODELS = {
+    NOTE_TYPE_PERSONAL: PersonalNoteAttachmentFact,
+    NOTE_TYPE_TASK: TaskNoteAttachmentFact,
+    NOTE_TYPE_CHAT: ChatNoteAttachmentFact,
 }
 
 
@@ -79,10 +96,61 @@ def forget_deleted_notes(code: int, note_ids) -> None:
 
     EVERY path that removes note rows calls this with the ids it removed: the page and agent
     deletes here, a project or a task delete (the notes cascade), the account erasure and the
-    demo team's cleanup. A path that deletes note rows and does not is the bug."""
+    demo team's cleanup. A path that deletes note rows and does not is the bug. The same paths
+    call `forget_note_attachments` (MIP-1720), but BEFORE the delete."""
     ids = sorted({int(n) for n in note_ids})
     for start in range(0, len(ids), _FORGET_BATCH):
         _forget_batch(code, ids[start : start + _FORGET_BATCH])
+
+
+def forget_note_attachments(code: int, note_ids) -> int:
+    """Delete the uploaded files of notes that are about to be deleted (MIP-1720): the rows now,
+    in the caller's transaction, and the files in storage AFTER it commits. Returns the number of
+    rows removed. `code` is the `NOTE_TYPE_*` of the family.
+
+    Call it BEFORE the note rows go, never after: an attachment points at its note with a
+    `SET_NULL` foreign key, so once the note is deleted the row has `note = NULL` and nothing can
+    find it, or the file it names, again (no route lists attachments, and the media route
+    authorizes a path by its note). Everything else in this module is called after the delete;
+    this is the one that must come first. EVERY path that removes note rows calls it, from the
+    same places as `forget_deleted_notes`.
+
+    The files go after the commit, like a chat's (`channel_delete._forget`): a file delete cannot
+    be rolled back, so a delete that fails must not have touched storage. It is best-effort; a
+    file that cannot be removed is logged (by family, never by name: the name is the uploader's
+    text) and the row is already gone, which is what `purge_detached_note_attachments` is for."""
+    model = ATTACHMENT_MODELS[code]
+    ids = sorted({int(n) for n in note_ids})
+    files: list[str] = []
+    removed = 0
+    for start in range(0, len(ids), _FORGET_BATCH):
+        rows = list(
+            model.objects.filter(note_id__in=ids[start : start + _FORGET_BATCH]).values_list(
+                "pk", "note_attachment_url"
+            )
+        )
+        # By primary key: a row uploaded between the read and the delete is not deleted
+        # without its file being known.
+        removed += model.objects.filter(pk__in=[pk for pk, _ in rows]).delete()[0]
+        files.extend(name for _pk, name in rows if name)
+    if files:
+        label = next(label for label, (_model, c) in FAMILIES.items() if c == code)
+        transaction.on_commit(lambda: remove_stored_files(files, family=label), robust=True)
+    return removed
+
+
+def remove_stored_files(names, *, family) -> int:
+    """Delete these stored files, best-effort. Returns how many could not be deleted."""
+    failed = 0
+    for name in names:
+        try:
+            default_storage.delete(name)
+        except Exception:  # noqa: BLE001 - a missing or unreachable file must not undo a delete
+            failed += 1
+            logger.warning(
+                "could not remove an attachment file of a deleted note (family %s)", family
+            )
+    return failed
 
 
 def _forget_batch(code: int, ids: list[int]) -> None:
@@ -113,6 +181,7 @@ def delete_note(*, team_id, family: str, note_id) -> None:
             note = model.objects.get(team=team_id, note_id=note_id)
         except model.DoesNotExist:
             raise DeleteRefused("Note not found.", 404)
+        forget_note_attachments(code, [note_id])
         note.delete()
         delete_note_permissions(code, note_id)
         delete_note_versions(code, note_id)
@@ -189,6 +258,7 @@ def _owned_personal_folder(team_id, owner_id, folder_id) -> PersonalNoteFolder:
 
 
 def _hard_delete(note_ids: set, folder_ids: set) -> None:
+    forget_note_attachments(NOTE_TYPE_PERSONAL, note_ids)  # before the notes: see its note
     with batched_note_cleanup():  # the receiver's pass over the satellites, once (MIP-1517)
         PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
     NotePermissionMaster.objects.filter(note_type=NOTE_TYPE_PERSONAL, note_id__in=note_ids).delete()
