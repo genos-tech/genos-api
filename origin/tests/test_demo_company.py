@@ -103,16 +103,18 @@ class DemoCompanyLayerTests(TestCase):
 
     # --- join little --------------------------------------------------------------------------
 
-    def test_the_visitor_is_in_three_of_six_projects_and_two_of_four_chats(self):
+    def test_the_visitor_is_in_four_of_seven_projects_and_two_of_four_chats(self):
         team = self.en["team_id"]
-        self.assertEqual(self._projects(self.en).count(), 6)
+        # The story's two, the company layer's four, and the launch plan (MIP-1740).
+        self.assertEqual(self._projects(self.en).count(), 7)
 
         joined = set(
             ProjectMembers.objects.filter(team_id=team, attendee=self.en_user).values_list(
                 "project__project_name", flat=True
             )
         )
-        self.assertEqual(len(joined), 3)
+        self.assertEqual(len(joined), 4)
+        self.assertIn("Launch plan", joined)
         self.assertIn("Design system", joined)
 
         open_chats = Channel.objects.filter(
@@ -228,7 +230,7 @@ class DemoCompanyLayerTests(TestCase):
         team = self.ja["team_id"]
         copy = demo_company.COPY["ja"]
 
-        self.assertEqual(self._projects(self.ja).count(), 6)
+        self.assertEqual(self._projects(self.ja).count(), 7)
         self.assertEqual(
             list(
                 ProjectLabel.objects.filter(team_id=team)
@@ -272,7 +274,7 @@ class DemoCompanyLayerTests(TestCase):
         )
         for slug in demo_company.GROUP_SLUGS:
             self.assertIn(f"@{slug}", text)
-        self.assertIn("three of the six projects", text)
+        self.assertIn("four of the seven projects", text)
         self.assertIn("two of the four department chats", text)
 
     # --- cleanup -------------------------------------------------------------------------------------

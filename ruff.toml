@@ -1,9 +1,15 @@
-# Shared ruff config for the two Python services (backend/, backend_django/).
-# Lint is wired into CI as REPORT-ONLY (non-required) to start: the codebase
-# has never been linted, so expect many findings. Tighten/auto-fix in a
-# dedicated cleanup pass, then consider flipping the lint checks to required.
+# Ruff config for genos-api (one Django/DRF service: `origin/`, `apis/`).
+# CI runs it in the `backend-django-lint` job of .github/workflows/ci.yml as
+# `ruff check origin apis`, with ruff pinned to the version in
+# requirements-dev.txt (keep the two in step). That job is report-only: it is
+# not one of the branch ruleset's required checks. CI does not lint manage.py,
+# scripts/ or docs/*.py, and does not run `ruff format` at all.
+# The rule set below is deliberately conservative; the ignores are a
+# baseline for code that predates the lint, each with the files that still
+# trip it (counted with ruff 0.17.1 on origin/main, 2026-11-20). Re-enable
+# one by fixing those files and deleting its line.
 # ruff is a standalone binary and parses 3.12+ syntax regardless of this
-# target-version, so the Flask service's PEP 701 f-strings lint fine here.
+# target-version.
 target-version = "py311"
 line-length = 100
 
@@ -16,15 +22,31 @@ extend-exclude = [
 
 [lint]
 # Start conservative: pyflakes (F) + a subset of pycodestyle (E) + import
-# sorting (I). Expand the rule set in the cleanup pass.
+# sorting (I).
 select = ["E", "F", "W", "I"]
-# Relaxed baseline for a previously-unlinted codebase. Re-enable these in a
-# follow-up cleanup pass once the noise is burned down.
 ignore = [
     "E501", # line-too-long
-    "F403", # star import — Django settings do `from .settings import *`
-    "F405", # name may be undefined / from star import — same Django pattern
-    "E402", # import-not-at-top — Django settings + conditional imports
-    "F841", # unused local variable (minor; revisit)
-    "E712", # `== True` / `== False` comparisons (minor; revisit)
+    # F403/F405: `from x import *` re-exports, not Django settings (those carry
+    # their own noqa in apis/settings_test.py). F403: 77 hits in 20 files, the
+    # package re-exports in origin/{models,serializers,urls,views}/__init__.py
+    # (origin/models/__init__.py alone has 38) and the view/serializer/url
+    # modules that star-import models and serializers.
+    # F405: 339 hits in 16 files, the names those star imports provide
+    # (origin/views/project/prj_views.py 74, origin/views/task/task_views.py 57,
+    # origin/urls/common/urls.py 51 are the largest).
+    "F403", # star import
+    "F405", # name may be undefined / from star import
+    # E402: 84 hits in 6 files, all imports placed after a module-level
+    # statement (a `logger = ...`, a constant or a function): origin/views/task/task_views.py 50,
+    # origin/services/demo_seeder.py 24, origin/models/task/task_models.py 5,
+    # origin/views/common/auth_views.py 3, origin/search_engine/agent/acl.py 1,
+    # origin/search_engine/agent/controller.py 1.
+    "E402", # import-not-at-top
+    # F841: 21 hits in 14 files, 10 of them under origin/tests (7 hits in
+    # test_search_chunkers_agent.py); the rest are origin/search_engine/agent/{controller,note_summary}.py,
+    # origin/services/demo_seeder.py and origin/views/task/task_views.py.
+    "F841", # unused local variable
+    # E712: 6 hits in 3 files: origin/views/common/inbox_views.py 4,
+    # origin/views/task/search_views.py 1, origin/views/task/task_views.py 1.
+    "E712", # `== True` / `== False` comparisons
 ]
