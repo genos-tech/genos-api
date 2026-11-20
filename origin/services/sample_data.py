@@ -656,6 +656,17 @@ class Result:
         }
 
 
+class _Stays(Exception):
+    """Raised by a remover that finds, at the moment of removal, that something it was going to
+    take is still in use: an earlier object of this run that could not be removed still wears
+    this label or has this tag. Not a failure: the object stays, with this reason."""
+
+    def __init__(self, reason: str, detail: dict | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail or {}
+
+
 def _forget_markers(team_id, object_type: str, ids) -> None:
     ids = [str(i) for i in ids]
     if ids:
@@ -762,9 +773,14 @@ def _remove_todo_item(team, entry: Entry, planner: _Planner) -> None:
 
 
 def _remove_todo_category(team, entry: Entry, planner: _Planner) -> None:
-    from origin.models.chat.todo_models import ToDoCategory
+    from origin.models.chat.todo_models import ToDoCategory, ToDoItem
 
     with transaction.atomic():
+        # Deleting a tag clears it from every to-do that wears it (SET_NULL): so look again now.
+        # The plan said none was left, but a to-do of this run that could not be removed is.
+        still = ToDoItem.objects.filter(category_id=entry.id).count()
+        if still:
+            raise _Stays(KEEP_CATEGORY_IN_USE, {"todos": still})
         ToDoCategory.objects.filter(category_id=entry.id, team_id=team.team_id).delete()
         _forget_markers(team.team_id, TODO_CATEGORY, [entry.id])
 
@@ -783,10 +799,15 @@ def _remove_mention_group(team, entry: Entry, planner: _Planner) -> None:
 
 
 def _remove_label(team, entry: Entry, planner: _Planner) -> None:
-    from origin.models.project.prj_models import ProjectLabel
+    from origin.models.project.prj_models import ProjectLabel, ProjectLabelAssignment
     from origin.services.project_catalog import invalidate_label_project_list
 
     with transaction.atomic():
+        # Deleting a label takes it off every project that wears it: so look again now. A project
+        # of this run that could not be removed still wears it.
+        still = ProjectLabelAssignment.objects.filter(label_id=entry.id).count()
+        if still:
+            raise _Stays(KEEP_LABEL_IN_USE, {"projects": still})
         ProjectLabel.objects.filter(label_id=entry.id, team_id=team.team_id).delete()
         _forget_markers(team.team_id, PROJECT_LABEL, [entry.id])
     invalidate_label_project_list(team.team_id)
@@ -885,6 +906,9 @@ def execute(team, *, request=None) -> Result:
         try:
             remover(team, entry, planner)
             result.removed.append(entry)
+        except _Stays as stays:
+            entry.reason, entry.detail = stays.reason, stays.detail
+            result.kept.append(entry)
         except Exception as error:  # noqa: BLE001 — one object must not stop the rest
             logger.exception(
                 "sample data: %s %s not removed (team %s)", entry.type, entry.id, team.pk

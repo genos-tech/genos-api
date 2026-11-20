@@ -14,15 +14,15 @@ from django.test import TransactionTestCase
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoItem
-from origin.models.chat.unified_models import Channel, ChannelKind, Message
-from origin.models.common.mention_group_models import MentionGroupMaster
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
+from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
 from origin.models.common.sample_data_models import SampleDataMarker
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
-from origin.models.project.prj_models import ProjectLabel, ProjectMaster
+from origin.models.project.prj_models import ProjectLabel, ProjectLabelAssignment, ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services import sample_data
 from origin.services.organisation_examples import COPY
 from origin.tests.test_base import BaseAPITestCase
@@ -635,4 +635,408 @@ class StarterProjectDeleteCommitsTests(TransactionTestCase):
             ProjectMaster.objects.filter(
                 team=team, project_name="Getting started with Genos"
             ).exists()
+        )
+
+
+class ThePersonsWorkStaysTests(SampleDataTestCase):
+    """Something the person edited or added inside a sample project, chat, folder, note or to-do."""
+
+    def setUp(self):
+        super().setUp()
+        self.team = self.create_team()
+        self.starter = self.project(self.team, "Getting started with Genos")
+        self.hiring = self.project(self.team, COPY["en"]["private_project"])
+
+    def run_it(self):
+        with (
+            mock.patch("origin.search_engine.purge.os_helpers.bulk", return_value=(0, [])),
+            mock.patch("origin.search_engine.purge.get_client"),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            return self.execute(self.team).data
+
+    def kept(self, body, type_):
+        return {e["id"]: e for e in body.get("kept", body.get("keep")) if e["type"] == type_}
+
+    def assert_project_kept(self, project, *, why):
+        self.assertTrue(ProjectMaster.objects.filter(pk=project.pk).exists())
+        body = self.preview(self.team).data
+        entry = self.kept(body, "project")[str(project.project_id)]
+        self.assertEqual(entry["reason"], sample_data.KEEP_PROJECT_CHANGED)
+        self.assertIn(why, entry["detail"])
+        # The preview and the run agree.
+        result = self.run_it()
+        self.assertEqual(
+            self.kept(result, "project")[str(project.project_id)]["detail"], entry["detail"]
+        )
+        # The project, all its sample tasks and the person's addition are all still there.
+        self.assertTrue(ProjectMaster.objects.filter(pk=project.pk).exists())
+        self.assertTrue(TaskMaster.objects.filter(project=project, is_milestone=False).exists())
+        # Its marker is kept, so a later run can take it once the person's work is gone.
+        self.assertTrue(
+            SampleDataMarker.objects.filter(
+                team=self.team, object_type="project", object_id=str(project.project_id)
+            ).exists()
+        )
+        return result
+
+    def test_a_task_the_person_added_keeps_the_project_and_everything_in_it(self):
+        mine = _person_task(self.team, self.hiring, self.user, "Interview Sam on Friday")
+        sample_tasks = TaskMaster.objects.filter(project=self.hiring).count() - 1
+
+        result = self.assert_project_kept(self.hiring, why="tasks")
+
+        self.assertTrue(TaskMaster.objects.filter(pk=mine.pk).exists())
+        self.assertEqual(TaskMaster.objects.filter(project=self.hiring).count(), sample_tasks + 1)
+        # The other projects, with nothing of the person's in them, did go.
+        self.assertFalse(ProjectMaster.objects.filter(pk=self.starter.pk).exists())
+        # The label the kept project wears stays with it; the rest of the sample is gone.
+        self.assertEqual(self.kept(result, "project_label").popitem()[1]["detail"], {"projects": 1})
+        self.assertTrue(ProjectLabel.objects.filter(team=self.team).exists())
+
+    def test_a_seeded_task_whose_text_the_person_rewrote_keeps_the_project(self):
+        task = TaskMaster.objects.filter(project=self.starter, is_milestone=False).first()
+        task.content = [
+            {"type": "paragraph", "content": [{"type": "text", "text": "Our real plan"}]}
+        ]
+        task.save()
+        self.assert_project_kept(self.starter, why="edited")
+
+    def test_ticking_a_seeded_task_off_is_not_the_persons_work(self):
+        # The starter project asks to be ticked off and deleted: a status change must not keep it.
+        for task in TaskMaster.objects.filter(project=self.starter):
+            task.status = "Closed"
+            task.save()
+        result = self.run_it()
+        self.assertFalse(ProjectMaster.objects.filter(pk=self.starter.pk).exists())
+        self.assertEqual(self.kept(result, "project"), {})
+
+    def test_a_comment_keeps_the_project(self):
+        task = TaskMaster.objects.filter(project=self.starter, is_milestone=False).first()
+        TaskComments.objects.create(task=task, sender=self.user, comment_id=1, comment_body=[])
+        self.assert_project_kept(self.starter, why="comments")
+
+    def test_a_milestone_the_person_added_keeps_the_project(self):
+        MilestoneMaster.objects.create(
+            team=self.team,
+            project=self.starter,
+            reporter=self.user,
+            title="Q1 launch",
+            status="Open",
+            priority="Normal",
+        )
+        self.assert_project_kept(self.starter, why="milestones")
+
+    def test_a_member_added_keeps_the_project(self):
+        from origin.models.project.prj_models import ProjectMembers
+
+        ProjectMembers.objects.create(team=self.team, project=self.starter, attendee=self.user2)
+        self.assert_project_kept(self.starter, why="members")
+
+    def test_a_message_in_the_projects_chat_keeps_the_project(self):
+        pm = Channel.objects.get(project=self.starter, kind=ChannelKind.PM)
+        Message.objects.create(
+            channel=pm, sender=self.user, seq=1, body=[], body_text="hi", metadata={}
+        )
+        self.assert_project_kept(self.starter, why="messages")
+
+    def test_once_the_persons_work_is_gone_the_next_run_removes_the_project(self):
+        mine = _person_task(self.team, self.hiring, self.user)
+        self.run_it()
+        self.assertTrue(ProjectMaster.objects.filter(pk=self.hiring.pk).exists())
+        mine.delete()
+
+        second = self.run_it()
+
+        self.assertFalse(ProjectMaster.objects.filter(pk=self.hiring.pk).exists())
+        self.assertIn(str(self.hiring.project_id), {e["id"] for e in second["removed"]})
+        self.assertFalse(ProjectLabel.objects.filter(team=self.team).exists())
+        self.assertFalse(SampleDataMarker.objects.filter(team=self.team).exists())
+
+    def test_a_project_the_person_deleted_themselves_is_reported_gone_not_failed(self):
+        from origin.services.project_delete import delete_project
+
+        delete_project(self.starter)
+        body = self.preview(self.team).data
+        self.assertEqual(body["alreadyGone"], 1)
+        result = self.run_it()
+        self.assertTrue(result["complete"])
+        # Its sprint, milestone and task markers went with it.
+        self.assertFalse(SampleDataMarker.objects.filter(team=self.team).exists())
+
+    # -- chats ---------------------------------------------------------------------------------
+
+    def chat(self, title):
+        return Channel.objects.get(team=self.team, kind=ChannelKind.GM, title=title)
+
+    def test_a_chat_the_person_wrote_in_stays_and_one_nobody_touched_goes(self):
+        general = self.chat(COPY["en"]["chat_general"])
+        private = self.chat(COPY["en"]["chat_private"])
+        Message.objects.create(
+            channel=general, sender=self.user, seq=2, body=[], body_text="Hello team", metadata={}
+        )
+
+        result = self.run_it()
+
+        self.assertTrue(Channel.objects.filter(pk=general.pk, is_deleted=False).exists())
+        self.assertEqual(Message.objects.filter(channel=general).count(), 2)
+        self.assertFalse(Channel.objects.filter(pk=private.pk).exists())
+        self.assertEqual(
+            self.kept(result, "channel")[str(general.id)]["reason"], sample_data.KEEP_CHAT_IN_USE
+        )
+
+    def test_a_chat_someone_joined_stays(self):
+        general = self.chat(COPY["en"]["chat_general"])
+        ChannelMember.objects.create(channel=general, user=self.user2, role="member")
+        result = self.run_it()
+        self.assertTrue(Channel.objects.filter(pk=general.pk, is_deleted=False).exists())
+        self.assertEqual(self.kept(result, "channel")[str(general.id)]["detail"], {"members": 1})
+
+    def test_a_chat_the_person_already_deleted_softly_is_left_for_them_to_restore(self):
+        from origin.services.channel_delete import SOFT, delete_group_chat
+
+        private = self.chat(COPY["en"]["chat_private"])
+        delete_group_chat(private, mode=SOFT)
+        self.run_it()
+        # Not hard-deleted behind their back: it can still be restored.
+        self.assertTrue(Channel.objects.filter(pk=private.pk, is_deleted=True).exists())
+
+    # -- notes and folders -----------------------------------------------------------------------
+
+    def folder(self, name):
+        return PersonalNoteFolder.objects.get(team=self.team, scope="team", name=name)
+
+    def test_a_folder_the_person_put_a_note_in_stays_but_the_unedited_samples_in_it_go(self):
+        folder = self.folder(COPY["en"]["folder"])
+        subfolder = self.folder(COPY["en"]["subfolder"])
+        overview = PersonalNoteMaster.objects.get(
+            team=self.team, folder_id=folder.folder_id, title=COPY["en"]["overview_title"]
+        )
+        mine = PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Our onboarding",
+            body=[],
+            folder_id=folder.folder_id,
+        )
+
+        result = self.run_it()
+
+        self.assertTrue(PersonalNoteFolder.objects.filter(pk=folder.pk).exists())
+        self.assertTrue(PersonalNoteMaster.objects.filter(pk=mine.pk).exists())
+        # The how-it-works note names projects, chats and a tag that are gone now: it goes too.
+        self.assertFalse(PersonalNoteMaster.objects.filter(pk=overview.pk).exists())
+        # The empty sample subfolder (with its example note) goes; the folder with the note stays.
+        self.assertFalse(PersonalNoteFolder.objects.filter(pk=subfolder.pk).exists())
+        self.assertEqual(
+            self.kept(result, "note_folder")[str(folder.folder_id)]["reason"],
+            sample_data.KEEP_FOLDER_IN_USE,
+        )
+
+    def test_a_folder_with_a_subfolder_the_person_made_stays(self):
+        folder = self.folder(COPY["en"]["folder"])
+        PersonalNoteFolder.objects.create(
+            team=self.team,
+            owner=self.user,
+            name="Mine",
+            parent_folder_id=folder.folder_id,
+            scope="team",
+        )
+        result = self.run_it()
+        self.assertTrue(PersonalNoteFolder.objects.filter(pk=folder.pk).exists())
+        self.assertEqual(
+            self.kept(result, "note_folder")[str(folder.folder_id)]["detail"], {"folders": 1}
+        )
+
+    def test_a_note_the_person_edited_is_left_exactly_as_they_wrote_it(self):
+        overview = PersonalNoteMaster.objects.get(
+            team=self.team, title=COPY["en"]["overview_title"]
+        )
+        overview.body = [
+            {"type": "paragraph", "content": [{"type": "text", "text": "Our department handbook"}]}
+        ]
+        overview.save()
+        edited = list(overview.body)
+
+        result = self.run_it()
+
+        overview.refresh_from_db()
+        self.assertEqual(overview.body, edited)
+        self.assertEqual(overview.title, COPY["en"]["overview_title"])
+        self.assertEqual(
+            self.kept(result, "note")[str(overview.note_id)]["reason"], sample_data.KEEP_NOTE_EDITED
+        )
+        # Its folder stays around it, with the note's path intact.
+        self.assertTrue(PersonalNoteFolder.objects.filter(folder_id=overview.folder_id).exists())
+
+    def test_a_retitled_note_counts_as_edited(self):
+        note = PersonalNoteMaster.objects.get(team=self.team, title=COPY["en"]["meeting_title"])
+        note.title = "Standup notes"
+        note.save()
+        result = self.run_it()
+        self.assertTrue(PersonalNoteMaster.objects.filter(pk=note.pk).exists())
+        self.assertIn(str(note.note_id), self.kept(result, "note"))
+
+    def test_a_note_the_person_hung_a_child_note_under_stays(self):
+        note = PersonalNoteMaster.objects.get(team=self.team, title=COPY["en"]["meeting_title"])
+        child = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Child", body=[], parent_note_id=note.note_id
+        )
+        self.run_it()
+        self.assertTrue(PersonalNoteMaster.objects.filter(pk=note.pk).exists())
+        self.assertTrue(PersonalNoteMaster.objects.filter(pk=child.pk).exists())
+
+    # -- to-dos, groups ----------------------------------------------------------------------
+
+    def test_the_example_todo_and_the_note_it_points_at_go_together(self):
+        todo = ToDoItem.objects.get(group__team=self.team, title=COPY["en"]["todo_title"])
+        overview = PersonalNoteMaster.objects.get(
+            team=self.team, title=COPY["en"]["overview_title"]
+        )
+        self.run_it()
+        self.assertFalse(ToDoItem.objects.filter(pk=todo.pk).exists())
+        self.assertFalse(PersonalNoteMaster.objects.filter(pk=overview.pk).exists())
+
+    def test_an_edited_todo_stays_and_so_does_the_tag_it_wears(self):
+        todo = ToDoItem.objects.get(group__team=self.team, title=COPY["en"]["todo_title"])
+        todo.title = "Decide who owns the sample projects"
+        todo.save()
+        result = self.run_it()
+        self.assertTrue(ToDoItem.objects.filter(pk=todo.pk).exists())
+        self.assertEqual(
+            self.kept(result, "todo_item")[str(todo.item_id)]["reason"],
+            sample_data.KEEP_TODO_EDITED,
+        )
+        self.assertEqual(
+            self.kept(result, "todo_category")[str(todo.category_id)]["detail"], {"todos": 1}
+        )
+        self.assertTrue(ToDoCategory.objects.filter(pk=todo.category_id).exists())
+
+    def test_a_todo_with_a_subitem_or_reminder_the_person_added_stays(self):
+        todo = ToDoItem.objects.get(group__team=self.team, title=COPY["en"]["todo_title"])
+        ToDoItem.objects.create(
+            group=todo.group, category=todo.category, title="Sub step", parent_item=todo
+        )
+        result = self.run_it()
+        self.assertTrue(ToDoItem.objects.filter(pk=todo.pk).exists())
+        self.assertEqual(
+            self.kept(result, "todo_item")[str(todo.item_id)]["detail"], {"subItems": 1}
+        )
+
+    def test_a_mention_group_with_someone_else_in_it_stays(self):
+        group = MentionGroupMaster.objects.get(team=self.team, group_name="sample-dept")
+        MentionGroupMembers.objects.create(
+            team=self.team, group=group, user=self.user2, added_by=self.user
+        )
+        result = self.run_it()
+        group.refresh_from_db()
+        self.assertFalse(group.is_deleted)
+        self.assertEqual(
+            self.kept(result, "mention_group")[str(group.group_id)]["detail"], {"members": 1}
+        )
+
+    def test_the_mention_group_goes_the_way_settings_deletes_it(self):
+        group = MentionGroupMaster.objects.get(team=self.team, group_name="sample-dept")
+        self.run_it()
+        group.refresh_from_db()
+        # Soft, like the Settings page: a message that carries the group keeps rendering.
+        self.assertTrue(group.is_deleted)
+
+
+class OneFailureTests(SampleDataTestCase):
+    """Per object, not all or nothing: one that cannot be removed leaves the rest removed, named
+    in the answer, and not half removed."""
+
+    def setUp(self):
+        super().setUp()
+        self.team = self.create_team()
+        # One of the two projects that wear the example label.
+        self.victim = self.project(self.team, COPY["en"]["private_project"])
+
+    def run_it(self):
+        with (
+            mock.patch("origin.search_engine.purge.os_helpers.bulk", return_value=(0, [])),
+            mock.patch("origin.search_engine.purge.get_client"),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            return self.execute(self.team)
+
+    def test_a_failing_project_is_reported_and_the_rest_is_removed(self):
+        from origin.services.project_delete import delete_project as real
+
+        def flaky(project):
+            if project.project_id == self.victim.project_id:
+                raise RuntimeError("disk on fire")
+            return real(project)
+
+        with mock.patch("origin.services.project_delete.delete_project", side_effect=flaky):
+            resp = self.run_it()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data["complete"])
+        self.assertEqual([f["id"] for f in resp.data["failed"]], [str(self.victim.project_id)])
+        self.assertEqual(resp.data["failed"][0]["reason"], "RuntimeError")
+        # The three other projects, the chats, notes, folders, to-dos are gone...
+        self.assertEqual(ProjectMaster.objects.filter(team=self.team).count(), 1)
+        self.assertFalse(
+            PersonalNoteMaster.objects.filter(title=COPY["en"]["overview_title"]).exists()
+        )
+        self.assertFalse(
+            Channel.objects.filter(team=self.team, title=COPY["en"]["chat_general"]).exists()
+        )
+        # ...the failed one is whole, with its tasks and its marker...
+        self.assertTrue(TaskMaster.objects.filter(project=self.victim).exists())
+        self.assertTrue(
+            SampleDataMarker.objects.filter(
+                team=self.team, object_type="project", object_id=str(self.victim.project_id)
+            ).exists()
+        )
+        # ...and the label that project still wears was not taken from it (reported as staying).
+        self.assertEqual(ProjectLabelAssignment.objects.filter(project=self.victim).count(), 1)
+        self.assertIn(
+            "project_label", {e["type"] for e in resp.data["kept"] if e["reason"] == "label_in_use"}
+        )
+
+        # The next run, with the fault gone, finishes the job.
+        again = self.run_it()
+        self.assertTrue(again.data["complete"])
+        self.assertFalse(ProjectMaster.objects.filter(team=self.team).exists())
+        self.assertFalse(SampleDataMarker.objects.filter(team=self.team).exists())
+
+    def test_a_project_delete_that_dies_half_way_leaves_the_project_whole(self):
+        tasks = TaskMaster.objects.filter(project=self.victim).count()
+        with mock.patch(
+            "origin.services.project_delete.forget_deleted_notes", side_effect=RuntimeError("late")
+        ):
+            resp = self.run_it()
+        self.assertFalse(resp.data["complete"])
+        # `forget_deleted_notes` runs AFTER the cascade, inside the same transaction: if the
+        # rollback were missing the project would be gone and its marker with it.
+        self.assertTrue(ProjectMaster.objects.filter(pk=self.victim.pk).exists())
+        self.assertEqual(TaskMaster.objects.filter(project=self.victim).count(), tasks)
+
+    def test_a_failing_chat_does_not_stop_the_notes(self):
+        with mock.patch(
+            "origin.services.channel_delete.delete_group_chat", side_effect=RuntimeError("no")
+        ):
+            resp = self.run_it()
+        self.assertEqual({f["type"] for f in resp.data["failed"]}, {"channel"})
+        self.assertEqual(len(resp.data["failed"]), 2)
+        self.assertTrue(
+            Channel.objects.filter(team=self.team, title=COPY["en"]["chat_general"]).exists()
+        )
+        self.assertFalse(
+            PersonalNoteMaster.objects.filter(title=COPY["en"]["overview_title"]).exists()
+        )
+        self.assertFalse(ProjectMaster.objects.filter(team=self.team).exists())
+
+    def test_a_failing_folder_is_reported_with_its_subfolder(self):
+        with mock.patch(
+            "origin.services.note_delete.delete_team_folder", side_effect=RuntimeError("no")
+        ):
+            resp = self.run_it()
+        failed = [f for f in resp.data["failed"] if f["type"] == "note_folder"]
+        self.assertEqual(len(failed), 3)  # the folder, its subfolder, the private folder
+        self.assertTrue(
+            PersonalNoteFolder.objects.filter(team=self.team, name=COPY["en"]["folder"]).exists()
         )
