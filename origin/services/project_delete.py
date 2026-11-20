@@ -16,6 +16,8 @@ Who may delete (the owner) is checked by the caller: the page's view, the tool.
 
 from __future__ import annotations
 
+import logging
+
 from django.db import transaction
 
 from origin.models.chat.unified_models import Channel, ChannelKind
@@ -29,6 +31,8 @@ from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
 from origin.services.note_satellites import batched_note_cleanup
 from origin.views.utils.note_role import NOTE_TYPE_TASK
+
+logger = logging.getLogger(__name__)
 
 
 def project_contents(project: ProjectMaster) -> dict[str, int]:
@@ -71,6 +75,12 @@ def delete_project(project: ProjectMaster) -> None:
     # statements would strand a detached channel against a live project, and the revoke
     # must not outlive a delete that failed.
     with transaction.atomic():
+        # Read BEFORE the delete: afterwards nothing names what the project held.
+        task_ids = list(TaskMaster.objects.filter(project=project).values_list("task_id", flat=True))
+        milestone_ids = list(
+            MilestoneMaster.objects.filter(project=project).values_list("milestone_id", flat=True)
+        )
+        chats = list(Channel.objects.filter(project=project).values_list("id", "kind"))
         _revoke_chat_note_roles(project)
         Channel.objects.filter(project=project).update(is_deleted=True, project=None)
         # The project's task notes go with it (by the project and by their task), and so must
@@ -91,3 +101,33 @@ def delete_project(project: ProjectMaster) -> None:
         with batched_note_cleanup(), suppress_task_activity():
             project.delete()
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)
+        # After the commit, so a delete that rolls back never touches the index.
+        transaction.on_commit(
+            lambda: _forget_search(task_ids, milestone_ids, note_ids, chats), robust=True
+        )
+
+
+def _forget_search(task_ids, milestone_ids, note_ids, chats) -> None:
+    """Drop the search chunks of what the delete took: tasks (and their comments), milestones, task
+    notes (and their summaries) and the project chat. Best-effort and never raises: a failed purge
+    must not undo or fail a delete that has committed, and the reindex's `sweep_orphans` retries
+    whatever this misses (a failed OpenSearch delete keeps its `RagChunk` tracking row).
+
+    A project delete cascades with no hook of its own, so without this a deleted project's tasks
+    stayed searchable (Spotlight, the agent, MCP) until the next `opensearch_reindex` pass (MIP-1734).
+    One call for the rows named by id, so a big project is one bulk request, not one per task.
+    """
+    from origin.search_engine.purge import purge_chat, purge_entities
+
+    pairs = [("task", f"task:{task_id}") for task_id in task_ids]
+    pairs += [("milestone", f"milestone:{milestone_id}") for milestone_id in milestone_ids]
+    for note_id in note_ids:
+        pairs.append(("note", f"note:task:{note_id}"))
+        pairs.append(("note_summary", f"note_summary:{NOTE_TYPE_TASK}:{note_id}"))
+    try:
+        if pairs:
+            purge_entities(pairs)
+    except Exception:  # noqa: BLE001
+        logger.exception("Best-effort search purge failed after deleting a project")
+    for channel_id, kind in chats:
+        purge_chat(channel_id, kind)  # best-effort on its own
