@@ -1040,3 +1040,31 @@ class OneFailureTests(SampleDataTestCase):
         self.assertTrue(
             PersonalNoteFolder.objects.filter(team=self.team, name=COPY["en"]["folder"]).exists()
         )
+
+
+class HowItWorksNoteTests(SampleDataTestCase):
+    """The note the example department explains itself in, and the one action it points at."""
+
+    def overview_text(self, lang):
+        from origin.services.organisation_examples import COPY as copy
+
+        return str(copy[lang]["overview"])
+
+    def test_the_note_names_the_one_action_and_no_longer_says_chats_can_only_be_left(self):
+        for lang, action, stale in (
+            ("en", "Remove sample data", "can only be left"),
+            ("ja", "サンプルデータを削除", "退出のみ可能"),
+        ):
+            with self.subTest(lang):
+                text = self.overview_text(lang)
+                self.assertIn(action, text)
+                self.assertNotIn(stale, text)
+
+    def test_the_seeded_note_is_the_text_the_marker_hashes(self):
+        # What `execute` compares: a note nobody touched hashes to its marker, byte for byte.
+        team = self.create_team()
+        note = PersonalNoteMaster.objects.get(team=team, title=COPY["en"]["overview_title"])
+        marker = SampleDataMarker.objects.get(
+            team=team, object_type="note", object_id=str(note.note_id)
+        )
+        self.assertEqual(sample_data.fingerprint(note.title, note.body), marker.fingerprint)

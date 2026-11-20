@@ -14,7 +14,8 @@ Japanese), unlike the two starter projects that are always both.
 
 Not made here, on purpose: nothing sets `is_demo`, nothing is created for other people, and no
 row is a copy of the demo's content (the eval corpus, `test_demo_v1_golden`, stays untouched).
-Group chats cannot be deleted by their owner yet (only left); the how-to text says so.
+Everything made here is recorded in `SampleDataMarker` (MIP-1706), so the team owner can remove
+all of it in one action; the how-to note says so.
 """
 
 from __future__ import annotations
@@ -149,11 +150,14 @@ COPY = {
             (
                 "Deleting the samples",
                 [
-                    "Delete the two “Sample dept” projects (project menu, Delete Project), the "
-                    "two “Sample dept” folders (Delete folder), the “Sample dept” tag (open a "
-                    "project, Edit tags, Delete tag) and the @sample-dept mention group "
-                    "(Settings, Mention groups, Delete group). The two group chats can only be "
-                    "left for now (Leave group).",
+                    "All at once: the team owner opens the team profile (Show Team Profile) and "
+                    "chooses Remove sample data. It lists what goes, removes all the sample "
+                    "data made with the team, and keeps anything you added or changed. One at a "
+                    "time: delete the two “Sample dept” projects (project menu, Delete "
+                    "Project), the two “Sample dept” folders (Delete folder), the “Sample "
+                    "dept” tag (open a project, Edit tags, Delete tag), the @sample-dept "
+                    "mention group (Settings, Mention groups, Delete group) and the two group "
+                    "chats (the chat's group profile, Delete group).",
                 ],
             ),
         ),
@@ -323,12 +327,15 @@ COPY = {
             (
                 "サンプルを削除するには",
                 [
-                    "「サンプル部署」の2つのプロジェクト（プロジェクトのメニューの"
-                    "「プロジェクトを削除」）、2つのフォルダ（「フォルダを削除」）、"
+                    "まとめて削除する場合：チームのオーナーがチームプロフィール（チームプロフィールを"
+                    "表示）を開き、「サンプルデータを削除」を選びます。削除される内容が一覧で表示され、"
+                    "チームと一緒に作成されたサンプルデータをすべて削除します。あなたが追加・変更した"
+                    "ものは残ります。1つずつ削除する場合：「サンプル部署」の2つのプロジェクト"
+                    "（プロジェクトのメニューの「プロジェクトを削除」）、2つのフォルダ（「フォルダを削除」）、"
                     "「サンプル部署」タグ（プロジェクトを開いて「タグを編集する」から「タグの削除」）、"
                     "メンショングループ @sample-dept（設定の「メンショングループ」から"
-                    "「グループの削除」）を削除してください。2つのグループチャットは、今のところ"
-                    "退出のみ可能です。",
+                    "「グループの削除」）、2つのグループチャット（グループのプロフィールの"
+                    "「グループを削除」）を削除してください。",
                 ],
             ),
         ),
