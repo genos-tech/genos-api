@@ -86,7 +86,7 @@ pipenv run python manage.py runserver 0.0.0.0:8890
 ```bash
 pipenv run coverage run manage.py test origin.tests
 pipenv run coverage report
-ruff check origin apis            # import sort + pyflakes/pycodestyle (see ruff.toml)
+ruff check .                      # import sort + pyflakes/pycodestyle (see ruff.toml)
 ```
 
 `manage.py test` runs on `apis.settings_test` (what CI uses) unless `DJANGO_SETTINGS_MODULE` is set or
@@ -172,7 +172,7 @@ arrived. Every row above has a numbered section in the runbook:
 
 - **backend-django** (required) — system check, migration-drift check, and
   `coverage run manage.py test origin.tests` against a Postgres 15 service.
-- **backend-django-lint** (report-only) — `ruff check origin apis`.
+- **backend-django-lint** (report-only) — `ruff check .` (whole repo).
 
 ### agent-evals: the retrieval gate, and when its billed Vertex run starts
 

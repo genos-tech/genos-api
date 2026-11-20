@@ -10,7 +10,8 @@ group + a team folder + an open group chat; the private version of each for a sm
   (Carol), Quality (Dan). Each has a project tag, a mention group, an open team folder with a note,
   and an open chat;
 * four more projects, so the workspace has six and the visitor is in three of them (the point of
-  "join little, find everything"); one of the six is private;
+  "join little, find everything"); one of the six is private. The launch plan (`demo_launch_plan`,
+  MIP-1740) is a seventh project the visitor is in, so the visitor is in four of seven;
 * a private team folder and a private group chat, which the visitor is not in.
 
 It runs ONLY for v2 (`create_demo_environment(version="v2")`, i.e. visitors). v1 is the eval
@@ -175,7 +176,7 @@ COPY = {
             (
                 "Join little, find everything",
                 [
-                    "You are in three of the six projects and two of the four department "
+                    "You are in four of the seven projects and two of the four department "
                     "chats. Press Cmd-K and type # or @ to find the rest, or look under Join "
                     "Project. The leads' chat, folder and the OKR project are private.",
                 ],
@@ -467,7 +468,7 @@ COPY = {
             (
                 "少しだけ参加して、すべてを見つける",
                 [
-                    "6つのプロジェクトのうち3つ、4つの部署チャットのうち2つに参加しています。"
+                    "7つのプロジェクトのうち4つ、4つの部署チャットのうち2つに参加しています。"
                     "残りは Cmd-K で # や @ を入力するか、「プロジェクトに参加」から見つけます。"
                     "リーダーのチャットとフォルダ、OKRのプロジェクトは非公開です。",
                 ],
@@ -747,11 +748,12 @@ def _create_extra_project(team, demo_user, bots, spec, label, sprint_name, taken
     return project
 
 
-def create_company_layer(team, demo_user, bots, lang, seeded_projects, sprint_name) -> None:
+def create_company_layer(team, demo_user, bots, lang, seeded_projects, sprint_name) -> list:
     """Add the departments, extra projects and private things to a v2 demo workspace.
 
     `seeded_projects` are the two story projects (`_create_project_from_blueprint` results, in
-    blueprint order); they only get department tags. Runs inside `create_demo_environment`'s
+    blueprint order); they only get department tags. Returns the four department labels (so
+    the launch plan can join the Product one). Runs inside `create_demo_environment`'s
     transaction.
     """
     copy = COPY.get(lang, COPY["en"])
@@ -833,3 +835,4 @@ def create_company_layer(team, demo_user, bots, lang, seeded_projects, sprint_na
         _create_extra_project(
             team, demo_user, bots, spec, labels[spec["department"]], sprint_name, taken_codes
         )
+    return labels

@@ -1,13 +1,9 @@
 # Ruff config for genos-api (one Django/DRF service: `origin/`, `apis/`).
 # CI runs it in the `backend-django-lint` job of .github/workflows/ci.yml as
-# `ruff check origin apis`, with ruff pinned to the version in
-# requirements-dev.txt (keep the two in step). That job is report-only: it is
-# not one of the branch ruleset's required checks. CI does not lint manage.py,
-# scripts/ or docs/*.py, and does not run `ruff format` at all.
-# The rule set below is deliberately conservative; the ignores are a
-# baseline for code that predates the lint, each with the files that still
-# trip it (counted with ruff 0.17.1 on origin/main, 2026-11-20). Re-enable
-# one by fixing those files and deleting its line.
+# `ruff check .` (the whole repo, including manage.py, scripts/ and docs/*.py),
+# with ruff pinned to the version in requirements-dev.txt (keep the two in
+# step). That job is report-only: it is not one of the branch ruleset's
+# required checks. CI does not run `ruff format`.
 # ruff is a standalone binary and parses 3.12+ syntax regardless of this
 # target-version.
 target-version = "py311"
@@ -24,29 +20,59 @@ extend-exclude = [
 # Start conservative: pyflakes (F) + a subset of pycodestyle (E) + import
 # sorting (I).
 select = ["E", "F", "W", "I"]
-ignore = [
-    "E501", # line-too-long
-    # F403/F405: `from x import *` re-exports, not Django settings (those carry
-    # their own noqa in apis/settings_test.py). F403: 77 hits in 20 files, the
-    # package re-exports in origin/{models,serializers,urls,views}/__init__.py
-    # (origin/models/__init__.py alone has 38) and the view/serializer/url
-    # modules that star-import models and serializers.
-    # F405: 339 hits in 16 files, the names those star imports provide
-    # (origin/views/project/prj_views.py 74, origin/views/task/task_views.py 57,
-    # origin/urls/common/urls.py 51 are the largest).
-    "F403", # star import
-    "F405", # name may be undefined / from star import
-    # E402: 84 hits in 6 files, all imports placed after a module-level
-    # statement (a `logger = ...`, a constant or a function): origin/views/task/task_views.py 50,
-    # origin/services/demo_seeder.py 24, origin/models/task/task_models.py 5,
-    # origin/views/common/auth_views.py 3, origin/search_engine/agent/acl.py 1,
-    # origin/search_engine/agent/controller.py 1.
-    "E402", # import-not-at-top
-    # F841: 21 hits in 14 files, 10 of them under origin/tests (7 hits in
-    # test_search_chunkers_agent.py); the rest are origin/search_engine/agent/{controller,note_summary}.py,
-    # origin/services/demo_seeder.py and origin/views/task/task_views.py.
-    "F841", # unused local variable
-    # E712: 6 hits in 3 files: origin/views/common/inbox_views.py 4,
-    # origin/views/task/search_views.py 1, origin/views/task/task_views.py 1.
-    "E712", # `== True` / `== False` comparisons
-]
+# E501 stays ignored globally (many long lines; the formatter owns wrapping).
+# Every other rule in `select` is on for every file, so a NEW file is linted
+# with all of them. The legacy files that predate that are listed below.
+ignore = ["E501"] # line-too-long
+
+# Legacy files that still trip a rule, one entry per file with only the codes
+# it trips (measured with ruff 0.17.1 on 2026-11-20 by running ruff with the
+# per-file ignores removed). A file you fix drops its code from its entry (or
+# the whole entry); do not add entries for new code. Where the hits come from:
+# - F403/F405: `from x import *` re-exports, not Django settings (those carry
+#   their own noqa in apis/settings_test.py): the package re-exports in
+#   origin/{models,serializers,urls,views}/__init__.py and the view/serializer/
+#   url modules that star-import models and serializers. A removed or renamed
+#   name that a star-importing module still uses is therefore NOT flagged here
+#   and only fails at runtime with a NameError.
+# - E402: imports placed after a module-level statement (a `logger = ...`, a
+#   constant or a function).
+# - F841: unused local variable (mostly under origin/tests).
+# - E712: `== True` / `== False` comparisons.
+[lint.per-file-ignores]
+"origin/models/__init__.py" = ["F403"]
+"origin/models/chat/activity_models.py" = ["F403", "F405"]
+"origin/models/task/task_models.py" = ["E402"]
+"origin/search_engine/agent/acl.py" = ["E402"]
+"origin/search_engine/agent/controller.py" = ["E402", "F841"]
+"origin/search_engine/agent/note_summary.py" = ["F841"]
+"origin/serializers/__init__.py" = ["F403"]
+"origin/serializers/note/note_serializers.py" = ["F403", "F405"]
+"origin/serializers/project/prj_serializers.py" = ["F403", "F405"]
+"origin/serializers/task/task_serializers.py" = ["F403", "F405"]
+"origin/services/demo_seeder.py" = ["E402", "F841"]
+"origin/tests/test_agent_body_on_user_model.py" = ["F841"]
+"origin/tests/test_agent_decide_edits.py" = ["F841"]
+"origin/tests/test_agent_dynamic_steps.py" = ["F841"]
+"origin/tests/test_agent_mention_tokens_loop.py" = ["F841"]
+"origin/tests/test_briefing.py" = ["F841"]
+"origin/tests/test_models_task_project_note.py" = ["F841"]
+"origin/tests/test_search_chunkers_agent.py" = ["F841"]
+"origin/tests/test_serializers.py" = ["F841"]
+"origin/tests/test_team_join_pins.py" = ["F841"]
+"origin/tests/test_timeline.py" = ["F841"]
+"origin/urls/__init__.py" = ["F403"]
+"origin/urls/chat/urls.py" = ["F403", "F405"]
+"origin/urls/common/urls.py" = ["F403", "F405"]
+"origin/urls/note/urls.py" = ["F403", "F405"]
+"origin/urls/project/urls.py" = ["F403", "F405"]
+"origin/urls/task/urls.py" = ["F403", "F405"]
+"origin/views/__init__.py" = ["F403"]
+"origin/views/common/auth_views.py" = ["E402"]
+"origin/views/common/inbox_views.py" = ["E712", "F403", "F405"]
+"origin/views/note/chat_note_views.py" = ["F403", "F405"]
+"origin/views/note/personal_note_views.py" = ["F403", "F405"]
+"origin/views/note/task_note_views.py" = ["F403", "F405"]
+"origin/views/project/prj_views.py" = ["F403", "F405"]
+"origin/views/task/search_views.py" = ["E712", "F403", "F405"]
+"origin/views/task/task_views.py" = ["E402", "E712", "F403", "F405", "F841"]
