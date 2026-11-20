@@ -10,7 +10,7 @@ leaves the rest removed and reported; and that a second run is a no-op.
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import TransactionTestCase
+from django.test import override_settings
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoCategory, ToDoItem
@@ -26,6 +26,7 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.services import sample_data
 from origin.services.organisation_examples import COPY
 from origin.tests.test_base import BaseAPITestCase
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 User = get_user_model()
 
@@ -576,6 +577,8 @@ class RemovalTests(SampleDataTestCase):
         self.assertNotIn("Sample dept", str(event.metadata))
         self.assertNotIn("Getting started", str(event.metadata))
 
+    # The to-do service queues its push only where a sockets service is configured.
+    @override_settings(SOCKETS_INTERNAL_URL="http://sockets.test")
     def test_the_people_affected_are_told_live(self):
         with (
             mock.patch("origin.services.channel_delete.push_channel_deleted") as chat_push,
@@ -610,7 +613,7 @@ class RemovalTests(SampleDataTestCase):
         )
 
 
-class StarterProjectDeleteCommitsTests(TransactionTestCase):
+class StarterProjectDeleteCommitsTests(CheapFlushTransactionTestCase):
     """The regression that `execute` found: deleting a starter project failed at COMMIT.
 
     A starter project has a task that blocks another one. Deleting it re-derived the blocked
