@@ -38,6 +38,12 @@ so a colleague with that chat already open sees it at once. That needs genos-soc
 `/internal/broadcast/message`; until it is deployed the push is refused and logged, and the card
 shows at the next sync as before.
 
+The card's field names are in the language of its sender, the person who made the task
+(`task_card.card_language`: their UI language, English when unknown), for the first post and for
+every refresh (MIP-1744). The card is ONE stored message for the whole channel with its labels
+baked in as text, so it cannot be translated per viewer; the sender's language is stable (a
+colleague editing the task over MCP does not flip it) and needs no change to the app's own card.
+
 Best effort, like every other observer of a write: the task is already saved, so a
 failure here is logged and costs the card, never the create. Idempotent per task: a
 task that already has a card is left alone.
@@ -104,13 +110,20 @@ def _post(*, project, task_id, actor_id, body, body_text, metadata) -> Message |
     return message
 
 
+def _language_of(user_id) -> str:
+    """The card language of the person with this id (English when there is none)."""
+    return task_card.card_language(CustomUser.objects.filter(id=user_id).first())
+
+
 def _system_user_id(project) -> str | None:
     return str(project.project_system_user_id) if project.project_system_user_id else None
 
 
-def _task_card_parts(task) -> tuple[list, str, dict]:
-    """`(body, body_text, metadata)` of `task`'s card, built from the row as stored."""
+def _task_card_parts(task, language: str | None = None) -> tuple[list, str, dict]:
+    """`(body, body_text, metadata)` of `task`'s card, built from the row as stored, with its
+    field names in `language` (English when none)."""
     body = task_card.task_card_body(
+        labels=task_card.card_labels(language),
         title=task.title,
         status=task.status or "Open",
         priority=task.priority,
@@ -130,8 +143,9 @@ def _task_card_parts(task) -> tuple[list, str, dict]:
     return body, task.title, metadata
 
 
-def _milestone_card_parts(milestone) -> tuple[list, str, dict]:
-    """`(body, body_text, metadata)` of a milestone's card, built from the rows as stored."""
+def _milestone_card_parts(milestone, language: str | None = None) -> tuple[list, str, dict]:
+    """`(body, body_text, metadata)` of a milestone's card, built from the rows as stored, with its
+    field names in `language` (English when none)."""
     assignees = [
         row.user
         for row in MilestoneAssignees.objects.filter(milestone=milestone)
@@ -139,6 +153,7 @@ def _milestone_card_parts(milestone) -> tuple[list, str, dict]:
         .order_by("ts_created_at", "pk")
     ]
     body = task_card.milestone_card_body(
+        labels=task_card.card_labels(language),
         title=milestone.title,
         status=milestone.status,
         priority=milestone.priority,
@@ -186,7 +201,7 @@ def post_task_created_card(task, *, actor_id) -> Message | None:
         task = _fresh_task(task.task_id)
         if task is None or task.project_id is None:
             return None
-        body, body_text, metadata = _task_card_parts(task)
+        body, body_text, metadata = _task_card_parts(task, _language_of(actor_id))
         return _post(
             project=task.project,
             task_id=task.task_id,
@@ -209,7 +224,7 @@ def post_milestone_created_card(milestone, *, actor_id) -> Message | None:
         milestone = _fresh_milestone(milestone.milestone_id)
         if milestone is None or milestone.task_id is None:
             return None
-        body, body_text, metadata = _milestone_card_parts(milestone)
+        body, body_text, metadata = _milestone_card_parts(milestone, _language_of(actor_id))
         return _post(
             project=milestone.project,
             task_id=milestone.task_id,
@@ -230,8 +245,10 @@ def post_milestone_created_card(milestone, *, actor_id) -> Message | None:
 # --- keeping the card current (MIP-1460) ------------------------------------------------------
 
 
-def _refresh(project, task_id, parts) -> Message | None:
-    """Rewrite the card of `task_id` to `parts`, when it differs from what is stored.
+def _refresh(project, task_id, build) -> Message | None:
+    """Rewrite the card of `task_id` to what `build(language)` returns, when it differs from
+    what is stored. `language` is the card's SENDER's, so a card keeps its language whoever
+    edits the task (MIP-1744); an old English card of a Japanese sender is healed here.
 
     No card means nothing to refresh (a task that predates cards, or one nobody posted for):
     this never makes one. An unchanged card is not written, so a save that touched nothing the
@@ -243,14 +260,14 @@ def _refresh(project, task_id, parts) -> Message | None:
     if channel is None:
         return None
     card = (
-        Message.objects.select_related("channel")
+        Message.objects.select_related("channel", "sender")
         .filter(channel=channel, task_id=task_id, is_thread_reply=False, deleted_at__isnull=True)
         .order_by("seq")
         .first()
     )
     if card is None:
         return None
-    body, body_text, metadata = parts
+    body, body_text, metadata = build(task_card.card_language(card.sender))
     # Merged, not replaced: the browser's card may carry keys this does not know about.
     merged = {**(card.metadata or {}), **metadata}
     if card.body == body and card.body_text == body_text and (card.metadata or {}) == merged:
@@ -267,7 +284,7 @@ def schedule_refresh(*, task_id=None, milestone_id=None, derived: bool = False) 
 
     Only for a write the browser did not make. The app rewrites the card itself after every
     edit (`PATCH card-message`, in the viewer's language), and rewriting it here too would fight
-    that: English labels over its own, and two broadcasts. A dependency-derived Blocked flip is
+    that: its labels replaced by the sender's, and two broadcasts. A dependency-derived Blocked flip is
     the server's own whoever's request it rode in on (`derived`), so it qualifies. Nothing is
     scheduled inside `suppress_task_activity()` (bulk seeding and teardown).
 
@@ -306,7 +323,7 @@ def refresh_task_card(task_id) -> Message | None:
         if task.is_milestone:
             milestone = _fresh_milestone(task_id=task_id)
             return refresh_milestone_card(milestone.milestone_id) if milestone else None
-        return _refresh(task.project, task.task_id, _task_card_parts(task))
+        return _refresh(task.project, task.task_id, lambda lang: _task_card_parts(task, lang))
     except Exception:  # noqa: BLE001 — the task is saved; an observer must not fail the write
         log.warning("task card refresh failed task=%s", task_id, exc_info=True)
         return None
@@ -318,7 +335,11 @@ def refresh_milestone_card(milestone_id) -> Message | None:
         milestone = _fresh_milestone(milestone_id)
         if milestone is None or milestone.task_id is None:
             return None
-        return _refresh(milestone.project, milestone.task_id, _milestone_card_parts(milestone))
+        return _refresh(
+            milestone.project,
+            milestone.task_id,
+            lambda lang: _milestone_card_parts(milestone, lang),
+        )
     except Exception:  # noqa: BLE001 — the milestone is saved; an observer must not fail the write
         log.warning("milestone card refresh failed milestone=%s", milestone_id, exc_info=True)
         return None

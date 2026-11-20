@@ -321,11 +321,19 @@ class DemoLaunchPlanLifecycleTests(TestCase):
     def test_the_chat_cards_are_current_when_the_signin_commits(self):
         """Claude's writes schedule a card refresh for commit (the app would rewrite its own card;
         a connected app has no browser). The cards are built by the refresh's own builder, so
-        running it changes nothing."""
-        user = _user("lp_commit")
+        running it changes nothing: in either language (MIP-1744: the Japanese workspace's cards
+        used to be English, and the refresh agreed with them)."""
+        for lang, field in (("en", "Status: "), ("ja", "ステータス：")):
+            with self.subTest(lang=lang):
+                self._cards_are_current_when_the_signin_commits(lang, field)
+
+    def _cards_are_current_when_the_signin_commits(self, lang, field):
+        user = _user(f"lp_commit_{lang}")
         with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            ws = create_demo_environment(user, short="lpcommit", lang="en", version="v2")
-        project = ProjectMaster.objects.get(team_id=ws["team_id"], project_name="Launch plan")
+            ws = create_demo_environment(user, short=f"lpcommit{lang}", lang=lang, version="v2")
+        project = ProjectMaster.objects.get(
+            team_id=ws["team_id"], project_name=demo_launch_plan.COPY[lang]["project"]
+        )
         channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
         before = {
             m.pk: (m.body, m.metadata, m.ts_updated_at)
@@ -338,6 +346,15 @@ class DemoLaunchPlanLifecycleTests(TestCase):
             for m in Message.objects.filter(channel=channel)
         }
         self.assertEqual(before, after)
+        cards = list(
+            Message.objects.filter(channel=channel, task__isnull=False, is_thread_reply=False)
+        )
+        self.assertGreaterEqual(len(cards), 4)
+        for card in cards:
+            first_rows = [
+                "".join(c.get("text", "") for c in block.get("content", [])) for block in card.body
+            ]
+            self.assertTrue(any(row.startswith(field) for row in first_rows), (lang, first_rows))
 
     def test_the_plan_is_swept_with_the_team(self):
         user = _user("lp_sweep")
