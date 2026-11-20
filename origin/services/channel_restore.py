@@ -21,10 +21,12 @@ Decisions, all the safe reading:
 * **Search**: the delete purged the chat's search chunks. Restoring marks the channel for the
   incremental reindexer (`acl_dirty`), which re-chunks the whole chat on its next pass, so the
   messages become searchable again at the next `opensearch_reindex` run (not instantly).
-* **Live**: nothing tells other members' open apps that the chat is back (no existing socket
-  notice means "a chat appeared"; the app's own `channel.created` is emitted by its socket
-  handler, not by this API). The restoring device refreshes its own list, and everyone else sees
-  the chat at their next chat-list refresh (reload, reconnect or refocus).
+* **Live** (MIP-1719): after the restore commits, every live member (`chat_member_rows`: not a
+  person who left, not a deleted account, including people of a guest team in a shared chat) is
+  told with `push_channel_appeared`, so their open apps re-read their chat list now, the way a
+  delete reaches them at once. A rolled-back restore announces nothing, and a sockets outage never
+  fails the restore (the chat is back whatever sockets says; members then see it at their next
+  list refresh, as before).
 
 A hard-deleted chat has no row, so it is simply not found; a chat that was never deleted is not
 restorable either (404, same as the list, so a double click is harmless: the second request
@@ -42,7 +44,9 @@ from django.utils import timezone
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import TeamMembers
 from origin.search_engine.acl_dirty import mark_channels_dirty
+from origin.services.channel_scope import chat_member_rows
 from origin.services.member_roles import GUEST
+from origin.services.realtime_push import push_channel_appeared
 
 logger = logging.getLogger(__name__)
 
@@ -92,5 +96,14 @@ def restore_group_chat(channel: Channel) -> bool:
             return False
         # Best-effort and in the same transaction, so a rollback leaves no stale mark.
         mark_channels_dirty([channel.pk])
+        # After commit and best-effort (never raises), so a rolled-back restore tells nobody.
+        # The roster is read here, after the flag flipped: the live members at the moment of
+        # the restore.
+        push_channel_appeared(
+            user_ids=chat_member_rows(channel).values_list("user_id", flat=True),
+            team_id=channel.team_id,
+            channel_id=channel.pk,
+            kind=ChannelKind.GM,
+        )
     logger.info("group chat restored channel=%s team=%s", channel.pk, channel.team_id)
     return True
