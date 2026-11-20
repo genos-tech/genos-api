@@ -1364,8 +1364,10 @@ CATALOG: tuple[McpTool, ...] = (
         milestone_ref_args=("milestone_id",),
         description=(
             "Create a task in a project. Use it to split discovered work out "
-            "of the task you're on, rather than widening that one. Get the "
-            "project id from `list_projects`. `content_text` is markdown — "
+            "of the task you're on, rather than widening that one. Search "
+            "first (`search_workspace`): a duplicate is worse than a missing "
+            "task, so add to an existing task instead of creating a second. "
+            "Get the project id from `list_projects`. `content_text` is markdown — "
             "headings, check lists, code fences and tables are preserved — "
             "and `milestone_id` (from `list_milestones`) files the task under "
             "an existing milestone in the same project; `parent_task_id` "
