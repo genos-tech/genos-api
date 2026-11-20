@@ -1,10 +1,14 @@
 """Team-membership helpers shared across the join / invite flows.
 
-`add_team_member` centralises the un-delete-or-create logic that the
-direct-join and inbox-approval views implement inline; `accept_invite`
-validates and consumes a `TeamInvite` and is the single source of truth
-for both the accept endpoint and the invite-signup path.
+`join_team` is the one place a person becomes a team member (MIP-1732): it reactivates a
+soft-deleted `TeamMembers` row or creates one, then puts the person into the team's default
+chats, in the caller's transaction. The direct join, the approved join request and the accepted
+invite all go through it, so everything attached to "a person joined" is written once.
+`accept_invite` validates and consumes a `TeamInvite` and is the single source of truth for both
+the accept endpoint and the invite-signup path.
 """
+
+from dataclasses import dataclass
 
 from django.db import transaction
 from django.utils import timezone
@@ -25,27 +29,70 @@ class InviteAcceptError(Exception):
         super().__init__(code)
 
 
-def add_team_member(team_id, attendee_id, *, announce: bool = True) -> bool:
-    """Un-delete-or-create a TeamMembers row. True when the person JOINED (a new row, or a
-    soft-deleted one brought back); False when they were already a member.
+class TeamMembershipInvalid(Exception):
+    """`join_team` was asked to create a row for a team or a person that does not exist.
 
-    Mirrors the re-join path in `TeamMembersView.post`: a previously
-    soft-deleted membership is reactivated in place so the
-    (team, attendee) unique constraint isn't violated.
+    `errors` is the serializer's error body, which the join views answer with as a 400."""
+
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__(errors)
+
+
+@dataclass(frozen=True)
+class JoinResult:
+    """What `join_team` did. `member` is the live row. `joined`: the person JOINED (a new row,
+    or a soft-deleted one brought back) rather than already being a member. `created`: the row
+    is a new one (implies `joined`)."""
+
+    member: TeamMembers
+    joined: bool
+    created: bool
+
+
+def join_team(team_id, attendee_id, *, announce: bool = True) -> JoinResult:
+    """Make `attendee_id` a live member of `team_id`: reactivate their soft-deleted row in place,
+    or create one. A person who is already a member is left untouched (nothing is saved).
+
+    A previously soft-deleted membership is reactivated rather than re-inserted so the
+    (team, attendee) unique constraint isn't violated; the role and join times it had are kept.
+    A new row is validated by `TeamMembersSerializer` first and
+    `TeamMembershipInvalid` is raised for a team or a person that does not exist, writing
+    nothing. Validation is for new rows only: an existing row has already been through it.
 
     A real join also puts the person into the team's default chat and their department chats
-    (MIP-1708, `join_default_chats`), in the caller's transaction and without ever failing it.
+    (MIP-1708, `join_default_chats`), best-effort and never failing the join. Row and chats are
+    written in one transaction (a savepoint when the caller already holds one), so call this
+    inside the transaction that must roll back with them. `announce=False` when the caller's own
+    relay has already told the person's apps.
+
+    What stays with the caller: who may join (each caller authorizes first), the security event
+    (its `via` differs: `direct`, `self`, `join_request`, none for an invite), the guide notes
+    and the response body.
     """
-    existing = TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).first()
-    if existing is not None:
-        if not existing.is_deleted:
-            return False
-        existing.is_deleted = False
-        existing.save(update_fields=["is_deleted", "ts_updated_at"])
-    else:
-        TeamMembers.objects.create(team_id=team_id, attendee_id=attendee_id)
-    join_default_chats(team_id, attendee_id, announce=announce)
-    return True
+    with transaction.atomic():
+        existing = TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).first()
+        if existing is not None:
+            if not existing.is_deleted:
+                return JoinResult(existing, joined=False, created=False)
+            existing.is_deleted = False
+            existing.save(update_fields=["is_deleted", "ts_updated_at"])
+            member, created = existing, False
+        else:
+            from origin.serializers.common.team_serializers import TeamMembersSerializer
+
+            serializer = TeamMembersSerializer(data={"team": team_id, "attendee": attendee_id})
+            if not serializer.is_valid():
+                raise TeamMembershipInvalid(serializer.errors)
+            member, created = serializer.save(), True
+        join_default_chats(team_id, attendee_id, announce=announce)
+    return JoinResult(member, joined=True, created=created)
+
+
+def add_team_member(team_id, attendee_id, *, announce: bool = True) -> bool:
+    """`join_team`, answering only whether the person JOINED (a new row, or a soft-deleted one
+    brought back): False when they were already a member."""
+    return join_team(team_id, attendee_id, announce=announce).joined
 
 
 def drop_in_team_access(team_id, attendee_id) -> None:
@@ -240,7 +287,7 @@ def accept_invite(invite, user, *, announce: bool = True):
         if is_guest_invite:
             add_project_guest(team.team_id, invite.project_id, user.id)
         else:
-            add_team_member(team.team_id, user.id, announce=announce)
+            join_team(team.team_id, user.id, announce=announce)
         invite.status = "accepted"
         invite.accepted_by = user
         invite.ts_accepted_at = timezone.now()

@@ -50,10 +50,11 @@ from origin.services.member_roles import (
 )
 from origin.services.realtime_push import announced_by_sockets, push_membership_removed
 from origin.services.security_events import record_security_event, user_label
-from origin.services.team_default_chats import join_default_chats
 from origin.services.team_membership import (
     InviteAcceptError,
+    TeamMembershipInvalid,
     accept_invite,
+    join_team,
     remove_team_member,
 )
 from origin.services.team_setup import DepartmentsRefused, parse_departments, set_up_new_team
@@ -519,38 +520,18 @@ class TeamMembersView(AuthenticatedAPIView):
 
         data = {"team": team_id, "attendee": attendee_id}
 
-        # Re-join path: a previously soft-deleted membership row is
-        # un-deleted in place. Without this, the UniqueConstraint on
-        # (team, attendee) would reject the second join attempt and the
-        # left-then-rejoin flow would 4xx silently.
-        existing = TeamMembers.objects.filter(
-            team_id=data["team"], attendee_id=data["attendee"]
-        ).first()
-        if existing is not None:
-            if existing.is_deleted:
-                # The membership and the default chats are one transaction (MIP-1708).
-                with transaction.atomic():
-                    existing.is_deleted = False
-                    existing.save(update_fields=["is_deleted", "ts_updated_at"])
-                    join_default_chats(
-                        team_id, attendee_id, announce=not announced_by_sockets(request)
-                    )
-                _record_member_added(request, team_id, attendee_id, via=self._via(request))
-            self._seed_guide_notes_best_effort(request, data["team"])
-            return Response(data, status=status.HTTP_201_CREATED)
-
-        serializer = TeamMembersSerializer(data=data)
-        if serializer.is_valid():
-            with transaction.atomic():
-                serializer.save()
-                join_default_chats(
-                    team_id, attendee_id, announce=not announced_by_sockets(request)
-                )
+        # A previously soft-deleted membership is brought back in place, a new one is created
+        # and the default chats are joined, in one transaction (`join_team`).
+        try:
+            result = join_team(team_id, attendee_id, announce=not announced_by_sockets(request))
+        except TeamMembershipInvalid as exc:
+            return Response(exc.errors, status=status.HTTP_400_BAD_REQUEST)
+        if result.joined:
             _record_member_added(request, team_id, attendee_id, via=self._via(request))
-            self._seed_guide_notes_best_effort(request, data["team"])
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        self._seed_guide_notes_best_effort(request, data["team"])
+        # A new row answers with the row; a rejoin or a team switch echoes the request.
+        body = TeamMembersSerializer(result.member).data if result.created else data
+        return Response(body, status=status.HTTP_201_CREATED)
 
 
 class LeaveTeamView(AuthenticatedAPIView):
@@ -642,39 +623,31 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
         team_id = str(team.team_id)
         attendee_id = str(item.sender_id)
 
-        # Re-join path: a previously soft-deleted membership row gets
-        # un-deleted in place. Without this, the unique constraint on
-        # (team, attendee) would reject the insert and the user would
-        # stay out of the team after the owner's approve click.
         data = {"team": team_id, "attendee": attendee_id}
-        existing = TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).first()
-        if existing is not None and not existing.is_deleted:
+        # Already a member: answered before the request's own state is asked about.
+        if TeamMembers.objects.filter(
+            team_id=team_id, attendee_id=attendee_id, is_deleted=False
+        ).exists():
             data["teamName"] = team.team_name
             return Response(data, status=status.HTTP_201_CREATED)
 
         if not is_still_open(item):
             return already_answered()
 
-        if existing is not None:
-            with transaction.atomic():
-                existing.is_deleted = False
-                existing.save(update_fields=["is_deleted", "ts_updated_at"])
-                join_default_chats(team_id, attendee_id, announce=not announced_by_sockets(request))
+        # A previously soft-deleted membership is brought back in place (otherwise the unique
+        # constraint on (team, attendee) would refuse the insert and the person would stay out
+        # after the approve click), a new one is created; the default chats are joined, in one
+        # transaction (`join_team`).
+        try:
+            result = join_team(team_id, attendee_id, announce=not announced_by_sockets(request))
+        except TeamMembershipInvalid as exc:
+            return Response(exc.errors, status=status.HTTP_400_BAD_REQUEST)
+        if result.joined:
             _record_member_added(request, team_id, attendee_id, via="join_request")
-            data["teamName"] = team.team_name
-            return Response(data, status=status.HTTP_201_CREATED)
-
-        serializer = TeamMembersSerializer(data=data)
-        if serializer.is_valid():
-            with transaction.atomic():
-                serializer.save()
-                join_default_chats(team_id, attendee_id, announce=not announced_by_sockets(request))
-            _record_member_added(request, team_id, attendee_id, via="join_request")
-            res = serializer.data
-            res["teamName"] = team.team_name
-            return Response(res, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # A new row answers with the row; a returning member with the request's echo.
+        res = TeamMembersSerializer(result.member).data if result.created else data
+        res["teamName"] = team.team_name
+        return Response(res, status=status.HTTP_201_CREATED)
 
 
 #############################
