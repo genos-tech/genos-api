@@ -17,6 +17,8 @@ URL shape (see plan §2):
     DELETE /api/v3/channels/{id}/members/{user_id}/       remove a member
     GET    /api/v3/channels/{id}/shares/                  guest teams in an external chat
     POST   /api/v3/channels/{id}/join/                    self-join a public GM
+    GET    /api/v3/channels/deleted/?team_id=             my soft-deleted groups (MIP-1715)
+    POST   /api/v3/channels/{id}/restore/                 restore one (owner only)
 
   Messages
     GET    /api/v3/channels/{id}/messages/?since=ISO      delta sync
@@ -62,6 +64,7 @@ from origin.views.chat.activity_views_v3 import (
     ActivitySurfaceView,
     ActivityUnreadView,
 )
+from origin.views.chat.channel_restore_views import ChannelRestoreView, DeletedChannelListView
 from origin.views.chat.channel_views import (
     ChannelDetailView,
     ChannelInlineUploadView,
@@ -104,9 +107,19 @@ urlpatterns = [
         name="v3_channel_list",
     ),
     path(
+        "api/v3/channels/deleted/",
+        DeletedChannelListView.as_view(),
+        name="v3_channel_deleted_list",
+    ),
+    path(
         "api/v3/channels/<uuid:channel_id>/",
         ChannelDetailView.as_view(),
         name="v3_channel_detail",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/restore/",
+        ChannelRestoreView.as_view(),
+        name="v3_channel_restore",
     ),
     path(
         "api/v3/channels/<uuid:channel_id>/members/",
