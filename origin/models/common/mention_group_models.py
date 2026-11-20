@@ -38,8 +38,12 @@ class MentionGroupMaster(models.Model):
 
     class Meta:
         constraints = [
+            # Live groups only: a delete is soft (`is_deleted`), and a deleted group must not
+            # keep its name taken (MIP-1733). Every name lookup in the views already filters
+            # `is_deleted=False`, so this makes the database say what they say.
             models.UniqueConstraint(
                 fields=["team", "group_name"],
+                condition=models.Q(is_deleted=False),
                 name="uniq_mention_group_name_per_team",
             )
         ]
