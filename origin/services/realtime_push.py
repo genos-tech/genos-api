@@ -382,6 +382,80 @@ def push_channel_deleted(*, user_ids, team_id, channel_id, kind) -> None:
         logger.warning("sockets channel-delete push could not be scheduled", exc_info=True)
 
 
+CHANNEL_APPEARED_PATH = "/internal/broadcast/channel"
+# genos-sockets sends this header on the create call of its own `channel.create` handler, which
+# announces the new chat to its members itself (`channel.created`); see `announced_by_sockets`.
+RELAY_HEADER = "X-Genos-Relay"
+RELAY_VALUE = "sockets"
+
+# A chat this big is not told live past this many people; the rest see it at their next chat-list
+# refresh, which is what they got before this push existed. The same cap as the delete.
+MAX_CHANNEL_APPEARED_PUSHES = 500
+
+
+def announced_by_sockets(request) -> bool:
+    """True when `request` is the create call of genos-sockets' own `channel.create` handler,
+    which broadcasts `channel.created` to the members itself, so this API must not announce the
+    chat a second time (MIP-1719).
+
+    The marker is not a credential and proves nothing: a client that sets it on its own REST
+    create only silences the live notice of its own write. Any other caller (a plain REST client)
+    sends no such header and its chat IS announced.
+    """
+    return request.headers.get(RELAY_HEADER) == RELAY_VALUE
+
+
+def push_channel_appeared(*, user_ids, team_id, channel_id, kind) -> None:
+    """Tell genos-sockets that a chat became visible to each of `user_ids` (MIP-1719), so their
+    open apps re-read their chat list now instead of at the next refresh, reload or reconnect.
+
+    For a chat that APPEARS with no socket handler to announce it: a group its owner restored
+    (MIP-1715), a group made over REST. The app's own `channel.created` is emitted by the sockets
+    `channel.create` handler for a chat made in the app, and a delete reaches every member at
+    once (`push_channel_deleted`); the undo and a REST create did not. Call this ONLY from those
+    paths, never where the app's own handler already announces (that would announce twice).
+
+    The body is facts only: the person, team, chat and kind. No title, no member list. The app
+    answers by re-reading its own list with its own token, so what it may see is still decided
+    here. One signed post per person (the sockets route takes one `userId`), one after the other,
+    STOPPING at the first failure: an outage then costs one timeout, not one per member, and an
+    older sockets that has no such route answers 404 once and is logged, so deploy order does not
+    matter. At most `MAX_CHANNEL_APPEARED_PUSHES` people. The caller passes the live roster
+    (`chat_member_rows`), so a person who is not a member, or whose account is deleted, is never
+    told. Sends once the current transaction commits (a rolled-back write announces nothing), or
+    at once when there is none. Best-effort and never raises: the chat is saved whatever sockets
+    says. A no-op when `SOCKETS_INTERNAL_URL` is unset.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets channel push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        people = [str(u) for u in user_ids if u][:MAX_CHANNEL_APPEARED_PUSHES]
+        if not people:
+            return
+
+        def send() -> None:
+            for person in people:
+                payload: dict[str, Any] = {
+                    "userId": person,
+                    "teamId": str(team_id),
+                    "channelId": str(channel_id),
+                    "kind": int(kind),
+                }
+                if not _post(payload, CHANNEL_APPEARED_PATH, "channel"):
+                    logger.warning(
+                        "stopped telling members that chat %s appeared after one failed push",
+                        channel_id,
+                    )
+                    return
+
+        transaction.on_commit(send, robust=True)
+    except Exception:  # noqa: BLE001 — the chat is saved; an observer must not break it
+        logger.warning("sockets channel push could not be scheduled", exc_info=True)
+
+
 TODO_PATH = "/internal/broadcast/todo"
 
 

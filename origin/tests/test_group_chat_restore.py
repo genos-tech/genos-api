@@ -7,13 +7,17 @@ its team, and nobody else, with a 404 and no hint for anyone else); that a hard-
 never-deleted chat is a 404; that restoring changes nothing but the flag and the stamp, so
 everything comes back exactly as it was; that a restored chat is back in EVERY reader the delete
 hid it from (the mirror of `SoftDeleteTests` in `test_group_chat_delete`); that its search chunks
-are queued to come back; and that a failed restore leaves the chat deleted.
+are queued to come back; that a failed restore leaves the chat deleted; and (MIP-1719) that every
+live member is told it is back, and nobody is when the restore rolls back.
 """
 
+import json
 import uuid
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 
@@ -31,10 +35,11 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.search_engine.acl_dirty import claim
 from origin.search_engine.chunkers.chat_chunker import iter_gm_chunks
 from origin.search_engine.models import SearchAclDirty
-from origin.services import channel_restore
+from origin.services import channel_restore, realtime_push
 from origin.services.channel_scope import readable_chats_qs, user_channels_qs
 from origin.services.external_grants import offer_grant, respond_to_grant
 from origin.services.member_roles import EDITOR, GUEST
+from origin.services.realtime_push import CHANNEL_APPEARED_PATH
 from origin.tests import test_group_chat_delete as delete_tests
 from origin.tests.cross_team_fixtures import CrossTeamTestCase
 
@@ -329,9 +334,10 @@ class WhatComesBackTests(RestoreTestCase):
         revoke_in_delete.assert_not_called()
         revoke_elsewhere.assert_not_called()
 
-    def test_nobody_is_told_over_a_socket(self):
-        """There is no existing notice that means "a chat appeared"; restore sends none and the
-        PR says so (members see the chat at their next list refresh)."""
+    @override_settings(SOCKETS_INTERNAL_URL="")
+    def test_nothing_is_sent_to_a_socket_when_none_is_configured(self):
+        """No sockets URL (a dev stack, a test) means no push at all (live notices: see
+        `LiveNoticeTests`)."""
         self.soft_delete()
         with mock.patch("origin.services.realtime_push._post") as post:
             self.restore(self.user)
@@ -449,6 +455,113 @@ class RollbackSafetyTests(RestoreTestCase):
         self.assertFalse(SearchAclDirty.objects.exists())
 
 
+@override_settings(SOCKETS_INTERNAL_URL="http://sockets.test", SOCKETS_INTERNAL_SECRET="s")
+class LiveNoticeTests(RestoreTestCase):
+    """MIP-1719: a restore reaches every member's open app at once, the way the delete did."""
+
+    def told(self, post):
+        return [c.args[0] for c in post.call_args_list if c.args[1] == CHANNEL_APPEARED_PATH]
+
+    def test_every_live_member_is_told_which_chat_and_of_what_kind(self):
+        self.soft_delete()
+        with mock.patch("origin.services.realtime_push._post", return_value=True) as post:
+            self.restore(self.user)
+        told = self.told(post)
+        self.assertEqual(
+            {p["userId"] for p in told},
+            {str(self.user.id), str(self.user2.id), str(self.editor.id)},
+        )
+        for payload in told:
+            self.assertEqual(
+                payload,
+                {
+                    "userId": payload["userId"],
+                    "teamId": str(self.team.team_id),
+                    "channelId": str(self.channel.id),
+                    "kind": int(ChannelKind.GM),
+                },
+            )
+
+    def test_a_person_who_left_a_deleted_account_and_an_outsider_are_not_told(self):
+        ChannelMember.objects.filter(channel=self.channel, user=self.editor).update(is_deleted=True)
+        User.objects.filter(pk=self.user2.pk).update(is_deleted=True)
+        self.soft_delete()
+        with mock.patch("origin.services.realtime_push._post", return_value=True) as post:
+            self.restore(self.user)
+        told = {p["userId"] for p in self.told(post)}
+        self.assertEqual(told, {str(self.user.id)})
+        self.assertNotIn(str(self.user3.id), told)
+
+    def test_the_posts_stop_at_the_first_failure(self):
+        self.soft_delete()
+        with mock.patch("origin.services.realtime_push._post", return_value=False) as post:
+            resp = self.restore(self.user)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(self.told(post)), 1, "one timeout, not one per member")
+
+    def test_an_older_sockets_with_no_route_does_not_fail_the_restore(self):
+        self.soft_delete()
+        with mock.patch.object(realtime_push.requests, "post") as post:
+            post.return_value = mock.Mock(status_code=404)
+            resp = self.restore(self.user)
+        self.assertEqual(resp.status_code, 200)
+        self.channel.refresh_from_db()
+        self.assertFalse(self.channel.is_deleted)
+
+    def test_a_restore_inside_a_transaction_that_rolls_back_announces_nothing(self):
+        self.soft_delete()
+        stale = Channel.objects.get(pk=self.channel.pk)
+        with mock.patch("origin.services.realtime_push._post", return_value=True) as post:
+            with self.captureOnCommitCallbacks(execute=True):
+                try:
+                    with transaction.atomic():
+                        self.assertTrue(channel_restore.restore_group_chat(stale))
+                        raise RuntimeError("something later in the request failed")
+                except RuntimeError:
+                    pass
+        post.assert_not_called()
+        self.assertStillDeleted()
+
+    def test_a_failure_while_restoring_announces_nothing(self):
+        self.soft_delete()
+        self.authenticate(self.user)
+        with (
+            mock.patch("origin.services.realtime_push._post", return_value=True) as post,
+            mock.patch.object(
+                channel_restore, "mark_channels_dirty", side_effect=RuntimeError("index fell over")
+            ),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.client.post(self.restore_url)
+        post.assert_not_called()
+
+    def test_a_restore_that_loses_the_race_announces_nothing(self):
+        self.soft_delete()
+        stale = Channel.objects.get(pk=self.channel.pk)
+        self.assertTrue(channel_restore.restore_group_chat(stale))
+        with mock.patch("origin.services.realtime_push._post", return_value=True) as post:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.assertFalse(channel_restore.restore_group_chat(stale))
+        post.assert_not_called()
+
+    def test_a_chat_that_was_never_deleted_announces_nothing(self):
+        with mock.patch("origin.services.realtime_push._post", return_value=True) as post:
+            self.restore(self.user)  # a 404: not deleted
+        post.assert_not_called()
+
+    def test_the_wire_body_is_facts_only(self):
+        self.soft_delete()
+        with mock.patch.object(realtime_push.requests, "post") as post:
+            post.return_value = mock.Mock(status_code=200)
+            self.restore(self.user)
+        self.assertEqual(post.call_count, 3)
+        for call in post.call_args_list:
+            body = json.loads(call.kwargs["data"])
+            self.assertEqual(set(body), {"userId", "teamId", "channelId", "kind"})
+            self.assertNotIn(b"Doomed", call.kwargs["data"], "the title never leaves the API")
+
+
 class SharedChatRestoreTests(CrossTeamTestCase):
     """A chat shared with another team: a soft delete kept the grant, so a restore reopens it."""
 
@@ -490,3 +603,16 @@ class SharedChatRestoreTests(CrossTeamTestCase):
 
         self.authenticate(self.b_owner)
         self.assertEqual(self.client.get(self.url).status_code, 200)
+
+    @override_settings(SOCKETS_INTERNAL_URL="http://sockets.test", SOCKETS_INTERNAL_SECRET="s")
+    def test_a_member_of_the_guest_team_is_told_too_and_only_members(self):
+        self.authenticate(self.a_owner)
+        self.client.delete(f"{self.url}?mode=soft")
+        restore_url = reverse("v3_channel_restore", args=[self.chat.id])
+        with mock.patch("origin.services.realtime_push._post", return_value=True) as post:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.assertEqual(self.client.post(restore_url).status_code, 200)
+        told = {
+            c.args[0]["userId"] for c in post.call_args_list if c.args[1] == CHANNEL_APPEARED_PATH
+        }
+        self.assertEqual(told, {str(self.a_owner.id), str(self.b_owner.id)})

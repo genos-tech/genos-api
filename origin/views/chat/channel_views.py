@@ -73,7 +73,11 @@ from origin.services.member_roles import (
     resolve_gm_role,
     resolve_team_role,
 )
-from origin.services.realtime_push import push_membership_removed
+from origin.services.realtime_push import (
+    announced_by_sockets,
+    push_channel_appeared,
+    push_membership_removed,
+)
 from origin.services.security_events import record_security_event, user_label
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
@@ -722,6 +726,18 @@ class ChannelListView(AuthenticatedAPIView):
                         object_id=channel.id,
                         role_ceiling=body.get("role_ceiling") or "editor",
                         actor=request.user,
+                    )
+                # MIP-1719: tell the members' open apps. The app's own create goes through the
+                # sockets `channel.create` handler, which broadcasts `channel.created` itself and
+                # says so with a header; any other caller (a plain REST client) has no handler to
+                # announce its chat, so this does. Inside the transaction, so a rollback (the
+                # grant error below) announces nothing.
+                if not announced_by_sockets(request):
+                    push_channel_appeared(
+                        user_ids=chat_member_rows(channel).values_list("user_id", flat=True),
+                        team_id=team.team_id,
+                        channel_id=channel.id,
+                        kind=kind,
                     )
         except ExternalGrantError as exc:
             # Rolled back with the channel: a half-created external chat
