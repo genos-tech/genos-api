@@ -59,14 +59,28 @@ def _env(mode=None):
     return mock.patch.dict(os.environ, env, clear=True)
 
 
+# The instant every test here runs at unless it moves the clock itself: 30 s into a minute, 8 h into
+# a UTC day. The per-minute and per-day windows are cut from `limits._now()` (bucket key
+# `...:<int(now // 60)>` / `...:<YYYYMMDD>`), so a test that makes N calls and expects the Nth to be
+# refused is wrong whenever the real wall clock crosses a minute (or UTC midnight) between its first
+# and last call: the calls land in two windows, each under the limit, and the Nth gets 200. A slow
+# CI shard stretches a test from milliseconds to seconds, which makes that likely (MIP-1793).
+PINNED_NOW = 1_800_000_030.0
+
+
 class LimitsBase(McpBase):
-    """A Core person with a write key, the mode switch under test control, a clean store."""
+    """A Core person with a write key, the mode switch under test control, a clean store, and the
+    limiter's clock pinned (`PINNED_NOW`; a test that needs another instant patches `limits._now`
+    itself, inside the test)."""
 
     mode = limits.ENFORCE
     tier = "core"
 
     def setUp(self):
         super().setUp()
+        clock = mock.patch.object(limits, "_now", return_value=PINNED_NOW)
+        clock.start()
+        self.addCleanup(clock.stop)
         cache.clear()
         limits._local.clear()
         self.addCleanup(cache.clear)
