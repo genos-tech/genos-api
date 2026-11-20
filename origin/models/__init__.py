@@ -1,4 +1,5 @@
 from .chat.activity_models import *
+from .chat.auto_join_models import *
 from .chat.mention_models import *
 from .chat.personal_tag_models import *
 from .chat.reaction_models import *
@@ -15,6 +16,7 @@ from .common.member_event_models import *
 from .common.member_importance_models import *
 from .common.notification_models import *
 from .common.ops_models import *
+from .common.sample_data_models import *
 from .common.schedule_models import *
 from .common.security_event_models import *
 from .common.team_models import *

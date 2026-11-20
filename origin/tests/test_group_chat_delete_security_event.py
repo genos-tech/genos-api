@@ -192,14 +192,15 @@ class TheTeamLogShowsItTests(GroupChatDeleteTestCase):
 
 
 class TheMigrationIsOneLeafTests(GroupChatDeleteTestCase):
-    def test_0249_is_the_single_leaf_and_hangs_off_0248(self):
+    def test_0249_hangs_off_0248_and_the_app_has_one_leaf(self):
         from django.db.migrations.loader import MigrationLoader
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         leaves = [n for (app, n) in loader.graph.leaf_nodes() if app == "origin"]
+        # Later migrations stack on 0249 (0250 sample-data markers, 0251 ...): the guard that
+        # matters is one leaf, which `scripts/check_migration_leaves.py` also runs in CI.
         self.assertEqual(len(leaves), 1, leaves)
-        self.assertTrue(leaves[0].startswith("0249_"), leaves)
-        node = loader.graph.node_map[("origin", leaves[0])]
+        node = loader.graph.node_map[("origin", "0249_security_event_channel_deleted")]
         self.assertEqual(
             [p[1] for p in node.parents if p[0] == "origin"], ["0248_ai_app_note_commented_carry"]
         )

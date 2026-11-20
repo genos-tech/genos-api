@@ -12,8 +12,10 @@ Called from `TeamMasterView.post`. The list is validated BEFORE the team is made
 a 400 and creates nothing); the setup itself is best-effort, each part in its own savepoint, so a
 failure never costs the team and never leaves a half-made department.
 
-Other people are not added to anything here. A person who joins the team later finds the open
-chats by name (chat search), and the folders and tags are visible to the whole team.
+Other people are not added to anything here. The chats are MARKED (`ChannelAutoJoin`, MIP-1708):
+`general` as the team's default chat, a department's chat as the chat of its mention group, so
+that a person who joins the team later, or is added to the group later, is put into them
+(`services/team_default_chats`). The folders and tags are visible to the whole team.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectLabel
 from origin.services.note_folder_manage import create_team_folder
 from origin.services.organisation_examples import _create_group_chat, example_locale
+from origin.services.team_default_chats import mark_default_chat, mark_department_chat
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +135,9 @@ def create_general_chat(team, user) -> Channel | None:
     ).exists():
         return None
     copy = COPY[example_locale(user)]
-    return _create_group_chat(team, user, GENERAL_TITLE, copy["general_hello"], False)
+    channel = _create_group_chat(team, user, GENERAL_TITLE, copy["general_hello"], False)
+    mark_default_chat(team, channel)
+    return channel
 
 
 def create_departments(team, user, names: list[str]) -> int:
@@ -171,13 +176,14 @@ def create_departments(team, user, names: list[str]) -> int:
             create_team_folder(
                 team_id=str(team.team_id), user_id=user.id, name=name, visibility="public"
             )
-            _create_group_chat(
+            chat = _create_group_chat(
                 team,
                 user,
                 f"{slug} · general",
                 copy["department_hello"].format(name=name),
                 False,
             )
+            mark_department_chat(team, chat, group)
     return created
 
 

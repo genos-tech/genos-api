@@ -48,8 +48,9 @@ from origin.services.member_roles import (
     resolve_project_role,
     resolve_team_role,
 )
-from origin.services.realtime_push import push_membership_removed
+from origin.services.realtime_push import announced_by_sockets, push_membership_removed
 from origin.services.security_events import record_security_event, user_label
+from origin.services.team_default_chats import join_default_chats
 from origin.services.team_membership import (
     InviteAcceptError,
     accept_invite,
@@ -527,15 +528,24 @@ class TeamMembersView(AuthenticatedAPIView):
         ).first()
         if existing is not None:
             if existing.is_deleted:
-                existing.is_deleted = False
-                existing.save(update_fields=["is_deleted", "ts_updated_at"])
+                # The membership and the default chats are one transaction (MIP-1708).
+                with transaction.atomic():
+                    existing.is_deleted = False
+                    existing.save(update_fields=["is_deleted", "ts_updated_at"])
+                    join_default_chats(
+                        team_id, attendee_id, announce=not announced_by_sockets(request)
+                    )
                 _record_member_added(request, team_id, attendee_id, via=self._via(request))
             self._seed_guide_notes_best_effort(request, data["team"])
             return Response(data, status=status.HTTP_201_CREATED)
 
         serializer = TeamMembersSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            with transaction.atomic():
+                serializer.save()
+                join_default_chats(
+                    team_id, attendee_id, announce=not announced_by_sockets(request)
+                )
             _record_member_added(request, team_id, attendee_id, via=self._via(request))
             self._seed_guide_notes_best_effort(request, data["team"])
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -646,15 +656,19 @@ class JoinTeamFromInboxView(AuthenticatedAPIView):
             return already_answered()
 
         if existing is not None:
-            existing.is_deleted = False
-            existing.save(update_fields=["is_deleted", "ts_updated_at"])
+            with transaction.atomic():
+                existing.is_deleted = False
+                existing.save(update_fields=["is_deleted", "ts_updated_at"])
+                join_default_chats(team_id, attendee_id, announce=not announced_by_sockets(request))
             _record_member_added(request, team_id, attendee_id, via="join_request")
             data["teamName"] = team.team_name
             return Response(data, status=status.HTTP_201_CREATED)
 
         serializer = TeamMembersSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            with transaction.atomic():
+                serializer.save()
+                join_default_chats(team_id, attendee_id, announce=not announced_by_sockets(request))
             _record_member_added(request, team_id, attendee_id, via="join_request")
             res = serializer.data
             res["teamName"] = team.team_name
@@ -919,7 +933,7 @@ class InviteAcceptView(AuthenticatedAPIView):
         was_guest = invite.member_role == GUEST
         project_id = invite.project_id
         try:
-            team = accept_invite(invite, request.user)
+            team = accept_invite(invite, request.user, announce=not announced_by_sockets(request))
         except InviteAcceptError as exc:
             return Response({"detail": exc.code}, status=status.HTTP_400_BAD_REQUEST)
         record_security_event(

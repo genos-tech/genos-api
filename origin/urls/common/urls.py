@@ -88,6 +88,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimStatusView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.sample_data_views import SampleDataView
 from origin.views.common.schedule_views import ScheduleDetailView, ScheduleListView, ScheduleRunView
 from origin.views.common.security_event_views import (
     MySecurityEventListView,
@@ -549,6 +550,8 @@ urlpatterns = [
         TeamMemberRoleView.as_view(),
         name="team_member_role",
     ),
+    # The sample data made with the team, previewed (GET) and removed (POST): owner only.
+    path("api/v2/team/sample-data/", SampleDataView.as_view(), name="team_sample_data"),
     path(
         "api/v2/team/member/remove/",
         RemoveTeamMemberView.as_view(),

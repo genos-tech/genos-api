@@ -460,6 +460,7 @@ REGISTRY = {
     ),
     "origin.views.common.team_views.TeamMasterView": checked("can_manage"),
     "origin.views.common.team_views.RemoveTeamMemberView": checked("can_remove_member"),
+    "origin.views.common.sample_data_views.SampleDataView": checked("_require_team_owner"),
     "origin.views.common.team_views.TeamInviteListView": checked("can_manage"),
     "origin.views.common.team_views.TeamInviteRevokeView": checked("can_manage"),
     "origin.views.common.team_views.TeamMemberRoleView": checked("can_manage"),
