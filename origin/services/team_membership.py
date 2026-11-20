@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from origin.models.common.team_models import TeamMembers
+from origin.services.team_default_chats import join_default_chats
 
 
 class InviteAcceptError(Exception):
@@ -24,20 +25,27 @@ class InviteAcceptError(Exception):
         super().__init__(code)
 
 
-def add_team_member(team_id, attendee_id) -> None:
-    """Un-delete-or-create a TeamMembers row.
+def add_team_member(team_id, attendee_id, *, announce: bool = True) -> bool:
+    """Un-delete-or-create a TeamMembers row. True when the person JOINED (a new row, or a
+    soft-deleted one brought back); False when they were already a member.
 
     Mirrors the re-join path in `TeamMembersView.post`: a previously
     soft-deleted membership is reactivated in place so the
     (team, attendee) unique constraint isn't violated.
+
+    A real join also puts the person into the team's default chat and their department chats
+    (MIP-1708, `join_default_chats`), in the caller's transaction and without ever failing it.
     """
     existing = TeamMembers.objects.filter(team_id=team_id, attendee_id=attendee_id).first()
     if existing is not None:
-        if existing.is_deleted:
-            existing.is_deleted = False
-            existing.save(update_fields=["is_deleted", "ts_updated_at"])
-        return
-    TeamMembers.objects.create(team_id=team_id, attendee_id=attendee_id)
+        if not existing.is_deleted:
+            return False
+        existing.is_deleted = False
+        existing.save(update_fields=["is_deleted", "ts_updated_at"])
+    else:
+        TeamMembers.objects.create(team_id=team_id, attendee_id=attendee_id)
+    join_default_chats(team_id, attendee_id, announce=announce)
+    return True
 
 
 def drop_in_team_access(team_id, attendee_id) -> None:
@@ -190,7 +198,7 @@ def add_project_guest(team_id, project_id, attendee_id) -> None:
     )
 
 
-def accept_invite(invite, user):
+def accept_invite(invite, user, *, announce: bool = True):
     """Validate and consume `invite` on behalf of `user`.
 
     Raises `InviteAcceptError(code)` on any failure; returns the joined
@@ -201,6 +209,9 @@ def accept_invite(invite, user):
     row: `ProjectMembers` only, no `TeamMembers`. Everything before the
     branch — single-use, expiry, email lock — is shared on purpose, so a
     guest link is exactly as hard to forward or replay as a team link.
+
+    A team join also puts the person into the team's default chat (MIP-1708); `announce=False`
+    when the caller's own relay already tells their open apps.
     """
     from origin.services.member_roles import GUEST
 
@@ -229,7 +240,7 @@ def accept_invite(invite, user):
         if is_guest_invite:
             add_project_guest(team.team_id, invite.project_id, user.id)
         else:
-            add_team_member(team.team_id, user.id)
+            add_team_member(team.team_id, user.id, announce=announce)
         invite.status = "accepted"
         invite.accepted_by = user
         invite.ts_accepted_at = timezone.now()

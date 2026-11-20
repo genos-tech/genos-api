@@ -10,6 +10,8 @@ from origin.models.common.mention_group_models import (
     MentionGroupMembers,
 )
 from origin.models.common.team_models import TeamMembers
+from origin.services.realtime_push import announced_by_sockets
+from origin.services.team_default_chats import add_group_members_to_chat
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.batch_limits import MAX_GROUP_MEMBERS_PER_ADD, check_batch_size
 from origin.views.utils.request_validators import as_int, as_uuid, is_own_user_id
@@ -254,6 +256,13 @@ class MentionGroupMembersView(AuthenticatedAPIView):
         if to_create:
             with transaction.atomic():
                 MentionGroupMembers.objects.bulk_create(to_create, ignore_conflicts=True)
+                # A department's chat takes its group's members (MIP-1708). Removal, below,
+                # does not take them out again.
+                add_group_members_to_chat(
+                    group,
+                    [m.user_id for m in to_create],
+                    announce=not announced_by_sockets(request),
+                )
 
         all_member_ids = [
             str(uid)
