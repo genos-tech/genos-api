@@ -75,19 +75,29 @@ def build_export(user) -> dict:
             }
         )
 
-    folders = {
-        f.folder_id: f.name for f in PersonalNoteFolder.objects.filter(owner=user, scope="personal")
-    }
+    # Their notes in BOTH spaces, each labelled with the space account deletion uses
+    # (`note_spaces`): the person wrote them either way, but only the personal ones go when the
+    # account does; a team note stays with the team (MIP-1782).
+    from origin.services.note_spaces import SPACE_PERSONAL, SPACE_TEAM, team_space_note_ids
+
+    owned = list(PersonalNoteMaster.objects.filter(owner=user).order_by("note_id"))
+    team_notes = team_space_note_ids({n.team_id for n in owned})
+    folders = dict(
+        PersonalNoteFolder.objects.filter(
+            folder_id__in={n.folder_id for n in owned if n.folder_id is not None}
+        ).values_list("folder_id", "name")
+    )
     notes = [
         {
             "note_id": n.note_id,
             "title": n.title,
+            "space": SPACE_TEAM if n.note_id in team_notes else SPACE_PERSONAL,
             "folder": folders.get(n.folder_id),
             "body": n.body,  # BlockNote JSON — lossless
             "created_at": _iso(n.ts_created_at),
             "updated_at": _iso(n.ts_updated_at),
         }
-        for n in PersonalNoteMaster.objects.filter(owner=user).order_by("note_id")
+        for n in owned
     ]
 
     categories = {c.category_id: c.name for c in ToDoCategory.objects.filter(user=user)}
