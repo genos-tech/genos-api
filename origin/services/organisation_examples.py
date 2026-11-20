@@ -35,6 +35,7 @@ from origin.models.project.prj_models import (
     ProjectMembers,
     ProjectTags,
 )
+from origin.services import sample_data
 from origin.services.demo_blocks import _body, _text_body
 from origin.services.demo_seeder import (
     _create_blueprint_tasks,
@@ -53,6 +54,9 @@ LABEL_COLOR, LABEL_TEXT_COLOR = "#0ea5e9", "#ffffff"
 # The group name is the same in every language: a mention is typed, and the app asks for a
 # lowercase name.
 GROUP_NAME = "sample-dept"
+
+# What this module writes in the sample-data marker table (MIP-1706).
+SEEDER = sample_data.SEEDER_EXAMPLES
 
 
 def _task(title, body, due_offset_days=3, priority="Normal"):
@@ -495,7 +499,10 @@ def _create_project(user, team, name, milestone_spec, task_specs, label, is_priv
     milestone, backing_task = _create_milestone_with_backing_task(
         team, project, sprint, user, [], milestone_spec
     )
-    _create_blueprint_tasks(team, project, sprint, milestone, backing_task, user, [], task_specs)
+    tasks = _create_blueprint_tasks(
+        team, project, sprint, milestone, backing_task, user, [], task_specs
+    )
+    sample_data.mark_project(team, SEEDER, project, sprint, [(milestone, backing_task)], tasks)
     return project
 
 
@@ -515,6 +522,25 @@ def _create_group_chat(team, user, title, hello, is_private) -> Channel:
     return channel
 
 
+# `_create_team_note` and `_create_group_chat` are shared with the new-team setup (the "general"
+# chat and the departments the owner named) and the demo company, which are the person's own and
+# must NOT be marked. So the marking lives in these two, which only this module calls.
+def _sample_note(team, user, folder, title, body) -> PersonalNoteMaster:
+    note = _create_team_note(team, user, folder, title, body)
+    sample_data.mark(
+        team, SEEDER, sample_data.NOTE, note.note_id, sample_data.fingerprint(note.title, note.body)
+    )
+    return note
+
+
+def _sample_chat(team, user, title, hello, is_private) -> Channel:
+    channel = _create_group_chat(team, user, title, hello, is_private)
+    # The hash is of the greeting: a chat that holds only that, and only its owner, has nothing
+    # of anyone's in it.
+    sample_data.mark(team, SEEDER, sample_data.CHANNEL, channel.id, sample_data.fingerprint(hello))
+    return channel
+
+
 def create_organisation_examples(user, team) -> None:
     """Make the example department for `user`'s new `team`. Raises on failure; the caller keeps
     the team and the rest of the starter either way."""
@@ -528,32 +554,37 @@ def create_organisation_examples(user, team) -> None:
             text_color=LABEL_TEXT_COLOR,
             created_by=user,
         )
+        sample_data.mark(team, SEEDER, sample_data.PROJECT_LABEL, label.label_id)
         group = MentionGroupMaster.objects.create(
             team=team,
             group_name=GROUP_NAME,
             description=copy["group_description"],
             created_by=user,
         )
+        sample_data.mark(team, SEEDER, sample_data.MENTION_GROUP, group.group_id)
         MentionGroupMembers.objects.create(team=team, group=group, user=user, added_by=user)
 
         folder, _ = create_team_folder(
             team_id=str(team.team_id), user_id=user.id, name=copy["folder"], visibility="public"
         )
-        _create_team_note(team, user, folder, copy["overview_title"], copy["overview"])
+        sample_data.mark(team, SEEDER, sample_data.NOTE_FOLDER, folder.folder_id)
+        _sample_note(team, user, folder, copy["overview_title"], copy["overview"])
         subfolder, _ = create_team_folder(
             team_id=str(team.team_id),
             user_id=user.id,
             name=copy["subfolder"],
             parent_folder_id=folder.folder_id,
         )
-        _create_team_note(team, user, subfolder, copy["meeting_title"], copy["meeting"])
+        sample_data.mark(team, SEEDER, sample_data.NOTE_FOLDER, subfolder.folder_id)
+        _sample_note(team, user, subfolder, copy["meeting_title"], copy["meeting"])
         private_folder, _ = create_team_folder(
             team_id=str(team.team_id),
             user_id=user.id,
             name=copy["private_folder"],
             visibility="private",
         )
-        _create_team_note(team, user, private_folder, copy["private_title"], copy["private"])
+        sample_data.mark(team, SEEDER, sample_data.NOTE_FOLDER, private_folder.folder_id)
+        _sample_note(team, user, private_folder, copy["private_title"], copy["private"])
 
         taken_codes = set(
             ProjectMaster.objects.filter(team=team, code__isnull=False).values_list(
@@ -581,8 +612,8 @@ def create_organisation_examples(user, team) -> None:
             taken_codes,
         )
 
-        _create_group_chat(team, user, copy["chat_general"], copy["chat_general_hello"], False)
-        _create_group_chat(team, user, copy["chat_private"], copy["chat_private_hello"], True)
+        _sample_chat(team, user, copy["chat_general"], copy["chat_general_hello"], False)
+        _sample_chat(team, user, copy["chat_private"], copy["chat_private_hello"], True)
 
         group_today = ToDoGroup.objects.filter(
             team=team, user=user, local_date=user_today(user)
@@ -594,10 +625,18 @@ def create_organisation_examples(user, team) -> None:
         category = ToDoCategory.objects.create(
             team=team, user=user, name=copy["todo_category"], sort_order=2
         )
-        ToDoItem.objects.create(
+        sample_data.mark(team, SEEDER, sample_data.TODO_CATEGORY, category.category_id)
+        item = ToDoItem.objects.create(
             group=group_today,
             category=category,
             title=copy["todo_title"],
             sort_order=0,
             notes=_text_body(copy["todo_notes"]),
+        )
+        sample_data.mark(
+            team,
+            SEEDER,
+            sample_data.TODO_ITEM,
+            item.item_id,
+            sample_data.fingerprint(item.title, item.notes),
         )

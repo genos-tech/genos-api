@@ -44,7 +44,7 @@ from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.task.task_models import TaskDependency
-from origin.services import member_events
+from origin.services import member_events, sample_data
 from origin.services.demo_seeder import (
     _body,
     _create_blueprint_tasks,
@@ -851,7 +851,7 @@ def _create_starter_project(
     examples_milestone, examples_backing_task = _create_milestone_with_backing_task(
         team, project, sprint, user, [], examples_blueprint["milestone"]
     )
-    _create_blueprint_tasks(
+    example_tasks = _create_blueprint_tasks(
         team,
         project,
         sprint,
@@ -860,6 +860,14 @@ def _create_starter_project(
         user,
         [],
         examples_blueprint["tasks"],
+    )
+    sample_data.mark_project(
+        team,
+        sample_data.SEEDER_STARTER,
+        project,
+        sprint,
+        [(milestone, backing_task), (examples_milestone, examples_backing_task)],
+        [*tasks, *example_tasks],
     )
 
     # Inviting teammates blocks the first-project walkthrough in each
@@ -921,6 +929,9 @@ def create_starter_workspace(user, team) -> None:
                 name=todo_blueprint["category"],
                 sort_order=category_order,
             )
+            sample_data.mark(
+                team, sample_data.SEEDER_STARTER, sample_data.TODO_CATEGORY, category.category_id
+            )
             for item_order, (title, notes) in enumerate(todo_blueprint["items"]):
                 item_fields = {
                     "group": group,
@@ -930,7 +941,14 @@ def create_starter_workspace(user, team) -> None:
                 }
                 if notes is not None:
                     item_fields["notes"] = _text_body(notes)
-                ToDoItem.objects.create(**item_fields)
+                item = ToDoItem.objects.create(**item_fields)
+                sample_data.mark(
+                    team,
+                    sample_data.SEEDER_STARTER,
+                    sample_data.TODO_ITEM,
+                    item.item_id,
+                    sample_data.fingerprint(item.title, item.notes),
+                )
 
         # The example department (MIP-1690): label, mention group, team folders, projects, chats.
         # It runs in its own savepoint (inside the function), so if it fails it leaves nothing

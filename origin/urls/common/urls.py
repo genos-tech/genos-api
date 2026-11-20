@@ -104,6 +104,7 @@ from origin.views.common.team_connection_views import (
     TeamConnectionRevokeView,
     TeamConnectionView,
 )
+from origin.views.common.sample_data_views import SampleDataView
 from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
@@ -549,6 +550,8 @@ urlpatterns = [
         TeamMemberRoleView.as_view(),
         name="team_member_role",
     ),
+    # The sample data made with the team, previewed (GET) and removed (POST): owner only.
+    path("api/v2/team/sample-data/", SampleDataView.as_view(), name="team_sample_data"),
     path(
         "api/v2/team/member/remove/",
         RemoveTeamMemberView.as_view(),
