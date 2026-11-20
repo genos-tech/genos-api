@@ -15,6 +15,7 @@ from .common.member_event_models import *
 from .common.member_importance_models import *
 from .common.notification_models import *
 from .common.ops_models import *
+from .common.sample_data_models import *
 from .common.schedule_models import *
 from .common.security_event_models import *
 from .common.team_models import *
