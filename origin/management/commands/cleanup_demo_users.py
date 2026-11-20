@@ -7,6 +7,11 @@ Run daily via cron / Celery beat. Sweeps any `CustomUser` row with
 Cleanup on signout (in LogoutView) is the primary mechanism; this
 command catches users who closed the tab without signing out.
 
+It also sweeps demo TEAMS with no owner (MIP-1721): a workspace is found
+through its owner, and `TeamMaster.owner` is SET_NULL, so a demo user
+deleted any other way leaves a team nothing else could find. Same age
+window, and `--dry-run` covers both.
+
 Usage:
     python manage.py cleanup_demo_users
     python manage.py cleanup_demo_users --hours 12
@@ -21,8 +26,9 @@ from datetime import timedelta
 from django.utils import timezone
 
 from origin.management.cron_command import CronCommand
+from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
-from origin.services.demo_seeder import delete_demo_environment
+from origin.services.demo_seeder import delete_demo_environment, delete_ownerless_demo_team
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +67,7 @@ class Command(CronCommand):
 
         if count == 0:
             self.stdout.write(f"No demo users older than {hours}h found.")
+            self._sweep_ownerless_teams(cutoff, hours, dry_run)
             return
 
         self.stdout.write(
@@ -87,4 +94,41 @@ class Command(CronCommand):
         else:
             self.stdout.write(
                 self.style.SUCCESS(f"Deleted {deleted} demo user(s), {failed} failed.")
+            )
+        self._sweep_ownerless_teams(cutoff, hours, dry_run)
+
+    def _sweep_ownerless_teams(self, cutoff, hours, dry_run) -> None:
+        """Demo teams whose owner row is already gone (MIP-1721). The user sweep above finds a
+        workspace through its owner, so it can never reach one of these. Same age window as the
+        users; never a team that has an owner, is soft-deleted or is not a demo team (the delete
+        checks that again under a lock)."""
+        team_ids = list(
+            TeamMaster.objects.filter(
+                is_demo=True, is_deleted=False, owner__isnull=True, ts_created_at__lt=cutoff
+            ).values_list("team_id", flat=True)
+        )
+        if not team_ids:
+            return
+        self.stdout.write(f"Found {len(team_ids)} ownerless demo team(s) older than {hours}h.")
+        swept = 0
+        failed = 0
+        for team_id in team_ids:
+            if dry_run:
+                self.stdout.write(f"  [dry-run] would delete ownerless demo team {team_id}")
+                continue
+            try:
+                # False: it gained an owner, or went, since the read above. Not ours.
+                if delete_ownerless_demo_team(team_id):
+                    swept += 1
+            except Exception:
+                failed += 1
+                log.exception("cleanup_demo_users: failed to delete ownerless team=%s", team_id)
+
+        if dry_run:
+            self.stdout.write(
+                self.style.SUCCESS(f"Dry-run complete. {len(team_ids)} ownerless would be deleted.")
+            )
+        else:
+            self.stdout.write(
+                self.style.SUCCESS(f"Deleted {swept} ownerless demo team(s), {failed} failed.")
             )

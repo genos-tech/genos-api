@@ -3030,3 +3030,43 @@ def delete_demo_environment(demo_user: CustomUser) -> None:
         # Finally the demo user. CASCADE on NotificationPreference /
         # UserFeatureAccess handles those automatically.
         demo_user.delete()
+
+
+def delete_ownerless_demo_team(team_id: uuid.UUID) -> bool:
+    """Delete a demo team whose owner row is already gone (MIP-1721), with its data and the bot
+    peers that were only ever in it. Returns False, deleting nothing, when the team is not one.
+
+    `delete_demo_environment` finds a demo workspace through its OWNER, and `TeamMaster.owner` is
+    SET_NULL: a demo user deleted any other way (a shell, the admin) leaves the team with
+    `owner = NULL`, and nothing could find it again. `cleanup_demo_users` selects these by age;
+    this is the delete.
+
+    What is checked HERE, under a row lock, and not trusted from the caller's earlier read: the team
+    is `is_demo`, not soft-deleted, and has no owner NOW. A team that has an owner is the owner's to
+    delete (`delete_demo_environment`), and a team that is not a demo team is never this function's.
+    Bots: a member is deleted only if it is a demo user, owns no team, and belongs to no other team,
+    the same "bots only ever belong to this one demo team" `delete_demo_environment` relies on, but
+    checked instead of assumed, because here there is no owner to anchor it.
+    """
+    with transaction.atomic():
+        team = (
+            TeamMaster.objects.select_for_update()
+            .filter(team_id=team_id, is_demo=True, is_deleted=False, owner__isnull=True)
+            .first()
+        )
+        if team is None:
+            return False
+        member_ids = list(
+            TeamMembers.objects.filter(team=team).values_list("attendee_id", flat=True)
+        )
+        delete_demo_team_data(team_id)
+        # After the team's own members are gone: whoever still has a membership is in another team.
+        elsewhere = set(
+            TeamMembers.objects.filter(attendee_id__in=member_ids).values_list(
+                "attendee_id", flat=True
+            )
+        )
+        bot_ids = [m for m in set(member_ids) if m not in elsewhere]
+        if bot_ids:
+            CustomUser.objects.filter(id__in=bot_ids, is_demo=True, own_teams__isnull=True).delete()
+    return True
