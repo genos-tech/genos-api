@@ -64,6 +64,53 @@ def _sign(secret: str, timestamp: str, body: bytes) -> str:
     return "sha256=" + digest
 
 
+# What a failed push may say about itself (MIP-1724): the ids that exist in THIS kind of payload, so
+# the line names the chat, project or task that was not announced. Keys are the payload's own;
+# values are ids or fixed names, never a title, a body, a member list or a token.
+_LOG_TOP_LEVEL = (
+    ("userId", "user"),
+    ("teamId", "team"),
+    ("projectId", "project"),
+    ("channelId", "channel"),
+    ("taskId", "task"),
+    ("commentId", "comment"),
+    ("kind", "kind"),
+    ("scope", "scope"),
+    ("event", "event"),
+    ("action", "action"),
+)
+# A message or activity push nests its ids inside the object it carries.
+_LOG_NESTED = (
+    ("message", (("id", "message"), ("channelId", "channel"))),
+    ("activity", (("id", "activity"), ("channelId", "channel"), ("messageId", "message"))),
+)
+
+
+def _log_fields(payload: dict[str, Any]) -> str:
+    """`user=... channel=... kind=...` for the ids a push payload carries. Absent keys are left
+    out (the old line printed `task=None comment=None` for every push that was not a comment)."""
+    found: dict[str, str] = {}
+    for key, label in _LOG_TOP_LEVEL:
+        value = payload.get(key)
+        if value is not None:
+            found[label] = str(value)[:64]
+    for name, keys in _LOG_NESTED:
+        inner = payload.get(name)
+        if isinstance(inner, dict):
+            for key, label in keys:
+                value = inner.get(key)
+                if value is not None:
+                    found.setdefault(label, str(value)[:64])
+    # A membership push names the rooms it removes: show the first few, and how many more.
+    for key, label in (("projectIds", "projects"), ("channels", "channels")):
+        items = payload.get(key)
+        if isinstance(items, list) and items:
+            ids = [str(i.get("id") if isinstance(i, dict) else i)[:64] for i in items[:3]]
+            more = f"+{len(items) - 3}" if len(items) > 3 else ""
+            found[label] = ",".join(ids) + more
+    return " ".join(f"{label}={value}" for label, value in found.items()) or "no-ids"
+
+
 def _post(payload: dict[str, Any], path: str = BROADCAST_PATH, what: str = "task-comment") -> bool:
     """One signed push to `path`. True only when sockets accepted it (HTTP 200)."""
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -84,21 +131,15 @@ def _post(payload: dict[str, Any], path: str = BROADCAST_PATH, what: str = "task
         )
     except requests.RequestException as exc:
         logger.warning(
-            "sockets %s push failed task=%s comment=%s user=%s: %s",
-            what,
-            payload.get("taskId"),
-            payload.get("commentId"),
-            payload.get("userId"),
-            exc,
+            "sockets %s push failed path=%s %s: %s", what, path, _log_fields(payload), exc
         )
         return False
     if resp.status_code != 200:
         logger.warning(
-            "sockets %s push refused task=%s comment=%s user=%s status=%s",
+            "sockets %s push refused path=%s %s status=%s",
             what,
-            payload.get("taskId"),
-            payload.get("commentId"),
-            payload.get("userId"),
+            path,
+            _log_fields(payload),
             resp.status_code,
         )
         return False
