@@ -532,6 +532,8 @@ class RemovalTests(SampleDataTestCase):
             self._chunk("c1", "chat", f"gm:{channel_id}"),
             self._chunk("d1", "todo", f"todo:2026-11-20:item:{item.item_id}"),
         ]
+        pm = Channel.objects.get(project=project, kind=ChannelKind.PM)
+        gone.append(self._chunk("p1", "chat", f"pm:{pm.id}"))
         # Chunks of what must stay.
         kept = [
             self._chunk("k1", "task", f"task:{self.my_task.task_id}"),
@@ -693,6 +695,10 @@ class ThePersonsWorkStaysTests(SampleDataTestCase):
         # The label the kept project wears stays with it; the rest of the sample is gone.
         self.assertEqual(self.kept(result, "project_label").popitem()[1]["detail"], {"projects": 1})
         self.assertTrue(ProjectLabel.objects.filter(team=self.team).exists())
+        # The plan says so too, not only the removal's last look: the label is listed as staying.
+        after = self.preview(self.team).data
+        self.assertIn("project_label", {e["type"] for e in after["keep"]})
+        self.assertNotIn("project_label", {e["type"] for e in after["remove"]})
 
     def test_a_seeded_task_whose_text_the_person_rewrote_keeps_the_project(self):
         task = TaskMaster.objects.filter(project=self.starter, is_milestone=False).first()
@@ -726,6 +732,14 @@ class ThePersonsWorkStaysTests(SampleDataTestCase):
             priority="Normal",
         )
         self.assert_project_kept(self.starter, why="milestones")
+
+    def test_a_milestone_whose_goal_the_person_rewrote_keeps_the_project(self):
+        milestone = MilestoneMaster.objects.filter(project=self.starter).first()
+        milestone.description = [
+            {"type": "paragraph", "content": [{"type": "text", "text": "Q1 goal"}]}
+        ]
+        milestone.save()
+        self.assert_project_kept(self.starter, why="edited")
 
     def test_a_member_added_keeps_the_project(self):
         from origin.models.project.prj_models import ProjectMembers
@@ -911,6 +925,9 @@ class ThePersonsWorkStaysTests(SampleDataTestCase):
             self.kept(result, "todo_category")[str(todo.category_id)]["detail"], {"todos": 1}
         )
         self.assertTrue(ToDoCategory.objects.filter(pk=todo.category_id).exists())
+        after = self.preview(self.team).data
+        self.assertIn("todo_category", {e["type"] for e in after["keep"]})
+        self.assertNotIn("todo_category", {e["type"] for e in after["remove"]})
 
     def test_a_todo_with_a_subitem_or_reminder_the_person_added_stays(self):
         todo = ToDoItem.objects.get(group__team=self.team, title=COPY["en"]["todo_title"])
@@ -1014,6 +1031,26 @@ class OneFailureTests(SampleDataTestCase):
         # rollback were missing the project would be gone and its marker with it.
         self.assertTrue(ProjectMaster.objects.filter(pk=self.victim.pk).exists())
         self.assertEqual(TaskMaster.objects.filter(project=self.victim).count(), tasks)
+
+    def test_a_todo_that_cannot_be_removed_keeps_the_tag_it_wears(self):
+        from origin.services.todo_items import delete_item as real
+
+        def flaky(item):
+            if item.title == COPY["en"]["todo_title"]:
+                raise RuntimeError("no")
+            return real(item)
+
+        with mock.patch("origin.services.todo_items.delete_item", side_effect=flaky):
+            resp = self.run_it()
+
+        stuck = ToDoItem.objects.get(group__team=self.team, title=COPY["en"]["todo_title"])
+        self.assertEqual([f["type"] for f in resp.data["failed"]], ["todo_item"])
+        # The tag it wears was not deleted from under it (a tag delete clears it off the to-do).
+        self.assertIsNotNone(stuck.category_id)
+        self.assertIn(
+            "todo_category",
+            {e["type"] for e in resp.data["kept"] if e["reason"] == "category_in_use"},
+        )
 
     def test_a_failing_chat_does_not_stop_the_notes(self):
         with mock.patch(
