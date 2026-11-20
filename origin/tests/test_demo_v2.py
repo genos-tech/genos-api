@@ -23,7 +23,7 @@ from django.test import TestCase
 from origin.models.common.team_models import TeamMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
-from origin.services import demo_company, demo_seeder, demo_v2
+from origin.services import demo_company, demo_launch_plan, demo_seeder, demo_v2
 from origin.services.demo_seeder import create_demo_environment, delete_demo_environment
 
 User = get_user_model()
@@ -117,8 +117,9 @@ class DemoV2SeedingTests(TestCase):
     def test_project_names_and_task_codes_are_clean(self):
         for team in (self.en_team, self.ja_team):
             projects = ProjectMaster.objects.filter(team_id=team["team_id"])
-            # The story's two projects, plus the company layer's four (MIP-1692).
-            self.assertEqual(projects.count(), 6)
+            # The story's two projects, the company layer's four (MIP-1692) and the launch plan
+            # (MIP-1740).
+            self.assertEqual(projects.count(), 7)
             for project in projects:
                 self.assertNotIn("demo-", project.project_name)
                 self.assertNotEqual(project.code, "QDC")
@@ -126,10 +127,10 @@ class DemoV2SeedingTests(TestCase):
     def test_every_task_has_tags_and_effort(self):
         tasks = TaskMaster.objects.filter(team_id=self.en_team["team_id"])
         filed = [t for t in tasks if t.tags and t.effort_level and t.effort_level_code]
-        # Every blueprint task (16) and every task the company layer adds (MIP-1692);
-        # milestone backing tasks are not blueprint tasks.
+        # Every blueprint task (16), every task the company layer adds (MIP-1692) and the
+        # launch plan's four (MIP-1740); milestone backing tasks are not blueprint tasks.
         company_tasks = sum(len(p["tasks"]) for p in demo_company.COPY["en"]["projects"])
-        self.assertEqual(len(filed), 16 + company_tasks)
+        self.assertEqual(len(filed), 16 + company_tasks + len(demo_launch_plan.TASKS))
 
     def test_japanese_workspace_stays_japanese(self):
         names = list(

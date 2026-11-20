@@ -1184,9 +1184,22 @@ def create_demo_environment(
         #      folders and chats, more projects than the visitor joins, and a few private
         #      things. Never for v1: that is the eval corpus.
         if is_v2:
-            from origin.services.demo_company import create_company_layer
+            from origin.services.demo_company import PRODUCT, create_company_layer
+            from origin.services.demo_launch_plan import create_launch_plan
 
-            create_company_layer(team, demo_user, bots, lang, seeded_projects, content.SPRINT_NAME)
+            labels = create_company_layer(
+                team, demo_user, bots, lang, seeded_projects, content.SPRINT_NAME
+            )
+            # 16c. v2 only: a launch plan, part of it written through a connected Claude app, so
+            #      the landing page's screenshot shows real "by the agent" labels (MIP-1740).
+            create_launch_plan(
+                team,
+                demo_user,
+                bots,
+                lang,
+                label=labels[PRODUCT],
+                sprint_name=content.SPRINT_NAME,
+            )
 
         # 17. Push DISPLAY timestamps into the past so the workspace reads
         #     as three months of real use instead of "created 8 seconds
