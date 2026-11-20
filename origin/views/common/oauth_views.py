@@ -317,7 +317,9 @@ class OAuthCallbackView(APIView):
             # would authenticate a login. `primary` names the method that
             # will work, so the failure page can say more than "not this
             # one".
-            if not _can_sign_in_with(existing, provider_email=profile.email):
+            # An address the provider did not verify is a claim, not an
+            # identity: it must not stand in for the account's own address.
+            if not _can_sign_in_with(existing, provider_email=_verified_email(profile)):
                 _record_oauth_signin_failed(
                     provider_name, profile, "not_a_login_account", existing.user
                 )
@@ -346,8 +348,15 @@ class OAuthCallbackView(APIView):
             # user's calendar until the next refresh, as the price of
             # signing in.
         else:
-            # First time this provider identity has signed in. If our
-            # CustomUser table already has a row with the same email,
+            # First time this provider identity has signed in. An address the
+            # provider did not verify may belong to someone else: refuse before
+            # anything else, so the answer does not depend on whether an account
+            # holds that address.
+            if profile.email and not profile.email_verified:
+                _record_oauth_signin_failed(provider_name, profile, "email_not_verified", None)
+                return HttpResponseRedirect(_frontend_failure_url(reason="email_not_verified"))
+
+            # If our CustomUser table already has a row with the same email,
             # block — the user has another account they should sign
             # into instead.
             if profile.email and User.objects.with_email(profile.email).exists():
@@ -377,8 +386,8 @@ class OAuthCallbackView(APIView):
                 email=email,
                 username=display_name,
                 primary_auth_provider=provider_name,
-                # Provider verified the email before issuing the OAuth
-                # token, so the user doesn't need to re-prove ownership.
+                # The provider vouched for the email (`email_verified`, checked
+                # above, or none was given), so the user does not re-prove ownership.
                 is_email_verified=True,
                 **signup_consent.acceptance_fields(accepted_at, terms_version),
             )
@@ -631,6 +640,11 @@ def _record_oauth_signin_failed(provider_name: str, profile, reason: str, user) 
         target_id=user.pk if user is not None else "",
         metadata={"method": provider_name, "reason": reason},
     )
+
+
+def _verified_email(profile) -> Optional[str]:
+    """The profile's address only when the provider verified it."""
+    return profile.email if profile.email_verified else None
 
 
 def _can_sign_in_with(account: ConnectedAccount, *, provider_email: Optional[str] = None) -> bool:

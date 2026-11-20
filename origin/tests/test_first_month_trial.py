@@ -194,6 +194,36 @@ class StartAndSwitchTests(TrialBase):
         self.assertEqual(first_month_trial.why_not(user), first_month_trial.NOT_ELIGIBLE_ACCOUNT)
         self.assertIsNone(self.start(user))
 
+    def test_a_placeholder_address_starts_nothing_on_any_path_and_a_real_one_still_does(self):
+        """MIP-1771: a GitHub sign-up with no public email is `github_<id>@noemail.local` and
+        marked verified, and each such account has its own id, so the one-per-address rule cannot
+        catch it. The hook and the grant command both refuse it, whatever the case; a normal
+        verified address starts one as before, and a trial already running is left alone."""
+        running = self.start()  # self.user: a real, verified address
+        self.assertIsNotNone(running)
+        placeholders = [
+            verified(CustomUser.objects.create_user(email=email, username=name, password="x"))
+            for email, name in [
+                ("github_1@noemail.local", "gh1"),
+                ("GitHub_2@NoEmail.Local", "gh2"),
+                ("google_3@noemail.local", "go3"),
+            ]
+        ]
+        for user in placeholders:
+            self.assertEqual(
+                first_month_trial.why_not(user), first_month_trial.NOT_ELIGIBLE_ACCOUNT
+            )
+            self.assertIsNone(self.start(user))
+        with offer(True):
+            summary = first_month_trial.grant_to_existing()
+        self.assertEqual(
+            summary.started, 1
+        )  # self.user2, a real address (self.user already had one)
+        for user in placeholders:
+            self.assertFalse(CoreTrial.objects.filter(user=user).exists())
+        self.assertEqual(CoreTrial.objects.get(user=self.user).ends_at, running.ends_at)
+        self.assertTrue(CoreTrial.objects.filter(user=self.user2).exists())
+
     def test_the_second_call_finds_the_first_row(self):
         first = self.start()
         self.assertIsNone(self.start())

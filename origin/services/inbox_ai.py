@@ -87,6 +87,7 @@ PRODUCERS: dict[str, dict[str, Any]] = {
     "origin/services/cross_team_notices.py": {"types": (0,), "ai": False},
     "origin/services/todo_reminders.py": {"types": (9,), "ai": False},
     "origin/services/message_reminders.py": {"types": (9,), "ai": False},
+    "origin/services/first_month_trial_notices.py": {"types": (0,), "ai": False},
 }
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)

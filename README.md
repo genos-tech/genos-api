@@ -146,7 +146,7 @@ Additional cron services share the same image, each with its own config and
 
 | Config                              | Schedule        | Job                                            |
 | ----------------------------------- | --------------- | ---------------------------------------------- |
-| `railway-reminder-tick.toml`        | every minute    | Fire due message reminders (push + inbox)      |
+| `railway-reminder-tick.toml`        | every minute    | Fire due reminders and first-month trial notices  |
 | `railway-webhook-deliver.toml`      | every minute    | Drain the outbound webhook outbox              |
 | `railway-email-notify.toml`         | every 5 min     | Drain the email notification outbox            |
 | `railway-reindexer.toml`            | every 10 min    | Incremental OpenSearch reindex                 |
