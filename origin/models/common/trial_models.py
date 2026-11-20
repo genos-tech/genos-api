@@ -17,6 +17,8 @@ The row is also the "one per person" record. `user` is unique (one per account) 
 `email_hash`, a copy of the account's own blind index of the lowercased address (the identity the
 account system already uses; no new identity data). The copy is what survives account deletion:
 deletion anonymises the address, and without it a deleted-and-re-created account would start again.
+That holds until the blind-index key is rotated: `rotate_field_keys` cannot re-hash this copy (the plain
+address is gone), so rotating the key while the offer runs lets such an account start once more.
 """
 
 from __future__ import annotations

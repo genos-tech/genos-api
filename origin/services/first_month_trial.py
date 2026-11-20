@@ -32,15 +32,20 @@ WHEN a trial starts.
   * An EXISTING account, once, when the operator runs `manage.py first_month_trial grant-existing`
     after switching the offer on: 30 days from that moment, never back-dated.
 
-Who is skipped, always: an account that already has the effective plan Core or above (a payer, a
-comp, a paying team's member; their one trial is not burned unseen), demo and system accounts,
+Who is skipped, always: an account that already has the effective plan Core or above AT THAT MOMENT
+(a payer, a comp, a paying team's member; their one trial is not burned unseen. Someone invited to a
+paying team has not joined it yet when an invited signup starts, so they do get a trial row; the
+best plan wins and the row simply runs out), demo and system accounts,
 inactive and deleted accounts, and anyone who has had one. A person who later leaves a paying team
 or lapses can still be given it by the command: it is "the first month", not "the first month after
 never having paid".
 
 ONE per person. The identity is the one the account system already has: `CustomUser.email_hash`, a
 keyed hash of the LOWERCASED address, unique across accounts, and copied onto the trial row so that
-deleting an account (which anonymises its address) cannot start another. Nothing folds `+tag` or
+deleting an account (which anonymises its address) cannot start another. LIMIT, stated plainly:
+`rotate_field_keys` cannot re-hash that copy (the plain address is gone after deletion), so after a
+rotation of the blind-index key a deleted-and-re-created account matches nothing and gets a second
+month. Do not rotate that key while the offer is on, or accept the leak. Nothing folds `+tag` or
 dots: to the account system those are different addresses, and the trial follows it.
 
 The switch. `FIRST_MONTH_CORE_TRIAL` (environment, read at call time like
@@ -144,7 +149,10 @@ def _start(user: CustomUser, now: datetime) -> CoreTrial | None:
             )
     except IntegrityError:
         return None
+    # Now, for this request, and again once the surrounding transaction (the OAuth callback runs
+    # inside one) has committed: a read from another request in between would cache "free".
     _evict(user.pk)
+    transaction.on_commit(lambda: _evict(user.pk))
     log.info("first-month trial started user=%s ends=%s", user.pk, trial.ends_at.isoformat())
     return trial
 
@@ -208,7 +216,7 @@ def grant_to_existing(*, dry_run: bool = False, now: datetime | None = None) -> 
             out.started += 1
             continue
         if _start(user, now) is None:
-            out.skip(ADDRESS_ALREADY_USED)
+            out.skip(ALREADY_HAD_ONE)  # a unique constraint refused: someone wrote it first
         else:
             out.started += 1
     return out

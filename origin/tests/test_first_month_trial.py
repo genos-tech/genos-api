@@ -16,6 +16,7 @@ What is pinned, and why each is its own test:
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import timedelta
 from io import StringIO
@@ -26,6 +27,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import DatabaseError
 from django.test import override_settings
 from django.utils import timezone
 from oauth2_provider.models import Application
@@ -39,7 +41,13 @@ from origin.models.common.user_models import TIER_SET_BY_OPERATOR, CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine import quota
-from origin.services import account_deletion, first_month_trial, schedule_defaults, stripe_billing
+from origin.services import (
+    account_deletion,
+    blind_index,
+    first_month_trial,
+    schedule_defaults,
+    stripe_billing,
+)
 from origin.tests.test_base import BaseAPITestCase
 from origin.tests.test_mcp_oauth_foundation import oauth_on
 from origin.tests.test_stripe_billing import STRIPE_TEST_SETTINGS, BillingTestBase
@@ -170,6 +178,10 @@ class StartAndSwitchTests(TrialBase):
             cases[label] = user
         for label, user in cases.items():
             with self.subTest(label):
+                # The REASON, not only "None": a crash would also return None.
+                self.assertEqual(
+                    first_month_trial.why_not(user), first_month_trial.NOT_ELIGIBLE_ACCOUNT
+                )
                 self.assertIsNone(self.start(user))
         self.assertFalse(CoreTrial.objects.exists())
 
@@ -195,12 +207,51 @@ class StartAndSwitchTests(TrialBase):
         self.assertEqual(CoreTrial.objects.filter(user=self.user).count(), 1)
         self.assertEqual(self.tier(), "core")
 
-    def test_a_failure_never_breaks_the_signup(self):
+    def test_a_failure_never_breaks_the_signup_nor_leaves_its_transaction_aborted(self):
+        # A database error inside the savepoint (the OAuth callback calls this inside its own
+        # transaction): swallowed, and the caller can still query afterwards.
         with (
             offer(True),
-            mock.patch.object(first_month_trial, "why_not", side_effect=RuntimeError("db is down")),
+            mock.patch.object(first_month_trial, "_start", side_effect=DatabaseError("boom")),
         ):
             self.assertIsNone(first_month_trial.start_for_new_account(self.user))
+        self.assertEqual(CustomUser.objects.filter(pk=self.user.pk).count(), 1)
+        self.assertFalse(CoreTrial.objects.exists())
+        # And it still works once the fault is gone: nothing was half-written.
+        self.assertIsNotNone(self.start())
+
+    def test_verifying_an_email_signup_starts_the_trial_when_the_offer_is_on(self):
+        newcomer = CustomUser.objects.create_user(
+            email="signup@example.com", username="s", password="x"
+        )
+        raw = "t" * 32
+        CustomUser.objects.filter(pk=newcomer.pk).update(
+            email_verification_token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            email_verification_token_expires_at=timezone.now() + timedelta(hours=1),
+        )
+        # Not verified yet: the unverified account has no trial.
+        self.assertEqual(
+            first_month_trial.why_not(newcomer), first_month_trial.NOT_ELIGIBLE_ACCOUNT
+        )
+        with offer(True):
+            res = self.client.get(f"/api/v2/user/verify-email/?token={raw}")
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(CoreTrial.objects.filter(user=newcomer).exists())
+        self.assertEqual(self.tier(newcomer), "core")
+
+    def test_verifying_an_email_signup_starts_nothing_while_the_offer_is_off(self):
+        newcomer = CustomUser.objects.create_user(
+            email="signup2@example.com", username="s2", password="x"
+        )
+        raw = "u" * 32
+        CustomUser.objects.filter(pk=newcomer.pk).update(
+            email_verification_token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            email_verification_token_expires_at=timezone.now() + timedelta(hours=1),
+        )
+        with offer(False):
+            res = self.client.get(f"/api/v2/user/verify-email/?token={raw}")
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(CoreTrial.objects.exists())
 
     def test_switching_the_offer_off_ends_it_for_new_people_and_not_for_a_running_trial(self):
         self.start()
@@ -231,9 +282,13 @@ class OnePerPersonTests(TrialBase):
 
     def test_the_address_is_matched_the_way_the_account_system_matches_it(self):
         self.start()
-        # The account system lowercases (blind index); a differently cased address is the same
-        # identity and cannot even be a second account.
+        # The account system lowercases (blind index): the stored copy is that hash, and an
+        # address that differs only in case hashes to the same value.
         self.assertTrue(CustomUser.objects.with_email("TEST@Example.com").exists())
+        self.assertEqual(
+            blind_index.USER_EMAIL.compute("TEST@Example.com"),
+            CoreTrial.objects.get(user=self.user).email_hash,
+        )
         self.assertEqual(
             CoreTrial.objects.get(user=self.user).email_hash,
             CustomUser.objects.get(pk=self.user.pk).email_hash,
