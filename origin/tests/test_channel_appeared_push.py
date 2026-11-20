@@ -255,11 +255,13 @@ class CreateAnnouncesTests(BaseAPITestCase):
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.push.assert_not_called()
 
-    def test_a_direct_message_is_not_announced_here(self):
-        """Unchanged by this task: a DM is not a group (MIP-1719 covers groups)."""
+    def test_a_direct_message_is_announced_to_both_sides(self):
+        """MIP-1719 left the DM alone; MIP-1722 announces it (see test_channel_appeared_rest_paths)."""
         res = self.create(kind=ChannelKind.DM, other_user_id=str(self.user2.id))
         self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-        self.push.assert_not_called()
+        self.assertEqual(
+            {p["userId"] for p in self.told()}, {str(self.user.id), str(self.user2.id)}
+        )
 
     def test_the_announcement_waits_for_the_commit(self):
         self.authenticate(self.user)

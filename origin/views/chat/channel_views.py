@@ -602,17 +602,28 @@ class ChannelListView(AuthenticatedAPIView):
                 # history would split across two channel UUIDs. Reactivating
                 # the existing channel preserves the conversation.
                 channel = existing.channel
-                if channel.is_deleted:
+                revived = channel.is_deleted
+                if revived:
                     channel.is_deleted = False
                     channel.save(update_fields=["is_deleted"])
                 # Re-activate the requester's membership if they had
                 # left/been removed. The other side's membership is left
                 # as-is; if they removed themselves it stays removed.
+                had_live_row = ChannelMember.objects.filter(
+                    channel=channel, user=request.user, is_deleted=False
+                ).exists()
                 ChannelMember.objects.update_or_create(
                     channel=channel,
                     user=request.user,
                     defaults={"is_deleted": False, "role": "member"},
                 )
+                # MIP-1722: a plain re-open of a live DM changes nothing for anyone, so it
+                # announces nothing. A DM that was deleted comes back for everyone still in it;
+                # a requester who had left gets it back on their other devices only.
+                if revived:
+                    ChannelListView._announce_dm(request, team, channel, everyone=True)
+                elif not had_live_row:
+                    ChannelListView._announce_dm(request, team, channel, everyone=False)
                 return Response(
                     {"channel": ChannelSerializer(channel, context={"request": request}).data},
                     status=status.HTTP_200_OK,
@@ -626,10 +637,30 @@ class ChannelListView(AuthenticatedAPIView):
             # requester's row (and trip the per-channel member uniqueness).
             if not is_self_dm:
                 ChannelMember.objects.create(channel=channel, user=other, role="member")
+            # MIP-1722: the other side (and the requester's other devices) learn of the new DM
+            # now. Inside the transaction, so a rollback announces nothing.
+            ChannelListView._announce_dm(request, team, channel, everyone=True)
 
         return Response(
             {"channel": ChannelSerializer(channel, context={"request": request}).data},
             status=status.HTTP_201_CREATED,
+        )
+
+    @staticmethod
+    def _announce_dm(request, team, channel, *, everyone):
+        """Tell the open apps of the people who gained this DM (MIP-1722): both sides, or only
+        the requester when they alone got it back. Not when the call is the one genos-sockets'
+        own `channel.create` handler makes: that handler broadcasts `channel.created` itself."""
+        if announced_by_sockets(request):
+            return
+        people = chat_member_rows(channel)
+        if not everyone:
+            people = people.filter(user_id=request.user.id)
+        push_channel_appeared(
+            user_ids=people.values_list("user_id", flat=True),
+            team_id=team.team_id,
+            channel_id=channel.id,
+            kind=ChannelKind.DM,
         )
 
     @staticmethod
@@ -1142,12 +1173,26 @@ class ChannelMembersView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Who is in the chat NOW: of the people this call writes, only those who are not are
+        # gaining it (a re-add of a live member changes nothing for them).
+        already_in = set(chat_member_rows(channel).values_list("user_id", flat=True))
         try:
             added = self._add_members(channel, users, request.user)
         except ExternalGrantError as exc:
             return Response({"error": exc.code}, status=_grant_error_status(exc))
         except PermissionError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        # MIP-1722: tell ONLY the people who gained the chat. A refused add returned above and
+        # announces nothing. Not when genos-sockets' own `channel.member.add` handler made this
+        # call: it sends `channel.created` to each added person itself.
+        if not announced_by_sockets(request):
+            push_channel_appeared(
+                user_ids=[m.user_id for m in added if m.user_id not in already_in],
+                team_id=channel.team_id,
+                channel_id=channel.id,
+                kind=channel.kind,
+            )
 
         return Response(
             {"members": ChannelMemberSerializer(added, many=True).data},
@@ -1262,11 +1307,25 @@ class ChannelJoinView(AuthenticatedAPIView):
 
         # Idempotent: a brand-new join creates the row; a user who had
         # previously left (soft-deleted membership) gets it re-activated.
+        was_member = ChannelMember.objects.filter(
+            channel=channel, user=request.user, is_deleted=False
+        ).exists()
         member, _created = ChannelMember.objects.update_or_create(
             channel=channel,
             user=request.user,
             defaults={"is_deleted": False, "role": "member"},
         )
+
+        # MIP-1722: the joiner's OTHER devices learn of the chat now (this one has the response).
+        # Not for a re-join of a chat they are already in, and not when genos-sockets' own
+        # `channel.join` handler made this call: it sends `channel.created` to the joiner itself.
+        if not was_member and not announced_by_sockets(request):
+            push_channel_appeared(
+                user_ids=[request.user.id],
+                team_id=channel.team_id,
+                channel_id=channel.id,
+                kind=channel.kind,
+            )
 
         return Response(
             {
