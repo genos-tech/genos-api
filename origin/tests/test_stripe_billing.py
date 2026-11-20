@@ -74,6 +74,14 @@ class BillingTestBase(BaseAPITestCase):
         super().setUp()
         self.authenticate()
         quota.invalidate_effective_tier([self.user.id, self.user2.id])
+        # Plan prices are read from Stripe and cached, so which test reaches the real API depends
+        # on the cache and the order (MIP-1776). Refuse by default; a test that wants a price
+        # patches `stripe.Price.retrieve` itself, which takes precedence.
+        price_lookup = mock.patch(
+            "stripe.Price.retrieve", side_effect=RuntimeError("no network in tests")
+        )
+        price_lookup.start()
+        self.addCleanup(price_lookup.stop)
 
     def tearDown(self):
         quota.invalidate_effective_tier([self.user.id, self.user2.id])
@@ -363,7 +371,11 @@ class PortalFlowTests(BillingTestBase):
         self.assertNotIn("items", kwargs["flow_data"]["subscription_update"])
 
     def test_switch_flow_needs_no_plan(self):
-        res = self.client.post(PORTAL_URL, {"flow": "switch"}, format="json")
+        # Only the request validation is under test; the Stripe call is mocked (MIP-1776).
+        with mock.patch.object(
+            stripe_billing, "create_portal_session", return_value="https://stripe/bps_x"
+        ):
+            res = self.client.post(PORTAL_URL, {"flow": "switch"}, format="json")
         self.assertNotEqual(res.status_code, 400)
 
     def test_cancel_flow(self):

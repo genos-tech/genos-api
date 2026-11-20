@@ -168,6 +168,13 @@ class SearchEndToEndTests(BaseAPITestCase):
         with (
             mock.patch.object(S, "get_client", return_value=client),
             mock.patch.object(S, "resolve_milestone_mirrors", side_effect=lambda r: r),
+            # The query embedding and the LLM reranker are real Gemini/OpenAI calls otherwise
+            # (MIP-1776); neither is under test here.
+            mock.patch.object(S, "embed_one", return_value=[0.0] * 8),
+            mock.patch(
+                "origin.search_engine.reranker.rerank",
+                side_effect=lambda *, entities, output_k, **kw: entities[:output_k],
+            ),
         ):
             result = S.search(
                 query="specs roadmap",

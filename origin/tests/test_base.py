@@ -1,5 +1,7 @@
 """Shared test base class with common fixtures and auth helpers."""
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -22,6 +24,12 @@ class BaseAPITestCase(TestCase):
     """
 
     def setUp(self):
+        # A folder move re-indexes the moved notes, which embeds them through the real OpenAI API
+        # (MIP-1776). Stub the refresh for every test of this base; a test of the refresh patches
+        # it again (or its own layer) and takes precedence.
+        refresh = mock.patch("origin.views.utils.personal_note_move.refresh_personal_notes")
+        refresh.start()
+        self.addCleanup(refresh.stop)
         self.client = APIClient()
 
         self.user = User.objects.create_user(

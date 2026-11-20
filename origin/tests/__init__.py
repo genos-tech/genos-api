@@ -3,3 +3,8 @@
 from origin.tests.patch_leak_tripwire import install
 
 install()
+
+# Real network connections fail the test that opens them, by name (MIP-1776).
+from origin.tests.network_guard import install as install_network_guard  # noqa: E402
+
+install_network_guard()
