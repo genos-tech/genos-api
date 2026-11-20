@@ -11,6 +11,7 @@ purpose (other people's content, listed in the PR). Every query is keyed on the 
 another member's rows, and the rows ABOUT the person in other members' data, are never touched.
 """
 
+import json
 import uuid
 from datetime import timedelta
 from io import StringIO
@@ -39,7 +40,11 @@ from origin.models.common.usage_models import ModelUsageCounter
 from origin.models.note.favorite_note_models import NoteFolderFavorite
 from origin.models.note.personal_note_models import PersonalNoteFolder
 from origin.models.project.prj_models import ProjectMaster
-from origin.models.task.task_models import TaskMaster
+from origin.models.task.task_models import (
+    TaskCommentMentionFact,
+    TaskCommentReactionFact,
+    TaskMaster,
+)
 from origin.models.task.task_recent_models import TaskRecent
 from origin.search_engine.models import NoteSummary, ThreadSummary
 from origin.services import deleted_account_leftovers, message_reminders
@@ -129,6 +134,33 @@ class OwnRowsAreDeletedTests(LeftoversFixture):
         )
         MessageReaction.objects.create(user=self.leaver, message=self.mates_msg, emoji="+1")
         MessageMention.objects.create(message=self.mates_msg, mentioned_user=self.leaver)
+        project = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="P2",
+            code="P2",
+            owner=self.mate,
+            project_system_user=self.mate,
+        )
+        task = TaskMaster.objects.create(team=self.team, project=project, title="t", status="Open")
+        TaskCommentReactionFact.objects.create(
+            team=self.team,
+            task=task,
+            comment_id=1,
+            reaction_id=1,
+            reaction_emoji="+1",
+            sender=self.leaver,
+        )
+        TaskCommentReactionFact.objects.create(
+            team=self.team,
+            task=task,
+            comment_id=1,
+            reaction_id=2,
+            reaction_emoji="+1",
+            sender=self.mate,
+        )
+        TaskCommentMentionFact.objects.create(
+            team=self.team, task=task, comment_id=1, mentioned_user=self.leaver
+        )
         # What the other member holds on the same message is not touched.
         Flag.objects.create(user=self.mate, message=self.mates_msg)
         MessageReaction.objects.create(user=self.mate, message=self.mates_msg, emoji="+1")
@@ -143,6 +175,9 @@ class OwnRowsAreDeletedTests(LeftoversFixture):
             (MessageMention, "mentioned_user"),
         ):
             self.assertFalse(model.objects.filter(**{field: self.leaver}).exists(), model.__name__)
+        self.assertFalse(TaskCommentReactionFact.objects.filter(sender=self.leaver).exists())
+        self.assertFalse(TaskCommentMentionFact.objects.filter(mentioned_user=self.leaver).exists())
+        self.assertEqual(TaskCommentReactionFact.objects.filter(sender=self.mate).count(), 1)
         self.assertTrue(Flag.objects.filter(user=self.mate).exists())
         self.assertTrue(MessageReaction.objects.filter(user=self.mate).exists())
         # The message itself, and the leaver's own message, stay.
@@ -230,13 +265,14 @@ class AnonymisedRowsTests(LeftoversFixture):
             sender=self.leaver,
             receiver=self.mate,
             item_type=message_reminders.ITEM_TYPE_MESSAGE_REMINDER,
-            item_body={"title": "Reminder", "text": "x"},
+            item_body={"title": "Reminder about otheruser's message", "text": "leaver says hello"},
             item_optionals={"sender_name": "otheruser", "preview": "leaver says hello"},
             request_status="",
         )
         delete_account(self.leaver)
         card.refresh_from_db()
         self.assertEqual(card.item_optionals["sender_name"], DELETED_USERNAME)
+        self.assertNotIn("otheruser", json.dumps([card.item_body, card.item_optionals]))
         # The message preview is the other member's reminder about a message that stays.
         self.assertEqual(card.item_optionals["preview"], "leaver says hello")
 

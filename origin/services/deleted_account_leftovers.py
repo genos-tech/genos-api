@@ -17,7 +17,7 @@ DELETED, because the row exists only for the person and has no purpose without t
   person who is gone cannot be approved by anyone. An ANSWERED request stays: it is the
   receiver's history, and the sender reads "Deleted user".
 * `MessageReminder` (could still fire; the tick now also retires one of a deleted account),
-  `Flag`, `Pin`, `MessageReaction`, `MessageMention` (a row about them, not the message text),
+  `Flag`, `Pin`, `MessageReaction`, `MessageMention` and the task-comment versions of both (a row about them, not the text),
   `TaskRecent`, `ToDoSchedule` (a recurring personal to-do title), `NoteFolderFavorite`.
 * `ModelUsageCounter` (quota counters) and `UserFeatureAccess` (a grant with a free-text note).
 
@@ -26,7 +26,8 @@ ANONYMISED, because the row is shared and stays:
 * `ThreadSummary` / `NoteSummary`: the cached summary is the team's; only the bare
   `generated_by_user_id` (who asked for it) is blanked.
 * An inbox reminder card ANOTHER member holds about the person's message: `sender_name` in its
-  `item_optionals` becomes "Deleted user". The preview is the message's own text, which stays.
+  `item_optionals`, and the name in the card's English title ("Reminder about <name>'s
+  message"), become "Deleted user". The preview is the message's own text, which stays.
 
 KEPT (listed in the PR as known limits, with the reason): names inside other people's message,
 note, task and comment text; the outbox's `actor_name` on other people's rows; Stripe (Ken's
@@ -56,6 +57,7 @@ from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxIt
 from origin.models.common.notification_models import EmailNotificationEvent
 from origin.models.common.usage_models import ModelUsageCounter
 from origin.models.note.favorite_note_models import NoteFolderFavorite
+from origin.models.task.task_models import TaskCommentMentionFact, TaskCommentReactionFact
 from origin.models.task.task_recent_models import TaskRecent
 
 DELETED_SENDER_NAME = "Deleted user"
@@ -86,6 +88,9 @@ def _scopes(user_filter: dict) -> list[tuple[str, QuerySet]]:
         ("pins", Pin.objects.filter(**of("user"))),
         ("reactions", MessageReaction.objects.filter(**of("user"))),
         ("mentions", MessageMention.objects.filter(**of("mentioned_user"))),
+        # The same two on a task comment (a table of its own, `sender` / `mentioned_user`).
+        ("comment_reactions", TaskCommentReactionFact.objects.filter(**of("sender"))),
+        ("comment_mentions", TaskCommentMentionFact.objects.filter(**of("mentioned_user"))),
         ("recent_tasks", TaskRecent.objects.filter(**of("user"))),
         ("todo_schedules", ToDoSchedule.objects.filter(**of("user"))),
         ("folder_favorites", NoteFolderFavorite.objects.filter(**of("user"))),
@@ -118,17 +123,22 @@ def _anonymise_summaries(user_ids: list[str]) -> int:
 
 
 def _anonymise_reminder_cards(sender_filter: dict) -> int:
-    """`sender_name` on reminder cards (other members') about a deleted sender's messages."""
+    """The sender's name on reminder cards (other members') about a deleted sender's messages:
+    `item_optionals.sender_name`, and the same name inside the English `item_body.title`."""
     n = 0
     cards = InboxItems.objects.filter(item_type=_REMINDER_CARD, **sender_filter).exclude(
         item_optionals__sender_name=DELETED_SENDER_NAME
     )
-    for item in cards.only("pk", "item_optionals"):
+    for item in cards.only("pk", "item_optionals", "item_body"):
         optionals = dict(item.item_optionals or {})
-        if "sender_name" not in optionals:
+        name = optionals.get("sender_name")
+        if not name:
             continue
         optionals["sender_name"] = DELETED_SENDER_NAME
-        InboxItems.objects.filter(pk=item.pk).update(item_optionals=optionals)
+        body = dict(item.item_body) if isinstance(item.item_body, dict) else item.item_body
+        if isinstance(body, dict) and isinstance(body.get("title"), str):
+            body["title"] = body["title"].replace(name, DELETED_SENDER_NAME)
+        InboxItems.objects.filter(pk=item.pk).update(item_optionals=optionals, item_body=body)
         n += 1
     return n
 
