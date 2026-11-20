@@ -40,13 +40,14 @@ inactive and deleted accounts, and anyone who has had one. A person who later le
 or lapses can still be given it by the command: it is "the first month", not "the first month after
 never having paid".
 
-ONE per person. The identity is the one the account system already has: `CustomUser.email_hash`, a
-keyed hash of the LOWERCASED address, unique across accounts, and copied onto the trial row so that
-deleting an account (which anonymises its address) cannot start another. LIMIT, stated plainly:
-`rotate_field_keys` cannot re-hash that copy (the plain address is gone after deletion), so after a
-rotation of the blind-index key a deleted-and-re-created account matches nothing and gets a second
-month. Do not rotate that key while the offer is on, or accept the leak. Nothing folds `+tag` or
-dots: to the account system those are different addresses, and the trial follows it.
+ONE per person, while the account exists. The trial row is one-to-one with the account, and the
+account system keeps the address unique across live accounts (`CustomUser.email_hash`, a keyed hash
+of the LOWERCASED address), so "one per account" is "one per address" with nothing stored on the
+trial row. Deleting an account deletes its row and keeps no copy of the address or of its hash
+(MIP-1779: counsel, "do not keep PII that is not necessary"). LIMIT, stated plainly: a person who
+deletes their account and signs up again may have a new first month (about US$6 worst case, needs a
+verified address each time, and the offer is temporary). Nothing folds `+tag` or dots: to the
+account system those are different addresses, and the trial follows it.
 
 The switch. `FIRST_MONTH_CORE_TRIAL` (environment, read at call time like
 `mcp_tier_limits.MODE_ENV`, so no code deploy and no `apis/settings.py` edit: changing a Railway
@@ -86,7 +87,6 @@ NO_ADDRESS_SUFFIX = "@noemail.local"
 OFFER_CLOSED = "offer_closed"
 NOT_ELIGIBLE_ACCOUNT = "not_a_live_verified_account"
 ALREADY_HAD_ONE = "already_had_one"
-ADDRESS_ALREADY_USED = "address_already_used"
 ALREADY_ON_A_PLAN = "already_on_core_or_above"
 
 
@@ -128,8 +128,6 @@ def why_not(user: CustomUser, *, now: datetime | None = None) -> str | None:
         return NOT_ELIGIBLE_ACCOUNT
     if CoreTrial.objects.filter(user_id=user.pk).exists():
         return ALREADY_HAD_ONE
-    if user.email_hash and CoreTrial.objects.filter(email_hash=user.email_hash).exists():
-        return ADDRESS_ALREADY_USED
     from origin.search_engine import quota  # noqa: PLC0415
 
     if quota._TIER_RANK.get(_effective_tier_now(user.pk), 0) >= quota._TIER_RANK[TRIAL_PLAN]:  # noqa: SLF001
@@ -138,12 +136,11 @@ def why_not(user: CustomUser, *, now: datetime | None = None) -> str | None:
 
 
 def _start(user: CustomUser, now: datetime) -> CoreTrial | None:
-    """Write the row. None when someone else wrote it first (the unique constraints decide)."""
+    """Write the row. None when someone else wrote it first (the unique `user` decides)."""
     try:
         with transaction.atomic():
             trial = CoreTrial.objects.create(
                 user=user,
-                email_hash=user.email_hash or None,
                 started_at=now,
                 ends_at=now + timedelta(days=TRIAL_DAYS),
             )
