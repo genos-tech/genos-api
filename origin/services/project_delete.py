@@ -24,6 +24,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.services.activity_suppression import suppress_task_activity
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
 from origin.services.note_satellites import batched_note_cleanup
@@ -82,6 +83,11 @@ def delete_project(project: ProjectMaster) -> None:
         # A big project has many notes: their permission/version/summary rows go in one pass
         # (MIP-1517), not three statements per note.
         forget_note_attachments(NOTE_TYPE_TASK, note_ids)  # before the notes cascade away
-        with batched_note_cleanup():
+        # Under `suppress_task_activity`: deleting a task that blocks another one (a starter
+        # project has one) makes the dependency's delete signal re-derive the blocked task's
+        # status, and the "status changed" activity row that writes lands after Django has
+        # collected the cascade, so it names a task and a project that are gone and the COMMIT
+        # fails on the deferred foreign key. The project's history goes with it anyway.
+        with batched_note_cleanup(), suppress_task_activity():
             project.delete()
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)

@@ -700,6 +700,7 @@ def _remove_project(team, entry: Entry, planner: _Planner) -> None:
     sprint_ids = list(Sprint.objects.filter(project=project).values_list("sprint_id", flat=True))
     chats = list(Channel.objects.filter(project=project).values_list("id", "kind"))
     owner_id = project.owner_id
+    project_id = project.project_id  # a deleted instance forgets its id
     with transaction.atomic():
         delete_project(project)
         _forget_markers(team.team_id, PROJECT, [entry.id])
@@ -711,7 +712,7 @@ def _remove_project(team, entry: Entry, planner: _Planner) -> None:
                 user_id=owner_id,
                 team_id=team.team_id,
                 scope="project",
-                project_ids=[project.project_id],
+                project_ids=[project_id],
                 channels=[(kind, channel_id) for channel_id, kind in chats],
             )
     # Search: a project delete cascades with no hook, so the chunks wait for the next reindex's
@@ -845,7 +846,6 @@ def execute(team, *, request=None) -> Result:
     """
     from origin.models.common.security_event_models import SecurityAction
     from origin.models.note.personal_note_models import PersonalNoteFolder
-    from origin.services.realtime_push import push_todo_changed
     from origin.services.security_events import record_security_event
 
     markers = _markers(team.team_id)
@@ -903,9 +903,6 @@ def execute(team, *, request=None) -> Result:
 
     _sweep_stale(team, plan)
 
-    removed_types = {e.type for e in result.removed}
-    if TODO_ITEM in removed_types and team.owner_id:
-        push_todo_changed(team.owner_id, team.team_id)
     if result.removed:
         counts = result.as_dict()["counts"]
         record_security_event(

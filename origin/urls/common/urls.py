@@ -88,6 +88,7 @@ from origin.views.common.ownership_claim_views import (
     TeamOwnershipClaimStatusView,
 )
 from origin.views.common.runtime_config_views import RuntimeConfigView
+from origin.views.common.sample_data_views import SampleDataView
 from origin.views.common.schedule_views import ScheduleDetailView, ScheduleListView, ScheduleRunView
 from origin.views.common.security_event_views import (
     MySecurityEventListView,
@@ -104,7 +105,6 @@ from origin.views.common.team_connection_views import (
     TeamConnectionRevokeView,
     TeamConnectionView,
 )
-from origin.views.common.sample_data_views import SampleDataView
 from origin.views.common.team_emoji_views import TeamEmojiView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
