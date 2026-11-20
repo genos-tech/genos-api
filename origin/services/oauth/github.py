@@ -104,7 +104,9 @@ class GitHubOAuthProvider(OAuthProvider):
             provider_user_id=str(user["id"]),
             email=email,
             display_name=user.get("name") or user.get("login"),
-            # GitHub only lets an address be made public once it is verified,
-            # and the fallback above takes the primary VERIFIED one only.
+            # The fallback above takes the primary VERIFIED address only. The
+            # public `/user` email is ASSUMED to be a verified one (GitHub's UI
+            # only offers verified addresses for the public profile; not
+            # confirmed in the API docs, MIP-1766).
             email_verified=bool(email),
         )
