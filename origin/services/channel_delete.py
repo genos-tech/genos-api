@@ -34,11 +34,13 @@ from django.db import transaction
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Channel, ChannelKind, Message, MessageAttachment
+from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant
 from origin.services.channel_scope import chat_member_rows
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.external_grants import active_grants_for_object, revoke_grant
 from origin.services.realtime_push import push_channel_deleted
+from origin.services.security_events import record_security_event
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +69,15 @@ class ChannelDeleteReport:
     files_to_remove: int = 0
 
 
-def delete_group_chat(channel: Channel, *, mode: str = SOFT) -> ChannelDeleteReport:
+def delete_group_chat(channel: Channel, *, mode: str = SOFT, request=None) -> ChannelDeleteReport:
     """Soft- or hard-delete one group chat. See the module note for what each one takes.
 
     Atomic, because ATOMIC_REQUESTS is off: a failure half way through a hard delete must not
     leave a chat with its messages gone and its members still listed.
+
+    The delete writes a `channel.deleted` security event (MIP-1716) inside the same transaction,
+    so a delete that rolls back leaves no event and an event is never written for a delete that
+    did not happen. `request` is only for the event's source and address.
     """
     if mode not in MODES:
         raise ChannelDeleteError("bad_mode", f"mode must be one of {', '.join(MODES)}.")
@@ -88,6 +94,9 @@ def delete_group_chat(channel: Channel, *, mode: str = SOFT) -> ChannelDeleteRep
     members = list(chat_member_rows(channel).values_list("user_id", "ts_joined_at"))
     report.members = len(members)
     member_ids = [str(user_id) for user_id, _ in members if user_id]
+    # Counted now, for the event: a hard delete removes the rows, and a soft one never counts them.
+    message_count = Message._base_manager.filter(channel_id=channel_id).count()
+    title = channel.title
     files: list[str] = []
 
     with transaction.atomic():
@@ -102,6 +111,22 @@ def delete_group_chat(channel: Channel, *, mode: str = SOFT) -> ChannelDeleteRep
             Channel.objects.filter(pk=channel_id).update(
                 is_deleted=True, ts_updated_at=timezone.now()
             )
+
+        record_security_event(
+            SecurityAction.CHANNEL_DELETED,
+            request=request,
+            team_id=team_id,
+            target_type="channel",
+            target_id=channel_id,
+            target_label=title or "",
+            metadata={
+                "channel_id": str(channel_id),
+                "channel": title,
+                "mode": mode,
+                "members": report.members,
+                "messages": message_count,
+            },
+        )
 
         # After commit, best-effort, so a rolled-back delete never touches the index, the storage
         # or anyone's open browser.

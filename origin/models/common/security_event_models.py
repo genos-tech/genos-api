@@ -48,6 +48,9 @@ class SecurityAction(models.TextChoices):
     API_KEY_REJECTED = "api_key.rejected", "API key rejected"
     MEMBER_ADDED = "member.added", "Member added"
     MEMBER_REMOVED = "member.removed", "Member removed or left"
+    # A group chat deleted, softly or for good (MIP-1716): a hard delete leaves nothing else to
+    # say who erased a company's chat. Names and counts only, never message text.
+    CHANNEL_DELETED = "channel.deleted", "Group chat deleted"
     ROLE_CHANGED = "role.changed", "Role changed"
     OWNER_TRANSFERRED = "owner.transferred", "Ownership transferred"
     INVITE_SENT = "invite.sent", "Invite sent"

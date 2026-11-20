@@ -1051,7 +1051,7 @@ class ChannelDetailView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            report = delete_group_chat(channel, mode=mode)
+            report = delete_group_chat(channel, mode=mode, request=request)
         except ChannelDeleteError as exc:
             return Response(
                 {"error": str(exc), "code": exc.code}, status=status.HTTP_400_BAD_REQUEST
