@@ -24,6 +24,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
+from origin.search_engine.quota import get_mcp_enabled
 from origin.services import mcp_connections, mcp_oauth
 from origin.services.member_roles import OWNER, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
@@ -38,12 +39,17 @@ class McpConnectionsThrottle(WindowRateThrottle):
     fail_closed = True
 
 
-def _serialize(connection: McpConnection, teams: dict[str, str]) -> dict:
+def _serialize(connection: McpConnection, teams: dict[str, str], *, paused: bool = False) -> dict:
     """`teams` is id → name for the teams the member is in now: a team they left stops
-    showing (and stops working) without anyone editing the connection."""
+    showing (and stops working) without anyone editing the connection.
+
+    `paused`: the member's plan does not include MCP right now (the first month of Core ended, or a
+    subscription lapsed). The connection is KEPT, and every call it makes is refused by the plan
+    gate until the plan is back; the page shows it as paused rather than as live (MIP-1737)."""
     live = [t for t in connection.team_ids if t in teams]
     default = str(connection.default_team_id)
     return {
+        "paused": paused,
         "id": str(connection.id),
         "client": mcp_oauth.client_summary(connection.application),
         "scope": connection.scope,
@@ -71,9 +77,12 @@ class McpConnectionListView(_Base):
         rows = McpConnection.objects.filter(
             user=request.user, revoked_at__isnull=True
         ).select_related("application")
+        # One plan read for the whole list: MCP is Core and up, and the plan gate refuses every call
+        # while the plan lacks it. The rows stay (never deleted, still endable below).
+        paused = not get_mcp_enabled(str(request.user.id))
         return Response(
             {
-                "connections": [_serialize(c, teams) for c in rows],
+                "connections": [_serialize(c, teams, paused=paused) for c in rows],
                 # Every team the member is in now, so the page can offer to add one.
                 "availableTeams": [{"id": t, "name": n} for t, n in teams.items()],
             }
@@ -138,7 +147,9 @@ class McpConnectionDetailView(_Base):
                     "teams": len(team_ids),
                 },
             )
-        return Response(_serialize(connection, teams))
+        return Response(
+            _serialize(connection, teams, paused=not get_mcp_enabled(str(request.user.id)))
+        )
 
     def delete(self, request, connection_id):
         mcp_connections.revoke_connection(self._mine(request, connection_id))

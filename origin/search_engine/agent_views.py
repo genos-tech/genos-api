@@ -3685,6 +3685,7 @@ class AgentFeaturesView(AuthenticatedAPIView):
             "tier":        "free" | "pro" | "max" | "enterprise",
             "tier_source": "personal" | "team",
             "tier_team":   str | null,    # granting team's name when source=team
+            "trial_ends_at": str | null,  # ISO end of the first-month Core trial, while it grants the tier
             "llm_ask":     {"used": int, "limit": int | null},
             "web_search":  {"used": int, "limit": int | null},
             "task_create": {"used": int, "limit": int | null, "period": "month"},
@@ -3715,6 +3716,10 @@ class AgentFeaturesView(AuthenticatedAPIView):
             "tier": resolved["tier"],
             "tier_source": resolved["source"],
             "tier_team": resolved["team_name"],
+            # The end of the first-month Core trial (MIP-1737), an ISO timestamp, ONLY while the
+            # trial is what gives this account its plan; null for everyone else (a payer, a
+            # paying team's member, a Free account with no trial or one that has ended).
+            "trial_ends_at": resolved.get("trial_ends_at"),
             # `llm_ask` and `web_search` stay in the payload even when
             # credits rule — old clients still read them, and the
             # counters keep incrementing (Free's breaker needs

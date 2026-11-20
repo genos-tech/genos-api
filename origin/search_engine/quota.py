@@ -76,6 +76,10 @@ _MONTHLY_CFG_KEYS = {
 # Tier ladder for effective-tier resolution (higher wins).
 _TIER_RANK = {"free": 0, "core": 1, "pro": 2, "max": 3, "enterprise": 4}
 
+# What a running first-month trial reads as (`origin.services.first_month_trial.TRIAL_PLAN`,
+# duplicated as a literal so this module needs no import from there).
+_TRIAL_TIER = "core"
+
 _EFFECTIVE_TIER_CACHE_SECONDS = 60
 _EFFECTIVE_TIER_CACHE_PREFIX = "effective_tier:"
 
@@ -96,14 +100,37 @@ def get_user_tier(user_id: str) -> str:
     return tier or "free"
 
 
-def resolve_effective_tier(user_id: str) -> dict:
-    """Return `{"tier", "source", "team_name"}` for the user.
+def _personal_tier_and_trial_end(user_id: str):
+    """`(tier, trial_ends_at)` for the user in ONE query (the trial row is a LEFT JOIN).
 
-    `tier` is the best of the user's own `CustomUser.tier` and the
-    `plan` of every non-deleted team they actively belong to.
+    Same contract as `get_user_tier`: never raises, 'free' and no trial when the user cannot be
+    loaded."""
+    try:
+        row = (
+            CustomUser.objects.filter(id=user_id).values_list("tier", "core_trial__ends_at").first()
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("personal tier lookup failed for user_id=%s", user_id)
+        return "free", None
+    if not row:
+        return "free", None
+    return row[0] or "free", row[1]
+
+
+def resolve_effective_tier(user_id: str) -> dict:
+    """Return `{"tier", "source", "team_name", "trial_ends_at"}` for the user.
+
+    `tier` is the best of the user's own `CustomUser.tier`, the
+    `plan` of every non-deleted team they actively belong to, and Core
+    while a first-month trial (`CoreTrial`, MIP-1737) is running.
     `source` is `"personal"` or `"team"`; `team_name` names the
-    granting team when `source == "team"` (else None). Cached for 60s
-    per user — tier changes propagate within a minute, which is
+    granting team when `source == "team"` (else None). `trial_ends_at`
+    is an ISO timestamp ONLY when the running trial is what grants the
+    tier (a payer or a paying team's member gets None: the trial does
+    not change what they have). A trial ends by the clock here, with
+    nothing written, so a Stripe webhook cannot end it early and it
+    cannot lower anyone. Cached for 60s per user (no longer than the
+    trial has left) — tier changes propagate within a minute, which is
     accepted (`invalidate_effective_tier` shortens that for the CLI
     paths).
     """
@@ -112,8 +139,8 @@ def resolve_effective_tier(user_id: str) -> dict:
     if isinstance(cached, dict) and "tier" in cached:
         return cached
 
-    best = get_user_tier(user_id)
-    resolved = {"tier": best, "source": "personal", "team_name": None}
+    best, trial_ends_at = _personal_tier_and_trial_end(user_id)
+    resolved = {"tier": best, "source": "personal", "team_name": None, "trial_ends_at": None}
     try:
         team_plans = TeamMaster.objects.filter(
             team_members__attendee_id=user_id,
@@ -122,13 +149,32 @@ def resolve_effective_tier(user_id: str) -> dict:
         ).values_list("plan", "team_name")
         for plan, team_name in team_plans:
             if _TIER_RANK.get(plan or "free", 0) > _TIER_RANK.get(resolved["tier"], 0):
-                resolved = {"tier": plan, "source": "team", "team_name": team_name}
+                resolved = {
+                    "tier": plan,
+                    "source": "team",
+                    "team_name": team_name,
+                    "trial_ends_at": None,
+                }
     except Exception:  # noqa: BLE001
         # Fail open to the personal tier — a team-lookup hiccup must
         # never downgrade a request to an error.
         log.exception("resolve_effective_tier team lookup failed for user_id=%s", user_id)
 
-    cache.set(cache_key, resolved, _EFFECTIVE_TIER_CACHE_SECONDS)
+    ttl = _EFFECTIVE_TIER_CACHE_SECONDS
+    if trial_ends_at is not None:
+        left = (trial_ends_at - timezone.now()).total_seconds()
+        # Core is one more CANDIDATE: it lifts only someone who would otherwise read lower.
+        if left > 0 and _TIER_RANK[_TRIAL_TIER] > _TIER_RANK.get(resolved["tier"], 0):
+            resolved = {
+                "tier": _TRIAL_TIER,
+                "source": "personal",
+                "team_name": None,
+                "trial_ends_at": trial_ends_at.isoformat(),
+            }
+            # Never keep an answer past the moment it stops being true.
+            ttl = max(1, min(ttl, int(left)))
+
+    cache.set(cache_key, resolved, ttl)
     return resolved
 
 

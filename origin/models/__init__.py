@@ -20,6 +20,7 @@ from .common.sample_data_models import *
 from .common.schedule_models import *
 from .common.security_event_models import *
 from .common.team_models import *
+from .common.trial_models import *
 from .common.usage_models import *
 from .common.user_models import *
 from .note.chat_note_models import *
