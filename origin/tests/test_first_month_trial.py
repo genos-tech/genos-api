@@ -27,7 +27,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import DatabaseError
+from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 from oauth2_provider.models import Application
@@ -210,9 +210,15 @@ class StartAndSwitchTests(TrialBase):
     def test_a_failure_never_breaks_the_signup_nor_leaves_its_transaction_aborted(self):
         # A database error inside the savepoint (the OAuth callback calls this inside its own
         # transaction): swallowed, and the caller can still query afterwards.
+        def real_failing_sql(*_args, **_kwargs):
+            # Real SQL that Postgres refuses: it marks the open transaction as aborted, which a
+            # Python-raised error would not.
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1/0")
+
         with (
             offer(True),
-            mock.patch.object(first_month_trial, "_start", side_effect=DatabaseError("boom")),
+            mock.patch.object(first_month_trial, "_start", side_effect=real_failing_sql),
         ):
             self.assertIsNone(first_month_trial.start_for_new_account(self.user))
         self.assertEqual(CustomUser.objects.filter(pk=self.user.pk).count(), 1)
