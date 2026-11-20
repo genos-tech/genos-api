@@ -163,9 +163,9 @@ class FlagListView(AuthenticatedAPIView):
         # (`chat_member_q`, the rule the message endpoints apply).
         qs = Flag.objects.filter(
             user=request.user,
-            message__channel_id__in=Channel.objects.filter(chat_member_q(request.user.id)).values(
-                "id"
-            ),
+            message__channel_id__in=Channel.objects.filter(
+                chat_member_q(request.user.id), is_deleted=False
+            ).values("id"),
         ).select_related("message", "message__sender")
         if status_param == "completed":
             qs = qs.filter(completed_at__isnull=False).order_by("-completed_at")
