@@ -288,7 +288,11 @@ def _retire_if_moot(reminder, *, now) -> bool:
     """
     message = reminder.message
     reason = None
-    if message.deleted_at is not None:
+    if reminder.user.is_deleted or not reminder.user.is_active:
+        # The account is gone (a soft delete: the row stays, anonymised). Its reminders are
+        # deleted with it (MIP-1783); one left from before that rule must not still fire.
+        reason = "account deleted"
+    elif message.deleted_at is not None:
         reason = "message deleted"
     elif not is_chat_member(message.channel_id, reminder.user_id):
         # They left the chat (or the project, or the team) since asking: delivering the
