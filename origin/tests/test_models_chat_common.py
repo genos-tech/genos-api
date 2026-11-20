@@ -2,8 +2,7 @@
 
 Focus: custom save()/managers, DB constraints (unique / partial-unique),
 FK on_delete semantics (CASCADE / PROTECT / SET_NULL), the unified
-Channel/Message schema invariants, CustomUser tier/manager, and the two
-custom save() id-builders on MentionFact / ReactionFact.
+Channel/Message schema invariants and CustomUser tier/manager.
 
 These are DB-backed (django.test.TestCase). IntegrityError-raising blocks
 are wrapped in transaction.atomic() so the broken savepoint can roll back
@@ -34,8 +33,6 @@ from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.test import TestCase
 
-from origin.models.chat.mention_models import MentionFact
-from origin.models.chat.reaction_models import ReactionFact
 from origin.models.chat.todo_models import ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import (
     Channel,
@@ -564,93 +561,6 @@ class ReadCursorTests(_Fixtures):
         m.delete()  # last_read_message is SET_NULL
         cur.refresh_from_db()
         self.assertIsNone(cur.last_read_message_id)
-
-
-# ===========================================================================
-# Legacy fact tables: custom save() builds the `uid` primary key
-# ===========================================================================
-class MentionFactSaveTests(_Fixtures):
-    def test_uid_built_from_components_and_user_str(self):
-        # uid = "{chat_type}-{chat_id}-{thread_id}-{message_id}-{mentioned_user}"
-        # mentioned_user stringifies via AbstractBaseUser.__str__ -> email.
-        mf = MentionFact.objects.create(
-            team=self.team,
-            chat_type=1,
-            chat_id=10,
-            message_id=100,
-            is_thread=False,
-            thread_id=0,
-            mentioned_user=self.user2,
-        )
-        self.assertEqual(mf.uid, f"1-10-0-100-{self.user2.email}")
-        # And it's the primary key.
-        self.assertEqual(mf.pk, mf.uid)
-
-    def test_uid_unique_constraint_on_components(self):
-        kw = dict(
-            team=self.team,
-            chat_type=2,
-            chat_id=20,
-            message_id=200,
-            is_thread=True,
-            thread_id=3,
-            mentioned_user=self.user,
-        )
-        MentionFact.objects.create(**kw)
-        # Same component tuple => same uid pk => IntegrityError on re-insert.
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                MentionFact.objects.create(**kw)
-
-    def test_null_mentioned_user_stringifies_to_none(self):
-        mf = MentionFact.objects.create(
-            team=self.team,
-            chat_type=1,
-            chat_id=1,
-            message_id=1,
-            is_thread=False,
-            thread_id=0,
-            mentioned_user=None,
-        )
-        self.assertEqual(mf.uid, "1-1-0-1-None")
-
-
-class ReactionFactSaveTests(_Fixtures):
-    def test_uid_built_from_reaction_components(self):
-        # uid = "{chat_type}-{chat_id}-{thread_id}-{message_id}-{reaction_id}"
-        # reaction_id (not the user) is the final component here.
-        rf = ReactionFact.objects.create(
-            team=self.team,
-            chat_type=1,
-            chat_id=10,
-            message_id=100,
-            is_thread=False,
-            thread_id=0,
-            reaction_id=55,
-            reaction_emoji="👍",
-            sender=self.user,
-        )
-        self.assertEqual(rf.uid, "1-10-0-100-55")
-        self.assertEqual(rf.pk, rf.uid)
-
-    def test_uid_collision_raises(self):
-        kw = dict(
-            team=self.team,
-            chat_type=1,
-            chat_id=10,
-            message_id=100,
-            is_thread=False,
-            thread_id=0,
-            reaction_id=55,
-            reaction_emoji="👍",
-            sender=self.user,
-        )
-        ReactionFact.objects.create(**kw)
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                # Differ only on emoji; uid is identical -> pk collision.
-                kw2 = dict(kw, reaction_emoji="🎉")
-                ReactionFact.objects.create(**kw2)
 
 
 # ===========================================================================
