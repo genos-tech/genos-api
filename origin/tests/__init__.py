@@ -8,3 +8,8 @@ install()
 from origin.tests.network_guard import install as install_network_guard  # noqa: E402
 
 install_network_guard()
+
+# Every test starts with an empty default cache (MIP-1803).
+from origin.tests.cache_isolation import install as install_cache_isolation  # noqa: E402
+
+install_cache_isolation()
