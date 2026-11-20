@@ -45,6 +45,7 @@ from origin.serializers.chat.unified_serializers import (
     ChannelSerializer,
     MessageSerializer,
 )
+from origin.services.channel_delete import MODES, SOFT, ChannelDeleteError, delete_group_chat
 from origin.services.channel_scope import (
     chat_member_rows,
     is_chat_member,
@@ -1018,6 +1019,51 @@ class ChannelDetailView(AuthenticatedAPIView):
         project.save(update_fields=["project_name", "ts_updated_at"])
         channel.refresh_from_db()
         return Response({"channel": ChannelSerializer(channel, context={"request": request}).data})
+
+    def delete(self, request, channel_id):
+        """DELETE /api/v3/channels/{channel_id}/?mode=soft|hard  (MIP-1705)
+
+        Delete a GROUP chat. Only its owner may (an editor cannot, and a group with no live owner
+        is not run by "any member" here: deleting is the one act that must have a name behind
+        it). Someone outside the chat gets the same 404 as for a chat that does not exist.
+
+        `mode=soft` (the default) hides the chat everywhere and keeps every row, so it can be put
+        back; `mode=hard` removes the messages, files and the chat for good. What each takes, and
+        what stays (the chat's notes) in both, is in `services/channel_delete.py`.
+        """
+        channel = _get_channel_for_user(channel_id, request.user)
+        if channel.kind != ChannelKind.GM:
+            return Response(
+                {"error": "Only a group chat can be deleted.", "code": "not_a_group"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Strictly the owner: `resolve_gm_role`, not `actor_gm_role`, which would let any host
+        # member act on a group whose owner is gone.
+        if resolve_gm_role(channel, request.user.id) != OWNER:
+            return Response(
+                {"error": "Only the channel owner can delete it.", "code": "not_owner"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        mode = (request.query_params.get("mode") or SOFT).lower()
+        if mode not in MODES:
+            return Response(
+                {"error": f"mode must be one of {', '.join(MODES)}.", "code": "bad_mode"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            report = delete_group_chat(channel, mode=mode)
+        except ChannelDeleteError as exc:
+            return Response(
+                {"error": str(exc), "code": exc.code}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(
+            {
+                "deleted": True,
+                "mode": report.mode,
+                "messagesDeleted": report.messages_deleted,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class ChannelMembersView(AuthenticatedAPIView):

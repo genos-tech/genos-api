@@ -336,6 +336,52 @@ def push_membership_removed(
         logger.warning("sockets membership push could not be scheduled", exc_info=True)
 
 
+# A chat this big is not told live past this many people; the rest see it gone at their next
+# refresh (the chat is gone for them either way: the server no longer lists or serves it).
+MAX_CHANNEL_DELETE_PUSHES = 500
+
+
+def push_channel_deleted(*, user_ids, team_id, channel_id, kind) -> None:
+    """Tell genos-sockets that a chat is gone, for each of its members (MIP-1705).
+
+    The same notice as a removal from the chat (`push_membership_removed`, scope "channel"): it
+    takes their open sockets out of the chat's room, and the app answers by re-reading its chat
+    list, which no longer has the chat. One signed post per person, because the sockets route
+    takes one `userId`, so the posts go one after the other and STOP at the first failure: a
+    sockets outage then costs one timeout, not one per member. Sends once the transaction commits;
+    best-effort and never raises: the delete is done whatever sockets says.
+    """
+    try:
+        if not settings.SOCKETS_INTERNAL_URL:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets channel-delete push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        people = [str(u) for u in user_ids if u][:MAX_CHANNEL_DELETE_PUSHES]
+        if not people:
+            return
+
+        def send() -> None:
+            for person in people:
+                payload: dict[str, Any] = {
+                    "userId": person,
+                    "teamId": str(team_id),
+                    "scope": "channel",
+                    "projectIds": [],
+                    "channels": [{"kind": int(kind), "id": str(channel_id)}],
+                }
+                if not _post(payload, MEMBERSHIP_PATH, "membership"):
+                    logger.warning(
+                        "stopped telling members that chat %s was deleted after one failed push",
+                        channel_id,
+                    )
+                    return
+
+        transaction.on_commit(send, robust=True)
+    except Exception:  # noqa: BLE001 — the delete is done; an observer must not break it
+        logger.warning("sockets channel-delete push could not be scheduled", exc_info=True)
+
+
 TODO_PATH = "/internal/broadcast/todo"
 
 

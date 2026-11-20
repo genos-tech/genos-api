@@ -144,6 +144,36 @@ def purge_task(task_id) -> None:
         log.exception("Best-effort purge failed for task %s", task_id)
 
 
+def purge_chat(channel_id, kind) -> None:
+    """A chat deleted (soft or hard): drop its main-timeline, thread and thread-summary chunks.
+
+    Without this a deleted chat's messages stay searchable until the next reindex's orphan sweep
+    finds the channel gone (`sweep_orphans`), which is up to a cron cadence later. Matched by
+    entity-id prefix, so every thread of the chat goes with it.
+    """
+    try:
+        from django.db.models import Q
+
+        from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
+
+        label = CHAT_TYPE_LABEL.get(int(kind))
+        if label is None:
+            return
+        main = f"{label}:{channel_id}"
+        summaries = f"thread_summary:{int(kind)}:{channel_id}:"
+        ids = list(
+            RagChunk.objects.filter(
+                Q(entity_type="chat", entity_id=main)
+                | Q(entity_type="chat", entity_id__startswith=f"{main}:thread:")
+                | Q(entity_type="thread_summary", entity_id__startswith=summaries)
+            ).values_list("chunk_id", flat=True)
+        )
+        if ids:
+            purge_chunks(ids)
+    except Exception:  # noqa: BLE001
+        log.exception("Best-effort purge failed for chat %s", channel_id)
+
+
 def purge_milestone(milestone_id) -> None:
     try:
         purge_entities([("milestone", f"milestone:{milestone_id}")])
