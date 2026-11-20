@@ -34,6 +34,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.search_engine.chunkers.task_chunker import iter_task_chunks
 from origin.services import demo_launch_plan
 from origin.services.demo_seeder import create_demo_environment
 
@@ -266,6 +267,26 @@ class DemoLaunchPlanBackdatingTests(TestCase):
             for task in tasks.values():
                 updated = TaskMaster.objects.get(pk=task.pk).ts_updated_at
                 self.assertGreaterEqual(updated, self.before)
+
+    def test_the_reindex_after_sign_in_still_finds_the_plan_and_its_comments(self):
+        """The post-signin reindex asks the chunkers for what changed since seeding began. The
+        tasks keep a fresh `ts_updated_at`, so each is re-emitted WITH its comments, though the
+        comments' own `ts_updated_at` is days old."""
+        for _lang, (_visitor, project, tasks) in self.each_language():
+            wanted = {
+                f"task:{t.task_id}:comment:{c.comment_id}"
+                for t in tasks.values()
+                for c in TaskComments.objects.filter(task=t)
+            }
+            self.assertEqual(len(wanted), 5)
+            found = {
+                chunk.chunk_id
+                for entity in iter_task_chunks(since=self.before)
+                for chunk in entity.chunks
+            }
+            self.assertLessEqual(wanted, found)
+            titles = {f"task:{t.task_id}:title_content" for t in tasks.values()}
+            self.assertLessEqual(titles, found)
 
     def test_running_the_pass_again_with_the_same_now_changes_nothing(self):
         now = timezone.now()
