@@ -165,13 +165,14 @@ def _hard_delete(channel: Channel, report: ChannelDeleteReport) -> list[str]:
 
     messages = Message._base_manager.filter(channel_id=channel.id)
     while True:
-        ids = list(messages.values_list("id", flat=True)[:_MESSAGE_BATCH])
+        ids = list(messages.order_by("seq").values_list("id", flat=True)[:_MESSAGE_BATCH])
         if not ids:
             break
         # A reply goes with its thread root through the CASCADE, so a slice can remove more rows
-        # than it named; the loop ends when the channel has none left.
-        Message._base_manager.filter(id__in=ids).delete()
-        report.messages_deleted += len(ids)
+        # than it named; the loop ends when the channel has none left. The count is what the
+        # delete reports it removed, not how many ids were named (MIP-1717).
+        _, removed = Message._base_manager.filter(id__in=ids).delete()
+        report.messages_deleted += removed.get(Message._meta.label, 0)
 
     # Members, direct pairs, read cursors, pins, activity and tag assignments cascade; the chat's
     # notes are SET_NULL and stay.

@@ -369,6 +369,20 @@ class HardDeleteTests(GroupChatDeleteTestCase):
         self.assertFalse(Message.objects.filter(channel_id=self.channel.pk).exists())
         self.assertFalse(Channel.objects.filter(pk=self.channel.pk).exists())
 
+    def test_the_count_includes_replies_the_cascade_removed_with_their_root(self):
+        """A slice names ids, but deleting a thread root also removes its replies (CASCADE), which
+        a later slice never sees. The number reported must be what was really removed (MIP-1717)."""
+        root = self._message(self.channel, "root", seq=1)
+        for i in range(2, 5):
+            self._message(self.channel, f"reply {i}", seq=i, thread_root=root, sender=self.user2)
+        self._message(self.channel, "after", seq=5)
+
+        with mock.patch.object(channel_delete, "_MESSAGE_BATCH", 1):
+            resp = self.delete(self.user, "hard")
+
+        self.assertEqual(Message.objects.filter(channel_id=self.channel.pk).count(), 0)
+        self.assertEqual(resp.data["messagesDeleted"], 5)
+
     def test_a_failure_half_way_leaves_the_chat_exactly_as_it_was(self):
         self._fill()
         real = Message._base_manager.filter
