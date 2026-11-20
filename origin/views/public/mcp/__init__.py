@@ -15,7 +15,8 @@ proves a tool can be invoked outside any HTTP request from a bare
 `ToolContext`. So there is no LLM here and no agent loop — just JSON-RPC
 in, `run()`, JSON-RPC out.
 
-    protocol.py  JSON-RPC envelope, the two protocol eras, error codes
+    protocol.py  JSON-RPC envelope, the two protocol eras, error codes, the handshake `instructions`
+    core_rules.py  the `instructions` with the core working rules (MIP-1619), behind `MCP_CORE_RULES`
     tools.py     the curated catalog and the registry adapter
     resolve.py   "PRJ-123" / a task URL / a raw id  ->  a task id
     views.py     the endpoint: auth, team resolution, dispatch
