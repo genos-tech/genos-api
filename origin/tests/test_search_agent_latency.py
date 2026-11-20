@@ -164,14 +164,31 @@ class VariantLanesTests(SimpleTestCase):
         from concurrent.futures import ThreadPoolExecutor
 
         calls = []
+        rewrites_started = threading.Event()
 
         def lane(variant):
             calls.append(variant)
+            if {"v1", "v2"} <= set(calls):
+                rewrites_started.set()
             return self._lane_for(variant)
 
+        def first_lane():
+            runner_calls.append("orig")
+            # Still "running" until both rewrites' lanes have started: if the
+            # fuse waited for the original before starting them, this times out.
+            self.assertTrue(rewrites_started.wait(timeout=5), "rewrite lanes waited for the first")
+            return first_value
+
+        # The original's lanes are computed here, on this thread, and the pool
+        # only hands the result back. `_first_fused` patches module attributes
+        # (`S._run_keyword`...), and so does `_fuse`: two threads inside
+        # `mock.patch.object` on the same attribute can restore each other's
+        # mock instead of the real function, leaving it patched for every later
+        # test (MIP-1760: the lexical-tier tests then saw this one's fake lane).
+        first_value = self._first_fused()
         runner_calls = []
         with ThreadPoolExecutor(max_workers=1) as pool:
-            first = pool.submit(lambda: runner_calls.append("orig") or self._first_fused())
+            first = pool.submit(first_lane)
             fused = self._fuse(["orig", "v1", "v2"], lane, first_result=first)
         self.assertEqual(runner_calls, ["orig"])
         # The rewrites were run (each lane asks the fake twice: keyword, vector);
