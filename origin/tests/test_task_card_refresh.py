@@ -262,3 +262,97 @@ class MilestoneCardRefreshTests(CardPostBase):
         self._update(assignee_ids=[])
 
         self.assertIn("Assignees: Unassigned", _text(self._card().body))
+
+
+class DeletedPersonCardTests(RefreshBase):
+    """A card names a person whose account row is gone (MIP-1725).
+
+    `reporter` is SET_NULL, so a hard-deleted user (the demo teardown) leaves a task or milestone
+    with no reporter. Building the card read `user.email` off `None`, the refresh raised, and
+    `refresh_*_card` logged a WARNING with a traceback and left the card stale.
+    """
+
+    LOGGER = "origin.services.task_card_post"
+
+    def _milestone(self):
+        out = MANAGE_MILESTONE.run(
+            {
+                "action": "create",
+                "project_id": self.project.project_id,
+                "title": "Launch",
+                "assignee_ids": [str(self.user2.id)],
+            },
+            self.ctx,
+        )
+        milestone = MilestoneMaster.objects.get(milestone_id=out["milestone_id"])
+        # The reporter is the person who is about to go: user2, also its only assignee.
+        MilestoneMaster.objects.filter(pk=milestone.pk).update(reporter=self.user2)
+        return milestone
+
+    def _milestone_card(self, milestone):
+        return Message.objects.get(channel=self.channel, task_id=milestone.task_id)
+
+    def test_deleting_the_milestones_reporter_refreshes_its_card_quietly(self):
+        """The measured path: the assignee row cascades away, its signal schedules the refresh,
+        and by then the reporter is NULL."""
+        milestone = self._milestone()
+
+        with self.assertNoLogs(self.LOGGER, level="WARNING"):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.user2.delete()
+
+        self.assertIsNone(MilestoneMaster.objects.get(pk=milestone.pk).reporter_id)
+        text = _text(self._milestone_card(milestone).body).split("\n")
+        self.assertIn("Reporter: Deleted user", text)
+        self.assertIn("Assignees: Unassigned", text)  # the refresh DID run: the assignee is gone
+
+    def test_a_milestone_card_with_no_reporter_refreshes_on_any_later_edit(self):
+        milestone = self._milestone()
+        MilestoneMaster.objects.filter(pk=milestone.pk).update(reporter=None)
+
+        with self.assertNoLogs(self.LOGGER, level="WARNING"):
+            with self.captureOnCommitCallbacks(execute=True):
+                MANAGE_MILESTONE.run(
+                    {
+                        "action": "update",
+                        "milestone_id": milestone.milestone_id,
+                        "status": "WIP",
+                    },
+                    self.ctx,
+                )
+
+        text = _text(self._milestone_card(milestone).body)
+        self.assertIn("Status: WIP", text)
+        self.assertIn("Reporter: Deleted user", text)
+
+    def test_a_task_card_with_no_reporter_refreshes_quietly(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=None)
+
+        with self.assertNoLogs(self.LOGGER, level="WARNING"):
+            self._tool(UPDATE_TASK, status="WIP")
+
+        text = _text(self._card().body)
+        self.assertIn("Status: WIP", text)
+        self.assertIn("Reporter: Deleted user", text)
+        self.assertEqual(_mention_ids(self._card().body), [str(self.user2.id)])  # the assignee
+
+    def test_a_task_with_neither_assignee_nor_reporter_still_refreshes(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(reporter=None, assignee=None)
+
+        with self.assertNoLogs(self.LOGGER, level="WARNING"):
+            self._tool(UPDATE_TASK, status="WIP")
+
+        text = _text(self._card().body)
+        self.assertIn("Assignee: Unassigned", text)
+        self.assertIn("Reporter: Deleted user", text)
+
+    def test_any_other_failure_is_still_logged_and_does_not_raise(self):
+        """Only a missing person is tolerated: a broken row still shows as the warning."""
+        milestone = self._milestone()
+        with mock.patch.object(
+            task_card_post.task_card, "card_mention", side_effect=AttributeError("email")
+        ):
+            with self.assertLogs(self.LOGGER, level="WARNING") as logs:
+                self.assertIsNone(task_card_post.refresh_milestone_card(milestone.milestone_id))
+
+        self.assertIn("milestone card refresh failed", logs.output[0])

@@ -34,6 +34,12 @@ CARD_LABELS = {
     "unassigned": "Unassigned",
 }
 
+# What a card names a person whose account row is gone (`reporter` is SET_NULL when the user
+# is hard-deleted). The same words `account_deletion` gives an erased account's username
+# (`DELETED_USERNAME`; a test pins the two together), so a hard-deleted person reads like a
+# soft-deleted one. Not in `CARD_LABELS`: that table is pinned to the demo content's.
+DELETED_USER = "Deleted user"
+
 # A milestone card names a sprint and takes any number of assignees.
 MILESTONE_CARD_LABELS = {
     **CARD_LABELS,
@@ -109,6 +115,19 @@ def card_mention(user, team_id) -> dict:
     }
 
 
+def _person(user, team_id) -> dict:
+    """The mention for `user`, or, when the row is gone (a NULL reporter), the plain words
+    `DELETED_USER` in the muted italic of an unassigned row. Only a missing person is
+    handled: anything else that is not a user still raises."""
+    if user is None:
+        return {
+            "text": DELETED_USER,
+            "type": "text",
+            "styles": {"italic": True, "textColor": "gray"},
+        }
+    return card_mention(user, team_id)
+
+
 def _heading(prefix: str, title: str) -> dict:
     return {
         "type": "heading",
@@ -180,7 +199,7 @@ def task_card_body(
             card_label(labels["assignee"]),
             card_mention(assignee, team_id) if assignee is not None else _unassigned(labels),
         ),
-        _row(card_label(labels["reporter"]), card_mention(reporter, team_id)),
+        _row(card_label(labels["reporter"]), _person(reporter, team_id)),
         _due_row(labels, due_date),
         _blank_row(),
     ]
@@ -223,7 +242,7 @@ def milestone_card_body(
             card_label(labels["priority"]),
             card_chip(priority, PRIORITY_COLOR.get(priority)) if priority else neutral_chip(),
         ),
-        _row(card_label(labels["reporter"]), card_mention(reporter, team_id)),
+        _row(card_label(labels["reporter"]), _person(reporter, team_id)),
         _row(*assignee_row),
         _due_row(labels, due_date),
         _blank_row(),
