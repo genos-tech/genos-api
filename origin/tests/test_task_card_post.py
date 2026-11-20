@@ -317,6 +317,69 @@ class TaskCardBodyTests(BaseAPITestCase):
             chip = self._body(effort=level)[3]["content"][1]
             self.assertEqual((chip["text"], chip["styles"]["textColor"]), (level, color))
 
+    def test_the_deleted_user_label_is_what_an_erased_account_is_called(self):
+        from origin.services import account_deletion
+
+        self.assertEqual(task_card.DELETED_USER, account_deletion.DELETED_USERNAME)
+
+    def test_a_reporter_who_exists_is_still_a_mention(self):
+        """A card with a reporter is exactly what it was: label, then the mention node."""
+        expected = [
+            task_card.card_label("Reporter: "),
+            task_card.card_mention(self.user, self.team.team_id),
+        ]
+        self.assertEqual(self._body()[5]["content"], expected)
+        milestone = task_card.milestone_card_body(
+            title="M",
+            status="Open",
+            priority="Low",
+            sprint_name=None,
+            reporter=self.user,
+            assignees=[],
+            due_date=None,
+            team_id=self.team.team_id,
+        )
+        self.assertEqual(milestone[4]["content"], expected)
+
+    def test_no_reporter_reads_deleted_user_in_the_muted_italic_not_a_mention(self):
+        body = task_card.task_card_body(
+            title="T",
+            status="Open",
+            priority=None,
+            assignee=None,
+            reporter=None,
+            due_date=None,
+            team_id=self.team.team_id,
+        )
+        self.assertEqual(
+            body[5]["content"],
+            [
+                task_card.card_label("Reporter: "),
+                {
+                    "text": "Deleted user",
+                    "type": "text",
+                    "styles": {"italic": True, "textColor": "gray"},
+                },
+            ],
+        )
+
+    def test_something_that_is_neither_a_person_nor_none_still_raises(self):
+        with self.assertRaises(AttributeError):
+            task_card.card_mention(object(), self.team.team_id)
+        with self.assertRaises(AttributeError):
+            self._body_with_reporter(object())
+
+    def _body_with_reporter(self, reporter):
+        return task_card.task_card_body(
+            title="T",
+            status="Open",
+            priority=None,
+            assignee=None,
+            reporter=reporter,
+            due_date=None,
+            team_id=self.team.team_id,
+        )
+
     def test_a_milestone_card_with_no_assignees_or_sprint_reads_unassigned(self):
         body = task_card.milestone_card_body(
             title="M",
