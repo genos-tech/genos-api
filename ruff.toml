@@ -1,9 +1,9 @@
 # Ruff config for genos-api (one Django/DRF service: `origin/`, `apis/`).
 # CI runs it in the `backend-django-lint` job of .github/workflows/ci.yml as
 # `ruff check origin apis`, with ruff pinned to the version in
-# requirements-dev.txt (keep the two in step). That job is NOT a required
-# check (the branch ruleset requires only the test, pip-audit, gitleaks and
-# migration-leaf checks), and `ruff format` is not run in CI at all.
+# requirements-dev.txt (keep the two in step). That job is report-only: it is
+# not one of the branch ruleset's required checks. CI does not lint manage.py,
+# scripts/ or docs/*.py, and does not run `ruff format` at all.
 # The rule set below is deliberately conservative; the ignores are a
 # baseline for code that predates the lint, each with the files that still
 # trip it (counted with ruff 0.17.1 on origin/main, 2026-11-20). Re-enable
@@ -22,7 +22,7 @@ extend-exclude = [
 
 [lint]
 # Start conservative: pyflakes (F) + a subset of pycodestyle (E) + import
-# sorting (I). Expand the rule set in the cleanup pass.
+# sorting (I).
 select = ["E", "F", "W", "I"]
 ignore = [
     "E501", # line-too-long
