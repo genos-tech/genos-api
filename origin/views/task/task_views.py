@@ -2428,18 +2428,23 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-def _own_comment(request, task_id, comment_id):
+def _own_comment(request, task_id, comment_id, *, allow_deleted=False):
     """The caller's own comment, or None.
 
     Someone else's comment is answered exactly like a missing one. The UI
     only offers edit and delete on your own (`TaskCommentBubble.isSent`),
     and the API offered both on everyone's.
+
+    A deleted comment is gone too, unless the caller is the delete itself (which is
+    idempotent): an edit must not put text back into a tombstone (MIP-1784).
     """
     try:
         comment = TaskComments.objects.filter(task=task_id, comment_id=comment_id).first()
     except (DjangoValidationError, TypeError, ValueError):
         return None
     if comment is None or str(comment.sender_id) != str(request.user.id):
+        return None
+    if comment.is_deleted and not allow_deleted:
         return None
     return comment
 
@@ -2654,7 +2659,7 @@ class TaskCommentsView(AuthenticatedAPIView):
             )
         if not can_access_task(task_id, request.user.id):
             return _no_task()
-        comment = _own_comment(request, task_id, comment_id)
+        comment = _own_comment(request, task_id, comment_id, allow_deleted=True)
         if comment is None:
             return Response(
                 {"error": "Comment not found."},
