@@ -39,6 +39,7 @@ OTHER_HASHES = {
     "test_agent_eval_sequence_fixture.py": "the eval fixture's own source and setup output, not a model input",
     "test_builtin_task_templates.py": "the built-in task templates a person picks from, not the agent's input",
     "test_demo_v1_golden.py": "the demo workspace seeder's output",
+    "test_mcp_instructions.py": "the MCP handshake text sent to EXTERNAL clients (MIP-1619), never the in-app agent's input",
 }
 
 
