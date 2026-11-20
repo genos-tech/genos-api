@@ -80,7 +80,7 @@ from origin.serializers.common.user_serializers import (
     UserCreateSerializer,
     UserSerializer,
 )
-from origin.services import signup_consent, start_here_note
+from origin.services import first_month_trial, signup_consent, start_here_note
 from origin.services.email import send_templated_email
 
 User = get_user_model()
@@ -206,6 +206,9 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             if not user.is_email_verified:
                 user.is_email_verified = True
                 user.save(update_fields=["is_email_verified"])
+            # The token proved the inbox, so the first month of Core can start now
+            # (MIP-1737). A no-op while the offer is off; never raises.
+            first_month_trial.start_for_new_account(user)
             refresh = RefreshToken.for_user(user)
             record_security_event(
                 SecurityAction.SIGNIN_SUCCEEDED,
@@ -972,6 +975,9 @@ class VerifyEmailView(APIView):
                 "email_verification_token_expires_at",
             ]
         )
+        # The address is proven: the first month of Core starts here for an email signup
+        # (MIP-1737). A no-op while the offer is off; never raises.
+        first_month_trial.start_for_new_account(user)
         return Response({"message": "verified"}, status=status.HTTP_200_OK)
 
 

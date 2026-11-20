@@ -41,6 +41,7 @@ from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.team_models import TeamMembers
+from origin.models.common.trial_models import CoreTrial
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import schedules
@@ -226,7 +227,10 @@ def pending_members(*, now: datetime | None = None, limit: int = SEED_BATCH) -> 
         better_team = TeamMembers.objects.filter(
             attendee_id=OuterRef("pk"), is_deleted=False, team__is_deleted=False
         ).exclude(team__plan__in=plans)
-        members = members.exclude(own_off & ~Exists(better_team))
+        # A running first-month Core trial (MIP-1737) lifts a Free member to Core, so the query must
+        # not leave them out: the gate (`plan_allows`) reads them as Core and so must this scan.
+        running_trial = CoreTrial.objects.filter(user_id=OuterRef("pk"), ends_at__gt=now)
+        members = members.exclude(own_off & ~Exists(better_team) & ~Exists(running_trial))
     return list(members.order_by("pk")[:limit])
 
 
