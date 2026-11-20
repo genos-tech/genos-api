@@ -104,4 +104,7 @@ class GitHubOAuthProvider(OAuthProvider):
             provider_user_id=str(user["id"]),
             email=email,
             display_name=user.get("name") or user.get("login"),
+            # GitHub only lets an address be made public once it is verified,
+            # and the fallback above takes the primary VERIFIED one only.
+            email_verified=bool(email),
         )
