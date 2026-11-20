@@ -1,4 +1,5 @@
 from .chat.activity_models import *
+from .chat.auto_join_models import *
 from .chat.mention_models import *
 from .chat.personal_tag_models import *
 from .chat.reaction_models import *
