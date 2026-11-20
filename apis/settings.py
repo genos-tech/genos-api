@@ -23,6 +23,7 @@ import dj_database_url
 from apis import mcp_oauth_settings
 from apis.credit_policy import load_credit_policy
 from apis.llm_catalog import load_llm_catalog
+from origin.search_engine.index_names import resolve_index_names
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -899,6 +900,9 @@ MEDIA_ROOT = os.environ.get(
 # chats, tasks, and notes. The OpenSearch index is created by
 # `python manage.py opensearch_setup` and (re)populated by
 # `python manage.py opensearch_reindex`.
+_OPENSEARCH_INDEX, _OPENSEARCH_ALIAS = resolve_index_names(
+    os.environ.get("OPENSEARCH_INDEX"), os.environ.get("OPENSEARCH_ALIAS")
+)
 SEARCH_ENGINE = {
     "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
     "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),
@@ -914,10 +918,13 @@ SEARCH_ENGINE = {
     "OPENSEARCH_CA_CERT": os.environ.get("OPENSEARCH_CA_CERT", ""),
     # Physical index name. Increment the suffix when changing the
     # mapping or embedding model and reindexing.
-    "OPENSEARCH_INDEX": os.environ.get("OPENSEARCH_INDEX", "knowledge_chunks_v1"),
+    "OPENSEARCH_INDEX": _OPENSEARCH_INDEX,
     # Stable alias the app queries. Repointed at a new physical index
-    # during zero-downtime migrations.
-    "OPENSEARCH_ALIAS": os.environ.get("OPENSEARCH_ALIAS", "knowledge_chunks_current"),
+    # during zero-downtime migrations. `OPENSEARCH_ALIAS` wins; unset, it is
+    # `knowledge_chunks_current` for a `knowledge_chunks_v<N>` index and
+    # `<index>_current` for any other name, so an isolated run (own
+    # OPENSEARCH_INDEX) never acts on the shared alias (MIP-1762).
+    "OPENSEARCH_ALIAS": _OPENSEARCH_ALIAS,
     # OpenAI embedding configuration. `text-embedding-3-small` is the
     # MVP default: 1536-dim, cheap, multilingual-decent. If you change
     # the model or dimension, bump the index suffix and reindex.
