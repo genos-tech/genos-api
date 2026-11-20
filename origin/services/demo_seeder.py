@@ -2934,6 +2934,13 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
             # NotePermissionMaster is bare (note_type, note_id) — filter
             # by team is sufficient since we control creation.
             NotePermissionMaster.objects.filter(team=team_id).delete()
+        # Their uploaded files first: once a note row is gone its attachment rows are detached
+        # (`note = NULL`) and nothing can find the files again (MIP-1720).
+        from origin.services.note_delete import forget_note_attachments
+
+        forget_note_attachments(1, personal_note_ids)
+        forget_note_attachments(2, task_note_ids)
+        forget_note_attachments(3, chat_note_ids)
         ChatNoteMaster.objects.filter(team=team_id).delete()
         TaskNoteMaster.objects.filter(team=team_id).delete()
         PersonalNoteMaster.objects.filter(team=team_id).delete()

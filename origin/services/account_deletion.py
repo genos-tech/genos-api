@@ -206,11 +206,12 @@ def _delete_personal_data(user) -> None:
         PersonalNoteMaster,
     )
     from origin.models.note.recent_note_models import NoteRecentMaster
-    from origin.services.note_delete import forget_deleted_notes
+    from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
     from origin.services.note_satellites import batched_note_cleanup
 
     note_ids = list(PersonalNoteMaster.objects.filter(owner=user).values_list("note_id", flat=True))
     if note_ids:
+        forget_note_attachments(1, note_ids)  # their uploaded files, before the notes go (MIP-1720)
         NotePermissionMaster.objects.filter(note_id__in=note_ids, note_type=1).delete()
         # The note rows' versions and summaries (which hold their text) go with them in one
         # pass, through the post_delete receiver (MIP-1517).
