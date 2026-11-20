@@ -354,7 +354,9 @@ class TestOAuthSignIn(SecurityEventCase):
         return OAuthCallbackView()._handle_login(
             **consent,
             provider_name="google",
-            profile=ProviderProfile(provider_user_id=sub, email=email, display_name="G"),
+            profile=ProviderProfile(
+                provider_user_id=sub, email=email, display_name="G", email_verified=True
+            ),
             token_response=TokenResponse(
                 access_token="tok",
                 refresh_token=None,
@@ -982,7 +984,10 @@ class TestOAuthConnections(SecurityEventCase):
         OAuthCallbackView()._handle_connect(
             provider_name="github",
             profile=ProviderProfile(
-                provider_user_id="gh-2", email="gh2@example.com", display_name="GH"
+                provider_user_id="gh-2",
+                email="gh2@example.com",
+                display_name="GH",
+                email_verified=True,
             ),
             token_response=TokenResponse(
                 access_token="tok",

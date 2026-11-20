@@ -788,6 +788,7 @@ class LoginRouteIsolationTests(TestCase):
                 provider_user_id=personal.provider_user_id,
                 email="personal@example.com",
                 display_name="Personal",
+                email_verified=True,
             ),
             token_response=TokenResponse(
                 access_token="tok",
@@ -814,6 +815,7 @@ class LoginRouteIsolationTests(TestCase):
                 provider_user_id=personal.provider_user_id,
                 email="personal@example.com",
                 display_name="Personal",
+                email_verified=True,
             ),
             token_response=TokenResponse(
                 access_token="tok",
@@ -845,7 +847,10 @@ class LoginRouteIsolationTests(TestCase):
         resp = view._handle_login(
             provider_name="google",
             profile=ProviderProfile(
-                provider_user_id="cb-sub", email="cb@example.com", display_name="CB"
+                provider_user_id="cb-sub",
+                email="cb@example.com",
+                display_name="CB",
+                email_verified=True,
             ),
             token_response=TokenResponse(
                 access_token="login-scoped-token",

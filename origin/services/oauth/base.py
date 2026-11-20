@@ -35,6 +35,10 @@ class ProviderProfile:
     provider_user_id: str
     email: Optional[str]
     display_name: Optional[str]
+    # Whether the PROVIDER vouches that this account's owner controls `email`.
+    # Default False so a provider that forgets to say fails closed: an address
+    # nobody proved is a claim, not an identity (MIP-1766).
+    email_verified: bool = False
 
 
 class OAuthProvider(ABC):

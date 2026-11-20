@@ -121,8 +121,14 @@ class GoogleOAuthProvider(OAuthProvider):
         )
         resp.raise_for_status()
         data = resp.json()
+        # `email` is whatever address the Google account claims; only
+        # `email_verified` says Google checked it. A missing or non-true
+        # claim counts as unverified. (The string form is accepted because
+        # some Google endpoints send it that way.)
+        claim = data.get("email_verified")
         return ProviderProfile(
             provider_user_id=data["sub"],
             email=data.get("email"),
             display_name=data.get("name") or data.get("given_name"),
+            email_verified=claim is True or claim == "true",
         )

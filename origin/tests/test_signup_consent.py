@@ -177,7 +177,10 @@ class _FakeProvider(OAuthProvider):
 
     def fetch_profile(self, *, access_token):
         return ProviderProfile(
-            provider_user_id="g-123", email="oauth-new@example.com", display_name="Oauth New"
+            provider_user_id="g-123",
+            email="oauth-new@example.com",
+            display_name="Oauth New",
+            email_verified=True,
         )
 
 

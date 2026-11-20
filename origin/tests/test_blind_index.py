@@ -425,7 +425,10 @@ class TestLookupsOnceEncrypted(_Keys, BaseAPITestCase):
         OAuthCallbackView()._handle_login(
             provider_name="google",
             profile=ProviderProfile(
-                provider_user_id="other-sub", email="test@example.com", display_name="G"
+                provider_user_id="other-sub",
+                email="test@example.com",
+                display_name="G",
+                email_verified=True,
             ),
             token_response=TokenResponse(
                 access_token="tok",
