@@ -194,6 +194,15 @@ class JoinPathTests(DefaultChatBase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(self.row(self.general, self.carol).role, "member")
 
+    def test_a_direct_rejoin_of_someone_with_no_chat_rows_puts_them_into_general(self):
+        # A soft-deleted membership brought back in place, who never had a chat row.
+        TeamMembers.objects.create(team=self.acme, attendee=self.carol, is_deleted=True)
+
+        response = self.direct_join(self.carol)
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(self.in_chat(self.general, self.carol))
+
     def test_an_approved_join_request_puts_the_person_into_general(self):
         response = self.approve(self.request_to_join(self.carol))
 
@@ -422,6 +431,21 @@ class NeverAddedTests(DefaultChatBase):
         TeamMembers.objects.create(team=self.acme, attendee=self.carol, member_role=GUEST)
 
         self.assertEqual(join_default_chats(self.acme.team_id, self.carol.id), [])
+
+    def test_someone_who_left_the_team_is_not_added_by_a_group_add_or_a_join_call(self):
+        TeamMembers.objects.create(team=self.acme, attendee=self.carol, is_deleted=True)
+
+        self.assertEqual(add_group_members_to_chat(self.sales_group, [self.carol.id]), {})
+        self.assertEqual(join_default_chats(self.acme.team_id, self.carol.id), [])
+        self.assertEqual(ChannelMember.objects.filter(user=self.carol).count(), 0)
+
+    def test_a_deleted_group_is_refused_by_the_service_itself(self):
+        TeamMembers.objects.create(team=self.acme, attendee=self.carol)
+        self.sales_group.is_deleted = True
+        self.sales_group.save()
+
+        self.assertEqual(add_group_members_to_chat(self.sales_group, [self.carol.id]), {})
+        self.assertIsNone(self.row(self.sales_chat, self.carol))
 
     def test_someone_who_is_not_a_member_of_the_team_is_not_added(self):
         self.assertEqual(join_default_chats(self.acme.team_id, self.carol.id), [])
