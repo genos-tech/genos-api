@@ -128,6 +128,12 @@ REGISTRY = {
     "origin.views.chat.activity_views_v3.ActivityReadView": self_only(_OWN_ACTIVITY),
     "origin.views.chat.activity_views_v3.ActivitySurfaceView": checked("is_team_member"),
     # views.chat.channel_views
+    "origin.views.chat.channel_restore_views.ChannelRestoreView": checked(
+        "restorable_channels_qs"
+    ),
+    "origin.views.chat.channel_restore_views.DeletedChannelListView": checked(
+        "restorable_channels_qs"
+    ),
     "origin.views.chat.channel_views.ChannelDetailView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelInlineUploadView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelJoinView": checked("_verify_team_member"),
