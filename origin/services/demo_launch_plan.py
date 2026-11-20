@@ -13,7 +13,9 @@ believable launch plan where some of it was:
 least three weeks after the visitor's today and every other date is an offset from it (`plan_dates`),
 so the sample reads like real work in any month; the text is a template filled in at seeding
 (`resolve_copy`). The rows are backdated by `backdate_launch_plan` (see there) before the
-transaction commits, so no visitor is ever served a row that reads "just now".
+transaction commits, so no visitor is ever served a task row, comment or card that reads "just now".
+(The decision note, its versions and the sprint keep their seeding-time stamps: the seeder leaves
+notes alone on purpose, see the module comment above `demo_seeder._backdate`.)
 
 **Nothing is hand-written into a row.** Every record goes through the model save the product's own
 write uses, under the same thread-local the request middleware / MCP set:
@@ -43,6 +45,7 @@ with the team (tasks, notes, versions, messages, project).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -80,6 +83,8 @@ from origin.services.task_card_post import _task_card_parts
 from origin.services.user_time import user_today
 from origin.views.utils.note_role import ROLE_OWNER
 from origin.views.utils.note_version import snapshot_note_version
+
+logger = logging.getLogger(__name__)
 
 NOTE_TYPE_TASK = 2
 
@@ -643,14 +648,18 @@ def backdate_launch_plan(project: ProjectMaster, now: datetime) -> None:
 
     for rank, task in enumerate(tasks):
         rows = list(TaskActivity.objects.filter(task=task).order_by("activity_id"))
-        days = [FIRST_ROW_DAYS - ROW_STEP_DAYS * index for index in range(len(rows))]
-        if not rows or days[-1] < NEWEST_MIN_DAYS:
-            raise RuntimeError(
-                f"launch plan task {task.task_id}: {len(rows)} rows do not fit in "
-                f"{FIRST_ROW_DAYS} days at {ROW_STEP_DAYS} days apart"
+        if not rows:
+            continue
+        # A sign-in must never fail for a cosmetic pass: a task with more rows than fit (a later
+        # change that records one more row per save) gets a tighter step, and past that equal
+        # days; the tests pin the two-day spacing of today's rows.
+        step = ROW_STEP_DAYS
+        if len(rows) > 1 and FIRST_ROW_DAYS - step * (len(rows) - 1) < NEWEST_MIN_DAYS:
+            step = max((FIRST_ROW_DAYS - NEWEST_MIN_DAYS) // (len(rows) - 1), 0)
+            logger.warning(
+                "launch plan task %s: %s rows, step %s days", task.task_id, len(rows), step
             )
-        if rows[0].action_type != TaskActivityActionType.CREATED:
-            raise RuntimeError(f"launch plan task {task.task_id}: its first row is not 'created'")
+        days = [max(FIRST_ROW_DAYS - step * index, NEWEST_MIN_DAYS) for index in range(len(rows))]
         stamps = {row.pk: at(day, rank) for row, day in zip(rows, days, strict=True)}
         _backdate_each(TaskActivity, stamps, "ts_created_at")
         _backdate(TaskMaster, [task.pk], ts_created_at=stamps[rows[0].pk])
@@ -660,8 +669,8 @@ def backdate_launch_plan(project: ProjectMaster, now: datetime) -> None:
         commented = [r for r in rows if r.action_type == TaskActivityActionType.COMMENT_ADDED]
         comments = list(TaskComments.objects.filter(task=task).order_by("comment_id"))
         if len(commented) != len(comments):
-            raise RuntimeError(f"launch plan task {task.task_id}: comments and rows disagree")
-        for row, comment in zip(commented, comments, strict=True):
+            logger.warning("launch plan task %s: comments and rows disagree", task.task_id)
+        for row, comment in zip(commented, comments, strict=False):
             sent = stamps[row.pk]
             TaskComments.objects.filter(pk=comment.pk).update(ts_sent_at=sent, ts_updated_at=sent)
 
