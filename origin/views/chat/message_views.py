@@ -55,6 +55,7 @@ from origin.services import (
     thread_summary_cleanup,
     webhook_enqueue,
 )
+from origin.services.archive import archived_channel_response
 from origin.services.channel_scope import chat_member_rows, is_chat_member
 from origin.services.deleted_account_channel_owners import acts_as_owner
 from origin.services.mention_extractor import (
@@ -625,6 +626,9 @@ class MessagesDeltaView(AuthenticatedAPIView):
         Returns the full serialized Message.
         """
         channel = _verify_member_or_404(channel_id, request.user)
+        # An archived group chat or project chat takes no messages until restored (MIP-1693).
+        if res := archived_channel_response(channel):
+            return res
         body = body_object(request)
         msg_body = body.get("body")
         if msg_body is None or not isinstance(msg_body, list):

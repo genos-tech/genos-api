@@ -98,6 +98,7 @@ from origin.views.chat.pin_flag_views import (
 from origin.views.chat.reaction_views_v3 import MessageReactionsView
 from origin.views.chat.read_cursor_views import ReadCursorView
 from origin.views.chat.search_views_v3 import SearchTeamMembersAndGroupsView
+from origin.views.project.archive_views import GroupChatArchiveView, GroupChatRestoreView
 
 urlpatterns = [
     # Channels
@@ -115,6 +116,16 @@ urlpatterns = [
         "api/v3/channels/<uuid:channel_id>/",
         ChannelDetailView.as_view(),
         name="v3_channel_detail",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/archive/",
+        GroupChatArchiveView.as_view(),
+        name="v3_channel_archive",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/unarchive/",
+        GroupChatRestoreView.as_view(),
+        name="v3_channel_unarchive",
     ),
     path(
         "api/v3/channels/<uuid:channel_id>/restore/",

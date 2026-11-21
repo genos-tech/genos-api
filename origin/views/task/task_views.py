@@ -27,6 +27,7 @@ from origin.services import realtime_push, task_ancestry, task_comment_reactions
 from origin.services.activity_minimal_card import (
     activities_wire as activities_wire_for_recipients,
 )
+from origin.services.archive import archived_project_response, archived_task_response
 from origin.services.channel_scope import chat_member_q
 from origin.services.custom_fields import refuse_changed_values, sanitize_custom_field_values
 from origin.services.github_webhooks import ensure_webhooks_for_links
@@ -248,6 +249,9 @@ class TaskMasterView(AuthenticatedAPIView):
         # authenticated creator (not the `reporter` field). Note the
         # create-form bootstrap row (`is_init_task`) is a real create
         # and charges a unit — deleting it later doesn't refund.
+        # An archived project takes no new tasks (MIP-1693). First, so nothing is charged.
+        if res := archived_project_response(body_object(request).get("project")):
+            return res
         if res := check_monthly_creation_quota(request.user.id, TASK_CREATE_KEY, "task_create"):
             return res
 
@@ -549,6 +553,9 @@ class TaskMasterView(AuthenticatedAPIView):
         # space isn't a task-existence oracle.
         if not can_access_task(task_id, request.user.id):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+        # An archived project is read-only until its owner restores it (MIP-1693).
+        if res := archived_task_response(task_id):
+            return res
 
         # After the access check, so a stranger learns nothing about the task;
         # before anything is read or written, so a refused link changes nothing.
@@ -2525,6 +2532,9 @@ class TaskCommentsView(AuthenticatedAPIView):
             )
         if not can_access_task(task_id, request.user.id):
             return _no_task()
+        # An archived project is read-only until its owner restores it (MIP-1693).
+        if res := archived_task_response(task_id):
+            return res
 
         # NOTE: this count must stay UNFILTERED by `is_deleted`. `comment_id`
         # is a per-task sequence claimed at create time and guarded by the

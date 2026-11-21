@@ -194,7 +194,9 @@ REGISTRY = {
     "origin.views.common.mcp_consent_views.McpConsentContextView": checked("_teams_of"),
     "origin.views.common.mcp_consent_views.McpConsentDecisionView": checked("_teams_of"),
     # views.common.agent_work_views (MIP-1613): team membership, then the task and note read rules
-    "origin.views.common.agent_work_views.AgentWorkView": checked("require_team_member_or_response"),
+    "origin.views.common.agent_work_views.AgentWorkView": checked(
+        "require_team_member_or_response"
+    ),
     # views.common.mcp_connection_views (MIP-1079)
     "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
         "the caller's own connected apps (user=request.user on every query)"
@@ -589,6 +591,14 @@ REGISTRY = {
     "origin.views.project.prj_views.ProjectLabelsView": checked(
         "_require_project_manager", "require_team_member_or_response"
     ),
+    "origin.views.project.archive_views.ProjectArchiveView": checked(
+        "_owned_project", "is_project_member"
+    ),
+    "origin.views.project.archive_views.ProjectRestoreView": checked(
+        "_owned_project", "is_project_member"
+    ),
+    "origin.views.project.archive_views.GroupChatArchiveView": checked("_owned_group_chat"),
+    "origin.views.project.archive_views.GroupChatRestoreView": checked("_owned_group_chat"),
     "origin.views.project.prj_views.ProjectMasterView": checked(
         "require_project_member_or_response",
         "require_team_member_or_response",
