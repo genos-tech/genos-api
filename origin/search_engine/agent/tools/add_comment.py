@@ -32,6 +32,7 @@ from origin.search_engine.agent.tools.project_gone import task_is_gone
 from origin.search_engine.agent.undo import UNDO_KEY, comment_capture
 from origin.services import realtime_push
 from origin.services.task_comment_fanout import fan_out_task_comment
+from origin.services.task_comment_ids import next_task_comment_id
 
 _PARA_PROPS = {
     "textColor": "default",
@@ -66,7 +67,9 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
         return []
     blocks = markdown_to_blocks(
         text,
-        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        entity_link_resolver=lambda token: resolve_note_entity_link(
+            token, team_id=ctx.team_id, user_id=ctx.user_id
+        ),
         # A `mention` chip here also notifies: the comment fan-out reads
         # mention nodes off the saved body (MIP-708).
         entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
@@ -116,7 +119,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # any remaining race as a ToolError on .save().
     try:
         with transaction.atomic():
-            next_id = TaskComments.objects.select_for_update().filter(task=task).count() + 1
+            next_id = next_task_comment_id(task.task_id)
             comment = TaskComments.objects.create(
                 task=task,
                 sender_id=ctx.user_id,

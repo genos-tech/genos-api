@@ -472,6 +472,8 @@ class TestTheGuard(DeletedTaskBase):
         )
         self.assertEqual(
             files,
-            ["origin/views/task/conversion_views.py"],
+            # force_delete_views: a deleted (not yet purged) task can still be force-deleted
+            # (MIP-1584), by its creator or the project owner.
+            ["origin/views/force_delete_views.py", "origin/views/task/conversion_views.py"],
             found,
         )

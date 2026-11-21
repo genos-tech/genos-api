@@ -27,11 +27,17 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.task.task_models import TaskMaster
+from origin.services.archive import (
+    archived_chat_note_response,
+    archived_task_note_response,
+    archived_task_response,
+)
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
     NOTE_TYPE_CHAT,
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
+    ROLE_VIEWER,
     get_effective_role,
     note_exists,
 )
@@ -69,6 +75,22 @@ def parse_document_name(document_name):
     if entity_id <= 0:
         return None
     return prefix, entity_id
+
+
+def _archived_note(note_type, note_id) -> bool:
+    """True when the note's project (or chat) is archived (MIP-1938). Personal notes never are."""
+    if note_type == NOTE_TYPE_TASK:
+        return archived_task_note_response(note_id) is not None
+    if note_type == NOTE_TYPE_CHAT:
+        return archived_chat_note_response(note_id) is not None
+    return False
+
+
+def _archived_answer() -> Response:
+    """Read-only for everyone who may open it: the Viewer role, plus `archived` so genos-collab also
+    refuses the comments a viewer may normally add. Reads keep working (200). genos-collab re-asks
+    every minute, so an open editor follows an archive or a restore without reconnecting."""
+    return Response({"role_id": ROLE_VIEWER, "archived": True}, status=status.HTTP_200_OK)
 
 
 class CollabAccessCheckView(AuthenticatedAPIView):
@@ -113,6 +135,8 @@ class CollabAccessCheckView(AuthenticatedAPIView):
         )
         if role is None:
             return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if _archived_note(note_type, note_id):
+            return _archived_answer()
         return Response({"role_id": role}, status=status.HTTP_200_OK)
 
     @staticmethod
@@ -126,4 +150,6 @@ class CollabAccessCheckView(AuthenticatedAPIView):
         ).exists() or not can_access_task(task_id, user_id):
             # One answer for "no such task" and "not yours" (MIP-1497).
             return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if archived_task_response(task_id) is not None:
+            return _archived_answer()
         return Response({"role_id": None}, status=status.HTTP_200_OK)
