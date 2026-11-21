@@ -9,7 +9,9 @@ incremental sync all hang on it), so what a delete removes is everything that SA
     client posts `metadata` as it likes, so a key we do not know is dropped, not trusted;
   * the `MessageMention` rows (who was named is part of what was said);
   * the original file names of the `MessageAttachment` rows. The rows and the stored files stay:
-    removing files is a purge with its own decision (MIP-1785).
+    removing files is a purge with its own decision (MIP-1785);
+  * the cached summary of the message's thread (`ThreadSummary`, an LLM digest of the replies),
+    and its search chunk after the commit (MIP-1802).
 
 What stays: id, channel, `seq`, sender, parent / thread root, reply count, reactions, `edited_at`,
 `deleted_at` and the timestamps. `ts_updated_at` is stamped, so a client that already holds the row
@@ -30,7 +32,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Message, MessageAttachment, MessageMention
-from origin.services import message_via
+from origin.services import message_via, thread_summary_cleanup
 
 #: The `metadata` keys a tombstone keeps: ids that link it to its task or comment, and the
 #: connected-app stamp (`message_via`, already reduced to a kind and a family). Nothing in them is
@@ -81,6 +83,8 @@ def tombstone_message(message: Message, *, now: datetime | None = None) -> bool:
     MessageAttachment.objects.filter(message=message).exclude(original_name="").update(
         original_name=""
     )
+    # The cached digest of this message's thread quotes its text (MIP-1802).
+    thread_summary_cleanup.forget_message_thread(message)
     return newly_deleted
 
 

@@ -26,6 +26,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.services import thread_summary_cleanup
 from origin.services.activity_suppression import suppress_task_activity
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
@@ -83,6 +84,9 @@ def delete_project(project: ProjectMaster) -> None:
         chats = list(Channel.objects.filter(project=project).values_list("id", "kind"))
         _revoke_chat_note_roles(project)
         Channel.objects.filter(project=project).update(is_deleted=True, project=None)
+        # The project chat's cached thread summaries hold its text and key it by a bare uuid, so
+        # nothing cascades to them (MIP-1802). Their search chunks go with `_forget_search`.
+        thread_summary_cleanup.forget_channels([channel_id for channel_id, _kind in chats])
         # The project's task notes go with it (by the project and by their task), and so must
         # what other people hold about them: recents, favorites, mention rows (MIP-1514).
         note_ids = set(

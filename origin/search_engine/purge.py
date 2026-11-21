@@ -174,6 +174,26 @@ def purge_chat(channel_id, kind) -> None:
         log.exception("Best-effort purge failed for chat %s", channel_id)
 
 
+def purge_thread_summaries(triples) -> None:
+    """Thread summaries deleted (MIP-1802): drop their `thread_summary:<kind>:<chat>:<thread>` chunk.
+
+    `triples` is `(chat_type, chat_id, thread_id)` of rows the caller has already deleted. The
+    chunk id IS the entity id (`thread_summary_chunker`), so the deterministic id is targeted as
+    well as the tracked ones: a delete a person asked for must not depend on `RagChunk` having
+    kept up with the index. A 404 counts as success in `purge_chunks`. Best-effort like its
+    siblings; `sweep_orphans` retries what this misses (the summary row is gone, so it reads dead).
+    """
+    eids = [f"thread_summary:{int(kind)}:{chat}:{thread}" for kind, chat, thread in triples]
+    if not eids:
+        return
+    try:
+        chunk_ids = dict.fromkeys(_tracked_chunk_ids([("thread_summary", eid) for eid in eids]))
+        chunk_ids.update(dict.fromkeys(eids))
+        purge_chunks(list(chunk_ids))
+    except Exception:  # noqa: BLE001
+        log.exception("Best-effort purge failed for %d thread summar(ies)", len(eids))
+
+
 def purge_milestone(milestone_id) -> None:
     try:
         purge_entities([("milestone", f"milestone:{milestone_id}")])
