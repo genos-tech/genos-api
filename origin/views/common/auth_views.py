@@ -724,13 +724,14 @@ class CookieTokenRefreshView(TokenRefreshView):
                         validated = self._rotate(_GraceTokenRefreshSerializer, refresh)
                     except (InvalidToken, TokenError):
                         return Response({"error": "Invalid or expired refresh token"}, status=403)
+                    self._link_successor(validated, jti)
                     return self._respond(validated)
             if not graced:
                 _close_grace(jti)
             return Response({"error": "Invalid or expired refresh token"}, status=403)
 
-        if not graced:
-            self._link_successor(validated, jti)
+        # Also for a graced use, so signing out with the token it minted closes the old window.
+        self._link_successor(validated, jti)
         return self._respond(validated)
 
     @staticmethod

@@ -114,6 +114,13 @@ class RefreshGraceTests(BaseAPITestCase):
         self.client.post(reverse("signout"))
         self.assertEqual(self.refresh(self.t0).status_code, 403)
 
+    def test_signout_with_a_token_minted_by_a_graced_use_closes_the_original_window(self):
+        self.rotate()
+        branch = self.refresh(self.t0).cookies["refresh"].value  # minted through the grace window
+        self.client.cookies["refresh"] = branch
+        self.client.post(reverse("signout"))
+        self.assertEqual(self.refresh(self.t0).status_code, 403)
+
     def test_a_password_change_still_signs_the_session_out(self):
         self.rotate()
         self.user.set_password("a-brand-new-password-9")
