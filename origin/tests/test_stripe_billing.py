@@ -1327,6 +1327,57 @@ class TeamBillingTests(BillingTestBase):
         self.team.refresh_from_db()
         self.assertEqual(self.team.stripe_customer_id, "cus_team_1")
 
+    def test_team_customer_gets_the_owners_email_not_the_team_address(self):
+        """MIP-1904: `team_email` is a generated address on a domain Genos does not own,
+        so receipts and payment-failure mails for the team went nowhere."""
+        self.team.team_email = "acme-abc123@genos.tech"
+        self.team.save()
+        with mock.patch(
+            "stripe.Customer.create",
+            return_value=self._sdk("Customer", {"id": "cus_team_9", "object": "customer"}),
+        ) as create:
+            stripe_billing.ensure_team_customer(self.team)
+        email = create.call_args.kwargs["email"]
+        self.assertEqual(email, self.user.email)
+        self.assertFalse(email.endswith("@genos.tech"))
+
+    def test_sync_team_stripe_emails_dry_run_calls_nothing(self):
+        from io import StringIO  # noqa: PLC0415
+
+        from django.core.management import call_command  # noqa: PLC0415
+
+        self._bind_team()
+        out = StringIO()
+        with mock.patch("stripe.Customer.modify") as modify:
+            call_command("sync_team_stripe_emails", stdout=out)
+        modify.assert_not_called()
+        self.assertIn("DRY RUN", out.getvalue())
+        self.assertIn("1 would be updated", out.getvalue())
+        self.assertNotIn(self.user.email, out.getvalue())
+        self.assertNotIn("cus_team_1", out.getvalue())
+
+    def test_sync_team_stripe_emails_needs_yes(self):
+        from django.core.management import call_command  # noqa: PLC0415
+        from django.core.management.base import CommandError  # noqa: PLC0415
+
+        with self.assertRaises(CommandError):
+            call_command("sync_team_stripe_emails", "--apply")
+
+    def test_sync_team_stripe_emails_apply_updates_to_the_owner(self):
+        from io import StringIO  # noqa: PLC0415
+
+        from django.core.management import call_command  # noqa: PLC0415
+
+        self._bind_team()
+        out = StringIO()
+        with (
+            mock.patch("stripe.Customer.modify") as modify,
+            mock.patch.object(stripe_billing, "_stripe", return_value=__import__("stripe")),
+        ):
+            call_command("sync_team_stripe_emails", "--apply", "--yes", stdout=out)
+        modify.assert_called_once_with("cus_team_1", email=self.user.email)
+        self.assertIn("1 customer(s) updated", out.getvalue())
+
     # ---- webhook ----------------------------------------------------- #
 
     def test_team_checkout_completed_sets_plan_and_member_tiers(self):
