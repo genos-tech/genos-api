@@ -38,7 +38,9 @@ def _archived_response() -> Response:
 def archived_project_response(project_id) -> Response | None:
     """409 when the project is archived, else None. One guard for every write path that names a
     project: task create and edit, comments, and the project's chat."""
-    if project_id in (None, ""):
+    try:
+        project_id = int(project_id)
+    except (TypeError, ValueError):
         return None
     archived = (
         ProjectMaster.objects.filter(project_id=project_id, archived_at__isnull=False)
