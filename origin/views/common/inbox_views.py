@@ -5,7 +5,6 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.services.hidden_scope import channel_hidden_from, visible_projects_q
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
 from origin.models.common.team_models import *
@@ -13,6 +12,7 @@ from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
 from origin.services import inbox_ai, inbox_via, realtime_push
 from origin.services.deleted_account_channel_owners import join_request_receiver
+from origin.services.hidden_scope import channel_hidden_from, visible_projects_q
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (

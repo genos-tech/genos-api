@@ -16,13 +16,13 @@ from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
+from origin.services.hidden_scope import visible_projects_q
 from origin.services.member_removal import count_open_work
 from origin.services.member_roles import (
     OWNER,
     can_manage,
     resolve_project_role,
 )
-from origin.services.hidden_scope import visible_projects_q
 from origin.services.project_catalog import (
     CatalogRefused,
     clean_label_color,

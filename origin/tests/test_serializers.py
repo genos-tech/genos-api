@@ -84,9 +84,7 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
         )
 
     def test_valid_entry_with_chat_name_kept(self):
-        s = self._serializer(
-            [{"chat_type": 2, "chat_id": "xyz", "chat_name": "General"}]
-        )
+        s = self._serializer([{"chat_type": 2, "chat_id": "xyz", "chat_name": "General"}])
         self.assertTrue(s.is_valid(), s.errors)
         self.assertEqual(
             s.validated_data["muted_chats"],
@@ -173,17 +171,13 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
         self.assertIn("muted_chats", s.errors)
 
     def test_chat_name_non_string_rejected(self):
-        s = self._serializer(
-            [{"chat_type": 1, "chat_id": "abc", "chat_name": 123}]
-        )
+        s = self._serializer([{"chat_type": 1, "chat_id": "abc", "chat_name": 123}])
         self.assertFalse(s.is_valid())
         self.assertIn("muted_chats", s.errors)
 
     def test_chat_name_none_allowed(self):
         """chat_name=None is explicitly accepted (optional metadata)."""
-        s = self._serializer(
-            [{"chat_type": 1, "chat_id": "abc", "chat_name": None}]
-        )
+        s = self._serializer([{"chat_type": 1, "chat_id": "abc", "chat_name": None}])
         self.assertTrue(s.is_valid(), s.errors)
         self.assertNotIn("chat_name", s.validated_data["muted_chats"][0])
 
@@ -225,9 +219,7 @@ class NotificationPreferenceSerializerTests(BaseAPITestCase):
 # ======================================================================
 class NotificationPreferenceCategorySettingsTests(BaseAPITestCase):
     def _serializer(self, category_settings):
-        return NotificationPreferenceSerializer(
-            data={"category_settings": category_settings}
-        )
+        return NotificationPreferenceSerializer(data={"category_settings": category_settings})
 
     def test_valid_map_normalizes(self):
         s = self._serializer({"mention_task_body": False, "mention_chat": True})
@@ -293,7 +285,9 @@ class NotificationPreferenceSnoozeTests(BaseAPITestCase):
         self.assertIsNone(s.validated_data["snooze_schedule"])
 
     def test_schedule_bad_time_rejected(self):
-        s = self._serializer({"snooze_schedule": {"enabled": True, "start": "25:00", "end": "09:00"}})
+        s = self._serializer(
+            {"snooze_schedule": {"enabled": True, "start": "25:00", "end": "09:00"}}
+        )
         self.assertFalse(s.is_valid())
         self.assertIn("snooze_schedule", s.errors)
 
@@ -414,16 +408,12 @@ class NotificationPreferenceMutedTargetsTests(BaseAPITestCase):
 
     def test_chat_type_bool_rejected(self):
         # bool is excluded explicitly (unlike muted_chats).
-        s = self._serializer(
-            [{"target_type": "thread", "target_id": "t", "chat_type": True}]
-        )
+        s = self._serializer([{"target_type": "thread", "target_id": "t", "chat_type": True}])
         self.assertFalse(s.is_valid())
         self.assertIn("muted_targets", s.errors)
 
     def test_categories_non_string_rejected(self):
-        s = self._serializer(
-            [{"target_type": "task", "target_id": "7", "categories": [1, 2]}]
-        )
+        s = self._serializer([{"target_type": "task", "target_id": "7", "categories": [1, 2]}])
         self.assertFalse(s.is_valid())
         self.assertIn("muted_targets", s.errors)
 
@@ -474,7 +464,7 @@ class UserSerializerTests(BaseAPITestCase):
         self.assertIsNotNone(s.validated_data["custom_status_expiry"])
 
     def test_custom_status_expiry_null_clears_under_partial(self):
-        """"Don't clear"/auto-clear both send explicit null; partial must accept it."""
+        """ "Don't clear"/auto-clear both send explicit null; partial must accept it."""
         s = UserSerializer(self.user, data={"custom_status_expiry": None}, partial=True)
         self.assertTrue(s.is_valid(), s.errors)
         self.assertIsNone(s.validated_data["custom_status_expiry"])
@@ -539,21 +529,15 @@ class UserCreateSerializerTests(BaseAPITestCase):
 class PasswordSerializerTests(BaseAPITestCase):
     def test_password_reset_request_requires_valid_email(self):
         self.assertFalse(PasswordResetRequestSerializer(data={"email": "notanemail"}).is_valid())
-        self.assertTrue(
-            PasswordResetRequestSerializer(data={"email": "ok@example.com"}).is_valid()
-        )
+        self.assertTrue(PasswordResetRequestSerializer(data={"email": "ok@example.com"}).is_valid())
 
     def test_password_reset_confirm_min_length(self):
-        s = PasswordResetConfirmSerializer(
-            data={"token": "tok", "new_password": "short"}
-        )
+        s = PasswordResetConfirmSerializer(data={"token": "tok", "new_password": "short"})
         self.assertFalse(s.is_valid())
         self.assertIn("new_password", s.errors)
 
     def test_password_reset_confirm_valid(self):
-        s = PasswordResetConfirmSerializer(
-            data={"token": "tok", "new_password": "longenough123"}
-        )
+        s = PasswordResetConfirmSerializer(data={"token": "tok", "new_password": "longenough123"})
         self.assertTrue(s.is_valid(), s.errors)
         # new_password is write_only.
         self.assertNotIn("new_password", s.data)
@@ -603,11 +587,29 @@ class MessageSerializerTests(BaseAPITestCase):
         msg = self._message(ch)
         data = MessageSerializer(msg).data
         expected_keys = {
-            "id", "channelId", "channelKind", "sender", "seq", "body",
-            "bodyText", "parentId", "threadRootId", "isThreadReply",
-            "replyCount", "reactions", "mentions", "attachments", "metadata",
-            "taskId", "displayId", "taskStatus", "taskCommentCount",
-            "editedAt", "deletedAt", "tsSent", "tsUpdated",
+            "id",
+            "channelId",
+            "channelKind",
+            "sender",
+            "seq",
+            "body",
+            "bodyText",
+            "parentId",
+            "threadRootId",
+            "isThreadReply",
+            "replyCount",
+            "reactions",
+            "mentions",
+            "attachments",
+            "metadata",
+            "taskId",
+            "displayId",
+            "taskStatus",
+            "taskCommentCount",
+            "editedAt",
+            "deletedAt",
+            "tsSent",
+            "tsUpdated",
         }
         self.assertEqual(set(data.keys()), expected_keys)
         self.assertEqual(data["id"], str(msg.id))
@@ -629,15 +631,11 @@ class MessageSerializerTests(BaseAPITestCase):
 
     def test_display_id_property_fallback(self):
         """TaskMaster.display_id falls back to '#<task_id>' with no project number."""
-        task = TaskMaster.objects.create(
-            team=self.team, title="A task", status="Open"
-        )
+        task = TaskMaster.objects.create(team=self.team, title="A task", status="Open")
         self.assertEqual(task.display_id, f"#{task.task_id}")
 
     def test_message_with_task_populates_display_id_and_status(self):
-        task = TaskMaster.objects.create(
-            team=self.team, title="A task", status="Open"
-        )
+        task = TaskMaster.objects.create(team=self.team, title="A task", status="Open")
         ch = self._channel(ChannelKind.PM)
         msg = self._message(ch, task=task, metadata={"taskId": task.task_id})
         data = MessageSerializer(msg).data
@@ -719,9 +717,7 @@ class MessageReactionSerializerTests(BaseAPITestCase):
         msg = Message.objects.create(
             channel=ch, sender=self.user, seq=1, body={}, body_text="", metadata={}
         )
-        reaction = MessageReaction.objects.create(
-            message=msg, user=self.user, emoji="👍"
-        )
+        reaction = MessageReaction.objects.create(message=msg, user=self.user, emoji="👍")
         data = MessageReactionSerializer(reaction).data
         self.assertEqual(set(data.keys()), {"id", "user", "emoji", "tsSent"})
         self.assertEqual(data["emoji"], "👍")
@@ -741,10 +737,24 @@ class ChannelSerializerTests(BaseAPITestCase):
         )
         data = ChannelSerializer(ch).data
         expected = {
-            "id", "kind", "title", "profileImageUrl", "projectId", "ownerId",
-            "isPrivate", "isExternal", "teamId", "hostTeamName",
-            "legacyChatId", "latestMessage",
-            "unreadCount", "members", "dmPartner", "tsCreated", "tsUpdated",
+            "id",
+            "kind",
+            "title",
+            "profileImageUrl",
+            "projectId",
+            "ownerId",
+            "isPrivate",
+            "isHidden",
+            "isExternal",
+            "teamId",
+            "hostTeamName",
+            "legacyChatId",
+            "latestMessage",
+            "unreadCount",
+            "members",
+            "dmPartner",
+            "tsCreated",
+            "tsUpdated",
         }
         self.assertEqual(set(data.keys()), expected)
         self.assertEqual(data["title"], "Engineering")
@@ -825,15 +835,18 @@ class ToDoSerializerTests(BaseAPITestCase):
         )
 
     def test_category_shape(self):
-        cat = ToDoCategory.objects.create(
-            team=self.team, user=self.user, name="Work", sort_order=3
-        )
+        cat = ToDoCategory.objects.create(team=self.team, user=self.user, name="Work", sort_order=3)
         data = ToDoCategorySerializer(cat).data
         self.assertEqual(
             set(data.keys()),
             {
-                "categoryId", "name", "color", "textColor", "sortOrder",
-                "tsCreatedAt", "tsUpdatedAt",
+                "categoryId",
+                "name",
+                "color",
+                "textColor",
+                "sortOrder",
+                "tsCreatedAt",
+                "tsUpdatedAt",
             },
         )
         self.assertEqual(data["categoryId"], cat.category_id)
@@ -844,16 +857,23 @@ class ToDoSerializerTests(BaseAPITestCase):
 
     def test_item_shape_and_camelcase(self):
         group = self._group()
-        item = ToDoItem.objects.create(
-            group=group, title="Do the thing", sort_order=1
-        )
+        item = ToDoItem.objects.create(group=group, title="Do the thing", sort_order=1)
         data = ToDoItemSerializer(item).data
         self.assertEqual(
             set(data.keys()),
             {
-                "itemId", "groupId", "categoryId", "parentItemId", "title",
-                "notes", "isCompleted", "sortOrder", "tsCreatedAt",
-                "tsUpdatedAt", "tsCompletedAt", "via",
+                "itemId",
+                "groupId",
+                "categoryId",
+                "parentItemId",
+                "title",
+                "notes",
+                "isCompleted",
+                "sortOrder",
+                "tsCreatedAt",
+                "tsUpdatedAt",
+                "tsCompletedAt",
+                "via",
             },
         )
         self.assertIsNone(data["via"])  # MIP-1488: no write source recorded
@@ -876,9 +896,7 @@ class ToDoSerializerTests(BaseAPITestCase):
         )
         self.assertEqual(data["localDate"], "2026-05-31")
         self.assertEqual(len(data["items"]), 2)
-        self.assertEqual(
-            {it["title"] for it in data["items"]}, {"Item A", "Item B"}
-        )
+        self.assertEqual({it["title"] for it in data["items"]}, {"Item A", "Item B"})
 
     def test_item_deserialization_camelcase_input(self):
         """Writable camelCase source fields map back to model field names."""
@@ -948,8 +966,13 @@ class NoteVersionSerializerTests(BaseAPITestCase):
         self.assertEqual(
             set(data.keys()),
             {
-                "versionNo", "editor", "title", "restoredFromVersionNo",
-                "tsCreatedAt", "tsUpdatedAt", "via",
+                "versionNo",
+                "editor",
+                "title",
+                "restoredFromVersionNo",
+                "tsCreatedAt",
+                "tsUpdatedAt",
+                "via",
             },
         )
         self.assertNotIn("body", data)
@@ -983,9 +1006,7 @@ class NoteVersionSerializerTests(BaseAPITestCase):
 # ======================================================================
 class AllFieldsModelSerializerTests(BaseAPITestCase):
     def test_task_master_serializer_snake_case_representation(self):
-        task = TaskMaster.objects.create(
-            team=self.team, title="My task", status="Open"
-        )
+        task = TaskMaster.objects.create(team=self.team, title="My task", status="Open")
         data = TaskMasterSerializer(task).data
         # __all__ keeps snake_case model field names.
         self.assertEqual(data["title"], "My task")
@@ -1020,9 +1041,7 @@ class AllFieldsModelSerializerTests(BaseAPITestCase):
         self.assertIn("team_email", s.errors)
 
     def test_team_master_invalid_email(self):
-        s = TeamMasterSerializer(
-            data={"team_name": "X Team", "team_email": "not-an-email"}
-        )
+        s = TeamMasterSerializer(data={"team_name": "X Team", "team_email": "not-an-email"})
         self.assertFalse(s.is_valid())
         self.assertIn("team_email", s.errors)
 
@@ -1035,9 +1054,7 @@ class AllFieldsModelSerializerTests(BaseAPITestCase):
         fresh = get_user_model().objects.create_user(
             username="fresh", email="fresh@example.com", password="freshpass123"
         )
-        s = TeamMembersSerializer(
-            data={"team": str(self.team.team_id), "attendee": str(fresh.id)}
-        )
+        s = TeamMembersSerializer(data={"team": str(self.team.team_id), "attendee": str(fresh.id)})
         self.assertTrue(s.is_valid(), s.errors)
 
     def test_team_members_serializer_duplicate_rejected(self):

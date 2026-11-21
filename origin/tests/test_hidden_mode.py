@@ -20,7 +20,7 @@ from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.services.hidden_scope import visible_channels_q, visible_projects_q
-from origin.tests.test_base import BaseAPITestCase, User
+from origin.tests.test_base import BaseAPITestCase
 
 PROJECTS = "/api/v2/project/projects/"
 PROJECT = "/api/v2/project/"
@@ -58,7 +58,11 @@ class HiddenBase(BaseAPITestCase):
         )
         ChannelMember.objects.create(channel=self.gm, user=self.user, role="owner")
         self.private_visible = Channel.objects.create(
-            team=self.team, kind=ChannelKind.GM, title="Locked Chat", owner=self.user, is_private=True
+            team=self.team,
+            kind=ChannelKind.GM,
+            title="Locked Chat",
+            owner=self.user,
+            is_private=True,
         )
         ChannelMember.objects.create(channel=self.private_visible, user=self.user, role="owner")
 

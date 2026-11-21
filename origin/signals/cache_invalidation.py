@@ -110,7 +110,10 @@ def _invalidate_project_members(sender, instance, **kwargs):
     attendee_id = getattr(instance, "attendee_id", None)
     if team_id is not None and attendee_id is not None:
         cache.delete_many(
-            [f"project:list:{team_id}:{attendee_id}", f"project:list:{team_id}:{attendee_id}:archived"]
+            [
+                f"project:list:{team_id}:{attendee_id}",
+                f"project:list:{team_id}:{attendee_id}:archived",
+            ]
         )
 
 

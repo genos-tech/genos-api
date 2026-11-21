@@ -23,9 +23,7 @@ def visible_projects_q(user_id) -> Q:
     return (
         Q(is_hidden=False)
         | Q(owner_id=user_id)
-        | Q(
-            project_id__in=ProjectMembers.objects.filter(attendee_id=user_id).values("project_id")
-        )
+        | Q(project_id__in=ProjectMembers.objects.filter(attendee_id=user_id).values("project_id"))
     )
 
 

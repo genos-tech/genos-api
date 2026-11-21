@@ -23,7 +23,6 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apis.request_id import describe_exception
-from origin.services.hidden_scope import project_hidden_from
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -33,6 +32,7 @@ from origin.serializers.common.team_serializers import TeamMasterSerializer, Tea
 from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.external_grants import host_team_ids_for_user
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.member_removal import (
     clean_up_after_removal,
     count_open_work,

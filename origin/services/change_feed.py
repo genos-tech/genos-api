@@ -283,7 +283,9 @@ def _clear_project_lists(teams: set[str]) -> None:
         attendees.update(
             ProjectMembers.objects.filter(team_id=team).values_list("attendee_id", flat=True)
         )
-        keys.update(f"project:list:{team}:{a}{sfx}" for a in attendees if a for sfx in ("", ":archived"))
+        keys.update(
+            f"project:list:{team}:{a}{sfx}" for a in attendees if a for sfx in ("", ":archived")
+        )
     if keys:
         cache.delete_many(sorted(keys))
 

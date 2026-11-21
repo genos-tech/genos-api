@@ -41,7 +41,6 @@ from origin.models.chat.unified_models import (
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.models.project.prj_models import ProjectMaster
-from origin.services.hidden_scope import channel_hidden_from
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
     ChannelSerializer,
@@ -65,6 +64,7 @@ from origin.services.external_grants import (
     remove_external_participants,
     visible_shares_for_object,
 )
+from origin.services.hidden_scope import channel_hidden_from
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     OWNER,

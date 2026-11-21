@@ -256,6 +256,7 @@ class ProjectListPayloadTests(CrossTeamTestCase):
             "projectTags": list(tags),
             "projectLabels": list(labels),
             "isPrivate": project.is_private,
+            "isHidden": project.is_hidden,
             "isJoined": joined,
             "systemUserId": str(system_user.id),
         }
