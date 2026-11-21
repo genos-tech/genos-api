@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0258_archived_at"),
+        ("origin", "0260_note_template"),
     ]
 
     operations = [
