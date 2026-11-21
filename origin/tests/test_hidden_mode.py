@@ -305,3 +305,17 @@ class ToggleTests(HiddenBase):
         )
         self.assertEqual(res.status_code, 201, res.content)
         self.assertTrue(ProjectMaster.objects.get(project_name="Fresh").is_hidden)
+
+    def test_a_non_member_put_with_only_a_project_id_learns_nothing(self):
+        self.authenticate(self.user2)
+        res = self.put()
+        self.assertEqual(res.status_code, 404)
+        self.assertNotIn("Codename Falcon", res.content.decode())
+
+    def test_a_refused_rename_does_not_apply_the_privacy_change(self):
+        self.authenticate(self.user)
+        res = self.put(is_private=False, project_name="Open")  # name taken by another project
+        self.assertGreaterEqual(res.status_code, 400)
+        self.project.refresh_from_db()
+        self.assertTrue(self.project.is_private)
+        self.assertTrue(self.project.is_hidden)

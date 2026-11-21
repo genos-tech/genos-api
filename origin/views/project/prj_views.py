@@ -20,6 +20,7 @@ from origin.services.hidden_scope import visible_projects_q
 from origin.services.member_removal import count_open_work
 from origin.services.member_roles import (
     OWNER,
+    VIEWER,
     can_manage,
     resolve_project_role,
 )
@@ -121,6 +122,10 @@ class ProjectMasterView(AuthenticatedAPIView):
         # — so anyone could rewrite any project's display-id prefix. It
         # joins rename under owner/editor. Transfer stays owner-only.
         actor_role = resolve_project_role(project, request.user.id)
+        # A caller outside the project learns nothing about it, not even its name or that it
+        # exists (MIP-1699): the response below is the whole project row.
+        if actor_role == VIEWER and not is_project_member(project.project_id, request.user.id):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
         if (
             new_code is not None or new_name is not None or new_owner_id is not None
         ) and not can_manage(actor_role):
@@ -146,6 +151,8 @@ class ProjectMasterView(AuthenticatedAPIView):
                     {"error": "is_private and is_hidden must be true or false."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+        # Computed now so a refused request changes nothing; written after the rest is applied.
+        privacy_change = None
         if new_private is not None or new_hidden is not None:
             next_private = project.is_private if new_private is None else new_private
             next_hidden = project.is_hidden if new_hidden is None else new_hidden
@@ -158,9 +165,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                 # Making a project public also unhides it.
                 next_hidden = False
             if (next_private, next_hidden) != (project.is_private, project.is_hidden):
-                project.is_private = next_private
-                project.is_hidden = next_hidden
-                project.save(update_fields=["is_private", "is_hidden", "ts_updated_at"])
+                privacy_change = (next_private, next_hidden)
 
         try:
             if new_code is not None:
@@ -211,6 +216,10 @@ class ProjectMasterView(AuthenticatedAPIView):
                     "to_user": user_label(project.owner_id),
                 },
             )
+
+        if privacy_change is not None:
+            project.is_private, project.is_hidden = privacy_change
+            project.save(update_fields=["is_private", "is_hidden", "ts_updated_at"])
 
         return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
 
