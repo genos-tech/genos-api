@@ -1,0 +1,77 @@
+{
+  "startAt": 0,
+  "maxResults": 100,
+  "issues": [
+    {
+      "id": "10001",
+      "key": "DEMO-1",
+      "fields": {
+        "summary": "Launch epic",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {"type": "paragraph", "content": [
+              {"type": "text", "text": "Plan the "},
+              {"type": "text", "text": "launch", "marks": [{"type": "strong"}]},
+              {"type": "text", "text": " with "},
+              {"type": "mention", "attrs": {"id": "abc", "text": "@Sam Example"}},
+              {"type": "text", "text": ", see "},
+              {"type": "text", "text": "the plan", "marks": [{"type": "link", "attrs": {"href": "https://example.com/plan"}}]},
+              {"type": "text", "text": " and "},
+              {"type": "text", "text": "bad link", "marks": [{"type": "link", "attrs": {"href": "javascript:alert(1)"}}]}
+            ]},
+            {"type": "bulletList", "content": [
+              {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "first"}]}]},
+              {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "second"}]}]}
+            ]}
+          ]
+        },
+        "status": {"name": "In Progress"},
+        "priority": {"name": "High"},
+        "assignee": {"displayName": "Dev One", "emailAddress": "dev1@example.com"},
+        "duedate": "2026-12-20",
+        "labels": ["Backend", "launch"],
+        "comment": {"comments": [
+          {"author": {"displayName": "Dev One"}, "created": "2026-11-01T09:00:00.000+0000",
+           "body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Kicked off."}]}]}},
+          {"author": {"displayName": "Sam Example"}, "created": "2026-11-02T10:30:00.000+0000", "body": "Plain v2 comment"}
+        ]},
+        "attachment": [
+          {"filename": "plan.pdf", "content": "https://example.atlassian.net/secure/attachment/1/plan.pdf", "size": 2048},
+          {"filename": "evil.txt", "content": "javascript:alert(1)", "size": 1}
+        ]
+      },
+      "changelog": {"histories": [
+        {"created": "2026-11-03T08:00:00.000+0000", "author": {"displayName": "Dev One"},
+         "items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}, {"field": "labels", "fromString": "", "toString": "x"}]}
+      ]}
+    },
+    {
+      "id": "10002",
+      "key": "DEMO-2",
+      "fields": {
+        "summary": "Write the announcement",
+        "description": "Plain v2 description",
+        "status": {"name": "To Do"},
+        "priority": {"name": "Medium"},
+        "assignee": {"displayName": "No Email"},
+        "labels": [],
+        "parent": {"key": "DEMO-1", "id": "10001"},
+        "comment": {"comments": []}
+      }
+    },
+    {
+      "id": "10003",
+      "key": "DEMO-3",
+      "fields": {
+        "summary": "Proofread",
+        "status": {"name": "Done"},
+        "parent": {"key": "DEMO-2"},
+        "comment": {"comments": [
+          {"author": {"displayName": "Dev One"}, "created": "2026-11-05T12:00:00.000+0000", "body": "Looks fine"}
+        ]}
+      }
+    }
+  ]
+}
