@@ -55,6 +55,11 @@ TICK_NAME = "ops-alert-tick"
 # The outside probe that watches the tick, watched back by it.
 PROBE_NAME = "uptime-probe"
 
+# Crons that run outside Django and report each run to `api/v2/health/cron/<name>/`
+# (`ExternalCronHeartbeatView`) with the shared `EXTERNAL_CRON_HEARTBEAT_TOKEN`. Their
+# start command passes no `--heartbeat`. Only these names are accepted there.
+EXTERNAL_CRONS = frozenset({"collab-orphan-sweep"})
+
 # How long each cron may go without a successful run before it counts as
 # missed: its interval, plus enough slack that one skipped or slow run
 # doesn't page. Keyed by the Railway service name its start command passes
@@ -84,6 +89,8 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     "schedule-report-prune": timedelta(hours=26),
     "ai-app-notice-prune": timedelta(hours=26),
     "retention-purge": timedelta(hours=26),
+    # genos-collab's orphan sweep, reporting through ExternalCronHeartbeatView (MIP-1858).
+    "collab-orphan-sweep": timedelta(hours=26),
     # weekly, monthly
     "ai-cost-dashboard-weekly": timedelta(days=7, hours=3),
     "ai-cost-dashboard-monthly": timedelta(days=32),

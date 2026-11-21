@@ -624,6 +624,21 @@ class TestToolCalls(McpBase):
         self.assertTrue(is_error)
         self.assertIn("PRJ-123", text, "the error must name the forms that work")
 
+    def test_a_missing_task_id_says_it_is_required_and_what_it_takes(self):
+        """MIP-1862: an absent (or null) task_id was answered 'must be an integer (got None)',
+        which is wrong twice: the argument is missing, and a display id or URL is accepted too."""
+        self._key()
+        for arguments in ({}, {"task_id": None}):
+            with self.subTest(arguments=arguments):
+                text, is_error = self._tool_text(self._call("get_task", arguments))
+                self.assertTrue(is_error)
+                self.assertIn("`task_id` is required", text)
+                self.assertIn("PRJ-123", text)
+                self.assertIn("URL", text)
+                self.assertIn("numeric id", text)
+                self.assertNotIn("must be an integer", text)
+                self.assertNotIn("got None", text)
+
     def test_the_task_body_reaches_the_caller(self):
         """The description is the spec handed to the coding agent, so it
         has to survive the trip. *How* it is rendered belongs to
