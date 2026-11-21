@@ -24,13 +24,16 @@ from unittest import mock
 from django.test import override_settings
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember, Message
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_models import TaskMaster
 from origin.search_engine import ingestion
 from origin.search_engine.chunkers import chat_chunker
 from origin.search_engine.chunkers.base import Chunk, EntityChunks
-from origin.search_engine.models import RagChunk
+from origin.search_engine.models import RagChunk, ThreadSummary
 from origin.tests.test_base import BaseAPITestCase
 
 GOLDEN = Path(__file__).parent / "fixtures" / "chat_chunks_pin.json"
+GOLDEN_CASES = Path(__file__).parent / "fixtures" / "chat_chunks_pin_cases.json"
 T0 = dt.datetime(2026, 11, 1, 9, 0, tzinfo=dt.timezone.utc)
 
 
@@ -112,6 +115,132 @@ class TestChatChunksArePinned(_ChatFixture):
         self.assertEqual(_sort_acl(json.loads(text)), _sort_acl(json.loads(GOLDEN.read_text())))
 
 
+class TestChatChunkCasesArePinned(_ChatFixture):
+    """MIP-1914: the cases `TestChatChunksArePinned` leaves out, pinned the same way. The golden
+    `chat_chunks_pin_cases.json` was generated from the chunker as it was BEFORE the MIP-1868
+    change (origin/main ce3ca431), so it pins the old output, not the new one."""
+
+    def test_chunks_equal_the_golden(self):
+        # Task link: `Message.task_id` becomes `related_entity_ids` on the main timeline and on
+        # the thread anchor and window.
+        project = ProjectMaster.objects.create(
+            team=self.team, project_name="Pin P", owner=self.user
+        )
+        ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        task = TaskMaster.objects.create(team=self.team, project=project, title="Pinned task")
+
+        gm = self._channel("Linked GM")
+        self._msg(gm, 1, "plain message linked to a task", task=task)
+        self._msg(gm, 2, "plain message with no link")
+        root = self._msg(gm, 3, "thread root linked to a task", task=task)
+        self._msg(
+            gm,
+            4,
+            "first reply",
+            sender=self.user2,
+            is_thread_reply=True,
+            thread_root=root,
+            parent=root,
+        )
+        # A task comment's mirror reply: out of the window and out of the next reply's context.
+        self._msg(
+            gm,
+            5,
+            "mirrored task comment text",
+            is_thread_reply=True,
+            thread_root=root,
+            parent=root,
+            task=task,
+            metadata={"taskCommentId": 7},
+        )
+        self._msg(
+            gm, 6, "reply after the mirror", is_thread_reply=True, thread_root=root, parent=root
+        )
+        # A thread with a ThreadSummary: no window chunk.
+        sroot = self._msg(gm, 7, "summarised thread root")
+        self._msg(
+            gm,
+            8,
+            "summarised thread reply",
+            sender=self.user2,
+            is_thread_reply=True,
+            thread_root=sroot,
+            parent=sroot,
+        )
+        ThreadSummary.objects.create(
+            team_id=str(self.team.team_id),
+            chat_type=2,
+            chat_id=gm.id,
+            thread_id=sroot.id,
+            summary_text="summary",
+        )
+        # A soft-deleted thread root: anchor None, the replies still indexed.
+        droot = self._msg(gm, 9, "deleted thread root")
+        self._msg(
+            gm,
+            10,
+            "reply under a deleted root",
+            sender=self.user2,
+            is_thread_reply=True,
+            thread_root=droot,
+            parent=droot,
+        )
+        Message.objects.filter(pk=droot.pk).update(deleted_at=T0)
+
+        # A channel whose messages are all deleted: a tombstone entity with no chunks.
+        dead = self._channel("All deleted GM")
+        for n in (21, 22):
+            m = self._msg(dead, n, f"deleted {n}")
+            Message.objects.filter(pk=m.pk).update(deleted_at=T0)
+
+        # A PM channel: title falls back to the project name, ACL from ProjectMembers.
+        pm = Channel.objects.get(project=project, kind=ChannelKind.PM)
+        self._msg(pm, 31, "project chat message")
+        pm_root = self._msg(pm, 32, "project chat thread root")
+        self._msg(
+            pm,
+            33,
+            "project chat reply",
+            sender=self.user2,
+            is_thread_reply=True,
+            thread_root=pm_root,
+            parent=pm_root,
+        )
+
+        names = {
+            str(self.team.team_id): "TEAM",
+            str(self.user.id): "USER1",
+            str(self.user2.id): "USER2",
+            str(gm.id): "GM",
+            str(dead.id): "DEAD",
+            str(pm.id): "PM",
+        }
+        entities = [
+            {"entity_id": b.entity_id, "chunks": [c.to_dict() for c in b.chunks]}
+            for b in chat_chunker.iter_all_chat_chunks()
+        ]
+        for e in entities:
+            for c in e["chunks"]:
+                if c.get("project_id"):
+                    c["project_id"] = "PROJECT"
+                c["related_entity_ids"] = [
+                    r.replace(f"task:{task.task_id}", "task:TASK") for r in c["related_entity_ids"]
+                ]
+        text = json.dumps(entities, indent=2, sort_keys=True)
+        for real, name in names.items():
+            text = text.replace(real, name)
+        text = text.replace(str(_mid(0))[:-5], "MSG-")
+        # Sorted after the real ids became names: the real ones are random uuids.
+        text = json.dumps(
+            sorted(json.loads(text), key=lambda e: e["entity_id"]), indent=2, sort_keys=True
+        )
+        if os.environ.get("WRITE_CHAT_CHUNK_GOLDEN"):
+            GOLDEN_CASES.write_text(text + "\n")
+        self.assertEqual(
+            _sort_acl(json.loads(text)), _sort_acl(json.loads(GOLDEN_CASES.read_text()))
+        )
+
+
 class TestChatLoadedOneChannelAtATime(_ChatFixture):
     def test_the_next_channel_is_not_read_until_the_first_is_consumed(self):
         for i in range(3):
@@ -127,7 +256,7 @@ class TestChatLoadedOneChannelAtATime(_ChatFixture):
             self.assertEqual(len({c.args[0] for c in load.call_args_list}), 3)
 
 
-def _entity(n):
+def _entity(n, title="T"):
     chunks = [
         Chunk(
             chunk_id=f"chat:gm:c:msg:{i}",
@@ -136,7 +265,7 @@ def _entity(n):
             chunk_type="chat_message",
             team_id=str(uuid.UUID(int=1)),
             acl_user_ids=["u"],
-            title="T",
+            title=title,
             search_text=f"text {i}",
             snippet_text=f"text {i}",
         )
@@ -225,3 +354,79 @@ class TestKilledRunKeepsProgress(_Ingest):
         self.assertEqual(stats.chunks_unchanged, 200)
         self.assertEqual(stats.chunks_new, 50)
         self.assertEqual(RagChunk.objects.filter(entity_id="gm:c").count(), 250)
+
+
+@override_settings(
+    SEARCH_ENGINE={
+        **__import__("django.conf").conf.settings.SEARCH_ENGINE,
+        "RAG_INGEST_SLICE_SIZE": 100,
+    }
+)
+class TestSliceWriteFailures(_Ingest):
+    """MIP-1914: a write that fails in the MIDDLE slice, and the metadata-only lane in slices."""
+
+    def _tracked(self):
+        return set(RagChunk.objects.filter(entity_id="gm:c").values_list("chunk_id", flat=True))
+
+    def _ids(self, rng):
+        return {f"chat:gm:c:msg:{i}" for i in rng}
+
+    def test_a_failed_middle_slice_is_not_tracked_and_is_the_only_one_redone(self):
+        slice_two = self._ids(range(100, 200))
+        calls = {"n": 0}
+
+        def bulk(actions):
+            calls["n"] += 1
+            self.bulk_sizes.append(len(actions))
+            if calls["n"] == 2:
+                return ingestion.BulkResult(failed={a["_id"] for a in actions})
+            return ingestion.BulkResult()
+
+        stats = ingestion.IngestionStats()
+        with mock.patch.object(ingestion, "_bulk_index", side_effect=bulk):
+            ingestion._ingest_entity(_entity(250), stats, dry_run=False)
+        # Slices 1 and 3 are tracked, slice 2 is not; the error names the count.
+        self.assertEqual(self._tracked(), self._ids(range(0, 100)) | self._ids(range(200, 250)))
+        self.assertEqual(self.embedded, [100, 100, 50])
+        self.assertEqual(len(stats.errors), 1)
+        self.assertIn("bulk write failed for 100 chunk(s)", stats.errors[0])
+
+        # The next pass re-embeds exactly the failed slice.
+        self.embedded.clear()
+        again = ingestion.IngestionStats()
+        ingestion._ingest_entity(_entity(250), again, dry_run=False)
+        self.assertEqual(self.embedded, [100])
+        self.assertEqual(again.chunks_new, 100)
+        self.assertEqual(again.chunks_unchanged, 150)
+        self.assertEqual(
+            self._tracked(), slice_two | self._ids(range(0, 100)) | self._ids(range(200, 250))
+        )
+        self.assertEqual(again.errors, [])
+
+    def test_metadata_only_lane_writes_in_slices_and_drops_a_missing_doc(self):
+        ingestion._ingest_entity(_entity(250), ingestion.IngestionStats(), dry_run=False)
+        self.embedded.clear()
+        self.bulk_sizes.clear()
+        gone = "chat:gm:c:msg:150"  # in slice 2 of 3
+
+        def bulk(actions):
+            self.bulk_sizes.append(len(actions))
+            return ingestion.BulkResult(missing={gone} & {a["_id"] for a in actions})
+
+        stats = ingestion.IngestionStats()
+        with mock.patch.object(ingestion, "_bulk_index", side_effect=bulk):
+            ingestion._ingest_entity(_entity(250, title="T2"), stats, dry_run=False)
+        # A new title is a metadata change: three update bulks, nothing re-embedded.
+        self.assertEqual(stats.chunks_metadata_only, 250)
+        self.assertEqual(self.bulk_sizes, [100, 100, 50])
+        self.assertEqual(self.embedded, [])
+        # The doc OpenSearch lacked loses its tracking row; every other chunk is tracked.
+        self.assertEqual(self._tracked(), self._ids(range(250)) - {gone})
+        self.assertEqual(stats.errors, [])
+
+        # Next pass: that one chunk is new and re-embedded whole; the rest are unchanged.
+        again = ingestion.IngestionStats()
+        ingestion._ingest_entity(_entity(250, title="T2"), again, dry_run=False)
+        self.assertEqual(self.embedded, [1])
+        self.assertEqual(again.chunks_new, 1)
+        self.assertEqual(again.chunks_unchanged, 249)
