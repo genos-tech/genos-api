@@ -8,10 +8,18 @@ view streams it as a download.
 what they authored or was addressed to them — their profile, their
 memberships, their personal notes and todos, the tasks they own or are
 assigned, the messages and comments they wrote, and the questions they
-asked the AI. It deliberately does NOT dump whole team workspaces:
+asked the AI (text and answers under `ai_questions`). It deliberately does NOT dump whole team workspaces:
 those belong to the team, contain other people's personal data, and
 handing a departing member a full copy of the workspace via a
 self-service endpoint would be the actual privacy incident.
+
+Also exported, each only as the person's OWN rows (MIP-1795): AI answers and thumbs, reactions they
+made, attachments they uploaded (name, type, size, never the file), task changes they made, their
+sign-in and security events, API key metadata, and connected apps and accounts. Deliberately left
+out: other people's data (reactions on their messages, history another person caused, who else is
+on a task), every token, secret and key hash, and file bytes. Each of those sets is capped to its
+newest `ROW_LIMITS` rows; `export_limits` says which were cut. Task-file attachments are not
+listed: the row records no uploader, so they cannot be told apart from someone else's.
 
 Note bodies are exported as BlockNote JSON — lossless, and the format
 the app itself stores. (There is no server-side blocks→markdown
@@ -33,9 +41,227 @@ log = logging.getLogger(__name__)
 
 EXPORT_FORMAT_VERSION = 1
 
+# Size guard for the sets added in MIP-1795 (the older sets are unbounded, as before). Each is cut
+# to its NEWEST `limit` rows and the document says so under `export_limits`, so one huge set cannot
+# time the request out and nobody is told a cut set is complete. AI answers are long text, so that
+# set is the smallest.
+ROW_LIMITS = {
+    "ai_questions": 2000,
+    "ai_feedback": 5000,
+    "message_reactions": 5000,
+    "message_attachments": 5000,
+    "task_body_attachments": 5000,
+    "task_history": 20000,
+    "security_events": 5000,
+    "api_keys": 1000,
+    "connected_apps": 1000,
+    "connected_accounts": 100,
+}
+
+# Task-history fields whose old/new values are the person's own plain words or enum values. Any other
+# field (assignee, reporter, collaborators, description, tags) names or quotes other people, so only
+# the fact of the change is exported.
+_HISTORY_VALUE_FIELDS = {
+    "title",
+    "status",
+    "priority",
+    "effort",
+    "due_date",
+    "start_date",
+}
+
 
 def _iso(value):
     return value.isoformat() if value else None
+
+
+def _capped(name, queryset, limits, to_row):
+    """The newest `ROW_LIMITS[name]` rows of `queryset` (already newest-first), oldest first,
+    mapped through `to_row`; records whether the set was cut."""
+    limit = ROW_LIMITS[name]
+    rows = list(queryset[: limit + 1])
+    limits[name] = {"limit": limit, "truncated": len(rows) > limit}
+    return [to_row(r) for r in reversed(rows[:limit])]
+
+
+def _more_data(user) -> dict:
+    """Sets added after format v1 first shipped (MIP-1795): all of them the person's OWN rows.
+
+    Deliberately left out: other people's data (reactions on their messages, history another
+    person caused, who else is on a task), anything secret (API key hashes and secrets, OAuth
+    tokens), and file bytes (attachments are metadata only).
+    """
+    from origin.models.chat.unified_models import MessageAttachment, MessageReaction
+    from origin.models.common.api_key_models import ApiKey
+    from origin.models.common.mcp_connection_models import McpConnection
+    from origin.models.common.security_event_models import SecurityEvent
+    from origin.models.common.user_models import ConnectedAccount
+    from origin.models.task.task_activity_models import TaskActivity
+    from origin.models.task.task_models import TaskBodyAttachmentFact
+    from origin.search_engine.models import AgentRun, AgentRunFeedback
+
+    uid = str(user.id)
+    limits: dict = {}
+
+    ai_questions = _capped(
+        "ai_questions",
+        AgentRun.objects.filter(user_id=uid)
+        .only(
+            "run_id", "team_id", "query", "final_answer_text", "status", "session_id", "started_at"
+        )
+        .order_by("-started_at", "-run_id"),
+        limits,
+        lambda r: {
+            "run_id": str(r.run_id),
+            "session_id": str(r.session_id) if r.session_id else None,
+            "team_id": r.team_id,
+            "question": r.query,
+            "answer": r.final_answer_text,
+            "status": r.status,
+            "asked_at": _iso(r.started_at),
+        },
+    )
+    ai_feedback = _capped(
+        "ai_feedback",
+        AgentRunFeedback.objects.filter(user_id=uid).order_by("-created_at", "-id"),
+        limits,
+        lambda f: {
+            "run_id": str(f.run_id),
+            "rating": f.rating,
+            "comment": f.comment,
+            "created_at": _iso(f.created_at),
+        },
+    )
+    message_reactions = _capped(
+        "message_reactions",
+        MessageReaction.objects.filter(user=user).order_by("-ts_created_at", "-id"),
+        limits,
+        lambda r: {
+            "message_id": str(r.message_id),
+            "emoji": r.emoji,
+            "created_at": _iso(r.ts_created_at),
+        },
+    )
+    message_attachments = _capped(
+        "message_attachments",
+        MessageAttachment.objects.filter(uploader=user).order_by("-ts_created_at", "-id"),
+        limits,
+        lambda a: {
+            "message_id": str(a.message_id),
+            "name": a.original_name or (a.file.name or "").rsplit("/", 1)[-1],
+            "mime": a.mime,
+            "size_bytes": a.size_bytes,
+            "uploaded_at": _iso(a.ts_created_at),
+        },
+    )
+    task_body_attachments = _capped(
+        "task_body_attachments",
+        TaskBodyAttachmentFact.objects.filter(uploader=user).order_by(
+            "-ts_created_at", "-attachment_id"
+        ),
+        limits,
+        lambda a: {
+            "task_id": a.task_id,
+            "name": (a.body_attachment_url.name or "").rsplit("/", 1)[-1],
+            "uploaded_at": _iso(a.ts_created_at),
+        },
+    )
+
+    def _history_row(a):
+        row = {
+            "task_id": a.task_id,
+            "action": a.action_type,
+            "field": a.field_name,
+            "at": _iso(a.ts_created_at),
+        }
+        if a.field_name in _HISTORY_VALUE_FIELDS:
+            row["old_value"] = a.old_value
+            row["new_value"] = a.new_value
+        return row
+
+    task_history = _capped(
+        "task_history",
+        TaskActivity.objects.filter(actor=user).order_by("-ts_created_at", "-activity_id"),
+        limits,
+        _history_row,
+    )
+    # Their own sign-ins and account actions (what Settings already shows them): when, what, from
+    # where. Not `target_label`/`target_id`/`metadata`, which can name somebody else.
+    security_events = _capped(
+        "security_events",
+        SecurityEvent.objects.filter(actor_id=user.id).order_by("-event_id"),
+        limits,
+        lambda e: {
+            "at": _iso(e.ts_created_at),
+            "action": e.action,
+            "source": e.source,
+            "team_id": str(e.team_id) if e.team_id else None,
+            "ip": e.ip,
+            "user_agent": e.user_agent,
+        },
+    )
+    # Name, prefix, scope and dates only: never the key, its hash or anything that can rebuild it.
+    api_keys = _capped(
+        "api_keys",
+        ApiKey.objects.filter(user=user).order_by("-ts_created_at", "-id"),
+        limits,
+        lambda k: {
+            "name": k.name,
+            "prefix": k.prefix,
+            "scope": k.scope,
+            "allow_destructive": k.allow_destructive,
+            "team_id": str(k.team_id) if k.team_id else None,
+            "created_at": _iso(k.ts_created_at),
+            "last_used_at": _iso(k.last_used_at),
+            "expires_at": _iso(k.expires_at),
+            "revoked_at": _iso(k.revoked_at),
+        },
+    )
+    connected_apps = _capped(
+        "connected_apps",
+        McpConnection.objects.filter(user=user)
+        .select_related("application")
+        .order_by("-ts_created_at", "-id"),
+        limits,
+        lambda c: {
+            "app": c.application.name or c.application.client_id,
+            "scope": c.scope,
+            "allow_destructive": c.allow_destructive,
+            "team_ids": c.team_ids,
+            "created_at": _iso(c.ts_created_at),
+            "last_used_at": _iso(c.last_used_at),
+            "revoked_at": _iso(c.revoked_at),
+        },
+    )
+    # Provider, their address there and the scopes granted. Never a token.
+    connected_accounts = _capped(
+        "connected_accounts",
+        ConnectedAccount.objects.filter(user=user).order_by("-ts_created_at", "-id"),
+        limits,
+        lambda c: {
+            "provider": c.provider,
+            "provider_email": c.provider_email,
+            "scopes": c.scopes,
+            "is_login_identity": c.is_login_identity,
+            "connected_at": _iso(c.ts_created_at),
+        },
+    )
+
+    data = {
+        "ai_questions": ai_questions,
+        "ai_feedback": ai_feedback,
+        "message_reactions": message_reactions,
+        "message_attachments": message_attachments,
+        "task_body_attachments": task_body_attachments,
+        "task_history": task_history,
+        "security_events": security_events,
+        "api_keys": api_keys,
+        "connected_apps": connected_apps,
+        "connected_accounts": connected_accounts,
+    }
+    data["more_counts"] = {k: len(v) for k, v in data.items()}
+    data["export_limits"] = limits
+    return data
 
 
 def build_export(user) -> dict:
@@ -350,4 +576,6 @@ def build_export(user) -> dict:
             "task_comments": len(comments),
             "ai_conversations": len(ai_asks),
         },
+        # Added after the keys above, which are unchanged (MIP-1795).
+        **_more_data(user),
     }
