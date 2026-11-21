@@ -27,6 +27,7 @@ from origin.models.common.mention_group_models import MentionGroupMaster, Mentio
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NoteFolderPermission
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services.hidden_scope import channel_hidden_from, project_hidden_from
 
 GROUP_MENTION = NoteFolderPermission.VIA_MENTION_GROUP
 GROUP_PROJECT = NoteFolderPermission.VIA_PROJECT
@@ -56,8 +57,11 @@ def _mention_group_user_ids(team_id, group_id):
     }
 
 
-def _project_user_ids(team_id, project_id):
-    if not ProjectMaster.objects.filter(project_id=project_id, team=team_id).exists():
+def _project_user_ids(team_id, project_id, viewer_id):
+    project = ProjectMaster.objects.filter(project_id=project_id, team=team_id).first()
+    # A hidden project's roster is for its members: anyone else gets the answer for a missing
+    # project (MIP-1935), so the id does not confirm it exists.
+    if project is None or project_hidden_from(project, viewer_id):
         return set()
     return {
         str(uid)
@@ -68,8 +72,9 @@ def _project_user_ids(team_id, project_id):
     }
 
 
-def _gm_user_ids(team_id, channel_id):
-    if not Channel.objects.filter(id=channel_id, team=team_id, kind=ChannelKind.GM).exists():
+def _gm_user_ids(team_id, channel_id, viewer_id):
+    channel = Channel.objects.filter(id=channel_id, team=team_id, kind=ChannelKind.GM).first()
+    if channel is None or channel_hidden_from(channel, viewer_id):
         return set()
     return {
         str(uid)
@@ -80,11 +85,12 @@ def _gm_user_ids(team_id, channel_id):
     }
 
 
-def resolve_group_user_ids(team_id, group_type, group_id):
+def resolve_group_user_ids(team_id, group_type, group_id, *, viewer_id):
     """User ids in one group, or an empty set for an unknown/foreign id.
 
     Never raises on a bad id: a stale group in a request should drop out
-    of the invite, not 500 the whole call.
+    of the invite, not 500 the whole call. `viewer_id` is the caller: a hidden project or
+    group chat they do not belong to resolves empty, like a missing one.
     """
     if group_type not in VALID_GROUP_TYPES or group_id in (None, ""):
         return set()
@@ -92,14 +98,14 @@ def resolve_group_user_ids(team_id, group_type, group_id):
         if group_type == GROUP_MENTION:
             return _mention_group_user_ids(team_id, int(group_id))
         if group_type == GROUP_PROJECT:
-            return _project_user_ids(team_id, int(group_id))
-        return _gm_user_ids(team_id, group_id)
+            return _project_user_ids(team_id, int(group_id), viewer_id)
+        return _gm_user_ids(team_id, group_id, viewer_id)
     except (TypeError, ValueError):
         # Non-numeric id for a numeric group kind (or a malformed UUID).
         return set()
 
 
-def expand_groups(team_id, groups):
+def expand_groups(team_id, groups, *, viewer_id):
     """Expand ``[{"type": ..., "id": ...}, ...]`` to
     ``{user_id: (group_type, group_id)}``.
 
@@ -112,6 +118,8 @@ def expand_groups(team_id, groups):
             continue
         group_type = entry.get("type")
         group_id = entry.get("id")
-        for user_id in resolve_group_user_ids(team_id, group_type, group_id):
+        for user_id in resolve_group_user_ids(
+            team_id, group_type, group_id, viewer_id=viewer_id
+        ):
             out.setdefault(user_id, (group_type, str(group_id)))
     return out

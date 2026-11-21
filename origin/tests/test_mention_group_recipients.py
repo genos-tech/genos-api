@@ -149,7 +149,9 @@ class ResolverTests(Base):
             resolve_group_members({str(self.group.group_id)})  # noqa
 
     def test_a_folder_invite_snapshot_of_a_group_is_current_members_too(self):
-        got = resolve_group_user_ids(self.team.team_id, GROUP_MENTION, self.group.group_id)
+        got = resolve_group_user_ids(
+            self.team.team_id, GROUP_MENTION, self.group.group_id, viewer_id=self.user.id
+        )
         self.assertEqual(got, self.on_team)
 
 
