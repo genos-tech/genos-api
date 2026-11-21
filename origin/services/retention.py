@@ -32,8 +32,10 @@ swallow the cron's time budget. `dry_run` counts without writing.
 
 Not here, on purpose:
 
-  * `SecurityEvent` has its own command (`prune_security_events`) with a floor
-    of 90 days, because an audit trail is the one thing a breach investigation
+  * `SecurityEvent`: only the four high-volume actions have a period here
+    (`security_events_high_volume`, MIP-1789), with a floor of 90 days. Every
+    other audit row is kept by its own command (`prune_security_events`, 365
+    days), because an audit trail is the one thing a breach investigation
     cannot do without.
   * `yjs_documents` is written by genos-collab (Node), not Django, so it
     cannot be purged from this process.
@@ -115,13 +117,23 @@ class Policy:
     # NEVER read as a default: only `retention_purge --approved-periods`
     # (always a dry run) uses it, to show what the period would match.
     approved_days: int | None = None
+    # The shortest period this policy accepts, whatever the variable says. A
+    # value under it is read as this floor (never as "delete sooner").
+    floor_days: int | None = None
+    # For DELETE rows that the ORM refuses to delete (an append-only table):
+    # the function that deletes a batch and returns how many. None means
+    # `batch.delete()`.
+    remove: Callable[[QuerySet], int] | None = None
 
     @property
     def env_var(self) -> str:
         return f"RETENTION_{self.name.upper()}_DAYS"
 
     def days(self) -> int | None:
-        return parse_days(os.environ.get(self.env_var))
+        days = parse_days(os.environ.get(self.env_var))
+        if days is None or self.floor_days is None:
+            return days
+        return max(days, self.floor_days)
 
     def cutoff(self, now: datetime | None = None) -> datetime | None:
         days = self.days()
@@ -135,6 +147,8 @@ class Policy:
         if days is None:
             cutoff = self.cutoff(now)
         else:
+            if self.floor_days is not None:
+                days = max(days, self.floor_days)
             cutoff = (now or timezone.now()) - timedelta(days=days)
         if cutoff is None:
             return None
@@ -179,6 +193,24 @@ def _email_events() -> QuerySet:
     from origin.models.common.notification_models import EmailNotificationEvent
 
     return EmailNotificationEvent.objects.all()
+
+
+def _security_events() -> QuerySet:
+    from origin.models.common.security_event_models import SecurityEvent
+
+    return SecurityEvent.objects.all()
+
+
+def _high_volume_security_events() -> Q:
+    from origin.services.security_events import HIGH_VOLUME_ACTIONS
+
+    return Q(action__in=HIGH_VOLUME_ACTIONS)
+
+
+def _remove_security_events(qs: QuerySet) -> int:
+    from origin.services.security_events import delete_rows
+
+    return delete_rows(qs)
 
 
 def _note_versions() -> QuerySet:
@@ -300,6 +332,21 @@ POLICIES: tuple[Policy, ...] = (
         approved_days=365,
     ),
     Policy(
+        name="security_events_high_volume",
+        description=(
+            "The security log's api_key and AI-app used / refused rows (one per key or "
+            "connection, address and hour). Other security events are not here: they keep "
+            "365 days in `prune_security_events`."
+        ),
+        action=Action.DELETE,
+        queryset=_security_events,
+        age_field="ts_created_at",
+        eligible=_high_volume_security_events,
+        approved_days=90,
+        floor_days=90,
+        remove=_remove_security_events,
+    ),
+    Policy(
         name="deleted_message_bodies",
         description=(
             "The text of a message that was deleted. The row stays as a "
@@ -326,7 +373,10 @@ def _apply(policy: Policy, qs: QuerySet, limit: int) -> int:
             break
         batch = policy.queryset().filter(**{f"{pk}__in": ids})
         if policy.action is Action.DELETE:
-            batch.delete()
+            if policy.remove is not None:
+                policy.remove(batch)
+            else:
+                batch.delete()
         else:
             batch.update(**policy.blank_to)
         done += len(ids)

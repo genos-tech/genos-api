@@ -36,6 +36,7 @@ from origin.models.chat.unified_models import (
 from origin.models.common.feature_models import UserFeatureAccess
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.notification_models import EmailNotificationEvent
+from origin.models.common.security_event_models import SecurityAction, SecurityEvent
 from origin.models.common.usage_models import ModelUsageCounter
 from origin.models.note.favorite_note_models import NoteFolderFavorite
 from origin.models.note.personal_note_models import PersonalNoteFolder
@@ -371,3 +372,91 @@ class ExportStaysConsistentTests(LeftoversFixture):
         self.assertEqual(build_export(self.leaver)["counts"]["schedule_reports"], 1)
         delete_account(self.leaver)
         self.assertEqual(build_export(self.leaver)["counts"]["schedule_reports"], 0)
+
+
+class SecurityNetworkFieldsTests(LeftoversFixture):
+    """MIP-1789: a deleted person's IP and user agent leave the security log. Every other column
+    stays: the action, the time, the team and the actor id are the record a breach needs."""
+
+    def _row(
+        self, actor_id, action=SecurityAction.API_KEY_USED, ip="203.0.113.9", ua="Mozilla/5.0"
+    ):
+        return SecurityEvent.objects.create(
+            action=action,
+            source="api_key",
+            actor_id=actor_id,
+            actor_label="",
+            team_id=self.team.team_id,
+            target_type="api_key",
+            target_id="k1",
+            ip=ip,
+            user_agent=ua,
+            metadata={"n": 1},
+        )
+
+    def _leave_rows_behind(self):
+        """An account deleted BEFORE this rule: soft-deleted, its rows still hold the network."""
+        self.theirs = self._row(self.leaver.pk)
+        self.theirs_null = self._row(self.leaver.pk, ip=None, ua="")
+        self.mates = self._row(self.mate.pk)
+        self.no_actor = self._row(None, action=SecurityAction.SIGNIN_FAILED)
+        type(self.leaver).objects.filter(pk=self.leaver.pk).update(is_deleted=True)
+
+    def test_deleting_an_account_blanks_its_network_fields_and_keeps_the_rest(self):
+        mine = self._row(self.leaver.pk, action=SecurityAction.SIGNIN_SUCCEEDED)
+        before = SecurityEvent.objects.get(pk=mine.pk)
+        delete_account(self.leaver)
+        after = SecurityEvent.objects.get(pk=mine.pk)
+        self.assertIsNone(after.ip)
+        self.assertEqual(after.user_agent, "")
+        for field in ("action", "ts_created_at", "team_id", "actor_id", "source", "metadata"):
+            self.assertEqual(getattr(after, field), getattr(before, field), field)
+
+    def test_the_deletion_record_itself_loses_the_requesters_network_fields(self):
+        from django.test import RequestFactory
+
+        from origin.middleware import current_user
+
+        request = RequestFactory().post(
+            "/", REMOTE_ADDR="198.51.100.4", HTTP_USER_AGENT="Requester/1.0"
+        )
+        with patch.object(current_user._state, "request", request, create=True):
+            delete_account(self.leaver)
+        rows = SecurityEvent.objects.filter(actor_id=self.leaver.pk)
+        self.assertTrue(rows.filter(action=SecurityAction.ACCOUNT_DELETED).exists())
+        self.assertFalse(rows.filter(ip__isnull=False).exists())
+        self.assertFalse(rows.exclude(user_agent="").exists())
+
+    def test_another_members_rows_and_rows_with_no_actor_keep_their_network_fields(self):
+        self._leave_rows_behind()
+        deleted_account_leftovers.prune(apply=True)
+        self.mates.refresh_from_db()
+        self.no_actor.refresh_from_db()
+        self.assertEqual(self.mates.ip, "203.0.113.9")
+        self.assertEqual(self.no_actor.ip, "203.0.113.9")
+
+    def test_the_prune_counts_a_dry_run_and_blanks_only_the_deleted_accounts_rows(self):
+        self._leave_rows_behind()
+        dry = deleted_account_leftovers.prune(apply=False)
+        self.assertEqual(dry.by_table["security_network_fields"], 1)
+        self.theirs.refresh_from_db()
+        self.assertEqual(self.theirs.ip, "203.0.113.9")
+
+        applied = deleted_account_leftovers.prune(apply=True)
+        self.assertEqual(applied.by_table["security_network_fields"], 1)
+        self.theirs.refresh_from_db()
+        self.assertIsNone(self.theirs.ip)
+        self.assertEqual(self.theirs.user_agent, "")
+        self.assertEqual(self.theirs.action, SecurityAction.API_KEY_USED)
+        self.assertEqual(
+            deleted_account_leftovers.prune(apply=False).by_table.get("security_network_fields", 0),
+            0,
+        )
+
+    def test_the_command_counts_without_printing_ids(self):
+        self._leave_rows_behind()
+        out = StringIO()
+        call_command("prune_deleted_account_leftovers", stdout=out)
+        self.assertIn("security_network_fields=1", out.getvalue())
+        self.assertNotIn(str(self.leaver.pk), out.getvalue())
+        self.assertNotIn("203.0.113.9", out.getvalue())

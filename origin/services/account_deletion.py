@@ -75,6 +75,7 @@ from origin.models.common.trial_models import CoreTrial
 from origin.models.common.user_models import ConnectedAccount
 from origin.services import blind_index, change_feed
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
+from origin.services.deleted_account_leftovers import blank_network_for
 from origin.services.deleted_account_leftovers import delete_for_user as delete_leftovers_for
 from origin.services.deleted_account_memberships import end_group_memberships
 from origin.services.oauth import revoke as oauth_revoke
@@ -444,6 +445,9 @@ def delete_account(user) -> dict:
                 target_label=original_email,
                 metadata={"via": "account_deleted"},
             )
+        # The rows above were just written with this person as the actor, and carry the IP and
+        # user agent of the request that deleted them. Blanked here, after they exist (MIP-1789).
+        blank_network_for(user.pk)
 
         # What the guest teams' rosters wrote for this person on OTHER teams' objects (a shared
         # project, chat or note folder, MIP-1550). Leaving a team through `remove_team_member`
