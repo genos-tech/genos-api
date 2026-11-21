@@ -31,6 +31,7 @@ from origin.services.project_catalog import (
 )
 from origin.services.project_code import derive_project_code
 from origin.services.project_delete import delete_project
+from origin.services.project_list_cache import project_list_key
 from origin.services.project_manage import (
     PROJECT_CODE_RE,
     ProjectRefused,
@@ -553,9 +554,7 @@ class ProjectsView(AuthenticatedAPIView):
         # Archived projects are hidden unless the caller asks for them (MIP-1693). The flag is part of
         # the cache key, so the two answers never share an entry.
         include_archived = request.GET.get("include_archived") in ("1", "true", "True")
-        cache_key = f"project:list:{team_id}:{attendee_id}" + (
-            ":archived" if include_archived else ""
-        )
+        cache_key = project_list_key(team_id, attendee_id, include_archived=include_archived)
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)

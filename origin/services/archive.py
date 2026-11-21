@@ -12,6 +12,7 @@ Each change writes one security-log row and one workspace-change row, with count
 
 from __future__ import annotations
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -79,26 +80,30 @@ def _set_project_archived(
     project: ProjectMaster, *, archived: bool, request=None, actor=None
 ) -> None:
     now = timezone.now() if archived else None
-    ProjectMaster.objects.filter(pk=project.pk).update(archived_at=now)
-    project.archived_at = now
-    counts = project_counts(project)
-    record_security_event(
-        SecurityAction.PROJECT_ARCHIVED if archived else SecurityAction.PROJECT_RESTORED,
-        request=request,
-        actor=actor,
-        team_id=project.team_id,
-        target_type="project",
-        target_id=project.project_id,
-        metadata={"project_id": project.project_id, **counts},
-    )
-    record_workspace_change(
-        team_id=project.team_id,
-        project_id=project.project_id,
-        entity_kind=ENTITY_PROJECT,
-        entity_id=project.project_id,
-        action=ACTION_UPDATE,
-        fields=["archived_at"],
-    )
+    # One transaction: the flag, the security row and the workspace-change row land together or not
+    # at all (MIP-1886). `save()` rather than `.update()`: `.update()` fires no post_save, so the
+    # project-list cache was never cleared and delta-sync clients never saw `ts_updated_at` move.
+    with transaction.atomic():
+        project.archived_at = now
+        project.save(update_fields=["archived_at", "ts_updated_at"])
+        counts = project_counts(project)
+        record_security_event(
+            SecurityAction.PROJECT_ARCHIVED if archived else SecurityAction.PROJECT_RESTORED,
+            request=request,
+            actor=actor,
+            team_id=project.team_id,
+            target_type="project",
+            target_id=project.project_id,
+            metadata={"project_id": project.project_id, **counts},
+        )
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind=ENTITY_PROJECT,
+            entity_id=project.project_id,
+            action=ACTION_UPDATE,
+            fields=["archived_at"],
+        )
 
 
 def archive_project(project: ProjectMaster, *, request=None, actor=None) -> None:
@@ -111,20 +116,21 @@ def restore_project(project: ProjectMaster, *, request=None, actor=None) -> None
 
 def _set_channel_archived(channel: Channel, *, archived: bool, request=None, actor=None) -> None:
     now = timezone.now() if archived else None
-    Channel.objects.filter(pk=channel.pk).update(archived_at=now)
-    channel.archived_at = now
-    record_security_event(
-        SecurityAction.CHANNEL_ARCHIVED if archived else SecurityAction.CHANNEL_RESTORED,
-        request=request,
-        actor=actor,
-        team_id=channel.team_id,
-        target_type="channel",
-        target_id=str(channel.id),
-        metadata={
-            "channel_id": str(channel.id),
-            "messages": Message.objects.filter(channel=channel).count(),
-        },
-    )
+    with transaction.atomic():
+        channel.archived_at = now
+        channel.save(update_fields=["archived_at", "ts_updated_at"])
+        record_security_event(
+            SecurityAction.CHANNEL_ARCHIVED if archived else SecurityAction.CHANNEL_RESTORED,
+            request=request,
+            actor=actor,
+            team_id=channel.team_id,
+            target_type="channel",
+            target_id=str(channel.id),
+            metadata={
+                "channel_id": str(channel.id),
+                "messages": Message.objects.filter(channel=channel).count(),
+            },
+        )
 
 
 def archive_group_chat(channel: Channel, *, request=None, actor=None) -> None:
