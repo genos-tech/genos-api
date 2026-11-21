@@ -774,9 +774,9 @@ def _undo(team, run_id, request):
         if added:
             # Read access the import granted goes with it, unless the person has posted since.
             posted = set(
-                Message.objects.filter(channel_id=b.channel_id, sender_id__in=added).values_list(
-                    "sender_id", flat=True
-                )
+                Message.objects.filter(channel_id=b.channel_id, sender_id__in=added)
+                .exclude(metadata__has_key="slackImport")
+                .values_list("sender_id", flat=True)
             )
             ChannelMember.objects.filter(
                 channel_id=b.channel_id, user_id__in=[a for a in added if a not in map(str, posted)]
