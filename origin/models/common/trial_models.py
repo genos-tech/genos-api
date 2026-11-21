@@ -13,12 +13,12 @@ It is its own table, not columns on `CustomUser`, for one reason: `CustomUser.sa
 `update_fields` writes every column, so a stale in-memory user saved after the trial started would
 put NULL back and quietly give the person a second month.
 
-The row is also the "one per person" record. `user` is unique (one per account) and so is
-`email_hash`, a copy of the account's own blind index of the lowercased address (the identity the
-account system already uses; no new identity data). The copy is what survives account deletion:
-deletion anonymises the address, and without it a deleted-and-re-created account would start again.
-That holds until the blind-index key is rotated: `rotate_field_keys` cannot re-hash this copy (the plain
-address is gone), so rotating the key while the offer runs lets such an account start once more.
+The row is also the "one per person" record, and `user` is unique: one per ACCOUNT. The account
+system already makes the address unique across live accounts (`CustomUser.email_hash`), so no
+second identity is stored here. Nothing about the person outlives the account: deleting the account
+deletes this row (`account_deletion._delete_personal_data`), and the row never held a copy of the
+address or of its hash (MIP-1779: counsel, "do not keep PII that is not necessary"). The price: a
+person who deletes their account and signs up again may have a new first month.
 """
 
 from __future__ import annotations
@@ -31,9 +31,6 @@ from origin.models.common.user_models import CustomUser
 
 class CoreTrial(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name="core_trial")
-    # `CustomUser.email_hash` at the moment the trial began. NULL only for an account the previous
-    # release wrote mid-deploy (NULLs do not collide in a unique column).
-    email_hash = models.CharField(max_length=64, unique=True, null=True, blank=True, editable=False)
     started_at = models.DateTimeField(default=timezone.now)
     # Fixed when the trial begins, so shortening or lengthening the offer later never moves the
     # end of a trial that is already running.

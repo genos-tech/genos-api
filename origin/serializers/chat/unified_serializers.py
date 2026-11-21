@@ -31,7 +31,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
-from origin.services import inbox_via, message_via
+from origin.services import inbox_via, message_tombstone, message_via
 from origin.services.member_roles import channel_role_to_member_role
 
 
@@ -225,6 +225,12 @@ class MessageSerializer(serializers.ModelSerializer):
         meta = data.get("metadata")
         if isinstance(meta, dict) and message_via.KEY in meta:
             data["metadata"] = message_via.for_wire(meta)
+        if instance.deleted_at is not None:
+            # A deleted message is a tombstone with no text (MIP-1784). The delete clears the
+            # stored text; this is the second defence, for a row deleted before that did and
+            # for a writer that forgets. It is what keeps the `?since=` sync, which serves the
+            # tombstone so a client can apply it, from carrying the words.
+            data = message_tombstone.public_tombstone(data)
         return data
 
     def get_channelKind(self, obj):

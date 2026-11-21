@@ -26,9 +26,9 @@ past work stays attributed to "Deleted user", and nothing dangles.
     EVERY request (`CHECK_USER_IS_ACTIVE`), so all sessions on all
     devices die at once, with no token blacklist to maintain;
   * personal-only data deleted outright: notification preferences and
-    push subscriptions, todos, personal tags, personal notes, and the
-    AI/search rows keyed by the bare `user_id` string (those carry no
-    FK, so nothing else would ever clean them up).
+    push subscriptions, the first-month trial row, todos, personal tags,
+    personal notes, and the AI/search rows keyed by the bare `user_id`
+    string (those carry no FK, so nothing else would ever clean them up).
 
 **Ownership is the one hard blocker.** A team whose owner vanishes is
 unadministrable, so deletion refuses while the user solely owns a team
@@ -67,6 +67,7 @@ from origin.models.common.notification_models import NotificationPreference, Pus
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.models.common.trial_models import CoreTrial
 from origin.models.common.user_models import ConnectedAccount
 from origin.services import blind_index, change_feed
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
@@ -186,6 +187,10 @@ def _delete_personal_data(user) -> None:
     # FK, but the account is soft-deleted so nothing fires. Rows where they are only the
     # ACTOR stay: they are someone else's feed and read "Deleted user".
     delete_activity_for(user.pk)
+    # The first month of Core (MIP-1737, MIP-1779): the row is the person's, and nothing about it
+    # may outlive the account, so a deleted person's trial is not kept to refuse a second month.
+    # The FK cascade never fires for a soft delete, so it goes by hand.
+    CoreTrial.objects.filter(user=user).delete()
     get_grant_model().objects.filter(user=user).delete()
     get_refresh_token_model().objects.filter(user=user).delete()
     get_access_token_model().objects.filter(user=user).delete()

@@ -51,7 +51,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
-from origin.services import message_via
+from origin.services import message_tombstone, message_via
 
 logger = logging.getLogger(__name__)
 
@@ -199,19 +199,17 @@ def write_message(
             # is editing body / soft-deleting. Mirror the change.
             if not created:
                 update_fields: list[str] = []
-                if body is not None and msg.body != body:
+                # A deleted message takes no new text (MIP-1784).
+                if body is not None and msg.body != body and msg.deleted_at is None:
                     msg.body = body
                     msg.body_text = _body_text_from_body(body)
                     update_fields.extend(["body", "body_text"])
-                # Soft-delete: legacy uses `is_deleted=True`; unified
-                # uses `deleted_at` (nullable datetime).
-                if is_deleted and msg.deleted_at is None:
-                    from django.utils import timezone
-
-                    msg.deleted_at = timezone.now()
-                    update_fields.append("deleted_at")
                 if update_fields:
                     msg.save(update_fields=update_fields)
+                # Soft-delete: legacy uses `is_deleted=True`; unified
+                # uses `deleted_at` (nullable datetime), and the text goes with it.
+                if is_deleted:
+                    message_tombstone.tombstone_message(msg)
             return msg
     except Exception:  # noqa: BLE001 — never break the legacy write
         logger.exception(
@@ -281,15 +279,12 @@ def write_thread_message(
                     "reply_count": 0,
                 },
             )
-            if not created and body is not None and msg.body != body:
+            if not created and body is not None and msg.body != body and msg.deleted_at is None:
                 msg.body = body
                 msg.body_text = _body_text_from_body(body)
                 msg.save(update_fields=["body", "body_text"])
-            if is_deleted and msg.deleted_at is None:
-                from django.utils import timezone
-
-                msg.deleted_at = timezone.now()
-                msg.save(update_fields=["deleted_at"])
+            if is_deleted:
+                message_tombstone.tombstone_message(msg)
             return msg
     except Exception:  # noqa: BLE001
         logger.exception(
@@ -314,11 +309,7 @@ def delete_message(
         msg = _resolve_message(chat_type, chat_id, message_id)
         if msg is None:
             return None
-        if msg.deleted_at is None:
-            from django.utils import timezone
-
-            msg.deleted_at = timezone.now()
-            msg.save(update_fields=["deleted_at"])
+        message_tombstone.tombstone_message(msg)
         return msg
     except Exception:  # noqa: BLE001
         logger.exception(
@@ -843,8 +834,8 @@ def soft_delete_task_comment_as_thread_reply(
     deleted comment stays visible in the PM task thread, which renders
     comments exclusively through the mirror.
 
-    Semantics match the v3 `MessageDetailView.delete`: set `deleted_at`
-    (a tombstone — the body is kept for audit/recovery), decrement the
+    Semantics match the v3 `MessageDetailView.delete`: set `deleted_at` and
+    clear the text (`message_tombstone`, MIP-1784), decrement the
     parent's `reply_count` (floored at 0 so a double-delete can't
     underflow), and bump the parent's `ts_updated_at` so the FE's
     `?since=` message delta re-serves the task-header row and its
@@ -864,10 +855,15 @@ def soft_delete_task_comment_as_thread_reply(
         deterministic_id = task_comment_message_uuid(task_id, comment_id)
         with transaction.atomic():
             msg = Message.objects.filter(id=deterministic_id).first()
-            if msg is None or msg.deleted_at is not None:
+            if msg is None:
                 return False
-            msg.deleted_at = timezone.now()
-            msg.save(update_fields=["deleted_at", "ts_updated_at"])
+            if msg.deleted_at is not None:
+                # Already a tombstone: nothing to count down. One an older delete left with its
+                # text is cleaned (MIP-1784); a clean one is not written.
+                message_tombstone.tombstone_message(msg)
+                return False
+            # Flag and text together (MIP-1784), the same as a chat delete.
+            message_tombstone.tombstone_message(msg)
             if msg.parent_id is not None:
                 Message.objects.filter(pk=msg.parent_id, reply_count__gt=0).update(
                     reply_count=F("reply_count") - 1,

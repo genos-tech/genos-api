@@ -37,7 +37,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
-from origin.models.chat.unified_models import Activity, Channel
+from origin.models.chat.unified_models import Activity, Channel, Message
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
@@ -297,11 +297,33 @@ class ActivityListView(AuthenticatedAPIView):
             ),
             limit=_MAX_TOMBSTONES,
         )
+        # A row whose message was deleted AFTER the client cached it (MIP-1784). The feed serves
+        # rows by `ts_created_at` alone, so without this the browser keeps the text it embedded
+        # in the row for good; served again, the row carries the blank tombstone and overwrites
+        # the copy. Driven from the few messages updated since `since` (`msg_channel_updated_idx`),
+        # not from the user's rows; the window is the feed's own, the same on every page, so a
+        # later page still finds them. No query on a first load (`since` is already the start).
+        feed_start = timezone.now() - timedelta(days=_DEFAULT_SINCE_DAYS)
+        deleted_since: tuple = ()
+        if since > feed_start:
+            deleted_since = tuple(
+                Activity.objects.filter(
+                    recipient=request.user,
+                    ts_created_at__gte=feed_start,
+                    ts_created_at__lt=since,
+                    message_id__in=Message.objects.filter(
+                        channel_id__in=readable,
+                        deleted_at__isnull=False,
+                        ts_updated_at__gte=since,
+                    ).values("id"),
+                    **narrowing,
+                ).values_list("id", flat=True)
+            )
         qs = (
             Activity.objects.filter(
                 Q(channel_id__isnull=True) | Q(channel_id__in=readable) | Q(id__in=task_kept),
+                Q(ts_created_at__gte=since) | Q(id__in=deleted_since),
                 recipient=request.user,
-                ts_created_at__gte=since,
                 **narrowing,
             )
             .exclude(id__in=lost_ids)
