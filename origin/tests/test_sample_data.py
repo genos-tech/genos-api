@@ -284,6 +284,16 @@ class AccessTests(SampleDataTestCase):
         self.assertEqual(ProjectMaster.objects.filter(team=self.sample_team).count(), before)
         self.assertEqual(SampleDataMarker.objects.filter(team=self.sample_team).count(), markers)
 
+    def test_a_refused_removal_writes_no_security_event(self):
+        from origin.models.common.security_event_models import SecurityAction, SecurityEvent
+
+        for who, expected in ((self.editor, 403), (self.outsider, 404)):
+            with self.subTest(who.username):
+                self.assertEqual(self.execute(self.sample_team, who).status_code, expected)
+                self.assertFalse(
+                    SecurityEvent.objects.filter(action=SecurityAction.SAMPLE_DATA_REMOVED).exists()
+                )
+
     def test_a_member_with_a_transferred_owner_role_is_checked_by_the_owner_column(self):
         # Ownership is `TeamMaster.owner`, never the stored role: hand it over and the new owner
         # may, and the old one may not.
