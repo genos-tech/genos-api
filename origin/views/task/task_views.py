@@ -805,6 +805,10 @@ class TaskMasterView(AuthenticatedAPIView):
                     {"error": "Destination project not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            # An archived project is read-only: nothing may be filed into it (MIP-1885). After the
+            # membership check, so a stranger learns nothing about the archive state (MIP-1884).
+            if dest_project.archived_at is not None:
+                return archived_project_response(dest_project.project_id)
             # Only a milestone, a root task or a task directly in a milestone
             # may change project; anything filed under an ordinary task
             # follows what it sits in. Moving one on its
