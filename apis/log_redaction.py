@@ -35,8 +35,6 @@ three are tested against the same cases in `log_redaction_cases.json`.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 import re
 
