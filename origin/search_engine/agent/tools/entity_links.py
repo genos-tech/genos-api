@@ -15,12 +15,15 @@ bare tokens. Every note editor wraps its DOM in
 URL-link modal — so a stored relative href is a fully working in-app
 link, and still resolves as a normal path if the note is exported.
 
-Scoping: DB-backed types are resolved with a team guard and skip deleted
-rows; an unresolvable/foreign token returns None and the caller keeps
-the prose (the pre-existing degrade behavior — a note never carries a
-dead link). Tokens only ever reference entities the agent read through
-ACL-checked tools in the same conversation, and the target views enforce
-ACL again on open. Chat tokens are a pure syntactic mapping (they carry
+Scoping: DB-backed types are resolved with a team guard, skip deleted
+rows, AND require that the caller may read the entity (MIP-1945): the
+fallback label is the project's name, the task's display id, the
+milestone's or note's title, so a team-only check let any teammate read
+the name of a hidden or private project by id. The checks are the same
+ones the chip resolver (`entity_chips`) makes. An unresolvable, foreign or
+unreadable token returns None and the caller keeps the prose (the
+pre-existing degrade behavior — a note never carries a dead link). The
+target views enforce ACL again on open. Chat tokens are a pure syntactic mapping (they carry
 their own UUIDs; the chat view enforces membership). Chat-attached notes
 have no stable deep-link route today → None. Todo items resolve to
 `/workspace/todo/<local_date>/item/<item_id>`; the todo modal re-checks
@@ -31,7 +34,15 @@ from __future__ import annotations
 
 import re
 
+from origin.search_engine.agent.acl import (
+    may_read_note,
+    milestone_acl_user_ids,
+    task_acl_user_ids,
+    task_note_acl_user_ids,
+)
 from origin.search_engine.agent.tools.project_gone import in_deleted_project
+from origin.search_engine.chunkers.base import NOTE_TYPE_PERSONAL
+from origin.views.utils.scope_guards import is_project_member
 
 _TASK_RE = re.compile(r"^task:(\d+)$")
 _PROJECT_RE = re.compile(r"^project:(\d+)$")
@@ -63,7 +74,7 @@ _MD_LINK_RE = re.compile(r"\[([^\]\n]{1,500})\]\(([^)\s]{1,500})\)")
 _BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\s]{1,200})\](?!\()")
 
 
-def rewrite_citation_md(text: str, *, team_id: str) -> str:
+def rewrite_citation_md(text: str, *, team_id: str, user_id: str) -> str:
     """Rewrite citation tokens in a plain-markdown string into real links.
 
     The chat surface resolves `[label](task:12)` tokens client-side
@@ -92,7 +103,7 @@ def rewrite_citation_md(text: str, *, team_id: str) -> str:
         label, target = match.group(1), match.group(2)
         if not ENTITY_TOKEN_RE.match(target):
             return match.group(0)
-        resolved = resolve_note_entity_link(target, team_id=team_id)
+        resolved = resolve_note_entity_link(target, team_id=team_id, user_id=user_id)
         if resolved is None:
             return label
         href, _fallback = resolved
@@ -100,7 +111,7 @@ def rewrite_citation_md(text: str, *, team_id: str) -> str:
 
     def _sub_bare(match: re.Match) -> str:
         token = match.group(1)
-        resolved = resolve_note_entity_link(token, team_id=team_id)
+        resolved = resolve_note_entity_link(token, team_id=team_id, user_id=user_id)
         if resolved is None:
             return match.group(0)
         href, label = resolved
@@ -111,13 +122,16 @@ def rewrite_citation_md(text: str, *, team_id: str) -> str:
     return _BARE_TOKEN_RE.sub(_sub_bare, _MD_LINK_RE.sub(_sub_link, text))
 
 
-def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | None:
+def resolve_note_entity_link(token: str, *, team_id: str, user_id: str) -> tuple[str, str] | None:
     """Token → (href, label), or None to degrade to prose.
 
     href is app-relative (`/workspace/...`); label is a short fallback
-    for bare `[token]` citations (display_id / name / title).
+    for bare `[token]` citations (display_id / name / title). `user_id` is
+    the reader the note or digest is written for; an entity they may not
+    read resolves to None, exactly like a missing one.
     """
     token = (token or "").strip()
+    user_id = str(user_id or "")
 
     m = _TASK_RE.match(token)
     if m:
@@ -133,6 +147,7 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
             or str(task.team_id or "") != team_id
             or not task.project_id
             or in_deleted_project(task)
+            or user_id not in task_acl_user_ids(task.project_id, task.assignee_id, task.reporter_id)
         ):
             return None
         return (
@@ -145,7 +160,11 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
         from origin.models.project.prj_models import ProjectMaster  # noqa: PLC0415
 
         project = ProjectMaster.objects.filter(project_id=int(m.group(1)), is_deleted=False).first()
-        if project is None or str(project.team_id or "") != team_id:
+        if (
+            project is None
+            or str(project.team_id or "") != team_id
+            or not is_project_member(project.project_id, user_id)
+        ):
             return None
         return (
             f"/workspace/tasks/project/{project.project_id}",
@@ -166,6 +185,7 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
             or str(milestone.team_id or "") != team_id
             or not milestone.project_id
             or in_deleted_project(milestone)
+            or user_id not in milestone_acl_user_ids(milestone.project_id, milestone.milestone_id)
         ):
             return None
         return (
@@ -182,7 +202,16 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
             )
 
             note = PersonalNoteMaster.objects.filter(note_id=note_id).first()
-            if note is None or str(note.team_id or "") != team_id:
+            if (
+                note is None
+                or str(note.team_id or "") != team_id
+                or not may_read_note(
+                    user_id=user_id,
+                    note_type_code=NOTE_TYPE_PERSONAL,
+                    note_id=note.note_id,
+                    owner_id=note.owner_id,
+                )
+            ):
                 return None
             return (f"/workspace/notes/my/{note.note_id}", note.title or f"note {note.note_id}")
 
@@ -196,6 +225,10 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
             or str(note.team_id or "") != team_id
             or not note.project_id
             or not note.task_id
+            or user_id
+            not in task_note_acl_user_ids(
+                owner_id=note.owner_id, project_id=note.project_id, note_id=note.note_id
+            )
         ):
             return None
         return (
@@ -217,7 +250,13 @@ def resolve_note_entity_link(token: str, *, team_id: str) -> tuple[str, str] | N
         from origin.models.chat.todo_models import ToDoItem  # noqa: PLC0415
 
         item = ToDoItem.objects.filter(item_id=int(m.group(2))).select_related("group").first()
-        if item is None or item.group is None or str(item.group.team_id or "") != team_id:
+        if (
+            item is None
+            or item.group is None
+            or str(item.group.team_id or "") != team_id
+            # A to-do is its owner's alone: the title is the label.
+            or str(item.group.user_id or "") != user_id
+        ):
             return None
         # Use the group's real date, not the token's — a model-mangled
         # date still yields a working link.

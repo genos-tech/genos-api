@@ -77,7 +77,9 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     editor's chips (`entity_chips`, MIP-708)."""
     return markdown_to_blocks(
         text,
-        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        entity_link_resolver=lambda token: resolve_note_entity_link(
+            token, team_id=ctx.team_id, user_id=ctx.user_id
+        ),
         entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
     )
 

@@ -372,42 +372,58 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
         stats.chunks_deleted += stale_count
         return
 
-    # Embed new + changed.
-    embeddings_by_id: dict[str, list[float]] = {}
-    if to_embed_ids:
-        texts = [incoming[cid].search_text for cid in to_embed_ids]
-        vectors = embed_texts(texts)
-        for cid, vec in zip(to_embed_ids, vectors):
-            embeddings_by_id[cid] = vec
-
-    # Bulk index new + changed. Ids a write really failed for (see
-    # `_bulk_index`) are NOT mirrored into `RagChunk` below: recording a
-    # row for a chunk that never landed makes the next pass call it
-    # `unchanged`, forever (MIP-855: 709 chunks stayed without a field
-    # after an OpenSearch redeploy, and a full reindex was hash-gated).
+    # Embed, write and record the chunks in slices (MIP-1868). One entity can
+    # hold thousands of chunks (a channel's whole main timeline is one), and
+    # one 1536-float python list is ~50 KB: embedding the lot and building
+    # every document first held several hundred MB and the 500 MB cron was
+    # killed with no traceback. Each slice is released before the next, and
+    # its tracking rows are written at once, so a killed run keeps what it
+    # finished (the next pass sees those chunks as unchanged).
+    #
+    # Ids a write really failed for (see `_bulk_index`) are NOT mirrored into
+    # `RagChunk`: recording a row for a chunk that never landed makes the next
+    # pass call it `unchanged`, forever (MIP-855: 709 chunks stayed without a
+    # field after an OpenSearch redeploy, and a full reindex was hash-gated).
     failed_ids: set[str] = set()
-    missing_ids: set[str] = set()
-    if to_embed_ids:
-        result = _bulk_index(
-            [_to_os_doc(incoming[cid], embeddings_by_id[cid], model) for cid in to_embed_ids]
+    slice_size = _write_slice_size()
+
+    def _track(ids: list[str]) -> None:
+        _upsert_tracking(
+            entity_type=entity.entity_type,
+            entity_id=entity.entity_id,
+            chunks=incoming,
+            hashes=incoming_hashes,
+            meta_hashes=incoming_meta_hashes,
+            model=model,
+            affected_ids=set(ids),
         )
+
+    for start in range(0, len(to_embed_ids), slice_size):
+        ids = to_embed_ids[start : start + slice_size]
+        vectors = embed_texts([incoming[cid].search_text for cid in ids])
+        result = _bulk_index(
+            [_to_os_doc(incoming[cid], vec, model) for cid, vec in zip(ids, vectors)]
+        )
+        del vectors
         failed_ids |= set(result.failed)
+        _track([cid for cid in ids if cid not in result.failed])
 
     # Refresh metadata-only chunks in place. Separate bulk call from the
-    # one above because these are `update` ops, not full `index` ops —
+    # ones above because these are `update` ops, not full `index` ops —
     # that is what preserves the existing embedding.
-    if meta_only_ids:
-        result = _bulk_index([_to_os_metadata_update(incoming[cid]) for cid in meta_only_ids])
+    for start in range(0, len(meta_only_ids), slice_size):
+        ids = meta_only_ids[start : start + slice_size]
+        result = _bulk_index([_to_os_metadata_update(incoming[cid]) for cid in ids])
         failed_ids |= set(result.failed)
-        missing_ids |= set(result.missing)
-
-    # A metadata update for a document OpenSearch doesn't hold: the row
-    # claims a doc that isn't there (an index recreated or restored under a
-    # live tracking table). Skipping the row would repeat the same failing
-    # update forever, since the text hash still matches; dropping it makes
-    # the chunk `new` next pass, which re-embeds and writes the whole doc.
-    if missing_ids:
-        RagChunk.objects.filter(chunk_id__in=missing_ids).delete()
+        # A metadata update for a document OpenSearch doesn't hold: the row
+        # claims a doc that isn't there (an index recreated or restored under
+        # a live tracking table). Skipping the row would repeat the same
+        # failing update forever, since the text hash still matches; dropping
+        # it makes the chunk `new` next pass, which re-embeds and writes the
+        # whole doc.
+        if result.missing:
+            RagChunk.objects.filter(chunk_id__in=result.missing).delete()
+        _track([cid for cid in ids if cid not in result.failed and cid not in result.missing])
 
     # Stale = previously tracked under this entity but not in current set.
     keep_ids = set(incoming.keys())
@@ -421,16 +437,13 @@ def _ingest_entity(entity: EntityChunks, stats: IngestionStats, *, dry_run: bool
             f"{len(failed_ids)} chunk(s); retried next pass"
         )
 
-    # Mirror to RagChunk.
-    _upsert_tracking(
-        entity_type=entity.entity_type,
-        entity_id=entity.entity_id,
-        chunks=incoming,
-        hashes=incoming_hashes,
-        meta_hashes=incoming_meta_hashes,
-        model=model,
-        affected_ids=(set(to_embed_ids) | set(meta_only_ids)) - failed_ids - missing_ids,
-    )
+
+def _write_slice_size() -> int:
+    """Chunks embedded, written and tracked per slice."""
+    try:
+        return max(1, int(settings.SEARCH_ENGINE.get("RAG_INGEST_SLICE_SIZE", 100)))
+    except (ValueError, TypeError):
+        return 100
 
 
 def _meta_fingerprint(chunk: Chunk) -> str:

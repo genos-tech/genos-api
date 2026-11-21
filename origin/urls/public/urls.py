@@ -22,6 +22,7 @@ in kind from breaking the others.
 
 from django.urls import path
 
+from origin.views.public.mcp import surfaces
 from origin.views.public.mcp.views import McpView
 from origin.views.public.openai_challenge import openai_apps_challenge_view
 from origin.views.public.openapi import OpenApiSchemaView
@@ -53,6 +54,16 @@ urlpatterns = [
     # people copy by hand doesn't get one. `APPEND_SLASH` can't rescue a
     # POST anyway — the redirect would drop the body.
     path("api/public/v1/mcp", McpView.as_view(), name="public_v1_mcp"),
+    # MIP-1594: the same server, narrower lists. A fixed set of tool names per URL (see
+    # `origin/views/public/mcp/surfaces.py`); the full endpoint above is unchanged.
+    *[
+        path(
+            f"api/public/v1/mcp/{segment}",
+            McpView.as_view(surface=surface),
+            name=f"public_v1_mcp_{surface.replace('-', '_')}",
+        )
+        for segment, surface in surfaces.SURFACE_SEGMENTS.items()
+    ],
     # MIP-1108: ChatGPT's plugin portal checks the host serves its token here (404 unless
     # `OPENAI_APPS_CHALLENGE` is set). At the origin's `.well-known`, so not under /api.
     path(

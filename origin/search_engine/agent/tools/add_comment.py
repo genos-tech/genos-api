@@ -66,7 +66,9 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
         return []
     blocks = markdown_to_blocks(
         text,
-        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        entity_link_resolver=lambda token: resolve_note_entity_link(
+            token, team_id=ctx.team_id, user_id=ctx.user_id
+        ),
         # A `mention` chip here also notifies: the comment fan-out reads
         # mention nodes off the saved body (MIP-708).
         entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
