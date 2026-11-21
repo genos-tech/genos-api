@@ -550,7 +550,12 @@ class ProjectsView(AuthenticatedAPIView):
             if not visible_project_ids:
                 return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        cache_key = f"project:list:{team_id}:{attendee_id}"
+        # Archived projects are hidden unless the caller asks for them (MIP-1693). The flag is part of
+        # the cache key, so the two answers never share an entry.
+        include_archived = request.GET.get("include_archived") in ("1", "true", "True")
+        cache_key = f"project:list:{team_id}:{attendee_id}" + (
+            ":archived" if include_archived else ""
+        )
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
@@ -585,6 +590,8 @@ class ProjectsView(AuthenticatedAPIView):
         )
         if visible_project_ids is not None:
             projects = projects.filter(project_id__in=visible_project_ids)
+        if not include_archived:
+            projects = projects.filter(archived_at__isnull=True)
         project_tags = defaultdict(list)
         for project_tag in (
             ProjectTags.objects.filter(team=team_id).order_by("ts_updated_at").reverse()

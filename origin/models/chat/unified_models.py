@@ -112,6 +112,9 @@ class Channel(models.Model):
     # never approved.
     is_external = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
+    # A group chat the owner archived (MIP-1693): read-only, hidden from the default chat list,
+    # restored with one action. Nothing about the chat is removed.
+    archived_at = models.DateTimeField(null=True, blank=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

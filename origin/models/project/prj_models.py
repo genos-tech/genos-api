@@ -47,6 +47,9 @@ class ProjectMaster(models.Model):
     )
     is_private = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
+    # Set by the owner to archive the project (MIP-1693): read-only and hidden from the default
+    # lists until restored. Nothing about the project is removed.
+    archived_at = models.DateTimeField(null=True, blank=True)
     # Short 2-6 letter uppercase code used as the prefix in human-
     # readable task display IDs (e.g. "GEN-42"). Unique within a team
     # (different teams can both have a "GEN" project — the constraint

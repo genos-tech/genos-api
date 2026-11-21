@@ -40,6 +40,7 @@ from origin.models.chat.unified_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster
+from origin.models.project.prj_models import ProjectMaster
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
     ChannelSerializer,
@@ -382,6 +383,15 @@ class ChannelListView(AuthenticatedAPIView):
             # (the team's own chats, chats shared with it, a shared
             # project's PM chat) is `channel_scope.team_scope_q`.
             qs = qs.filter(team_scope_q(team_id, user.id))
+
+        # Archived group chats, and the chats of archived projects, leave the list unless the caller
+        # asks for them (MIP-1693).
+        if request.GET.get("include_archived") not in ("1", "true", "True"):
+            qs = qs.filter(archived_at__isnull=True).exclude(
+                project_id__in=ProjectMaster.objects.filter(archived_at__isnull=False).values(
+                    "project_id"
+                )
+            )
 
         # Paging is opt-in: with neither `cursor` nor `limit` this is every
         # channel, as it has always been (MIP-808). Applied to the queryset
