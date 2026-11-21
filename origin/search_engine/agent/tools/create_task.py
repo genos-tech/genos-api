@@ -89,6 +89,7 @@ from origin.search_engine.quota import (
     check_remaining_monthly,
     increment_usage,
 )
+from origin.services.archive import archived_refusal
 from origin.services.milestone_service import ensure_backing_task
 from origin.services.task_card_post import post_task_created_card
 from origin.services.task_collaborators import sync_task_collaborators
@@ -217,6 +218,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create tasks in project {project_id}.")
+
+    # MIP-1852: no new work in an archived project (the app's create refuses it with 409). After the
+    # membership check, so a stranger learns nothing about the project's state.
+    if why := archived_refusal(project):
+        raise ToolError(f"{why} Nothing was created.")
 
     # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): a task the app's own form would refuse because a field the
     # project requires is missing is refused here too (`project_field_rules`).

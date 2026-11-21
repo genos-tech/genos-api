@@ -535,7 +535,7 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Every project the caller can see, with the numeric ids and "
             "short codes other tools take. Call this to turn a project name "
-            "into an id."
+            "into an id. A result marked `archived: true` (a project, or a task, chat or hit in one) is read-only: show it, but never propose new work in it."
         ),
     ),
     McpTool(
