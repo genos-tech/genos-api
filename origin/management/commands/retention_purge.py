@@ -11,7 +11,8 @@ Usage:
     python manage.py retention_purge                  # dry run: counts for every policy that has a period
     python manage.py retention_purge --apply          # really delete / blank
     python manage.py retention_purge --approved-periods  # counts for the approved periods (90 d outbox,
-                                                      # 180 d agent runs) even with no variable set
+                                                      # 180 d agent runs, 90 d high-volume security
+                                                      # events) even with no variable set
     python manage.py retention_purge --only agent_runs
     python manage.py retention_purge --list           # the policies and their periods
 """

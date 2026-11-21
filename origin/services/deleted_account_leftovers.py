@@ -23,6 +23,10 @@ DELETED, because the row exists only for the person and has no purpose without t
 
 ANONYMISED, because the row is shared and stays:
 
+* The security log (`SecurityEvent`, MIP-1789): `ip` and `user_agent` of the rows whose ACTOR is
+  the person are blanked. The action, the time, the team, the actor id and the target stay: that
+  is the record a breach needs. `delete_account` does it after it writes its own deletion rows.
+
 * `ThreadSummary` / `NoteSummary`: the cached summary is the team's; only the bare
   `generated_by_user_id` (who asked for it) is blanked.
 * The chat-list preview line (`Message.body_text`) of a message that @mentions the person
@@ -121,6 +125,26 @@ def _delete_batched(qs: QuerySet) -> int:
         if len(ids) < _BATCH:
             break
     return total
+
+
+def _blank_network_fields(actor_filter: dict, *, apply: bool) -> int:
+    """Blank `ip` and `user_agent` on the security-log rows selected by `actor_filter`. Counts
+    them, and writes only when `apply`."""
+    from origin.models.common.security_event_models import SecurityEvent
+    from origin.services.security_events import blank_network_fields
+
+    qs = SecurityEvent.objects.filter(**actor_filter).filter(
+        Q(ip__isnull=False) | ~Q(user_agent="")
+    )
+    if not apply:
+        return qs.count()
+    return blank_network_fields(qs, batch=_BATCH)
+
+
+def blank_network_for(user_id) -> int:
+    """The network fields of ONE deleted account's security-log rows (called by `delete_account`,
+    after the rows it writes about the deletion). Returns the count."""
+    return _blank_network_fields({"actor_id": user_id}, apply=True)
 
 
 def _anonymise_summaries(user_ids: list[str]) -> int:
@@ -289,6 +313,7 @@ def prune(*, apply: bool = False) -> PruneResult:
         .exclude(item_optionals__sender_name=DELETED_SENDER_NAME)
         .count()
     )
+    by_table["security_network_fields"] = _blank_network_fields({"actor_id__in": ids}, apply=False)
     by_table = {k: v for k, v in by_table.items() if v}
     matched = sum(by_table.values())
     accounts = len(ids)
@@ -298,4 +323,5 @@ def prune(*, apply: bool = False) -> PruneResult:
     changed += sum(_delete_batched(qs) for _name, qs in scopes)
     changed += _anonymise_summaries(ids)
     changed += _anonymise_reminder_cards({"sender__is_deleted": True})
+    changed += _blank_network_fields({"actor_id__in": ids}, apply=True)
     return PruneResult(matched, changed, accounts, by_table, dry_run=False)

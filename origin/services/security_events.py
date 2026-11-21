@@ -36,7 +36,7 @@ import time
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from rest_framework.throttling import BaseThrottle
 
@@ -62,6 +62,18 @@ NOT_AN_ADDRESS = "(not an address)"
 _UA_MAX = 512
 
 
+# The four actions that repeat per key or connection and address and hour (MIP-1789): most of the
+# table's rows, and little audit value once a breach window has passed. They keep 90 days
+# (`retention_purge`, policy `security_events_high_volume`, off until a period is set); every other
+# action keeps `retention_days()`.
+HIGH_VOLUME_ACTIONS = (
+    SecurityAction.API_KEY_USED,
+    SecurityAction.API_KEY_REJECTED,
+    SecurityAction.MCP_USED,
+    SecurityAction.MCP_REJECTED,
+)
+
+
 def retention_days() -> int:
     """How long events are kept: `SECURITY_EVENT_RETENTION_DAYS`, never
     under the floor. A trail that is gone by the time a breach is noticed
@@ -74,6 +86,36 @@ def retention_days() -> int:
 
 def prune_before():
     return timezone.now() - timedelta(days=retention_days())
+
+
+def delete_rows(qs) -> int:
+    """Delete the rows of `qs` (a `SecurityEvent` queryset), for a retention policy that names
+    them by action. The append-only guard refuses every ORM delete, so this goes past it the way
+    `SecurityEventQuerySet.prune` does; it is the only other place a row leaves. Batches are the
+    caller's (`retention._apply`)."""
+    deleted, _ = models.QuerySet.delete(qs)
+    return deleted
+
+
+def blank_network_fields(qs, *, batch: int = 1_000) -> int:
+    """Clear `ip` and `user_agent` on the rows of `qs` (a `SecurityEvent` queryset), in batches.
+    Every other column stays: the action, the time, the team and the actor are the record.
+    Returns how many rows changed. Used when the person a row is about has been deleted
+    (MIP-1789). Like `delete_rows`, it goes past the append-only guard, and only for these two
+    columns."""
+    from origin.models.common.security_event_models import SecurityEvent  # noqa: PLC0415
+
+    changed = 0
+    while True:
+        ids = list(qs.values_list("pk", flat=True)[:batch])
+        if not ids:
+            break
+        changed += models.QuerySet.update(
+            SecurityEvent.objects.filter(pk__in=ids), ip=None, user_agent=""
+        )
+        if len(ids) < batch:
+            break
+    return changed
 
 
 def client_ip(request) -> str | None:

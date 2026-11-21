@@ -410,10 +410,11 @@ class OnePolicyDoesNotTouchAnotherTests(BaseAPITestCase):
         self.assertFalse(NoteVersionMaster.objects.filter(pk=note.pk).exists())
         self.assertTrue(AgentRun.objects.filter(pk=run.pk).exists())
 
-    def test_the_security_audit_log_is_not_a_policy(self):
-        """It has its own command and a floor; a period here must not reach it."""
-        self.assertNotIn("security_events", retention.BY_NAME)
-        self.assertFalse(any("security" in p.name for p in retention.POLICIES))
+    def test_the_audit_log_has_only_its_high_volume_policy(self):
+        """The rest of the audit log keeps its own command and floor (`prune_security_events`).
+        Only the four high-volume actions have a period here (MIP-1789)."""
+        security = [p for p in retention.POLICIES if "security" in p.name]
+        self.assertEqual([p.name for p in security], ["security_events_high_volume"])
 
 
 class CommandTests(BaseAPITestCase):
@@ -518,7 +519,12 @@ class CommandTests(BaseAPITestCase):
             self.assertIsNone(p.days())
         self.assertEqual(
             {p.name: p.approved_days for p in retention.POLICIES if p.approved_days},
-            {"agent_runs": 180, "email_notification_events": 90, "workspace_changes": 365},
+            {
+                "agent_runs": 180,
+                "email_notification_events": 90,
+                "workspace_changes": 365,
+                "security_events_high_volume": 90,
+            },
         )
 
     def test_the_cron_start_command_applies_explicitly(self):
@@ -534,3 +540,125 @@ class CronRegistrationTests(SimpleTestCase):
         from origin.services import ops_alerts
 
         self.assertIn("retention-purge", ops_alerts.CRON_SCHEDULES)
+
+
+class HighVolumeSecurityEventTests(BaseAPITestCase):
+    """MIP-1789: the four high-volume security actions keep 90 days, never less; the rest of the
+    audit log keeps its own 365 days (`prune_security_events`). Off until a period is set, and a
+    period is never a default (`Policy.approved_days` is a preview only)."""
+
+    NAME = "security_events_high_volume"
+
+    def _event(self, action, days_old):
+        from django.db import connection
+
+        from origin.models.common.security_event_models import SecurityEvent
+
+        event = SecurityEvent.objects.create(
+            action=action,
+            source="api_key",
+            actor_id=self.user.pk,
+            ip="203.0.113.9",
+            user_agent="test-agent",
+        )
+        with connection.cursor() as cur:
+            cur.execute(
+                f"UPDATE {SecurityEvent._meta.db_table} SET ts_created_at = %s WHERE event_id = %s",
+                [timezone.now() - timedelta(days=days_old), event.event_id],
+            )
+        return event
+
+    def _remaining(self):
+        from origin.models.common.security_event_models import SecurityEvent
+
+        return set(SecurityEvent.objects.values_list("event_id", flat=True))
+
+    def test_nothing_goes_when_no_period_is_set(self):
+        import os
+
+        from origin.models.common.security_event_models import SecurityAction
+
+        old = self._event(SecurityAction.API_KEY_USED, 400)
+        with mock.patch.dict("os.environ", {}):
+            os.environ.pop(retention.BY_NAME[self.NAME].env_var, None)
+            retention.run_all()
+        self.assertIn(old.event_id, self._remaining())
+
+    def test_the_approved_period_is_never_a_default(self):
+        policy = retention.BY_NAME[self.NAME]
+        self.assertEqual(policy.approved_days, 90)
+        with mock.patch.dict("os.environ", {}):
+            import os
+
+            os.environ.pop(policy.env_var, None)
+            self.assertIsNone(policy.days())
+
+    def test_a_period_takes_only_the_four_high_volume_actions_past_it(self):
+        from origin.models.common.security_event_models import SecurityAction as A
+
+        old = [
+            self._event(a, 100)
+            for a in (A.API_KEY_USED, A.API_KEY_REJECTED, A.MCP_USED, A.MCP_REJECTED)
+        ]
+        recent = self._event(A.API_KEY_USED, 10)
+        kept = [
+            self._event(a, 400)
+            for a in (A.API_KEY_CREATED, A.API_KEY_REVOKED, A.MCP_CONNECTED, A.SIGNIN_FAILED)
+        ]
+        with _env(**{self.NAME: 90}):
+            retention.run_all(only=self.NAME)
+        remaining = self._remaining()
+        for event in old:
+            self.assertNotIn(event.event_id, remaining)
+        self.assertIn(recent.event_id, remaining)
+        for event in kept:
+            self.assertIn(event.event_id, remaining)
+
+    def test_a_period_under_the_floor_is_read_as_the_floor(self):
+        from origin.models.common.security_event_models import SecurityAction as A
+
+        policy = retention.BY_NAME[self.NAME]
+        with _env(**{self.NAME: 7}):
+            self.assertEqual(policy.days(), 90)
+            near = self._event(A.MCP_USED, 30)
+            far = self._event(A.MCP_USED, 100)
+            retention.run_all(only=self.NAME)
+        remaining = self._remaining()
+        self.assertIn(near.event_id, remaining)
+        self.assertNotIn(far.event_id, remaining)
+
+    def test_the_approved_preview_counts_and_deletes_nothing(self):
+        from origin.models.common.security_event_models import SecurityAction as A
+
+        old = self._event(A.API_KEY_USED, 120)
+        out = StringIO()
+        import os
+
+        with mock.patch.dict("os.environ", {}):
+            os.environ.pop(retention.BY_NAME[self.NAME].env_var, None)
+            call_command("retention_purge", "--approved-periods", "--only", self.NAME, stdout=out)
+        self.assertIn(f"{self.NAME}: would change 1 rows older than 90 days", out.getvalue())
+        self.assertIn(old.event_id, self._remaining())
+
+    def test_the_command_is_a_dry_run_until_apply(self):
+        from origin.models.common.security_event_models import SecurityAction as A
+
+        old = self._event(A.MCP_REJECTED, 120)
+        with _env(**{self.NAME: 90}):
+            call_command("retention_purge", "--only", self.NAME, stdout=StringIO())
+            self.assertIn(old.event_id, self._remaining())
+            call_command("retention_purge", "--apply", "--only", self.NAME, stdout=StringIO())
+        self.assertNotIn(old.event_id, self._remaining())
+
+    def test_the_audit_log_policy_names_exactly_the_four_actions(self):
+        from origin.models.common.security_event_models import SecurityAction as A
+        from origin.models.common.security_event_models import SecurityEvent
+
+        policy = retention.BY_NAME[self.NAME]
+        self.assertEqual(policy.queryset().model, SecurityEvent)
+        from origin.services.security_events import HIGH_VOLUME_ACTIONS
+
+        self.assertEqual(
+            set(HIGH_VOLUME_ACTIONS),
+            {A.API_KEY_USED, A.API_KEY_REJECTED, A.MCP_USED, A.MCP_REJECTED},
+        )
