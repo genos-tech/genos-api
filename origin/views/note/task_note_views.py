@@ -11,6 +11,10 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
+from origin.services.archive import (
+    archived_project_response,
+    archived_task_note_response,
+)
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.services.note_role_revoke import (
     restore_task_roles_on_move,
@@ -414,6 +418,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        if res := archived_project_response(data["project"]):
+            return res
+
         # Tier quota: monthly note-creation cap (shared across
         # personal / task / chat notes).
         if res := check_monthly_creation_quota(request_user_id, NOTE_CREATE_KEY, "note_create"):
@@ -497,6 +504,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             return res
 
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
+            return res
+
+        if res := archived_task_note_response(data["note_id"]):
             return res
 
         try:
@@ -588,6 +598,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
+        if res := archived_task_note_response(data["note_id"]):
+            return res
+
         try:
             delete_note(team_id=data["team"], family="task", note_id=data["note_id"])
         except DeleteRefused as refused:
@@ -673,6 +686,9 @@ class TaskNoteAttachmentView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
             return res
 
+        if res := archived_task_note_response(data["note"]):
+            return res
+
         upload, res = check_attachment_upload(request.user, data["note_attachment_url"])
         if res:
             return res
@@ -736,6 +752,9 @@ class TaskNoteMoveView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
+        if res := archived_task_note_response(data["note_id"]):
+            return res
+
         try:
             note = TaskNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
         except TaskNoteMaster.DoesNotExist:
@@ -745,6 +764,9 @@ class TaskNoteMoveView(AuthenticatedAPIView):
             target_task = TaskMaster.objects.get(team=data["team_id"], task_id=data["task_id"])
         except TaskMaster.DoesNotExist:
             return Response({"error": "Target task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if res := archived_project_response(target_task.project_id):
+            return res
 
         # The mover must be a member of the target task's project —
         # mirrors the implicit-access rule in `_accessible_task_note_ids`.

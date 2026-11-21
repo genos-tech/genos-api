@@ -18,6 +18,7 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.security_event_models import SecurityAction
+from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.project.workspace_change_models import ACTION_UPDATE, ENTITY_PROJECT
 from origin.models.task.task_models import TaskMaster
@@ -64,6 +65,21 @@ def archived_task_response(task_id) -> Response | None:
         TaskMaster.objects.filter(task_id=task_id).values_list("project_id", flat=True).first()
     )
     return archived_project_response(project_id)
+
+
+def archived_task_note_response(note_id) -> Response | None:
+    """409 when the project a task note lives in is archived (a note's own writes: autosave, delete,
+    move out, attachments, version restore). A missing note is None: the caller answers 404."""
+    project_id = (
+        TaskNoteMaster.objects.filter(note_id=note_id).values_list("project_id", flat=True).first()
+    )
+    return archived_project_response(project_id)
+
+
+def archived_chat_note_response(note_id) -> Response | None:
+    """409 when the note's channel is archived, or its project is. A missing note is None."""
+    channel = Channel.objects.filter(chat_notes__note_id=note_id).first()
+    return archived_channel_response(channel) if channel is not None else None
 
 
 def project_counts(project: ProjectMaster) -> dict[str, int]:
