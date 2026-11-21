@@ -22,7 +22,7 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0254_core_trial_notices"),
+        ("origin", "0255_core_trial_drop_email_hash"),
     ]
 
     operations = [
