@@ -191,7 +191,9 @@ class NoteTemplateView(AuthenticatedAPIView):
         if "default_folder_id" in request.data:
             if request.data["default_folder_id"] is None:
                 t.default_for_folder = None
-            else:
+            elif as_int(request.data["default_folder_id"]) != t.default_for_folder_id:
+                # Only a CHANGE needs Editor on the folder: renaming a template whose default
+                # folder you can no longer edit must still work.
                 folder, err = _resolve_default_folder(
                     request, team_id, request.data["default_folder_id"]
                 )

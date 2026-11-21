@@ -234,3 +234,26 @@ class NoteTemplateTests(BaseAPITestCase):
         by_id = {f["folderId"]: f for f in res.data}
         self.assertEqual(by_id[folder.folder_id]["defaultTemplateId"], t.template_id)
         self.assertIsNone(by_id[plain.folder_id]["defaultTemplateId"])
+
+    def test_rename_works_when_default_folder_is_no_longer_editable(self):
+        folder = self._folder()
+        t = self._make(default_for_folder=folder)
+        NoteFolderPermission.objects.filter(folder=folder).update(role_id=ROLE_VIEWER)
+        PersonalNoteFolder.objects.filter(pk=folder.pk).update(visibility="private")
+        r = self.client.put(
+            URL,
+            {
+                "team_id": str(self.team.team_id),
+                "template_id": t.template_id,
+                "name": "Renamed",
+                "default_folder_id": folder.folder_id,
+            },
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.data["name"], "Renamed")
+
+    def test_deleting_team_deletes_its_templates(self):
+        self._make()
+        self.team.delete()
+        self.assertEqual(NoteTemplate.objects.count(), 0)

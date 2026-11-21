@@ -16,7 +16,7 @@ class NoteTemplate(models.Model):
 
     template_id = models.BigAutoField(primary_key=True)
     team = models.ForeignKey(
-        TeamMaster, on_delete=models.SET_NULL, null=True, to_field="team_id", db_index=True
+        TeamMaster, on_delete=models.CASCADE, null=True, to_field="team_id", db_index=True
     )
     name = models.CharField(max_length=100)
     title = models.CharField(max_length=255, blank=True, default="")
