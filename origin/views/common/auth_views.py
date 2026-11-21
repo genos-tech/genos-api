@@ -585,6 +585,10 @@ def _refresh_token_password_is_current(refresh_value: str) -> bool:
 # clear that, because the live chain keeps minting new rows.
 _LEGACY_PII_CLAIMS = ("email",)
 
+# Family id of a login session (MIP-1907): set at login, copied by every rotation, so signout can
+# revoke the token in the cookie AND the siblings a grace-window replay minted from it.
+_FAMILY_CLAIM = "fam"
+
 
 class _ScrubbedRefreshToken(RefreshToken):
     """A refresh token that drops legacy PII claims as soon as it is loaded.
@@ -598,6 +602,10 @@ class _ScrubbedRefreshToken(RefreshToken):
         super().__init__(token, verify)
         for claim in _LEGACY_PII_CLAIMS:
             self.payload.pop(claim, None)
+        # A session from before MIP-1907 has no family id: its own jti starts one, and the
+        # rotation (which copies every custom claim) carries it to every successor.
+        if token is not None and _FAMILY_CLAIM not in self.payload:
+            self.payload[_FAMILY_CLAIM] = self.payload.get(jwt_api_settings.JTI_CLAIM)
 
 
 class _ScrubbingTokenRefreshSerializer(TokenRefreshSerializer):
@@ -659,6 +667,37 @@ def _close_grace(jti: str) -> None:
         logger.warning("refresh grace window not closed (cache unavailable)")
 
 
+def _family_revoked_key(fam) -> str:
+    return f"refresh-fam-revoked:{fam}"
+
+
+def _revoke_family(fam) -> None:
+    """Signout: no token of this family refreshes again. The default cache, like the grace window
+    it limits: a flushed cache forgets the revocation, but the token in the cookie is blacklisted
+    in the database either way, so only a sibling copied within 30 s of a rotation is affected."""
+    if not fam:
+        return
+    try:
+        cache.set(
+            _family_revoked_key(fam),
+            1,
+            int(jwt_api_settings.REFRESH_TOKEN_LIFETIME.total_seconds()),
+        )
+    except Exception:
+        logger.warning("refresh family revocation not recorded (cache unavailable)")
+
+
+def _family_revoked(fam) -> bool:
+    """Fails OPEN on a cache that is down: refusing every refresh would sign everyone out."""
+    if not fam:
+        return False
+    try:
+        return bool(cache.get(_family_revoked_key(fam)))
+    except Exception:
+        logger.warning("refresh family revocation not checked (cache unavailable)")
+        return False
+
+
 def _consume_grace(jti: str, user_id) -> bool:
     """One use of the window. Fails closed on anything unexpected, including a cache that is down."""
     try:
@@ -700,6 +739,10 @@ class CookieTokenRefreshView(TokenRefreshView):
             return Response({"error": "Invalid or expired refresh token"}, status=403)
         jti = old[jwt_api_settings.JTI_CLAIM]
         user_id = old.get(jwt_api_settings.USER_ID_CLAIM)
+
+        # Signed out (MIP-1907): refused before anything is rotated, graced or not.
+        if _family_revoked(old.get(_FAMILY_CLAIM)):
+            return Response({"error": "Invalid or expired refresh token"}, status=403)
 
         graced = BlacklistedToken.objects.filter(token__jti=jti).exists()
         if graced:
@@ -808,8 +851,11 @@ class LogoutView(APIView):
 
         if refresh:
             try:
-                # Signing out ends the grace window of a rotated token too (MIP-1878).
-                _close_grace(_GraceRefreshToken(refresh)[jwt_api_settings.JTI_CLAIM])
+                # Signing out ends the grace window of a rotated token too (MIP-1878), and the
+                # whole family: a token a graced replay minted is no longer worth a session.
+                signing_out = _GraceRefreshToken(refresh)
+                _close_grace(signing_out[jwt_api_settings.JTI_CLAIM])
+                _revoke_family(signing_out.get(_FAMILY_CLAIM))
             except (InvalidToken, TokenError, KeyError):
                 pass
             try:
