@@ -518,7 +518,7 @@ class CommandTests(BaseAPITestCase):
             self.assertIsNone(p.days())
         self.assertEqual(
             {p.name: p.approved_days for p in retention.POLICIES if p.approved_days},
-            {"agent_runs": 180, "email_notification_events": 90},
+            {"agent_runs": 180, "email_notification_events": 90, "workspace_changes": 365},
         )
 
     def test_the_cron_start_command_applies_explicitly(self):

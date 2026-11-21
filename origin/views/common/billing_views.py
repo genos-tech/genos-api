@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 from apis.request_id import error_response
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine import credit_ledger
-from origin.services import stripe_billing
+from origin.services import first_month_trial, stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     as_uuid,
@@ -349,6 +349,10 @@ class BillingPlansView(AuthenticatedAPIView):
         return Response(
             {
                 "billing_enabled": stripe_billing.billing_enabled(),
+                # Public, user-agnostic: whether the first-month Core offer is switched
+                # on (FIRST_MONTH_CORE_TRIAL). The pricing page shows the offer's copy only
+                # when this is true, so the page can never advertise an offer that is off.
+                "first_month_offer": first_month_trial.offer_is_open(),
                 "currency": currency,
                 "supported_currencies": stripe_billing.supported_currencies(),
                 "tiers": tiers,
