@@ -24,3 +24,12 @@ if not DEBUG:
 # Close each connection when its request ends, instead of keeping it for CONN_MAX_AGE seconds.
 # Costs one reconnect per request on the local stack; nothing else changes.
 DATABASES["default"]["CONN_MAX_AGE"] = 0
+
+# The refresh cookie must survive a page on another origin (MIP-1871). The api is on
+# localhost:8890; a page opened at http://127.0.0.1:3000 is cross-site to it, and Chrome sends a
+# cross-site cookie only when it is SameSite=None; Secure. Chrome treats http://localhost as a
+# secure origin, so the Secure attribute is accepted there. With SameSite=Lax the sign-in worked
+# but no refresh cookie was kept, so the next page load's refresh got 403 and the person was
+# signed out.
+AUTH_COOKIE_SECURE = True
+AUTH_COOKIE_SAMESITE = "None"
