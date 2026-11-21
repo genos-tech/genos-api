@@ -33,3 +33,14 @@ DATABASES["default"]["CONN_MAX_AGE"] = 0
 # signed out.
 AUTH_COOKIE_SECURE = True
 AUTH_COOKIE_SAMESITE = "None"
+
+# With the cookie sent cross-site, the browser would also let any site the developer visits make
+# credentialed requests here, if CORS allowed every origin (apis/settings.py does that when DEBUG is
+# on). Keep CORS to the local frontend origins, including 127.0.0.1, so no other site can read a
+# response that carries the refresh cookie.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8890",
+]
