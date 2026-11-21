@@ -149,9 +149,7 @@ def _source(request, key=None) -> tuple[str, str | None]:
     key = key or _api_key(request)
     if key is not None:
         path = (getattr(request, "path", "") or "").rstrip("/")
-        # The full endpoint and every surface under it (MIP-1594) are MCP.
-        on_mcp = path == _MCP_PATH or path.startswith(_MCP_PATH + "/")
-        return (SecuritySource.MCP if on_mcp else SecuritySource.API_KEY), str(key.id)
+        return (SecuritySource.MCP if _on_mcp(path) else SecuritySource.API_KEY), str(key.id)
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
         return SecuritySource.APP, None
@@ -681,3 +679,8 @@ def note_mcp_destructive(
             "arguments": destructive_arguments(arguments, declared),
         },
     )
+
+
+def _on_mcp(path: str) -> bool:
+    """The full MCP endpoint and every surface under it (MIP-1594)."""
+    return path == _MCP_PATH or path.startswith(_MCP_PATH + "/")
