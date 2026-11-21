@@ -48,6 +48,11 @@ def mask_email(text: str) -> str:
     return _EMAIL.sub(_mask_one, text)
 
 
+def is_address(text: str) -> bool:
+    """Whether the whole of `text` is one email address, nothing around it."""
+    return bool(text) and _EMAIL.fullmatch(text) is not None
+
+
 def has_email(text: str) -> bool:
     """Whether `text` still holds an unmasked email address.
 

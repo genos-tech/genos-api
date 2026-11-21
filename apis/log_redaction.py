@@ -18,7 +18,16 @@ stops the ones nobody caught. What it masks:
     says it's secret (`password`, `token`, `secret`, `authorization`, …);
   * any other run of 32+ base64url characters mixing upper case, lower
     case and digits: what a generated key looks like, and what a path,
-    a snake_case name, a UUID or a hex hash never does.
+    a snake_case name, a UUID or a hex hash never does;
+  * the token in an unsubscribe link (`unsubscribe/<token>/`): a signed,
+    never-expiring payload that holds the user's id, and that Django and the
+    throttles write whenever the path of a refused request is logged
+    (MIP-1788). Rewritten to the route's template, so the line still says which
+    route was hit.
+
+A client address is not masked by shape (a version number looks the same):
+call sites do not log one. Where a line needs to tell callers apart,
+`ip_marker` is a short keyed hash.
 
 genos-sockets has a copy of this module and genos-collab a port of it; all
 three are tested against the same cases in `log_redaction_cases.json`.
@@ -26,6 +35,8 @@ three are tested against the same cases in `log_redaction_cases.json`.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
 
@@ -61,6 +72,10 @@ _NAMED_BARE = re.compile(
     r"(" + _NAME + r"=)" + _BARE + r"|(" + _NAME + r":\s+)(?!" + _PLAIN_WORD + r")" + _BARE,
     re.IGNORECASE,
 )
+
+# `/api/v2/email/unsubscribe/<signed token>/`. The token is base64url text with
+# `:` between its parts; anything up to the next `/`, query, quote or space.
+_UNSUBSCRIBE = re.compile(r"(/unsubscribe/)(?!<token>)[^/\s?#\"'<>]+")
 
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
 
@@ -106,8 +121,35 @@ def redact(text: str) -> str:
     return _LONG.sub(MASK, text)
 
 
+def redact_line(text: str) -> str:
+    """What the formatters call: `redact`, after the rewrite only this API needs.
+
+    The unsubscribe token goes first, to the route's template, so the line still
+    says which route was hit. It is kept out of `redact` because that function,
+    and its cases in `log_redaction_cases.json`, are shared with genos-sockets and
+    genos-collab, which have no such route."""
+    if not text:
+        return text
+    return redact(_UNSUBSCRIBE.sub(r"\1<token>", text))
+
+
+def ip_marker(address: str | None) -> str:
+    """Ten hex characters that stand for a client address in a log line.
+
+    A keyed hash (`salted_hmac`, so its key is derived from `SECRET_KEY` and is not
+    the key itself), so the line says "the same caller again" or "a different one"
+    without holding the address, and the marker cannot be turned back into one by
+    hashing all of IPv4 (MIP-1788). It changes if the key is rotated, which is
+    fine: it is for reading a burst, not for joining logs."""
+    from django.utils.crypto import salted_hmac  # noqa: PLC0415 — needs settings only when called
+
+    if not address:
+        return "-"
+    return salted_hmac("origin.log_ip_marker", str(address), algorithm="sha256").hexdigest()[:10]
+
+
 class RedactingFormatter(logging.Formatter):
     """The plain text formatter, with the finished line redacted."""
 
     def format(self, record: logging.LogRecord) -> str:
-        return redact(super().format(record))
+        return redact_line(super().format(record))

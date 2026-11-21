@@ -1915,7 +1915,8 @@ class TestWhatYouDid(BriefingBase):
         text = "\n".join(logs.output)
         self.assertIn("briefing_calendar_unreadable", text)
         self.assertIn("RuntimeError", text)
-        self.assertIn("invalid_client", text)
+        # The exception's text can quote the member's event data (MIP-1788).
+        self.assertNotIn("invalid_client", text)
 
     def test_a_task_comment_is_one_thing_done_not_also_a_chat_message(self):
         """A comment is mirrored into the project chat as a message; counting both would say

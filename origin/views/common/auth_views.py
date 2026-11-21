@@ -34,7 +34,7 @@ from origin.services.demo_seeder import (
     delete_demo_environment,
     kick_off_demo_reindex,
 )
-from origin.services.security_events import record_security_event
+from origin.services.security_events import record_security_event, typed_address_label
 from origin.services.throttles import AuthThrottle
 from origin.views.utils.request_validators import body_object
 
@@ -263,15 +263,16 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
 
 
 def _record_signin_failed(request, email, *, reason: str) -> None:
-    """A refused sign-in. The address typed is the label; the account it
-    names, when one exists, is the target, so its owner's trail shows
-    the attempt."""
+    """A refused sign-in. The address typed is the label (masked, and only if
+    it is an address: the box is where a password is pasted by mistake,
+    MIP-1789); the account it names, when one exists, is the target, so its
+    owner's trail shows the attempt."""
     email = str(email or "")
     target = User.objects.with_email(email).only("pk").first() if email else None
     record_security_event(
         SecurityAction.SIGNIN_FAILED,
         request=request,
-        actor_label=email,
+        actor_label=typed_address_label(email),
         target_type="user" if target else "",
         target_id=target.pk if target else "",
         metadata={"method": "password", "reason": reason},
@@ -768,7 +769,7 @@ class PasswordResetRequestView(APIView):
         record_security_event(
             SecurityAction.PASSWORD_RESET_REQUESTED,
             request=request,
-            actor_label=email,
+            actor_label=typed_address_label(email),
             target_type="user" if user is not None else "",
             target_id=user.pk if user is not None else "",
             metadata={"issued": user is not None},

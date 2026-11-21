@@ -9,6 +9,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from apis.llm_catalog import EFFORTS
+from apis.request_id import describe_exception
 from origin.models.common.item_activity_models import purge_for_user as purge_item_activity
 from origin.models.common.member_importance_models import (
     purge_for_user as purge_importance,
@@ -167,7 +168,7 @@ class UserProfileImageView(AuthenticatedAPIView):
             try:
                 previous_file.delete(save=False)
             except Exception as err:  # pragma: no cover - best-effort cleanup
-                print(f"Failed to delete previous profile image: {err}")
+                logger.warning("Failed to delete previous profile image: %s", describe_exception(err))
 
         # Only update the FileField
         new_profile_image_data = {

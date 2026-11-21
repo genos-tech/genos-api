@@ -53,6 +53,7 @@ EVENTS_URL = "/api/v2/team/security-events/"
 SIGNIN = "/api/v2/user/signin/"
 PROBE = "/api/public/v1/me/"
 MCP = "/api/public/v1/mcp"
+_HOOK_URL = "https://hooks.example.com:8443/services/T0KEN-in-the-path?apikey=abc123"
 
 
 class _Dead:
@@ -289,6 +290,25 @@ class TestSignIn(SecurityEventCase):
         row = self.one(SecurityAction.SIGNIN_FAILED)
         self.assertEqual(row.actor_label, mask_email("nobody@example.com"))
         self.assertEqual(row.target_id, "")
+
+    def test_text_typed_in_the_email_box_that_is_not_an_address_is_not_stored(self):
+        """A password pasted into the wrong box (MIP-1789). Only something
+        shaped like an address is kept, masked; the rest becomes a fixed word,
+        in the row and in the log line."""
+        typed = "hunter2-pasted-by-mistake"
+        with self.assertLogs("origin.services.security_events", "INFO") as logs:
+            self._signin(email=typed)
+        row = self.one(SecurityAction.SIGNIN_FAILED)
+        self.assertEqual(row.actor_label, security_events.NOT_AN_ADDRESS)
+        self.assertNotIn(typed, row.actor_label + row.target_label + str(row.metadata))
+        self.assertNotIn(typed, "\n".join(logs.output))
+
+    def test_an_address_with_text_around_it_is_not_kept_either(self):
+        """Masking an address inside other text keeps the text, which is the
+        part that can be a password."""
+        self._signin(email="hunter2 ghost@example.com")
+        row = self.one(SecurityAction.SIGNIN_FAILED)
+        self.assertEqual(row.actor_label, security_events.NOT_AN_ADDRESS)
 
     def test_the_password_is_never_stored(self):
         self._signin(password="hunter2-secret")
@@ -898,6 +918,68 @@ class TestProjectMembership(SecurityEventCase):
         self.assertEqual(row.target_id, str(self.project.project_id))
 
 
+# ── 5b. the log lines carry no client address (MIP-1788) ───────────────
+
+_IPV4 = r"\b\d{1,3}(?:\.\d{1,3}){3}\b"
+_IPV6 = r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}\b|::1\b"
+
+
+class TestLogLinesCarryNoAddress(SecurityEventCase):
+    """The row keeps the address (an incident needs it); the Railway log line
+    does not: its retention is not documented."""
+
+    def _assert_no_address(self, text, *addresses):
+        self.assertNotRegex(text, _IPV4)
+        self.assertNotRegex(text, _IPV6)
+        for address in addresses:
+            self.assertNotIn(address, text)
+
+    def test_a_security_event_line_has_no_ip_but_the_row_does(self):
+        for address in ("203.0.113.7", "2001:db8:85a3::8a2e:370:7334"):
+            with self.subTest(address=address), self.assertLogs(
+                "origin.services.security_events", "INFO"
+            ) as logs:
+                self.client.post(
+                    SIGNIN,
+                    {"email": "nobody@example.com", "password": "wrong-password"},
+                    format="json",
+                    REMOTE_ADDR=address,
+                )
+            text = "\n".join(logs.output)
+            self.assertIn("security.event", text)
+            self.assertIn("action=signin.failed", text)
+            self._assert_no_address(text, address)
+            self.assertEqual(
+                SecurityEvent.objects.filter(ip=address).count(), 1, "the row keeps the address"
+            )
+
+    def test_a_security_alert_line_has_no_ip_but_the_alert_row_does(self):
+        self.authenticate(self.user)
+        with self.assertLogs("origin.services.security_events", "INFO") as logs:
+            self.client.get("/api/v2/user/account/export/", REMOTE_ADDR="198.51.100.23")
+        text = "\n".join(logs.output)
+        self.assertIn("security.alert", text)
+        self._assert_no_address(text, "198.51.100.23")
+        self.assertEqual(self.one(SecurityAction.ALERT_EXPORT).ip, "198.51.100.23")
+
+    def test_every_other_field_of_the_line_is_kept(self):
+        with self.assertLogs("origin.services.security_events", "INFO") as logs:
+            self.client.post(
+                SIGNIN,
+                {"email": self.user.email, "password": "wrong-password"},
+                format="json",
+            )
+        row = self.one(SecurityAction.SIGNIN_FAILED)
+        line = next(line for line in logs.output if "security.event" in line)
+        for part in (
+            f"id={row.event_id}",
+            "action=signin.failed",
+            f"target=user:{self.user.id}",
+            "source=anonymous",
+        ):
+            self.assertIn(part, line)
+
+
 # ── 6. export, deletion, webhooks, OAuth connections ───────────────────
 
 
@@ -948,20 +1030,27 @@ class TestWebhooks(SecurityEventCase):
                 "/api/v2/webhooks/",
                 {
                     "team_id": str(self.team.team_id),
-                    "url": "https://example.com/hook",
+                    "url": _HOOK_URL,
                     "events": ["task.created"],
                 },
                 format="json",
             )
         self.assertEqual(res.status_code, 201, res.data)
         created = self.one(SecurityAction.WEBHOOK_CREATED)
-        self.assertEqual(created.target_label, "https://example.com/hook")
+        # The host only (MIP-1789): the path and query of a webhook URL often
+        # carry the secret that authorises the receiver.
+        self.assertEqual(created.target_label, "hooks.example.com")
         self.assertNotIn(res.data["secret"], str(created.metadata))
 
         self.client.delete(f"/api/v2/webhooks/{res.data['id']}/")
         deleted = self.one(SecurityAction.WEBHOOK_DELETED)
         self.assertEqual(deleted.target_id, res.data["id"])
         self.assertEqual(deleted.team_id, self.team.team_id)
+        self.assertEqual(deleted.target_label, "hooks.example.com")
+        for row in (created, deleted):
+            flat = row.target_label + str(row.metadata)
+            for secret_part in ("T0KEN-in-the-path", "apikey=abc123", "8443", "https"):
+                self.assertNotIn(secret_part, flat)
 
 
 class TestOAuthConnections(SecurityEventCase):

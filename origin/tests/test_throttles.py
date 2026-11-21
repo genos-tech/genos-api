@@ -249,8 +249,30 @@ class TestDenialsAreLoggedAndCounted(_ThrottleCase):
         ):
             self.client.post(_SIGNIN, body)
             self.client.post(_SIGNIN, body)
-        self.assertTrue(any("scope=signin_burst ip=" in line for line in logs.output))
+        denied = [line for line in logs.output if "scope=signin_burst" in line]
+        self.assertTrue(denied)
+        # Never the address itself (MIP-1788): a keyed marker that still tells
+        # one caller from another.
+        self.assertNotRegex("\n".join(logs.output), r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+        self.assertRegex(denied[0], r" client=[0-9a-f]{10} ")
+        self.assertNotIn(" ip=", denied[0])
         self.assertEqual(denied_count("signin_burst"), 1)
+
+    def test_the_marker_tells_callers_apart_and_is_stable(self):
+        body = {"email": "nobody@example.com", "password": "wrong-password"}
+        seen = {}
+        for address in ("203.0.113.7", "203.0.113.8", "203.0.113.7"):
+            cache.clear()
+            with (
+                mock.patch.object(SignInBurstThrottle, "rate", "1/min"),
+                self.assertLogs("origin.services.throttles", "WARNING") as logs,
+            ):
+                self.client.post(_SIGNIN, body, REMOTE_ADDR=address)
+                self.client.post(_SIGNIN, body, REMOTE_ADDR=address)
+            line = next(x for x in logs.output if "throttle.denied" in x)
+            seen.setdefault(address, set()).add(line.split(" client=")[1].split(" ")[0])
+        self.assertEqual(len(seen["203.0.113.7"]), 1)
+        self.assertNotEqual(seen["203.0.113.7"], seen["203.0.113.8"])
 
     def test_the_command_reports_the_counts(self):
         self.authenticate()
