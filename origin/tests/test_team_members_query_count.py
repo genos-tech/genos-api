@@ -645,13 +645,14 @@ class MalformedGrantTests(SharingWorld):
 # fixture cost 35 -> 61, 20 -> 33, 23 -> 34 and 24 -> 36 queries for 2 -> 4 rounds
 # (6 -> 12 grants), i.e. about 4 per grant.
 #
-#   member (not the owner), 12:
+#   member (not the owner), 13:
 #       1 auth + 2 membership (owner check, member check) + 1 roster
+#       + 1 the team's deleted accounts (`deletedUserIds`, MIP-1820; constant, not per share)
 #       + 1 grants (owned by or shared with the team)
 #       + 3 people on the shared objects the caller is on: chats, projects, folders
 #       + 1 which of its two teams each of them belongs to
 #       + 1 the teams (owner and name together) + 1 team pictures + 1 users
-#   guest_team_member (owner of their own team), 11: the same with a one-query
+#   guest_team_member (owner of their own team), 12: the same with a one-query
 #       membership check
 #   outside_caller (not a member, admitted to shared chats / folders / a project), 16:
 #       1 auth + 2 membership + 3 is_guest (another membership check, then a
@@ -662,8 +663,8 @@ class MalformedGrantTests(SharingWorld):
 #   project_guest (in no team; the shared-object lookups find nothing to read), 14:
 #       the outside_caller list without the two row queries
 BUDGETS = {
-    "member": 12,
-    "guest_team_member": 11,
+    "member": 13,
+    "guest_team_member": 12,
     "outside_caller": 16,
     "project_guest": 14,
 }
