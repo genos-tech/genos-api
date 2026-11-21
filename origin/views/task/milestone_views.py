@@ -12,6 +12,7 @@ from origin.models.task.milestone_models import (
 )
 from origin.models.task.sprint_models import Sprint
 from origin.services import mention_extractor
+from origin.services.archive import archived_project_response
 from origin.services.custom_fields import sanitize_custom_field_values
 from origin.services.milestone_manage import (
     FOLDER_NAME_MAX,
@@ -374,6 +375,9 @@ class MilestoneView(AuthenticatedAPIView):
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(project.project_id, request.user.id):
             return _deny_not_found("Project")
+        # An archived project is read-only (MIP-1887); after the membership gate.
+        if res := archived_project_response(project.project_id):
+            return res
 
         # After the membership gate (a stranger learns nothing), before anything
         # is written. Same rule as a task's links: a milestone's links are
@@ -487,6 +491,8 @@ class MilestoneView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
+        if res := archived_project_response(milestone.project_id):
+            return res
 
         if res := refuse_unsafe_link_urls(request.data.get("links")):
             return res
@@ -511,6 +517,8 @@ class MilestoneView(AuthenticatedAPIView):
             # milestone into a project (in any team) the caller can't reach.
             if not is_project_member(dest_project.project_id, request.user.id):
                 return _deny_not_found("Project")
+            if res := archived_project_response(dest_project.project_id):
+                return res
             if str(dest_project.project_id) != str(source_project_id):
                 project_move = dest_project
 
@@ -713,6 +721,8 @@ class MilestoneView(AuthenticatedAPIView):
             return Response({"error": "Milestone not found."}, status=status.HTTP_404_NOT_FOUND)
         if not is_project_member(milestone.project_id, request.user.id):
             return _deny_not_found("Milestone")
+        if res := archived_project_response(milestone.project_id):
+            return res
         delete_milestone(milestone)
         return Response(
             {"message": "Milestone soft-deleted."},
@@ -869,6 +879,8 @@ class MilestoneFolderListView(AuthenticatedAPIView):
             return _deny_not_found("Project")
         if not is_project_member(project.project_id, request.user.id):
             return _deny_not_found("Project")
+        if res := archived_project_response(project.project_id):
+            return res
         name, res = _clean_folder_name(request.data.get("name"))
         if res:
             return res
@@ -901,6 +913,8 @@ class MilestoneFolderView(AuthenticatedAPIView):
         folder = self._get_folder(request, folder_id)
         if folder is None:
             return _deny_not_found("Folder")
+        if res := archived_project_response(folder.project_id):
+            return res
         if "name" in request.data:
             name, res = _clean_folder_name(request.data.get("name"))
             if res:
@@ -926,5 +940,7 @@ class MilestoneFolderView(AuthenticatedAPIView):
         folder = self._get_folder(request, folder_id)
         if folder is None:
             return _deny_not_found("Folder")
+        if res := archived_project_response(folder.project_id):
+            return res
         folder.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

@@ -131,6 +131,7 @@ from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.services.archive import archived_refusal_for_args
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import (
     DESTRUCTIVE_DONE,
@@ -247,6 +248,35 @@ _BLOCK_ID_SCHEMA = {
         "needed when `note_id` is a block link. If both are given they must name the same block."
     ),
 }
+
+
+# The write tools that change a project's own data (not notes, todos, calendar, schedules, memory,
+# importance, or join requests): refused while the project is archived (MIP-1887).
+ARCHIVE_GUARDED_TOOLS = frozenset(
+    {
+        "update_task",
+        "add_comment",
+        "update_comment",
+        "delete_comment",
+        "delete_task_attachment",
+        "restore_task_body",
+        "add_task_delivery",
+        "remove_task_delivery",
+        "update_task_dependencies",
+        "create_task",
+        "assign_task",
+        "update_tasks_bulk",
+        "create_task_plan",
+        "manage_milestone",
+        "delete_milestone",
+        "manage_sprint",
+        "delete_sprint",
+        "manage_project",
+        "manage_project_members",
+        "add_project_tag",
+        "manage_project_labels",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -3144,6 +3174,11 @@ def call(
     try:
         _require_task_refs(tool, args)
         args = resolve_references(tool, args, ctx.team_id)
+        if tool.write and tool.name in ARCHIVE_GUARDED_TOOLS:
+            # MIP-1887: an archived project is read-only on this surface too. The tools write
+            # through the registry, not the REST views, so the guard has to sit here.
+            if why := archived_refusal_for_args(args):
+                raise ToolError(why)
         if (
             limits
             and tool.write
