@@ -42,8 +42,10 @@ from oauth2_provider.views.dynamic_client_registration import DynamicClientRegis
 from oauth2_provider.views.mixins import OAuthLibMixin
 from oauthlib.oauth2.rfc6749.errors import CustomOAuth2Error
 
+from apis.mcp_oauth_settings import MCP_PATH
 from origin.services import mcp_oauth
 from origin.services.throttles import AuthThrottle
+from origin.views.public.mcp import surfaces
 
 
 class OAuthRegisterThrottle(AuthThrottle):
@@ -283,4 +285,30 @@ revoke_view = gated(
     throttled(OAuthTokenThrottle)(never_cache(json_errors(RevokeTokenView.as_view())))
 )
 server_metadata_view = gated(OAuthServerMetadataView.as_view())
-resource_metadata_view = gated(OAuthProtectedResourceMetadataView.as_view())
+
+
+class McpResourceMetadataView(OAuthProtectedResourceMetadataView):
+    """RFC 9728 metadata for ONE URL of the MCP server (MIP-1594): a client must find its own URL
+    as `resource` (section 3.3), so a surface's document names the surface, the full endpoint's is
+    what it always was, and a path that is none of ours is a 404 rather than the full document."""
+
+    def get_resource(self, request):
+        path = "/" + (self.kwargs.get("resource_path") or "").strip("/")
+        if path == "/":
+            return super().get_resource(request)
+        if path == MCP_PATH:
+            return mcp_oauth.resource_for(None)
+        prefix = MCP_PATH + "/"
+        if path.startswith(prefix):
+            surface = surfaces.SURFACE_SEGMENTS.get(path[len(prefix) :])
+            if surface is not None:
+                return mcp_oauth.resource_for(surface)
+        return None
+
+    def get(self, request, *args, **kwargs):
+        if self.get_resource(request) is None:
+            return _not_found()
+        return super().get(request, *args, **kwargs)
+
+
+resource_metadata_view = gated(McpResourceMetadataView.as_view())

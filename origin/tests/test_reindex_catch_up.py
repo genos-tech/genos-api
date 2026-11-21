@@ -184,3 +184,71 @@ class TestCatchUpWindow(TestCase):
         with self.assertRaises(CommandError):
             self._since("--catch-up", "--heartbeat", CRON)
         self.ingest_all.assert_not_called()
+
+
+class TestSuccessMarkIsTheRunStart(TestCase):
+    """MIP-1913: the success mark the next catch-up window starts from is when the run STARTED, not
+    when it finished. The run reads Postgres at its start, so a run longer than the overlap would
+    otherwise leave a hole just before its own finish time."""
+
+    RUN_MINUTES = 20  # longer than the 11-minute overlap
+
+    def setUp(self):
+        _patch_command(self)
+        self.t0 = timezone.now().replace(microsecond=0)
+        self.clock = [self.t0]
+        self.ingest_all = self._start(
+            mock.patch.object(
+                opensearch_reindex,
+                "ingest_all",
+                side_effect=self._slow_run,
+            )
+        )
+        self._start(mock.patch("django.utils.timezone.now", side_effect=lambda: self.clock[0]))
+
+    def _start(self, patcher):
+        started = patcher.start()
+        self.addCleanup(patcher.stop)
+        return started
+
+    def _slow_run(self, **kwargs):
+        self.clock[0] += dt.timedelta(minutes=self.RUN_MINUTES)
+        return ingestion.IngestionStats()
+
+    def _run(self, *extra):
+        call_command(
+            "opensearch_reindex",
+            "--since-minutes",
+            "11",
+            "--heartbeat",
+            CRON,
+            *extra,
+            stdout=mock.Mock(),
+        )
+
+    def test_a_long_run_records_its_start_as_the_success_mark(self):
+        self._run()
+        beat = CronHeartbeat.objects.get(name=CRON)
+        self.assertEqual(beat.last_started_at, self.t0)
+        self.assertEqual(beat.last_succeeded_at, self.t0)
+
+    def test_the_next_window_covers_the_long_runs_start_even_after_a_failed_tick(self):
+        self._run()  # run A: started t0, finished t0 + 20 min
+        self.clock[0] += dt.timedelta(minutes=1)  # the next tick fails: no success is recorded
+        self.ingest_all.side_effect = RuntimeError("boom")
+        with self.assertRaises(RuntimeError):
+            self._run()
+        self.ingest_all.side_effect = self._slow_run
+        self.clock[0] += dt.timedelta(minutes=10)
+        self._run("--catch-up")
+        since = self.ingest_all.call_args.kwargs["since"]
+        self.assertLessEqual(since, self.t0 - dt.timedelta(minutes=11))
+
+    def test_another_cron_still_records_its_finish_time(self):
+        from origin.services import ops_alerts
+
+        ops_alerts.cron_started("email-digest")
+        self.clock[0] += dt.timedelta(minutes=5)
+        ops_alerts.cron_succeeded("email-digest")
+        beat = CronHeartbeat.objects.get(name="email-digest")
+        self.assertEqual(beat.last_succeeded_at, self.t0 + dt.timedelta(minutes=5))

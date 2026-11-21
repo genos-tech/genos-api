@@ -22,6 +22,7 @@ from origin.search_engine.agent.tools.note_access import has_write_permission, l
 from origin.search_engine.agent.tools.note_body_hash import note_body_hash
 from origin.search_engine.agent.tools.update_note import _wrap_blocknote
 from origin.services import collab_push
+from origin.services.archive import archived_note_refusal
 from origin.views.public.mcp.note_blocks import _stored
 from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 
@@ -120,6 +121,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             f"Not authorized to edit note {ref.note_id}. You must be the owner, have editor "
             "permission on it, or be a member of the project or chat it belongs to."
         )
+    if why := archived_note_refusal(ref.family, ref.note_id):
+        raise ToolError(f"{why} Nothing was changed.")
     note = ref.note
 
     try:

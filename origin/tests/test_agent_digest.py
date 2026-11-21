@@ -454,7 +454,7 @@ class DigestCitationRewriteTests(BaseAPITestCase):
             "- [gone](task:999999) was deleted.\n"
             "- See [MDN](https://developer.mozilla.org)."
         )
-        out = rewrite_citation_md(text, team_id=str(self.team.team_id))
+        out = rewrite_citation_md(text, team_id=str(self.team.team_id), user_id=str(self.user.id))
         self.assertIn(
             f"[WRD-1](/workspace/tasks/project/{self.project.project_id}/task/{self.task.task_id})",
             out,
@@ -473,7 +473,9 @@ class DigestCitationRewriteTests(BaseAPITestCase):
             team_name="Other", team_email="other-team@example.com", owner=self.user2
         )
         out = rewrite_citation_md(
-            f"[peek](task:{self.task.task_id})", team_id=str(other_team.team_id)
+            f"[peek](task:{self.task.task_id})",
+            team_id=str(other_team.team_id),
+            user_id=str(self.user.id),
         )
         self.assertEqual(out, "peek")
 
@@ -529,6 +531,7 @@ class BareCitationTokenTests(BaseAPITestCase):
         out = rewrite_citation_md(
             f"Start with [task:{self.task.task_id}] today.",
             team_id=str(self.team.team_id),
+            user_id=str(self.user.id),
         )
         # Label comes from the entity itself (display_id), like the note path.
         self.assertIn(
@@ -542,6 +545,7 @@ class BareCitationTokenTests(BaseAPITestCase):
         out = rewrite_citation_md(
             f"[project:{self.project.project_id}] is stale.",
             team_id=str(self.team.team_id),
+            user_id=str(self.user.id),
         )
         self.assertIn(
             f"[Website Redesign](/workspace/tasks/project/{self.project.project_id})", out
@@ -550,7 +554,9 @@ class BareCitationTokenTests(BaseAPITestCase):
     def test_unresolvable_bare_token_is_left_literal(self):
         from origin.search_engine.agent.tools.entity_links import rewrite_citation_md
 
-        out = rewrite_citation_md("See [task:999999].", team_id=str(self.team.team_id))
+        out = rewrite_citation_md(
+            "See [task:999999].", team_id=str(self.team.team_id), user_id=str(self.user.id)
+        )
         self.assertEqual(out, "See [task:999999].")
 
     def test_rewriting_is_idempotent(self):
@@ -559,8 +565,9 @@ class BareCitationTokenTests(BaseAPITestCase):
         once = rewrite_citation_md(
             f"[WRD-4](task:{self.task.task_id}) and [task:{self.task.task_id}].",
             team_id=str(self.team.team_id),
+            user_id=str(self.user.id),
         )
-        twice = rewrite_citation_md(once, team_id=str(self.team.team_id))
+        twice = rewrite_citation_md(once, team_id=str(self.team.team_id), user_id=str(self.user.id))
         self.assertEqual(once, twice)
         # And the already-rewritten label is not re-consumed as a token.
         self.assertNotIn("task:", once)

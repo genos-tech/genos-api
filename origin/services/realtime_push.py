@@ -331,6 +331,43 @@ def push_message(message, event) -> None:
         logger.warning("sockets message push could not be scheduled", exc_info=True)
 
 
+def push_messages(messages, event) -> None:
+    """`push_message` for a batch (MIP-1943: "Delete all my messages" blanks up to a few hundred
+    rows in one call). One query reads them all; after the commit they are sent one by one and the
+    first failure ends the run, so an unreachable sockets costs one timeout and not one per row.
+    Whatever is not pushed is found by the next sync. Never raises."""
+    try:
+        if not settings.SOCKETS_INTERNAL_URL or not messages:
+            return
+        if not settings.SOCKETS_INTERNAL_SECRET:
+            logger.warning("sockets message push skipped: SOCKETS_INTERNAL_SECRET is unset")
+            return
+        from rest_framework.renderers import JSONRenderer  # noqa: PLC0415
+
+        from origin.models.chat.unified_models import Message  # noqa: PLC0415
+        from origin.serializers.chat.unified_serializers import MessageSerializer  # noqa: PLC0415
+        from origin.views.chat.message_views import _prefetched_messages  # noqa: PLC0415
+
+        fresh = _prefetched_messages(Message.objects.filter(pk__in=[m.pk for m in messages]))
+        payloads = [
+            {
+                "event": event,
+                "message": json.loads(JSONRenderer().render(MessageSerializer(m).data)),
+                "taskId": m.task_id,
+            }
+            for m in fresh
+        ]
+
+        def send_all() -> None:
+            for payload in payloads:
+                if not _post(payload, MESSAGE_PATH, "message"):
+                    return
+
+        transaction.on_commit(send_all, robust=True)
+    except Exception:  # noqa: BLE001 — the rows are saved; an observer must not break them
+        logger.warning("sockets messages push could not be scheduled", exc_info=True)
+
+
 # Sockets takes at most this many of each (genos-sockets `MAX_ROOMS`); a person in more than that
 # is cut off from the first ones and the rest at their next reconnect, which is the same answer
 # they got before this push existed.

@@ -614,12 +614,20 @@ class McpOnlyAndServiceTests(World):
         self.assertIsNone(_task_chip({"task_id": self.gone_task.task_id}, team, uid))
         self.assertIsNotNone(_task_chip({"task_id": self.live_task.task_id}, team, uid))
         self.assertIsNone(_milestone_chip(self.gone_ms.milestone_id, team, uid))
-        self.assertIsNone(resolve_note_entity_link(f"task:{self.gone_task.task_id}", team_id=team))
         self.assertIsNone(
-            resolve_note_entity_link(f"milestone:{self.gone_ms.milestone_id}", team_id=team)
+            resolve_note_entity_link(
+                f"task:{self.gone_task.task_id}", team_id=team, user_id=str(self.user.id)
+            )
+        )
+        self.assertIsNone(
+            resolve_note_entity_link(
+                f"milestone:{self.gone_ms.milestone_id}", team_id=team, user_id=str(self.user.id)
+            )
         )
         self.assertIsNotNone(
-            resolve_note_entity_link(f"task:{self.live_task.task_id}", team_id=team)
+            resolve_note_entity_link(
+                f"task:{self.live_task.task_id}", team_id=team, user_id=str(self.user.id)
+            )
         )
         self.assertEqual(
             context.can_open(
@@ -630,7 +638,9 @@ class McpOnlyAndServiceTests(World):
         with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
             self.assertIsNotNone(_task_chip({"task_id": self.gone_task.task_id}, team, uid))
             self.assertIsNotNone(
-                resolve_note_entity_link(f"task:{self.gone_task.task_id}", team_id=team)
+                resolve_note_entity_link(
+                    f"task:{self.gone_task.task_id}", team_id=team, user_id=str(self.user.id)
+                )
             )
             self.assertEqual(
                 context.can_open(self.ctx(self.holder), [self.gone_task.task_id]),
