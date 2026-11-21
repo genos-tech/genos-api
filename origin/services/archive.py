@@ -59,7 +59,7 @@ def ensure_project_writable(project_id, refused) -> None:
 
 
 # Argument names that point at a project's data, per kind of target. The MCP gate reads these.
-_TASK_ARGS = ("task_id", "parent_task_id")
+_TASK_ARGS = ("task_id", "parent_task_id", "blocker_task_id", "blocked_task_id")
 
 
 def _project_ids_in(args, found: set[int]) -> None:
