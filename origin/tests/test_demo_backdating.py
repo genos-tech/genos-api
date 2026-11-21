@@ -35,6 +35,7 @@ from origin.models.chat.unified_models import Channel, Message
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.search_engine.chunkers.task_chunker import iter_task_chunks
 from origin.services.demo_seeder import _backdate, create_demo_environment
 
 User = get_user_model()
@@ -112,7 +113,8 @@ class DemoBackdatingTests(TestCase):
         for model, filters in (
             (Message, {"channel__team": self.team_id}),
             (TaskMaster, {"team": self.team_id}),
-            (TaskComments, {"task__team": self.team_id}),
+            # NOT TaskComments: a comment's `ts_updated_at` is the one that moves, with its
+            # `ts_sent_at` (MIP-1808); `DemoCommentsNotEditedTests` pins why that is safe.
         ):
             oldest = model.objects.filter(**filters).aggregate(Min("ts_updated_at"))[
                 "ts_updated_at__min"
@@ -788,3 +790,94 @@ class SprintClampFallbackTests(TestCase):
             [],
             "the sweep left tasks with no sprint at all",
         )
+
+
+class DemoCommentsNotEditedTests(TestCase):
+    """MIP-1808: a seeded task comment must not read "(edited)".
+
+    The comment bubble shows the label when `tsSent` and `tsUpdated` differ to the second, and
+    the seeder backdated `ts_sent_at` only, so all 92 comments outside the Launch plan read
+    "(edited)". The fix sets `ts_updated_at` equal to `ts_sent_at` on comments; these tests also pin
+    that the search index still sees them (the reason `ts_updated_at` is otherwise never backdated).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.seeded_at = timezone.now()
+        cls.envs = {}
+        for version in ("v1", "v2"):
+            user = User.objects.create_user(
+                username=f"demo_not_edited_{version}",
+                email=f"demo_not_edited_{version}@example.com",
+                password="x",
+                is_demo=True,
+            )
+            cls.envs[version] = create_demo_environment(
+                user, short=f"edited{version}", version=version
+            )
+
+    def each_version(self):
+        """`[(version, team_id)]`: loop with `with self.subTest(version=version)` inside."""
+        return [(version, env["team_id"]) for version, env in self.envs.items()]
+
+    @staticmethod
+    def _to_the_second(value):
+        return value.replace(microsecond=0)
+
+    def test_no_seeded_comment_reads_edited(self):
+        for version, team_id in self.each_version():
+            with self.subTest(version=version):
+                comments = list(TaskComments.objects.filter(task__team=team_id))
+                self.assertGreater(len(comments), 0)
+                edited = [
+                    c.pk
+                    for c in comments
+                    if self._to_the_second(c.ts_sent_at) != self._to_the_second(c.ts_updated_at)
+                ]
+                self.assertEqual(edited, [], "comments that would read (edited)")
+
+    def test_the_comments_are_still_backdated(self):
+        for version, team_id in self.each_version():
+            with self.subTest(version=version):
+                oldest = TaskComments.objects.filter(task__team=team_id).aggregate(
+                    Min("ts_sent_at")
+                )["ts_sent_at__min"]
+                self.assertLess(oldest, self.seeded_at - timedelta(days=7))
+
+    def test_the_tasks_stay_inside_the_post_signin_reindex_window(self):
+        for version, team_id in self.each_version():
+            with self.subTest(version=version):
+                oldest = TaskMaster.objects.filter(team=team_id).aggregate(Min("ts_updated_at"))
+                self.assertGreaterEqual(oldest["ts_updated_at__min"], self.seeded_at)
+
+    def test_the_chunker_still_emits_every_comment_for_the_post_signin_window(self):
+        since = self.seeded_at - timedelta(minutes=5)
+        found = {
+            chunk.chunk_id
+            for entity in iter_task_chunks(since=since)
+            for chunk in entity.chunks
+            if chunk.chunk_type == "task_comment"
+        }
+        for version, team_id in self.each_version():
+            with self.subTest(version=version):
+                wanted = {
+                    f"task:{c.task_id}:comment:{c.comment_id}"
+                    for c in TaskComments.objects.filter(task__team=team_id, is_deleted=False)
+                    if c.comment_body
+                }
+                self.assertTrue(wanted)
+                self.assertLessEqual(wanted - found, set(), "comment chunks the reindex drops")
+
+    def test_the_helper_sets_both_columns_and_nothing_else(self):
+        from origin.services.demo_seeder import _backdate_comments
+
+        _version, team_id = self.each_version()[0]
+        first, second = TaskComments.objects.filter(task__team=team_id).order_by("pk")[:2]
+        before = TaskMaster.objects.get(task_id=first.task_id).ts_updated_at
+        when = timezone.now() - timedelta(days=9)
+        _backdate_comments({first.pk: when, second.pk: when - timedelta(days=1)})
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual((first.ts_sent_at, first.ts_updated_at), (when, when))
+        self.assertEqual(second.ts_sent_at, second.ts_updated_at)
+        self.assertEqual(TaskMaster.objects.get(task_id=first.task_id).ts_updated_at, before)
