@@ -383,6 +383,25 @@ class WhatGoesWithTheTask(PurgeBase):
         self.assertFalse(Activity.objects.filter(pk__in=[mine.pk, as_text.pk]).exists())
         self.assertTrue(Activity.objects.filter(pk=theirs.pk).exists())
 
+    def test_a_pending_email_for_the_tasks_inbox_row_goes_with_it(self):
+        """MIP-1940: the outbox link is SET_NULL, so the email would be sent with its text."""
+        from origin.models.common.notification_models import EmailNotificationEvent
+
+        task = self.make_deleted(days=60)
+        mention = Activity.objects.create(
+            team=self.team,
+            recipient=self.user2,
+            actor=self.user,
+            activity_type=ActivityType.MENTION,
+            surface_type=5,
+            meta={"taskId": task.task_id},
+        )
+        mail = EmailNotificationEvent.objects.create(
+            user=self.user2, category="mention", title="t", body="secret", activity=mention
+        )
+        self.purge()
+        self.assertFalse(EmailNotificationEvent.objects.filter(pk=mail.pk).exists())
+
     def test_the_tasks_note_and_its_files_go(self):
         task = self.make_deleted(days=60)
         note = TaskNoteMaster.objects.create(

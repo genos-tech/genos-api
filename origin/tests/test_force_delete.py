@@ -32,18 +32,23 @@ from origin.models.chat.unified_models import (
     MessageAttachment,
     MessageReaction,
 )
+from origin.models.common.inbox_models import InboxItems
+from origin.models.common.notification_models import EmailNotificationEvent
 from origin.models.common.security_event_models import SecurityAction, SecurityEvent
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import (
     TaskAttachments,
     TaskComments,
     TaskDependency,
     TaskMaster,
+    TaskTags,
 )
+from origin.models.task.task_recent_models import TaskRecent
 from origin.services import force_delete as svc
 from origin.services import unified_writer
 from origin.tests.test_base import BaseAPITestCase
@@ -145,6 +150,48 @@ class MessageForceDelete(Base):
         self.assertEqual(resp.data["removed"]["attachments"], 1)
         self.assertEqual(resp.data["left"]["empty message rows"], 1)
 
+    def test_a_pending_email_and_a_reminder_card_do_not_outlive_the_text(self):
+        """MIP-1940: `EmailNotificationEvent.activity` is SET_NULL, so deleting the Activity row
+        un-linked a PENDING mention email and the tick sent it with the erased text."""
+        from origin.services.message_reminders import ITEM_TYPE_MESSAGE_REMINDER
+
+        self.fill()
+        activity = Activity.objects.get(message=self.msg)
+        mail = EmailNotificationEvent.objects.create(
+            user=self.user, category="mention", title="t", body=SECRET, activity=activity
+        )
+        card = InboxItems.objects.create(
+            team=self.team,
+            sender=self.user2,
+            receiver=self.user,
+            item_type=ITEM_TYPE_MESSAGE_REMINDER,
+            item_body={"title": "Reminder", "text": SECRET},
+            item_optionals={"message_id": str(self.msg.id), "preview": SECRET},
+            request_status="",
+        )
+        card_mail = EmailNotificationEvent.objects.create(
+            user=self.user, category="reminder", title="t", body=SECRET, inbox_item=card
+        )
+        other = InboxItems.objects.create(
+            team=self.team,
+            sender=self.user2,
+            receiver=self.user,
+            item_type=ITEM_TYPE_MESSAGE_REMINDER,
+            item_body={"title": "Reminder", "text": "other"},
+            item_optionals={"message_id": "00000000-0000-0000-0000-000000000000"},
+            request_status="",
+        )
+        resp = self.post(self.url, self.user2)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertFalse(EmailNotificationEvent.objects.filter(pk__in=[mail.pk, card_mail.pk]))
+        self.assertFalse(InboxItems.objects.filter(pk=card.pk).exists())
+        self.assertTrue(InboxItems.objects.filter(pk=other.pk).exists())
+        self.assertFalse(
+            EmailNotificationEvent.objects.filter(body__contains=SECRET).exists(),
+            "no outbox row may still hold the erased text",
+        )
+        self.assertEqual(resp.data["removed"]["email rows and reminder cards"], 3)
+
     def test_the_group_owner_may_an_editor_and_a_member_may_not(self):
         self.assertEqual(self.post(self.url, self.editor).status_code, 403)
         self.assertEqual(self.post(self.url, self.user).status_code, 200)
@@ -244,6 +291,33 @@ class MyMessagesForceDelete(Base):
         self.assertTrue(Channel.objects.filter(pk=self.dm.pk).exists())
         self.assertEqual(resp.data["remaining"], 0)
         self.assertEqual(resp.data["removed"]["messages"], 2)
+
+    def test_the_batch_is_small_enough_for_one_request(self):
+        self.assertLessEqual(svc.MY_MESSAGES_BATCH, 200)
+
+    def test_the_open_chats_are_told_once_per_erased_message(self):
+        """MIP-1943: no push meant the text stayed on screen until the next sync."""
+        with mock.patch("origin.services.realtime_push.push_messages") as push:
+            self.post(self.url, self.user)
+        push.assert_called_once()
+        pushed = {m.pk for m in push.call_args.args[0]}
+        self.assertEqual(pushed, {m.pk for m in self.mine})
+
+    def test_queries_per_message_stay_bounded(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        for i in range(10, 20):
+            Message.objects.create(
+                channel=self.dm, sender=self.user, seq=i, body=text_body("x"), body_text="x"
+            )
+        self.authenticate(self.user)
+        with CaptureQueriesContext(connection) as ctx:
+            with self.captureOnCommitCallbacks(execute=True):
+                resp = self.client.post(self.url, CONFIRM, format="json")
+        n = resp.data["removed"]["messages"]
+        self.assertEqual(n, 12)
+        self.assertLess(len(ctx) / n, 30, f"{len(ctx)} queries for {n} messages")
 
     def test_the_partner_cannot_delete_my_messages_through_it(self):
         self.post(self.url, self.user2)
@@ -362,6 +436,62 @@ class TaskForceDelete(TaskBase):
         )
         self.assertGreater(nxt.project_task_number, 999)
 
+    def test_the_scrubbed_task_keeps_no_pr_links_tags_recents_or_calendar_link(self):
+        """MIP-1942: the row stays, so the cascades a plain delete relies on do not run."""
+        top = self.make_task(self.user2, "Top secret", content=text_body(SECRET))
+        TaskMaster.objects.filter(pk=top.pk).update(
+            project_task_number=999,
+            linked_calendar_event_id="evt-secret",
+            linked_calendar_id="cal-secret",
+        )
+        TaskDelivery.objects.create(
+            team=self.team,
+            task=top,
+            repo_owner="o",
+            repo_name="r",
+            pr_title=SECRET,
+            branch="secret-branch",
+            state="open",
+            source="webhook",
+        )
+        TaskTags.objects.create(
+            project=self.project,
+            task=top,
+            tag_id=1,
+            tag_name="t",
+            tag_color="a",
+            tag_text_color="b",
+        )
+        TaskRecent.objects.create(user=self.user2, task=top, team=self.team)
+        resp = self.post(reverse("v3_task_force_delete", args=[top.task_id]), self.user2)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertTrue(resp.data["scrubbed"])
+        top.refresh_from_db()
+        self.assertFalse(TaskDelivery.objects.filter(task_id=top.task_id).exists())
+        self.assertFalse(TaskTags.objects.filter(task_id=top.task_id).exists())
+        self.assertFalse(TaskRecent.objects.filter(task_id=top.task_id).exists())
+        self.assertIsNone(top.linked_calendar_event_id)
+        self.assertIsNone(top.linked_calendar_id)
+
+    def test_a_pending_email_for_a_task_comment_does_not_outlive_it(self):
+        """MIP-1940 for tasks: the Activity rows of the card and comment mirrors."""
+        from origin.models.chat.unified_models import Channel as Ch
+
+        chan = Ch.objects.create(team=self.team, kind=ChannelKind.GM, title="T", owner=self.user)
+        msg = Message.objects.create(
+            channel=chan, sender=self.user2, seq=1, body=text_body(SECRET), body_text=SECRET
+        )
+        Message.objects.filter(pk=msg.pk).update(task=self.task)
+        activity = Activity.objects.create(
+            team=self.team, recipient=self.user, message=msg, activity_type=ActivityType.MENTION
+        )
+        mail = EmailNotificationEvent.objects.create(
+            user=self.user, category="mention", title="t", body=SECRET, activity=activity
+        )
+        resp = self.post(self.url, self.user2)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertFalse(EmailNotificationEvent.objects.filter(pk=mail.pk).exists())
+
     def test_a_dependency_to_a_live_task_is_removed(self):
         TaskDependency.objects.create(
             team=self.team, blocker_task_id=self.task.task_id, blocked_task_id=self.anchor.task_id
@@ -433,6 +563,23 @@ class NoteForceDelete(Base):
         self.forget.assert_called_once_with(f"my-note:{self.note.note_id}")
         event = events().get()
         self.assertNotIn("Plan", f"{event.metadata} {event.target_label}")
+
+    def test_a_note_with_sub_pages_is_refused_with_a_count(self):
+        """MIP-1941: the same rule as the agent's delete tool and as tasks with sub-tasks."""
+        for owner in (self.user, self.user2):
+            PersonalNoteMaster.objects.create(
+                team=self.team,
+                owner=owner,
+                title="child",
+                body=text_body(SECRET),
+                parent_note_id=self.note.note_id,
+            )
+        resp = self.post(self.url, self.user)
+        self.assertEqual(resp.status_code, 409, resp.data)
+        self.assertEqual(resp.data["code"], "has_children")
+        self.assertEqual(resp.data["children"], 2)
+        self.assertTrue(PersonalNoteMaster.objects.filter(pk=self.note.pk).exists())
+        self.assertEqual(events().count(), 0)
 
     def test_an_editor_may_not_and_nothing_is_touched(self):
         self.assertEqual(self.post(self.url, self.user2).status_code, 403)

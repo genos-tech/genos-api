@@ -56,6 +56,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
+from origin.models.task.task_delivery_models import TaskDelivery
 from origin.models.task.task_models import (
     TaskAttachments,
     TaskBodyAttachmentFact,
@@ -64,18 +65,22 @@ from origin.models.task.task_models import (
     TaskComments,
     TaskDependency,
     TaskMaster,
+    TaskTags,
 )
-from origin.services import collab_push, member_roles, message_tombstone
+from origin.models.task.task_recent_models import TaskRecent
+from origin.services import collab_push, member_roles, message_tombstone, realtime_push
 from origin.services.activity_suppression import suppress_task_activity
 from origin.services.deleted_task_purge import (
     PurgeReport,
     _files_to_remove,
     _inbox_rows,
     _inventory,
+    erase_notification_traces,
 )
 from origin.services.note_delete import (
     FAMILIES,
     DeleteRefused,
+    child_note_count,
     delete_note,
     forget_deleted_notes,
     forget_note_attachments,
@@ -89,8 +94,10 @@ from origin.views.utils.note_role import NOTE_TYPE_TASK, ROLE_OWNER, get_effecti
 logger = logging.getLogger(__name__)
 
 CONFIRM_VALUE = "delete-permanently"
-#: One call takes at most this many of a person's messages; the response says how many remain.
-MY_MESSAGES_BATCH = 2000
+#: One call takes at most this many of a person's messages; the response says how many remain, and
+#: the client calls again. Each message costs about a dozen queries, so a batch must fit a request
+#: (2,000 in one transaction risked the gunicorn timeout and a rollback of all of it, MIP-1943).
+MY_MESSAGES_BATCH = 200
 SCRUBBED_TITLE = "(deleted)"
 
 
@@ -238,6 +245,9 @@ def _erase_message(message: Message, report: ForceDeleteReport, files: list[str]
     report.removed["reactions"] += MessageReaction.objects.filter(message=message).delete()[0]
     report.removed["flags"] += Flag.objects.filter(message=message).delete()[0]
     report.removed["reminders"] += MessageReminder.objects.filter(message=message).delete()[0]
+    report.removed["email rows and reminder cards"] += erase_notification_traces(
+        Activity.objects.filter(message=message), [message.id]
+    )
     report.removed["inbox rows"] += Activity.objects.filter(message=message).delete()[0]
     report.removed["messages"] += 1
     report.left["empty message rows"] += 1
@@ -292,6 +302,8 @@ def force_delete_my_messages(
         for message in batch:
             _erase_message(message, report, files)
         report.remaining = todo.count()
+        # The open chats (the caller's other tabs, the partner's app) show the blank rows now.
+        realtime_push.push_messages(batch, realtime_push.UPDATED)
         _event(
             request=request,
             team_id=channel.team_id,
@@ -361,6 +373,16 @@ def force_delete_note(family: str, note, *, actor, request=None) -> ForceDeleteR
     report = ForceDeleteReport("note", f"{family}:{note_id}")
     team_id = note.team_id
     with transaction.atomic():
+        # The agent's delete tool and the task rule refuse the same way (MIP-1941): sub-pages
+        # would be left pointing at nothing, and a teammate's page would lose its folder path.
+        children = child_note_count(team_id=team_id, family=family, note_id=note_id)
+        if children:
+            raise ForceDeleteRefused(
+                "has_children",
+                "Delete the sub-pages first.",
+                409,
+                {"children": children},
+            )
         try:
             delete_note(team_id=team_id, family=family, note_id=note_id)
         except DeleteRefused as exc:
@@ -437,6 +459,10 @@ def force_delete_task(task: TaskMaster, *, actor, request=None) -> ForceDeleteRe
         note_ids = list(
             TaskNoteMaster.objects.filter(task_id=task_id).values_list("note_id", flat=True)
         )
+        report.removed["email rows and reminder cards"] += erase_notification_traces(
+            _inbox_rows(task_id),
+            Message.objects.filter(task_id=task_id).values_list("id", flat=True),
+        )
         _inbox_rows(task_id).delete()
         for message in Message.objects.filter(task_id=task_id):
             message_tombstone.tombstone_message(message)
@@ -490,8 +516,13 @@ def _scrub(task: TaskMaster) -> None:
     TaskBodyAttachmentFact.objects.filter(task_id=task_id).delete()
     TaskNoteMaster.objects.filter(task_id=task_id).delete()
     TaskActivity.objects.filter(task_id=task_id).delete()
+    TaskDelivery.objects.filter(task_id=task_id).delete()
+    TaskTags.objects.filter(task_id=task_id).delete()
+    TaskRecent.objects.filter(task_id=task_id).delete()
     task.collaborators.clear()
     TaskMaster.objects.filter(pk=task.pk).update(
+        linked_calendar_event_id=None,
+        linked_calendar_id=None,
         title=SCRUBBED_TITLE,
         content=None,
         links=None,
