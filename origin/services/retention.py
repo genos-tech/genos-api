@@ -111,6 +111,10 @@ class Policy:
     eligible: Callable[[], Q] | None = None
     # For BLANK: the columns to clear and what to clear them to.
     blank_to: dict | None = None
+    # The period Ken approved (MIP-1786), or None when none is decided. It is
+    # NEVER read as a default: only `retention_purge --approved-periods`
+    # (always a dry run) uses it, to show what the period would match.
+    approved_days: int | None = None
 
     @property
     def env_var(self) -> str:
@@ -125,10 +129,13 @@ class Policy:
             return None
         return (now or timezone.now()) - timedelta(days=days)
 
-    def candidates(self, now: datetime | None = None) -> QuerySet | None:
+    def candidates(self, now: datetime | None = None, days: int | None = None) -> QuerySet | None:
         """Rows past the period and allowed to go, or `None` when the policy is
-        off. Oldest first."""
-        cutoff = self.cutoff(now)
+        off. Oldest first. `days` overrides the environment (dry-run preview)."""
+        if days is None:
+            cutoff = self.cutoff(now)
+        else:
+            cutoff = (now or timezone.now()) - timedelta(days=days)
         if cutoff is None:
             return None
         qs = self.queryset().filter(**{f"{self.age_field}__lt": cutoff})
@@ -230,6 +237,7 @@ POLICIES: tuple[Policy, ...] = (
         queryset=_agent_runs,
         age_field="started_at",
         eligible=_finished_runs,
+        approved_days=180,
     ),
     Policy(
         name="agent_step_results",
@@ -258,6 +266,7 @@ POLICIES: tuple[Policy, ...] = (
         queryset=_email_events,
         age_field="ts_created_at",
         eligible=_settled_emails,
+        approved_days=90,
     ),
     Policy(
         name="note_versions",
@@ -321,6 +330,15 @@ def run_policy(
         return Result(policy.name, days, qs.count(), 0, True)
     changed = _apply(policy, qs, cap)
     return Result(policy.name, days, changed, changed, False)
+
+
+def preview_approved(policy: Policy, *, now: datetime | None = None) -> Result | None:
+    """Count what the approved period would match. Read-only, ignores the
+    environment, and `None` for a policy with no approved period."""
+    if policy.approved_days is None:
+        return None
+    qs = policy.candidates(now, days=policy.approved_days)
+    return Result(policy.name, policy.approved_days, qs.count(), 0, True)
 
 
 def run_all(

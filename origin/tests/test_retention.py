@@ -471,10 +471,61 @@ class CommandTests(BaseAPITestCase):
         AgentRun.objects.filter(pk=run.pk).update(started_at=OLD)
 
         with _env(agent_runs=90):
-            out = self._call("--only", "agent_runs")
+            out = self._call("--only", "agent_runs", "--apply")
 
         self.assertIn("agent_runs: changed 1 rows older than 90 days", out)
         self.assertFalse(AgentRun.objects.filter(pk=run.pk).exists())
+
+    def test_without_apply_it_is_a_dry_run_even_with_a_period_set(self):
+        run = AgentRun.objects.create(
+            team_id=str(self.team.team_id), user_id=str(self.user.id), query="q", status="done"
+        )
+        AgentRun.objects.filter(pk=run.pk).update(started_at=OLD)
+
+        with _env(agent_runs=90):
+            out = self._call("--only", "agent_runs")
+
+        self.assertIn("[dry-run] agent_runs: would change 1 rows", out)
+        self.assertTrue(AgentRun.objects.filter(pk=run.pk).exists())
+
+    def test_apply_cannot_be_combined_with_a_preview(self):
+        for flag in ("--dry-run", "--approved-periods"):
+            with self.subTest(flag=flag), self.assertRaisesMessage(CommandError, "--apply"):
+                self._call("--apply", flag)
+
+    def test_approved_periods_count_without_any_variable_and_delete_nothing(self):
+        run = AgentRun.objects.create(
+            team_id=str(self.team.team_id), user_id=str(self.user.id), query="q", status="done"
+        )
+        AgentStep.objects.create(run=run, step_index=0, tool_name="t", result_json={"a": 1})
+        AgentRun.objects.filter(pk=run.pk).update(started_at=timezone.now() - timedelta(days=181))
+        young = AgentRun.objects.create(
+            team_id=str(self.team.team_id), user_id=str(self.user.id), query="q", status="done"
+        )
+        AgentRun.objects.filter(pk=young.pk).update(started_at=timezone.now() - timedelta(days=179))
+
+        out = self._call("--approved-periods")
+
+        self.assertIn("[dry-run] agent_runs: would change 1 rows older than 180 days", out)
+        self.assertIn("1 agent steps would go", out)
+        self.assertIn("email_notification_events: would change 0 rows older than 90 days", out)
+        self.assertNotIn("note_versions", out)
+        self.assertEqual(AgentRun.objects.count(), 2)
+        self.assertEqual(AgentStep.objects.count(), 1)
+
+    def test_approved_days_are_never_a_default(self):
+        for p in retention.POLICIES:
+            self.assertIsNone(p.days())
+        self.assertEqual(
+            {p.name: p.approved_days for p in retention.POLICIES if p.approved_days},
+            {"agent_runs": 180, "email_notification_events": 90},
+        )
+
+    def test_the_cron_start_command_applies_explicitly(self):
+        from pathlib import Path
+
+        toml = Path(__file__).resolve().parents[2] / "railway-retention-purge.toml"
+        self.assertIn("retention_purge --apply --heartbeat", toml.read_text())
 
 
 @override_settings()

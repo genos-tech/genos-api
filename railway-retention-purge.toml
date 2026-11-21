@@ -11,8 +11,13 @@
 #   policies and their variable names are listed by:
 #       python /app/manage.py retention_purge --list
 #
-# To see what a period would remove before setting it (no DB changes):
-#   RETENTION_AGENT_RUNS_DAYS=90 python /app/manage.py retention_purge --dry-run
+# The command is a DRY RUN unless --apply is given (MIP-1786); the start command
+# below passes --apply on purpose, so only create this service after the dry run
+# counts were seen and the variables are set. Steps:
+#   1. python /app/manage.py retention_purge --approved-periods   (counts only)
+#   2. set RETENTION_EMAIL_NOTIFICATION_EVENTS_DAYS=90 and RETENTION_AGENT_RUNS_DAYS=180
+#   3. python /app/manage.py retention_purge   (dry run with those variables)
+#   4. create the service from this file; verify by CronHeartbeat, not deploy status
 #
 # All env vars from `backend-django` (DATABASE_URL, etc.) must also be set on
 # this service, plus the RETENTION_*_DAYS variables you choose.
@@ -24,5 +29,5 @@ dockerfilePath = "Dockerfile"
 [deploy]
 # Daily, half an hour after the security-event prune so the two don't contend.
 cronSchedule = "0 4 * * *"
-startCommand = "python /app/manage.py retention_purge --heartbeat retention-purge"
+startCommand = "python /app/manage.py retention_purge --apply --heartbeat retention-purge"
 restartPolicyType = "NEVER"
