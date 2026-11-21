@@ -249,12 +249,6 @@ class TaskMasterView(AuthenticatedAPIView):
         # authenticated creator (not the `reporter` field). Note the
         # create-form bootstrap row (`is_init_task`) is a real create
         # and charges a unit — deleting it later doesn't refund.
-        # An archived project takes no new tasks (MIP-1693). First, so nothing is charged.
-        if res := archived_project_response(body_object(request).get("project")):
-            return res
-        if res := check_monthly_creation_quota(request.user.id, TASK_CREATE_KEY, "task_create"):
-            return res
-
         # The project decides who can open the task, so the caller has to
         # be on it. `align_team_to_object` already moves `team` onto the
         # project's own team, but only for a caller who reaches the
@@ -267,6 +261,13 @@ class TaskMasterView(AuthenticatedAPIView):
             project = ProjectMaster.objects.filter(project_id=project_id).first()
         if project is None:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # An archived project takes no new tasks (MIP-1693). After the membership check (MIP-1884:
+        # a stranger must not learn the archive state) and before the quota, so nothing is charged.
+        if project.archived_at is not None:
+            return archived_project_response(project.project_id)
+        if res := check_monthly_creation_quota(request.user.id, TASK_CREATE_KEY, "task_create"):
+            return res
 
         if res := _refuse_unreachable_task_links(request, project):
             return res
