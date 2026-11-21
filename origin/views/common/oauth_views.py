@@ -45,6 +45,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.user_models import MULTI_ACCOUNT_PROVIDERS, ConnectedAccount
 from origin.services import crypto, first_month_trial, signup_consent, start_here_note
+from origin.services.oauth import revoke
 from origin.services.oauth.base import FlowIntent, OAuthProvider, ProviderProfile, TokenResponse
 from origin.services.oauth.registry import get_provider, supported_provider_names
 from origin.services.security_events import record_security_event
@@ -718,7 +719,11 @@ def _disconnect_account(account: ConnectedAccount) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
     target_id = account.pk
+    # MIP-1790: read the token before the row goes, revoke it at the provider once the delete is
+    # done. Both are no-ops unless OAUTH_REVOKE_ON_DISCONNECT is on, and neither can raise.
+    grants = revoke.capture([account])
     account.delete()
+    revoke.revoke_after_commit(grants)
     record_security_event(
         SecurityAction.OAUTH_DISCONNECTED,
         actor=account.user,
