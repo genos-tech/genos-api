@@ -5,6 +5,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
+from origin.services.hidden_scope import channel_hidden_from, visible_projects_q
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxItems
 from origin.models.common.team_models import *
@@ -503,6 +504,8 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
         if project_id is not None:
             project_owner_id = list(
                 ProjectMaster.objects.filter(team_id=body["team_id"], project_id=project_id)
+                # A hidden project does not take join requests from outsiders (MIP-1699).
+                .filter(visible_projects_q(request.user.id))
                 .exclude(owner__isnull=True)
                 .values_list("owner", flat=True)
             )
@@ -682,7 +685,13 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
         # A group with no live owner (none, or a deleted account) addresses the request to its
         # longest-standing host-side member instead (MIP-1550); with nobody to receive it, 404.
         gm_owner_id = join_request_receiver(gm_channel) if gm_channel is not None else None
-        if gm_channel is None or not gm_owner_id or gm_channel.team_id != as_uuid(body["team_id"]):
+        if (
+            gm_channel is None
+            or not gm_owner_id
+            or gm_channel.team_id != as_uuid(body["team_id"])
+            # A hidden group does not take join requests from outsiders (MIP-1699).
+            or channel_hidden_from(gm_channel, request.user.id)
+        ):
             return Response(
                 {"error": "GM not found or has no owner."},
                 status=status.HTTP_404_NOT_FOUND,

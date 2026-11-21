@@ -22,6 +22,7 @@ from origin.services.member_roles import (
     can_manage,
     resolve_project_role,
 )
+from origin.services.hidden_scope import visible_projects_q
 from origin.services.project_catalog import (
     CatalogRefused,
     clean_label_color,
@@ -77,7 +78,7 @@ from origin.views.utils.upload_validation import check_image_upload
 # the endpoints that validate them. The app sends `team`, `project_name`,
 # `owner`, `is_private` and, from the create modal, `project_system_user`.
 # `code` is the one optional extra: it is checked like `PUT code` is.
-CREATE_PROJECT_FIELDS = ("team", "project_name", "is_private")
+CREATE_PROJECT_FIELDS = ("team", "project_name", "is_private", "is_hidden")
 CREATE_PROJECT_SERVER_VALUES = {
     "is_deleted": False,
     "profile_image_file_name": None,
@@ -100,6 +101,8 @@ class ProjectMasterView(AuthenticatedAPIView):
         new_code = request.data.get("code")
         new_name = request.data.get("project_name")
         new_owner_id = request.data.get("owner_id")
+        new_private = request.data.get("is_private")
+        new_hidden = request.data.get("is_hidden")
         if not project_id:
             return Response(
                 {"error": "project_id is required."},
@@ -130,6 +133,34 @@ class ProjectMasterView(AuthenticatedAPIView):
                 {"error": "Only the project owner can transfer ownership."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # Private and Hidden are the owner's switches (MIP-1699), like archive.
+        if (new_private is not None or new_hidden is not None) and actor_role != OWNER:
+            return Response(
+                {"error": "Only the project owner can change who can see the project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        for value in (new_private, new_hidden):
+            if value is not None and not isinstance(value, bool):
+                return Response(
+                    {"error": "is_private and is_hidden must be true or false."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if new_private is not None or new_hidden is not None:
+            next_private = project.is_private if new_private is None else new_private
+            next_hidden = project.is_hidden if new_hidden is None else new_hidden
+            if not next_private:
+                if new_hidden:
+                    return Response(
+                        {"error": "Only a private project can be hidden."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # Making a project public also unhides it.
+                next_hidden = False
+            if (next_private, next_hidden) != (project.is_private, project.is_hidden):
+                project.is_private = next_private
+                project.is_hidden = next_hidden
+                project.save(update_fields=["is_private", "is_hidden", "ts_updated_at"])
 
         try:
             if new_code is not None:
@@ -219,6 +250,14 @@ class ProjectMasterView(AuthenticatedAPIView):
             return res
         data = {key: request.data.get(key) for key in CREATE_PROJECT_FIELDS if key in request.data}
         data["owner"] = request.user.pk
+        if "is_hidden" in data and (
+            not isinstance(data["is_hidden"], bool)
+            or (data["is_hidden"] and data.get("is_private") is not True)
+        ):
+            return Response(
+                {"error": "Only a private project can be hidden."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if request.data.get("code"):
             code = str(request.data.get("code")).strip().upper()
             if not PROJECT_CODE_RE.match(code):
@@ -391,6 +430,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                 "ownerUserId": project_data["owner_id"],
                 "profileImagePath": project_data["profile_image_file_name"],
                 "isPrivate": project_data["is_private"],
+                "isHidden": project_data["is_hidden"],
                 "tsCreatedAt": project_data["ts_created_at"],
                 "projectMembers": project_members,
                 "projectLabels": project_labels,
@@ -584,6 +624,8 @@ class ProjectsView(AuthenticatedAPIView):
             owned_or_shared |= Q(project_id__in=list(external_grants.keys()))
         projects = (
             ProjectMaster.objects.filter(owned_or_shared)
+            # A hidden project is listed to its members only (MIP-1699).
+            .filter(visible_projects_q(attendee_id))
             .annotate(is_joined=Exists(member_exists_subquery))
             .order_by("ts_updated_at")
             .reverse()
@@ -632,6 +674,7 @@ class ProjectsView(AuthenticatedAPIView):
                 "projectTags": project_tags[project.project_id],
                 "projectLabels": project_labels[project.project_id],
                 "isPrivate": project.is_private,
+                "isHidden": project.is_hidden,
                 "isJoined": project.is_joined,
                 # The FK column, not `project_system_user.id`: that loaded
                 # the user once per project. Null (a deleted system user)

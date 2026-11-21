@@ -23,6 +23,7 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apis.request_id import describe_exception
+from origin.services.hidden_scope import project_hidden_from
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -1716,7 +1717,7 @@ class TeamInviteListView(AuthenticatedAPIView):
                         "email": i.invited_email,
                         "memberRole": i.member_role,
                         "projectId": i.project_id,
-                        "projectName": i.project.project_name if i.project_id else None,
+                        "projectName": _invite_project_name(i, request.user.id),
                         "invitedBy": i.invited_by.username if i.invited_by_id else None,
                         "expiresAt": i.expires_at,
                         "createdAt": i.ts_created_at,
@@ -1726,6 +1727,15 @@ class TeamInviteListView(AuthenticatedAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def _invite_project_name(invite, viewer_id):
+    """The project's name for the invite list; a hidden one the viewer is not in is masked (MIP-1699)."""
+    if not invite.project_id:
+        return None
+    if project_hidden_from(invite.project, viewer_id):
+        return "Hidden project"
+    return invite.project.project_name
 
 
 class TeamInviteRevokeView(AuthenticatedAPIView):

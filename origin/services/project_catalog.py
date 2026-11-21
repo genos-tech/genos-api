@@ -173,7 +173,12 @@ def invalidate_label_project_list(team_id) -> None:
     # one call every label path makes, `bulk_create` included.
     change_feed.bump_projects(team_id)
     attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
-    keys = [f"project:list:{team_id}:{attendee_id}" for attendee_id in attendee_ids if attendee_id]
+    keys = [
+        f"project:list:{team_id}:{attendee_id}{suffix}"
+        for attendee_id in attendee_ids
+        if attendee_id
+        for suffix in ("", ":archived")
+    ]
     if keys:
         cache.delete_many(keys)
 

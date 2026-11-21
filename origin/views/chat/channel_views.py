@@ -41,6 +41,7 @@ from origin.models.chat.unified_models import (
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant, TeamMaster
 from origin.models.project.prj_models import ProjectMaster
+from origin.services.hidden_scope import channel_hidden_from
 from origin.serializers.chat.unified_serializers import (
     ChannelMemberSerializer,
     ChannelSerializer,
@@ -698,6 +699,12 @@ class ChannelListView(AuthenticatedAPIView):
         title = (body.get("title") or "").strip()
         is_external = bool(body.get("is_external", False))
         is_private = bool(body.get("is_private", False))
+        is_hidden = body.get("is_hidden", False)
+        if not isinstance(is_hidden, bool):
+            return Response(
+                {"error": "is_hidden must be true or false."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         profile_image_url = body.get("profile_image_url") or ""
         member_user_ids = body.get("member_user_ids") or []
         guest_team_ids = body.get("guest_team_ids") or []
@@ -728,6 +735,11 @@ class ChannelListView(AuthenticatedAPIView):
             # (`ChannelJoinView`), which is access no grant approved — and
             # the guest side would have no way to know it happened.
             is_private = True
+        if is_hidden and (kind != ChannelKind.GM or not is_private):
+            return Response(
+                {"error": "Only a private group message can be hidden."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Validate member ids exist; collapse duplicates and drop the
         # creator if accidentally included (we add them separately as
@@ -750,6 +762,7 @@ class ChannelListView(AuthenticatedAPIView):
                     kind=kind,
                     title=title,
                     is_private=is_private,
+                    is_hidden=is_hidden,
                     is_external=is_external,
                     profile_image_url=profile_image_url,
                     owner=request.user,
@@ -856,6 +869,8 @@ class ChannelDetailView(AuthenticatedAPIView):
               "title": "<str>",              # max 80 chars
               "profile_image_url": "<str>",  # max 512 chars
               "is_private": <bool>,
+              "is_hidden": <bool>,           # needs is_private; making the
+                                             # chat public clears it.
               "owner_user_id": "<uuid>"      # transfer ownership; the
                                              # target must be a current
                                              # non-deleted member.
@@ -941,6 +956,26 @@ class ChannelDetailView(AuthenticatedAPIView):
                 )
             channel.is_private = next_private
             update_fields.append("is_private")
+            if not next_private and channel.is_hidden:
+                # Making a chat public also unhides it (MIP-1699).
+                channel.is_hidden = False
+                update_fields.append("is_hidden")
+        if "is_hidden" in body:
+            next_hidden = body.get("is_hidden")
+            if not isinstance(next_hidden, bool):
+                return Response(
+                    {"error": "is_hidden must be true or false."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if next_hidden and not channel.is_private:
+                return Response(
+                    {"error": "Only a private group can be hidden."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if channel.is_hidden != next_hidden:
+                channel.is_hidden = next_hidden
+                if "is_hidden" not in update_fields:
+                    update_fields.append("is_hidden")
         new_owner_user_id = body.get("owner_user_id") if "owner_user_id" in body else None
         if "owner_user_id" in body:
             # The outer gate now admits editors; ownership itself must
@@ -1319,6 +1354,9 @@ class ChannelJoinView(AuthenticatedAPIView):
                 {"error": "Only group messages support self-join."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if channel_hidden_from(channel, request.user.id):
+            # A hidden group does not admit it exists (MIP-1699).
+            raise Http404("Channel not found.")
         if channel.is_private:
             return Response(
                 {"error": "This group is private; request access from the owner."},

@@ -109,7 +109,9 @@ def _invalidate_project_members(sender, instance, **kwargs):
     team_id = getattr(instance, "team_id", None)
     attendee_id = getattr(instance, "attendee_id", None)
     if team_id is not None and attendee_id is not None:
-        cache.delete(f"project:list:{team_id}:{attendee_id}")
+        cache.delete_many(
+            [f"project:list:{team_id}:{attendee_id}", f"project:list:{team_id}:{attendee_id}:archived"]
+        )
 
 
 @receiver(post_save, sender=ProjectMaster)
@@ -137,7 +139,12 @@ def _invalidate_project_list(sender, instance, **kwargs):
     if team_id is None:
         return
     attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
-    keys = [f"project:list:{team_id}:{attendee_id}" for attendee_id in attendee_ids if attendee_id]
+    keys = [
+        f"project:list:{team_id}:{attendee_id}{suffix}"
+        for attendee_id in attendee_ids
+        if attendee_id
+        for suffix in ("", ":archived")
+    ]
     if keys:
         cache.delete_many(keys)
 
