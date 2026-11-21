@@ -158,6 +158,16 @@ class DeletedUserIdsTests(BaseAPITestCase):
         )
         self.assertEqual(self._get(user=guest)["data"]["deletedUserIds"], [])
 
+    def test_a_stranger_gets_not_found_and_no_ids(self):
+        """Not a member, not a guest, not an external collaborator: the team does not exist."""
+        stranger = User.objects.create_user(
+            username="Stan Stranger", email="stan@example.com", password="x"
+        )
+        self.authenticate(stranger)
+        res = self.client.get(URL, {"team_id": str(self.team.team_id)})
+        self.assertEqual(res.status_code, 404)
+        self.assertNotIn(str(self.doomed.id), res.content.decode())
+
     def test_additive_only_the_existing_keys_and_rows_are_unchanged(self):
         """Old clients ignore the new key: nothing that was there moved or changed."""
         body = self._get()
