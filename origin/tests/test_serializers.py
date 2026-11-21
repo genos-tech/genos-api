@@ -745,6 +745,7 @@ class ChannelSerializerTests(BaseAPITestCase):
             "ownerId",
             "isPrivate",
             "isHidden",
+            "description",
             "isExternal",
             "teamId",
             "hostTeamName",

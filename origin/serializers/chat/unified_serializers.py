@@ -339,6 +339,7 @@ class ChannelSerializer(serializers.ModelSerializer):
     # Hidden (MIP-1699): a private chat only its members can see. Changed through PATCH
     # (`is_hidden`), which checks it needs Private; read-only here.
     isHidden = serializers.BooleanField(source="is_hidden", read_only=True)
+    description = serializers.CharField(read_only=True)
     # A cross-team chat. Read-only on purpose: it is decided at creation
     # (`ChannelListView._create_group`) and there is no meaningful
     # conversion afterwards — an internal chat cannot become external
@@ -405,6 +406,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "ownerId",
             "isPrivate",
             "isHidden",
+            "description",
             "isExternal",
             "teamId",
             "hostTeamName",
