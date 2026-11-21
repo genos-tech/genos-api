@@ -797,9 +797,7 @@ def _portal_flow_data(stripe, customer_id: str, flow: str, plan: str | None) -> 
             # personal subscription but the SEAT COUNT for a team one,
             # and a confirm flow that omits it would resize the team as
             # a side effect of changing plan.
-            "items": [
-                {"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}
-            ],
+            "items": [{"id": item["id"], "price": price_id, "quantity": item.get("quantity") or 1}],
         },
     }
 
@@ -905,6 +903,39 @@ def _subscription_price_id(subscription) -> str | None:
     return ((items[0] or {}).get("price") or {}).get("id")
 
 
+def _release_pending_change_on_upgrade(stripe_sub: dict, previous_tier: str, new_tier: str) -> bool:
+    """Release a scheduled downgrade when the customer upgrades (MIP-1848).
+
+    A downgrade scheduled at period end (the portal setting
+    `schedule_at_period_end` on `decreasing_item_amount`) keeps the
+    subscription's schedule with the lower plan as its next phase. An
+    upgrade made afterwards is charged the difference, but Stripe keeps
+    that phase, so the plan would drop at renewal after the customer paid
+    for the higher one. Releasing the schedule keeps the current items and
+    removes the pending change. Only a tier move UP releases; scheduling a
+    downgrade (current price unchanged) never does. A failed release is
+    logged and never fails the webhook.
+    """
+    if new_tier not in PURCHASABLE_PLANS:
+        return False
+    previous_rank = (
+        PURCHASABLE_PLANS.index(previous_tier) if previous_tier in PURCHASABLE_PLANS else -1
+    )
+    if PURCHASABLE_PLANS.index(new_tier) <= previous_rank:
+        return False
+    schedule = stripe_sub.get("schedule")
+    schedule_id = schedule.get("id") if isinstance(schedule, dict) else schedule
+    if not schedule_id:
+        return False
+    try:
+        _stripe().SubscriptionSchedule.release(schedule_id)
+    except Exception:  # noqa: BLE001
+        log.warning("could not release schedule %s after an upgrade", schedule_id, exc_info=True)
+        return False
+    log.info("released schedule %s: upgraded %s -> %s", schedule_id, previous_tier, new_tier)
+    return True
+
+
 def handle_event(event) -> str:
     """Apply one verified Stripe event. Returns a short summary string
     (logged + echoed in the 200 body for `stripe listen` ergonomics).
@@ -987,7 +1018,9 @@ def handle_event(event) -> str:
             if team is not None:
                 _set_team_plan(team, tier, reason=f"{etype}:{status_}")
                 return f"team plan set to {tier}"
+            previous_tier = user.tier or "free"
             _set_personal_tier(user, tier, reason=f"{etype}:{status_}")
+            _release_pending_change_on_upgrade(obj, previous_tier, tier)
             return f"tier set to {tier}"
         if status_ in ("canceled", "unpaid", "incomplete_expired"):
             # Summaries are phrased from what the write RETURNED, here
@@ -1428,6 +1461,7 @@ def reconcile_from_stripe(user: CustomUser) -> str:
     subs = (json.loads(str(resp)) or {}).get("data") or []
 
     active_tiers: list[str] = []
+    active_subs: list[tuple[str, dict]] = []
     unmapped_active = False
     in_grace = False
     for sub in subs:
@@ -1438,12 +1472,16 @@ def reconcile_from_stripe(user: CustomUser) -> str:
                 unmapped_active = True
             else:
                 active_tiers.append(tier)
+                active_subs.append((tier, sub))
         elif status_ in ("past_due", "incomplete", "paused"):
             in_grace = True
 
     if active_tiers:
         best = max(active_tiers, key=PURCHASABLE_PLANS.index)
+        previous = user.tier or "free"
         _set_personal_tier(user, best, reason="reconcile")
+        best_sub = next(s for t, s in active_subs if t == best)
+        _release_pending_change_on_upgrade(best_sub, previous, best)
         return f"tier set to {best}"
     if unmapped_active:
         log.warning(
