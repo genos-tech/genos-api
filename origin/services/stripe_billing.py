@@ -1161,6 +1161,16 @@ def _team_by_customer(customer_id: str | None) -> TeamMaster | None:
     return TeamMaster.objects.filter(stripe_customer_id=customer_id, is_deleted=False).first()
 
 
+def team_billing_email(team: TeamMaster) -> str | None:
+    """The address Stripe mails the team's receipts and payment failures to: the OWNER's own
+    email (MIP-1904). The owner is the one payer (the checkout and portal are owner-only).
+    `team.team_email` is an internal value on a domain Genos does not own, so it must never be
+    given to Stripe. None when the owner has no usable address."""
+    owner = getattr(team, "owner", None)
+    email = (getattr(owner, "email", "") or "").strip()
+    return email or None
+
+
 def ensure_team_customer(team: TeamMaster) -> str:
     """Team twin of `ensure_customer` — same verify-then-replace rule
     for customers deleted in the dashboard."""
@@ -1175,7 +1185,7 @@ def ensure_team_customer(team: TeamMaster) -> str:
         )
     try:
         customer = stripe.Customer.create(
-            email=team.team_email,
+            email=team_billing_email(team),
             name=team.team_name,
             metadata={"genos_team_id": str(team.team_id)},
         )
