@@ -354,7 +354,9 @@ def _with_comment_threads(
     include_resolved = wanted is True or str(wanted).lower() == "true"
     return {
         **payload,
-        **note_comment_fields(note_type, note_id, ctx, include_resolved=include_resolved),
+        **note_comment_fields(
+            note_type, note_id, ctx, include_resolved=include_resolved, include_via=True
+        ),
     }
 
 
@@ -655,7 +657,8 @@ CATALOG: tuple[McpTool, ...] = (
             "Also returns the note's comment threads as `comment_threads`: "
             "reviewers' comments on parts of the text, each with the "
             "`anchor_text` it sits on, its replies (`author`, `ts`, "
-            "`markdown`) and whether it is `resolved`. Open threads come "
+            "`markdown`, and `via` on a comment an AI app wrote: its `kind`, and "
+            "`app` for Claude or ChatGPT) and whether it is `resolved`. Open threads come "
             "first; resolved ones are left out unless `include_resolved` is "
             "true. Answer a thread with `reply_to_note_comment`, settle it with "
             "`resolve_note_comment`; both take its `thread_id`. Returns `body_hash`: "

@@ -10,8 +10,7 @@ command for stale demos.
 Cleanup cannot rely on FK CASCADE — most FKs in this codebase use
 SET_NULL, and several chat/note tables reference rows via bare
 UUIDField (no FK at all). `delete_demo_team_data` therefore enumerates
-every team-scoped table explicitly. v1 intentionally skips
-MentionFact, ReactionFact, ToDoFact, ReadStatus, ActivityFact, and
+every team-scoped table explicitly. v1 intentionally skips ToDoFact and
 TaskActivity in the seeder; cleanup still sweeps them so demos created
 via future interactive use are removed cleanly.
 
@@ -44,9 +43,6 @@ from origin.middleware.current_user import (
     get_current_user,
     set_current_user,
 )
-from origin.models.chat.activity_models import ActivityFact
-from origin.models.chat.mention_models import MentionFact
-from origin.models.chat.reaction_models import ReactionFact
 from origin.models.chat.todo_models import ToDoCategory, ToDoGroup, ToDoItem
 from origin.models.chat.unified_models import (
     Channel,
@@ -421,7 +417,25 @@ def assert_content_parity() -> None:
 # couldn't find anything" — the worst possible first impression.
 #
 # So every field below is a display field, and `ts_updated_at` is never
-# named. Because `auto_now_add` / `auto_now` ignore values passed to
+# named — with ONE exception, a task comment's (`_backdate_comments`).
+# The comment bubble reads "edited" when `ts_sent_at` and `ts_updated_at`
+# differ to the second, so a backdated `ts_sent_at` next to a
+# seeding-time `ts_updated_at` made every demo comment read "(edited)"
+# (MIP-1808). That one is safe to set equal to `ts_sent_at` because:
+#   * the reindex window is unaffected: `task_chunker` re-emits a task
+#     when the TASK or one of its comments is newer than `since`, and then
+#     loads ALL its live comments; a demo task's own `ts_updated_at` is
+#     never backdated, so every demo task is inside the window;
+#   * nothing else reads a comment's `ts_updated_at` as a clock (the
+#     briefing, timeline, item lines and activity feeds all use
+#     `ts_sent_at`);
+#   * the cost is bounded and the same as for any real comment of that
+#     age: the comment's own chunk carries `updated_at = ts_updated_at`,
+#     so Spotlight's freshness decay (`exp(-age_days/90)`, typeahead and
+#     ai_search modes) scores it x0.4 to x1.0 for comments up to 12
+#     weeks old, while the task's title and content chunks stay fresh.
+#
+# Because `auto_now_add` / `auto_now` ignore values passed to
 # `create()`, backdating has to be a post-create `.update()` sweep:
 # `.update()` bypasses `pre_save` (so `auto_now` does not re-fire) and
 # writes only the columns named.
@@ -463,6 +477,20 @@ def _backdate_each(model, pk_to_value: dict, field: str) -> None:
         by_value.setdefault(value, []).append(pk)
     for value, pks in by_value.items():
         model.objects.filter(pk__in=pks).update(**{field: value})
+
+
+def _backdate_comments(pk_to_value: dict) -> None:
+    """Backdate task comments: `ts_sent_at` AND `ts_updated_at` to the same instant.
+
+    The only `ts_updated_at` the seeder sets, and only because the comment
+    bubble shows "edited" when the two differ (see the module comment above:
+    why it is safe for the search index). One `.update()` per distinct value.
+    """
+    by_value: dict = {}
+    for pk, value in pk_to_value.items():
+        by_value.setdefault(value, []).append(pk)
+    for value, pks in by_value.items():
+        TaskComments.objects.filter(pk__in=pks).update(ts_sent_at=value, ts_updated_at=value)
 
 
 # How far back the workspace's history reaches. 12 weeks reads as "this
@@ -640,8 +668,9 @@ def _backdate_history(team, demo_user, bots, seeded_projects, now) -> None:
     the blueprint tables stay pure content with no timeline bookkeeping
     mixed in.
 
-    Never touches `ts_updated_at` on anything (see the module comment
-    above); `_backdate`'s assertion enforces that mechanically.
+    Touches `ts_updated_at` on nothing but a task comment's, and that only through
+    `_backdate_comments` (see the module comment above); `_backdate`'s assertion
+    enforces that mechanically.
     """
     # ---- Chat ----------------------------------------------------------
     # DM channels carry no title, so they are located by their membership
@@ -888,7 +917,7 @@ def _backdate_project_tasks(project, now) -> None:
             newest_days_ago=min(newest, max(age - 1, 1)),
             now=now,
         )
-        _backdate_each(TaskComments, dict(zip(comment_pks, stamps)), "ts_sent_at")
+        _backdate_comments(dict(zip(comment_pks, stamps)))
 
 
 def _backdate_pm_channel(pm_channel, now) -> None:
@@ -2866,22 +2895,6 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
     with transaction.atomic(), suppress_task_activity():
         # Pre-collect parent IDs once so children can be filtered by
         # them without triggering N+1 lookups.
-        # Legacy chat ids (still the key on the kept Mention/Reaction fact
-        # tables) are derived from the v3 channels via `legacy_chat_id` —
-        # the legacy DM/GM master tables are gone.
-        dm_ids = list(
-            Channel.objects.filter(team=team_id, kind=ChannelKind.DM)
-            .exclude(legacy_chat_id=None)
-            .values_list("legacy_chat_id", flat=True)
-        )
-        gm_ids = list(
-            Channel.objects.filter(team=team_id, kind=ChannelKind.GM)
-            .exclude(legacy_chat_id=None)
-            .values_list("legacy_chat_id", flat=True)
-        )
-        project_ids = list(
-            ProjectMaster.objects.filter(team=team_id).values_list("project_id", flat=True)
-        )
         task_ids = list(TaskMaster.objects.filter(team=team_id).values_list("task_id", flat=True))
         member_ids = list(
             TeamMembers.objects.filter(team=team_id).values_list("attendee_id", flat=True)
@@ -2896,19 +2909,6 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         personal_note_ids = list(
             PersonalNoteMaster.objects.filter(team=team_id).values_list("note_id", flat=True)
         )
-
-        # Fact tables that key off (chat_type, chat_id) with no FK — must
-        # filter explicitly to avoid leaking rows. (MentionFact / ReactionFact
-        # are kept analytics tables; the legacy ChatAttachmentFact / ReadStatus
-        # tables are dropped, so they're no longer cleaned here.)
-        for chat_type, chat_ids in [(1, dm_ids), (2, gm_ids), (3, project_ids)]:
-            if not chat_ids:
-                continue
-            MentionFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
-            ReactionFact.objects.filter(chat_type=chat_type, chat_id__in=chat_ids).delete()
-
-        # ActivityFact is team-scoped via a proper FK.
-        ActivityFact.objects.filter(team=team_id).delete()
 
         # Legacy DM/GM/MDM/PM chat trees + UserChatMaster are gone (their
         # tables were dropped in the v3 migration); chat lives entirely on

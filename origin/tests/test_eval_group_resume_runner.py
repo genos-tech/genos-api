@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import datetime
+from datetime import timezone as dt_timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -30,6 +32,7 @@ import yaml
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connections
+from django.utils import timezone as django_timezone
 
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine import agent_views
@@ -42,6 +45,12 @@ from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 GROUP_DIR = Path(resume_runner.__file__).parent
 MY_TAGS = ("t977", "t991", "t1283", "t889-reason", "t889-undo", "t1530")
+# The day the agent is told it is ("Today's date is ...", `controller._current_date_line`) while these tests run. The
+# case files hold literal dates (t1057: due 2026-11-21 and 2026-12-05, 2026-12-12) and some checks say a prompt must NOT
+# contain one, so on the day the real clock equals a fixture date they failed (2026-11-21, every api PR red). Pinned to a
+# day that is no fixture's date and is never "today" for the tests again.
+PINNED_NOW = datetime(2027, 2, 10, 12, 0, tzinfo=dt_timezone.utc)
+PINNED_DATE_LINE = "Today's date is 2027-02-10 (Wednesday)"
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -64,6 +73,16 @@ def arm_overrides(tag: str) -> dict[str, Any]:
         merged.update(arm_overrides(dep))
     merged.update(data.get("overrides") or {})
     return merged
+
+
+class PinnedTimezone:
+    """`django.utils.timezone` with only `now()` fixed (swapped in for the name `timezone` inside the controller)."""
+
+    def now(self):
+        return PINNED_NOW
+
+    def __getattr__(self, name):
+        return getattr(django_timezone, name)
 
 
 class StubModel:
@@ -113,6 +132,8 @@ class RunnerBase(CheapFlushTransactionTestCase):
             mock.patch.object(controller, "get_model_client", return_value=self.model),
             mock.patch.object(agent_views, "run_agent", side_effect=closing(real_run)),
             mock.patch.object(agent_views, "resume_agent", side_effect=closing(real_resume)),
+            # only the controller's own clock: the database, tokens and the rest keep the real one
+            mock.patch.object(controller, "timezone", PinnedTimezone()),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -139,6 +160,24 @@ class ShapeTests(RunnerBase):
         )
         self.assertNotIn("error", result)
         self.assertEqual(result["answer"], "Stub answer.")
+
+    def test_the_agent_is_told_the_pinned_day_not_the_day_the_tests_run(self):
+        self.run_case(self.case("t977.plain-ask.approve.en"))
+        system = self.model.calls[0][0]
+        self.assertIn(PINNED_DATE_LINE, system)
+
+    def test_the_prompt_checks_read_the_prompt_without_the_runs_own_date(self):
+        # The case files hold literal dates; the clock line must not be able to match or break a check on one.
+        line = "Today's date is 2026-11-21 (Saturday) in the UTC timezone."
+        text = resume_runner.prompt_text(
+            {"system": f"Be brief.\n\n{line}", "messages": []},
+        )
+        self.assertNotIn("2026-11-21", text)
+        self.assertNotIn("Today's date", text)
+        self.assertIn("Be brief.", text)
+        # and what the model under test is sent still carries it (the stub recorded the real call)
+        self.run_case(self.case("t977.plain-ask.approve.en"))
+        self.assertIn(PINNED_DATE_LINE, self.model.calls[0][0])
 
     def test_both_legs_ran_through_the_production_views(self):
         result = self.run_case(self.case("t977.plain-ask.approve.en"))

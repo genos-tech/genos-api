@@ -49,7 +49,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageAttachmentSerializer,
     MessageSerializer,
 )
-from origin.services import message_via, webhook_enqueue
+from origin.services import message_tombstone, message_via, webhook_enqueue
 from origin.services.channel_scope import chat_member_rows, is_chat_member
 from origin.services.deleted_account_channel_owners import acts_as_owner
 from origin.services.mention_extractor import (
@@ -838,8 +838,11 @@ class MessageDetailView(AuthenticatedAPIView):
         """Soft-delete a message.
 
         Authorization: sender always, OR the channel owner. Sets
-        `deleted_at` to now (a tombstone marker — the body is kept so
-        future audit/recovery works, but the FE renders it as deleted).
+        `deleted_at` to now and clears the text in the same save
+        (`message_tombstone`, MIP-1784): the row stays as a tombstone so
+        the thread, `seq` and the client's sync hold, but it says nothing.
+        There is no server-side undo (the app asks first, and its Undo
+        for task comments is client-side), so nothing needs the text.
 
         Decrements the parent's reply_count if this is a thread reply.
         """
@@ -853,12 +856,15 @@ class MessageDetailView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         if message.deleted_at is not None:
-            # Idempotent — already gone.
+            # Idempotent — already gone. A row an older delete left with its text is cleaned
+            # now (the sender, or the owner, asking again is enough).
+            if message_tombstone.has_text(message):
+                with transaction.atomic():
+                    message_tombstone.tombstone_message(message)
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         with transaction.atomic():
-            message.deleted_at = timezone.now()
-            message.save(update_fields=["deleted_at", "ts_updated_at"])
+            message_tombstone.tombstone_message(message)
             if message.parent_id is not None:
                 # Decrement the parent's reply_count via an F-expression so
                 # the read-modify-write happens atomically in SQL. The

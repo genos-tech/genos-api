@@ -80,6 +80,7 @@ import base64
 import copy
 import json
 import logging
+import re
 import threading
 import uuid
 from collections.abc import Iterator
@@ -155,9 +156,19 @@ class RecordingClient:
         return getattr(self._inner, name)
 
 
+# The "today" anchor `controller._current_date_line` appends to the system instruction.
+_DATE_LINE = re.compile(r"Today's date is \d{4}-\d{2}-\d{2} \([A-Za-z]+\) in the \S+ timezone\.")
+
+
 def prompt_text(call: dict[str, Any]) -> str:
-    """One call's whole prompt as text: the system instruction, then every message."""
-    parts = [call.get("system") or ""]
+    """One call's whole prompt as text, for the prompt checks: the system instruction, then every message.
+
+    Without the "Today's date is ..." line: it is the run's own clock, not part of the case, and a case's
+    literal date ("2026-11-21") is checked against the prompt as present or absent. On the day the real date
+    equaled a fixture's, a `*_prompt_excludes` check failed (2026-11-21, t1057) and a `*_prompt_contains` one
+    could pass on the clock alone. Only what the checks read is cut; the model is sent the line as before.
+    """
+    parts = [_DATE_LINE.sub("", call.get("system") or "")]
     for m in call.get("messages") or []:
         if m.function_call is not None:
             parts.append(

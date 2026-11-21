@@ -34,6 +34,7 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.serializers.chat.unified_serializers import MessageSerializer
 from origin.services import demo_launch_plan
 from origin.services.demo_seeder import create_demo_environment, delete_demo_environment
+from origin.services.user_time import user_today
 from origin.views.public.mcp.via_privacy import via_for_viewer
 
 User = get_user_model()
@@ -71,7 +72,8 @@ class _Workspace:
         self.visitor = _user(f"lp_{short}")
         self.env = create_demo_environment(self.visitor, short=short, lang=lang, version="v2")
         self.team_id = self.env["team_id"]
-        self.copy = demo_launch_plan.COPY[lang]
+        self.today = user_today(self.visitor)
+        self.copy = demo_launch_plan.resolve_copy(lang, self.today)
         self.project = ProjectMaster.objects.get(
             team_id=self.team_id, project_name=self.copy["project"]
         )
@@ -79,7 +81,7 @@ class _Workspace:
             key: TaskMaster.objects.get(project=self.project, title=title)
             for key, (title, _summary) in self.copy["tasks"].items()
         }
-        self.note = TaskNoteMaster.objects.get(project=self.project, title=self.copy["note_title"])
+        self.note = TaskNoteMaster.objects.get(project=self.project)
         self.colleague = User.objects.get(
             pk__in=TeamMembers.objects.filter(team_id=self.team_id).values("attendee_id"),
             username="Alice Chen",
@@ -127,12 +129,18 @@ class DemoLaunchPlanTests(TestCase):
             )
 
     def test_the_decision_note_says_what_and_why(self):
-        self.assertEqual(self.en.note.title, "Decision: launch on March 12")
+        dates = demo_launch_plan.plan_dates(self.en.today)
+        launch = demo_launch_plan.format_day("en", dates["launch"])
+        review = demo_launch_plan.format_day("en", dates["review"])
+        self.assertEqual(self.en.note.title, f"Decision: launch on {launch}")
         text = json.dumps(self.en.note.body)
-        self.assertIn("March 5", text)
+        self.assertIn(review, text)
         self.assertIn("Proposed by Claude", text)
         self.assertEqual(self.en.note.task_id, self.en.tasks["legal"].task_id)
-        self.assertIn("3月5日", json.dumps(self.ja.note.body, ensure_ascii=False))
+        ja_review = demo_launch_plan.format_day(
+            "ja", demo_launch_plan.plan_dates(self.ja.today)["review"]
+        )
+        self.assertIn(ja_review, json.dumps(self.ja.note.body, ensure_ascii=False))
 
     def test_both_languages_carry_the_same_plan(self):
         en, ja = demo_launch_plan.COPY["en"], demo_launch_plan.COPY["ja"]
@@ -140,19 +148,24 @@ class DemoLaunchPlanTests(TestCase):
         for key in ("tasks", "comments"):
             self.assertEqual(list(en[key]), list(ja[key]))
         self.assertEqual(len(en["tags"]), len(ja["tags"]))
-        self.assertEqual(len(en["note_sections"]("x")), len(ja["note_sections"]("x")))
+        days = {key: "d" for key in ("launch", "review", "room", "later")}
+        self.assertEqual(len(en["note_sections"]("x", days)), len(ja["note_sections"]("x", days)))
 
     def test_every_task_is_filed_with_tags_and_effort(self):
         for ws in self.each_language():
             for task in ws.tasks.values():
                 self.assertTrue(task.tags and task.effort_level and task.effort_level_code)
 
-    def test_the_due_dates_and_the_text_agree_on_the_same_march(self):
+    def test_the_due_dates_and_the_text_agree_on_the_same_dates(self):
+        """The dates are offsets from the visitor's day (`test_demo_launch_plan_dates` tries other
+        days); the legal task is due the day the text says the review ends."""
         for ws in self.each_language():
+            dates = demo_launch_plan.plan_dates(ws.today)
             due = {key: task.due_date for key, task in ws.tasks.items()}
-            self.assertEqual({d.month for d in due.values()}, {3})
-            self.assertEqual(due["legal"].day, 5)
-            self.assertEqual(len({d.year for d in due.values()}), 1)
+            self.assertEqual(due, dates["due"])
+            self.assertEqual(due["legal"], dates["review"])
+            text = json.dumps(ws.copy["tasks"]["legal"], ensure_ascii=False)
+            self.assertIn(demo_launch_plan.format_day(ws.lang, dates["review"]), text)
 
     # --- Claude's writes are stamped by the real funnel ---------------------------------------
 
@@ -321,11 +334,19 @@ class DemoLaunchPlanLifecycleTests(TestCase):
     def test_the_chat_cards_are_current_when_the_signin_commits(self):
         """Claude's writes schedule a card refresh for commit (the app would rewrite its own card;
         a connected app has no browser). The cards are built by the refresh's own builder, so
-        running it changes nothing."""
-        user = _user("lp_commit")
+        running it changes nothing: in either language (MIP-1744: the Japanese workspace's cards
+        used to be English, and the refresh agreed with them)."""
+        for lang, field in (("en", "Status: "), ("ja", "ステータス：")):
+            with self.subTest(lang=lang):
+                self._cards_are_current_when_the_signin_commits(lang, field)
+
+    def _cards_are_current_when_the_signin_commits(self, lang, field):
+        user = _user(f"lp_commit_{lang}")
         with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            ws = create_demo_environment(user, short="lpcommit", lang="en", version="v2")
-        project = ProjectMaster.objects.get(team_id=ws["team_id"], project_name="Launch plan")
+            ws = create_demo_environment(user, short=f"lpcommit{lang}", lang=lang, version="v2")
+        project = ProjectMaster.objects.get(
+            team_id=ws["team_id"], project_name=demo_launch_plan.COPY[lang]["project"]
+        )
         channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
         before = {
             m.pk: (m.body, m.metadata, m.ts_updated_at)
@@ -338,6 +359,15 @@ class DemoLaunchPlanLifecycleTests(TestCase):
             for m in Message.objects.filter(channel=channel)
         }
         self.assertEqual(before, after)
+        cards = list(
+            Message.objects.filter(channel=channel, task__isnull=False, is_thread_reply=False)
+        )
+        self.assertGreaterEqual(len(cards), 4)
+        for card in cards:
+            first_rows = [
+                "".join(c.get("text", "") for c in block.get("content", [])) for block in card.body
+            ]
+            self.assertTrue(any(row.startswith(field) for row in first_rows), (lang, first_rows))
 
     def test_the_plan_is_swept_with_the_team(self):
         user = _user("lp_sweep")
