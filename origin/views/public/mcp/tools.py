@@ -146,6 +146,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
     progress,
     result_limits,
     secretary,
+    surfaces,
     via_privacy,
 )
 from origin.views.public.mcp.history_window import hide_old_messages  # noqa: E402
@@ -2633,7 +2634,9 @@ def _permitted(tool: McpTool, scope: str, allow_destructive: bool) -> bool:
     return allow_destructive or not tool.destructive
 
 
-def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpTool]:
+def visible_tools(
+    scope: str, *, allow_destructive: bool = False, surface: str | None = None
+) -> list[McpTool]:
     """The catalog this key may see, in a stable order.
 
     Write tools are hidden from a read-only key, and destructive ones from
@@ -2652,6 +2655,7 @@ def visible_tools(scope: str, *, allow_destructive: bool = False) -> list[McpToo
         if t.registry_name not in disabled
         and published(t)
         and _permitted(t, scope, allow_destructive)
+        and surfaces.publishes(surface, t.name)
     ]
 
 
@@ -3053,6 +3057,7 @@ def call(
     audit: Callable[[str, str, dict[str, Any], dict[str, Any]], None] | None = None,
     record_use: Callable[["McpTool", dict[str, Any]], None] | None = None,
     notify: Callable[["McpTool", dict[str, Any], dict[str, Any]], None] | None = None,
+    surface: str | None = None,
 ) -> dict[str, Any]:
     """Run a published tool and shape its output as a `CallToolResult`.
 
@@ -3061,10 +3066,17 @@ def call(
     the wrong key scope. Those go back to the model, which is the only
     party that can act on them. An *unknown tool* is not that: it means
     the client and server disagree about what exists, so it raises and
-    becomes a JSON-RPC protocol error instead.
+    becomes a JSON-RPC protocol error instead. `surface` is the endpoint
+    the call came through (MIP-1594): a name that endpoint does not list
+    is unknown there, as it would be on a server that never published it.
     """
     tool = BY_NAME.get(name)
-    if tool is None or tool.registry_name in _disabled_tools() or not published(tool):
+    if (
+        tool is None
+        or tool.registry_name in _disabled_tools()
+        or not published(tool)
+        or not surfaces.publishes(surface, name)
+    ):
         raise on_unknown_tool(name)
 
     args = dict(arguments or {})

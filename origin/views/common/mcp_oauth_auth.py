@@ -112,8 +112,9 @@ class McpOAuthAuthentication(authentication.BaseAuthentication):
         if "mcp:read" not in (token.scope or "").split():
             return "scope"
         resources = token.resource or []
-        if resources != [mcp_oauth.resource_identifier()]:
-            # Empty = unrestricted in the library; more than one = also valid elsewhere.
+        # Exactly one resource, and it is this server's (the full endpoint or one of its surfaces,
+        # MIP-1594). Empty = unrestricted in the library; more than one = also valid elsewhere.
+        if len(resources) != 1 or resources[0] not in mcp_oauth.resource_identifiers():
             return "audience"
         if connection is None or not connection.is_active:
             return "connection_revoked"

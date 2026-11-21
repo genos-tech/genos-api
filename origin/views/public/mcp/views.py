@@ -77,6 +77,10 @@ class McpView(PublicApiView):
     # answer `[1]` with a bare 400 `{"error": ...}` instead.
     object_body_required = False
 
+    # Which endpoint this is (MIP-1594): `None` is the full catalog, otherwise a key of
+    # `surfaces.SURFACE_SEGMENTS`, set per URL with `as_view(surface=...)`, never per request.
+    surface: str | None = None
+
     def dispatch(self, request, *args, **kwargs):
         # Before DRF authenticates or parses anything: an oversized request is refused on its
         # `Content-Length` alone, so it costs no key lookup and no JSON parse (`request_guard`).
@@ -278,7 +282,9 @@ class McpView(PublicApiView):
         if method == "tools/list":
             listed = [
                 tools.describe(t, getattr(credential_of(request), "kind", "api_key"))
-                for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+                for t in tools.visible_tools(
+                    scope, allow_destructive=allow_destructive, surface=self.surface
+                )
             ]
             # The one cacheable result we serve, so the one that carries
             # cache hints. See `protocol.CACHE_HINTS_NO_STORE` for why the
@@ -305,6 +311,7 @@ class McpView(PublicApiView):
                     allow_destructive,
                     credential_kind=getattr(credential_of(request), "kind", "api_key"),
                     request=request,
+                    surface=self.surface,
                 ),
                 modern=modern,
             )
@@ -327,7 +334,10 @@ class McpView(PublicApiView):
                 )
             # Written for what this key can do: see `prompts.py`.
             visible = frozenset(
-                t.name for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+                t.name
+                for t in tools.visible_tools(
+                    scope, allow_destructive=allow_destructive, surface=self.surface
+                )
             )
             return self._ok(
                 request_id,
@@ -491,6 +501,7 @@ class McpView(PublicApiView):
         allow_destructive: bool,
         credential_kind: str = "api_key",
         request=None,
+        surface: str | None = None,
     ) -> dict[str, Any]:
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -501,7 +512,10 @@ class McpView(PublicApiView):
 
         def unknown(tool_name: str) -> Exception:
             available = ", ".join(
-                t.name for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+                t.name
+                for t in tools.visible_tools(
+                    scope, allow_destructive=allow_destructive, surface=surface
+                )
             )
             return JsonRpcError(
                 protocol.INVALID_PARAMS,
@@ -577,6 +591,7 @@ class McpView(PublicApiView):
                     audit=audit,
                     record_use=record_use,
                     notify=notify,
+                    surface=surface,
                 )
                 # Size and name for the `perf.request` line, and the shadow cap's log line
                 # (MIP-1367). Observes only: `result` goes back exactly as built.

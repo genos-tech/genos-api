@@ -22,6 +22,7 @@ from django.conf import settings
 from oauth2_provider.cimd import is_cimd_client_id
 
 from apis.mcp_oauth_settings import MCP_PATH, SCOPES
+from origin.views.public.mcp import surfaces
 
 MAX_BODY_BYTES = 8192
 MAX_REDIRECT_URIS = 5
@@ -86,6 +87,16 @@ def public_base() -> str:
 def resource_identifier() -> str:
     """The one resource an access token is for: the MCP endpoint (RFC 8707)."""
     return f"{public_base()}{MCP_PATH}"
+
+
+def resource_identifiers() -> frozenset[str]:
+    """Every resource a token may be for: the full MCP endpoint and each of its surfaces (core and
+    domains, MIP-1594). They are one server, so one connection's token works on all of them; no
+    other URL is accepted, and a token for the full endpoint is the one the consent step issues."""
+    base = public_base()
+    return frozenset(
+        {resource_identifier(), *(f"{base}{MCP_PATH}/{seg}" for seg in surfaces.SURFACE_SEGMENTS)}
+    )
 
 
 def consent_url() -> str:
@@ -214,8 +225,9 @@ def authorize_problem(method: Any, challenge: Any, resources: list[str]) -> tupl
     none is given ours (there is only one to give)."""
     if method != "S256" or not isinstance(challenge, str) or not _CHALLENGE.fullmatch(challenge):
         return "invalid_request", "PKCE with code_challenge_method=S256 is required."
+    accepted = resource_identifiers()
     for resource in resources:
-        if resource != resource_identifier():
+        if resource not in accepted:
             return "invalid_target", "This server only issues tokens for its MCP endpoint."
     return None
 
