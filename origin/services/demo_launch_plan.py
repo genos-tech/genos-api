@@ -313,15 +313,17 @@ def _task_body(summary: str) -> list:
     return _body(("🧾 Summary", [summary]))
 
 
-def _post_card(task, channel) -> None:
+def _post_card(task, channel, lang) -> None:
     """The task's chat card, as the product builds it for a task made over MCP.
 
     `_task_card_parts` is the builder `task_card_post` uses for that card AND for its refresh after
     an edit, so the refresh that runs when the sign-in commits finds the card current and writes
-    nothing. Its labels are English (the refresh's are too); `message_via.stamped` is the funnel
-    that puts the connected app's kind and family on the message, for the icon."""
+    nothing. Its labels are in the workspace's language `lang`, which is the language of the card's
+    sender (the reporter: the visitor, whose `language` the seeder set), the one the refresh reads
+    (MIP-1744); `message_via.stamped` is the funnel that puts the connected app's kind and family
+    on the message, for the icon."""
     fresh = TaskMaster.objects.select_related("project", "assignee", "reporter").get(pk=task.pk)
-    body, body_text, metadata = _task_card_parts(fresh)
+    body, body_text, metadata = _task_card_parts(fresh, lang)
     next_seq = Message.objects.filter(channel=channel).count() + 1
     Message.objects.create(
         channel=channel,
@@ -461,7 +463,7 @@ def create_launch_plan(team, demo_user, bots, lang, *, label, sprint_name) -> Pr
     channel = Channel.objects.get(project=project, kind=ChannelKind.PM)
     for spec in TASKS:
         with _writing(demo_user, via_of[spec["by"]]):
-            _post_card(tasks[spec["key"]], channel)
+            _post_card(tasks[spec["key"]], channel, lang)
 
     for key, by, copy_key in COMMENTS:
         with _writing(demo_user, via_of[by]):
