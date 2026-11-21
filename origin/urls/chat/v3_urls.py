@@ -67,8 +67,8 @@ from origin.views.chat.activity_views_v3 import (
 from origin.views.chat.channel_restore_views import ChannelRestoreView, DeletedChannelListView
 from origin.views.chat.channel_views import (
     ChannelDetailView,
-    ChannelInlineUploadView,
     ChannelDirectoryView,
+    ChannelInlineUploadView,
     ChannelJoinView,
     ChannelListView,
     ChannelMemberDetailView,
