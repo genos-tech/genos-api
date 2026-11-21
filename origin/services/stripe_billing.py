@@ -1016,7 +1016,11 @@ def handle_event(event) -> str:
                 )
                 return "ignored: unmapped price"
             if team is not None:
+                previous_plan = team.plan or "free"
                 _set_team_plan(team, tier, reason=f"{etype}:{status_}")
+                # MIP-1892: same as the personal path; the team portal shares the
+                # account-level configuration, so a team can schedule a downgrade too.
+                _release_pending_change_on_upgrade(obj, previous_plan, tier)
                 return f"team plan set to {tier}"
             previous_tier = user.tier or "free"
             _set_personal_tier(user, tier, reason=f"{etype}:{status_}")
