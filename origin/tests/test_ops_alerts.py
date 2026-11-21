@@ -18,7 +18,9 @@ What's pinned, roughly in order of how silently each would break:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import ssl
 import time
@@ -58,23 +60,24 @@ def _tomls():
     return sorted(p for p in REPO.glob("railway-*.toml"))
 
 
-# Crons that do not beat a heartbeat (MIP-1823). Their job runs in another
-# image: genos-collab's sweep runs on Node in the collab image, which has no
-# Django and no write access to this database, so it cannot write a
-# CronHeartbeat row. It logs a success line, and Railway's run history is its
-# only record. Keep this set to exactly those services: a cron added here is
-# a cron whose death nobody hears about. Pinned by
-# test_the_collab_orphan_sweep_is_the_only_cron_without_a_heartbeat.
-NO_HEARTBEAT_CRONS = frozenset({"collab-orphan-sweep"})
+# Crons that beat from outside Django (MIP-1823, MIP-1858). genos-collab's sweep
+# runs on Node in the collab image, which has no write access to this database,
+# so it cannot write a CronHeartbeat row itself. It reports each run to
+# `api/v2/health/cron/<name>/` instead (`ops_alerts.EXTERNAL_CRONS`), and its
+# start command carries no `--heartbeat`. Keep this set to exactly those
+# services. Pinned by test_the_collab_orphan_sweep_beats_from_outside_django.
+NO_HEARTBEAT_CRONS = ops_alerts.EXTERNAL_CRONS
 
 
 def _ts_crons() -> dict[str, str]:
     """The cron services in `.railway/railway.ts` (MIP-857), service name to
-    start command, except `NO_HEARTBEAT_CRONS`. A service created after
+    start command, except `NO_HEARTBEAT_CRONS` (those beat from outside Django). A service created after
     2026-08-28 cannot have a railway-*.toml, so that file is where a new cron
     is defined."""
     text = (REPO / ".railway" / "railway.ts").read_text()
-    return {name: start for name, start in _TS_SERVICE.findall(text) if name not in NO_HEARTBEAT_CRONS}
+    return {
+        name: start for name, start in _TS_SERVICE.findall(text) if name not in NO_HEARTBEAT_CRONS
+    }
 
 
 def _ts_blocks() -> dict[str, str]:
@@ -184,11 +187,13 @@ class TestEveryCronReports(TestCase):
         ):
             self.assertIn(f"{var}: preserve()", block)
 
-    def test_the_collab_orphan_sweep_is_the_only_cron_without_a_heartbeat(self):
-        # MIP-1823: genos-collab's sweep is not a Django command, so it cannot
-        # beat. The exemption is pinned to that one service, and its block is
-        # pinned too: daily, dry run until COLLAB_SWEEP_DELETE is set by hand,
-        # no `--heartbeat`, and nothing secret written in the file.
+    def test_the_collab_orphan_sweep_beats_from_outside_django(self):
+        # MIP-1823 / MIP-1858: genos-collab's sweep is not a Django command, so it
+        # cannot pass `--heartbeat`. It reports through the external-cron endpoint
+        # instead, and has a schedule to be missed against, like every other cron.
+        # The exemption is pinned to that one service, and its block is pinned too:
+        # daily, dry run until COLLAB_SWEEP_DELETE is set by hand, no `--heartbeat`,
+        # and nothing secret written in the file.
         self.assertEqual(NO_HEARTBEAT_CRONS, {"collab-orphan-sweep"})
         text = (REPO / ".railway" / "railway.ts").read_text()
         every = {name for name, _start in _TS_SERVICE.findall(text)}
@@ -198,10 +203,10 @@ class TestEveryCronReports(TestCase):
         self.assertIn('startCommand: "node cron-sweep-orphans.js"', block)
         self.assertIn('restartPolicyType: "NEVER"', block)
         self.assertNotIn("--heartbeat", block)
-        self.assertNotIn("COLLAB_SWEEP_DELETE: \"", block)
+        self.assertNotIn('COLLAB_SWEEP_DELETE: "', block)
         self.assertNotIn("collab-orphan-sweep", _ts_crons())
         self.assertNotIn("collab-orphan-sweep", _heartbeat_names(s for _l, s in _crons()))
-        self.assertNotIn("collab-orphan-sweep", ops_alerts.CRON_SCHEDULES)
+        self.assertEqual(ops_alerts.CRON_SCHEDULES["collab-orphan-sweep"], timedelta(hours=26))
 
     def test_every_railway_ts_service_is_in_the_project(self):
         # A `service(...)` that `project(...)` does not list is never planned:
@@ -221,7 +226,7 @@ class TestEveryCronReports(TestCase):
         # The probe beats through AlertingHealthView, not a cron.
         self.assertEqual(
             names - {ops_alerts.TICK_NAME},
-            set(ops_alerts.CRON_SCHEDULES) - {ops_alerts.PROBE_NAME},
+            set(ops_alerts.CRON_SCHEDULES) - {ops_alerts.PROBE_NAME} - ops_alerts.EXTERNAL_CRONS,
         )
 
     def test_the_web_service_has_no_heartbeat(self):
@@ -723,6 +728,88 @@ class TestTick(_NoReconnect, TestCase):
         self.tick("--heartbeat", ops_alerts.TICK_NAME)
         self.assertIn("email-notify", mail.outbox[0].subject)
         self.assertIsNotNone(CronHeartbeat.objects.get(name=ops_alerts.TICK_NAME).last_succeeded_at)
+
+
+# ── a cron that beats from outside Django (MIP-1858) ─────────────────────
+
+HEARTBEAT_TOKEN = "collab-sweep-heartbeat-token"
+CRON = "collab-orphan-sweep"
+
+
+@mock.patch.dict(os.environ, {"EXTERNAL_CRON_HEARTBEAT_TOKEN": HEARTBEAT_TOKEN})
+class TestExternalCronHeartbeat(_NoReconnect, TestCase):
+    def post(self, body, *, name=CRON, token=HEARTBEAT_TOKEN):
+        headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"} if token else {}
+        return self.client.post(
+            f"/api/v2/health/cron/{name}/",
+            json.dumps(body),
+            content_type="application/json",
+            **headers,
+        )
+
+    def test_without_the_token_it_is_not_there(self):
+        self.assertEqual(self.post({"phase": "started"}, token=None).status_code, 404)
+        self.assertEqual(self.post({"phase": "started"}, token="guess").status_code, 404)
+        self.assertFalse(CronHeartbeat.objects.filter(name=CRON).exists())
+
+    @mock.patch.dict(os.environ, {"EXTERNAL_CRON_HEARTBEAT_TOKEN": ""})
+    def test_unconfigured_it_is_not_there(self):
+        self.assertEqual(self.post({"phase": "started"}, token="").status_code, 404)
+        self.assertFalse(CronHeartbeat.objects.filter(name=CRON).exists())
+
+    def test_only_the_external_crons_may_report(self):
+        # A token holder cannot beat for any other service, Django's own included.
+        self.assertEqual(self.post({"phase": "started"}, name="email-notify").status_code, 404)
+        self.assertFalse(CronHeartbeat.objects.filter(name="email-notify").exists())
+
+    def test_a_start_and_a_success_are_recorded(self):
+        self.assertEqual(self.post({"phase": "started"}).status_code, 200)
+        self.assertIsNotNone(CronHeartbeat.objects.get(name=CRON).last_started_at)
+        self.assertEqual(self.post({"phase": "succeeded"}).status_code, 200)
+        beat = CronHeartbeat.objects.get(name=CRON)
+        self.assertIsNotNone(beat.last_succeeded_at)
+
+    def test_a_success_resolves_the_failure_it_followed(self):
+        self.post({"phase": "failed", "error": "SweepAbort"})
+        self.assertTrue(
+            OpsAlert.objects.filter(key=f"cron:{CRON}", resolved_at__isnull=True).exists()
+        )
+        self.post({"phase": "succeeded"})
+        self.assertFalse(
+            OpsAlert.objects.filter(key=f"cron:{CRON}", resolved_at__isnull=True).exists()
+        )
+
+    def test_a_failure_keeps_only_the_error_type(self):
+        self.assertEqual(self.post({"phase": "failed", "error": "SweepAbort"}).status_code, 200)
+        beat = CronHeartbeat.objects.get(name=CRON)
+        self.assertIsNotNone(beat.last_failed_at)
+        self.assertEqual(beat.last_error, "SweepAbort")
+        alert = OpsAlert.objects.get(key=f"cron:{CRON}")
+        self.assertEqual(alert.kind, OpsAlertKind.CRON_FAILED)
+
+    def test_an_error_that_is_not_a_plain_type_name_is_not_kept(self):
+        # The sender is ours, but the field is free text: anything but a bare name is dropped.
+        for raw in ("Error: user@example.com\nsecret", "x" * 300, ["list"], None):
+            with self.subTest(error=raw):
+                self.post({"phase": "failed", "error": raw})
+                self.assertEqual(CronHeartbeat.objects.get(name=CRON).last_error, "unknown")
+
+    def test_a_phase_it_does_not_know_is_refused_and_records_nothing(self):
+        self.assertEqual(self.post({"phase": "exploded"}).status_code, 400)
+        self.assertEqual(self.post({}).status_code, 400)
+        self.assertFalse(CronHeartbeat.objects.filter(name=CRON).exists())
+
+    def test_a_run_that_never_reports_again_is_missed(self):
+        # The point of the heartbeat: silence after a day is an alert.
+        CronHeartbeat.objects.create(
+            name=CRON,
+            first_seen_at=timezone.now() - timedelta(days=3),
+            last_succeeded_at=timezone.now() - timedelta(hours=27),
+        )
+        self.assertEqual(ops_alerts.check_crons(), [CRON])
+        self.assertTrue(
+            OpsAlert.objects.filter(key=f"cron:{CRON}", kind=OpsAlertKind.CRON_MISSED).exists()
+        )
 
 
 # ── the outside probe's endpoint ────────────────────────────────────────

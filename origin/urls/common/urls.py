@@ -44,7 +44,11 @@ from origin.views.common.github_views import (
     GithubUnregisteredReposView,
     GithubWebhookView,
 )
-from origin.views.common.health_views import AlertingHealthView, HealthView
+from origin.views.common.health_views import (
+    AlertingHealthView,
+    ExternalCronHeartbeatView,
+    HealthView,
+)
 from origin.views.common.inbox_ai_views import (
     InboxAiOffView,
     InboxAiOnView,
@@ -121,6 +125,9 @@ urlpatterns = [
     # The outside probe's check on the alert pipeline (MIP-772). Bearer
     # OPS_HEALTH_TOKEN, else 404.
     path("api/v2/health/alerting/", AlertingHealthView.as_view(), name="health_alerting"),
+    # A cron that runs outside Django reports its runs here (MIP-1858). Bearer
+    # EXTERNAL_CRON_HEARTBEAT_TOKEN and a name in ops_alerts.EXTERNAL_CRONS, else 404.
+    path("api/v2/health/cron/<str:name>/", ExternalCronHeartbeatView.as_view(), name="health_cron"),
     # Public contact form (MIP-1261): mailed to support, not stored.
     path("api/v2/contact/", ContactView.as_view(), name="contact"),
     # User

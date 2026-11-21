@@ -15,6 +15,8 @@ from a working deployment.
 """
 
 import hmac
+import os
+import re
 from datetime import timedelta
 
 from django.conf import settings
@@ -102,3 +104,54 @@ class AlertingHealthView(APIView):
             },
             status=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+
+
+# The bearer token a cron that runs outside Django sends (MIP-1858). Read here, at
+# request time, and not in settings: the same value is set on genos-collab, and an
+# empty one makes the endpoint answer 404.
+EXTERNAL_CRON_TOKEN_ENV = "EXTERNAL_CRON_HEARTBEAT_TOKEN"
+
+
+class ExternalCronHeartbeatView(APIView):
+    """A cron that runs outside Django (genos-collab's orphan sweep) reports each run.
+
+    `POST api/v2/health/cron/<name>/` with `{"phase": "started" | "succeeded" |
+    "failed", "error": "<exception type>"}`. It records the same heartbeat as a
+    `--heartbeat` command, so a run that stops is missed and alerts. Only the names
+    in `ops_alerts.EXTERNAL_CRONS` are accepted. Behind a bearer token, else 404 as
+    if the route did not exist. The failure label is kept only when it is a plain
+    type name; anything else is stored as "unknown", so nothing a run carries can
+    reach an alert.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    PHASES = ("started", "succeeded", "failed")
+    _TYPE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,63}")
+
+    def post(self, request, name):
+        expected = os.environ.get(EXTERNAL_CRON_TOKEN_ENV, "").strip()
+        header = request.META.get("HTTP_AUTHORIZATION", "")
+        presented = header[len("Bearer ") :] if header.startswith("Bearer ") else ""
+        if not expected or not hmac.compare_digest(presented.encode(), expected.encode()):
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if name not in ops_alerts.EXTERNAL_CRONS:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        phase = data.get("phase")
+        if phase not in self.PHASES:
+            return Response(
+                {"detail": "phase must be started, succeeded or failed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if phase == "started":
+            ops_alerts.cron_started(name)
+        elif phase == "succeeded":
+            ops_alerts.cron_succeeded(name)
+        else:
+            raw = data.get("error")
+            label = raw if isinstance(raw, str) and self._TYPE_NAME.fullmatch(raw) else "unknown"
+            ops_alerts.cron_failed(name, label)
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)
