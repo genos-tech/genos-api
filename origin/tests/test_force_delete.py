@@ -192,6 +192,59 @@ class MessageForceDelete(Base):
         )
         self.assertEqual(resp.data["removed"]["email rows and reminder cards"], 3)
 
+    def _chat_mail(self, *, body=SECRET, url=None, status=None, user=None):
+        from origin.services.webpush_dispatch import _chat_url
+
+        return EmailNotificationEvent.objects.create(
+            user=user or self.user,
+            category="chats",
+            title="t",
+            body=body,
+            url=url if url is not None else _chat_url(self.channel),
+            status=EmailNotificationEvent.STATUS_PENDING if status is None else status,
+        )
+
+    def test_a_pending_chat_email_with_the_text_is_erased_with_the_message(self):
+        """MIP-1950: the `chats` outbox row is written by `enqueue_email_for_message` with the text
+        and the chat url, and NO link to the message or an inbox row."""
+        mail = self._chat_mail()
+        sent = self._chat_mail(status=EmailNotificationEvent.STATUS_SENT)
+        other_chat = self._chat_mail(url="/workspace/chat/gm/other")
+        other_text = self._chat_mail(body="something else")
+        resp = self.post(self.url, self.user2)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertFalse(EmailNotificationEvent.objects.filter(pk=mail.pk).exists())
+        # already sent (it left the building), another chat and another text stay
+        self.assertTrue(EmailNotificationEvent.objects.filter(pk=sent.pk).exists())
+        self.assertTrue(EmailNotificationEvent.objects.filter(pk=other_chat.pk).exists())
+        self.assertTrue(EmailNotificationEvent.objects.filter(pk=other_text.pk).exists())
+        self.assertEqual(resp.data["removed"]["email rows and reminder cards"], 1)
+
+    def test_a_chat_email_created_before_the_message_is_kept(self):
+        from datetime import timedelta
+
+        old = self._chat_mail()
+        EmailNotificationEvent.objects.filter(pk=old.pk).update(
+            ts_created_at=self.msg.ts_sent_at - timedelta(days=1)
+        )
+        self.assertEqual(self.post(self.url, self.user2).status_code, 200)
+        self.assertTrue(EmailNotificationEvent.objects.filter(pk=old.pk).exists())
+
+    def test_an_attachment_only_message_does_not_delete_a_blank_chat_email(self):
+        Message.objects.filter(pk=self.msg.pk).update(body_text="", body=[])
+        blank = self._chat_mail(body="")
+        self.assertEqual(self.post(self.url, self.user2).status_code, 200)
+        self.assertTrue(EmailNotificationEvent.objects.filter(pk=blank.pk).exists())
+
+    def test_no_pending_row_still_holds_the_erased_text(self):
+        self._chat_mail()
+        self.assertEqual(self.post(self.url, self.user2).status_code, 200)
+        self.assertFalse(
+            EmailNotificationEvent.objects.filter(
+                status=EmailNotificationEvent.STATUS_PENDING, body__contains=SECRET
+            ).exists()
+        )
+
     def test_the_group_owner_may_an_editor_and_a_member_may_not(self):
         self.assertEqual(self.post(self.url, self.editor).status_code, 403)
         self.assertEqual(self.post(self.url, self.user).status_code, 200)
@@ -435,6 +488,23 @@ class TaskForceDelete(TaskBase):
             team=self.team, project=self.project, title="n", status="Open"
         )
         self.assertGreater(nxt.project_task_number, 999)
+
+    def test_the_emptied_task_has_the_shape_collab_relies_on(self):
+        """MIP-1950: genos-collab `documentForget` answers 409 (and keeps the body) unless the task
+        row is `(deleted)`, has no content, is deleted and has exactly ONE history row with no
+        actor. A later change that adds a history row would silently break that."""
+        top = self.make_task(self.user2, "Top secret", content=text_body(SECRET))
+        TaskMaster.objects.filter(pk=top.pk).update(project_task_number=999)
+        resp = self.post(reverse("v3_task_force_delete", args=[top.task_id]), self.user2)
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertTrue(resp.data["scrubbed"])
+        top.refresh_from_db()
+        self.assertEqual(top.title, "(deleted)")
+        self.assertIsNone(top.content)
+        self.assertTrue(top.is_deleted)
+        rows = list(TaskActivity.objects.filter(task=top))
+        self.assertEqual(len(rows), 1, [r.action_type for r in rows])
+        self.assertIsNone(rows[0].actor_id)
 
     def test_the_scrubbed_task_keeps_no_pr_links_tags_recents_or_calendar_link(self):
         """MIP-1942: the row stays, so the cascades a plain delete relies on do not run."""
