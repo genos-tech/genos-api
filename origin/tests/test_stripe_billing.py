@@ -1351,6 +1351,39 @@ class TeamBillingTests(BillingTestBase):
         self.team.refresh_from_db()
         self.assertEqual(self.team.plan, "max")
 
+    def _team_scheduled_event(self, *, price):
+        event = self.subscription_event(
+            etype="customer.subscription.updated",
+            status_="active",
+            price=price,
+            customer="cus_team_1",
+        )
+        event["data"]["object"]["schedule"] = "sub_sched_t1"
+        return event
+
+    def test_team_upgrade_releases_the_pending_downgrade(self):
+        """MIP-1892: the team branch returned before the release the personal
+        path does, so a team that scheduled a downgrade and then upgraded
+        dropped back at renewal after paying for the higher plan."""
+        self._bind_team()
+        self.team.plan = "pro"
+        self.team.save(update_fields=["plan"])
+        with mock.patch("stripe.SubscriptionSchedule.release") as release:
+            stripe_billing.handle_event(self._team_scheduled_event(price="price_max_456"))
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "max")
+        release.assert_called_once_with("sub_sched_t1")
+
+    def test_team_scheduling_a_downgrade_does_not_release(self):
+        self._bind_team()
+        self.team.plan = "pro"
+        self.team.save(update_fields=["plan"])
+        with mock.patch("stripe.SubscriptionSchedule.release") as release:
+            stripe_billing.handle_event(self._team_scheduled_event(price="price_pro_123"))
+        self.team.refresh_from_db()
+        self.assertEqual(self.team.plan, "pro")
+        release.assert_not_called()
+
     def test_team_subscription_deleted_downgrades(self):
         self._bind_team()
         self.team.plan = "pro"
