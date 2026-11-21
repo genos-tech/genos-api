@@ -2553,6 +2553,21 @@ def _fill_from_comment_link(tool: McpTool, args: dict[str, Any], ref: Any) -> No
         )
 
 
+def _require_task_refs(tool: McpTool, args: dict[str, Any]) -> None:
+    """Refuse a call that leaves out a task reference the tool requires (MIP-1862).
+
+    A missing reference is not a mistyped one: the tool would answer "must be an integer
+    (got None)". Only this endpoint says so; the in-app agent keeps its own answers.
+    """
+    for arg in (*tool.task_ref_args, *(tool.parity_task_ref_args if parity_on() else ())):
+        if args.get(arg) is not None or arg in tool.optional_args:
+            continue
+        if arg in (_registered(tool).parameters_schema.get("required") or []):
+            raise ToolError(
+                f"`{arg}` is required: the task's display id (PRJ-123), its Genos URL, or its numeric id."
+            )
+
+
 def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dict[str, Any]:
     """`args` with every reference `tool` takes turned into the id it wants.
 
@@ -3127,6 +3142,7 @@ def call(
         except ToolError as exc:
             return _text_result(str(exc), is_error=True)
     try:
+        _require_task_refs(tool, args)
         args = resolve_references(tool, args, ctx.team_id)
         if (
             limits
