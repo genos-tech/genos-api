@@ -48,7 +48,8 @@ messaging and editor collaboration live in the sibling
 | `COLLAB_INTERNAL_SECRET`| with the above | Signs that push. Same value on genos-collab; must differ from `JWT_SECRET_KEY`. |
 | `SOCKETS_INTERNAL_URL`   | —        | genos-sockets' http(s) base URL for the task-comment push (MIP-1348): after a comment written outside the sockets `task_comment` handler commits (agent / MCP comment tools, undo, plain REST), sockets announces it to the project room so other people's open tasks update live. Plain `http://` only to a private host. Empty = no push. |
 | `SOCKETS_INTERNAL_SECRET`| with the above | Signs that push (HMAC-SHA256). Same value on genos-sockets; must differ from `JWT_SECRET_KEY` and `COLLAB_INTERNAL_SECRET`. |
-| `OPENSEARCH_HOST` / `OPENSEARCH_PORT` / `OPENSEARCH_INDEX` | — | Search engine. |
+| `OPENSEARCH_HOST` / `OPENSEARCH_PORT` / `OPENSEARCH_INDEX` | — | Search engine. The index defaults to `knowledge_chunks_v1`. |
+| `OPENSEARCH_ALIAS`      | —        | The alias the app queries (default `knowledge_chunks_current`). Unset, it follows the index: any `knowledge_chunks_v<N>` keeps the shared alias (a version bump re-points it), any other name gets `<index>_current`. Set it only to choose an alias name yourself. See "Isolated search runs" below. |
 | `EMBEDDING_PROVIDER`    | —        | `openai` / `vertex` — selects the embedding backend.               |
 | `LLM_PROVIDER`          | —        | `claude` / `gemini` / `openai` for the agent + judge.              |
 | `OPENAI_API_KEY`, `GEMINI_*` / `CLAUDE_API_KEY`, `TAVILY_API_KEY` | — | Provider creds (see `docs/` and the compose env in genos-platform). |
@@ -62,6 +63,25 @@ except the crons that decrypt, which check `FIELD_ENCRYPTION_KEYS` themselves.
 
 For the full local set, see the `backend` service env in
 `genos-platform/docker/docker-compose.yml`.
+
+### Isolated search runs (a demo or eval against a shared OpenSearch)
+
+Give the run an index name of its own; the alias follows, so the shared
+`knowledge_chunks_current` is never touched:
+
+```bash
+OPENSEARCH_INDEX=via_shot_chunks python manage.py opensearch_setup
+# -> creates index via_shot_chunks and alias via_shot_chunks_current
+```
+
+Every command and the app read the same pair, so keep both env vars on the
+reindex/eval/serve processes of that run too. To choose the alias yourself, also
+set `OPENSEARCH_ALIAS`. `opensearch_setup` fails (exit 1, nothing written) when an
+index already has the alias's name (the dev OpenSearch can hold a plain,
+auto-created `knowledge_chunks_current`) or when the alias belongs to another index
+family; a `knowledge_chunks_v1` to `v2` bump still re-points the shared alias as
+before. The paid eval run needs the same pair (see
+`origin/search_engine/agent/evals/group/RUNBOOK.md`).
 
 ## Running locally
 
