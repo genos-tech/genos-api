@@ -164,6 +164,14 @@ class TeamSetupTests(BaseAPITestCase):
             "not text": ["Payments", 5],
             "too long": ["x" * (MAX_NAME_LENGTH + 1)],
             "no letter or digit": ["###"],
+            "too many": [f"Dept {i}" for i in range(MAX_DEPARTMENTS + 1)],
+        }
+        codes = {
+            "not a list": "departments_not_a_list",
+            "not text": "departments_not_a_list",
+            "too long": "department_name_too_long",
+            "no letter or digit": "department_name_invalid",
+            "too many": "too_many_departments",
         }
         for label, departments in bad.items():
             before = TeamMaster.objects.count()
@@ -171,7 +179,8 @@ class TeamSetupTests(BaseAPITestCase):
 
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, label)
             self.assertIn("error", response.data, label)
-            self.assertEqual(response.data["code"], "invalid_departments", label)
+            self.assertEqual(response.data["field"], "departments", label)
+            self.assertEqual(response.data["code"], codes[label], label)
             self.assertEqual(TeamMaster.objects.count(), before, label)
 
     def test_a_name_at_the_length_limit_is_accepted(self):
