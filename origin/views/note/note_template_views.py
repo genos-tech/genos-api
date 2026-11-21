@@ -155,7 +155,7 @@ class NoteTemplateView(AuthenticatedAPIView):
         folder = None
         if request.data.get("default_folder_id") is not None:
             folder, err = _resolve_default_folder(
-                request, team_id, request.data["default_folder_id"]
+                request, team_id, request.data.get("default_folder_id")
             )
             if err:
                 return err
@@ -189,13 +189,13 @@ class NoteTemplateView(AuthenticatedAPIView):
             setattr(t, k, v)
         folder = None
         if "default_folder_id" in request.data:
-            if request.data["default_folder_id"] is None:
+            if request.data.get("default_folder_id") is None:
                 t.default_for_folder = None
-            elif as_int(request.data["default_folder_id"]) != t.default_for_folder_id:
+            elif as_int(request.data.get("default_folder_id")) != t.default_for_folder_id:
                 # Only a CHANGE needs Editor on the folder: renaming a template whose default
                 # folder you can no longer edit must still work.
                 folder, err = _resolve_default_folder(
-                    request, team_id, request.data["default_folder_id"]
+                    request, team_id, request.data.get("default_folder_id")
                 )
                 if err:
                     return err

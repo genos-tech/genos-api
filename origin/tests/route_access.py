@@ -529,6 +529,10 @@ REGISTRY = {
     "origin.views.note.note_folder_tag_views.NoteFolderTagView": checked(
         "_can_edit_vocabulary", "is_team_member"
     ),
+    # views.note.note_template_views
+    "origin.views.note.note_template_views.NoteTemplateView": checked(
+        "is_team_member", "_can_modify", "get_folder_role"
+    ),
     # views.note.note_role_views
     "origin.views.note.note_role_views.NoteRoleCheckView": checked("get_effective_role"),
     "origin.views.note.note_role_views.NoteRoleListView": checked("get_effective_role"),
