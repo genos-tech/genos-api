@@ -1818,3 +1818,29 @@ class TierProvenanceTests(BillingTestBase):
         self.team.refresh_from_db()
         self.assertEqual(self.team.plan, "max")
         self.assertIn("unchanged", summary)
+
+
+@override_settings(STRIPE=STRIPE_TEST_SETTINGS)
+class FirstMonthOfferFlagTests(BillingTestBase):
+    """GET /billing/plans/ carries `first_month_offer`, which follows the switch.
+
+    The public pricing page shows the first-month copy only when this is true, so the
+    flag must read the same switch the offer itself reads (MIP-1250).
+    """
+
+    def _plans(self, value):
+        with (
+            mock.patch.dict("os.environ", {"FIRST_MONTH_CORE_TRIAL": value}),
+            mock.patch("origin.services.stripe_billing.price_display", return_value=None),
+        ):
+            self.client.credentials()
+            res = self.client.get(PLANS_URL)
+        self.assertEqual(res.status_code, 200)
+        return res.json()
+
+    def test_off_when_the_switch_is_unset_or_not_on(self):
+        self.assertIs(self._plans("")["first_month_offer"], False)
+        self.assertIs(self._plans("no")["first_month_offer"], False)
+
+    def test_on_when_the_switch_is_on(self):
+        self.assertIs(self._plans("true")["first_month_offer"], True)
