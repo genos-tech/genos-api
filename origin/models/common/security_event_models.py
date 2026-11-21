@@ -51,6 +51,9 @@ class SecurityAction(models.TextChoices):
     # A group chat deleted, softly or for good (MIP-1716): a hard delete leaves nothing else to
     # say who erased a company's chat. Names and counts only, never message text.
     CHANNEL_DELETED = "channel.deleted", "Group chat deleted"
+    # A person's own data deleted for good, ahead of the 30-day window (MIP-1584). Ids and counts
+    # only: never a title, a word of text or a file name.
+    DATA_FORCE_DELETED = "data.force_deleted", "Data deleted permanently"
     # Archive and restore of a project or group chat (MIP-1693). Counts and ids only.
     PROJECT_ARCHIVED = "project.archived", "Project archived"
     PROJECT_RESTORED = "project.restored", "Project restored"
