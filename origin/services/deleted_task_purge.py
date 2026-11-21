@@ -221,6 +221,27 @@ def _inbox_rows(task_id: int):
     )
 
 
+def erase_notification_traces(activities, message_ids) -> int:
+    """Delete the outbox rows and the fired-reminder cards that quote the text of what is going
+    (MIP-1940). `EmailNotificationEvent.activity` / `.inbox_item` are SET_NULL, so deleting the
+    `Activity` rows first would un-link a PENDING email and `email_notify_tick` would send it with
+    the text; a reminder card copies the message text into `item_body` / `item_optionals`.
+    Call it BEFORE the activities are deleted. Returns the rows removed."""
+    from origin.models.common.inbox_models import InboxItems
+    from origin.models.common.notification_models import EmailNotificationEvent
+    from origin.services.message_reminders import ITEM_TYPE_MESSAGE_REMINDER
+
+    cards = InboxItems.objects.filter(
+        item_type=ITEM_TYPE_MESSAGE_REMINDER,
+        item_optionals__message_id__in=[str(m) for m in message_ids],
+    )
+    removed = EmailNotificationEvent.objects.filter(
+        Q(activity__in=activities) | Q(inbox_item__in=cards)
+    ).delete()[0]
+    removed += cards.delete()[0]
+    return removed
+
+
 def _inventory(task_id: int) -> tuple[Counter, Counter]:
     """(what a purge removes, what it leaves) for one task, as row counts."""
     cards = Message.objects.filter(task_id=task_id, is_thread_reply=False)
@@ -300,6 +321,10 @@ def _purge_one(task_id: int, cutoff: datetime, report: PurgeReport) -> str | Non
             TaskNoteMaster.objects.filter(task_id=task_id).values_list("note_id", flat=True)
         )
 
+        erase_notification_traces(
+            _inbox_rows(task_id),
+            Message.objects.filter(task_id=task_id).values_list("id", flat=True),
+        )
         _inbox_rows(task_id).delete()
         # The chat's copy of the task (its card and its comments' mirrors): the chat's own delete.
         for message in Message.objects.filter(task_id=task_id):
