@@ -133,6 +133,7 @@ REGISTRY = {
         "restorable_channels_qs"
     ),
     "origin.views.chat.channel_views.ChannelDetailView": checked("_get_channel_for_user"),
+    "origin.views.chat.channel_views.ChannelDirectoryView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelInlineUploadView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelJoinView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelListView": checked(

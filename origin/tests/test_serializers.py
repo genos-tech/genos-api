@@ -742,7 +742,7 @@ class ChannelSerializerTests(BaseAPITestCase):
         data = ChannelSerializer(ch).data
         expected = {
             "id", "kind", "title", "profileImageUrl", "projectId", "ownerId",
-            "isPrivate", "isExternal", "teamId", "hostTeamName",
+            "isPrivate", "description", "isExternal", "teamId", "hostTeamName",
             "legacyChatId", "latestMessage",
             "unreadCount", "members", "dmPartner", "tsCreated", "tsUpdated",
         }
