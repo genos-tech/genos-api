@@ -10,6 +10,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
+from django.db import transaction
 from django.db.models import Case, Count, F, IntegerField, Q, Sum, Value, When
 from django.db.models.fields.json import KeyTextTransform
 from rest_framework import status
@@ -48,6 +49,7 @@ from origin.services.task_collaborators import may_name_person as _may_name_pers
 from origin.services.task_collaborators import people_allowed_on as _people_allowed_on
 from origin.services.task_collaborators import refuse_new_people, sync_task_collaborators
 from origin.services.task_comment_fanout import fan_out_task_comment
+from origin.services.task_comment_ids import next_task_comment_id
 from origin.services.task_comment_manage import soft_delete_comment
 from origin.services.task_milestone_move import (
     bridge_milestone_to_parent as _bridge_milestone_to_parent,
@@ -1174,7 +1176,6 @@ class TaskMasterView(AuthenticatedAPIView):
             cache_team_id = task.team_id
             cache_project_id = task.project_id
             # Its notes cascade with it: so do the traces of them other people hold (MIP-1514).
-            from django.db import transaction
 
             from origin.models.note.task_note_models import TaskNoteMaster
             from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
@@ -2541,28 +2542,22 @@ class TaskCommentsView(AuthenticatedAPIView):
         if res := archived_task_response(task_id):
             return res
 
-        # NOTE: this count must stay UNFILTERED by `is_deleted`. `comment_id`
-        # is a per-task sequence claimed at create time and guarded by the
-        # `unique_task_comment` constraint, and deletes are soft (the row
-        # stays). Counting only live rows would re-issue the id of a deleted
-        # comment and collide on the constraint — and the v3 mirror's
-        # `uuid5(task_id, comment_id)` PK would resolve to the tombstoned
-        # message. Deleted rows keep their slot on purpose.
-        comment_count = TaskComments.objects.filter(task=task_id).count()
+        # `comment_id` is MAX + 1 under a lock on the task row (`next_task_comment_id`), counting
+        # deleted rows too, so neither a delete nor a purge can make two comments share an id.
+        with transaction.atomic():
+            data = {
+                "task": task_id,
+                # The caller, never the body's `sender_id`: that named the
+                # author, so a member could post as any colleague and the
+                # activity feed and the push said it was them.
+                "sender": request.user.id,
+                "comment_id": next_task_comment_id(task_id),
+                "comment_body": request.data.get("comment_body"),
+            }
 
-        data = {
-            "task": task_id,
-            # The caller, never the body's `sender_id`: that named the
-            # author, so a member could post as any colleague and the
-            # activity feed and the push said it was them.
-            "sender": request.user.id,
-            "comment_id": comment_count + 1,
-            "comment_body": request.data.get("comment_body"),
-        }
-
-        serializer = TaskCommentsSerializer(data=data)
-        if serializer.is_valid():
-            comment_obj = serializer.save()
+            serializer = TaskCommentsSerializer(data=data)
+            comment_obj = serializer.save() if serializer.is_valid() else None
+        if comment_obj is not None:
             # Webhook, v3 thread mirror, mention + participant activities
             # and web push all live in `task_comment_fanout`, shared with
             # the agent's `add_comment` tool so both produce the same
