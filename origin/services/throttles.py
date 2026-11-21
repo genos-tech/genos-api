@@ -40,6 +40,8 @@ from django_redis.exceptions import ConnectionInterrupted
 from rest_framework.settings import api_settings
 from rest_framework.throttling import AnonRateThrottle, BaseThrottle
 
+from apis.log_redaction import ip_marker
+
 logger = logging.getLogger(__name__)
 
 THROTTLE_CACHE = "throttle"
@@ -125,7 +127,9 @@ def _who(throttle, request) -> str:
     user = getattr(request, "user", None)
     if user is not None and user.is_authenticated:
         return f"user={user.pk}"
-    return f"ip={throttle.get_ident(request)}"
+    # A keyed marker, not the address: Railway keeps this line and the address
+    # is personal data (MIP-1788). It still tells one caller from another.
+    return f"client={ip_marker(throttle.get_ident(request))}"
 
 
 def _cache_down(throttle, request, exc) -> bool:

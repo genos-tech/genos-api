@@ -32,6 +32,7 @@ from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.utils import timezone
 
+from apis.request_id import describe_exception
 from origin.models.chat.todo_models import ToDoItem
 from origin.models.chat.unified_models import (
     Activity,
@@ -904,12 +905,12 @@ def _calendar_today(ctx: ToolContext, now: datetime, zone) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - Google being down must not cost the member their briefing
         # MIP-1333: this used to say nothing, so a deployment that could not refresh the Google
         # token (a cron service without the OAuth client variables) looked like a calendar that
-        # was merely "down". The type and a short message make the cause findable in the logs.
+        # was merely "down". The type and status make the cause findable in the logs; not the
+        # message, which can quote the member's calendar data (MIP-1788).
         log.warning(
-            "briefing_calendar_unreadable user=%s error=%s detail=%s",
+            "briefing_calendar_unreadable user=%s error=%s",
             ctx.user_id,
-            type(exc).__name__,
-            str(exc)[:160],
+            describe_exception(exc),
         )
         return {"events": None, "note": "The calendar could not be read right now."}
     return {"events": out.get("events", [])}

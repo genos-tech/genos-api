@@ -1,9 +1,11 @@
+import logging
+
 from django.db import transaction
 from django.db.models import F, IntegerField, Value
 from rest_framework import status
 from rest_framework.response import Response
 
-from apis.request_id import error_response
+from apis.request_id import describe_exception, error_response
 from origin.models.note.personal_note_models import PersonalNoteFolder
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
@@ -29,6 +31,8 @@ from origin.views.utils.note_version import (
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.upload_validation import check_attachment_upload
+
+logger = logging.getLogger(__name__)
 
 NOTE_TYPE = 1  # Personal Notes
 
@@ -362,7 +366,11 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             except Exception as e:
                 # Version write failure shouldn't fail the user's save.
                 # Log and continue.
-                print(f"NoteVersion snapshot failed for personal note {note.note_id}: {e}")
+                logger.warning(
+                    "NoteVersion snapshot failed for personal note %s: %s",
+                    note.note_id,
+                    describe_exception(e),
+                )
             return Response(
                 {
                     **serializer.data,

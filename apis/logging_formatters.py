@@ -27,7 +27,7 @@ import json
 import logging
 import os
 
-from apis.log_redaction import redact
+from apis.log_redaction import redact_line
 from apis.request_id import current_request_id
 
 # Railway lowercases the level and matches it to the closest of
@@ -91,7 +91,7 @@ class RailwayJSONFormatter(logging.Formatter):
 
         # Redacted before encoding, so the patterns see the text rather than
         # its JSON escapes (MIP-622; apis/log_redaction.py).
-        payload["message"] = redact(message)
+        payload["message"] = redact_line(message)
 
         # default=str keeps a stray non-serialisable value from ever making a
         # logging call raise; ensure_ascii=False keeps Japanese text readable

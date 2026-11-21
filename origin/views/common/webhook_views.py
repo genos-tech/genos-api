@@ -11,6 +11,7 @@ add an exfiltration target.
 """
 
 import uuid
+from urllib.parse import urlsplit
 
 from rest_framework import status
 from rest_framework.response import Response
@@ -30,6 +31,16 @@ from origin.services.security_events import record_security_event
 from origin.services.webhook_delivery import WebhookUrlError, validate_webhook_url
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_team_member
+
+
+def _host_label(url: str) -> str:
+    """The host of a webhook URL, for the security log (MIP-1789). The path and
+    query of these URLs often hold the secret that authorises the sender, and the
+    log is kept for a year; the host says where the data was sent."""
+    try:
+        return urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
 
 
 def _serialize(e: WebhookEndpoint) -> dict:
@@ -266,7 +277,7 @@ class WebhookListCreateView(AuthenticatedAPIView):
             team_id=team.team_id,
             target_type="webhook",
             target_id=endpoint.id,
-            target_label=url,
+            target_label=_host_label(url),
             metadata={"events": events},
         )
 
@@ -298,7 +309,7 @@ class WebhookDetailView(AuthenticatedAPIView):
             team_id=team_id,
             target_type="webhook",
             target_id=webhook_id,
-            target_label=url,
+            target_label=_host_label(url),
             metadata={"events": events},
         )
         return Response({"id": str(webhook_id)}, status=status.HTTP_200_OK)

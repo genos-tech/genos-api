@@ -1,10 +1,12 @@
+import logging
+
 from django.db import transaction
 from django.db.models import Case, CharField, F, IntegerField, Q, Value, When
 from django.db.models.functions import Concat
 from rest_framework import status
 from rest_framework.response import Response
 
-from apis.request_id import error_response
+from apis.request_id import describe_exception, error_response
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
@@ -32,6 +34,8 @@ from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
 from origin.views.utils.scope_guards import can_access_task
 from origin.views.utils.upload_validation import check_attachment_upload
+
+logger = logging.getLogger(__name__)
 
 NOTE_TYPE = 2  # Task Notes
 
@@ -546,7 +550,11 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                     body=note.body,
                 )
             except Exception as e:
-                print(f"NoteVersion snapshot failed for task note {note.note_id}: {e}")
+                logger.warning(
+                    "NoteVersion snapshot failed for task note %s: %s",
+                    note.note_id,
+                    describe_exception(e),
+                )
             return Response(
                 {
                     **serializer.data,

@@ -9,7 +9,9 @@ app, an API key, MCP or the agent.
 **It never raises.** An audit row that can't be written must not turn a
 successful sign-in or export into a 500, so a failure logs at ERROR and
 the action goes ahead. Every row is also logged as a `security.event`
-line, so the Railway logs hold a copy even when the insert failed.
+line, so the Railway logs hold a copy even when the insert failed. The line
+has no client address (the row has it; the line's event id leads there):
+Railway keeps logs for a period nobody has documented (MIP-1788).
 
 **Alerts.** Two anomalies write an `alert.*` row and log a
 `security.alert` WARNING:
@@ -45,7 +47,7 @@ from origin.models.common.security_event_models import (
     SecuritySource,
 )
 from origin.services import throttles
-from origin.services.pii_mask import mask_email
+from origin.services.pii_mask import is_address, mask_email
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,9 @@ logger = logging.getLogger(__name__)
 _MCP_PATH = "/api/public/v1/mcp"
 
 _LABEL_MAX = 254
+
+# What a failed sign-in stores when the box held something that is not an address.
+NOT_AN_ADDRESS = "(not an address)"
 _UA_MAX = 512
 
 
@@ -126,6 +131,19 @@ def _log_actor(event) -> str:
     if not label:
         return "-"
     return "[EMAIL]" if "@" in label else label
+
+
+def typed_address_label(typed) -> str:
+    """The label for text a visitor typed into an email box before anyone is
+    known: the address, masked, when the whole of it is one; else a fixed word.
+
+    The box is where a password gets pasted by mistake, and `mask_email` keeps
+    every character that is not an address (MIP-1789). The row only needs to say
+    whose account was tried, which the target and the masked address do."""
+    text = str(typed or "").strip()
+    if not text:
+        return ""
+    return mask_email(text) if is_address(text) else NOT_AN_ADDRESS
 
 
 def user_label(user_id) -> str:
@@ -210,7 +228,7 @@ def record_security_event(
         return None
 
     logger.info(
-        "security.event id=%s action=%s actor=%s team=%s target=%s:%s source=%s ip=%s",
+        "security.event id=%s action=%s actor=%s team=%s target=%s:%s source=%s",
         event.event_id,
         event.action,
         _log_actor(event),
@@ -218,7 +236,6 @@ def record_security_event(
         event.target_type or "-",
         event.target_id or "-",
         event.source,
-        event.ip or "-",
     )
     if action == SecurityAction.EXPORT:
         _alert(SecurityAction.ALERT_EXPORT, event, {"summary": "account data exported"})
@@ -237,11 +254,10 @@ def _alert(action: str, cause: SecurityEvent, metadata: dict) -> None:
     """Write the alert row for `cause` and log the WARNING that is the
     alert itself. The line goes out even if the row can't be written."""
     logger.warning(
-        "security.alert action=%s actor=%s source=%s ip=%s cause=%s %s",
+        "security.alert action=%s actor=%s source=%s cause=%s %s",
         action,
         _log_actor(cause),
         cause.source,
-        cause.ip or "-",
         cause.event_id,
         " ".join(f"{k}={v}" for k, v in metadata.items()),
     )

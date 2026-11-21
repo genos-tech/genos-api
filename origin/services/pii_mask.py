@@ -48,6 +48,33 @@ def mask_email(text: str) -> str:
     return _EMAIL.sub(_mask_one, text)
 
 
+_LOCAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._%+-")
+_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+_ADDRESS_MAX = 254
+
+
+def is_address(text: str) -> bool:
+    """Whether the whole of `text` is one email address, nothing around it.
+
+    The same shape `_EMAIL` masks, checked without a regex: this runs on text a
+    visitor typed before signing in, so its cost must not depend on how the text
+    is built (a regex over `%%%%…` was flagged as polynomial)."""
+    if not text or len(text) > _ADDRESS_MAX or text.count("@") != 1:
+        return False
+    local, domain = text.split("@")
+    labels = domain.split(".")
+    tld = labels[-1]
+    return (
+        bool(local)
+        and all(c in _LOCAL_CHARS for c in local)
+        and len(labels) >= 2
+        and all(label and all(c in _LABEL_CHARS for c in label) for label in labels)
+        and len(tld) >= 2
+        and tld.isascii()
+        and tld.isalpha()
+    )
+
+
 def has_email(text: str) -> bool:
     """Whether `text` still holds an unmasked email address.
 
