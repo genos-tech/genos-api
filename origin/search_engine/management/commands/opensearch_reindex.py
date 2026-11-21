@@ -93,6 +93,10 @@ _ALL_ENTITY_TYPES = [
 
 
 class Command(CronCommand):
+    # `--catch-up` starts its window from the last success; the run read Postgres at its start, so
+    # that mark is the start, not the finish (MIP-1913).
+    success_marks_start = True
+
     help = (
         "Re-index chats, tasks, and notes into OpenSearch. By default "
         "runs a full reindex; pass --since-minutes for an incremental "
@@ -105,15 +109,14 @@ class Command(CronCommand):
             type=int,
             default=None,
             help=(
-                "Only re-process entities updated within the last N "
-                "minutes. Default: full reindex."
+                "Only re-process entities updated within the last N minutes. Default: full reindex."
             ),
         )
         parser.add_argument(
             "--since",
             type=str,
             default=None,
-            help=("Explicit ISO 8601 timestamp lower-bound. Overrides " "--since-minutes."),
+            help=("Explicit ISO 8601 timestamp lower-bound. Overrides --since-minutes."),
         )
         parser.add_argument(
             "--catch-up",
@@ -190,9 +193,7 @@ class Command(CronCommand):
         )
 
     def handle(self, *args, **options):
-        if (options.get("apply") or options.get("repair_metadata")) and not options.get(
-            "repair"
-        ):
+        if (options.get("apply") or options.get("repair_metadata")) and not options.get("repair"):
             raise CommandError("--apply and --repair-metadata only make sense with --repair.")
         if options.get("repair_metadata") and not options.get("apply"):
             raise CommandError("--repair-metadata needs --apply.")
@@ -360,8 +361,10 @@ def _catch_up_since(since: datetime, heartbeat: str, overlap: timedelta) -> date
     stays missing from search until someone runs a full reindex by hand.
 
     `last_succeeded_at` only moves on a run that finished without an ERROR,
-    so a failed run widens the next window too. The overlap is subtracted
-    from it because that run read Postgres before it finished.
+    so a failed run widens the next window too. For this command it holds the
+    run's START (`success_marks_start`, MIP-1913), because the run read
+    Postgres from then on; the overlap is subtracted to cover the lanes that
+    read a little after the start.
     """
     if not heartbeat:
         raise CommandError("--catch-up needs --heartbeat to know the last successful run.")

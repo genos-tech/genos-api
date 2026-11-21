@@ -11,6 +11,11 @@ from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
+from origin.services.archive import (
+    archived_project_of_task,
+    archived_project_response,
+    archived_task_note_response,
+)
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.services.note_role_revoke import (
     restore_task_roles_on_move,
@@ -32,7 +37,7 @@ from origin.views.utils.note_version import (
 )
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from origin.views.utils.scope_guards import can_access_task
+from origin.views.utils.scope_guards import can_access_task, is_project_member
 from origin.views.utils.upload_validation import check_attachment_upload
 
 logger = logging.getLogger(__name__)
@@ -414,6 +419,15 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
+        # The named project AND the task's own project: the body's `project_id` is the client's, so
+        # a live one could be paired with a task of an archived project. Only a project the caller is
+        # on is checked, so the answer never says whether someone else's project is archived.
+        for project_id in (data["project"], archived_project_of_task(data["task"])):
+            if is_project_member(project_id, request_user_id) and (
+                res := archived_project_response(project_id)
+            ):
+                return res
+
         # Tier quota: monthly note-creation cap (shared across
         # personal / task / chat notes).
         if res := check_monthly_creation_quota(request_user_id, NOTE_CREATE_KEY, "note_create"):
@@ -497,6 +511,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
             return res
 
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
+            return res
+
+        if res := archived_task_note_response(data["note_id"]):
             return res
 
         try:
@@ -588,6 +605,9 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
+        if res := archived_task_note_response(data["note_id"]):
+            return res
+
         try:
             delete_note(team_id=data["team"], family="task", note_id=data["note_id"])
         except DeleteRefused as refused:
@@ -673,6 +693,9 @@ class TaskNoteAttachmentView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
             return res
 
+        if res := archived_task_note_response(data["note"]):
+            return res
+
         upload, res = check_attachment_upload(request.user, data["note_attachment_url"])
         if res:
             return res
@@ -736,6 +759,9 @@ class TaskNoteMoveView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
+        if res := archived_task_note_response(data["note_id"]):
+            return res
+
         try:
             note = TaskNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
         except TaskNoteMaster.DoesNotExist:
@@ -755,6 +781,9 @@ class TaskNoteMoveView(AuthenticatedAPIView):
                 {"error": "You are not a member of the target task's project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        if res := archived_project_response(target_task.project_id):
+            return res
 
         now = timezone.now()
         with transaction.atomic():
