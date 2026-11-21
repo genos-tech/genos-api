@@ -247,6 +247,11 @@ REGISTRY = {
     "origin.views.common.inbox_ai_views.InboxAiOnView": self_only(
         "the caller's own Inbox item: looked up by id AND receiver=request.user, else a 404"
     ),
+    # views.common.contact_views (MIP-1261)
+    "origin.views.common.contact_views.ContactView": public(
+        "anonymous contact form; mails support and stores nothing; ContactIpThrottle per IP and "
+        "ContactEmailThrottle per sender address, both failing closed"
+    ),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(
         "exchanges the HttpOnly refresh cookie for a new access token; the cookie is the credential"
