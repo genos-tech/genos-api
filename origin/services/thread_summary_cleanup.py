@@ -63,6 +63,20 @@ def forget_message_thread(message) -> int:
     )
 
 
+def forget_edited_message(message, *, old_body, old_body_text) -> int:
+    """Drop the summary of the thread of `message` after an EDIT that changed its text (MIP-1819).
+
+    The old text of an edited reply lives in the digest (and its chunk) until the next ask; it is
+    no longer what the author wants kept. A save that leaves body and plain text as they were
+    (same words sent again) changes nothing. Same shape as a delete: the row goes in the caller's
+    transaction, the chunk after commit; never an LLM call, the next ask writes a new digest.
+    Cost when the thread has no summary: one indexed read.
+    """
+    if message.body == old_body and message.body_text == old_body_text:
+        return 0
+    return forget_message_thread(message)
+
+
 def forget_channels(channel_ids) -> int:
     """Drop every summary of these chats. Returns how many rows went."""
     from origin.search_engine.models import ThreadSummary

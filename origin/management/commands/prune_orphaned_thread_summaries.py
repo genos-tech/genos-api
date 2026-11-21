@@ -41,6 +41,7 @@ class Command(CronCommand):
         self.stdout.write("prune_orphaned_thread_summaries: " + ("APPLY" if apply else "DRY RUN"))
         result = service.prune(apply=apply)
         reasons = ", ".join(f"{name}={n}" for name, n in result.by_reason.items())
+        reasons += f", edited_since_digest={result.edited_since_digest} (kept, count only)"
         if apply:
             self.stdout.write(f"removed {result.changed} thread summaries; by reason: {reasons}")
             log.info("prune_orphaned_thread_summaries: removed=%d", result.changed)

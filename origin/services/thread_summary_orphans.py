@@ -49,6 +49,10 @@ class PruneResult:
     changed: int  # rows deleted (0 on a dry run)
     by_reason: dict = field(default_factory=dict)  # reason -> rows (counts only)
     dry_run: bool = True
+    # Rows that are NOT orphans but whose digest is older than the newest edit of a live message
+    # of their thread (MIP-1819): edits made before edits forgot the summary. A count only; `--apply`
+    # does not remove them.
+    edited_since_digest: int = 0
 
 
 def _reasons(rows: list[dict]) -> dict[int, str]:
@@ -107,6 +111,28 @@ def _reasons(rows: list[dict]) -> dict[int, str]:
     return out
 
 
+def _edited_since_digest(rows: list[dict]) -> set[int]:
+    """Pks of `rows` whose digest predates the newest edit of a live message of the thread."""
+    chat_ids = {r["chat_id"] for r in rows}
+    thread_ids = {r["thread_id"] for r in rows}
+    newest: dict[tuple, object] = {}
+    for mid, root_id, cid, edited_at in Message._base_manager.filter(
+        Q(thread_root_id__in=thread_ids) | Q(id__in=thread_ids),
+        channel_id__in=chat_ids,
+        deleted_at__isnull=True,
+        edited_at__isnull=False,
+    ).values_list("id", "thread_root_id", "channel_id", "edited_at"):
+        key = (root_id or mid, cid)
+        if key not in newest or edited_at > newest[key]:
+            newest[key] = edited_at
+    return {
+        r["pk"]
+        for r in rows
+        if (r["thread_id"], r["chat_id"]) in newest
+        and newest[(r["thread_id"], r["chat_id"])] > r["ts_updated_at"]
+    }
+
+
 def prune(*, apply: bool = False) -> PruneResult:
     """Count (default) or remove (`apply=True`) the orphaned thread summaries and their chunks."""
     from origin.search_engine.models import ThreadSummary
@@ -114,6 +140,7 @@ def prune(*, apply: bool = False) -> PruneResult:
 
     by_reason = dict.fromkeys(REASONS, 0)
     changed = 0
+    edited = 0
     last_pk = 0
     while True:
         rows = list(
@@ -127,10 +154,11 @@ def prune(*, apply: bool = False) -> PruneResult:
         found = _reasons(rows)
         for reason in found.values():
             by_reason[reason] += 1
+        edited += len(_edited_since_digest([r for r in rows if r["pk"] not in found]))
         if apply and found:
             gone = [r for r in rows if r["pk"] in found]
             with transaction.atomic():
                 changed += ThreadSummary.objects.filter(pk__in=found).delete()[0]
             purge_thread_summaries((r["chat_type"], r["chat_id"], r["thread_id"]) for r in gone)
     matched = sum(by_reason.values())
-    return PruneResult(matched, changed, by_reason, dry_run=not apply)
+    return PruneResult(matched, changed, by_reason, dry_run=not apply, edited_since_digest=edited)

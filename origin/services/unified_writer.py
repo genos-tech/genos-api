@@ -51,7 +51,7 @@ from origin.models.chat.unified_models import (
     Pin,
     ReadCursor,
 )
-from origin.services import message_tombstone, message_via
+from origin.services import message_tombstone, message_via, thread_summary_cleanup
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +206,7 @@ def write_message(
                     update_fields.extend(["body", "body_text"])
                 if update_fields:
                     msg.save(update_fields=update_fields)
+                    thread_summary_cleanup.forget_message_thread(msg)
                 # Soft-delete: legacy uses `is_deleted=True`; unified
                 # uses `deleted_at` (nullable datetime), and the text goes with it.
                 if is_deleted:
@@ -283,6 +284,7 @@ def write_thread_message(
                 msg.body = body
                 msg.body_text = _body_text_from_body(body)
                 msg.save(update_fields=["body", "body_text"])
+                thread_summary_cleanup.forget_message_thread(msg)
             if is_deleted:
                 message_tombstone.tombstone_message(msg)
             return msg
@@ -802,6 +804,7 @@ def update_task_comment_thread_reply(
         ).first()
         if msg is None:
             return None
+        old_body, old_body_text = msg.body, msg.body_text
         msg.body = body or []
         msg.body_text = _body_text_from_body(body)
         msg.edited_at = timezone.now()
@@ -812,7 +815,11 @@ def update_task_comment_thread_reply(
         if metadata != (msg.metadata or {}):
             msg.metadata = metadata
             update_fields.append("metadata")
-        msg.save(update_fields=update_fields)
+        with transaction.atomic():
+            msg.save(update_fields=update_fields)
+            thread_summary_cleanup.forget_edited_message(
+                msg, old_body=old_body, old_body_text=old_body_text
+            )
         return msg
     except Exception:  # noqa: BLE001
         logger.exception(
