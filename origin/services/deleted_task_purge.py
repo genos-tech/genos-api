@@ -77,7 +77,7 @@ from origin.models.task.task_models import (
     TaskMaster,
 )
 from origin.search_engine.models import AgentSession, RagChunk
-from origin.services import message_tombstone
+from origin.services import collab_push, message_tombstone
 from origin.services.activity_suppression import suppress_task_activity
 from origin.services.detached_note_attachments import DetachedReport, _classify
 from origin.services.note_delete import (
@@ -339,6 +339,7 @@ def _purge_one(task_id: int, cutoff: datetime, report: PurgeReport) -> str | Non
         with batched_note_cleanup(), suppress_task_activity():
             task.delete()
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)
+        collab_push.forget_task_bodies_after_commit([task_id])  # MIP-1937
 
         report.counts.update(removes)
         report.left.update(left)

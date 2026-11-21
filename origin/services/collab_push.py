@@ -122,6 +122,35 @@ def forget_document(document_name: str) -> bool:
     return True
 
 
+# One short POST (5 s timeout) per document, after the commit, in the request: a big project would
+# make the request wait minutes. The rest is left to collab's orphan sweep (`sweep:orphans`).
+FORGET_AFTER_COMMIT_CAP = 100
+
+
+def forget_documents_after_commit(document_names) -> None:
+    """`forget_document` for each name once the current transaction commits (MIP-1937): a delete
+    that rolls back forgets nothing. At most `FORGET_AFTER_COMMIT_CAP` per call; a no-op when collab
+    is not configured. Call it from EVERY path that hard-deletes a note or a task: the row is gone,
+    so the document is the last copy of its text."""
+    names = list(dict.fromkeys(document_names))
+    if not names or not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
+        return
+    left = names[FORGET_AFTER_COMMIT_CAP:]
+    names = names[:FORGET_AFTER_COMMIT_CAP]
+
+    def send() -> None:
+        for name in names:
+            forget_document(name)
+        if left:
+            logger.warning("collab forget capped: %s documents left to the orphan sweep", len(left))
+
+    transaction.on_commit(send, robust=True)
+
+
+def forget_task_bodies_after_commit(task_ids) -> None:
+    forget_documents_after_commit(f"task-body:{int(t)}" for t in task_ids)
+
+
 def _push(document_name: str, blocks: list[dict[str, Any]]) -> None:
     """Send `blocks` to `document_name` once the current transaction
     commits (immediately when there is none). A rolled-back write never

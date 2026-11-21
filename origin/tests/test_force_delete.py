@@ -68,7 +68,11 @@ def events():
     return SecurityEvent.objects.filter(action=SecurityAction.DATA_FORCE_DELETED)
 
 
-@override_settings(MEDIA_ROOT=_MEDIA)
+@override_settings(
+    MEDIA_ROOT=_MEDIA,
+    COLLAB_INTERNAL_URL="http://collab.internal",
+    COLLAB_INTERNAL_SECRET="test-secret",
+)
 class Base(BaseAPITestCase):
     @classmethod
     def tearDownClass(cls):

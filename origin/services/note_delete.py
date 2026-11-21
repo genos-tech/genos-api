@@ -39,6 +39,7 @@ from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.models.note.task_note_models import TaskNoteAttachmentFact, TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.purge import purge_note, purge_note_folders
+from origin.services import collab_push
 from origin.services.note_satellites import batched_note_cleanup
 from origin.views.utils.note_acl_resync import (
     collect_folder_subtree_ids,
@@ -101,6 +102,11 @@ def forget_deleted_notes(code: int, note_ids) -> None:
     ids = sorted({int(n) for n in note_ids})
     for start in range(0, len(ids), _FORGET_BATCH):
         _forget_batch(code, ids[start : start + _FORGET_BATCH])
+    # The collaborative document is the last copy of the text once the row is gone (MIP-1937).
+    label = next(name for name, (_model, c) in FAMILIES.items() if c == code)
+    collab_push.forget_documents_after_commit(
+        collab_push.note_document_name(label, note_id) for note_id in ids
+    )
 
 
 def forget_note_attachments(code: int, note_ids) -> int:
