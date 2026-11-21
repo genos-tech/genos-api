@@ -16,7 +16,7 @@ import sys
 from django.core.exceptions import ImproperlyConfigured
 
 from .settings import *  # noqa: F401,F403
-from .settings import DATABASES, DEBUG
+from .settings import CORS_ALLOWED_ORIGINS, DATABASES, DEBUG
 
 if not DEBUG:
     raise ImproperlyConfigured(
@@ -37,3 +37,10 @@ if sys.argv[1:2] == ["test"]:
 # Close each connection when its request ends, instead of keeping it for CONN_MAX_AGE seconds.
 # Costs one reconnect per request on the local stack; nothing else changes.
 DATABASES["default"]["CONN_MAX_AGE"] = 0
+
+# Dev CORS (MIP-1871). `apis/settings.py` allows every origin with credentials when DEBUG is on. On
+# the local stack a page on any other localhost port is same-site with the api, so the Lax refresh
+# cookie is sent to it and it could read the refresh response, which carries the access token.
+# Keep CORS to the listed origins: the inherited, env-driven list plus 127.0.0.1:3000.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys([*CORS_ALLOWED_ORIGINS, "http://127.0.0.1:3000"]))
