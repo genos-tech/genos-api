@@ -1,9 +1,10 @@
 import time
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 
 from origin.search_engine.index_config import build_index_settings, build_mappings
+from origin.search_engine.index_names import index_family
 from origin.search_engine.models import RagChunk
 from origin.search_engine.opensearch_client import (
     get_client,
@@ -19,7 +20,9 @@ class Command(BaseCommand):
     help = (
         "Create the OpenSearch chunk index and point the stable alias at "
         "it. Idempotent: existing index/alias are left alone unless "
-        "--recreate is passed."
+        "--recreate is passed. Refuses (nothing written) to take over an "
+        "alias name that a plain index holds or that another index family "
+        "owns: see OPENSEARCH_ALIAS in the README."
     )
 
     def add_arguments(self, parser):
@@ -52,9 +55,7 @@ class Command(BaseCommand):
 
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                self._setup(
-                    client, physical, alias, options["recreate"], options["update_mapping"]
-                )
+                self._setup(client, physical, alias, options["recreate"], options["update_mapping"])
                 return
             except OSConnectionError as exc:
                 if attempt < _MAX_RETRIES:
@@ -71,7 +72,44 @@ class Command(BaseCommand):
                     )
                     # Exit 0 so the Dockerfile CMD continues to gunicorn.
 
+    def _refuse_foreign_alias(self, client, physical, alias):
+        """Raise (CommandError, exit 1) BEFORE any write if `alias` is not ours to create/re-point.
+
+        MIP-1762: an isolated run that overrode only OPENSEARCH_INDEX used to create its index,
+        clear RagChunk and only then fail on the shared alias name (or, if that was a real alias,
+        re-point it). Two cases are refused:
+
+        * a plain INDEX is named like the alias (an alias cannot take that name);
+        * the alias exists and points at an index of another family. `knowledge_chunks_v1` ->
+          `knowledge_chunks_v2` stays allowed (the documented bump behind one alias); an unrelated
+          name taking over the shared alias is not.
+        """
+        hint = (
+            "Give this run its own alias: set OPENSEARCH_ALIAS (unset, it is derived from "
+            "OPENSEARCH_INDEX for any name outside knowledge_chunks_v<N>). Nothing was changed."
+        )
+        if alias == physical:
+            raise CommandError(
+                f"OPENSEARCH_INDEX and OPENSEARCH_ALIAS are both {alias!r}: an alias cannot "
+                f"share its index's name. {hint}"
+            )
+        if client.indices.exists_alias(name=alias):
+            targets = sorted(client.indices.get_alias(name=alias).keys())
+            foreign = [t for t in targets if index_family(t) != index_family(physical)]
+            if foreign:
+                raise CommandError(
+                    f"Alias {alias!r} points at {', '.join(foreign)}, which is not in the family "
+                    f"of {physical!r}: refusing to re-point it. {hint}"
+                )
+        elif client.indices.exists(index=alias):
+            raise CommandError(
+                f"An index named {alias!r} exists, so it cannot be used as an alias "
+                f"(invalid_alias_name_exception). {hint}"
+            )
+
     def _setup(self, client, physical, alias, recreate, update_mapping=False):
+        self._refuse_foreign_alias(client, physical, alias)
+
         if recreate and client.indices.exists(index=physical):
             self.stdout.write(f"Deleting existing index {physical}…")
             client.indices.delete(index=physical)

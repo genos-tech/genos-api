@@ -8,7 +8,8 @@ What is pinned, and why each is its own test:
   * A payer, a comp, a paying team's member are untouched, and their one trial is not burned.
   * A Stripe webhook (subscription deleted / unpaid / a reconcile that finds nothing) cannot end
     a trial early, and subscribing during a trial simply works.
-  * One per person: per account, per address (it survives account deletion), once for existing
+  * One per person while the account exists (one row per account); nothing is kept after the
+    account is deleted, so a new sign-up may have a new first month (MIP-1779). Once for existing
     accounts, never back-dated.
   * At day 30 the plan reads as before, the data is all still there, a connected app is kept and
     shown as paused, and an MCP call is refused until the plan is back.
@@ -27,7 +28,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection
+from django.db import connection, transaction
 from django.test import override_settings
 from django.utils import timezone
 from oauth2_provider.models import Application
@@ -43,7 +44,6 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine import quota
 from origin.services import (
     account_deletion,
-    blind_index,
     first_month_trial,
     schedule_defaults,
     stripe_billing,
@@ -301,34 +301,90 @@ class StartAndSwitchTests(TrialBase):
 
 
 class OnePerPersonTests(TrialBase):
-    def test_the_same_address_after_account_deletion_gets_no_second_month(self):
+    """One trial per person WHILE THE ACCOUNT EXISTS (the one-to-one `user` row). Nothing about the
+    person is kept after the account is deleted (MIP-1779, counsel: no PII that is not necessary),
+    so a person who deletes the account and signs up again may have a new first month."""
+
+    def delete_account_of(self, user):
+        # A solo account can be deleted: leave the shared team first.
+        TeamMembers.objects.filter(attendee=user).update(is_deleted=True)
+        account_deletion.delete_account(user)
+        user.refresh_from_db()
+
+    def test_deleting_the_account_leaves_no_trial_row_and_no_hash_anywhere(self):
+        self.start(self.user2)
+        address_hash = CustomUser.objects.get(pk=self.user2.pk).email_hash
+        self.assertTrue(address_hash)
+        self.assertTrue(CoreTrial.objects.filter(user=self.user2).exists())
+        self.delete_account_of(self.user2)
+        self.assertFalse(CoreTrial.objects.filter(user_id=self.user2.pk).exists())
+        # The account row itself holds the hash of the made-up address, never the real one.
+        self.assertNotEqual(CustomUser.objects.get(pk=self.user2.pk).email_hash, address_hash)
+        # The trial table has no column that could hold an address hash, and the real hash is
+        # in no row of it (read as text, whatever the columns are called).
+        self.assertNotIn("email_hash", [f.name for f in CoreTrial._meta.get_fields()])
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT t::text FROM origin_coretrial t")
+            self.assertFalse([row for row in cursor.fetchall() if address_hash in row[0]])
+
+    def test_signing_up_again_after_a_deletion_is_allowed_and_gets_a_new_first_month(self):
         self.start(self.user2)
         address = self.user2.email
-        # A solo account can be deleted: leave the shared team first.
-        TeamMembers.objects.filter(attendee=self.user2).update(is_deleted=True)
-        account_deletion.delete_account(self.user2)
-        self.user2.refresh_from_db()
+        self.delete_account_of(self.user2)
         self.assertNotEqual(self.user2.email, address)  # anonymised
         again = verified(
             CustomUser.objects.create_user(email=address, username="back", password="x")
         )
-        self.assertEqual(first_month_trial.why_not(again), first_month_trial.ADDRESS_ALREADY_USED)
-        self.assertIsNone(self.start(again))
-        self.assertEqual(self.tier(again), "free")
+        self.assertIsNone(first_month_trial.why_not(again))
+        self.assertIsNotNone(self.start(again))
+        self.assertEqual(self.tier(again), "core")
+        self.assertEqual(CoreTrial.objects.filter(user=again).count(), 1)
 
-    def test_the_address_is_matched_the_way_the_account_system_matches_it(self):
+    def test_an_existing_account_cannot_get_a_second_trial_even_after_the_first_ended(self):
+        self.assertIsNotNone(self.start())
+        self.end_now()
+        self.assertEqual(first_month_trial.why_not(self.user), first_month_trial.ALREADY_HAD_ONE)
+        self.assertIsNone(self.start())
+        with offer(True):
+            first_month_trial.grant_to_existing()
+        self.assertEqual(CoreTrial.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(self.tier(), "free")
+
+    def test_deleting_one_account_leaves_another_persons_running_trial_alone(self):
+        self.start(self.user)
+        before = CoreTrial.objects.get(user=self.user)
+        self.start(self.user2)
+        self.delete_account_of(self.user2)
+        after = CoreTrial.objects.get(user=self.user)
+        self.assertEqual((after.pk, after.ends_at), (before.pk, before.ends_at))
+        self.assertEqual(self.tier(), "core")
+
+    def test_the_migration_drops_the_rows_a_deleted_account_left_behind(self):
+        """0255: a row kept by the old release for an already-deleted account goes, a live one stays
+        (the data step only; the column drop is the schema change the test database already has)."""
+        import importlib  # noqa: PLC0415
+
+        from django.apps import apps  # noqa: PLC0415
+
+        self.start(self.user)
+        self.start(self.user2)
+        CustomUser.objects.filter(pk=self.user2.pk).update(is_deleted=True, is_active=False)
+        migration = importlib.import_module("origin.migrations.0255_core_trial_drop_email_hash")
+        migration.drop_trials_of_deleted_accounts(apps, None)
+        self.assertEqual(list(CoreTrial.objects.values_list("user_id", flat=True)), [self.user.pk])
+
+    def test_the_account_system_matches_the_address_not_the_trial(self):
         self.start()
-        # The account system lowercases (blind index): the stored copy is that hash, and an
-        # address that differs only in case hashes to the same value.
+        # The account system lowercases (blind index), so an address that differs only in case is
+        # the same account and cannot be registered twice: that unique `email_hash` is what keeps
+        # "one per person" true while the account lives, with no copy on the trial row.
         self.assertTrue(CustomUser.objects.with_email("TEST@Example.com").exists())
-        self.assertEqual(
-            blind_index.USER_EMAIL.compute("TEST@Example.com"),
-            CoreTrial.objects.get(user=self.user).email_hash,
-        )
-        self.assertEqual(
-            CoreTrial.objects.get(user=self.user).email_hash,
-            CustomUser.objects.get(pk=self.user.pk).email_hash,
-        )
+        with self.assertRaises(Exception):  # noqa: B017, PT011 - IntegrityError, any backend
+            with transaction.atomic():
+                CustomUser.objects.create_user(
+                    email="TEST@Example.com", username="twin", password="x"
+                )
+        self.assertEqual(CoreTrial.objects.count(), 1)
 
 
 class ExistingAccountsTests(TrialBase):

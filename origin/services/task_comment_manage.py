@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from django.utils import timezone
+
 from origin.models.task.task_models import TaskComments
 from origin.search_engine.purge import purge_task_comment
 from origin.services import realtime_push, unified_writer, v3_activity
@@ -35,14 +37,18 @@ def soft_delete_comment(comment: TaskComments) -> int:
     when a comment is added, so removing the row would make the next comment
     reuse the id. Flipping `is_deleted` also drives the `comment_record` signal
     (a COMMENT_DELETED activity), and every live-comment reader already filters
-    on the flag. Idempotent: deleting a deleted comment writes nothing again.
+    on the flag. The text goes in the same save (`comment_body` to `[]`, MIP-1784), and
+    the mirror's with it: nothing brings a deleted comment back, so nothing needs it.
+    Idempotent: deleting a deleted comment writes no second history row; one deleted before
+    the text was cleared is cleaned (without the signal, the history already says deleted).
     """
     newly_deleted = not comment.is_deleted
     if newly_deleted:
         # `ts_updated_at` is `auto_now`, so it must be listed for the save to
         # refresh it.
         comment.is_deleted = True
-        comment.save(update_fields=["is_deleted", "ts_updated_at"])
+        comment.comment_body = []
+        comment.save(update_fields=["is_deleted", "comment_body", "ts_updated_at"])
         # Tombstone the v3 mirror too: the PM task thread renders comments only
         # through it, so skipping this leaves the deleted comment on screen.
         unified_writer.soft_delete_task_comment_as_thread_reply(
@@ -52,6 +58,17 @@ def soft_delete_comment(comment: TaskComments) -> int:
         # `ts_updated_at` bump also marks the task dirty for the incremental
         # reindexer, which re-chunks without it.
         purge_task_comment(comment.task_id, comment.comment_id)
+    elif comment.comment_body:
+        # Deleted before the text was cleared: blank it, and stamp it (`update` skips `auto_now`)
+        # so a client holding the row, and the search reindexer, see the change.
+        comment.comment_body = []
+        comment.ts_updated_at = timezone.now()
+        TaskComments.objects.filter(pk=comment.pk).update(
+            comment_body=[], ts_updated_at=comment.ts_updated_at
+        )
+        unified_writer.soft_delete_task_comment_as_thread_reply(
+            task_id=int(comment.task_id), comment_id=int(comment.comment_id)
+        )
     count = live_comment_count(comment.task_id)
     if newly_deleted:
         # Counted after the delete: the app SETs its chip from this number.

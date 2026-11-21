@@ -13,10 +13,12 @@ The body mirrors the live shape byte-for-byte (no block ids, a heading without
 This module is the single definition: `demo_seeder` imports it for the cards it
 seeds, so the demo and the live paths cannot drift apart.
 
-Labels are English unless the caller passes a table. The app rewrites the card
-in the viewer's language the next time the task's metadata is saved
-(`PATCH /api/v3/tasks/{id}/card-message/`), so a card made here is English
-until then.
+Labels are English unless the caller passes a table. The server-written card
+(`task_card_post`) passes the table of its sender's language (`card_language`,
+`card_labels`; MIP-1744): the field names are baked into the stored message as
+text, so one language has to be chosen when it is written, and the app rewrites
+it in the editor's language the next time the task's metadata is saved in the
+browser (`PATCH /api/v3/tasks/{id}/card-message/`).
 """
 
 from __future__ import annotations
@@ -46,6 +48,104 @@ MILESTONE_CARD_LABELS = {
     "sprint": "Sprint: ",
     "assignees": "Assignees: ",
 }
+
+# The field names per UI language, for a card the SERVER writes (MIP-1744). The words are the
+# ones `genos-frontend/src/i18n/locales/<lang>` writes on the app's own card
+# (`tasks.messageTemplate`), so a server-made card reads like an app-made one. `en` is the table
+# above, pinned to the English demo content (a test). The Japanese demo content
+# (`demo_content_ja.CARD_LABELS`) still spells a few labels the older way (ASCII colon, 労力): it
+# is the v1 eval corpus (`test_demo_v1_golden`), so it is left alone here. The vocabulary is the
+# UI's (`CustomUser.language`); a language with no table here reads English. Grow it by adding a
+# language: nothing else needs touching.
+_LABELS_BY_LANGUAGE = {
+    "en": {**MILESTONE_CARD_LABELS, "deleted_user": DELETED_USER},
+    "ja": {
+        "status": "ステータス：",
+        "priority": "優先度：",
+        "effort": "Effortレベル：",
+        "assignee": "担当者：",
+        "reporter": "報告者：",
+        "due": "締切：",
+        "unassigned": "未割り当て",
+        "sprint": "スプリント：",
+        "assignees": "担当者：",
+        "deleted_user": "削除済みユーザー",
+    },
+    "zh": {
+        "status": "状态：",
+        "priority": "优先级：",
+        "effort": "工作量：",
+        "assignee": "负责人：",
+        "reporter": "报告人：",
+        "due": "截止：",
+        "unassigned": "未指派",
+        "sprint": "冲刺：",
+        "assignees": "负责人：",
+        "deleted_user": "已删除用户",
+    },
+    "es": {
+        "status": "Estado: ",
+        "priority": "Prioridad: ",
+        "effort": "Esfuerzo: ",
+        "assignee": "Asignado: ",
+        "reporter": "Reportador: ",
+        "due": "Vence: ",
+        "unassigned": "Sin asignar",
+        "sprint": "Sprint: ",
+        "assignees": "Asignados: ",
+        "deleted_user": "Usuario eliminado",
+    },
+    "fr": {
+        "status": "Statut : ",
+        "priority": "Priorité : ",
+        "effort": "Effort : ",
+        "assignee": "Assigné : ",
+        "reporter": "Rapporteur : ",
+        "due": "Échéance : ",
+        "unassigned": "Non assigné",
+        "sprint": "Sprint : ",
+        "assignees": "Assignés : ",
+        "deleted_user": "Utilisateur supprimé",
+    },
+    "ar": {
+        "status": "الحالة: ",
+        "priority": "الأولوية: ",
+        "effort": "الجهد: ",
+        "assignee": "المُسنَد إليه: ",
+        "reporter": "المُبلِّغ: ",
+        "due": "الاستحقاق: ",
+        "unassigned": "غير مُسنَدة",
+        "sprint": "السبرنت: ",
+        "assignees": "المُسنَد إليهم: ",
+        "deleted_user": "مستخدم محذوف",
+    },
+    "hi": {
+        "status": "स्थिति: ",
+        "priority": "प्राथमिकता: ",
+        "effort": "प्रयास: ",
+        "assignee": "असाइनी: ",
+        "reporter": "रिपोर्टर: ",
+        "due": "ड्यू: ",
+        "unassigned": "असाइन नहीं",
+        "sprint": "स्प्रिंट: ",
+        "assignees": "असाइनी: ",
+        "deleted_user": "हटाया गया उपयोगकर्ता",
+    },
+}
+CARD_LANGUAGES = tuple(_LABELS_BY_LANGUAGE)
+
+
+def card_labels(language: str | None) -> dict[str, str]:
+    """The field names (task and milestone) in `language`; English for an unknown one."""
+    return _LABELS_BY_LANGUAGE.get(language or "", _LABELS_BY_LANGUAGE["en"])
+
+
+def card_language(user) -> str:
+    """The language a card is written in for `user`: their UI language, English when it is
+    unknown (NULL), not one the cards have a table for, or when there is no user."""
+    code = (getattr(user, "language", None) or "").strip().lower()
+    return code if code in _LABELS_BY_LANGUAGE else "en"
+
 
 # BlockNote ships a fixed `textColor` palette; these map the task meta values to
 # the closest named slot, as the frontend template does.
@@ -115,13 +215,14 @@ def card_mention(user, team_id) -> dict:
     }
 
 
-def _person(user, team_id) -> dict:
+def _person(user, team_id, labels: dict[str, str] | None = None) -> dict:
     """The mention for `user`, or, when the row is gone (a NULL reporter), the plain words
-    `DELETED_USER` in the muted italic of an unassigned row. Only a missing person is
-    handled: anything else that is not a user still raises."""
+    `DELETED_USER` (in the card's language, when `labels` carries it) in the muted italic of an
+    unassigned row. Only a missing person is handled: anything else that is not a user still
+    raises."""
     if user is None:
         return {
-            "text": DELETED_USER,
+            "text": (labels or {}).get("deleted_user", DELETED_USER),
             "type": "text",
             "styles": {"italic": True, "textColor": "gray"},
         }
@@ -199,7 +300,7 @@ def task_card_body(
             card_label(labels["assignee"]),
             card_mention(assignee, team_id) if assignee is not None else _unassigned(labels),
         ),
-        _row(card_label(labels["reporter"]), _person(reporter, team_id)),
+        _row(card_label(labels["reporter"]), _person(reporter, team_id, labels)),
         _due_row(labels, due_date),
         _blank_row(),
     ]
@@ -242,7 +343,7 @@ def milestone_card_body(
             card_label(labels["priority"]),
             card_chip(priority, PRIORITY_COLOR.get(priority)) if priority else neutral_chip(),
         ),
-        _row(card_label(labels["reporter"]), _person(reporter, team_id)),
+        _row(card_label(labels["reporter"]), _person(reporter, team_id, labels)),
         _row(*assignee_row),
         _due_row(labels, due_date),
         _blank_row(),
