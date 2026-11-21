@@ -471,3 +471,90 @@ class UndoTests(SlackBase):
         import uuid
 
         self.assertEqual(self.undo(str(uuid.uuid4())).status_code, 404)
+
+
+class ReviewRegressionTests(SlackBase):
+    def test_planted_key_in_a_members_chat_is_not_mapped(self):
+        from origin.services.slack_import import message_key
+
+        mine = Channel.objects.create(team=self.team, kind=2, title="mine", owner=self.user2)
+        ChannelMember.objects.create(channel=mine, user=self.user2, role="owner")
+        Message.objects.create(
+            channel=mine,
+            sender=self.user2,
+            seq=1,
+            body=[],
+            body_text="plant",
+            correlation_id=message_key(self.team.team_id, "G1", f"{T0}.000100"),
+        )
+        self.commit()
+        self.assertEqual(Message.objects.filter(channel=mine).count(), 1)
+        self.assertTrue(Channel.objects.filter(team=self.team, title="secret").exists())
+
+    def test_thread_broadcast_reply_is_imported(self):
+        files = tree()
+        files["general/2024-03-05.json"] = files["general/2024-03-05.json"] + [
+            {
+                "type": "message",
+                "subtype": "thread_broadcast",
+                "user": "U2",
+                "text": "also to channel",
+                "ts": f"{T0 + 500}.000100",
+                "thread_ts": f"{T0}.000100",
+            }
+        ]
+        self.commit(build_zip(files))
+        m = Message.objects.get(channel=self.gm("general"), body_text="also to channel")
+        self.assertTrue(m.is_thread_reply)
+
+    def test_unread_before_import_stays_unread(self):
+        from origin.models.chat.unified_models import ReadCursor
+
+        self.commit()
+        ch = self.gm("general")
+        first = Message.objects.filter(channel=ch).order_by("seq").first()
+        ReadCursor.objects.filter(user=self.user2, channel=ch, thread_root=None).update(
+            last_read_message=first
+        )
+        newer = tree(
+            {
+                "general/2024-03-06.json": [
+                    {"type": "message", "user": "U1", "text": "later", "ts": f"{T0 + 99999}.000100"}
+                ]
+            }
+        )
+        self.commit(build_zip(newer))
+        cur = ReadCursor.objects.get(user=self.user2, channel=ch, thread_root=None)
+        self.assertEqual(cur.last_read_message_id, first.id)
+
+    def test_undo_removes_members_the_import_added(self):
+        existing = Channel.objects.create(team=self.team, kind=2, title="x", owner=self.user)
+        ChannelMember.objects.create(channel=existing, user=self.user, role="owner")
+        out = self.commit()
+        ch = self.gm("general")
+        # Make general an "existing" chat in a later run by importing a newer export into it.
+        ChannelMember.objects.filter(channel=ch, user=self.user2).delete()
+        newer = tree(
+            {
+                "general/2024-03-06.json": [
+                    {"type": "message", "user": "U1", "text": "again", "ts": f"{T0 + 99999}.000100"}
+                ]
+            }
+        )
+        run2 = self.commit(build_zip(newer))["run_id"]
+        self.assertTrue(ChannelMember.objects.filter(channel=ch, user=self.user2).exists())
+        resp = self.client.post(
+            f"{RUNS}{run2}/undo/", {"team_id": str(self.team.team_id)}, format="json"
+        )
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertFalse(ChannelMember.objects.filter(channel=ch, user=self.user2).exists())
+        self.assertTrue(Message.objects.filter(channel=ch).exists())
+        self.assertTrue(out["run_id"])
+
+    def test_undo_while_locked_409(self):
+        out = self.commit()
+        cache.add(f"slack-import:{self.team.team_id}", "other", 600)
+        resp = self.client.post(
+            f"{RUNS}{out['run_id']}/undo/", {"team_id": str(self.team.team_id)}, format="json"
+        )
+        self.assertEqual(resp.status_code, 409)

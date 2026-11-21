@@ -54,6 +54,17 @@ def _team_for_import(request, team_id):
     return team, None
 
 
+def _acquire(team):
+    """One import or undo per team at a time. The token keeps a slow one from freeing a newer lock."""
+    lock, token = f"slack-import:{team.team_id}", uuid.uuid4().hex
+    return (lock, token) if cache.add(lock, token, LOCK_SECONDS) else (None, None)
+
+
+def _release(lock, token):
+    if cache.get(lock) == token:
+        cache.delete(lock)
+
+
 def _limits():
     return {
         "max_zip_mb": z.MAX_ZIP_BYTES // (1024 * 1024),
@@ -118,8 +129,8 @@ class SlackImportView(AuthenticatedAPIView):
         team, res = _team_for_import(request, request.data.get("team_id"))
         if res:
             return res
-        lock = f"slack-import:{team.team_id}"
-        if not cache.add(lock, 1, LOCK_SECONDS):
+        lock, token = _acquire(team)
+        if lock is None:
             return _refuse("import_in_progress", status.HTTP_409_CONFLICT)
         try:
             prepared, res = _prepare(request, team)
@@ -135,7 +146,7 @@ class SlackImportView(AuthenticatedAPIView):
                 request=request,
             )
         finally:
-            cache.delete(lock)
+            _release(lock, token)
         return Response(out, status=status.HTTP_201_CREATED)
 
 
@@ -163,9 +174,13 @@ class SlackImportUndoView(AuthenticatedAPIView):
         )
 
     def post(self, request, run_id: uuid.UUID):
-        return self._go(
-            request,
-            request.data.get("team_id"),
-            run_id,
-            lambda team, rid: slack_import.undo(team, rid, request=request),
-        )
+        def run(team, rid):
+            lock, token = _acquire(team)
+            if lock is None:
+                raise z.SlackImportError("import_in_progress", status.HTTP_409_CONFLICT)
+            try:
+                return slack_import.undo(team, rid, request=request)
+            finally:
+                _release(lock, token)
+
+        return self._go(request, request.data.get("team_id"), run_id, run)

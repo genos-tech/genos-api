@@ -198,9 +198,6 @@ def _prepare(team, chan, msgs, users):
             skipped["subtype"] += 1
             continue
         thread_ts = m.get("thread_ts")
-        if m.get("subtype") == "thread_broadcast":
-            skipped["subtype"] += 1
-            continue
         out.append(
             {
                 "raw": m,
@@ -241,9 +238,30 @@ def _team_gms(team):
     return Channel.objects.filter(team=team, kind=ChannelKind.GM, is_deleted=False)
 
 
-def _mapped_channel(team, items):
+def _import_created_channels(team, cid, chan):
+    """Live chats an earlier import of this Slack channel created: a banner the OWNER posted says so.
+
+    Only these may be mapped to. A message key is derivable from public ids, and `correlation_id`
+    is client-supplied on a normal send, so matching on keys alone would let a member plant one in
+    a chat of their own and have the history imported there.
+    """
+    banners = Message.objects.filter(
+        channel__team=team,
+        channel__kind=ChannelKind.GM,
+        channel__is_deleted=False,
+        channel__is_private=bool(chan.get("is_private")),
+        channel__is_external=False,
+        sender_id=team.owner_id,
+        correlation_id__startswith=BANNER_PREFIX,
+        metadata__slackImport__ch=cid,
+        metadata__slackImport__created_channel=True,
+    )
+    return list(banners.values_list("channel_id", flat=True).distinct())
+
+
+def _mapped_channel(team, items, cid, chan):
     """The live group chat an earlier run put these messages in (the one with the most), or None."""
-    gms = list(_team_gms(team).values_list("id", flat=True))
+    gms = _import_created_channels(team, cid, chan)
     if not gms or not items:
         return None, {}
     found = _existing_keys(gms, [i["key"] for i in items])
@@ -282,7 +300,7 @@ def resolve(team, export, *, channel_ids=None) -> dict:
             continue
         items, skipped = _prepare(team, chan, export.messages.get(chan.get("name"), []), users)
         counts["skipped_subtypes"] += skipped["subtype"]
-        mapped, found = _mapped_channel(team, items)
+        mapped, found = _mapped_channel(team, items, cid, chan)
         new_items = [i for i in items if i["key"] not in found]
         ids = {i["ts"] for i in items}
         orphans = sum(1 for i in items if i["is_reply"] and i["thread_ts"] not in ids)
@@ -465,10 +483,12 @@ def _commit_channel(team, user, run, c, users, id_to_name, name_by_chan, filenam
     else:
         channel = mapped
     have = set(ChannelMember.objects.filter(channel=channel).values_list("user_id", flat=True))
+    added = []
     for uid, u in members.items():
         if uid not in have and uid != user.id:
             ChannelMember.objects.create(channel=channel, user=u, role="member")
             have.add(uid)
+            added.append(str(uid))
     live = set(
         ChannelMember.objects.filter(channel=channel, is_deleted=False).values_list(
             "user_id", flat=True
@@ -597,6 +617,7 @@ def _commit_channel(team, user, run, c, users, id_to_name, name_by_chan, filenam
                 "run": str(run),
                 "ch": cid,
                 "created_channel": created,
+                "added_members": added,
                 "filename": (filename or "")[:120],
                 "messages": len(objs),
                 "at": now.isoformat(),
@@ -604,9 +625,23 @@ def _commit_channel(team, user, run, c, users, id_to_name, name_by_chan, filenam
         },
         correlation_id=f"{BANNER_PREFIX}{run.hex}:{cid}"[:64],
     )
+    # A member who had read everything before the import has read the banner too; one with unread
+    # messages from before keeps them unread.
+    cursors = {
+        cu.user_id: cu
+        for cu in ReadCursor.objects.filter(channel=channel, thread_root=None).select_related(
+            "last_read_message"
+        )
+    }
     for uid in live:
-        cur, _ = ReadCursor.objects.get_or_create(user_id=uid, channel=channel, thread_root=None)
-        ReadCursor.objects.filter(pk=cur.pk).update(last_read_message=banner)
+        cur = cursors.get(uid)
+        if cur is None:
+            if created:
+                ReadCursor.objects.create(
+                    user_id=uid, channel=channel, thread_root=None, last_read_message=banner
+                )
+        elif cur.last_read_message is not None and cur.last_read_message.seq >= last_seq:
+            ReadCursor.objects.filter(pk=cur.pk).update(last_read_message=banner)
     if chan.get("is_archived") and created:
         from origin.services.archive import archive_group_chat
 
@@ -673,8 +708,12 @@ def _plan(team, run_id):
     removable = {pk for pk, m in mine.items() if m["edited_at"] is None}
     roots = {m["thread_root_id"] for pk, m in mine.items() if m["thread_root_id"]}
     roots |= {pk for pk in mine if mine[pk]["thread_root_id"] is None}
-    for root in roots & removable:
-        child_ids = set(Message.objects.filter(thread_root_id=root).values_list("id", flat=True))
+    children = {}
+    for root_id, pk in Message.objects.filter(thread_root_id__in=roots & removable).values_list(
+        "thread_root_id", "id"
+    ):
+        children.setdefault(root_id, set()).add(pk)
+    for root, child_ids in children.items():
         if child_ids - removable:
             removable.discard(root)
     kept = set(mine) - removable
@@ -704,6 +743,11 @@ def undo_plan(team, run_id) -> dict:
 
 
 def undo(team, run_id, *, request=None) -> dict:
+    with transaction.atomic():
+        return _undo(team, run_id, request)
+
+
+def _undo(team, run_id, request):
     from origin.services import channel_delete, thread_summary_cleanup
 
     banners, mine, removable, kept, delete_channels = _plan(team, run_id)
@@ -726,6 +770,17 @@ def undo(team, run_id, *, request=None) -> dict:
     for b in banners:
         if b.channel_id in doomed:
             continue
+        added = b.metadata["slackImport"].get("added_members") or []
+        if added:
+            # Read access the import granted goes with it, unless the person has posted since.
+            posted = set(
+                Message.objects.filter(channel_id=b.channel_id, sender_id__in=added).values_list(
+                    "sender_id", flat=True
+                )
+            )
+            ChannelMember.objects.filter(
+                channel_id=b.channel_id, user_id__in=[a for a in added if a not in map(str, posted)]
+            ).delete()
         meta = dict(b.metadata)
         meta["slackImport"] = {**meta["slackImport"], "undone_at": now.isoformat()}
         Message.objects.filter(pk=b.pk).update(metadata=meta, ts_updated_at=now)
