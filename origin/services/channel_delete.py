@@ -10,7 +10,8 @@ Two ways, chosen by the owner in the delete dialog:
   put back by flipping the flag. The chat leaves every list (the app's chat list, the agent and MCP
   chat tools, search, the join directory, the message and member endpoints: they all read
   `is_deleted=False`, which is how a deleted PROJECT's chat already disappears, see
-  `project_delete`), and its search chunks are dropped.
+  `project_delete`), and its search chunks are dropped. Its cached thread summaries are removed
+  (they are a cache of the chat's text; a restored chat writes new ones, MIP-1802).
 * **Hard**: the messages and everything that hangs off them (reactions, mentions, attachments and
   their files, flags, reminders, activity rows), the members, pins, read cursors and the channel
   row itself are removed for good. `Message.channel` is PROTECT, so the messages go first.
@@ -36,6 +37,7 @@ from django.utils import timezone
 from origin.models.chat.unified_models import Channel, ChannelKind, Message, MessageAttachment
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import ExternalGrant
+from origin.services import thread_summary_cleanup
 from origin.services.channel_scope import chat_member_rows
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.external_grants import active_grants_for_object, revoke_grant
@@ -102,6 +104,11 @@ def delete_group_chat(channel: Channel, *, mode: str = SOFT, request=None) -> Ch
     with transaction.atomic():
         for user_id, joined_at in members:
             revoke_membership_roles(user_id=user_id, channel_id=channel_id, joined_at=joined_at)
+
+        # The cached thread summaries (LLM digests of the replies) go with the chat in BOTH modes:
+        # they hold its text and key it by a bare uuid, so nothing cascades to them (MIP-1802). A
+        # restored chat writes a fresh one on the next ask. Their search chunks go on commit.
+        thread_summary_cleanup.forget_channels([channel_id])
 
         if hard:
             files = _hard_delete(channel, report)
