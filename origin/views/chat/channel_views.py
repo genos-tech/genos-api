@@ -79,6 +79,7 @@ from origin.services.realtime_push import (
     push_membership_removed,
 )
 from origin.services.security_events import record_security_event, user_label
+from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     body_object,
@@ -1060,10 +1061,19 @@ class ChannelDetailView(AuthenticatedAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        project.project_name = title
-        # post_save → _ensure_pm_channel_for_project mirrors the name
-        # onto Channel.title.
-        project.save(update_fields=["project_name", "ts_updated_at"])
+        with transaction.atomic():
+            project.project_name = title
+            # post_save → _ensure_pm_channel_for_project mirrors the name
+            # onto Channel.title.
+            project.save(update_fields=["project_name", "ts_updated_at"])
+            record_workspace_change(
+                team_id=project.team_id,
+                project_id=project.project_id,
+                entity_kind="project",
+                entity_id=project.project_id,
+                action="update",
+                fields=["project_name"],
+            )
         channel.refresh_from_db()
         return Response({"channel": ChannelSerializer(channel, context={"request": request}).data})
 

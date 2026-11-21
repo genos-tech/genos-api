@@ -31,6 +31,7 @@ from origin.services.activity_suppression import suppress_task_activity
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
 from origin.services.note_satellites import batched_note_cleanup
+from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.utils.note_role import NOTE_TYPE_TASK
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,9 @@ def delete_project(project: ProjectMaster) -> None:
     # must not outlive a delete that failed.
     with transaction.atomic():
         # Read BEFORE the delete: afterwards nothing names what the project held.
-        task_ids = list(TaskMaster.objects.filter(project=project).values_list("task_id", flat=True))
+        task_ids = list(
+            TaskMaster.objects.filter(project=project).values_list("task_id", flat=True)
+        )
         milestone_ids = list(
             MilestoneMaster.objects.filter(project=project).values_list("milestone_id", flat=True)
         )
@@ -102,6 +105,15 @@ def delete_project(project: ProjectMaster) -> None:
         # status, and the "status changed" activity row that writes lands after Django has
         # collected the cascade, so it names a task and a project that are gone and the COMMIT
         # fails on the deferred foreign key. The project's history goes with it anyway.
+        # Recorded before the delete, in the same transaction: the row keeps the project's id and
+        # no FK, so it outlives the project row (the team's log still says who deleted it).
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind="project",
+            entity_id=project.project_id,
+            action="delete",
+        )
         with batched_note_cleanup(), suppress_task_activity():
             project.delete()
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)

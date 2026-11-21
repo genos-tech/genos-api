@@ -34,6 +34,7 @@ from origin.models.project.prj_models import (
     ProjectTags,
 )
 from origin.services import change_feed
+from origin.services.workspace_changes import record as record_workspace_change
 
 TAG_NAME_MAX = 20
 LABEL_NAME_MAX = 30
@@ -125,7 +126,7 @@ def add_project_tag(project: ProjectMaster, raw_name, raw_color=None) -> Project
             # The page numbers a new tag by how many there are, which repeats an id once any
             # tag has been deleted. The highest id plus one never does.
             highest = ProjectTags.objects.filter(project=project).aggregate(m=Max("tag_id"))["m"]
-            return ProjectTags.objects.create(
+            tag = ProjectTags.objects.create(
                 team=project.team,
                 project=project,
                 tag_id=(highest or 0) + 1,
@@ -133,9 +134,19 @@ def add_project_tag(project: ProjectMaster, raw_name, raw_color=None) -> Project
                 tag_color=color,
                 tag_text_color=text_color_for(color),
             )
+            # Inside the same transaction as the tag, but outside this IntegrityError handler:
+            # an audit-row failure must not be reported as a duplicate tag name.
+            record_workspace_change(
+                team_id=project.team_id,
+                project_id=project.project_id,
+                entity_kind="tag",
+                entity_id=tag.tag_id,
+                action="create",
+            )
     except IntegrityError:
         # Two adds of the same name at once: the database constraint decided.
         raise CatalogRefused(f'A tag named "{name}" already exists in this project.', 409)
+    return tag
 
 
 # ---- labels ---------------------------------------------------------------------
@@ -181,13 +192,21 @@ def create_label(*, team_id, user, raw_name, color=None, text_color=None) -> Pro
     if ProjectLabel.objects.filter(team=team_id, name__iexact=name).exists():
         raise CatalogRefused("A label with that name already exists in this team.", 409)
     # A new label is unassigned, so no project's payload changed: nothing to invalidate.
-    return ProjectLabel.objects.create(
-        team_id=team_id,
-        name=name,
-        color=color or DEFAULT_LABEL_COLOR,
-        text_color=text_color or DEFAULT_LABEL_TEXT_COLOR,
-        created_by=user,
-    )
+    with transaction.atomic():
+        label = ProjectLabel.objects.create(
+            team_id=team_id,
+            name=name,
+            color=color or DEFAULT_LABEL_COLOR,
+            text_color=text_color or DEFAULT_LABEL_TEXT_COLOR,
+            created_by=user,
+        )
+        record_workspace_change(
+            team_id=team_id,
+            entity_kind="label",
+            entity_id=label.label_id,
+            action="create",
+        )
+    return label
 
 
 def replace_project_labels(project: ProjectMaster, raw_ids: list):

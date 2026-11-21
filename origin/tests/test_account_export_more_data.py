@@ -76,6 +76,7 @@ NEW_KEYS = [
     "message_attachments",
     "task_body_attachments",
     "task_history",
+    "workspace_changes",
     "security_events",
     "api_keys",
     "connected_apps",

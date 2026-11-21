@@ -39,6 +39,7 @@ from origin.services.member_roles import (
 from origin.services.project_code import derive_project_code
 from origin.services.realtime_push import push_membership_removed
 from origin.services.security_events import record_security_event, user_label
+from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.utils.scope_guards import is_team_member
 
 PROJECT_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,5}$")
@@ -141,6 +142,13 @@ def create_project(
         for member_id in wanted:
             ProjectMembers.objects.create(team=team, project=project, attendee_id=member_id)
             record_member_added(project, member_id, via="direct", request=request, actor=owner)
+        record_workspace_change(
+            team_id=team.team_id,
+            project_id=project.project_id,
+            entity_kind="project",
+            entity_id=project.project_id,
+            action="create",
+        )
     return project
 
 
@@ -158,8 +166,17 @@ def set_project_code(project: ProjectMaster, raw) -> ProjectMaster:
         .exists()
     ):
         raise ProjectRefused("Another project in this team already uses that code.", 409)
-    project.code = code
-    project.save(update_fields=["code", "ts_updated_at"])
+    with transaction.atomic():
+        project.code = code
+        project.save(update_fields=["code", "ts_updated_at"])
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind="project",
+            entity_id=project.project_id,
+            action="update",
+            fields=["code"],
+        )
     # The code prefixes every task's display id, which search indexes (MIP-739):
     # re-emit the project's tasks and milestones on the next incremental pass.
     # Bumping each task's own `ts_updated_at` instead would reorder every list
@@ -176,8 +193,17 @@ def set_project_name(project: ProjectMaster, raw) -> ProjectMaster:
         .exists()
     ):
         raise ProjectRefused("Another project in this team already uses that name.", 409)
-    project.project_name = name
-    project.save(update_fields=["project_name", "ts_updated_at"])
+    with transaction.atomic():
+        project.project_name = name
+        project.save(update_fields=["project_name", "ts_updated_at"])
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind="project",
+            entity_id=project.project_id,
+            action="update",
+            fields=["project_name"],
+        )
     return project
 
 

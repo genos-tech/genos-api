@@ -32,6 +32,7 @@ from .note.task_note_models import *
 # read_status_models) were deleted in the v3 migration — chat lives in
 # `unified_models` (Channel / Message / ChannelMember / …).
 from .project.prj_models import *
+from .project.workspace_change_models import *
 from .task.milestone_models import *
 from .task.sprint_models import *
 from .task.task_activity_models import *
