@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0258_archived_at"),
+        ("origin", "0259_security_event_data_force_deleted"),
     ]
 
     operations = [
