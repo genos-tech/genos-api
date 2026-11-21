@@ -34,6 +34,7 @@ from origin.services.sprint_status import (
     SPRINT_STATUS_UPCOMING,
 )
 from origin.services.task_cache import invalidate_project_tasks_cache
+from origin.services.workspace_changes import record as record_workspace_change
 from origin.signals.task_signals import update_tasks_recorded
 
 
@@ -76,7 +77,7 @@ def create_sprint(*, project: ProjectMaster, name: str, start: date, end: date) 
             .first()
             or 0
         )
-        return Sprint.objects.create(
+        sprint = Sprint.objects.create(
             project=project,
             team=project.team,
             name=name,
@@ -86,6 +87,14 @@ def create_sprint(*, project: ProjectMaster, name: str, start: date, end: date) 
             status=SPRINT_STATUS_UPCOMING,
             is_auto_generated=False,
         )
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind="sprint",
+            entity_id=sprint.sprint_id,
+            action="create",
+        )
+        return sprint
 
 
 def update_sprint(
@@ -97,21 +106,36 @@ def update_sprint(
     status: str | None = None,
 ) -> Sprint:
     """Change the fields that are given; `None` leaves one alone."""
-    if name is not None:
+    changed: list[str] = []
+    if name is not None and name != sprint.name:
         sprint.name = name
-    if start is not None:
+        changed.append("name")
+    if start is not None and start != sprint.start_date:
         sprint.start_date = start
-    if end is not None:
+        changed.append("start_date")
+    if end is not None and end != sprint.end_date:
         sprint.end_date = end
+        changed.append("end_date")
     if sprint.end_date < sprint.start_date:
         raise SprintRefused("end_date must be >= start_date.", 400)
-    if status in _STATUSES:
+    if status in _STATUSES and status != sprint.status:
         sprint.status = status
+        changed.append("status")
     if _overlapping(
         sprint.project_id, sprint.start_date, sprint.end_date, exclude=sprint.sprint_id
     ).exists():
         raise SprintRefused("Updated window overlaps another sprint.", 409)
-    sprint.save()
+    with transaction.atomic():
+        sprint.save()
+        if changed:
+            record_workspace_change(
+                team_id=sprint.team_id,
+                project_id=sprint.project_id,
+                entity_kind="sprint",
+                entity_id=sprint.sprint_id,
+                action="update",
+                fields=changed,
+            )
     return sprint
 
 
@@ -120,8 +144,18 @@ def delete_sprint(sprint: Sprint) -> int:
 
     Idempotent: deleting a deleted sprint finds nothing left to detach.
     """
-    sprint.is_deleted = True
-    sprint.save(update_fields=["is_deleted", "ts_updated_at"])
+    was_deleted = sprint.is_deleted
+    with transaction.atomic():
+        sprint.is_deleted = True
+        sprint.save(update_fields=["is_deleted", "ts_updated_at"])
+        if not was_deleted:
+            record_workspace_change(
+                team_id=sprint.team_id,
+                project_id=sprint.project_id,
+                entity_kind="sprint",
+                entity_id=sprint.sprint_id,
+                action="delete",
+            )
 
     # Milestones fall back into "No sprint / Backlog", so the frontend doesn't
     # try to render them inside a now-invisible sprint.

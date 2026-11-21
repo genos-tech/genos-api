@@ -1,10 +1,12 @@
 from django.urls import path
 
+from origin.views.project.change_views import ProjectChangesView
 from origin.views.project.prj_views import *
 
 urlpatterns = [
     path("api/v2/project/", ProjectMasterView.as_view(), name="project"),
     path("api/v2/project/exist/", CheckProjectExistsView.as_view(), name="exist_project"),
+    path("api/v2/project/changes/", ProjectChangesView.as_view(), name="project_changes"),
     path("api/v2/project/join/", JoinProjectView.as_view(), name="join_project"),
     path("api/v2/project/leave/", LeaveProjectView.as_view(), name="leave_project"),
     path(

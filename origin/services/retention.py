@@ -193,6 +193,12 @@ def _task_activities() -> QuerySet:
     return TaskActivity.objects.all()
 
 
+def _workspace_changes() -> QuerySet:
+    from origin.models.project.workspace_change_models import WorkspaceChange
+
+    return WorkspaceChange.objects.all()
+
+
 def _messages() -> QuerySet:
     from origin.models.chat.unified_models import Message
 
@@ -281,6 +287,17 @@ POLICIES: tuple[Policy, ...] = (
         action=Action.DELETE,
         queryset=_task_activities,
         age_field="ts_created_at",
+    ),
+    Policy(
+        name="workspace_changes",
+        description=(
+            "Who changed a project, a sprint, a label or a tag, and how (MIP-1758): "
+            "the row, its actor and its source. Names of changed fields only."
+        ),
+        action=Action.DELETE,
+        queryset=_workspace_changes,
+        age_field="created_at",
+        approved_days=365,
     ),
     Policy(
         name="deleted_message_bodies",

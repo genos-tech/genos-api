@@ -41,6 +41,7 @@ from origin.services.project_manage import (
     set_project_name,
 )
 from origin.services.security_events import record_security_event, user_label
+from origin.services.workspace_changes import record as record_workspace_change
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields
 from origin.views.utils.inbox_approval import (
@@ -152,8 +153,17 @@ class ProjectMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             previous_owner_id = project.owner_id
-            project.owner_id = new_owner_id
-            project.save(update_fields=["owner", "ts_updated_at"])
+            with transaction.atomic():
+                project.owner_id = new_owner_id
+                project.save(update_fields=["owner", "ts_updated_at"])
+                record_workspace_change(
+                    team_id=project.team_id,
+                    project_id=project.project_id,
+                    entity_kind="project",
+                    entity_id=project.project_id,
+                    action="update",
+                    fields=["owner"],
+                )
             # The owner is on the search ACL of the project's tasks with no member row of their
             # own (MIP-1591): the hand-over changes who that is, and no member row moved.
             mark_projects_dirty([project.project_id])
@@ -236,8 +246,15 @@ class ProjectMasterView(AuthenticatedAPIView):
             with transaction.atomic():
                 team = serializer.validated_data["team"]
                 system_user = new_system_user(team, serializer.validated_data["project_name"])
-                serializer.save(project_system_user=system_user)
+                project = serializer.save(project_system_user=system_user)
                 TeamMembers.objects.get_or_create(team=team, attendee=system_user)
+                record_workspace_change(
+                    team_id=project.team_id,
+                    project_id=project.project_id,
+                    entity_kind="project",
+                    entity_id=project.project_id,
+                    action="create",
+                )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
@@ -945,7 +962,14 @@ class ProjectTagsView(AuthenticatedAPIView):
 
         serializer = ProjectTagsSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            tag = serializer.save()
+            record_workspace_change(
+                team_id=tag.team_id,
+                project_id=tag.project_id,
+                entity_kind="tag",
+                entity_id=tag.tag_id,
+                action="create",
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
@@ -1015,13 +1039,25 @@ class ProjectTagsView(AuthenticatedAPIView):
                     {"error": f"{field} must be text."}, status=status.HTTP_400_BAD_REQUEST
                 )
 
+        before = {f: getattr(tag, f) for f in ("tag_name", "tag_color", "tag_text_color")}
         if "tag_name" in body:
             tag.tag_name = body["tag_name"]
         if "tag_color" in body:
             tag.tag_color = body["tag_color"]
         if "tag_text_color" in body:
             tag.tag_text_color = body["tag_text_color"]
-        tag.save()
+        changed_tag_fields = [f for f in before if getattr(tag, f) != before[f]]
+        with transaction.atomic():
+            tag.save()
+            if changed_tag_fields:
+                record_workspace_change(
+                    team_id=tag.team_id,
+                    project_id=tag.project_id,
+                    entity_kind="tag",
+                    entity_id=tag.tag_id,
+                    action="update",
+                    fields=changed_tag_fields,
+                )
 
         # Also update all tasks that reference this tag by old name
         if "tag_name" in body and body["tag_name"] != old_tag_name:
@@ -1100,7 +1136,15 @@ class ProjectTagsView(AuthenticatedAPIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        tag.delete()
+        with transaction.atomic():
+            tag.delete()
+            record_workspace_change(
+                team_id=tag.team_id,
+                project_id=tag.project_id,
+                entity_kind="tag",
+                entity_id=tag.tag_id,
+                action="delete",
+            )
 
         # Remove the tag from all tasks that reference it
         from origin.models.task.task_models import TaskMaster
@@ -2228,7 +2272,15 @@ class ProjectLabelsView(AuthenticatedAPIView):
 
         if update_fields:
             update_fields.append("ts_updated_at")
-            label.save(update_fields=update_fields)
+            with transaction.atomic():
+                label.save(update_fields=update_fields)
+                record_workspace_change(
+                    team_id=project.team_id,
+                    entity_kind="label",
+                    entity_id=label.label_id,
+                    action="update",
+                    fields=[f for f in update_fields if f != "ts_updated_at"],
+                )
             _invalidate_label_project_list(project.team_id)
 
         return Response(_label_payload(label), status=status.HTTP_200_OK)
@@ -2252,7 +2304,15 @@ class ProjectLabelsView(AuthenticatedAPIView):
         except (ProjectLabel.DoesNotExist, ValueError, TypeError):
             return Response({"error": "Label not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        label.delete()
+        label_pk = label.label_id  # Django clears the pk on delete()
+        with transaction.atomic():
+            label.delete()
+            record_workspace_change(
+                team_id=project.team_id,
+                entity_kind="label",
+                entity_id=label_pk,
+                action="delete",
+            )
         _invalidate_label_project_list(project.team_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 

@@ -52,6 +52,7 @@ ROW_LIMITS = {
     "message_attachments": 5000,
     "task_body_attachments": 5000,
     "task_history": 20000,
+    "workspace_changes": 5000,
     "security_events": 5000,
     "api_keys": 1000,
     "connected_apps": 1000,
@@ -96,6 +97,7 @@ def _more_data(user) -> dict:
     from origin.models.common.mcp_connection_models import McpConnection
     from origin.models.common.security_event_models import SecurityEvent
     from origin.models.common.user_models import ConnectedAccount
+    from origin.models.project.workspace_change_models import WorkspaceChange
     from origin.models.task.task_activity_models import TaskActivity
     from origin.models.task.task_models import TaskBodyAttachmentFact
     from origin.search_engine.models import AgentRun, AgentRunFeedback
@@ -179,6 +181,22 @@ def _more_data(user) -> dict:
             row["new_value"] = a.new_value
         return row
 
+    # Who changed a project, a sprint, a label or a tag (MIP-1758): only the rows they made.
+    workspace_changes = _capped(
+        "workspace_changes",
+        WorkspaceChange.objects.filter(actor=user).order_by("-created_at", "-change_id"),
+        limits,
+        lambda c: {
+            "at": _iso(c.created_at),
+            "team_id": str(c.team_id),
+            "project_id": c.project_id,
+            "entity": c.entity_kind,
+            "entity_id": c.entity_id,
+            "action": c.action,
+            "fields": list(c.fields or []),
+            "source": {k: v for k, v in (("kind", c.source_kind), ("app", c.source_app)) if v},
+        },
+    )
     task_history = _capped(
         "task_history",
         TaskActivity.objects.filter(actor=user).order_by("-ts_created_at", "-activity_id"),
@@ -254,6 +272,7 @@ def _more_data(user) -> dict:
         "message_attachments": message_attachments,
         "task_body_attachments": task_body_attachments,
         "task_history": task_history,
+        "workspace_changes": workspace_changes,
         "security_events": security_events,
         "api_keys": api_keys,
         "connected_apps": connected_apps,
