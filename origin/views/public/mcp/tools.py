@@ -2853,9 +2853,17 @@ def description_for(tool: McpTool, credential_kind: str = "api_key") -> str:
     return text.replace("Runs as the API key's owner", "Runs as the member who connected this app")
 
 
+def title_for(tool: McpTool) -> str:
+    """The display title a client shows for the tool (MIP-1842: the Anthropic and OpenAI reviews
+    require a `title` on every tool). Derived from the published name, so a new tool gets one with
+    no list to keep in step: `get_task` reads "Get task"."""
+    return tool.name.replace("_", " ").capitalize()
+
+
 def describe(tool: McpTool, credential_kind: str = "api_key") -> dict[str, Any]:
     return {
         "name": tool.name,
+        "title": title_for(tool),
         "description": description_for(tool, credential_kind),
         "inputSchema": input_schema(tool),
         "annotations": annotations(tool),

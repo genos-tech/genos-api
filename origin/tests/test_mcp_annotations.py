@@ -47,6 +47,16 @@ class TestEveryToolSaysAllThree(McpBase):
                 self.assertEqual(set(hints), {"readOnlyHint", "destructiveHint", "openWorldHint"})
                 self.assertTrue(all(isinstance(v, bool) for v in hints.values()), hints)
 
+    def test_every_tool_has_a_title_and_the_name_is_within_64_characters(self):
+        # Anthropic's connector review (MIP-1842) requires a `title` on every tool and tool names of
+        # 64 characters or fewer; OpenAI's scan reads the same title.
+        self._key(scope=SCOPE_WRITE, allow_destructive=True)
+        for tool in self._result(self._rpc("tools/list"))["tools"]:
+            with self.subTest(tool=tool["name"]):
+                self.assertIsInstance(tool.get("title"), str)
+                self.assertTrue(tool["title"].strip(), tool["name"])
+                self.assertLessEqual(len(tool["name"]), 64)
+
     def test_the_hints_say_what_each_tool_is(self):
         by_name = {t.name: t for t in tools.visible_tools(SCOPE_WRITE, allow_destructive=True)}
         for name, hints in self.listed().items():
