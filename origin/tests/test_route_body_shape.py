@@ -58,6 +58,8 @@ EXEMPT = {
     "origin.views.common.auth_views.UserViewSet": "signup serializer 400",
     "origin.views.common.auth_views.CustomTokenObtainPairView": "sign-in serializer 400",
     "origin.views.common.auth_views.CookieTokenRefreshView": "refresh serializer 400",
+    # MIP-1261: a body that is not an object is treated as empty and answered with 400 field codes.
+    "origin.views.common.contact_views.ContactView": "contact form: non-object body is a 400",
     "origin.views.common.auth_views.DemoSignInView": "reads only an optional lang",
     "origin.views.common.auth_views.LogoutView": "reads the cookie, not the body",
     "origin.views.common.auth_views.PasswordResetRequestView": "serializer 400",
