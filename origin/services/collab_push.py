@@ -166,6 +166,15 @@ def push_note_body_now(note_type: str, note_id: int, blocks: list[dict[str, Any]
     return _push_now(f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}", blocks)
 
 
+def _note_document(note_type: str, note_id: int) -> str:
+    return f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}"
+
+
+def task_body_document(task_id: int) -> str:
+    """The Yjs document a task BODY lives in (MIP-1863): `task-body:<id>`, the name the editor uses."""
+    return f"task-body:{int(task_id)}"
+
+
 def read_note_threads(
     note_type: str, note_id: int, *, timeout: float = TIMEOUT_SECONDS
 ) -> list[dict[str, Any]] | None:
@@ -180,9 +189,20 @@ def read_note_threads(
     agent passes a shorter one, MIP-1545). The caller says so; a note with no comments and
     a note whose comments could not be read must not look alike.
     """
+    return _read_threads(_note_document(note_type, note_id), timeout=timeout)
+
+
+def read_task_body_threads(
+    task_id: int, *, timeout: float = TIMEOUT_SECONDS
+) -> list[dict[str, Any]] | None:
+    """The comment threads a task BODY holds (MIP-1863), from `task-body:<id>`. The same contract as
+    `read_note_threads`: `[]` for a task nobody has opened, `None` when they could not be read."""
+    return _read_threads(task_body_document(task_id), timeout=timeout)
+
+
+def _read_threads(document_name: str, *, timeout: float) -> list[dict[str, Any]] | None:
     if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
         return None
-    document_name = f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}"
     try:
         resp = requests.post(
             f"{settings.COLLAB_INTERNAL_URL}{READ_THREADS_PATH}",
@@ -302,23 +322,49 @@ def create_note_thread(
     via: dict[str, Any] | None = None,
     seed_blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Start a comment thread on a passage of a note (MIP-1644), as `user_id`.
+    """Start a comment thread on a passage of a note (MIP-1644), as `user_id`. See `create_thread_in`."""
+    return create_thread_in(
+        _note_document(note_type, note_id),
+        user_id=user_id,
+        text=text,
+        anchor_text=anchor_text,
+        block_id=block_id,
+        occurrence=occurrence,
+        via=via,
+        seed_blocks=seed_blocks,
+    )
+
+
+def create_thread_in(
+    document_name: str,
+    *,
+    user_id: str,
+    text: str,
+    anchor_text: str,
+    block_id: str | None = None,
+    occurrence: int | None = None,
+    via: dict[str, Any] | None = None,
+    seed_blocks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Start a comment thread on a passage of the Yjs document `document_name` (a note's, or a task
+    body's, MIP-1863), as `user_id`.
 
     collab finds `anchor_text` (exact plain text, inside one run of one block), writes the thread
     with the editor's own store and puts the `comment` mark on those characters, in one
     transaction. The answer is collab's: `threadId`, `commentId`, `blockId`, `occurrence`,
     `matches`. A passage it cannot place, or finds more than once without `block_id` /
     `occurrence`, is a `ThreadWriteError` (`not_found` / `conflict`, with a `code` and the facts),
-    and nothing is written. `via` is how it arrived, ALREADY reduced as for `reply_note_thread`.
+    and nothing is written. `via` is how it arrived, ALREADY reduced as for `reply_thread_in`.
     Never retried: a second POST would be a second thread.
 
     A note nobody has opened has no document and collab answers `no_document` (404). `seed_blocks`, the
     note's stored body with an id on every block, lets collab make the document from it and write the
     thread in the same transaction (MIP-1670); collab checks everything on a scratch document first, so a
-    refusal still creates nothing. The caller sends it only after `no_document`, never up front.
+    refusal still creates nothing. The caller sends it only after `no_document`, never up front. A task
+    body is never seeded here: its document is made when the task is opened in the editor.
     """
     payload: dict[str, Any] = {
-        "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
+        "documentName": document_name,
         "userId": user_id,
         "text": text,
         "anchorText": anchor_text,
@@ -343,7 +389,22 @@ def reply_note_thread(
     text: str,
     via: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Add a comment to a note's comment thread (MIP-1100), as `user_id`.
+    """Add a comment to a note's comment thread (MIP-1100), as `user_id`. See `reply_thread_in`."""
+    return reply_thread_in(
+        _note_document(note_type, note_id), thread_id=thread_id, user_id=user_id, text=text, via=via
+    )
+
+
+def reply_thread_in(
+    document_name: str,
+    *,
+    thread_id: str,
+    user_id: str,
+    text: str,
+    via: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add a comment to a thread of the Yjs document `document_name` (a note's, or a task body's), as
+    `user_id`.
 
     The answer is collab's: `commentId`, `commentCount`, `threadResolved`. `via` is how the
     reply arrived, ALREADY reduced to what any reader of the note may know (the doc goes to
@@ -351,7 +412,7 @@ def reply_note_thread(
     comment's `metadata`.
     """
     payload: dict[str, Any] = {
-        "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
+        "documentName": document_name,
         "threadId": thread_id,
         "userId": user_id,
         "text": text,
@@ -369,15 +430,32 @@ def resolve_note_thread(
     user_id: str,
     may_resolve_any: bool,
 ) -> dict[str, Any]:
-    """Mark a note's comment thread resolved (MIP-1100), as `user_id`.
+    """Mark a note's comment thread resolved (MIP-1100), as `user_id`. See `resolve_thread_in`."""
+    return resolve_thread_in(
+        _note_document(note_type, note_id),
+        thread_id=thread_id,
+        user_id=user_id,
+        may_resolve_any=may_resolve_any,
+    )
+
+
+def resolve_thread_in(
+    document_name: str,
+    *,
+    thread_id: str,
+    user_id: str,
+    may_resolve_any: bool,
+) -> dict[str, Any]:
+    """Mark a thread of the Yjs document `document_name` resolved, as `user_id`.
 
     collab resolves it when `user_id` wrote the thread's first comment, or `may_resolve_any` is
-    true (the caller is the note's owner), and changes nothing if it is already resolved.
+    true (the caller is the note's owner, or a task's assignee or reporter), and changes nothing if
+    it is already resolved.
     """
     return _write_thread(
         RESOLVE_THREAD_PATH,
         {
-            "documentName": f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}",
+            "documentName": document_name,
             "threadId": thread_id,
             "userId": user_id,
             "mayResolveAny": bool(may_resolve_any),
