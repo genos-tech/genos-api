@@ -195,6 +195,8 @@ REGISTRY = {
     # views.common.mcp_consent_views (MIP-1077)
     "origin.views.common.mcp_consent_views.McpConsentContextView": checked("_teams_of"),
     "origin.views.common.mcp_consent_views.McpConsentDecisionView": checked("_teams_of"),
+    # views.common.agent_work_views (MIP-1613): team membership, then the task and note read rules
+    "origin.views.common.agent_work_views.AgentWorkView": checked("require_team_member_or_response"),
     # views.common.mcp_connection_views (MIP-1079)
     "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
         "the caller's own connected apps (user=request.user on every query)"
