@@ -353,6 +353,10 @@ REGISTRY = {
     "origin.views.common.health_views.HealthView": public(
         "liveness probe for the platform; returns no data"
     ),
+    "origin.views.common.health_views.ExternalCronHeartbeatView": public(
+        "a cron outside Django reports its run; its own bearer token, 404 without it, and only "
+        "a name in ops_alerts.EXTERNAL_CRONS is accepted"
+    ),
     # views.common.inbox_views
     "origin.views.common.inbox_views.GrantNoteAccessFromInboxView": checked("get_explicit_role"),
     "origin.views.common.inbox_views.InboxItemForJoinGMRequestView": checked("is_team_member"),

@@ -62,6 +62,8 @@ EXEMPT = {
     "origin.views.common.contact_views.ContactView": "contact form: non-object body is a 400",
     "origin.views.common.auth_views.DemoSignInView": "reads only an optional lang",
     "origin.views.common.auth_views.LogoutView": "reads the cookie, not the body",
+    # MIP-1858: the body's `phase` is checked by the view; a body that is not an object is no phase, a 400.
+    "origin.views.common.health_views.ExternalCronHeartbeatView": "phase check: a 400, never a 500",
     "origin.views.common.auth_views.PasswordResetRequestView": "serializer 400",
     "origin.views.common.auth_views.PasswordResetConfirmView": "serializer 400",
     "origin.views.common.auth_views.ResendVerificationView": "serializer 400",
