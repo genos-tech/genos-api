@@ -118,8 +118,6 @@ def expand_groups(team_id, groups, *, viewer_id):
             continue
         group_type = entry.get("type")
         group_id = entry.get("id")
-        for user_id in resolve_group_user_ids(
-            team_id, group_type, group_id, viewer_id=viewer_id
-        ):
+        for user_id in resolve_group_user_ids(team_id, group_type, group_id, viewer_id=viewer_id):
             out.setdefault(user_id, (group_type, str(group_id)))
     return out

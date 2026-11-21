@@ -20,9 +20,7 @@ class HiddenGroupExpansionTests(HiddenBase):
         self.outsider = str(self.user2.id)
 
     def _ids(self, group_type, group_id, viewer):
-        return resolve_group_user_ids(
-            self.team.team_id, group_type, group_id, viewer_id=viewer
-        )
+        return resolve_group_user_ids(self.team.team_id, group_type, group_id, viewer_id=viewer)
 
     def test_a_non_member_gets_the_answer_for_a_missing_hidden_project(self):
         missing = self._ids(GROUP_PROJECT, 99999999, self.outsider)
@@ -36,7 +34,9 @@ class HiddenGroupExpansionTests(HiddenBase):
         ProjectMembers.objects.filter(project=self.project).delete()
         self.assertEqual(self._ids(GROUP_PROJECT, self.project.project_id, self.me), set())
         ProjectMembers.objects.create(team=self.team, project=self.project, attendee=self.user2)
-        self.assertEqual(self._ids(GROUP_PROJECT, self.project.project_id, self.me), {self.outsider})
+        self.assertEqual(
+            self._ids(GROUP_PROJECT, self.project.project_id, self.me), {self.outsider}
+        )
 
     def test_a_non_member_gets_nothing_for_a_hidden_group_chat(self):
         self.assertEqual(self._ids(GROUP_GM, str(self.gm.id), self.outsider), set())

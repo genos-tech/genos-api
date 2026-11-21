@@ -512,9 +512,8 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             # mean two things at once; inherit would let an ancestor
             # silently redefine what was shared. Ending the share is the
             # way out, and it is one action.
-            if (
-                visibility != PersonalNoteFolder.VISIBILITY_PRIVATE
-                and externally_shared(ExternalGrant.ObjectType.NOTE_FOLDER, folder.folder_id)
+            if visibility != PersonalNoteFolder.VISIBILITY_PRIVATE and externally_shared(
+                ExternalGrant.ObjectType.NOTE_FOLDER, folder.folder_id
             ):
                 return Response(
                     {
@@ -623,9 +622,7 @@ class TeamNoteFolderView(AuthenticatedAPIView):
                 team_id=owning_team_id, user_id=request_user_id, folder=folder
             )
         except DeleteRefused as refused:
-            return Response(
-                {"error": refused.message, **refused.extra}, status=refused.status
-            )
+            return Response({"error": refused.message, **refused.extra}, status=refused.status)
 
         return Response(
             {
@@ -714,7 +711,9 @@ def _grant_members(*, folder, team_id, granted_by_id, user_ids, groups, role_id)
         role_id = ROLE_EDITOR
 
     targets = {}
-    for user_id, (group_type, group_id) in expand_groups(team_id, groups, viewer_id=granted_by_id).items():
+    for user_id, (group_type, group_id) in expand_groups(
+        team_id, groups, viewer_id=granted_by_id
+    ).items():
         targets[str(user_id)] = (group_type, group_id)
     for user_id in user_ids or []:
         targets[str(user_id)] = (None, None)
