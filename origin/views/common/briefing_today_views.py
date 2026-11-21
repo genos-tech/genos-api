@@ -167,6 +167,7 @@ class BriefingTodayView(AuthenticatedAPIView):
                 window="today",
                 since=since,
                 project_id=request.query_params.get("project_id") or None,
+                page_only=True,
             )
         except ToolError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
