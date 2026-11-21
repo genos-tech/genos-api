@@ -566,12 +566,19 @@ class AccountTests(ScheduleBase):
         self.assertFalse(InboxItems.objects.filter(pk=self.theirs.pk).exists())
         self.assertTrue(InboxItems.objects.filter(pk=self.mine.pk).exists())
 
-    def test_other_inbox_items_of_that_member_are_left_to_the_existing_rules(self):
+    def test_the_rest_of_their_inbox_goes_too_and_nobody_elses(self):
+        """MIP-1783: it used to be left (only reports were erased), but a notice, digest or
+        reminder addressed to the person holds previews and names and has no purpose without
+        them. Another member's inbox is untouched."""
         notice = InboxItems.objects.create(
             team=self.team, sender=self.user, receiver=self.user2, item_type=0, item_body={}
         )
+        others = InboxItems.objects.create(
+            team=self.team, sender=self.user2, receiver=self.user, item_type=0, item_body={}
+        )
         delete_account(self.user2)
-        self.assertTrue(InboxItems.objects.filter(pk=notice.pk).exists())
+        self.assertFalse(InboxItems.objects.filter(pk=notice.pk).exists())
+        self.assertTrue(InboxItems.objects.filter(pk=others.pk).exists())
 
     def test_the_export_includes_their_reports_and_not_anyone_elses(self):
         doc = build_export(self.user)
