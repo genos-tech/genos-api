@@ -77,6 +77,7 @@ from origin.services import blind_index, change_feed
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
 from origin.services.deleted_account_leftovers import delete_for_user as delete_leftovers_for
 from origin.services.deleted_account_memberships import end_group_memberships
+from origin.services.oauth import revoke as oauth_revoke
 from origin.services.security_events import record_security_event
 from origin.views.utils.note_acl_resync import purge_notes_from_index
 
@@ -170,8 +171,11 @@ def _delete_personal_data(user, closing_team_ids=()) -> None:
     `closing_team_ids` are the teams that die with the person: nothing of theirs is kept there."""
     NotificationPreference.objects.filter(user=user).delete()
     PushSubscription.objects.filter(user=user).delete()
-    # OAuth grants hold live third-party refresh tokens.
+    # OAuth grants hold live third-party refresh tokens. With OAUTH_REVOKE_ON_DISCONNECT on they are
+    # also revoked at the provider, once the erasure commits (MIP-1790); off, this is the plain delete.
+    grants = oauth_revoke.capture(ConnectedAccount.objects.filter(user=user))
     ConnectedAccount.objects.filter(user=user).delete()
+    oauth_revoke.revoke_after_commit(grants)
     ToDoGroup.objects.filter(user=user).delete()  # items cascade
     ToDoCategory.objects.filter(user=user).delete()
     # What the person has read, and when (MIP-1550): theirs alone, nothing shows it to anyone
