@@ -72,6 +72,28 @@ def _set_refresh_cookie(response, refresh_value: str) -> None:
     )
 
 
+def _origin_allowed(request) -> bool:
+    """False when the request names an `Origin` that is not one of our frontends (MIP-1882).
+
+    The two endpoints that read the refresh cookie (refresh, signout) refuse a foreign Origin before
+    touching the cookie: defence in depth next to the Lax cookie. No Origin header is allowed
+    (same-origin navigations and non-browser clients send none, and a cross-site POST under Lax
+    carries no cookie anyway). The literal "null" (sandboxed frames, redirects) is refused. Not
+    `CORS_ALLOW_ALL_ORIGINS`: it is on under DEBUG.
+    """
+    # Browsers label who started the request. A cross-site one is never ours, and this also covers
+    # the GET that a link or redirect from another site sends with the Lax cookie and no Origin.
+    if request.META.get("HTTP_SEC_FETCH_SITE") == "cross-site":
+        return False
+    origin = request.META.get("HTTP_ORIGIN")
+    if not origin:
+        return True
+    return origin.rstrip("/") in {o.rstrip("/") for o in settings.CORS_ALLOWED_ORIGINS}
+
+
+_FOREIGN_ORIGIN = {"error": "Origin not allowed"}
+
+
 from origin.serializers.common.user_serializers import (
     CustomTokenObtainPairSerializer,
     PasswordResetConfirmSerializer,
@@ -583,7 +605,18 @@ class CookieTokenRefreshView(TokenRefreshView):
     # The inherited `post` uses this too, so both ways in scrub the claim.
     serializer_class = _ScrubbingTokenRefreshSerializer
 
+    # Refresh reads the httpOnly cookie, never the body (MIP-1882). POST is the way in; GET stays
+    # for one release so a cached frontend keeps working while it rolls over, then it goes.
     def get(self, request: Request, *args, **kwargs):
+        return self._refresh_from_cookie(request)
+
+    def post(self, request: Request, *args, **kwargs):
+        return self._refresh_from_cookie(request)
+
+    def _refresh_from_cookie(self, request: Request):
+        if not _origin_allowed(request):
+            return Response(_FOREIGN_ORIGIN, status=403)
+
         refresh = request.COOKIES.get("refresh")  # Get refresh token from cookies
 
         if not refresh or refresh == "":
@@ -636,6 +669,10 @@ class LogoutView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request: Request):
+        # A foreign Origin must not be able to end someone's session (MIP-1882).
+        if not _origin_allowed(request):
+            return JsonResponse(_FOREIGN_ORIGIN, status=403)
+
         refresh = request.COOKIES.get("refresh")
 
         # Identify the user *before* blacklisting so we can clean up
