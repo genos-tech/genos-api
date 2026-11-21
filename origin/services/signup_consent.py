@@ -18,7 +18,7 @@ from django.utils import timezone
 # change in a way that needs fresh acceptance; accounts keep the version they
 # accepted, so the record stays true. The value is the server's, never the
 # client's: a client cannot claim to have accepted a text we did not show.
-TERMS_VERSION = "2026-11-draft"
+TERMS_VERSION = "2026-12-interim-v1"
 
 # Stable machine-readable code for a refused signup. The frontend keys its
 # message off this string, so renaming it is a breaking API change.
