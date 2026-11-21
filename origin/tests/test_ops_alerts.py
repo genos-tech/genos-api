@@ -58,12 +58,23 @@ def _tomls():
     return sorted(p for p in REPO.glob("railway-*.toml"))
 
 
+# Crons that do not beat a heartbeat (MIP-1823). Their job runs in another
+# image: genos-collab's sweep runs on Node in the collab image, which has no
+# Django and no write access to this database, so it cannot write a
+# CronHeartbeat row. It logs a success line, and Railway's run history is its
+# only record. Keep this set to exactly those services: a cron added here is
+# a cron whose death nobody hears about. Pinned by
+# test_the_collab_orphan_sweep_is_the_only_cron_without_a_heartbeat.
+NO_HEARTBEAT_CRONS = frozenset({"collab-orphan-sweep"})
+
+
 def _ts_crons() -> dict[str, str]:
     """The cron services in `.railway/railway.ts` (MIP-857), service name to
-    start command. A service created after 2026-08-28 cannot have a
-    railway-*.toml, so that file is where a new cron is defined."""
+    start command, except `NO_HEARTBEAT_CRONS`. A service created after
+    2026-08-28 cannot have a railway-*.toml, so that file is where a new cron
+    is defined."""
     text = (REPO / ".railway" / "railway.ts").read_text()
-    return dict(_TS_SERVICE.findall(text))
+    return {name: start for name, start in _TS_SERVICE.findall(text) if name not in NO_HEARTBEAT_CRONS}
 
 
 def _ts_blocks() -> dict[str, str]:
@@ -172,6 +183,25 @@ class TestEveryCronReports(TestCase):
             "LOG_FORMAT",
         ):
             self.assertIn(f"{var}: preserve()", block)
+
+    def test_the_collab_orphan_sweep_is_the_only_cron_without_a_heartbeat(self):
+        # MIP-1823: genos-collab's sweep is not a Django command, so it cannot
+        # beat. The exemption is pinned to that one service, and its block is
+        # pinned too: daily, dry run until COLLAB_SWEEP_DELETE is set by hand,
+        # no `--heartbeat`, and nothing secret written in the file.
+        self.assertEqual(NO_HEARTBEAT_CRONS, {"collab-orphan-sweep"})
+        text = (REPO / ".railway" / "railway.ts").read_text()
+        every = {name for name, _start in _TS_SERVICE.findall(text)}
+        self.assertEqual(every - set(_ts_crons()), {"collab-orphan-sweep"})
+        block = _ts_blocks()["collab-orphan-sweep"]
+        self.assertIn('cronSchedule: "20 4 * * *"', block)
+        self.assertIn('startCommand: "node cron-sweep-orphans.js"', block)
+        self.assertIn('restartPolicyType: "NEVER"', block)
+        self.assertNotIn("--heartbeat", block)
+        self.assertNotIn("COLLAB_SWEEP_DELETE: \"", block)
+        self.assertNotIn("collab-orphan-sweep", _ts_crons())
+        self.assertNotIn("collab-orphan-sweep", _heartbeat_names(s for _l, s in _crons()))
+        self.assertNotIn("collab-orphan-sweep", ops_alerts.CRON_SCHEDULES)
 
     def test_every_railway_ts_service_is_in_the_project(self):
         # A `service(...)` that `project(...)` does not list is never planned:
