@@ -421,6 +421,22 @@ class TheFilters(_Base):
         self.assertEqual(data["totals"]["changes"], 1)
         self.assertEqual([g["project"]["code"] for g in data["groups"]], ["SUP"])
 
+    def test_project_filter_also_narrows_note_versions_in_totals_and_groups(self):
+        # A personal note and another project's task note, both written by Claude (MIP-1888).
+        self.decision(self.user, CLAUDE, title="Decision: personal", note_type=1)
+        self.decision(self.user, CLAUDE, title="Decision: in the default project")
+        data = self.get(self.user, project_id=self.other_project.project_id)
+        self.assertEqual(data["totals"]["changes"], 1)
+        self.assertEqual(sum(data["totals"]["by_agent"].values()), 1)
+        self.assertEqual([g["project"]["code"] for g in data["groups"]], ["SUP"])
+
+    def test_decisions_total_ignores_the_agent_filter(self):
+        self.decision(self.user2, CLAUDE, title="Decision: by claude")
+        self.decision(self.user2, KEY, title="Decision: by a key")
+        data = self.get(self.user, agent="claude")
+        self.assertEqual(data["totals"]["decisions"], 2)
+        self.assertEqual([d["title"] for d in data["decisions"]], ["Decision: by claude"])
+
     def test_agent_narrows_and_the_summary_row_still_shows_every_agent(self):
         data = self.get(self.user, agent="claude")
         self.assertEqual(

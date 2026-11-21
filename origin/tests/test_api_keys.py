@@ -38,6 +38,7 @@ from origin.services.member_roles import EDITOR
 from origin.services.team_membership import remove_team_member
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.common.api_key_auth import ApiKeyAuthentication
+from origin.views.public.mcp import surfaces
 from origin.views.public.v1_views import PublicApiView
 
 User = get_user_model()
@@ -445,13 +446,17 @@ class TestOnlyPublicViewsAcceptAKey(SimpleTestCase):
         # absent on purpose: it authenticates nothing (`[]`).
         self.assertEqual(
             sorted(public),
-            [
-                "api/public/v1/mcp",
-                "api/public/v1/me/",
-                "api/public/v1/projects/",
-                "api/public/v1/tasks/",
-                "api/public/v1/tasks/<int:task_id>/",
-            ],
+            sorted(
+                [
+                    "api/public/v1/mcp",
+                    # MIP-1594: the surfaces are the same endpoint, so they key-authenticate too.
+                    *(f"api/public/v1/mcp/{seg}" for seg in surfaces.SURFACE_SEGMENTS),
+                    "api/public/v1/me/",
+                    "api/public/v1/projects/",
+                    "api/public/v1/tasks/",
+                    "api/public/v1/tasks/<int:task_id>/",
+                ]
+            ),
         )
 
 

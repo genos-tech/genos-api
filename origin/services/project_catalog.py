@@ -34,6 +34,7 @@ from origin.models.project.prj_models import (
     ProjectTags,
 )
 from origin.services import change_feed
+from origin.services.project_list_cache import project_list_keys
 from origin.services.workspace_changes import record as record_workspace_change
 
 TAG_NAME_MAX = 20
@@ -174,10 +175,10 @@ def invalidate_label_project_list(team_id) -> None:
     change_feed.bump_projects(team_id)
     attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
     keys = [
-        f"project:list:{team_id}:{attendee_id}{suffix}"
+        key
         for attendee_id in attendee_ids
         if attendee_id
-        for suffix in ("", ":archived")
+        for key in project_list_keys(team_id, attendee_id)
     ]
     if keys:
         cache.delete_many(keys)

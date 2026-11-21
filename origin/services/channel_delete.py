@@ -125,10 +125,12 @@ def delete_group_chat(channel: Channel, *, mode: str = SOFT, request=None) -> Ch
             team_id=team_id,
             target_type="channel",
             target_id=channel_id,
-            target_label=title or "",
+            # A hard delete is a request to be forgotten: the title must not outlive the chat in
+            # the log for the whole retention period (MIP-1584). A soft delete keeps it.
+            target_label="" if hard else (title or ""),
             metadata={
                 "channel_id": str(channel_id),
-                "channel": title,
+                "channel": "" if hard else title,
                 "mode": mode,
                 "members": report.members,
                 "messages": message_count,

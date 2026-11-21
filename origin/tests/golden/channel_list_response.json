@@ -146,7 +146,9 @@
    "avatarImgPath": ""
   },
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  },
  {
   "id": "<uuid:13>",
@@ -261,7 +263,9 @@
   "members": [],
   "dmPartner": null,
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  },
  {
   "id": "<uuid:22>",
@@ -376,7 +380,9 @@
   "members": [],
   "dmPartner": null,
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  },
  {
   "id": "<uuid:29>",
@@ -491,6 +497,8 @@
   "members": [],
   "dmPartner": null,
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  }
 ]

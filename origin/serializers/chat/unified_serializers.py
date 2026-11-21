@@ -366,6 +366,10 @@ class ChannelSerializer(serializers.ModelSerializer):
     )
     tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
     tsUpdated = serializers.DateTimeField(source="ts_updated_at", read_only=True)
+    # The owner archived THIS group chat (MIP-1693, MIP-1853). A chat whose project is archived reads
+    # `archived: false` here; the project's own row carries that flag, and the client combines the two.
+    archived = serializers.SerializerMethodField()
+    archivedAt = serializers.DateTimeField(source="archived_at", read_only=True, allow_null=True)
 
     # Populated by the view's annotated queryset; see ChannelListView.
     latestMessage = serializers.SerializerMethodField()
@@ -411,7 +415,12 @@ class ChannelSerializer(serializers.ModelSerializer):
             "dmPartner",
             "tsCreated",
             "tsUpdated",
+            "archived",
+            "archivedAt",
         ]
+
+    def get_archived(self, obj) -> bool:
+        return obj.archived_at is not None
 
     def get_hostTeamName(self, obj):
         """The owning team's name when the chat is somebody else's.

@@ -14,6 +14,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.security_event_models import SecurityAction, SecurityEvent
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.serializers.project.prj_serializers import ProjectMasterSerializer
 from origin.services.archive import archived_project_response
 from origin.tests.test_base import BaseAPITestCase
 
@@ -206,3 +207,89 @@ class ArchiveGroupChatTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 403, res.data)
         self.gm.refresh_from_db()
         self.assertIsNone(self.gm.archived_at)
+
+
+class ArchivedFlagOnRowsTests(BaseAPITestCase):
+    """The list and detail rows say whether they are archived, so the client needs no second
+    request to find out (MIP-1853). `archivedAt` is the time the owner archived them, null when live.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+        self.authenticate(self.user)
+        self.live = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Live",
+            code="LIV",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.old = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Old",
+            code="OLD",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        for project in (self.live, self.old):
+            ProjectMembers.objects.create(team=self.team, project=project, attendee=self.user)
+        self.client.post(
+            f"{ARCHIVE}?team_id={self.team.team_id}&project_id={self.old.project_id}",
+            {},
+            format="json",
+        )
+        self.gm_live = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="Open", owner=self.user, is_private=True
+        )
+        self.gm_archived = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="Shut", owner=self.user, is_private=True
+        )
+        for gm in (self.gm_live, self.gm_archived):
+            ChannelMember.objects.create(channel=gm, user=self.user)
+        self.client.post(f"/api/v3/channels/{self.gm_archived.id}/archive/", {}, format="json")
+
+    def _row(self, rows, key, value):
+        matches = [row for row in rows if row[key] == value]
+        self.assertEqual(len(matches), 1, rows)
+        return matches[0]
+
+    def test_project_rows_carry_archived_and_archived_at(self):
+        res = self.client.get(PROJECTS, {"team_id": self.team.team_id, "include_archived": "true"})
+        self.assertEqual(res.status_code, 200, res.data)
+        live = self._row(res.data, "projectId", self.live.project_id)
+        old = self._row(res.data, "projectId", self.old.project_id)
+        self.assertIs(live["archived"], False)
+        self.assertIsNone(live["archivedAt"])
+        self.assertIs(old["archived"], True)
+        self.assertIsNotNone(old["archivedAt"])
+
+    def test_project_detail_row_carries_archived(self):
+        # The detail row is the serializer the PUT (update) and the create responses return.
+        self.old.refresh_from_db()
+        self.live.refresh_from_db()
+        old = ProjectMasterSerializer(self.old).data
+        live = ProjectMasterSerializer(self.live).data
+        self.assertIs(old["archived"], True)
+        self.assertIsNotNone(old["archived_at"])
+        self.assertIs(live["archived"], False)
+        self.assertIsNone(live["archived_at"])
+
+    def test_chat_rows_carry_archived_and_archived_at(self):
+        res = self.client.get(
+            "/api/v3/channels/",
+            {"team_id": str(self.team.team_id), "include_archived": "true"},
+        )
+        self.assertEqual(res.status_code, 200, res.data)
+        rows = res.data["channels"]
+        shut = self._row(rows, "id", str(self.gm_archived.id))
+        open_ = self._row(rows, "id", str(self.gm_live.id))
+        self.assertIs(shut["archived"], True)
+        self.assertIsNotNone(shut["archivedAt"])
+        self.assertIs(open_["archived"], False)
+        self.assertIsNone(open_["archivedAt"])
+
+    def test_chat_detail_row_carries_archived(self):
+        res = self.client.get(f"/api/v3/channels/{self.gm_archived.id}/")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertIs(res.data["channel"]["archived"], True)
