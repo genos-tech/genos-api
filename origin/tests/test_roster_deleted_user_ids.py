@@ -167,7 +167,8 @@ class DeletedUserIdsTests(BaseAPITestCase):
         # they always had.
         members = body["data"]["members"]
         self.assertEqual(
-            sorted(m["userName"] for m in members), sorted([self.user.username, self.user2.username])
+            sorted(m["userName"] for m in members),
+            sorted([self.user.username, self.user2.username]),
         )
         self.assertEqual(
             sorted(members[0]),
