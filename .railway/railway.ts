@@ -596,5 +596,30 @@ export default defineRailway(() => {
     },
   });
 
-  return project("genos", { resources: [agentDigest, agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
+  // genos-collab's orphan sweep (MIP-1823), a cron like the others here. Built from genos-collab,
+  // not genos-api. DRY RUN unless the service variable COLLAB_SWEEP_DELETE is 1 or true (set by
+  // hand in Railway, never in this file). Its PG_* reference backend-collab's own PG_* variables
+  // (one database: Postgres), so no secret is written here. Runbook: genos-docs operations/COLLAB_ORPHAN_SWEEP.md.
+  const collabOrphanSweep = service("collab-orphan-sweep", {
+    source: github("genos-tech/genos-collab", { branch: "main", checkSuites: false, rootDirectory: "/" }),
+    build: { buildEnvironment: "V3", builder: "NIXPACKS", buildCommand: "npm ci --omit=dev" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      COLLAB_SWEEP_DELETE: preserve(),
+      LOG_FORMAT: preserve(),
+      PG_DATABASE: preserve(),
+      PG_HOST: preserve(),
+      PG_PASSWORD: preserve(),
+      PG_PORT: preserve(),
+      PG_USER: preserve(),
+    },
+    deploy: {
+      cronSchedule: "20 4 * * *",
+      startCommand: "node cron-sweep-orphans.js",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
+
+  return project("genos", { resources: [agentDigest, agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, collabOrphanSweep, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
 });
