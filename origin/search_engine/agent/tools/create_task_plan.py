@@ -78,6 +78,7 @@ from origin.search_engine.quota import (
     check_remaining_monthly,
     increment_usage,
 )
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card, post_task_created_card
@@ -236,6 +237,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
         # The words of a missing one (MIP-1531), as `create_task` does.
+        raise ToolForbidden(f"Project {project_id} not found.")
+
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947).
         raise ToolForbidden(f"Project {project_id} not found.")
 
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)

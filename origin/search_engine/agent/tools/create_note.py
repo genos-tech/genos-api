@@ -61,6 +61,7 @@ from origin.search_engine.quota import (
     check_remaining_monthly,
     increment_usage,
 )
+from origin.services.hidden_scope import project_hidden_from
 from origin.views.utils.chat_note_target import (
     ChatNoteTargetNotFound,
     chat_note_roles,
@@ -258,6 +259,10 @@ def _create_task_note(
         # The words of a missing project, so a guessed id does not say which projects exist in
         # other teams (MIP-1516). Only the class differs: this one counts toward the MCP refusal
         # alarm. Same pattern as `milestone_access.load_project`.
+        raise ToolForbidden(f"Project {project_id} not found.")
+
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947).
         raise ToolForbidden(f"Project {project_id} not found.")
 
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)

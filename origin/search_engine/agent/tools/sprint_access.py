@@ -13,6 +13,7 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.sprint_models import Sprint
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_access import as_int
+from origin.services.hidden_scope import project_hidden_from
 from origin.views.utils.scope_guards import is_project_member
 
 
@@ -29,6 +30,9 @@ def load_project(raw_project_id: Any, ctx: ToolContext) -> ProjectMaster:
         raise ToolError(f"Project {project_id} not found.")
     if str(project.team_id) != ctx.team_id:
         # The words of a missing one (MIP-1519); the class still counts toward the refusal alarm.
+        raise ToolForbidden(f"Project {project_id} not found.")
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947).
         raise ToolForbidden(f"Project {project_id} not found.")
     _require_member(project.project_id, ctx, f"project {project_id}")
     return project

@@ -21,6 +21,7 @@ from typing import Any
 from origin.models.project.prj_models import ProjectMaster
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_access import as_int
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.member_roles import can_manage, resolve_project_role
 from origin.views.utils.scope_guards import is_project_member, is_team_member
 
@@ -38,6 +39,9 @@ def load_project(raw_project_id: Any, ctx: ToolContext) -> ProjectMaster:
         raise ToolError(f"Project {project_id} not found. Get ids from `list_projects`.")
     if str(project.team_id) != ctx.team_id:
         # The words of a missing one (MIP-1519); the class still counts toward the refusal alarm.
+        raise ToolForbidden(f"Project {project_id} not found. Get ids from `list_projects`.")
+    if project_hidden_from(project, ctx.user_id):
+        # Hidden = the same words as a missing one to a non-member (MIP-1947).
         raise ToolForbidden(f"Project {project_id} not found. Get ids from `list_projects`.")
     return project
 
