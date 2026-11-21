@@ -13,7 +13,6 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.tests import test_task_personal_note_roles_revoked as base
-
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_OWNER
 
 URL = "/api/v2/collab/access/check/"
