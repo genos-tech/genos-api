@@ -7,6 +7,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
@@ -20,6 +21,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.utils import get_md5_hash_password
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -549,7 +551,8 @@ def _refresh_token_password_is_current(refresh_value: str) -> bool:
         return True
 
     try:
-        token = RefreshToken(refresh_value)
+        # Blacklisted tokens are decoded too: the grace path (MIP-1878) must not skip this check.
+        token = _GraceRefreshToken(refresh_value)
     except (InvalidToken, TokenError):
         # Malformed or expired: not our call to make. Fall through and
         # let the serializer produce its own rejection.
@@ -601,6 +604,72 @@ class _ScrubbingTokenRefreshSerializer(TokenRefreshSerializer):
     token_class = _ScrubbedRefreshToken
 
 
+# --- Grace window for the previous refresh token (MIP-1878) ----------------------------------
+#
+# Rotation blacklists the old refresh token. When the response carrying the new cookie is lost
+# (client abort, navigation) or a second tab refreshes with the same cookie, the browser still holds
+# the blacklisted token and the next refresh signed the person out. Ken decided (2026-11-21): the
+# token that was just rotated is accepted again for this many seconds. The one tunable.
+REFRESH_GRACE_SECONDS = 30
+_GRACE_MAX_USES = 3
+
+
+class _GraceRefreshToken(_ScrubbedRefreshToken):
+    """Signature, expiry and type are still verified; only the blacklist lookup is skipped, so the
+    view can tell "blacklisted" apart from "invalid" and decide on the grace window itself."""
+
+    def check_blacklist(self):
+        pass
+
+
+class _GraceTokenRefreshSerializer(_ScrubbingTokenRefreshSerializer):
+    token_class = _GraceRefreshToken
+
+
+def _grace_key(jti: str) -> str:
+    return f"refresh-grace:{jti}"
+
+
+def _grace_uses_key(jti: str) -> str:
+    return f"refresh-grace-uses:{jti}"
+
+
+def _grace_pred_key(jti: str) -> str:
+    return f"refresh-grace-pred:{jti}"
+
+
+def _open_grace(jti: str, user_id) -> None:
+    """Remember that this token is about to be rotated. Best effort: a cache that is down only
+    means no grace (today's behaviour), never a failed refresh."""
+    try:
+        cache.set(_grace_key(jti), str(user_id), REFRESH_GRACE_SECONDS)
+        cache.add(_grace_uses_key(jti), 0, REFRESH_GRACE_SECONDS)
+    except Exception:
+        logger.warning("refresh grace window not recorded (cache unavailable)")
+
+
+def _close_grace(jti: str) -> None:
+    try:
+        pred = cache.get(_grace_pred_key(jti))
+        keys = [_grace_key(jti), _grace_uses_key(jti), _grace_pred_key(jti)]
+        if pred:
+            keys += [_grace_key(pred), _grace_uses_key(pred)]
+        cache.delete_many(keys)
+    except Exception:
+        logger.warning("refresh grace window not closed (cache unavailable)")
+
+
+def _consume_grace(jti: str, user_id) -> bool:
+    """One use of the window. Fails closed on anything unexpected, including a cache that is down."""
+    try:
+        if cache.get(_grace_key(jti)) != str(user_id):
+            return False
+        used = cache.incr(_grace_uses_key(jti))
+    except Exception:
+        return False
+    return used is not None and used <= _GRACE_MAX_USES
+
+
 class CookieTokenRefreshView(TokenRefreshView):
     # The inherited `post` uses this too, so both ways in scrub the claim.
     serializer_class = _ScrubbingTokenRefreshSerializer
@@ -625,31 +694,74 @@ class CookieTokenRefreshView(TokenRefreshView):
         if not _refresh_token_password_is_current(refresh):
             return Response({"error": "Invalid or expired refresh token"}, status=401)
 
-        # Manually create the serializer with the refresh token
-        serializer = _ScrubbingTokenRefreshSerializer(data={"refresh": refresh})
-
         try:
-            serializer.is_valid(raise_exception=True)
-            validated = serializer.validated_data
-
-            # Drop the (now-rotated, soon-to-be-blacklisted) refresh
-            # value out of the JSON body — the client should rely on
-            # the cookie for refresh, not see the value in JS land.
-            new_refresh = validated.pop("refresh", None)
-            response = Response(validated)
-
-            # `ROTATE_REFRESH_TOKENS=True` means simplejwt issues a
-            # fresh refresh token on every successful refresh. Persist
-            # it back into the httpOnly cookie so subsequent refreshes
-            # use the new (non-blacklisted) token. Without this the
-            # second refresh after a rotation would 403 once
-            # `BLACKLIST_AFTER_ROTATION` actually starts blacklisting
-            # the old one.
-            if new_refresh:
-                _set_refresh_cookie(response, new_refresh)
-            return response
+            old = _GraceRefreshToken(refresh)
         except (InvalidToken, TokenError):
             return Response({"error": "Invalid or expired refresh token"}, status=403)
+        jti = old[jwt_api_settings.JTI_CLAIM]
+        user_id = old.get(jwt_api_settings.USER_ID_CLAIM)
+
+        graced = BlacklistedToken.objects.filter(token__jti=jti).exists()
+        if graced:
+            # Rotated before: only the grace window lets it through.
+            if not _consume_grace(jti, user_id):
+                return Response({"error": "Invalid or expired refresh token"}, status=403)
+        else:
+            # Opened BEFORE the rotation commits, so another tab that arrives between the
+            # blacklist row and this write still finds it.
+            _open_grace(jti, user_id)
+
+        serializer_class = (
+            _GraceTokenRefreshSerializer if graced else _ScrubbingTokenRefreshSerializer
+        )
+        try:
+            validated = self._rotate(serializer_class, refresh)
+        except (InvalidToken, TokenError):
+            if not graced and BlacklistedToken.objects.filter(token__jti=jti).exists():
+                # A parallel request blacklisted it between the check above and the serializer.
+                if _consume_grace(jti, user_id):
+                    try:
+                        validated = self._rotate(_GraceTokenRefreshSerializer, refresh)
+                    except (InvalidToken, TokenError):
+                        return Response({"error": "Invalid or expired refresh token"}, status=403)
+                    self._link_successor(validated, jti)
+                    return self._respond(validated)
+            if not graced:
+                _close_grace(jti)
+            return Response({"error": "Invalid or expired refresh token"}, status=403)
+
+        # Also for a graced use, so signing out with the token it minted closes the old window.
+        self._link_successor(validated, jti)
+        return self._respond(validated)
+
+    @staticmethod
+    def _rotate(serializer_class, refresh):
+        serializer = serializer_class(data={"refresh": refresh})
+        serializer.is_valid(raise_exception=True)
+        return dict(serializer.validated_data)
+
+    @staticmethod
+    def _link_successor(validated, old_jti):
+        """So a signout with the NEW token also closes the old one's window."""
+        try:
+            new = validated.get("refresh")
+            if new:
+                new_jti = RefreshToken(new, verify=False)[jwt_api_settings.JTI_CLAIM]
+                cache.set(_grace_pred_key(new_jti), old_jti, REFRESH_GRACE_SECONDS)
+        except Exception:
+            logger.warning("refresh grace successor link not recorded")
+
+    @staticmethod
+    def _respond(validated):
+        # Drop the (now-rotated) refresh value out of the JSON body: the client relies on the
+        # httpOnly cookie for refresh and does not see the value in JS land.
+        new_refresh = validated.pop("refresh", None)
+        response = Response(validated)
+        # `ROTATE_REFRESH_TOKENS=True` issues a fresh refresh token on every successful refresh.
+        # Persist it back into the cookie so the next refresh uses the new token.
+        if new_refresh:
+            _set_refresh_cookie(response, new_refresh)
+        return response
 
 
 class LogoutView(APIView):
@@ -689,12 +801,17 @@ class LogoutView(APIView):
             pass
         if user is None and refresh:
             try:
-                user_id = RefreshToken(refresh).get("user_id")
+                user_id = _GraceRefreshToken(refresh).get("user_id")
                 user = User.objects.filter(id=user_id).first()
             except (InvalidToken, TokenError, KeyError, AttributeError):
                 pass
 
         if refresh:
+            try:
+                # Signing out ends the grace window of a rotated token too (MIP-1878).
+                _close_grace(_GraceRefreshToken(refresh)[jwt_api_settings.JTI_CLAIM])
+            except (InvalidToken, TokenError, KeyError):
+                pass
             try:
                 # `.blacklist()` requires the `token_blacklist` app
                 # to be in INSTALLED_APPS and its migrations to have
