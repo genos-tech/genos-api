@@ -241,3 +241,40 @@ class NoPrintInAppCodeTests(SimpleTestCase):
                 and node.func.id == "print"
             ]
         self.assertEqual(offenders, [])
+
+
+class IsAddressTests(SimpleTestCase):
+    """`is_address` decides what a failed sign-in may keep (MIP-1789); it must agree
+    with the shape `mask_email` masks and stay cheap on hostile text."""
+
+    def test_agrees_with_the_masking_shape(self):
+        from origin.services.pii_mask import is_address, mask_email  # noqa: PLC0415
+
+        for text, expected in (
+            ("kenji@gmail.com", True),
+            ("a.b+c_d%e-f@mail.example.co.jp", True),
+            ("x@y.z", False),  # one-letter TLD
+            ("user@localhost", False),
+            ("hunter2 ghost@example.com", False),
+            ("ghost@example.com ", False),
+            ("a@b@example.com", False),
+            ("@example.com", False),
+            ("ghost@.example.com", False),
+            ("ghost@example..com", False),
+            ("ghost@example.c0m", False),
+            ("", False),
+            ("hunter2-pasted-by-mistake", False),
+            ("é@example.com", False),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(is_address(text), expected)
+                if expected:
+                    self.assertNotEqual(mask_email(text), text)
+
+    def test_hostile_text_is_cheap(self):
+        from origin.services.pii_mask import is_address  # noqa: PLC0415
+
+        for text in ("%" * 200_000, "a@" + "a." * 100_000, "@" * 100_000):
+            started = time.perf_counter()
+            self.assertFalse(is_address(text))
+            self.assertLess(time.perf_counter() - started, 0.5)
