@@ -23,6 +23,7 @@ from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import ToolContext, wrap_workspace_content
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.services.collab_push import read_note_threads
+from origin.views.public.mcp.via_privacy import via_for_viewer
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,29 @@ def _user_id_or_none(value: Any) -> str | None:
         return None
 
 
+# The kinds a comment's `via` may be (the ones `note_threads._common.reduced_via` stamps, and genos-collab
+# `VIA_KINDS` accepts). A test pins that this and the writer agree.
+COMMENT_VIA_KINDS = frozenset({"api_key", "oauth", "app", "agent"})
+
+
+def comment_via(raw: Any) -> dict[str, Any] | None:
+    """The reduced `via` of a stored comment, as ANY reader of the note may read it, or None (MIP-1759).
+
+    `raw` is `metadata.via` as collab hands it back, which is data from a Yjs document: a person who
+    can edit the note may have written anything there. Only a dict with a known kind is read, a fresh
+    `{kind, app?}` is built from it, and `via_for_viewer` for nobody in particular (the one reducer
+    every surface uses) has the last word: a kind, and a connected app's official family
+    (`claude`, `chatgpt`), never a key's name or prefix, a connection id, or any other field.
+    """
+    kind = raw.get("kind") if isinstance(raw, dict) else None
+    # A text kind first: a list or dict there is unhashable and would raise in the set test.
+    if not isinstance(kind, str) or kind not in COMMENT_VIA_KINDS:
+        return None
+    candidate = {"kind": kind, **({"app": raw["app"]} if "app" in raw else {})}
+    shown = via_for_viewer(candidate, None, None)
+    return shown if isinstance(shown, dict) and shown else None
+
+
 def _clip(text: str) -> str:
     return text if len(text) <= MAX_COMMENT_CHARS else text[:MAX_COMMENT_CHARS] + "…"
 
@@ -68,7 +92,9 @@ def _person(user_id: Any, names: dict[str, str]) -> dict[str, Any] | None:
     return {"user_id": clean, "username": wrap_workspace_content(name) if name else None}
 
 
-def _comment(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+def _comment(
+    raw: dict[str, Any], names: dict[str, str], *, include_via: bool = False
+) -> dict[str, Any]:
     deleted = bool(raw.get("deleted"))
     created, updated = raw.get("createdAt"), raw.get("updatedAt")
     out: dict[str, Any] = {
@@ -81,10 +107,14 @@ def _comment(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
     if created and updated and updated != created:
         out["edited"] = True
     out["markdown"] = wrap_workspace_content(_clip(blocks_to_markdown(raw.get("body"))))
+    if include_via and (via := comment_via(raw.get("via"))):
+        out["via"] = via
     return out
 
 
-def _thread(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+def _thread(
+    raw: dict[str, Any], names: dict[str, str], *, include_via: bool = False
+) -> dict[str, Any]:
     out: dict[str, Any] = {
         "thread_id": _id_or_none(raw.get("id")),
         "resolved": bool(raw.get("resolved")),
@@ -94,7 +124,11 @@ def _thread(raw: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
         out["resolved_at"] = _instant_or_none(raw.get("resolvedAt"))
     anchor = raw.get("anchorText")
     out["anchor_text"] = wrap_workspace_content(anchor) if anchor else None
-    out["comments"] = [_comment(c, names) for c in raw.get("comments") or [] if isinstance(c, dict)]
+    out["comments"] = [
+        _comment(c, names, include_via=include_via)
+        for c in raw.get("comments") or []
+        if isinstance(c, dict)
+    ]
     return out
 
 
@@ -106,6 +140,7 @@ def note_comment_fields(
     include_resolved: bool = False,
     can_include_resolved: bool = True,
     read_timeout: float | None = None,
+    include_via: bool = False,
 ) -> dict[str, Any]:
     """The keys `get_note` adds on MCP: `comment_threads` and, when there is
     something to say, `comment_threads_note`.
@@ -122,6 +157,10 @@ def note_comment_fields(
     `read_timeout` is how long to wait for collab, in seconds; None keeps the reader's own wait
     (MCP). A read that runs out of time is a read that failed: null threads and the same note
     (MIP-1545).
+
+    `include_via=True` (the MCP `get_note` only, MIP-1759) adds the reduced `via` to a comment an AI
+    app wrote. Off by default: the in-app `fetch_note` shares this function, and what it returns must
+    not change.
     """
     if read_timeout is None:
         raw_threads = read_note_threads(note_type, note_id)
@@ -156,7 +195,9 @@ def note_comment_fields(
     user_ids = {clean for uid in user_ids if (clean := _user_id_or_none(uid))}
     names = LabelAccess(ctx).usernames(user_ids) if user_ids else {}
 
-    fields: dict[str, Any] = {"comment_threads": [_thread(t, names) for t in shown]}
+    fields: dict[str, Any] = {
+        "comment_threads": [_thread(t, names, include_via=include_via) for t in shown]
+    }
     notes = []
     if resolved and not include_resolved:
         s = "s" if len(resolved) != 1 else ""
