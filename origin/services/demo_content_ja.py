@@ -50,6 +50,7 @@ logic that consumes them. Everything with paragraphs in it lives here.
 
 from __future__ import annotations
 
+from origin.services import task_card
 from origin.services.demo_blocks import _body
 
 WEBSITE_MILESTONE_BODY = _body(
@@ -2208,16 +2209,9 @@ SELF_DM_MESSAGES = (
 # spelling, so the visitor would see two names for one thing.
 SPRINT_NAME = "Sprint {n}"
 
-# PM task-card field labels. Taken from the shipped Japanese UI
-# (`genos-frontend/src/i18n/locales/ja/index.ts`: ステータス / 優先度 /
-# 労力 / 担当者 / 報告者 / 締切 / 未割り当て) rather than translated
-# afresh, so a seeded card reads the same as the task pane next to it.
-CARD_LABELS = {
-    "status": "ステータス: ",
-    "priority": "優先度: ",
-    "effort": "労力: ",
-    "assignee": "担当者: ",
-    "reporter": "報告者: ",
-    "due": "締切: ",
-    "unassigned": "未割り当て",
-}
+# PM task-card field labels: the words the server writes for a Japanese sender
+# (`task_card.card_labels("ja")`, which mirror the shipped UI's
+# `genos-frontend/src/i18n/locales/ja`: ステータス： / 優先度： / Effortレベル： ...),
+# so a seeded card and a card made over MCP read the same (MIP-1805). Taken from the
+# server's table, not copied: one definition for both. Only the card's own keys.
+CARD_LABELS = {key: task_card.card_labels("ja")[key] for key in task_card.CARD_LABELS}

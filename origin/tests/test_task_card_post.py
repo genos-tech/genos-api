@@ -24,7 +24,7 @@ from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.create_task import CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import CREATE_TASK_PLAN
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
-from origin.services import demo_content_en, task_card, task_card_post
+from origin.services import demo_content_en, demo_content_ja, task_card, task_card_post
 from origin.services.unified_writer import write_task_comment_as_thread_reply
 
 from .test_base import BaseAPITestCase
@@ -288,6 +288,14 @@ class TaskCardBodyTests(BaseAPITestCase):
     def test_the_english_labels_are_the_demos(self):
         """`task_card` is what live cards use; `demo_content_en` what the demo seeds."""
         self.assertEqual(task_card.CARD_LABELS, demo_content_en.CARD_LABELS)
+
+    def test_the_japanese_demo_labels_are_the_servers(self):
+        """The Japanese demo seeds the words the server writes for a Japanese sender (MIP-1805),
+        so a seeded card and a card made over MCP read alike. The keys are the card's own."""
+        server = task_card.card_labels("ja")
+        self.assertEqual(demo_content_ja.CARD_LABELS, {k: server[k] for k in task_card.CARD_LABELS})
+        self.assertEqual(demo_content_ja.CARD_LABELS["status"], "ステータス：")
+        self.assertEqual(demo_content_ja.CARD_LABELS["effort"], "Effortレベル：")
 
     def _body(self, **kw):
         return task_card.task_card_body(

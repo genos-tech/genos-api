@@ -48,7 +48,10 @@ User = get_user_model()
 # ja b63c0d22...), and the date-normalised digest of that same content is below.
 GOLDEN = {
     "en": "3283ac8ca9cf952bfb415f5aa9f9383c65e5982f49a18f3c03408c94c2dfb372",
-    "ja": "a3f413b03ce2d0fd07c546559bb743c8a1c3729f8bcc38606e8f5462634b91f9",
+    # MIP-1805: re-recorded once, for the Japanese card labels alone (ステータス： etc, the
+    # server's words, were ステータス: etc). The en digest did not move; the labels are not
+    # in any eval's body_text and evals/fixture.py seeds en only.
+    "ja": "1c3b94c702a7cb8747a8ffb9dc86bfbb4adddb3c57eb647b398a386e78eeb759",
 }
 
 
