@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 from django.conf import settings
 from django.core.cache import cache
@@ -420,6 +421,24 @@ def ensure_customer(user: CustomUser) -> str:
     return customer["id"]
 
 
+def promotion_codes_allowed() -> bool:
+    """Whether Stripe Checkout shows the promotion-code box.
+
+    Off unless `STRIPE_ALLOW_PROMOTION_CODES` is set to a truthy value
+    (1/true/yes/on). Policy at launch is no discounts except the free
+    first month (2026-11-21), so the default is off. Read from the
+    environment here, not in settings, so the switch is one env value
+    and needs no settings change. Existing promotion codes in Stripe
+    cannot be applied while this is off.
+    """
+    return os.environ.get("STRIPE_ALLOW_PROMOTION_CODES", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def create_checkout_session(user: CustomUser, plan: str, currency: str | None = None) -> str:
     """Create a subscription Checkout Session; return its redirect URL.
 
@@ -453,8 +472,9 @@ def create_checkout_session(user: CustomUser, plan: str, currency: str | None = 
         # Stripe docs; if account setup is incomplete Stripe returns
         # a clear error at session-create time, surfaced as a 503.
         "automatic_tax": {"enabled": settings.STRIPE.get("AUTOMATIC_TAX", False)},
-        # Allow users to enter a Stripe Promotion Code
-        "allow_promotion_codes": True,
+        # Promotion-code box on the hosted page: OFF at launch (no
+        # discounts except the free first month). See promotion_codes_allowed().
+        "allow_promotion_codes": promotion_codes_allowed(),
     }
     # "I agree to the terms" checkbox on the Stripe-hosted page. The
     # linked terms URL comes from the ACCOUNT (dashboard: Settings →
