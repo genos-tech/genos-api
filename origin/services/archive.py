@@ -84,6 +84,19 @@ def archived_chat_note_response(note_id) -> Response | None:
     return archived_channel_response(channel) if channel is not None else None
 
 
+def archived_note_refusal(family: str, note_id) -> str | None:
+    """The refusal text when a note lives in an archived project or chat, else None (MIP-1939).
+    For the note tools of the in-app agent and MCP, which write note rows directly. Personal-family
+    notes are never archived."""
+    if family == "task":
+        response = archived_task_note_response(note_id)
+    elif family == "chat":
+        response = archived_chat_note_response(note_id)
+    else:
+        return None
+    return ARCHIVED_MESSAGE if response is not None else None
+
+
 def project_counts(project: ProjectMaster) -> dict[str, int]:
     """What the archive keeps, as counts. Names never go in the security log."""
     pid = project.project_id
