@@ -136,6 +136,7 @@ urlpatterns = [
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/demo/", DemoSignInView.as_view(), name="demo_signin"),
+    path("api/v2/user/demo/workspace/", DemoWorkspaceView.as_view(), name="demo_workspace"),
     path("api/v2/user/signout/", LogoutView.as_view(), name="signout"),
     path(
         "api/v2/user/password-reset/request/",

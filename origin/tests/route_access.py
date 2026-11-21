@@ -278,6 +278,9 @@ REGISTRY = {
     "origin.views.common.auth_views.DemoSignInView": public(
         "creates a throwaway demo tenant; DemoSignInThrottle per IP"
     ),
+    "origin.views.common.auth_views.DemoWorkspaceView": self_only(
+        "the caller's own demo team only: TeamMaster filtered by owner=request.user, is_demo"
+    ),
     "origin.views.common.auth_views.LogoutView": public(
         "clears the caller's own auth cookies; must work with an expired access token"
     ),
