@@ -94,7 +94,7 @@ class McpOAuthAuthentication(authentication.BaseAuthentication):
             if token.user_id and token.application_id
             else None
         )
-        reason = self._refusal(token, connection)
+        reason = self._refusal(token, connection, self._surface(request))
         if reason:
             security_events.note_mcp_rejected(django_request, reason, connection)
             raise exceptions.AuthenticationFailed(MESSAGE)
@@ -105,16 +105,28 @@ class McpOAuthAuthentication(authentication.BaseAuthentication):
         return (connection.user, credential)
 
     @staticmethod
-    def _refusal(token, connection) -> str | None:
+    def _surface(request) -> str | None:
+        """The surface of the URL being called: set per URL pattern (`as_view(surface=...)`), never
+        read from the raw path or a parameter."""
+        match = getattr(_django(request), "resolver_match", None)
+        func = getattr(match, "func", None)
+        return (getattr(func, "view_initkwargs", None) or {}).get("surface")
+
+    @staticmethod
+    def _refusal(token, connection, surface: str | None = None) -> str | None:
         """Why this token may not be used, or None."""
         if token.is_expired():
             return "expired"
         if "mcp:read" not in (token.scope or "").split():
             return "scope"
         resources = token.resource or []
-        # Exactly one resource, and it is this server's (the full endpoint or one of its surfaces,
-        # MIP-1594). Empty = unrestricted in the library; more than one = also valid elsewhere.
-        if len(resources) != 1 or resources[0] not in mcp_oauth.resource_identifiers():
+        # Exactly one resource: the full endpoint's (works on every URL: existing connections), or
+        # this URL's own (a connection made on a surface, MIP-1594). Empty = unrestricted in the
+        # library; more than one = also valid elsewhere; another surface's = not for this URL.
+        if len(resources) != 1 or resources[0] not in {
+            mcp_oauth.resource_for(None),
+            mcp_oauth.resource_for(surface),
+        }:
             return "audience"
         if connection is None or not connection.is_active:
             return "connection_revoked"

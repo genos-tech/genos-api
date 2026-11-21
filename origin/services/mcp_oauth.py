@@ -89,10 +89,27 @@ def resource_identifier() -> str:
     return f"{public_base()}{MCP_PATH}"
 
 
+def resource_for(surface: str | None) -> str:
+    """The resource of one URL of the server (RFC 8707): `None` is the full endpoint, otherwise
+    the surface's own URL (MIP-1594)."""
+    if surface is None or surface == surfaces.FULL:
+        return resource_identifier()
+    return f"{resource_identifier()}/{surface}"
+
+
+def metadata_url_for(surface: str | None) -> str:
+    """Where the protected-resource metadata of one URL lives (RFC 9728 section 3.1: the
+    well-known prefix, then the resource's own path)."""
+    return f"{public_base()}/.well-known/oauth-protected-resource{MCP_PATH}" + (
+        "" if surface is None or surface == surfaces.FULL else f"/{surface}"
+    )
+
+
 def resource_identifiers() -> frozenset[str]:
     """Every resource a token may be for: the full MCP endpoint and each of its surfaces (core and
-    domains, MIP-1594). They are one server, so one connection's token works on all of them; no
-    other URL is accepted, and a token for the full endpoint is the one the consent step issues."""
+    domains, MIP-1594). A connection is bound to the ONE it was made on: the full endpoint's
+    works on every URL, a surface's on that URL only (`mcp_oauth_auth`). No other URL is
+    accepted."""
     base = public_base()
     return frozenset(
         {resource_identifier(), *(f"{base}{MCP_PATH}/{seg}" for seg in surfaces.SURFACE_SEGMENTS)}
@@ -229,7 +246,15 @@ def authorize_problem(method: Any, challenge: Any, resources: list[str]) -> tupl
     for resource in resources:
         if resource not in accepted:
             return "invalid_target", "This server only issues tokens for its MCP endpoint."
+    if len(set(resources)) > 1:
+        return "invalid_target", "A token is for one resource: name only one."
     return None
+
+
+def granted_resource(resources: list[str]) -> str:
+    """The one resource a grant is bound to: the one the client asked for at authorize (already
+    checked by `authorize_problem`), or the full endpoint when it named none."""
+    return resources[0] if resources else resource_identifier()
 
 
 def authorize_query(params: Any) -> tuple[str | None, str | None]:

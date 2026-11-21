@@ -9,22 +9,28 @@ What is pinned, and why each is its own test:
     list it was given, and the full endpoint still lists every published tool.
   * A tool looks the same on every endpoint: the same description, schema, title and annotations.
   * A call to a name the endpoint does not list is refused as an unknown tool, not run.
-  * The OAuth audience accepts the full endpoint and its surfaces, and nothing else (a token for
-    another URL is refused, as before).
+  * OAuth, through the real flow (register, authorize, consent, token, call): a connection made on
+    the full URL works on every URL; one made on a surface URL works on that URL only; a token for
+    another URL, or for two, is refused everywhere. The protected-resource metadata and the 401
+    challenge name the URL that was called (RFC 9728 section 3.3).
+  * The security log, the plan-limit gate and the prompts know the surface.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 from django.test import override_settings
 from django.urls import reverse
+from oauth2_provider.models import AccessToken
 
 from origin.models.common.api_key_models import SCOPE_WRITE
-from origin.services import mcp_oauth
+from origin.models.common.security_event_models import SecurityEvent
+from origin.services import mcp_oauth, security_events
 from origin.tests.test_mcp_endpoint import MCP, McpBase
-from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
+from origin.tests.test_mcp_oauth_flow import METADATA, FlowBase
+from origin.tests.test_mcp_oauth_foundation import BASE
+from origin.tests.test_mcp_tier_limits import LimitsBase
 from origin.views.public.mcp import surfaces, tools
 
 API_BASE = "https://api.test"
@@ -163,8 +169,14 @@ class TestSurfaceAuthorityIsUnchanged(McpBase):
         self.assertIn("get_task", listed)
 
 
-@override_settings(API_PUBLIC_BASE_URL=API_BASE)
-class TestTheOAuthAudience(McpBase):
+CORE_URL = f"{MCP}/core"
+FULL_RESOURCE = f"{BASE}{mcp_oauth.MCP_PATH}"
+CORE_RESOURCE = f"{FULL_RESOURCE}/core"
+CORE_METADATA = f"{BASE}/.well-known/oauth-protected-resource{mcp_oauth.MCP_PATH}/core"
+
+
+class TestResourceIdentifiers(McpBase):
+    @override_settings(API_PUBLIC_BASE_URL=API_BASE)
     def test_resource_identifiers_are_the_full_endpoint_and_its_surfaces_only(self):
         ids = mcp_oauth.resource_identifiers()
         self.assertIn(f"{API_BASE}{mcp_oauth.MCP_PATH}", ids)
@@ -174,6 +186,20 @@ class TestTheOAuthAudience(McpBase):
         self.assertNotIn(f"{API_BASE}{mcp_oauth.MCP_PATH}/nope", ids)
         self.assertEqual(len(ids), 1 + len(surfaces.SURFACE_SEGMENTS))
 
+    @override_settings(API_PUBLIC_BASE_URL=API_BASE)
+    def test_resource_and_metadata_url_per_surface(self):
+        self.assertEqual(mcp_oauth.resource_for(None), f"{API_BASE}{mcp_oauth.MCP_PATH}")
+        self.assertEqual(mcp_oauth.resource_for("core"), f"{API_BASE}{mcp_oauth.MCP_PATH}/core")
+        self.assertEqual(
+            mcp_oauth.metadata_url_for("core"),
+            f"{API_BASE}/.well-known/oauth-protected-resource{mcp_oauth.MCP_PATH}/core",
+        )
+        self.assertEqual(
+            mcp_oauth.metadata_url_for(None),
+            f"{API_BASE}/.well-known/oauth-protected-resource{mcp_oauth.MCP_PATH}",
+        )
+
+    @override_settings(API_PUBLIC_BASE_URL=API_BASE)
     def test_the_authorize_step_takes_our_resources_and_refuses_others(self):
         challenge = "a" * 43
         self.assertIsNone(mcp_oauth.authorize_problem("S256", challenge, []))
@@ -184,28 +210,185 @@ class TestTheOAuthAudience(McpBase):
             mcp_oauth.authorize_problem("S256", challenge, ["https://evil.example/mcp"])[0],
             "invalid_target",
         )
+        two = [f"{API_BASE}{mcp_oauth.MCP_PATH}", f"{API_BASE}{mcp_oauth.MCP_PATH}/core"]
+        self.assertEqual(mcp_oauth.authorize_problem("S256", challenge, two)[0], "invalid_target")
 
-    def _token(self, resource):
-        return SimpleNamespace(is_expired=lambda: False, scope="mcp:read", resource=resource)
 
-    def _connection(self):
-        user = MagicMock(is_active=True, is_deleted=False)
-        return SimpleNamespace(is_active=True, user=user)
+class TestTheOAuthAudience(FlowBase):
+    """The real protocol, end to end, on a surface URL."""
 
-    def test_a_token_for_the_full_endpoint_works_on_a_surface(self):
-        token = self._token([f"{API_BASE}{mcp_oauth.MCP_PATH}"])
-        self.assertIsNone(McpOAuthAuthentication._refusal(token, self._connection()))
+    def surface_tokens(self, resource):
+        params = self.authorize_params(resource=resource)
+        code = self.consent(params=params)
+        res = self.token(code=code, resource=resource)
+        self.assertEqual(res.status_code, 200, res.content)
+        return res.json()
 
-    def test_a_token_for_a_surface_is_accepted(self):
-        token = self._token([f"{API_BASE}{mcp_oauth.MCP_PATH}/core"])
-        self.assertIsNone(McpOAuthAuthentication._refusal(token, self._connection()))
+    def test_a_client_that_sends_the_surface_url_gets_a_token_bound_to_it(self):
+        tokens = self.surface_tokens(CORE_RESOURCE)
+        row = AccessToken.objects.get()
+        self.assertEqual(row.resource, [CORE_RESOURCE])
+        self.assertEqual(self.mcp(tokens["access_token"], url=CORE_URL).status_code, 200)
 
-    def test_a_token_for_another_resource_or_two_resources_is_refused(self):
-        other = self._token(["https://evil.example/mcp"])
-        self.assertEqual(McpOAuthAuthentication._refusal(other, self._connection()), "audience")
-        two = self._token(
-            [f"{API_BASE}{mcp_oauth.MCP_PATH}", f"{API_BASE}{mcp_oauth.MCP_PATH}/core"]
+    def test_a_surface_token_works_on_its_own_url_only(self):
+        token = self.surface_tokens(CORE_RESOURCE)["access_token"]
+        for url in (MCP, f"{MCP}/tasks"):
+            with self.subTest(url=url):
+                res = self.mcp(token, url=url)
+                self.assertEqual(res.status_code, 401)
+                self.assertIn('error="invalid_token"', res["WWW-Authenticate"])
+
+    def test_a_full_token_still_works_on_every_url(self):
+        token = self.tokens()["access_token"]
+        self.assertEqual(AccessToken.objects.get().resource, [FULL_RESOURCE])
+        for url in (MCP, CORE_URL, *(f"{MCP}/{seg}" for seg in surfaces.SURFACE_SEGMENTS)):
+            with self.subTest(url=url):
+                self.assertEqual(self.mcp(token, url=url).status_code, 200)
+
+    def test_naming_no_resource_gives_the_full_one(self):
+        code = self.consent(params=self.authorize_params(resource=None))
+        self.assertEqual(self.token(code=code, resource=None).status_code, 200)
+        self.assertEqual(AccessToken.objects.get().resource, [FULL_RESOURCE])
+
+    def test_a_token_for_another_url_or_for_two_is_refused_on_every_url(self):
+        raw = self.tokens()["access_token"]
+        row = AccessToken.objects.get()
+        # A real token whose resource a bug or an edit made something else.
+        for resource in (["https://other.example/mcp"], [FULL_RESOURCE, CORE_RESOURCE], []):
+            AccessToken.objects.filter(pk=row.pk).update(resource=resource)
+            for url in (MCP, CORE_URL, f"{MCP}/tasks"):
+                with self.subTest(resource=resource, url=url):
+                    self.assertEqual(self.mcp(raw, url=url).status_code, 401)
+
+    def test_two_resources_at_authorize_are_refused(self):
+        params = self.authorize_params()
+        params["resource"] = [FULL_RESOURCE, CORE_RESOURCE]
+        landing = self.app.get("/oauth/authorize/", params)
+        self.assertNotEqual(landing.status_code, 200)
+
+    # -- metadata and the 401 challenge name the URL that was called --
+
+    def test_the_metadata_of_a_surface_names_the_surface(self):
+        res = self.client.get(f"/.well-known/oauth-protected-resource{mcp_oauth.MCP_PATH}/core")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["resource"], CORE_RESOURCE)
+
+    def test_the_metadata_of_the_full_endpoint_is_unchanged(self):
+        for path in (
+            "/.well-known/oauth-protected-resource",
+            f"/.well-known/oauth-protected-resource{mcp_oauth.MCP_PATH}",
+        ):
+            with self.subTest(path=path):
+                res = self.client.get(path)
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.json()["resource"], FULL_RESOURCE)
+
+    def test_the_metadata_of_a_url_that_is_not_ours_is_a_404(self):
+        for tail in ("/nope", "/core/extra", "/tasks/x"):
+            with self.subTest(tail=tail):
+                res = self.client.get(
+                    f"/.well-known/oauth-protected-resource{mcp_oauth.MCP_PATH}{tail}"
+                )
+                self.assertEqual(res.status_code, 404)
+
+    def test_a_401_on_a_surface_points_at_that_surface_metadata(self):
+        self.client.credentials()
+        res = self._rpc("tools/list", url=CORE_URL)
+        self.assertEqual(res.status_code, 401)
+        self.assertIn(f'resource_metadata="{CORE_METADATA}"', res["WWW-Authenticate"])
+        res = self.mcp("nonsense" * 5, url=CORE_URL)
+        self.assertIn('error="invalid_token"', res["WWW-Authenticate"])
+        self.assertIn(f'resource_metadata="{CORE_METADATA}"', res["WWW-Authenticate"])
+
+    def test_a_401_on_the_full_endpoint_is_the_setting_exactly(self):
+        self.client.credentials()
+        res = self._rpc("tools/list", url=MCP)
+        self.assertEqual(res["WWW-Authenticate"], f'Bearer resource_metadata="{METADATA}"')
+
+    @override_settings(MCP_RESOURCE_METADATA_URL="")
+    def test_a_surface_challenge_stays_dark_while_the_setting_is_empty(self):
+        self.client.credentials()
+        res = self._rpc("tools/list", url=CORE_URL)
+        self.assertNotIn("resource_metadata", res["WWW-Authenticate"])
+
+
+class TestTheSecurityLogKnowsTheSurface(FlowBase):
+    def test_a_destructive_call_on_a_surface_is_logged_as_mcp(self):
+        token = self.tokens()["access_token"]
+        before = SecurityEvent.objects.count()
+        self.call(token, "delete_note", {"note_id": 999999}, url=f"{MCP}/notes")
+        events = SecurityEvent.objects.filter(action="mcp.destructive")
+        self.assertEqual(events.count(), 1, SecurityEvent.objects.count() - before)
+        self.assertEqual(events.get().source, "mcp")
+
+    def test_a_rest_api_key_call_is_still_api_key(self):
+        key = SimpleNamespace(id="k1")
+        rest = SimpleNamespace(path="/api/public/v1/tasks", user=None, resolver_match=None)
+        mcp_surface = SimpleNamespace(
+            path="/api/public/v1/mcp/notes", user=None, resolver_match=None
         )
-        self.assertEqual(McpOAuthAuthentication._refusal(two, self._connection()), "audience")
-        none = self._token([])
-        self.assertEqual(McpOAuthAuthentication._refusal(none, self._connection()), "audience")
+        self.assertEqual(security_events._source(rest, key)[0], "api_key")
+        self.assertEqual(security_events._source(mcp_surface, key)[0], "mcp")
+
+    def surface_tokens_full(self):
+        return self.tokens()["access_token"]
+
+
+class TestThePlanGateKnowsTheSurface(LimitsBase):
+    def test_an_off_surface_tool_is_unknown_not_a_plan_answer(self):
+        self.rig(mcp_list_page_max=5)
+        res = self._call(
+            "list_milestones", {"limit": 100}, url=f"{CORE_URL}?team_id={self.team.team_id}"
+        )
+        self.assertIn("Unknown tool", res.json()["error"]["message"])
+        # the same call on the full endpoint is the plan's answer, as before
+        full = self._result(self._call("list_milestones", {"limit": 100}))
+        self.assertEqual(full["_meta"]["genos/limit"]["category"], "mcp_list_page")
+
+
+class TestTheShadowGateKnowsTheSurface(LimitsBase):
+    mode = "shadow"
+
+    def proposed_page_cap(self):
+        from unittest import mock
+
+        from origin.services import mcp_tier_limits as limits
+
+        table = {t: dict(row) for t, row in limits.MCP_TIER_LIMITS_PROPOSED.items()}
+        table[self.tier]["mcp_list_page_max"] = 5
+        patcher = mock.patch.object(limits, "MCP_TIER_LIMITS_PROPOSED", table)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_off_surface_call_writes_no_would_limit_line(self):
+        self.proposed_page_cap()
+        with self.assertNoLogs("origin.services.mcp_tier_limits", "INFO"):
+            res = self._call(
+                "list_milestones", {"limit": 100}, url=f"{CORE_URL}?team_id={self.team.team_id}"
+            )
+        self.assertIn("Unknown tool", res.json()["error"]["message"])
+
+
+class TestPromptsFollowTheSurface(McpBase):
+    def _prompts(self, url):
+        self._key(scope=SCOPE_WRITE)
+        res = self._rpc("prompts/list", url=f"{url}?team_id={self.team.team_id}")
+        self.assertEqual(res.status_code, 200)
+        return [p["name"] for p in res.json()["result"]["prompts"]]
+
+    def test_a_surface_without_the_briefing_lists_no_prompts(self):
+        for seg in ("github", "analytics", "tasks", "notes", "projects", "calendar-chat"):
+            with self.subTest(seg=seg):
+                self.assertEqual(self._prompts(f"{MCP}/{seg}"), [])
+
+    def test_core_and_full_list_them(self):
+        for url in (CORE_URL, MCP):
+            with self.subTest(url=url):
+                self.assertTrue(self._prompts(url))
+
+    def test_prompts_get_on_a_surface_without_the_briefing_is_unknown(self):
+        self._key(scope=SCOPE_WRITE)
+        res = self._rpc(
+            "prompts/get", {"name": "catch_me_up"}, url=f"{MCP}/github?team_id={self.team.team_id}"
+        )
+        self.assertIn("Unknown prompt", res.json()["error"]["message"])

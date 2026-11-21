@@ -149,7 +149,9 @@ def _source(request, key=None) -> tuple[str, str | None]:
     key = key or _api_key(request)
     if key is not None:
         path = (getattr(request, "path", "") or "").rstrip("/")
-        return (SecuritySource.MCP if path == _MCP_PATH else SecuritySource.API_KEY), str(key.id)
+        # The full endpoint and every surface under it (MIP-1594) are MCP.
+        on_mcp = path == _MCP_PATH or path.startswith(_MCP_PATH + "/")
+        return (SecuritySource.MCP if on_mcp else SecuritySource.API_KEY), str(key.id)
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
         return SecuritySource.APP, None

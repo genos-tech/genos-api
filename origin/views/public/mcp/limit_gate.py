@@ -30,7 +30,7 @@ from rest_framework.response import Response
 
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.services import mcp_tier_limits as limits
-from origin.views.public.mcp import list_paging, protocol, tools
+from origin.views.public.mcp import list_paging, protocol, surfaces, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 
 log = logging.getLogger(__name__)
@@ -281,13 +281,22 @@ def _could_be_limited(tool, arguments: dict[str, Any]) -> bool:
 
 
 def prepare(
-    tool_name: Any, arguments: dict[str, Any], ctx: ToolContext, scope: str, allow_destructive: bool
+    tool_name: Any,
+    arguments: dict[str, Any],
+    ctx: ToolContext,
+    scope: str,
+    allow_destructive: bool,
+    surface: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """The arguments a call runs with and, when a plan limit stops it, the result to answer with.
 
-    `off`: `(arguments, None)` with the very same dict, before anything is looked up."""
+    `off`: `(arguments, None)` with the very same dict, before anything is looked up. A name the
+    URL's surface does not publish is left alone too: it is an unknown tool there (MIP-1594), not
+    something a plan limit answers or a shadow line counts."""
     active = limits.mode()
     if active == limits.OFF:
+        return arguments, None
+    if isinstance(tool_name, str) and not surfaces.publishes(surface, tool_name):
         return arguments, None
     try:
         tool = tools.BY_NAME.get(tool_name) if isinstance(tool_name, str) else None
