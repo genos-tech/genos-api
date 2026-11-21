@@ -27,8 +27,13 @@ past work stays attributed to "Deleted user", and nothing dangles.
     devices die at once, with no token blacklist to maintain;
   * personal-only data deleted outright: notification preferences and
     push subscriptions, the first-month trial row, todos, personal tags,
-    personal notes, and the AI/search rows keyed by the bare `user_id`
-    string (those carry no FK, so nothing else would ever clean them up).
+    My Notes notes and folders, and the AI/search rows keyed by the bare
+    `user_id` string (those carry no FK, so nothing else would ever clean
+    them up);
+  * what the TEAM reads is kept: a Team Notes note, and the team folder
+    it sits in, stays when anyone else can still read it. The note reads
+    "Deleted user" like every other line of the person's; the folder gets
+    a live owner (a co-owner, else the team owner). See `note_spaces`.
 
 **Ownership is the one hard blocker.** A team whose owner vanishes is
 unadministrable, so deletion refuses while the user solely owns a team
@@ -73,6 +78,7 @@ from origin.services import blind_index, change_feed
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
 from origin.services.deleted_account_memberships import end_group_memberships
 from origin.services.security_events import record_security_event
+from origin.views.utils.note_acl_resync import purge_notes_from_index
 
 log = logging.getLogger(__name__)
 
@@ -158,8 +164,10 @@ def _purge_search_engine_rows(user_id: str) -> None:
     # rather than needing a pass here.
 
 
-def _delete_personal_data(user) -> None:
-    """Data that exists only for this person and has no team value."""
+def _delete_personal_data(user, closing_team_ids=()) -> None:
+    """Data that exists only for this person and has no team value.
+
+    `closing_team_ids` are the teams that die with the person: nothing of theirs is kept there."""
     NotificationPreference.objects.filter(user=user).delete()
     PushSubscription.objects.filter(user=user).delete()
     # OAuth grants hold live third-party refresh tokens.
@@ -201,20 +209,26 @@ def _delete_personal_data(user) -> None:
     purge_item_activity(user.pk)  # the per-day table (MIP-1084)
     purge_importance(user.pk)  # what they marked and tuned (MIP-1087)
 
-    # Personal notes are private by definition, so they are erasable
-    # content rather than team content. Folders cascade nothing (the
-    # tree is plain integer columns), so both go explicitly.
-    from origin.models.note.common_note_models import NotePermissionMaster
+    # My Notes are private by definition, so they are erasable content. TEAM NOTES are not:
+    # a note in a team folder (and the folder, the team's ACL carrier) belongs to the team, and
+    # teammates read it (MIP-1782). `PersonalNoteMaster` / `PersonalNoteFolder` hold both
+    # spaces in one table, so what goes and what stays is decided by `note_spaces.plan_erasure`,
+    # the rule the data export labels notes with too. The folder tree is plain integer columns
+    # (no cascade), so notes and folders go explicitly.
+    from origin.models.note.common_note_models import NoteFolderPermission, NotePermissionMaster
     from origin.models.note.favorite_note_models import NoteFavoriteMaster
     from origin.models.note.personal_note_models import (
         PersonalNoteFolder,
         PersonalNoteMaster,
     )
     from origin.models.note.recent_note_models import NoteRecentMaster
+    from origin.models.note.version_note_models import NoteVersionMaster
     from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
     from origin.services.note_satellites import batched_note_cleanup
+    from origin.services.note_spaces import hand_over_folder, plan_erasure
 
-    note_ids = list(PersonalNoteMaster.objects.filter(owner=user).values_list("note_id", flat=True))
+    plan = plan_erasure(user, closing_team_ids)
+    note_ids = sorted(plan.delete_note_ids)
     if note_ids:
         forget_note_attachments(1, note_ids)  # their uploaded files, before the notes go (MIP-1720)
         NotePermissionMaster.objects.filter(note_id__in=note_ids, note_type=1).delete()
@@ -224,11 +238,45 @@ def _delete_personal_data(user) -> None:
             PersonalNoteMaster.objects.filter(note_id__in=note_ids).delete()
         # What other people hold about those notes: recents, favorites, mention rows (MIP-1514).
         forget_deleted_notes(1, note_ids)
-    PersonalNoteFolder.objects.filter(owner=user).delete()
+    # The team folders that stay get a live owner BEFORE the person's own grants go, so a
+    # folder is never left with nobody who can manage it when somebody could have.
+    for folder_id in plan.handover_folder_ids:
+        hand_over_folder(folder_id, user.pk)
+    PersonalNoteFolder.objects.filter(folder_id__in=plan.delete_folder_ids).delete()
+    # The person's grants on every team folder and note: the folder FK would cascade them, but
+    # the account is soft-deleted. Other people's grants on a note or folder that stays are theirs.
+    NoteFolderPermission.objects.filter(user=user).delete()
+    NotePermissionMaster.objects.filter(user=user, note_type=1).delete()
+    # What the person wrote into a team's history stays (the editor reads "Deleted user", like
+    # every other line of theirs); the name of the API key or connected app they wrote through is
+    # their own label, so it does not.
+    NoteVersionMaster.objects.filter(editor=user).update(via=None)
+    _drop_from_search_after_commit(plan.delete_note_ids, plan.delete_folder_ids)
     # The person's own lists of notes they opened or starred: the account is soft-deleted, so
     # the user FK (SET_NULL) never fires and the rows would stay, pointing at their id.
     NoteRecentMaster.objects.filter(user=user).delete()
     NoteFavoriteMaster.objects.filter(user=user).delete()
+
+
+def _drop_from_search_after_commit(note_ids, folder_ids) -> None:
+    """Take the erased notes and folders out of search, once the erasure has committed.
+
+    Best-effort and after the commit, like the delete paths in `note_delete`: a failed erasure
+    must not have emptied the index, and the orphan sweep retries what this misses. The notes
+    that stay are not touched here: their text and access did not change, and the owner change
+    on a team folder bumps the folder's `ts_updated_at`, which the incremental reindex follows.
+    """
+    notes, folders = sorted(note_ids), sorted(folder_ids)
+    if not notes and not folders:
+        return
+
+    def _purge() -> None:
+        from origin.search_engine.purge import purge_note_folders
+
+        purge_notes_from_index(notes)
+        purge_note_folders(folders)
+
+    transaction.on_commit(_purge, robust=True)
 
 
 def _delete_avatar_file(path: str, user_id: str) -> None:
@@ -402,7 +450,7 @@ def delete_account(user) -> dict:
             for team_id in {*solo_team_ids, *left_team_ids}
         )
 
-        _delete_personal_data(user)
+        _delete_personal_data(user, solo_team_ids)
         _purge_search_engine_rows(user_id)
         # Both read the identity that is overwritten just below, so they run first.
         invites_removed = _delete_invites_to(original_email)
