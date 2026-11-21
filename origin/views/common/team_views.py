@@ -1318,6 +1318,31 @@ def _roster_page_size(request) -> int:
     return max(1, min(wanted, _ROSTER_PAGE_MAX))
 
 
+def _deleted_account_ids(team_id) -> list[str]:
+    """Ids of the ANONYMISED accounts that were members of this team (MIP-1820), sorted.
+
+    Distinct from the membership tombstone `isDeleted` on a roster row (`membership.is_deleted OR
+    attendee.is_deleted`): someone who merely LEFT the team has a live account and is never here.
+    One that left and deleted the account afterwards still is: it is this team's history.
+
+    What it reveals: only ids the caller can already read in this team's own messages (a sender,
+    a mention's `userId`), and only that the account behind them is gone, which every one of those
+    messages already shows ("Deleted user"). Never a global list (the query is keyed on the
+    team), never a name or an e-mail (those are erased), never a left member. The membership row
+    is the scope on purpose: deletion ends every membership (`delete_account`), it does not
+    remove the row.
+
+    A separate small query, not part of the roster's paged queryset: a full load hides deleted
+    rows, and on a page they would take slots and break the cursor.
+    """
+    return sorted(
+        str(pk)
+        for pk in TeamMembers.objects.filter(
+            team_id=team_id, attendee__is_deleted=True, attendee__is_system_user=False
+        ).values_list("attendee_id", flat=True)
+    )
+
+
 class GetTeamMembersView(AuthenticatedAPIView):
     """The roster of one team: every member's name, EMAIL, avatar, job
     title, permission role, country and status.
@@ -1496,6 +1521,9 @@ class GetTeamMembersView(AuthenticatedAPIView):
                 }
             )
 
+        # Same rule as the external people: on the LAST page only (an unpaged request is one
+        # page). `None` = leave the key out of this page.
+        deleted_user_ids = None
         if guest_visible is None:
             # The cross-team people are not part of the paged queryset, so they
             # ride on the LAST page only: on every page they would repeat, and
@@ -1503,14 +1531,19 @@ class GetTeamMembersView(AuthenticatedAPIView):
             # is the last, so it gets them as it always did.
             if not has_more:
                 response_data.extend(_external_people_rows(team_id, team_name, request.user.id))
+                deleted_user_ids = _deleted_account_ids(team_id)
         else:
             # `guest_visible` is only set when the caller failed
             # `is_team_member`, so this branch IS the outside-caller case.
             response_data = _without_phone(response_data)
+            # An outside caller is told nothing about the team's history of people.
+            if not has_more:
+                deleted_user_ids = []
 
-        body = build_delta_response(
-            {"members": response_data}, server_time, force_full_reload=force_full
-        )
+        payload = {"members": response_data}
+        if deleted_user_ids is not None:
+            payload["deletedUserIds"] = deleted_user_ids
+        body = build_delta_response(payload, server_time, force_full_reload=force_full)
         if paged:
             # Additive keys; absent on an unpaged request, which is unchanged.
             body["has_more"] = has_more
