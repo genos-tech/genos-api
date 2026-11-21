@@ -9,7 +9,10 @@ there and removes them, with the same care:
     the upload paths write. Any other path is counted and never deleted;
   * a file is an orphan when NO row names it, in either table. The task's own row being gone is
     the usual case (`orphan_task_gone`); a file whose task is alive but whose row is gone is the
-    other (`orphan_task_live`). Both are removed;
+    other (`orphan_task_live`). Only the first is removed by default: a live task's unnamed file may
+    still be shown by its body (a row stored in another form, an upload from before a path change),
+    so it is removed only with `include_live_tasks`, and then only when neither the task's body nor
+    its comments contain the file's name (MIP-1890);
   * a file younger than `GRACE` is never matched: an upload in flight writes its file before its
     row, and the row is what makes the file "named". A file whose age cannot be read is kept;
   * the table is read once for the scan, and every candidate is looked up again just before it is
@@ -22,6 +25,7 @@ name is the uploader's text, and nothing here prints or logs one.
 
 from __future__ import annotations
 
+import json
 import logging
 import posixpath
 from collections import Counter
@@ -31,7 +35,12 @@ from datetime import datetime, timedelta
 from django.core.files.storage import default_storage
 from django.utils import timezone
 
-from origin.models.task.task_models import TaskAttachments, TaskBodyAttachmentFact, TaskMaster
+from origin.models.task.task_models import (
+    TaskAttachments,
+    TaskBodyAttachmentFact,
+    TaskComments,
+    TaskMaster,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,8 @@ KEPT_ODD_PATH = "not at a task file path"
 KEPT_YOUNG = "younger than 7 days"
 KEPT_NO_AGE = "age could not be read"
 KEPT_REFERENCED = "a row names it"
+KEPT_LIVE_TASK = "of a live task (needs --include-live-tasks)"
+KEPT_IN_BODY = "a live task's body or comment contains its name"
 
 
 @dataclass
@@ -111,7 +122,27 @@ def _named_now(name: str) -> bool:
     )
 
 
-def scan(*, apply: bool, limit: int = DEFAULT_LIMIT, now: datetime | None = None) -> OrphanReport:
+def _named_in_task_text(task_id: int, name: str) -> bool:
+    """Does the live task's body, or any comment of it, contain this file's name (or its basename)?"""
+    needles = {name, posixpath.basename(name)}
+    task = TaskMaster.objects.filter(task_id=task_id).values_list("content", flat=True).first()
+    texts = [json.dumps(task, ensure_ascii=False)] if task else []
+    texts.extend(
+        json.dumps(body, ensure_ascii=False)
+        for body in TaskComments.objects.filter(task_id=task_id).values_list(
+            "comment_body", flat=True
+        )
+    )
+    return any(n in t for t in texts for n in needles)
+
+
+def scan(
+    *,
+    apply: bool,
+    limit: int = DEFAULT_LIMIT,
+    now: datetime | None = None,
+    include_live_tasks: bool = False,
+) -> OrphanReport:
     """Find (and, with `apply`, delete) the orphaned task files, at most `limit` deletions.
 
     Dry run unless `apply`: then nothing is written. Safe to run twice: the second run finds only
@@ -150,11 +181,18 @@ def scan(*, apply: bool, limit: int = DEFAULT_LIMIT, now: datetime | None = None
                 size = 0
             report.orphan_bytes += size
 
+            if task_id in live_task_ids and not include_live_tasks:
+                report.kept[KEPT_LIVE_TASK] += 1
+                continue
             if report.selected >= limit:
                 report.waiting += 1
                 continue
             report.selected += 1
             if not apply:
+                continue
+            if task_id in live_task_ids and _named_in_task_text(task_id, name):
+                report.kept[KEPT_IN_BODY] += 1
+                report.selected -= 1
                 continue
             if _named_now(name):  # a row written since the scan protects its file: not this run's
                 report.kept[KEPT_REFERENCED] += 1
