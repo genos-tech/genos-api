@@ -411,3 +411,166 @@ class PruneOrphanedThreadSummaries(Fixture):
         self.assertIn("0 ", text)
         for row in self.kept:
             self.assertTrue(self.has_row(row))
+
+
+class EditingAMessageForgetsItsThreadSummary(Fixture):
+    """MIP-1819: the old text of an edited reply is no longer what its author wants kept."""
+
+    def setUp(self):
+        super().setUp()
+        self.root, self.kids, self.row = self.thread(self.channel)
+        _, _, self.other_row = self.thread(self.channel)
+        _, _, self.elsewhere = self.thread(self.other_channel)
+
+    def untouched(self):
+        for row in (self.other_row, self.elsewhere):
+            self.assertTrue(self.has_row(row))
+            self.assertTrue(self.has_chunk(row))
+
+    def patch(self, message, text):
+        self.authenticate()
+        with self.commit():
+            return self.client.patch(
+                f"/api/v3/messages/{message.id}/",
+                {"body": _blocks(text), "body_text": text},
+                format="json",
+            )
+
+    def test_editing_a_reply_removes_the_summary_and_chunk(self):
+        res = self.patch(self.kids[0], "changed")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(self.has_row(self.row))
+        self.assertFalse(self.has_chunk(self.row))
+        self.untouched()
+
+    def test_editing_the_root_removes_the_summary_and_chunk(self):
+        res = self.patch(self.root, "changed root")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(self.has_row(self.row))
+        self.assertFalse(self.has_chunk(self.row))
+        self.untouched()
+
+    def test_an_edit_that_keeps_the_text_keeps_the_summary(self):
+        res = self.patch(self.kids[0], self.kids[0].body_text)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(self.has_row(self.row))
+        self.assertTrue(self.has_chunk(self.row))
+        self.untouched()
+
+    def test_a_failed_edit_keeps_the_summary(self):
+        self.authenticate()
+        with self.commit():
+            res = self.client.patch(
+                f"/api/v3/messages/{self.kids[0].id}/", {"body": "nope"}, format="json"
+            )
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(self.has_row(self.row))
+
+    def test_the_task_comment_mirror_edit_forgets_it(self):
+        from origin.services import unified_writer
+
+        mirror = Message.objects.create(
+            id=unified_writer.task_comment_message_uuid(7, 9),
+            channel=self.channel,
+            sender=self.user,
+            seq=900,
+            body=_blocks("old"),
+            body_text="old",
+            thread_root=self.root,
+            parent=self.root,
+            is_thread_reply=True,
+        )
+        with self.commit():
+            unified_writer.update_task_comment_thread_reply(
+                task_id=7, comment_id=9, body=_blocks("new")
+            )
+        self.assertFalse(self.has_row(self.row))
+        self.assertFalse(self.has_chunk(self.row))
+        self.untouched()
+        self.assertEqual(Message.objects.get(pk=mirror.pk).body_text, "new")
+
+    def test_the_task_comment_mirror_edit_with_the_same_text_keeps_it(self):
+        from origin.services import unified_writer
+
+        Message.objects.create(
+            id=unified_writer.task_comment_message_uuid(7, 9),
+            channel=self.channel,
+            sender=self.user,
+            seq=900,
+            body=_blocks("same"),
+            body_text="same",
+            thread_root=self.root,
+            parent=self.root,
+            is_thread_reply=True,
+        )
+        with self.commit():
+            unified_writer.update_task_comment_thread_reply(
+                task_id=7, comment_id=9, body=_blocks("same")
+            )
+        self.assertTrue(self.has_row(self.row))
+
+    def test_the_card_rewrite_forgets_the_thread_summary(self):
+        from origin.views.chat.message_views import rewrite_card_message
+
+        with self.commit():
+            rewrite_card_message(
+                Message.objects.get(pk=self.root.pk), body=_blocks("card v2"), body_text="card v2"
+            )
+        self.assertFalse(self.has_row(self.row))
+        self.untouched()
+
+    def test_the_mirror_of_a_legacy_thread_edit_forgets_it(self):
+        from origin.services import unified_writer
+
+        with self.commit():
+            with (
+                mock.patch.object(unified_writer, "_is_enabled", return_value=True),
+                mock.patch.object(unified_writer, "_resolve_channel", return_value=self.channel),
+                mock.patch.object(unified_writer, "_resolve_message", return_value=self.root),
+            ):
+                unified_writer.write_thread_message(
+                    chat_type=2,
+                    chat_id=0,
+                    thread_id=0,
+                    message_id=self.kids[0].seq,
+                    sender_id=self.user.id,
+                    body=_blocks("legacy edit"),
+                )
+        self.assertFalse(self.has_row(self.row))
+        self.untouched()
+
+    def test_an_edit_costs_one_summary_read_when_the_thread_has_none(self):
+        root = self.say(self.channel, "bare")
+        reply = self.say(self.channel, "bare reply", root=root)
+        self.authenticate()
+        with CaptureQueriesContext(connection) as ctx:
+            res = self.client.patch(
+                f"/api/v3/messages/{reply.id}/",
+                {"body": _blocks("e"), "body_text": "e"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        table = ThreadSummary._meta.db_table
+        touching = [q["sql"] for q in ctx.captured_queries if table in q["sql"]]
+        self.assertEqual(len(touching), 1, touching)
+        self.assertTrue(touching[0].lstrip().upper().startswith("SELECT"), touching)
+
+
+class PruneCountsSummariesOlderThanAnEdit(Fixture):
+    def test_the_dry_run_counts_a_digest_older_than_an_edit_and_writes_nothing(self):
+        _, kids, stale = self.thread(self.channel)
+        _, _, fresh = self.thread(self.channel)
+        _, kids2, _ = self.thread(self.channel)
+        ThreadSummary.objects.filter(pk=stale.pk).update(
+            ts_updated_at=timezone.now() - timedelta(days=1)
+        )
+        Message.objects.filter(pk=kids[0].pk).update(edited_at=timezone.now())
+        # edited BEFORE the digest was made: the digest is clean
+        Message.objects.filter(pk=kids2[0].pk).update(edited_at=timezone.now() - timedelta(days=2))
+        out = StringIO()
+        call_command("prune_orphaned_thread_summaries", stdout=out)
+        text = out.getvalue()
+        self.assertIn("edited_since_digest=1", text)
+        self.assertNotIn(SECRET, text)
+        self.assertEqual(ThreadSummary.objects.count(), 3)
+        self.assertTrue(self.has_row(fresh))

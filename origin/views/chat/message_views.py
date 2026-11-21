@@ -49,7 +49,12 @@ from origin.serializers.chat.unified_serializers import (
     MessageAttachmentSerializer,
     MessageSerializer,
 )
-from origin.services import message_tombstone, message_via, webhook_enqueue
+from origin.services import (
+    message_tombstone,
+    message_via,
+    thread_summary_cleanup,
+    webhook_enqueue,
+)
 from origin.services.channel_scope import chat_member_rows, is_chat_member
 from origin.services.deleted_account_channel_owners import acts_as_owner
 from origin.services.mention_extractor import (
@@ -799,6 +804,7 @@ class MessageDetailView(AuthenticatedAPIView):
         # `mentions[]` array on the serialized message disagreeing with
         # the rendered chips. The transaction wraps both writes.
         with transaction.atomic():
+            old_body, old_body_text = message.body, message.body_text
             message.body = body_json
             message.body_text = body_text
             message.edited_at = timezone.now()
@@ -809,6 +815,10 @@ class MessageDetailView(AuthenticatedAPIView):
                 message.metadata = cleaned
                 update_fields.append("metadata")
             message.save(update_fields=update_fields)
+            # The old text must not outlive the edit in the thread's cached digest (MIP-1819).
+            thread_summary_cleanup.forget_edited_message(
+                message, old_body=old_body, old_body_text=old_body_text
+            )
 
             # Re-sync MessageMention rows from the new body. The simple
             # wipe-and-recreate approach is correct (set semantics) and
@@ -894,6 +904,7 @@ def rewrite_card_message(message, *, body, body_text, metadata=None, server_buil
         if isinstance(metadata, dict) or cleaned is not given:
             metadata = cleaned
     with transaction.atomic():
+        old_body, old_body_text = message.body, message.body_text
         message.body = body
         message.body_text = body_text
         message.edited_at = timezone.now()
@@ -902,6 +913,9 @@ def rewrite_card_message(message, *, body, body_text, metadata=None, server_buil
             message.metadata = metadata
             update_fields.append("metadata")
         message.save(update_fields=update_fields)
+        thread_summary_cleanup.forget_edited_message(
+            message, old_body=old_body, old_body_text=old_body_text
+        )
 
         # Re-sync MessageMention rows from the new card body (the card
         # @-mentions the assignee + reporter). Mirrors
