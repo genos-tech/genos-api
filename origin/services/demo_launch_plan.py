@@ -72,6 +72,7 @@ from origin.services.demo_blocks import _body, _text_body
 from origin.services.demo_seeder import (
     _acting_as,
     _backdate,
+    _backdate_comments,
     _backdate_each,
     _backdate_pm_channel,
     _create_milestone_with_backing_task,
@@ -637,9 +638,10 @@ def backdate_launch_plan(project: ProjectMaster, now: datetime) -> None:
     incremental reindex window and its freshness decay (`task_chunker` and `chat_chunker` read it;
     see the module comment above `demo_seeder._backdate`).
 
-    The one `ts_updated_at` that IS set is a comment's, to its own `ts_sent_at`: the comment bubble
-    shows "edited" when the two differ to the second. Nothing indexes it on its own: the task's
-    chunk carries the comments and the task is dirty (see above).
+    The one `ts_updated_at` that IS set is a comment's, to its own `ts_sent_at` (`_backdate_comments`):
+    the comment bubble shows "edited" when the two differ to the second. Why that is safe for the
+    index is in the module comment above `demo_seeder._backdate` (the task is dirty, so the comment
+    is re-emitted; only the comment chunk's own freshness decay moves).
     """
     tasks = list(TaskMaster.objects.filter(project=project, is_milestone=False).order_by("task_id"))
     count = len(tasks)
@@ -674,7 +676,7 @@ def backdate_launch_plan(project: ProjectMaster, now: datetime) -> None:
             logger.warning("launch plan task %s: comments and rows disagree", task.task_id)
         for row, comment in zip(commented, comments, strict=False):
             sent = stamps[row.pk]
-            TaskComments.objects.filter(pk=comment.pk).update(ts_sent_at=sent, ts_updated_at=sent)
+            _backdate_comments({comment.pk: sent})
 
     # The milestone, its backing task, the project and the channel predate the work.
     milestone_at = at(MILESTONE_DAYS)
