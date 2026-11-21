@@ -91,6 +91,26 @@ logger = logging.getLogger(__name__)
 #############################
 # Team Master views
 #############################
+def _field_errors(serializer) -> dict:
+    """The 400 body for a refused team (MIP-1847).
+
+    The field messages stay as the serializer words them (the app that matches on text keeps
+    working), and each one now comes with a stable `code`: DRF's own (`unique`, `blank`,
+    `required`, `invalid`, ...) or the one the view gives (`unique` for an address already in
+    use). `codes` has one per refused field. `field` and `code` name the first refused field in
+    the form's order, which is the one the app shows first. `hint` is only for a name error; it
+    used to be sent with every one.
+    """
+    errors = dict(serializer.errors)
+    # Each message is a DRF ErrorDetail, which carries the code it was raised with.
+    codes = {name: messages[0].code for name, messages in errors.items()}
+    first = next(iter(codes))
+    body = {**errors, "codes": codes, "field": first, "code": codes[first]}
+    if "team_name" in errors:
+        body["hint"] = "Try with different team_name"
+    return body
+
+
 class TeamMasterView(AuthenticatedAPIView):
     def post(self, request):
         """Create a team owned by the CALLER.
@@ -104,6 +124,14 @@ class TeamMasterView(AuthenticatedAPIView):
         app sends the caller's own id, but one naming anybody else is
         refused rather than ignored, so a confused or hostile client hears
         about it.
+
+        A refused request is a 400 that writes nothing. Its body names the field it is about in
+        `field`, with a stable `code` for it (also in `codes`, one per refused field): `unique`
+        (the name, or the address, is already in use), `blank`, `required`, `invalid` (not an
+        email address) and `max_length` for the team fields. A bad `departments` list is a 400
+        with `error` (its text), `code` and `field: "departments"`; `code` is one of
+        `departments_not_a_list`, `department_name_too_long`, `department_name_invalid`,
+        `too_many_departments`. A refused `owner_id` is a 400 with `error` only.
         """
         body = body_object(request)
 
@@ -119,9 +147,9 @@ class TeamMasterView(AuthenticatedAPIView):
         try:
             departments = parse_departments(body.get("departments"))
         except DepartmentsRefused as refused:
-            # `code` lets the app tell this refusal from the duplicate-name 400 below.
+            # `code` says which rule refused the list (MIP-1847); `error` keeps its text.
             return Response(
-                {"error": str(refused), "code": "invalid_departments"},
+                {"error": str(refused), "code": refused.code, "field": "departments"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -169,9 +197,7 @@ class TeamMasterView(AuthenticatedAPIView):
                 data["departments"] = summary
             return Response(data, status=status.HTTP_201_CREATED)
 
-        error = serializer.errors
-        error["hint"] = "Try with different team_name"
-        return Response(error, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_field_errors(serializer), status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request):
         """Update editable team-master fields: `team_name` and `owner_id`.

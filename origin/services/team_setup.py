@@ -81,8 +81,23 @@ COPY = {
 }
 
 
+# Stable codes for a refused department list (MIP-1847). The app chooses its line from these, so
+# they do not change with the wording of `error`.
+DEPARTMENTS_NOT_A_LIST = "departments_not_a_list"
+DEPARTMENT_NAME_TOO_LONG = "department_name_too_long"
+DEPARTMENT_NAME_INVALID = "department_name_invalid"
+TOO_MANY_DEPARTMENTS = "too_many_departments"
+
+
 class DepartmentsRefused(ValueError):
-    """The list of departments cannot be used; the message is shown to the person."""
+    """The list of departments cannot be used; the message is shown to the person.
+
+    `code` says which rule refused it (one of the constants above).
+    """
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
 
 
 def department_slug(name: str) -> str:
@@ -105,7 +120,7 @@ def parse_departments(raw) -> list[str]:
     if raw is None:
         return []
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
-        raise DepartmentsRefused("departments must be a list of names.")
+        raise DepartmentsRefused("departments must be a list of names.", DEPARTMENTS_NOT_A_LIST)
     names: list[str] = []
     seen: set[str] = set()
     for item in raw:
@@ -114,17 +129,22 @@ def parse_departments(raw) -> list[str]:
             continue
         if len(name) > MAX_NAME_LENGTH:
             raise DepartmentsRefused(
-                f"A department name can be at most {MAX_NAME_LENGTH} characters: {name[:20]}…"
+                f"A department name can be at most {MAX_NAME_LENGTH} characters: {name[:20]}…",
+                DEPARTMENT_NAME_TOO_LONG,
             )
         slug = department_slug(name)
         if not slug:
-            raise DepartmentsRefused(f"A department name needs a letter or a digit: {name}")
+            raise DepartmentsRefused(
+                f"A department name needs a letter or a digit: {name}", DEPARTMENT_NAME_INVALID
+            )
         if slug in seen:
             continue
         seen.add(slug)
         names.append(name)
     if len(names) > MAX_DEPARTMENTS:
-        raise DepartmentsRefused(f"At most {MAX_DEPARTMENTS} departments at a time.")
+        raise DepartmentsRefused(
+            f"At most {MAX_DEPARTMENTS} departments at a time.", TOO_MANY_DEPARTMENTS
+        )
     return names
 
 

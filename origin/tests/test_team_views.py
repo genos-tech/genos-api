@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework import status
 
-from origin.models.common.team_models import TeamMembers
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.tests.test_base import BaseAPITestCase
 
 User = get_user_model()
@@ -810,3 +810,69 @@ class TestTeamProfileImage(BaseAPITestCase):
         # The per-upload cache-buster is what keeps overwrite storage from
         # serving a stale cached team avatar.
         self.assertIn("?v=", self.team.profile_image_file_name)
+
+
+class TestTeamCreationErrorCodes(BaseAPITestCase):
+    """POST /api/v2/team/create/ says which field was refused and why, with a stable code.
+
+    The app (MIP-1841, MIP-1847) chooses its message from `field` and `code`, not from the English
+    text. The field messages and `hint` stay as they were for the app that matches on text.
+    """
+
+    URL = "/api/v2/team/create/"
+
+    def _post(self, **body):
+        self.authenticate()
+        payload = {"team_name": "Fresh Team", "team_email": "fresh@test.com"}
+        payload.update(body)
+        return self.client.post(self.URL, payload, format="json")
+
+    def test_a_taken_name_is_unique_on_team_name(self):
+        response = self._post(team_name="Test Team")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["field"], "team_name")
+        self.assertEqual(response.data["code"], "unique")
+        self.assertEqual(response.data["codes"], {"team_name": "unique"})
+        self.assertIn("team master with this team name already exists.", response.data["team_name"])
+        self.assertEqual(response.data["hint"], "Try with different team_name")
+
+    def test_a_blank_name_is_blank_on_team_name(self):
+        response = self._post(team_name="")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["field"], "team_name")
+        self.assertEqual(response.data["code"], "blank")
+        self.assertEqual(response.data["codes"], {"team_name": "blank"})
+        self.assertEqual(response.data["team_name"], ["This field may not be blank."])
+
+    def test_a_refused_address_is_invalid_on_team_email(self):
+        response = self._post(team_email="not-an-address")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["field"], "team_email")
+        self.assertEqual(response.data["code"], "invalid")
+        self.assertEqual(response.data["codes"], {"team_email": "invalid"})
+        self.assertEqual(response.data["team_email"], ["Enter a valid email address."])
+
+    def test_an_address_already_in_use_is_unique_on_team_email(self):
+        first = self._post(team_name="First Team", team_email="shared@test.com")
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+
+        response = self._post(team_name="Second Team", team_email="shared@test.com")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["field"], "team_email")
+        self.assertEqual(response.data["code"], "unique")
+        self.assertEqual(response.data["codes"], {"team_email": "unique"})
+
+    def test_the_hint_is_only_for_a_team_name_error(self):
+        response = self._post(team_email="not-an-address")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertNotIn("hint", response.data)
+
+    def test_a_refused_request_still_writes_nothing(self):
+        before = TeamMaster.objects.count()
+        self._post(team_name="Test Team")
+        self.assertEqual(TeamMaster.objects.count(), before)
