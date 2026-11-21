@@ -257,6 +257,8 @@ class ProjectListPayloadTests(CrossTeamTestCase):
             "projectLabels": list(labels),
             "isPrivate": project.is_private,
             "isJoined": joined,
+            "archived": False,
+            "archivedAt": None,
             "systemUserId": str(system_user.id),
         }
         if external:

@@ -633,6 +633,10 @@ class ProjectsView(AuthenticatedAPIView):
                 "projectLabels": project_labels[project.project_id],
                 "isPrivate": project.is_private,
                 "isJoined": project.is_joined,
+                # Archived projects come back only with `include_archived=true` (MIP-1693); the
+                # row says so itself (MIP-1853), so the client needs no second request.
+                "archived": project.archived_at is not None,
+                "archivedAt": project.archived_at.isoformat() if project.archived_at else None,
                 # The FK column, not `project_system_user.id`: that loaded
                 # the user once per project. Null (a deleted system user)
                 # reads as null rather than failing the whole list.
