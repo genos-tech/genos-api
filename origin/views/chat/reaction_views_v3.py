@@ -24,6 +24,7 @@ from origin.serializers.chat.unified_serializers import (
     MessageReactionSerializer,
 )
 from origin.services import v3_activity
+from origin.services.archive import archived_channel_response
 from origin.services.channel_scope import is_chat_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import body_object
@@ -61,6 +62,8 @@ class MessageReactionsView(AuthenticatedAPIView):
 
     def post(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
+        if res := archived_channel_response(message.channel):
+            return res
         emoji = body_object(request).get("emoji")
         if not emoji or not isinstance(emoji, str):
             return Response(
@@ -107,6 +110,8 @@ class MessageReactionsView(AuthenticatedAPIView):
 
     def delete(self, request, message_id):
         message = _verify_message_member(message_id, request.user)
+        if res := archived_channel_response(message.channel):
+            return res
         emoji = body_object(request).get("emoji")
         if not emoji or not isinstance(emoji, str):
             return Response(

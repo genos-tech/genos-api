@@ -1156,6 +1156,8 @@ class TaskMasterView(AuthenticatedAPIView):
         # walkable integer task id destroyed another tenant's task.
         if not can_access_task(data["task_id"], request.user.id):
             return Response({"error": "Task not found."}, status=status.HTTP_404_NOT_FOUND)
+        if res := archived_task_response(data["task_id"]):
+            return res
 
         try:
             task = TaskMaster.objects.get(
@@ -2335,6 +2337,8 @@ class TaskAttachmentsView(AuthenticatedAPIView):
 
         if not can_access_task(task, request.user.id):
             return _no_task()
+        if res := archived_task_response(task):
+            return res
 
         original_name = ""
         if attached_file is not None:
@@ -2422,6 +2426,8 @@ class TaskAttachmentsView(AuthenticatedAPIView):
         # file taken off a task nobody can see is a delete nobody can look at or undo.
         if not can_access_task(task, request.user.id):
             return _no_task()
+        if res := archived_task_response(task):
+            return res
 
         try:
             attachment = TaskAttachments.objects.get(task=task, attachment_id=attachment_id)
@@ -2608,6 +2614,8 @@ class TaskCommentsView(AuthenticatedAPIView):
 
         if not can_access_task(task_id, request.user.id):
             return _no_task()
+        if res := archived_task_response(task_id):
+            return res
         message = _own_comment(request, task_id, comment_id)
         if message is None:
             return Response({"error": "Comment not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -2674,6 +2682,8 @@ class TaskCommentsView(AuthenticatedAPIView):
             )
         if not can_access_task(task_id, request.user.id):
             return _no_task()
+        if res := archived_task_response(task_id):
+            return res
         comment = _own_comment(request, task_id, comment_id, allow_deleted=True)
         if comment is None:
             return Response(
@@ -2851,6 +2861,8 @@ class TaskCommentReactionView(AuthenticatedAPIView):
         # time the rest are asked for it is there.
         if not can_access_task(body.get("task_id"), request.user.id):
             return _no_task()
+        if res := archived_task_response(body.get("task_id")):
+            return res
         if res := require_fields(body, "comment_id", "reaction_emoji"):
             return res
         # A comment id is a number. Text, a list or an object here was a ValueError or a
@@ -2936,6 +2948,8 @@ class TaskCommentReactionView(AuthenticatedAPIView):
 
         if not can_access_task(task_id, request.user.id):
             return _no_task()
+        if res := archived_task_response(task_id):
+            return res
         # A comment id is a number, as on the POST above. `int()` of text was a ValueError (500).
         comment_id = as_int(raw_comment_id)
         if comment_id is None:
