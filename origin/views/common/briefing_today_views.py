@@ -15,6 +15,10 @@ and "waits on me" have one definition and the page and Claude can never disagree
   `since` (an ISO time the page remembers, up to 31 days back) or, without it, the local day so far.
 * One extra query turns task ids into project ids (and task-note ids into their task), because a
   link in the app needs them and the briefing names only the task. The page builds the path.
+* Every English sentence the briefing builds (`latest.summary`, `reasons`) comes with the same
+  facts as data (`latest.data`: a `code` and its parts; `reasonCodes`), so the page says it in the
+  viewer's language and uses the sentence only for a code it does not know (MIP-1936). The MCP
+  tool never gets these (`structured` is off there).
 * Keys are camelCase, titles and texts are the words (the briefing's fence is removed), and every
   refusal is one `{"error": "<sentence>"}`.
 """
@@ -81,7 +85,9 @@ def _change(item: dict[str, Any]) -> dict[str, Any]:
     out = {k: item[k] for k in keep if k in item}
     # The latest word, as a person reads it: who, what, and a short quote when there is one.
     last = (item.get("events") or [{}])[-1]
-    out["latest"] = {k: last[k] for k in ("at", "what", "summary", "by", "text") if k in last}
+    out["latest"] = {
+        k: last[k] for k in ("at", "what", "summary", "by", "text", "data") if k in last
+    }
     return out
 
 
@@ -167,6 +173,7 @@ class BriefingTodayView(AuthenticatedAPIView):
                 window="today",
                 since=since,
                 project_id=request.query_params.get("project_id") or None,
+                structured=True,
             )
         except ToolError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -192,7 +199,11 @@ class BriefingTodayView(AuthenticatedAPIView):
                 "truncated": changed["truncated"],
             },
             "suggestedNext": [
-                {**_task_rows([r])[0], "reasons": r.get("reasons", [])}
+                {
+                    **_task_rows([r])[0],
+                    "reasons": r.get("reasons", []),
+                    "reason_codes": r.get("reason_codes", []),
+                }
                 for r in data["suggested_next"]
             ],
             "blocked": [

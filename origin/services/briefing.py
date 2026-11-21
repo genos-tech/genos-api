@@ -154,6 +154,22 @@ _KIND_OF_ACTION = {
     TaskActivityActionType.PR_COMMENT_ADDED: "pr",
     TaskActivityActionType.PR_UNLINKED: "pr",
 }
+# The same fields as stable keys for a page to translate (`_FIELD_LABEL` is the English word).
+_FIELD_KEY = {
+    action: label.replace(" ", "_")
+    for action, label in {
+        TaskActivityActionType.TITLE: "title",
+        TaskActivityActionType.STATUS: "status",
+        TaskActivityActionType.PRIORITY: "priority",
+        TaskActivityActionType.EFFORT: "effort",
+        TaskActivityActionType.ASSIGNEE: "assignee",
+        TaskActivityActionType.REPORTER: "reporter",
+        TaskActivityActionType.DUE_DATE: "due date",
+        TaskActivityActionType.START_DATE: "start date",
+        TaskActivityActionType.MILESTONE_LINK: "milestone",
+        TaskActivityActionType.SPRINT_LINK: "sprint",
+    }.items()
+}
 _FIELD_LABEL = {
     TaskActivityActionType.TITLE: "title",
     TaskActivityActionType.STATUS: "status",
@@ -312,25 +328,41 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
         if str(new) == me:
             kind = "assigned_to_you"
             summary = "assigned this to you"
+            data = {"code": "assigned_to_you"}
         else:
             summary = "changed the assignee"
+            data = {"code": "assignee_changed"}
     elif label and (old is not None or new is not None):
         summary = f"{label}: {_short(old) or '—'} → {_short(new) or '—'}"
+        data = {
+            "code": "field_changed",
+            "field": _FIELD_KEY[action],
+            "old": _short(old) or None,
+            "new": _short(new) or None,
+        }
     elif action == TaskActivityActionType.CREATED:
         summary = "created it"
+        data = {"code": "created"}
     elif action == TaskActivityActionType.DESCRIPTION:
         summary = "edited the description"
+        data = {"code": "description_edited"}
     elif action == TaskActivityActionType.PR_LINKED:
         title = (row.metadata or {}).get("pr_title") or (row.metadata or {}).get("title")
         summary = "linked a PR" + (f": {_short(title)}" if title else "")
+        data = {"code": "pr_linked", "title": _short(title) if title else None}
     elif action == TaskActivityActionType.PR_COMMENT_ADDED:
         summary = "commented on the PR"
+        data = {"code": "pr_commented"}
     elif action == TaskActivityActionType.PR_UNLINKED:
         summary = "unlinked a PR"
+        data = {"code": "pr_unlinked"}
     elif action == TaskActivityActionType.CUSTOM_FIELD:
-        summary = f"changed {_short((row.metadata or {}).get('field_name') or 'a custom field')}"
+        name = (row.metadata or {}).get("field_name")
+        summary = f"changed {_short(name or 'a custom field')}"
+        data = {"code": "custom_field_changed", "name": _short(name) if name else None}
     else:
         summary = row.get_action_type_display().lower()
+        data = {"code": "other"}
     if row.actor_id:
         actor, label_for_none = row.actor_id, None
     else:
@@ -344,6 +376,7 @@ def _activity_event(row: TaskActivity, me: str, names: _Names) -> dict[str, Any]
         # asked to be closed that way). Not a person, so not "what others did" (MIP-1142).
         "automated": row.actor_id is None,
         "summary": summary,
+        "_data": data,
     }
 
 
@@ -465,6 +498,7 @@ def _changed_tasks(
                     "kind": "comment",
                     "_actor": c.sender_id,
                     "summary": "commented",
+                    "_data": {"code": "comment"},
                     "_text": _snippet(body_text(c.comment_body)),
                 }
             )
@@ -545,6 +579,7 @@ def _changed_threads(ctx: ToolContext, win: Window, names: _Names) -> list[dict[
                 "kind": "reply",
                 "_actor": m.sender_id,
                 "summary": "replied",
+                "_data": {"code": "reply"},
                 "_text": _snippet(message_text(m)),
             }
         )
@@ -752,6 +787,7 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
                     if v.restored_from_version_no
                     else "edited the note"
                 ),
+                "_data": {"code": "note_restored" if v.restored_from_version_no else "note_edited"},
             }
         )
     for note in notes.values():
@@ -759,7 +795,9 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
     return list(notes.values())
 
 
-def _finish_items(items: list[dict[str, Any]], names: _Names) -> list[dict[str, Any]]:
+def _finish_items(
+    items: list[dict[str, Any]], names: _Names, structured: bool = False
+) -> list[dict[str, Any]]:
     """Heat, order and cap: the items with the most going on first, each as a story in
     time order. The first few tell it in detail, the rest give the latest word."""
     for item in items:
@@ -780,6 +818,8 @@ def _finish_items(items: list[dict[str, Any]], names: _Names) -> list[dict[str, 
                 "what": e["kind"] if e["kind"] != "other" else "change",
                 "summary": e["summary"],
             }
+            if structured and e.get("_data"):
+                event["data"] = e["_data"]
             if e.get("_text"):
                 event["text"] = wrap_workspace_content(e["_text"])
             if e.get("automated"):
@@ -793,7 +833,11 @@ def _finish_items(items: list[dict[str, Any]], names: _Names) -> list[dict[str, 
 
 
 def changed_for_me(
-    ctx: ToolContext, win: Window, project_id: int | None, names: _Names
+    ctx: ToolContext,
+    win: Window,
+    project_id: int | None,
+    names: _Names,
+    structured: bool = False,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """What other people did on the caller's things in the window:
     `(items, total, automated_only)`.
@@ -810,7 +854,7 @@ def changed_for_me(
         items += _changed_threads(ctx, win, names)
         items += _changed_notes(ctx, win, names)
     total = len(items)
-    return _finish_items(items, names), total, len(automated_only)
+    return _finish_items(items, names, structured), total, len(automated_only)
 
 
 # --------------------------------------------------------------------------- #
@@ -1757,6 +1801,17 @@ def _activity_reason(kinds: list[str], since_text: str) -> str:
     return f"{' and '.join(parts)} from others since {since_text}"
 
 
+def _activity_code(kinds: list[str], since: datetime) -> dict[str, Any]:
+    """`_activity_reason` as numbers: comments and other changes by others since `since`."""
+    comments = sum(1 for k in kinds if k in ("comment", "reply"))
+    return {
+        "code": "activity",
+        "comments": comments,
+        "changes": len(kinds) - comments,
+        "since": since.isoformat(),
+    }
+
+
 def _suggestion_pool(
     ctx: ToolContext, items: list[dict[str, Any]], project_id: int | None
 ) -> list[TaskMaster]:
@@ -1778,6 +1833,7 @@ def important_next(
     items: list[dict[str, Any]],
     project_id: int | None,
     week: Any,
+    structured: bool = False,
 ) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None, set[int]]:
     """`(top, importance block, excluded)` (MIP-1087): the top few ranked by what the member's
     activity says matters to them (`services/importance.py`: priority, due date and status are
@@ -1797,7 +1853,10 @@ def important_next(
         top = scored[: importance.TOP_BRIEFING]
         people = importance.people_counts(ctx, now, [s.task for s in top])
         today = now.astimezone(zone).date()
-        shown = [importance.shaped(s, _task_row(s.task, today), people) for s in top]
+        shown = [
+            importance.shaped(s, _task_row(s.task, today), people, structured=structured)
+            for s in top
+        ]
         found = importance.suggestions(ctx, now, prefs, week, pool, scored, live)
         return shown, importance.briefing_block(prefs, found), importance.excluded(prefs)
     except Exception:  # noqa: BLE001 - what matters to the member never fails a briefing
@@ -1813,6 +1872,7 @@ def suggested_next(
     items: list[dict[str, Any]],
     project_id: int | None,
     exclude: set[int] | frozenset[int] = frozenset(),
+    structured: bool = False,
 ) -> list[dict[str, Any]]:
     """The top few things to look at, with why. `exclude` is the tasks the member marked not
     important (MIP-1087): left out, and nothing else about the ranking changes.
@@ -1828,35 +1888,46 @@ def suggested_next(
     since_text = win.since.astimezone(zone).strftime("%b %-d %H:%M")
     scored = []
     for task in pool:
-        score, reasons = 0, []
+        score, reasons, codes = 0, [], []
         if task.due_date is not None:
             days = (task.due_date - today).days
             if days < 0:
                 score += 30 + min(-days, 10)
                 reasons.append(f"overdue by {_plural(-days, 'day')}")
+                codes.append({"code": "overdue", "days": -days})
             elif days == 0:
                 score += 25
                 reasons.append("due today")
+                codes.append({"code": "due_today"})
             elif days == 1:
                 score += 8
                 reasons.append("due tomorrow")
+                codes.append({"code": "due_tomorrow"})
         seen = activity.get(task.task_id)
         if seen:
             score += min(seen["heat"] * 4, 40)
             reasons.append(_activity_reason(seen["_kinds"], since_text))
+            codes.append(_activity_code(seen["_kinds"], win.since))
         if task.status == "Blocked":
             score -= 10
             reasons.append("currently Blocked: clear what blocks it first")
+            codes.append({"code": "blocked"})
         hint = _PRIORITY_HINT.get(task.priority or "", 0)
         if hint and score > 0:
             score += hint
             reasons.append(f"priority {task.priority}")
+            codes.append({"code": "priority", "priority": task.priority})
         if score > 0:
-            scored.append((score, task, reasons))
+            scored.append((score, task, reasons, codes))
     scored.sort(key=lambda s: (-s[0], -(s[1].ts_updated_at.timestamp())))
     return [
-        {**_task_row(task, today), "score": score, "reasons": reasons}
-        for score, task, reasons in scored[:SUGGESTIONS]
+        {
+            **_task_row(task, today),
+            "score": score,
+            "reasons": reasons,
+            **({"reason_codes": codes} if structured else {}),
+        }
+        for score, task, reasons, codes in scored[:SUGGESTIONS]
     ]
 
 
@@ -1872,14 +1943,18 @@ def build_briefing(
     since: Any = None,
     project_id: Any = None,
     now: datetime | None = None,
+    structured: bool = False,
 ) -> dict[str, Any]:
+    """`structured` (the Today page, MIP-1936) adds, beside every English sentence, the same
+    facts as data (`events[].data`, `suggested_next[].reason_codes`) so a page can say them in
+    the member's language. Off by default: what the MCP tool returns is unchanged."""
     now = now or timezone.now()
     zone = zone_for_user_id(ctx.user_id)
     project = _check_project(ctx, project_id)
     win = resolve_window(ctx, window, since, now, zone)
     names = _Names(ctx)
 
-    items, total_changed, automated_only = changed_for_me(ctx, win, project, names)
+    items, total_changed, automated_only = changed_for_me(ctx, win, project, names, structured)
     me = CustomUser.objects.filter(id=ctx.user_id).first()
     team = TeamMaster.objects.filter(team_id=ctx.team_id).first()
     agenda_section = agenda(ctx, now, zone, project)
@@ -1897,11 +1972,13 @@ def build_briefing(
     from origin.services import item_activity  # noqa: PLC0415 - it reads item_lines, which reads this module
 
     activity, week = item_activity.briefing_data(ctx, now)
-    ranked, importance_block, excluded = important_next(ctx, now, zone, items, project, week)
+    ranked, importance_block, excluded = important_next(
+        ctx, now, zone, items, project, week, structured
+    )
     suggestions = (
         ranked
         if ranked is not None
-        else suggested_next(ctx, now, zone, win, items, project, excluded)
+        else suggested_next(ctx, now, zone, win, items, project, excluded, structured)
     )
     did = what_you_did(ctx, now, zone, names)
 
