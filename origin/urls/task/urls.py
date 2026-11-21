@@ -29,6 +29,12 @@ from origin.views.task.task_activity_views import (
     TaskVelocityView,
 )
 from origin.views.task.task_delivery_views import TaskDeliveryListView
+from origin.views.task.task_import_views import (
+    TaskImportPreviewView,
+    TaskImportRunsView,
+    TaskImportUndoView,
+    TaskImportView,
+)
 from origin.views.task.task_progress_views import TaskProgressListView
 from origin.views.task.task_recent_views import RecentTasksView, RecordTaskOpenView
 from origin.views.task.task_views import *
@@ -41,6 +47,26 @@ from origin.views.task.task_views import *
 # `test_route_methods` holds every route here to that.
 urlpatterns = [
     path("api/v2/task/", TaskMasterView.as_view(), name="task_create"),
+    path(
+        "api/v2/task/import/preview/",
+        TaskImportPreviewView.as_view(http_method_names=["post", "options"]),
+        name="task_import_preview",
+    ),
+    path(
+        "api/v2/task/import/",
+        TaskImportView.as_view(http_method_names=["post", "options"]),
+        name="task_import",
+    ),
+    path(
+        "api/v2/task/import/runs/",
+        TaskImportRunsView.as_view(http_method_names=["get", "options"]),
+        name="task_import_runs",
+    ),
+    path(
+        "api/v2/task/import/runs/<uuid:run_id>/undo/",
+        TaskImportUndoView.as_view(http_method_names=["get", "post", "options"]),
+        name="task_import_undo",
+    ),
     path("api/v2/task/meta/", TaskMetaView.as_view(), name="task_meta"),
     path("api/v2/task/getTeamTasks/", GetTeamTasksView.as_view(), name="get_team_tasks"),
     path(

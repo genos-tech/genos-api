@@ -1,0 +1,10 @@
+﻿Summary,Issue key,Issue id,Issue Type,Status,Priority,Assignee,Reporter,Created,Due date,Description,Labels,Labels,Sprint,Parent id
+Set up the pipeline,DEMO-1,10001,Epic,To Do,High,,rita@example.com,21/Nov/26 9:15 AM,30/Nov/26 12:00 AM,"Build the CI pipeline.
+
+- lint
+- test",backend,infra,Sprint 1,
+Write the login page,DEMO-2,10002,Story,In Progress,Highest,dev1@example.com,rita@example.com,21/Nov/26 9:20 AM,,Login form,frontend,,Sprint 1,10001
+Fix typo in footer,DEMO-3,10003,Bug,Done,Low,nobody@elsewhere.test,rita@example.com,22/Nov/26 10:00 AM,25/Nov/26 12:00 AM,,,,,10001
+=HYPERLINK("http://evil.test"),DEMO-4,10004,Task,Blocked,Medium,,rita@example.com,22/Nov/26 10:05 AM,,Formula-looking title,,,,
+,DEMO-5,10005,Task,To Do,Medium,,rita@example.com,22/Nov/26 10:06 AM,,A row with no summary,,,,
+Orphan child,DEMO-6,10006,Sub-task,Weird Status,Mystery,,rita@example.com,22/Nov/26 10:07 AM,,,,,,99999
