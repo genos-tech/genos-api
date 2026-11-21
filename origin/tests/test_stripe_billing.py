@@ -944,6 +944,87 @@ class SubscriptionOverviewTests(BillingTestBase):
             res = self.client.get(SUBSCRIPTION_URL)
         self.assertEqual(res.status_code, 503)
 
+    @staticmethod
+    def _schedule_mock(*phases, sched_id="sub_sched_1"):
+        """A REAL SDK SubscriptionSchedule: Stripe's portal creates one when
+        a downgrade is scheduled at period end (phase 1 = current plan,
+        phase 2 = the lower plan starting at the period end)."""
+        import stripe  # noqa: PLC0415
+
+        payload = {
+            "id": sched_id,
+            "object": "subscription_schedule",
+            "status": "active",
+            "phases": [{"start_date": p[0], "items": [{"price": p[1]}]} for p in phases],
+        }
+        return mock.patch(
+            "stripe.SubscriptionSchedule.retrieve",
+            return_value=stripe.SubscriptionSchedule.construct_from(payload, "sk_test_x"),
+        )
+
+    def _scheduled_sub(self, price="price_pro_123", sched_id="sub_sched_1"):
+        sub = self._sub(price=price)
+        sub["schedule"] = sched_id
+        return sub
+
+    def test_scheduled_downgrade_reports_pending_plan_and_date(self):
+        """Pro stays until the period end; the overview says Core starts then."""
+        self._bind()
+        with (
+            self._list_mock(self._scheduled_sub(price="price_pro_123")),
+            self._schedule_mock(
+                (1700000000, "price_pro_123"), (1900000000, "price_core_789")
+            ) as retrieve,
+        ):
+            o = stripe_billing.subscription_overview(self.user)
+        retrieve.assert_called_once_with("sub_sched_1")
+        self.assertEqual(o["plan"], "pro")
+        self.assertEqual(o["pending_plan"], "core")
+        self.assertEqual(o["pending_change_at"], 1900000000)
+
+    def test_no_schedule_no_pending_and_no_schedule_read(self):
+        self._bind()
+        with (
+            self._list_mock(self._sub(price="price_pro_123")),
+            mock.patch("stripe.SubscriptionSchedule.retrieve") as retrieve,
+        ):
+            o = stripe_billing.subscription_overview(self.user)
+        retrieve.assert_not_called()
+        self.assertIsNone(o["pending_plan"])
+        self.assertIsNone(o["pending_change_at"])
+
+    def test_schedule_phase_on_same_plan_is_not_a_pending_change(self):
+        self._bind()
+        with (
+            self._list_mock(self._scheduled_sub(price="price_pro_123")),
+            self._schedule_mock((1700000000, "price_pro_123"), (1900000000, "price_pro_123")),
+        ):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertIsNone(o["pending_plan"])
+        self.assertIsNone(o["pending_change_at"])
+
+    def test_schedule_with_unmapped_next_price_is_not_shown(self):
+        self._bind()
+        with (
+            self._list_mock(self._scheduled_sub(price="price_pro_123")),
+            self._schedule_mock((1700000000, "price_pro_123"), (1900000000, "price_dashboard_x")),
+        ):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertIsNone(o["pending_plan"])
+        self.assertEqual(o["plan"], "pro")
+
+    def test_schedule_read_failure_keeps_the_plan_row(self):
+        """The schedule lookup is decoration: a failure hides only the
+        pending line, never the renewal row or the plan."""
+        self._bind()
+        with (
+            self._list_mock(self._scheduled_sub(price="price_pro_123")),
+            mock.patch("stripe.SubscriptionSchedule.retrieve", side_effect=RuntimeError("down")),
+        ):
+            o = stripe_billing.subscription_overview(self.user)
+        self.assertEqual(o["plan"], "pro")
+        self.assertIsNone(o["pending_plan"])
+
 
 @override_settings(STRIPE={**STRIPE_TEST_SETTINGS, "SECRET_KEY": "pk_live_x"})
 class WrongKeyKindTests(BillingTestBase):
