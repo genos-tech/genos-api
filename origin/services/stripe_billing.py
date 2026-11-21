@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 from django.conf import settings
 from django.core.cache import cache
@@ -1310,11 +1311,20 @@ def subscription_overview(user: CustomUser) -> dict | None:
           "cancel_at_period_end": bool,
           "current_period_end": <unix ts> | None,
           "cancel_at": <unix ts> | None,
+          "pending_plan": "core" | "pro" | "max" | None,  # a downgrade/change scheduled
+          "pending_change_at": <unix ts> | None,          # for the period end
         }
+
+    A plan change scheduled at period end (the portal's
+    `schedule_at_period_end` downgrade) leaves `plan` on the CURRENT
+    price until the renewal: Stripe keeps the old price on the
+    subscription and attaches a subscription schedule, so the pending
+    plan is read from that schedule (a GET; nothing is written).
     """
     if not billing_enabled() or not user.stripe_customer_id:
         return None
-    best = _best_live_subscription(_stripe(), user.stripe_customer_id)
+    stripe = _stripe()
+    best = _best_live_subscription(stripe, user.stripe_customer_id)
     if best is None:
         return None
     items = (best.get("items") or {}).get("data") or []
@@ -1323,13 +1333,53 @@ def subscription_overview(user: CustomUser) -> dict | None:
     # subscription ITEMS; the top-level read is the fallback for
     # accounts pinned to older API versions.
     period_end = first_item.get("current_period_end") or best.get("current_period_end")
+    plan = tier_for_price(_subscription_price_id(best))
+    pending_plan, pending_at = _pending_plan_change(stripe, best, plan)
     return {
-        "plan": tier_for_price(_subscription_price_id(best)),
+        "plan": plan,
         "status": best.get("status"),
         "cancel_at_period_end": bool(best.get("cancel_at_period_end")),
         "current_period_end": period_end,
         "cancel_at": best.get("cancel_at"),
+        "pending_plan": pending_plan,
+        "pending_change_at": pending_at,
     }
+
+
+def _pending_plan_change(stripe, subscription: dict, current_plan: str | None):
+    """(plan, unix start) of the next plan change on a scheduled subscription.
+
+    Only a subscription with a `schedule` can have one. The next phase
+    whose start is still in the future is the change; a phase that
+    keeps the current plan, or a price we don't map, is not shown. A
+    failed schedule read degrades to "nothing pending": the plan row
+    must still render, and the renewal date comes from the subscription.
+    """
+    schedule = subscription.get("schedule")
+    schedule_id = schedule.get("id") if isinstance(schedule, dict) else schedule
+    if not schedule_id:
+        return None, None
+    try:
+        sched = json.loads(str(stripe.SubscriptionSchedule.retrieve(schedule_id)))
+    except Exception:  # noqa: BLE001
+        log.warning("could not read subscription schedule %s", schedule_id, exc_info=True)
+        return None, None
+    now = time.time()
+    upcoming = sorted(
+        (p for p in (sched.get("phases") or []) if (p or {}).get("start_date", 0) > now),
+        key=lambda p: p["start_date"],
+    )
+    if not upcoming:
+        return None, None
+    phase = upcoming[0]
+    items = phase.get("items") or []
+    price = ((items[0] or {}).get("price")) if items else None
+    if isinstance(price, dict):
+        price = price.get("id")
+    plan = tier_for_price(price)
+    if plan is None or plan == current_plan:
+        return None, None
+    return plan, phase["start_date"]
 
 
 # --------------------------------------------------------------------------- #
