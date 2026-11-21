@@ -124,6 +124,9 @@ SUBJECTS: dict[str, tuple[str, str]] = {
     "comment_on_note": ("note", "note_id"),
     "reply_to_note_comment": ("note", "note_id"),
     "resolve_note_comment": ("note", "note_id"),
+    "comment_on_task_body": ("task", "task_id"),
+    "reply_to_task_body_comment": ("task", "task_id"),
+    "resolve_task_body_comment": ("task", "task_id"),
     "manage_note_sharing": ("note", "note_id"),
     "delete_note": ("note", "note_id"),
     # chat

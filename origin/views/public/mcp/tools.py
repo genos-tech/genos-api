@@ -2746,6 +2746,7 @@ OVERWRITE_TOOLS = frozenset(
         "update_todo_item",
         "update_my_schedule",
         "resolve_note_comment",  # settles a thread; the editor can reopen it
+        "resolve_task_body_comment",  # settles a thread on a task body; the editor can reopen it
         "set_item_importance",  # replaces the member's mark on one task
         "tune_my_importance",  # replaces how a signal counts
     }
@@ -2767,6 +2768,8 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "manage_project_labels",
         "comment_on_note",  # adds a thread and marks the words it is about; no text changes
         "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
+        "comment_on_task_body",  # adds a thread on a task body and marks its words; no text changes
+        "reply_to_task_body_comment",  # adds one comment to a task body thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
     }
 )
