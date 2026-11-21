@@ -167,10 +167,15 @@ class ListingPathTests(HiddenBase):
         self.authenticate(self.user2)
         res = self.client.get("/api/v2/team/invites/", {"team_id": str(self.team.team_id)})
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(res.json()["invites"][0]["projectName"], "Hidden project")
+        invite = res.json()["invites"][0]
+        self.assertIsNone(invite["projectName"])
+        self.assertTrue(invite["projectHidden"])
+        self.assertNotIn("Codename Falcon", res.content.decode())
         self.authenticate(self.user)
         res = self.client.get("/api/v2/team/invites/", {"team_id": str(self.team.team_id)})
-        self.assertEqual(res.json()["invites"][0]["projectName"], "Codename Falcon")
+        invite = res.json()["invites"][0]
+        self.assertEqual(invite["projectName"], "Codename Falcon")
+        self.assertFalse(invite["projectHidden"])
 
     def test_the_directory_never_lists_a_hidden_chat(self):
         # The directory (MIP-1694) lists public chats only; this pins that a hidden chat, which is
