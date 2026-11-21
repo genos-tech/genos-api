@@ -165,9 +165,8 @@ _ORGANISING_EN = _body(
         "What is not there yet",
         [
             "So that nothing surprises you: today a project cannot be archived (only deleted), "
-            "a group chat can be left but not deleted, there is no list of all group chats to "
-            "browse (search by name), and the task dashboard shows one project at a time. The "
-            "habits above work around each of these.",
+            "there is no list of all group chats to browse (search by name), and the task "
+            "dashboard shows one project at a time. The habits above work around each of these.",
         ],
     ),
     (
@@ -177,7 +176,8 @@ _ORGANISING_EN = _body(
             "already have one: "
             "the tag “Sample dept”, @sample-dept, the “Sample dept” folders, two projects and "
             "two group chats. Open the note “How the sample dept keeps its work tidy” in Team "
-            "Notes, copy what is useful, and delete the rest.",
+            "Notes, copy what is useful, and delete the rest. To remove all of the sample data at "
+            "once, the owner opens Team Profile and chooses Remove sample data.",
         ],
     ),
 )
@@ -389,9 +389,9 @@ _ORGANISING_JA = _body(
         "まだできないこと",
         [
             "驚かないように書いておきます。今のところ、プロジェクトはアーカイブできず（削除のみ）、"
-            "グループチャットは退出できても削除はできず、すべてのグループチャットを一覧で見る"
-            "画面はなく（名前で検索します）、タスクのダッシュボードは一度にひとつのプロジェクト"
-            "しか表示しません。上の習慣は、これらを補うものです。",
+            "すべてのグループチャットを一覧で見る画面はなく（名前で検索します）、"
+            "タスクのダッシュボードは一度にひとつのプロジェクトしか表示しません。"
+            "上の習慣は、これらを補うものです。",
         ],
     ),
     (
@@ -401,7 +401,8 @@ _ORGANISING_JA = _body(
             "すでに用意されています。"
             "タグ「サンプル部署」、@sample-dept、「サンプル部署」フォルダ、プロジェクト2つ、"
             "グループチャット2つです。チームノートの「サンプル部署の仕事の整理のしかた」を"
-            "開き、役立つものは真似して、残りは削除してください。",
+            "開き、役立つものは真似して、残りは削除してください。"
+            "まとめて消すには、オーナーがチームプロフィールを開いて「サンプルデータを削除」を選びます。",
         ],
     ),
 )
