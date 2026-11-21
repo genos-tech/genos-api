@@ -11,6 +11,7 @@ size, rows, quota) hold.
 from pathlib import Path
 from unittest import mock
 
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from rest_framework import status
@@ -21,6 +22,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.services import task_import
 from origin.tests.test_base import BaseAPITestCase
 
+User = get_user_model()
 FIXTURES = Path(__file__).parent / "fixtures" / "task_import"
 PREVIEW = "/api/v2/task/import/preview/"
 COMMIT = "/api/v2/task/import/"
@@ -73,6 +75,15 @@ class TaskImportPureTests(BaseAPITestCase):
     def test_title_formula_prefix_is_stripped(self):
         self.assertEqual(task_import.clean_title('=HYPERLINK("x")'), 'HYPERLINK("x")')
         self.assertEqual(task_import.clean_title("  +1 call"), "1 call")
+        self.assertEqual(task_import.clean_title("-- draft"), "-- draft")
+
+    def test_priority_none_override(self):
+        self.assertEqual(task_import.map_priority("High", {"high": "none"}), (None, None))
+
+    def test_parse_stops_at_the_row_cap_even_for_blank_lines(self):
+        with self.assertRaises(task_import.ImportError_) as ctx:
+            task_import.parse("title\n" + "\n" * (task_import.MAX_ROWS + 5))
+        self.assertEqual(ctx.exception.code, "too_many_rows")
 
 
 class TaskImportApiCase(BaseAPITestCase):
@@ -322,3 +333,60 @@ class TaskImportUndoTests(TaskImportApiCase):
         ProjectMembers.objects.filter(attendee=self.user2).delete()
         self.authenticate(self.user2)
         self.assertEqual(self.client.post(self.url).status_code, 404)
+
+
+class TaskImportReviewTests(TaskImportApiCase):
+    def commit(self, name, **extra):
+        with mock.patch("origin.services.task_import.invalidate_project_tasks_cache"):
+            return self.post(COMMIT, name, **extra)
+
+    def test_unknown_and_non_member_email_give_the_same_warning(self):
+        outsider = User.objects.create_user(
+            username="outsider", email="out@elsewhere.test", password="x-pass-123"
+        )
+        self.assertIsNotNone(outsider)
+        csv = b"title,assignee\nA,out@elsewhere.test\nB,nobody@nowhere.test\n"
+        resp = self.post(PREVIEW, "a.csv", content=csv)
+        codes = {r["row"]: [w["code"] for w in r["warnings"]] for r in resp.data["rows"]}
+        self.assertEqual(codes[2], codes[3])
+        self.assertEqual(codes[2], ["assignee_unknown"])
+
+    def test_a_parent_from_an_earlier_jira_import_is_found_by_issue_id(self):
+        self.commit("jira_export.csv")
+        epic = TaskMaster.objects.get(title="Set up the pipeline")
+        later = (
+            b"Summary,Issue key,Issue id,Status,Parent id\n"
+            b"Brand new child,DEMO-9,10009,To Do,10001\n"
+        )
+        resp = self.commit("later.csv", content=later)
+        self.assertEqual(resp.data["created"], 1)
+        child = TaskMaster.objects.get(title="Brand new child")
+        self.assertEqual(child.parent_task_id, epic.task_id)
+
+    def test_a_parent_from_an_earlier_notion_import_is_found_by_title(self):
+        self.commit("notion_export.csv")
+        parent = TaskMaster.objects.get(title="Plan the launch")
+        later = b"Name,Created time,Parent item\nNew sub item,x,Plan the launch (https://n.so/x)\n"
+        resp = self.commit("later.csv", content=later)
+        self.assertEqual(resp.data["created"], 1)
+        self.assertEqual(
+            TaskMaster.objects.get(title="New sub item").parent_task_id, parent.task_id
+        )
+
+    def test_undo_keeps_a_parent_whose_child_stays(self):
+        self.commit("notion_export.csv")
+        TaskMaster.objects.filter(title="Draft the press note").update(title="Press note (edited)")
+        run = TaskImportRun.objects.get()
+        out = self.client.post(f"/api/v2/task/import/runs/{run.run_id}/undo/")
+        self.assertEqual(out.data["kept"], 2)  # the edited child, and the parent it hangs under
+        self.assertEqual(out.data["removed"], 1)
+        self.assertEqual(TaskMaster.objects.get(title="Plan the launch").status, "Open")
+
+    def test_new_tag_ids_follow_the_highest_id(self):
+        ProjectTags.objects.filter(project=self.project).update(tag_id=7)
+        self.commit("jira_export.csv", data={"create_tags": "true"})
+        ids = list(
+            ProjectTags.objects.filter(project=self.project).values_list("tag_id", flat=True)
+        )
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(i >= 7 for i in ids))

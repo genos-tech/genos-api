@@ -85,7 +85,8 @@ def _prepare(request, project):
     try:
         headers, rows = task_import.parse(task_import.decode(data))
     except task_import.ImportError_ as exc:
-        return None, _refuse(exc.code, exc.status)
+        extra = {"limit": task_import.MAX_ROWS} if exc.code == "too_many_rows" else {}
+        return None, _refuse(exc.code, exc.status, **extra)
     if len(rows) > task_import.MAX_ROWS:
         return None, _refuse(
             "too_many_rows", status.HTTP_400_BAD_REQUEST, limit=task_import.MAX_ROWS

@@ -35,6 +35,7 @@ from collections import Counter
 from datetime import date
 
 from django.db import IntegrityError, transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from origin.models.common.user_models import CustomUser
@@ -108,11 +109,18 @@ def parse(text: str) -> tuple[list[str], list[list[str]]]:
         else ","
     )
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    records: list[list[str]] = []
+    seen = 0
     try:
-        records = [r for r in reader]
+        for record in reader:
+            seen += 1
+            # Blank lines count too, so a file of newlines cannot grow the list past the cap.
+            if seen > MAX_ROWS + 1:
+                raise ImportError_("too_many_rows")
+            if any(c.strip() for c in record):
+                records.append(record)
     except csv.Error as exc:
         raise ImportError_("bad_csv") from exc
-    records = [r for r in records if any(c.strip() for c in r)]
     if not records:
         raise ImportError_("empty_file")
     headers = [h.strip() for h in records[0]]
@@ -252,6 +260,8 @@ def map_priority(raw: str, overrides: dict | None = None) -> tuple[str | None, s
     key = (raw or "").strip().lower()
     if not key:
         return None, None
+    if overrides and overrides.get(key) == "none":  # the person chose "no priority" for it
+        return None, None
     if overrides and overrides.get(key) in PRIORITIES:
         return overrides[key], None
     if key in _PRIORITY_LOOKUP:
@@ -335,9 +345,9 @@ def parse_date(raw: str) -> tuple[date | None, str | None]:
 
 
 def clean_title(raw: str) -> str:
-    """The title as stored: trimmed, and no leading `= + - @ tab CR`, so a title that came out
+    """The title as stored: trimmed, and no leading `= + @ tab CR`, so a title that came out
     of a spreadsheet as a formula is plain text if it ever goes back into one."""
-    return (raw or "").strip().lstrip("=+-@\t\r ").strip()
+    return (raw or "").strip().lstrip("=+@\t\r ").strip()
 
 
 def _split_tags(values: list[str]) -> list[str]:
@@ -414,7 +424,9 @@ def resolve_rows(
             if user is None:
                 email_cache[key] = (None, "assignee_unknown")
             elif str(user.id) not in members:
-                email_cache[key] = (None, "assignee_not_member")
+                # The same answer as for no account at all: an editor must not learn which
+                # e-mail addresses have an account elsewhere on Genos.
+                email_cache[key] = (None, "assignee_unknown")
             else:
                 email_cache[key] = (user, None)
         return email_cache[key]
@@ -527,6 +539,7 @@ def resolve_rows(
                 "assignee_id": str(assignee.id) if assignee else None,
                 "tags": tag_names,
                 "external_id": ext,
+                "external_ids": [e.strip() for e in ext_ids],
                 "parent_ref": parent_ref,
                 "parent_row": None,
                 "errors": errors,
@@ -552,10 +565,7 @@ def resolve_rows(
             matches = title_index.get(clean_title(ref).lower(), [])
             target = matches[0] if len(matches) == 1 else None
         if target is None or target == r["row"]:
-            earlier = TaskImportRow.objects.filter(
-                project_id=project.project_id, row_key=_sha(profile, "ext", ref)
-            ).exists()
-            if not earlier:
+            if earlier_parent(project, ref) is None:
                 r["warnings"].append({"code": "parent_missing", "value": ref})
             continue
         r["parent_row"] = target
@@ -586,6 +596,23 @@ def resolve_rows(
             for v, c in priority_values.most_common()
         ],
     }
+
+
+def earlier_parent(project, ref: str):
+    """A live task an EARLIER import made that `ref` names: by one of the ids its row carried
+    (Jira's `Parent id` is the issue id, not the key), else by its title when only one task of
+    the project's imports has it (Notion has no id). None when there is none or it is not one."""
+    base = TaskImportRow.objects.filter(project_id=project.project_id).exclude(
+        task__status="Deleted"
+    )
+    row = base.filter(external_ids__contains=[ref]).select_related("task").first()
+    if row is None:
+        title = clean_title(ref)
+        if not title:
+            return None
+        rows = list(base.filter(task__title__iexact=title).select_related("task")[:2])
+        row = rows[0] if len(rows) == 1 else None
+    return row.task if row is not None else None
 
 
 def public_row(r: dict) -> dict:
@@ -686,88 +713,83 @@ def commit(
         mapping=mapping,
     )
     all_rows = {r["row"]: r for r in rows}
-    for r in _create_order(todo):
-        tags = [
-            {
-                "tagName": catalogue[t.lower()].tag_name,
-                "tagColor": catalogue[t.lower()].tag_color,
-                "tagTextColor": catalogue[t.lower()].tag_text_color,
+    try:
+        for r in _create_order(todo):
+            tags = [
+                {
+                    "tagName": catalogue[t.lower()].tag_name,
+                    "tagColor": catalogue[t.lower()].tag_color,
+                    "tagTextColor": catalogue[t.lower()].tag_text_color,
+                }
+                for t in r["tags"]
+                if t.lower() in catalogue
+            ]
+            kwargs = {
+                "team_id": project.team_id,
+                "project": project,
+                "reporter": user,
+                "title": r["title"],
+                "status": r["status"],
             }
-            for t in r["tags"]
-            if t.lower() in catalogue
-        ]
-        kwargs = {
-            "team_id": project.team_id,
-            "project": project,
-            "reporter": user,
-            "title": r["title"],
-            "status": r["status"],
-        }
-        if r["description"]:
-            kwargs["content"] = task_body_blocks(r["description"])
-        if r["assignee_id"]:
-            kwargs["assignee_id"] = r["assignee_id"]
-        if r["priority"]:
-            kwargs["priority"] = r["priority"]
-        if r["due_date"]:
-            kwargs["due_date"] = r["due_date"]
-        if r["start_date"]:
-            kwargs["start_date"] = r["start_date"]
-        if tags:
-            kwargs["tags"] = tags
-        parent_task = created_tasks.get(r["parent_row"]) if r["parent_row"] else None
-        if parent_task is None and r["parent_ref"]:
-            earlier = (
-                TaskImportRow.objects.filter(
-                    project_id=project.project_id, row_key=_sha(profile, "ext", r["parent_ref"])
-                )
-                .select_related("task")
-                .first()
+            if r["description"]:
+                kwargs["content"] = task_body_blocks(r["description"])
+            if r["assignee_id"]:
+                kwargs["assignee_id"] = r["assignee_id"]
+            if r["priority"]:
+                kwargs["priority"] = r["priority"]
+            if r["due_date"]:
+                kwargs["due_date"] = r["due_date"]
+            if r["start_date"]:
+                kwargs["start_date"] = r["start_date"]
+            if tags:
+                kwargs["tags"] = tags
+            parent_task = created_tasks.get(r["parent_row"]) if r["parent_row"] else None
+            if parent_task is None and r["parent_ref"]:
+                parent_task = earlier_parent(project, r["parent_ref"])
+            if parent_task is not None:
+                kwargs["parent_task_id"] = parent_task.task_id
+            try:
+                with transaction.atomic():
+                    task = TaskMaster.objects.create(**kwargs)
+                    TaskImportRow.objects.create(
+                        run=run,
+                        task=task,
+                        project=project,
+                        row_key=r["_key"],
+                        external_ids=r["external_ids"],
+                        fingerprint=_fingerprint(task),
+                    )
+            except IntegrityError:
+                skipped += 1
+                report.append({"row": r["row"], "outcome": "skipped", "code": "already_imported"})
+                continue
+            except Exception:  # noqa: BLE001 - one bad row must not stop the rest
+                logger.exception("task import: row %s failed", r["row"])
+                failed += 1
+                report.append({"row": r["row"], "outcome": "failed", "code": "create_failed"})
+                continue
+            created_tasks[r["row"]] = task
+            created += 1
+            report.append(
+                {
+                    "row": r["row"],
+                    "outcome": "created",
+                    "task_id": task.task_id,
+                    "display_id": task.display_id,
+                }
             )
-            if earlier is not None:
-                parent_task = earlier.task
-        if parent_task is not None:
-            kwargs["parent_task_id"] = parent_task.task_id
-        try:
-            with transaction.atomic():
-                task = TaskMaster.objects.create(**kwargs)
-                TaskImportRow.objects.create(
-                    run=run,
-                    task=task,
-                    project=project,
-                    row_key=r["_key"],
-                    external_id=r["external_id"][:128],
-                    fingerprint=_fingerprint(task),
-                )
-        except IntegrityError:
-            skipped += 1
-            report.append({"row": r["row"], "outcome": "skipped", "code": "already_imported"})
-            continue
-        except Exception:  # noqa: BLE001 - one bad row must not stop the rest
-            logger.exception("task import: row %s failed", r["row"])
-            failed += 1
-            report.append({"row": r["row"], "outcome": "failed", "code": "create_failed"})
-            continue
-        created_tasks[r["row"]] = task
-        created += 1
-        report.append(
-            {
-                "row": r["row"],
-                "outcome": "created",
-                "task_id": task.task_id,
-                "display_id": task.display_id,
-            }
-        )
-        if r["parent_row"] and parent_task is None and all_rows.get(r["parent_row"]):
-            report.append({"row": r["row"], "outcome": "warning", "code": "parent_failed"})
-
-    report.sort(key=lambda x: x["row"])
-    run.created_count, run.skipped_count, run.failed_count = created, skipped, failed
-    run.report = report
-    run.save(update_fields=["created_count", "skipped_count", "failed_count", "report"])
-    if created:
-        increment_usage(str(user.id), TASK_CREATE_KEY, created)
-        invalidate_project_tasks_cache(project.team_id, project.project_id)
+            if r["parent_row"] and parent_task is None and all_rows.get(r["parent_row"]):
+                report.append({"row": r["row"], "outcome": "warning", "code": "parent_failed"})
+    finally:
+        report.sort(key=lambda x: x["row"])
+        run.created_count, run.skipped_count, run.failed_count = created, skipped, failed
+        run.report = report
+        run.save(update_fields=["created_count", "skipped_count", "failed_count", "report"])
+        if created:
+            # In `finally`: a request that dies partway (a worker timeout raises into this frame)
+            # still records and charges the tasks it already made.
+            increment_usage(str(user.id), TASK_CREATE_KEY, created)
+            invalidate_project_tasks_cache(project.team_id, project.project_id)
     return run
 
 
@@ -778,19 +800,26 @@ def _create_tags(project, names: list[str]) -> None:
             "tag_name", flat=True
         )
     }
-    count = ProjectTags.objects.filter(project_id=project.project_id).count()
+    next_id = (
+        ProjectTags.objects.filter(project_id=project.project_id).aggregate(m=Max("tag_id"))["m"]
+        or 0
+    )
     for name in names:
         if name.lower() in existing:
             continue
-        count += 1
-        ProjectTags.objects.create(
-            team_id=project.team_id,
-            project=project,
-            tag_id=count,
-            tag_name=name,
-            tag_color="#E5E7EB",
-            tag_text_color="#111827",
-        )
+        next_id += 1
+        try:
+            with transaction.atomic():
+                ProjectTags.objects.create(
+                    team_id=project.team_id,
+                    project=project,
+                    tag_id=next_id,
+                    tag_name=name,
+                    tag_color="#E5E7EB",
+                    tag_text_color="#111827",
+                )
+        except IntegrityError:
+            pass  # a concurrent import made the same tag
         existing.add(name.lower())
 
 
@@ -799,19 +828,33 @@ def _create_tags(project, names: list[str]) -> None:
 
 def undo_plan(run: TaskImportRun) -> dict:
     """Which of the run's tasks an undo removes and which stay: a task someone edited since
-    (title, body, status, priority, assignee, due date) or commented on is the person's now."""
-    remove, kept = [], []
-    for marker in run.rows.select_related("task"):
+    (title, body, status, priority, assignee, due date) or commented on is the person's now, and
+    so is any task that still has a live child that stays (nothing is left without its parent)."""
+    markers = list(run.rows.select_related("task"))
+    keep: set[int] = set()
+    for marker in markers:
         task = marker.task
         if task.status == "Deleted":
-            remove.append(marker)  # already gone: only its marker is cleared
-        elif (
+            continue  # already gone: only its marker is cleared
+        if (
             _fingerprint(task) != marker.fingerprint
             or TaskComments.objects.filter(task=task).exists()
         ):
-            kept.append(marker)
-        else:
-            remove.append(marker)
+            keep.add(task.task_id)
+    remove_ids = {m.task_id for m in markers} - keep
+    while True:  # a parent with a child that stays, or one nobody here made, stays
+        blocked = set(
+            TaskMaster.objects.filter(parent_task_id__in=remove_ids)
+            .exclude(status="Deleted")
+            .exclude(task_id__in=remove_ids)
+            .values_list("parent_task_id", flat=True)
+        )
+        if not blocked:
+            break
+        keep |= blocked
+        remove_ids -= blocked
+    remove = [m for m in markers if m.task_id in remove_ids]
+    kept = [m for m in markers if m.task_id in keep]
     return {"remove": remove, "kept": kept}
 
 

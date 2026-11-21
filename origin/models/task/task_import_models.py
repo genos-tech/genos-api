@@ -65,7 +65,8 @@ class TaskImportRow(models.Model):
         to_field="project_id",
     )
     row_key = models.CharField(max_length=64)
-    external_id = models.CharField(max_length=128, blank=True, default="")
+    # Every id the row carried (Jira: Issue key and Issue id), so a later file can name it as a parent.
+    external_ids = models.JSONField(default=list)
     # sha256 of the title and description as imported: "edited since" is a comparison.
     fingerprint = models.CharField(max_length=64, blank=True, default="")
 
