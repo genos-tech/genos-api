@@ -216,6 +216,13 @@ REGISTRY = {
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
     ),
+    # views.common.briefing_today_views (MIP-1005, MIP-1696): the member comes from the token, the
+    # team is checked with require_team_member_or_response, and the briefing reads only what that
+    # member may open (LabelAccess, readable_chats_qs, live project membership)
+    "origin.views.common.briefing_today_views.BriefingTodayView": self_only(
+        "the caller's own briefing (a ToolContext built from request.user; the briefing's own "
+        "access rules decide what is listed)"
+    ),
     # views.common.memory_views (MIP-1088): the member comes from the token, the team is checked
     # with require_team_member_or_response, and every query in the services filters on the
     # member (and team); no call takes a user id
