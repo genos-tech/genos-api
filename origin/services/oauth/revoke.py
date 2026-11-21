@@ -44,7 +44,7 @@ from origin.services import crypto
 
 log = logging.getLogger(__name__)
 
-#: The switch. Same reading as `MCP_CORE_RULES` (`origin/views/public/mcp/protocol.py`).
+#: The switch. Read straight from the environment on every call, like the other default-off switches.
 FLAG_ENV = "OAUTH_REVOKE_ON_DISCONNECT"
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
