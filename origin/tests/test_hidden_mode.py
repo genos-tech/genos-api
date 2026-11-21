@@ -19,7 +19,7 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.services.hidden_scope import visible_channels_q, visible_projects_q
+from origin.services.hidden_scope import visible_projects_q
 from origin.tests.test_base import BaseAPITestCase
 
 PROJECTS = "/api/v2/project/projects/"
