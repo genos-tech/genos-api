@@ -20,6 +20,7 @@ cache eviction.
 import hashlib
 import hmac
 import json
+import os
 import time
 from unittest import mock
 
@@ -257,6 +258,32 @@ class CheckoutAndPortalViewTests(BillingTestBase):
         # The flag must not disturb the load-bearing params.
         self.assertEqual(kwargs["client_reference_id"], str(self.user.id))
         self.assertEqual(kwargs["mode"], "subscription")
+
+    def test_promotion_codes_off_when_env_unset(self):
+        """Policy (2026-11-21): no discounts at launch, so the hosted
+        page must not show the promotion-code box unless ops turns it on."""
+        with mock.patch.dict(os.environ):
+            os.environ.pop("STRIPE_ALLOW_PROMOTION_CODES", None)
+            kwargs = self._create_session_kwargs(STRIPE_TEST_SETTINGS)
+        self.assertIs(kwargs["allow_promotion_codes"], False)
+
+    def test_promotion_codes_on_when_env_truthy(self):
+        for value in ("1", "true", "TRUE", " yes ", "on"):
+            with (
+                self.subTest(value=value),
+                mock.patch.dict(os.environ, {"STRIPE_ALLOW_PROMOTION_CODES": value}),
+            ):
+                kwargs = self._create_session_kwargs(STRIPE_TEST_SETTINGS)
+            self.assertIs(kwargs["allow_promotion_codes"], True)
+
+    def test_promotion_codes_stay_off_for_other_values(self):
+        for value in ("", "0", "false", "no", "off", "maybe"):
+            with (
+                self.subTest(value=value),
+                mock.patch.dict(os.environ, {"STRIPE_ALLOW_PROMOTION_CODES": value}),
+            ):
+                kwargs = self._create_session_kwargs(STRIPE_TEST_SETTINGS)
+            self.assertIs(kwargs["allow_promotion_codes"], False)
 
     def test_portal_returns_url(self):
         with mock.patch.object(
