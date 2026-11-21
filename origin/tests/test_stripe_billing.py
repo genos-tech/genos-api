@@ -614,6 +614,51 @@ class HandleEventTests(BillingTestBase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.tier, "max")
 
+    def _scheduled_event(self, *, price, schedule="sub_sched_1"):
+        event = self.subscription_event(
+            etype="customer.subscription.updated", status_="active", price=price
+        )
+        event["data"]["object"]["schedule"] = schedule
+        return event
+
+    def test_upgrade_releases_the_pending_downgrade(self):
+        """MIP-1848: a downgrade scheduled at period end leaves a schedule
+        whose next phase is the lower plan. If the customer then upgrades,
+        Stripe charges the difference but keeps that phase, so the plan
+        would drop back at renewal after they paid for the higher one. An
+        upgrade must release the schedule."""
+        self._bind()
+        self.user.tier = "pro"
+        self.user.save(update_fields=["tier"])
+        with mock.patch("stripe.SubscriptionSchedule.release") as release:
+            stripe_billing.handle_event(self._scheduled_event(price="price_max_456"))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "max")
+        release.assert_called_once_with("sub_sched_1")
+
+    def test_scheduling_a_downgrade_does_not_release_the_schedule(self):
+        """The event Stripe sends when the portal schedules a downgrade
+        still carries the current (higher) price: no tier move, no release."""
+        self._bind()
+        self.user.tier = "pro"
+        self.user.save(update_fields=["tier"])
+        with mock.patch("stripe.SubscriptionSchedule.release") as release:
+            stripe_billing.handle_event(self._scheduled_event(price="price_pro_123"))
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "pro")
+        release.assert_not_called()
+
+    def test_upgrade_without_a_schedule_releases_nothing(self):
+        self._bind()
+        self.user.tier = "pro"
+        self.user.save(update_fields=["tier"])
+        event = self.subscription_event(
+            etype="customer.subscription.updated", status_="active", price="price_max_456"
+        )
+        with mock.patch("stripe.SubscriptionSchedule.release") as release:
+            stripe_billing.handle_event(event)
+        release.assert_not_called()
+
     def test_subscription_active_unmapped_price_no_change(self):
         self._bind()
         self.user.tier = "pro"
@@ -736,6 +781,21 @@ class ReconcileTests(BillingTestBase):
         self.assertEqual(quota.get_effective_tier(self.user.id), "max")
         self.assertEqual(listed.call_args.kwargs["customer"], "cus_abc")
         self.assertEqual(listed.call_args.kwargs["status"], "all")
+
+    def test_reconcile_upgrade_releases_the_pending_downgrade(self):
+        """MIP-1848: the portal return reconciles, so the pull path must
+        release a pending downgrade on an upgrade too (see the webhook test)."""
+        self._bind()
+        self.user.tier = "pro"
+        self.user.save(update_fields=["tier"])
+        sub = self._sub(price="price_max_456")
+        sub["schedule"] = "sub_sched_1"
+        with self._list_mock(sub), mock.patch("stripe.SubscriptionSchedule.release") as release:
+            summary = stripe_billing.reconcile_from_stripe(self.user)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.tier, "max")
+        self.assertEqual(summary, "tier set to max")
+        release.assert_called_once_with("sub_sched_1")
 
     def test_best_of_multiple_active_wins(self):
         self._bind()
