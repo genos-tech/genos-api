@@ -263,9 +263,7 @@ def _plain_headline(raw: str) -> str:
 def _recent_editions(user_id: str, now) -> list[str]:
     """The last few digests as `"3 days ago: <text>"` lines."""
     rows = (
-        InboxItems.objects.filter(
-            receiver_id=user_id, item_type=ITEM_TYPE_DIGEST, is_deleted=False
-        )
+        InboxItems.objects.filter(receiver_id=user_id, item_type=ITEM_TYPE_DIGEST, is_deleted=False)
         .order_by("-ts_created_at")
         .values_list("ts_created_at", "item_body")[:_RECALL_EDITIONS]
     )
@@ -442,9 +440,7 @@ class Command(HeartbeatCommand):
             team__is_deleted=False,
         ).values_list("attendee_id", "team__team_id", "team__plan")
         for attendee_id, team_id, plan in rows:
-            memberships.setdefault(str(attendee_id), []).append(
-                (str(team_id), plan or "free")
-            )
+            memberships.setdefault(str(attendee_id), []).append((str(team_id), plan or "free"))
 
         quotas = settings.SEARCH_ENGINE.get("TIER_QUOTAS") or {}
         sent = skipped = failed = 0
@@ -514,7 +510,7 @@ class Command(HeartbeatCommand):
             # an Inbox item has no sources map, so resolve to real
             # /workspace hrefs at save time (unresolvable → plain prose,
             # never a dead link).
-            text = rewrite_citation_md(text, team_id=team_id)
+            text = rewrite_citation_md(text, team_id=team_id, user_id=str(uid))
 
             item = InboxItems.objects.create(
                 team_id=team_id,

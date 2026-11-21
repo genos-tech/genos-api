@@ -52,6 +52,7 @@ from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from django.db import transaction
 from django.utils import timezone
 
 from origin.middleware.current_user import via_override
@@ -81,6 +82,7 @@ from origin.services.demo_seeder import (
 from origin.services.mcp_credential import McpOAuthCredential
 from origin.services.project_code import derive_project_code
 from origin.services.task_card_post import _task_card_parts
+from origin.services.task_comment_ids import next_task_comment_id
 from origin.services.user_time import user_today
 from origin.views.utils.note_role import ROLE_OWNER
 from origin.views.utils.note_version import snapshot_note_version
@@ -433,12 +435,13 @@ def _comment(task, visitor, text: str, project_id: int) -> None:
     genos-sockets, none of which a seeder should do."""
     from origin.services.unified_writer import write_task_comment_as_thread_reply  # noqa: PLC0415
 
-    comment = TaskComments.objects.create(
-        task=task,
-        sender=visitor,
-        comment_id=TaskComments.objects.filter(task=task).count() + 1,
-        comment_body=_text_body(text),
-    )
+    with transaction.atomic():
+        comment = TaskComments.objects.create(
+            task=task,
+            sender=visitor,
+            comment_id=next_task_comment_id(task.task_id),
+            comment_body=_text_body(text),
+        )
     write_task_comment_as_thread_reply(
         task_id=task.task_id,
         comment_id=comment.comment_id,

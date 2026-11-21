@@ -66,10 +66,12 @@ class Command(BaseCommand):
             examined += 1
             body = item.item_body or {}
             text = body.get("text") if isinstance(body, dict) else None
-            if not text or not item.team_id:
+            if not text or not item.team_id or not item.receiver_id:
                 skipped += 1
                 continue
-            rewritten = rewrite_citation_md(text, team_id=str(item.team_id))
+            rewritten = rewrite_citation_md(
+                text, team_id=str(item.team_id), user_id=str(item.receiver_id)
+            )
             if rewritten == text:
                 skipped += 1
                 continue

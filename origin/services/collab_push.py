@@ -46,6 +46,7 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 REPLACE_BLOCKS_PATH = "/internal/documents/replace-blocks"
+FORGET_PATH = "/internal/documents/forget"
 READ_THREADS_PATH = "/internal/documents/read-threads"
 # Must match genos-collab `INTERNAL_AUDIENCE`. User access tokens carry no
 # `aud`, so collab refuses them on this endpoint; and this token has no
@@ -89,6 +90,34 @@ def _post(document_name: str, blocks: list[dict[str, Any]]) -> bool:
         return False
     if resp.status_code != 200:
         logger.warning("collab body push refused doc=%s status=%s", document_name, resp.status_code)
+        return False
+    return True
+
+
+def note_document_name(note_type: str, note_id) -> str:
+    """The collab document name of a note: `my-note:<id>`, `task-note:<id>` or `chat-note:<id>`."""
+    return f"{_NOTE_DOCUMENT_PREFIX[note_type]}:{note_id}"
+
+
+def forget_document(document_name: str) -> bool:
+    """Ask genos-collab to delete a document whose parent row is gone (MIP-1584). Best-effort: a
+    collab that is not configured, unreachable or older than this endpoint (404) leaves the
+    document to its orphan sweep (`npm run sweep:orphans`). True only on HTTP 200."""
+    if not settings.COLLAB_INTERNAL_URL or not settings.COLLAB_INTERNAL_SECRET:
+        return False
+    try:
+        resp = requests.post(
+            f"{settings.COLLAB_INTERNAL_URL}{FORGET_PATH}",
+            json={"documentName": document_name},
+            headers={"Authorization": f"Bearer {_internal_token()}"},
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        logger.warning("collab forget failed doc=%s: %s", document_name, exc)
+        return False
+    if resp.status_code != 200:
+        logger.warning("collab forget refused doc=%s status=%s", document_name, resp.status_code)
         return False
     return True
 

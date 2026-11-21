@@ -79,5 +79,8 @@ if [ -z "$AI_COST_ARCHIVE_URI" ]; then
   exit 1
 fi
 
+# No --by-user: the bucket is outside Railway and keeps pages after account
+# deletion, so archived pages carry totals only (MIP-1791). The command
+# refuses the combination.
 exec python /app/manage.py ai_cost_dashboard \
-  "$@" --by-user --archive-dir "$AI_COST_ARCHIVE_URI"
+  "$@" --archive-dir "$AI_COST_ARCHIVE_URI"

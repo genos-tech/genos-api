@@ -224,9 +224,14 @@ class McpConsentDecisionView(_ConsentBase):
 
     @staticmethod
     def _outcome(library, fake, credentials, scopes, *, allow, record=None) -> Response:
-        # Always bound to our one resource, even when the client named none: a token with no
-        # resource is unrestricted, and the MCP endpoint refuses those.
-        credentials = {**credentials, "resource": [mcp_oauth.resource_identifier()]}
+        # Always bound to ONE of our resources: the one the client named at authorize (the URL it
+        # connects to, RFC 8707), or the full endpoint when it named none. A token with no resource
+        # is unrestricted, and the MCP endpoint refuses those. Read from the request the library
+        # just validated, never from the decision step's own fields.
+        credentials = {
+            **credentials,
+            "resource": [mcp_oauth.granted_resource(fake.GET.getlist("resource"))],
+        }
         try:
             uri, _headers, _body, _status = library.create_authorization_response(
                 request=fake, scopes=" ".join(scopes), credentials=credentials, allow=allow

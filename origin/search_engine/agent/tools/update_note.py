@@ -55,6 +55,7 @@ from origin.search_engine.agent.tools.note_targets import (
 )
 from origin.search_engine.agent.undo import UNDO_KEY, note_edit_capture, update_note_blocker
 from origin.search_engine.chunkers.base import NOTE_TYPE_CHAT, NOTE_TYPE_PERSONAL, NOTE_TYPE_TASK
+from origin.services.archive import archived_note_refusal
 from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.views.utils.note_version import keep_current_state, snapshot_note_version
 from origin.views.utils.personal_note_move import (
@@ -77,7 +78,9 @@ def _wrap_blocknote(text: str, ctx: ToolContext) -> list[dict[str, Any]]:
     editor's chips (`entity_chips`, MIP-708)."""
     return markdown_to_blocks(
         text,
-        entity_link_resolver=lambda token: resolve_note_entity_link(token, team_id=ctx.team_id),
+        entity_link_resolver=lambda token: resolve_note_entity_link(
+            token, team_id=ctx.team_id, user_id=ctx.user_id
+        ),
         entity_chip_resolver=chip_resolver(team_id=ctx.team_id, user_id=ctx.user_id),
     )
 
@@ -253,6 +256,9 @@ def _update_shared_surface_note(
             f"Not authorized to edit {note_type} note {note_id}. "
             f"You must be the note owner, {member}, or have an explicit editor grant."
         )
+
+    if why := archived_note_refusal(note_type, note_id):
+        raise ToolError(f"{why} Nothing was changed.")
 
     return _apply_changes(
         note=note,

@@ -35,6 +35,7 @@ from origin.models.project.prj_models import (
 )
 from origin.services import change_feed
 from origin.services.archive import ensure_project_writable
+from origin.services.project_list_cache import project_list_keys
 from origin.services.workspace_changes import record as record_workspace_change
 
 TAG_NAME_MAX = 20
@@ -123,31 +124,34 @@ def add_project_tag(project: ProjectMaster, raw_name, raw_color=None) -> Project
         raise CatalogRefused(
             f'A tag named "{existing.tag_name}" already exists in this project.', 409
         )
-    try:
-        with transaction.atomic():
-            # The page numbers a new tag by how many there are, which repeats an id once any
-            # tag has been deleted. The highest id plus one never does.
-            highest = ProjectTags.objects.filter(project=project).aggregate(m=Max("tag_id"))["m"]
-            tag = ProjectTags.objects.create(
-                team=project.team,
-                project=project,
-                tag_id=(highest or 0) + 1,
-                tag_name=name,
-                tag_color=color,
-                tag_text_color=text_color_for(color),
-            )
-            # Inside the same transaction as the tag, but outside this IntegrityError handler:
-            # an audit-row failure must not be reported as a duplicate tag name.
-            record_workspace_change(
-                team_id=project.team_id,
-                project_id=project.project_id,
-                entity_kind="tag",
-                entity_id=tag.tag_id,
-                action="create",
-            )
-    except IntegrityError:
-        # Two adds of the same name at once: the database constraint decided.
-        raise CatalogRefused(f'A tag named "{name}" already exists in this project.', 409)
+    with transaction.atomic():
+        # The page numbers a new tag by how many there are, which repeats an id once any
+        # tag has been deleted. The highest id plus one never does.
+        highest = ProjectTags.objects.filter(project=project).aggregate(m=Max("tag_id"))["m"]
+        try:
+            # A savepoint of its own, so a duplicate-name IntegrityError rolls back only
+            # the insert. Only the insert is inside this handler (MIP-1889).
+            with transaction.atomic():
+                tag = ProjectTags.objects.create(
+                    team=project.team,
+                    project=project,
+                    tag_id=(highest or 0) + 1,
+                    tag_name=name,
+                    tag_color=color,
+                    tag_text_color=text_color_for(color),
+                )
+        except IntegrityError:
+            # Two adds of the same name at once: the database constraint decided.
+            raise CatalogRefused(f'A tag named "{name}" already exists in this project.', 409)
+        # Same transaction as the tag, outside the handler above: an audit-row failure
+        # propagates and is never reported as a duplicate tag name.
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind="tag",
+            entity_id=tag.tag_id,
+            action="create",
+        )
     return tag
 
 
@@ -175,7 +179,12 @@ def invalidate_label_project_list(team_id) -> None:
     # one call every label path makes, `bulk_create` included.
     change_feed.bump_projects(team_id)
     attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
-    keys = [f"project:list:{team_id}:{attendee_id}" for attendee_id in attendee_ids if attendee_id]
+    keys = [
+        key
+        for attendee_id in attendee_ids
+        if attendee_id
+        for key in project_list_keys(team_id, attendee_id)
+    ]
     if keys:
         cache.delete_many(keys)
 
