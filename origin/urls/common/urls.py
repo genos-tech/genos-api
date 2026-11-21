@@ -1,5 +1,6 @@
 from django.urls import include, path
 
+from origin.views.common.agent_work_views import AgentWorkView
 from origin.views.common.api_key_views import (
     ApiKeyDetailView,
     ApiKeyListCreateView,
@@ -472,6 +473,7 @@ urlpatterns = [
         ScheduleRunView.as_view(),
         name="schedule_run",
     ),
+    path("api/v2/agent/work/", AgentWorkView.as_view(), name="agent_work"),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),
     path(
         "api/v2/mcp/connections/<uuid:connection_id>/",
