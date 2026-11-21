@@ -524,15 +524,17 @@ class EachV1ToolStoresWhatItsUndoNeeds(CaptureBase):
         folder = PersonalNoteFolder.objects.create(
             team=self.team, owner=self.user, name="Archive", scope=PersonalNoteFolder.SCOPE_PERSONAL
         )
-        _events, step, event = self.stored(
-            "update_note",
-            {
-                "note_id": self.note.note_id,
-                "note_type": "personal",
-                "title": "Plan v3",
-                "folder_id": folder.folder_id,
-            },
-        )
+        # The move re-indexes the note, which would embed it through the real OpenAI API (MIP-1776).
+        with mock.patch("origin.views.utils.personal_note_move.refresh_personal_notes"):
+            _events, step, event = self.stored(
+                "update_note",
+                {
+                    "note_id": self.note.note_id,
+                    "note_type": "personal",
+                    "title": "Plan v3",
+                    "folder_id": folder.folder_id,
+                },
+            )
         self.assertEqual(PersonalNoteMaster.objects.get(pk=self.note.pk).title, "Plan v3")
         self.assertIsNone(step.undo_json)
         self.assertNotIn("undo", event)

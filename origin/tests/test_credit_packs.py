@@ -261,7 +261,9 @@ class CheckoutEndpointTests(PackTestBase):
         literally nothing."""
         res = self.client.post(CHECKOUT_URL, {"pack": "pack_100"}, format="json")
         self.assertEqual(res.status_code, 400)
-        listing = self.client.get(PACKS_URL)
+        # The listing reads each pack's price from Stripe: never the real API (MIP-1776).
+        with mock.patch("stripe.Price.retrieve", side_effect=RuntimeError("no network in tests")):
+            listing = self.client.get(PACKS_URL)
         self.assertFalse(listing.data["available"])
 
     @CREDITS_ON

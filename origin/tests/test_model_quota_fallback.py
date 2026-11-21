@@ -222,8 +222,11 @@ class AskFallbackFlagOnTests(_AskFallbackBase):
             emit({"type": "done"})
             return None
 
-        with patch(
-            "origin.search_engine.agent_views.run_agent", side_effect=fake_run_agent
+        with (
+            patch("origin.search_engine.agent_views.run_agent", side_effect=fake_run_agent),
+            # Closing the run indexes the conversation, which embeds it through the real OpenAI
+            # API (MIP-1776).
+            patch("origin.search_engine.ingestion.ingest_conversation_run"),
         ):
             resp = self._ask()
             self.assertEqual(resp.status_code, 200)
