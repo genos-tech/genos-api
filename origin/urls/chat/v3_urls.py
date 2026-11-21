@@ -68,6 +68,7 @@ from origin.views.chat.channel_restore_views import ChannelRestoreView, DeletedC
 from origin.views.chat.channel_views import (
     ChannelDetailView,
     ChannelInlineUploadView,
+    ChannelDirectoryView,
     ChannelJoinView,
     ChannelListView,
     ChannelMemberDetailView,
@@ -106,6 +107,11 @@ urlpatterns = [
         "api/v3/channels/",
         ChannelListView.as_view(),
         name="v3_channel_list",
+    ),
+    path(
+        "api/v3/channels/directory/",
+        ChannelDirectoryView.as_view(),
+        name="v3_channel_directory",
     ),
     path(
         "api/v3/channels/deleted/",

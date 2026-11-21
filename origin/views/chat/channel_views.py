@@ -21,8 +21,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, OuterRef, Prefetch, Subquery
-from django.db.models.functions import Coalesce
+from django.db.models import Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery
+from django.db.models.functions import Coalesce, Lower
 from django.http import Http404
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -928,6 +928,23 @@ class ChannelDetailView(AuthenticatedAPIView):
                 )
             channel.profile_image_url = url
             update_fields.append("profile_image_url")
+        if "description" in body:
+            if channel.kind != ChannelKind.GM:
+                return Response(
+                    {"error": "Only group chats have a description."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            refusal = refuse_non_string_fields(body, "description")
+            if refusal:
+                return refusal
+            description = (body.get("description") or "").strip()
+            if len(description) > 280:
+                return Response(
+                    {"error": "description exceeds 280 chars."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            channel.description = description
+            update_fields.append("description")
         if "is_private" in body:
             next_private = bool(body.get("is_private"))
             if channel.is_external and not next_private:
@@ -1274,6 +1291,84 @@ class ChannelMembersView(AuthenticatedAPIView):
         return added
 
 
+_DIRECTORY_PAGE_DEFAULT = 24
+_DIRECTORY_PAGE_MAX = 50
+
+
+class ChannelDirectoryView(AuthenticatedAPIView):
+    """GET /api/v3/channels/directory/?team_id=&q=&limit=&offset= (MIP-1694)
+
+    The team's public group chats, for browsing. "Public" is `is_private=False`; external,
+    deleted and archived chats are never listed, nor is any other kind. Team members only: a
+    guest or an outsider gets the 404 a missing team gets, so the list cannot be used to learn
+    that a team or a chat exists. Joining stays on `ChannelJoinView`.
+    """
+
+    def get(self, request):
+        team_id = request.GET.get("team_id")
+        if not team_id:
+            return Response({"error": "team_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        _verify_team_member(request.user, team_id)
+
+        qs = Channel.objects.filter(
+            team_id=team_id,
+            kind=ChannelKind.GM,
+            is_private=False,
+            is_external=False,
+            is_deleted=False,
+            archived_at__isnull=True,
+        )
+        q = (request.GET.get("q") or "").strip()[:100]
+        if q:
+            qs = qs.filter(Q(title__icontains=q) | Q(description__icontains=q))
+        total = qs.count()
+        try:
+            limit = max(
+                1, min(int(request.GET.get("limit", _DIRECTORY_PAGE_DEFAULT)), _DIRECTORY_PAGE_MAX)
+            )
+        except (TypeError, ValueError):
+            limit = _DIRECTORY_PAGE_DEFAULT
+        try:
+            offset = max(0, int(request.GET.get("offset", 0)))
+        except (TypeError, ValueError):
+            offset = 0
+        live = ChannelMember.objects.filter(
+            channel=OuterRef("pk"), is_deleted=False, user__is_system_user=False
+        )
+        rows = list(
+            qs.annotate(
+                _member_count=Subquery(
+                    live.order_by().values("channel").annotate(n=Count("pk")).values("n")[:1],
+                    output_field=IntegerField(),
+                ),
+                _is_joined=Exists(
+                    ChannelMember.objects.filter(
+                        channel=OuterRef("pk"), user=request.user, is_deleted=False
+                    )
+                ),
+                _sort=Lower("title"),
+            ).order_by("_sort", "id")[offset : offset + limit]
+        )
+        return Response(
+            {
+                "results": [
+                    {
+                        "id": str(c.id),
+                        "title": c.title,
+                        "description": c.description,
+                        "profileImageUrl": c.profile_image_url or None,
+                        "memberCount": c._member_count or 0,
+                        "isJoined": c._is_joined,
+                        "tsCreated": c.ts_created_at,
+                    }
+                    for c in rows
+                ],
+                "total": total,
+                "hasMore": offset + len(rows) < total,
+            }
+        )
+
+
 class ChannelJoinView(AuthenticatedAPIView):
     """POST /api/v3/channels/{channel_id}/join/
 
@@ -1318,6 +1413,12 @@ class ChannelJoinView(AuthenticatedAPIView):
             return Response(
                 {"error": "Only group messages support self-join."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        # MIP-1694: an archived chat is read-only and an external one is admitted by grant only;
+        # neither is open to a self-join, whatever the directory lists.
+        if channel.archived_at is not None or channel.is_external:
+            return Response(
+                {"error": "This group cannot be joined."}, status=status.HTTP_403_FORBIDDEN
             )
         if channel.is_private:
             return Response(

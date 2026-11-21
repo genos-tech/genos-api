@@ -69,6 +69,9 @@ class Channel(models.Model):
     # `"channel_profiles/<id>/<file>"` path so callers don't need two
     # round-trips to render.
     profile_image_url = models.CharField(max_length=512, blank=True, default="")
+    # A one-line topic for a group chat (MIP-1694), shown in the chat header and in the
+    # group-chat directory. Written by the owner or an editor; never indexed or sent to the agent.
+    description = models.CharField(max_length=280, blank=True, default="")
     profile_image_file = models.FileField(
         upload_to=_channel_profile_image_path,
         blank=True,

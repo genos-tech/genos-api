@@ -336,6 +336,7 @@ class ChannelSerializer(serializers.ModelSerializer):
     projectId = serializers.IntegerField(source="project_id", read_only=True, allow_null=True)
     ownerId = serializers.UUIDField(source="owner_id", read_only=True, allow_null=True)
     isPrivate = serializers.BooleanField(source="is_private")
+    description = serializers.CharField(read_only=True)
     # A cross-team chat. Read-only on purpose: it is decided at creation
     # (`ChannelListView._create_group`) and there is no meaningful
     # conversion afterwards — an internal chat cannot become external
@@ -397,6 +398,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "projectId",
             "ownerId",
             "isPrivate",
+            "description",
             "isExternal",
             "teamId",
             "hostTeamName",
