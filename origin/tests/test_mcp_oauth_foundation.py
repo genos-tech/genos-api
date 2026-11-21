@@ -1029,3 +1029,30 @@ class TestClientPolicyOnItsOwn(TestCase):
             {"redirect_uris": f"{CALLBACK} https://*.example/cb"},
         ):
             self.assertIsNotNone(mcp_oauth.client_problem(self.app(**change)), change)
+
+
+@oauth_on()
+class TestLoopbackRedirectMayChangePort(FoundationBase):
+    """A desktop client (Claude Code) registers `http://localhost:<port>/callback` and may
+    arrive on another port later (RFC 8252 section 8.3): the port is not part of the match."""
+
+    def setUp(self):
+        super().setUp()
+        self.client_app(redirect_uris="http://localhost:3118/callback")
+
+    def test_the_same_loopback_host_on_another_port_reaches_consent(self):
+        res = self.authorize(redirect_uri="http://localhost:53682/callback")
+        self.assertEqual(res.status_code, 302, res.content)
+        self.assertTrue(res["Location"].startswith(f"{APP}/oauth/consent?"), res["Location"])
+
+    def test_the_registered_port_still_reaches_consent(self):
+        res = self.authorize(redirect_uri="http://localhost:3118/callback")
+        self.assertEqual(res.status_code, 302, res.content)
+
+    def test_another_host_is_not_a_loopback_match(self):
+        res = self.authorize(redirect_uri="http://127.0.0.1:53682/callback")
+        self.assertNotIn("Location", res, res.content)
+
+    def test_another_path_is_not_a_loopback_match(self):
+        res = self.authorize(redirect_uri="http://localhost:53682/other")
+        self.assertNotIn("Location", res, res.content)
