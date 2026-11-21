@@ -22,6 +22,9 @@ The output is one self-contained file — no CDN, no external font, no
 network at open time — so it can be scp'd, mailed, or attached to a
 ticket and still render.
 
+`--archive-dir` never takes `--by-user` (MIP-1791): archived pages hold
+totals only, because the bucket keeps them after account deletion.
+
 `--archive-dir` is what the scheduled Cloud Run jobs use. It writes TWO
 objects into one directory:
 
@@ -92,9 +95,7 @@ def _gcs_credentials():
     if sa_file:
         from google.oauth2 import service_account  # noqa: PLC0415
 
-        return service_account.Credentials.from_service_account_file(
-            sa_file, scopes=[_GCS_SCOPE]
-        )
+        return service_account.Credentials.from_service_account_file(sa_file, scopes=[_GCS_SCOPE])
     import google.auth  # noqa: PLC0415
 
     credentials, _project = google.auth.default(scopes=[_GCS_SCOPE])
@@ -146,6 +147,16 @@ class Command(HeartbeatCommand):
         )
 
     def handle(self, *args, **options):
+        if options["archive_dir"] and options["by_user"]:
+            # MIP-1791: the archive is a bucket that outlives the ledger
+            # (account deletion sweeps AiSpendEvent, never old pages) and
+            # is outside Railway. Per-user pages carry user ids, so they
+            # are never archived; --by-user stays for --out / --stdout.
+            raise CommandError(
+                "--by-user cannot be combined with --archive-dir: archived "
+                "pages are kept after account deletion, so they carry totals "
+                "only. Use --out or --stdout for the per-user view."
+            )
         data = cost_dashboard.collect(
             days=options["days"],
             month=options["month"],
