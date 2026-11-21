@@ -1197,8 +1197,10 @@ def create_team_portal_session(
 def sync_team_subscription_quantity(team_id) -> str:
     """Best-effort seat sync, called from the TeamMembers signal on
     every membership change. Updates the active subscription's quantity
-    to the current member count with `create_prorations` — the charge /
-    credit folds into the NEXT invoice (no surprise immediate charges).
+    to the current member count. An increase uses `create_prorations`
+    (the charge folds into the NEXT invoice, no surprise immediate
+    charge). A decrease uses `none`: no credit for the unused part of a
+    started period (MIP-1840, policy D9).
 
     Fail-SOFT by design: this runs inside member-management writes, and
     a Stripe hiccup must never block adding or removing a member. Bulk
@@ -1223,12 +1225,16 @@ def sync_team_subscription_quantity(team_id) -> str:
         sub = subs[0]
         item = ((sub.get("items") or {}).get("data") or [{}])[0]
         seats = team_seats(team_id)
-        if item.get("quantity") == seats:
+        current = item.get("quantity")
+        if current == seats:
             return "in sync"
+        # MIP-1840 / policy D9: a seat removed mid-period is not credited
+        # (no refund for a started month). Additions still prorate as before.
+        proration = "none" if current is not None and seats < current else "create_prorations"
         stripe.Subscription.modify(
             sub["id"],
             items=[{"id": item.get("id"), "quantity": seats}],
-            proration_behavior="create_prorations",
+            proration_behavior=proration,
         )
         log.info(
             "stripe billing: team %s seats %s -> %s (membership change)",

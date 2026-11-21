@@ -1264,6 +1264,27 @@ class TeamBillingTests(BillingTestBase):
         self.assertEqual(modify.call_args.kwargs["items"][0]["quantity"], 3)
         self.assertEqual(modify.call_args.kwargs["proration_behavior"], "create_prorations")
 
+    def test_member_leave_decrease_does_not_prorate(self):
+        # MIP-1840 / policy D9: a seat removed mid-period gives no credit.
+        self._bind_team()
+        list_mock, modify_mock = self._seat_sync_mocks(current_quantity=3)
+        with list_mock, modify_mock as modify:
+            out = stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(out, "quantity set to 2")
+        modify.assert_called_once()
+        self.assertEqual(modify.call_args.kwargs["items"][0]["quantity"], 2)
+        self.assertEqual(modify.call_args.kwargs["proration_behavior"], "none")
+
+    def test_member_join_increase_still_prorates(self):
+        # The increase path is unchanged: a seat added mid-period is prorated.
+        self._bind_team()
+        list_mock, modify_mock = self._seat_sync_mocks(current_quantity=1)
+        with list_mock, modify_mock as modify:
+            out = stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(out, "quantity set to 2")
+        self.assertEqual(modify.call_args.kwargs["items"][0]["quantity"], 2)
+        self.assertEqual(modify.call_args.kwargs["proration_behavior"], "create_prorations")
+
     def test_sync_noop_when_already_true(self):
         self._bind_team()
         list_mock, modify_mock = self._seat_sync_mocks(current_quantity=2)
