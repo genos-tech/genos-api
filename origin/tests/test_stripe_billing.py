@@ -1307,14 +1307,9 @@ class PlansViewTests(BillingTestBase):
     — same discipline as the other real-SDK mocks in this file.
     """
 
-    def setUp(self):
-        super().setUp()
-        # price_display caches per price id — evict so one test's mock
-        # can't satisfy the next test from cache.
-        from django.core.cache import cache  # noqa: PLC0415
-
-        cache.delete("stripe_price_display:price_pro_123")
-        cache.delete("stripe_price_display:price_max_456")
+    # price_display caches per price id; every test starts with an empty cache
+    # (origin/tests/cache_isolation.py, MIP-1803), so one test's mock cannot
+    # satisfy the next test from cache.
 
     @staticmethod
     def _price_mock(amount=1200, currency="jpy"):
