@@ -193,6 +193,8 @@ REGISTRY = {
     # views.common.mcp_consent_views (MIP-1077)
     "origin.views.common.mcp_consent_views.McpConsentContextView": checked("_teams_of"),
     "origin.views.common.mcp_consent_views.McpConsentDecisionView": checked("_teams_of"),
+    # views.common.agent_work_views (MIP-1613): team membership, then the task and note read rules
+    "origin.views.common.agent_work_views.AgentWorkView": checked("require_team_member_or_response"),
     # views.common.mcp_connection_views (MIP-1079)
     "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
         "the caller's own connected apps (user=request.user on every query)"
@@ -244,6 +246,11 @@ REGISTRY = {
     ),
     "origin.views.common.inbox_ai_views.InboxAiOnView": self_only(
         "the caller's own Inbox item: looked up by id AND receiver=request.user, else a 404"
+    ),
+    # views.common.contact_views (MIP-1261)
+    "origin.views.common.contact_views.ContactView": public(
+        "anonymous contact form; mails support and stores nothing; ContactIpThrottle per IP and "
+        "ContactEmailThrottle per sender address, both failing closed"
     ),
     # views.common.auth_views
     "origin.views.common.auth_views.CookieTokenRefreshView": public(

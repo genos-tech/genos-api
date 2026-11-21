@@ -60,6 +60,13 @@ class LeftoversFixture(BaseAPITestCase):
 
     def setUp(self):
         super().setUp()
+        # The search index is not up in unit tests: the prune's index reads see an empty index
+        # (MIP-1821). The derived-name tests mock it themselves.
+        _index = patch("origin.search_engine.opensearch_client.get_client")
+        _client = _index.start()
+        self.addCleanup(_index.stop)
+        _client.return_value.count.return_value = {"count": 0}
+        _client.return_value.search.return_value = {}
         self.leaver = self.user2
         self.mate = self.user
         self.channel = Channel.objects.create(

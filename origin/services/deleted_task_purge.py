@@ -83,9 +83,9 @@ from origin.services.detached_note_attachments import DetachedReport, _classify
 from origin.services.note_delete import (
     forget_deleted_notes,
     forget_note_attachments,
-    remove_stored_files,
 )
 from origin.services.note_satellites import batched_note_cleanup
+from origin.services.task_files import remove_now, stored_files_of_tasks
 from origin.services.v3_activity import SURFACE_TASK_BODY
 from origin.views.utils.note_role import NOTE_TYPE_TASK
 
@@ -260,38 +260,14 @@ def _inventory(task_id: int) -> tuple[Counter, Counter]:
     return removes, left
 
 
-def _used_by_another_row(name: str, task_id: int) -> bool:
-    return (
-        TaskAttachments.objects.filter(attached_file=name).exclude(task_id=task_id).exists()
-        or TaskBodyAttachmentFact.objects.filter(body_attachment_url=name)
-        .exclude(task_id=task_id)
-        .exists()
-    )
-
-
 def _files_to_remove(task_id: int, report: PurgeReport) -> list[str]:
     """The stored files of the task's own rows that are safe to delete after the rows go.
 
-    A name is deleted only when it is under the task's own folder (`task_attachments/<id>/`,
-    `tasks/<id>/`) and no other row names the same file. Anything else is counted and left: the row
-    goes either way, and a file we cannot prove is ours is never removed."""
-    names: list[str] = []
-    for model, column, folder in (
-        (TaskAttachments, "attached_file", f"task_attachments/{task_id}/"),
-        (TaskBodyAttachmentFact, "body_attachment_url", f"tasks/{task_id}/"),
-    ):
-        for name in model.objects.filter(task_id=task_id).values_list(column, flat=True):
-            if not name:
-                continue
-            safe = (
-                name.startswith(folder)
-                and ".." not in name.split("/")
-                and not _used_by_another_row(name, task_id)
-            )
-            if safe:
-                names.append(name)
-            else:
-                report.files_kept += 1
+    The attachments and body images follow the rule every task delete uses (`task_files`, MIP-1824):
+    under the task's own folder, and no other row names the same file. Anything else is counted and
+    left: the row goes either way, and a file we cannot prove is ours is never removed."""
+    names, kept = stored_files_of_tasks([task_id])
+    report.files_kept += kept
     # What is left of the task notes' files after `forget_note_attachments` took the ones whose note
     # is alive: rows whose note was already gone, judged by the same rule the detached-file purge uses.
     for name in TaskNoteAttachmentFact.objects.filter(task_id=task_id).values_list(
@@ -348,7 +324,7 @@ def _purge_one(task_id: int, cutoff: datetime, report: PurgeReport) -> str | Non
 def _after_commit(task_id: int, note_ids: list[int], files: list[str], report: PurgeReport) -> None:
     """Only once the delete is committed: the files, and the search index. Best-effort both."""
     if files:
-        failed = remove_stored_files(files, family="task")
+        failed = remove_now(files, family="task")
         report.files_removed += len(files) - failed
         report.file_errors += failed
     from origin.services.project_delete import _forget_search

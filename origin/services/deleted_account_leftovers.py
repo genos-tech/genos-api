@@ -38,10 +38,21 @@ ANONYMISED, because the row is shared and stays:
   `item_optionals`, and the name in the card's English title ("Reminder about <name>'s
   message"), become "Deleted user". The preview is the message's own text, which stays.
 
-KEPT (listed in the PR as known limits, with the reason): names inside other people's message,
-note, task and comment text (the `body` of a message, the search index built from it, a cached
-thread summary and a server-built inbox preview: MIP-1820 follow-up); the outbox's `actor_name` on other people's rows; Stripe (Ken's
-decision of 2026-11-02, the customer is kept); `CoreTrial` (its own task, MIP-1779).
+* MIP-1821, the name in DERIVED stores (never the typed text): the search chunks' `author_name`
+  (the roster's name, keyed by `author_id`) become "Deleted user"; a cached `ThreadSummary` of a
+  thread the person wrote in goes (a cache, rewritten by the next ask from the roster, which now
+  reads "Deleted user"); a server-built inbox notice the person SENT, and the outbox rows of other
+  members about it (`actor_name`, title, body), have the name replaced by "Deleted user". At
+  deletion the name is the one read before the account row is overwritten; `prune` reads it back
+  from the index's `author_name` (the only copy left once the row is anonymised), and a notice
+  whose name the index no longer holds is left alone (no guess).
+
+KEPT (listed in the PR as known limits, with the reason): names inside other people's typed text
+(the `body` of a message, note, task or comment, and the search text built from it, a mention node
+keeps `userName`: decision of 2026-11-21, rewriting someone's words edits their work); the
+`body_text` of a mirrored task comment, which is typed text too; the outbox's `actor_name` when the
+actor is no longer linked (no FK left to match: measured 0 in production); Stripe (Ken's decision
+of 2026-11-02, the customer is kept); `CoreTrial` (its own task, MIP-1779).
 
 Every query is keyed on the one user. Another member's rows, and rows about the person in other
 members' data, are never selected (other than the anonymised `sender_name` above). Batched, so
@@ -53,7 +64,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from django.db.models import Q, QuerySet, TextField
+from django.db.models import Exists, OuterRef, Q, QuerySet, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
 
@@ -262,18 +273,186 @@ def _blank_mention_previews(user_ids: list[str], *, apply: bool, via_rows: bool)
     return changed
 
 
-def delete_for_user(user_id) -> dict[str, int]:
+def _replace_names(value, names: tuple[str, ...]):
+    """`value` (a JSON-shaped body or a plain string) with every name in `names` replaced by the
+    deleted-user marker, in every string of it. Returns `value` itself when nothing changes, so a
+    caller compares to find out. Plain substring on purpose: a name that is part of another word is
+    replaced too (a leak is worse than a marker in a derived notice)."""
+    if not names:
+        return value
+    if isinstance(value, str):
+        for name in names:
+            if name in value:
+                value = value.replace(name, DELETED_SENDER_NAME)
+        return value
+    if isinstance(value, dict):
+        out = {k: _replace_names(v, names) for k, v in value.items()}
+        return out if out != value else value
+    if isinstance(value, list):
+        out = [_replace_names(v, names) for v in value]
+        return out if out != value else value
+    return value
+
+
+def _index_client():
+    from origin.search_engine.opensearch_client import get_client, get_index_alias
+
+    return get_client(), get_index_alias()
+
+
+def _names_in_index(user_id) -> tuple[str, ...]:
+    """The names the search index holds for this person (`author_name` of their chunks). Once the
+    account is anonymised this is the only copy left outside typed text; prune reads it first."""
+    client, alias = _index_client()
+    res = client.search(
+        index=alias,
+        body={
+            "size": 0,
+            "query": {"term": {"author_id": str(user_id)}},
+            "aggs": {"names": {"terms": {"field": "author_name", "size": 5}}},
+        },
+    )
+    buckets = ((res.get("aggregations") or {}).get("names") or {}).get("buckets") or []
+    names = {b.get("key") for b in buckets} - {"", None, DELETED_SENDER_NAME}
+    return tuple(sorted((str(n) for n in names), key=len, reverse=True))
+
+
+def _count_index_authors(user_ids: list[str]) -> int:
+    client, alias = _index_client()
+    res = client.count(
+        index=alias,
+        body={
+            "query": {
+                "bool": {
+                    "filter": [{"terms": {"author_id": user_ids}}],
+                    "must_not": [{"term": {"author_name": DELETED_SENDER_NAME}}],
+                }
+            }
+        },
+    )
+    return int(res.get("count", 0))
+
+
+def _scrub_index_author(user_id) -> int:
+    """`author_name` of this person's chunks becomes the marker. A metadata update by query: the
+    chunk text and its vectors are not touched, and the reindex rebuilds it the same way."""
+    client, alias = _index_client()
+    res = client.update_by_query(
+        index=alias,
+        body={
+            "query": {
+                "bool": {
+                    "filter": [{"term": {"author_id": str(user_id)}}],
+                    "must_not": [{"term": {"author_name": DELETED_SENDER_NAME}}],
+                }
+            },
+            "script": {
+                "lang": "painless",
+                "source": "ctx._source.author_name = params.name",
+                "params": {"name": DELETED_SENDER_NAME},
+            },
+        },
+        conflicts="proceed",
+        refresh=True,
+    )
+    return int(res.get("updated", 0))
+
+
+def _forget_summaries_sent_in(user_ids: list[str], *, apply: bool) -> int:
+    """Cached thread summaries of the threads these people wrote in: the digest names the senders
+    (from the roster). The row goes, its chunk after commit; the next ask writes a new one."""
+    from origin.search_engine.models import ThreadSummary
+    from origin.services.thread_summary_cleanup import forget_summaries
+
+    sent = Message.objects.filter(sender_id__in=user_ids, deleted_at__isnull=True).filter(
+        Q(channel_id=OuterRef("chat_id"))
+        & (Q(thread_root_id=OuterRef("thread_id")) | Q(pk=OuterRef("thread_id")))
+    )
+    qs = ThreadSummary.objects.annotate(_sent=Exists(sent)).filter(_sent=True)
+    if not apply:
+        return qs.count()
+    return forget_summaries(qs)
+
+
+def _scrub_notices(names_by_user: dict[str, tuple[str, ...]], *, apply: bool) -> int:
+    """Notices the person SENT (server-built `item_body` / `item_optionals`): the name becomes the
+    marker. Reminder cards are left to `_anonymise_reminder_cards`, which owns their sender_name."""
+    changed = 0
+    for uid, names in names_by_user.items():
+        if not names:
+            continue
+        qs = InboxItems.objects.filter(sender_id=uid).exclude(item_type=_REMINDER_CARD)
+        for item in qs.only("pk", "item_body", "item_optionals").iterator(chunk_size=_BATCH):
+            body = _replace_names(item.item_body, names)
+            optionals = _replace_names(item.item_optionals, names)
+            if body is item.item_body and optionals is item.item_optionals:
+                continue
+            changed += 1
+            if apply:
+                InboxItems.objects.filter(pk=item.pk).update(
+                    item_body=body, item_optionals=optionals
+                )
+    return changed
+
+
+def _scrub_outbox(names_by_user: dict[str, tuple[str, ...]], *, apply: bool) -> int:
+    """Outbox rows of OTHER members about a person's notice or activity: `actor_name`, the title and
+    the body. The row itself is kept (it is the member's own email history)."""
+    changed = 0
+    for uid, names in names_by_user.items():
+        if not names:
+            continue
+        rows = EmailNotificationEvent.objects.filter(
+            Q(inbox_item__sender_id=uid) | Q(activity__actor_id=uid)
+        )
+        for row in rows.only("pk", "title", "body", "actor_name").iterator(chunk_size=_BATCH):
+            title = _replace_names(row.title, names)
+            body = _replace_names(row.body, names)
+            actor = _replace_names(row.actor_name, names)
+            if title == row.title and body == row.body and actor == row.actor_name:
+                continue
+            changed += 1
+            if apply:
+                EmailNotificationEvent.objects.filter(pk=row.pk).update(
+                    title=title, body=body, actor_name=actor
+                )
+    return changed
+
+
+def _scrub_index_best_effort(user_id) -> None:
+    """The index scrub inside the deletion, best-effort: the search index is derived, so an outage
+    must neither block the deletion nor leak a name or id into the log (MIP-1821). An outage
+    leaves the name in the chunk metadata until the next reindex, which writes the marker too."""
+    import logging
+
+    try:
+        _scrub_index_author(user_id)
+    except Exception:  # noqa: BLE001 - never the name or the id in the log
+        logging.getLogger("origin.mcp").warning("deleted account: index author scrub skipped")
+
+
+def delete_for_user(user_id, name: str | None = None) -> dict[str, int]:
     """Delete and anonymise the rows of ONE account (called by `delete_account`). Returns counts
-    per table, and `anonymised_*` for what was rewritten, never a value."""
+    per table, and `anonymised_*` / `scrubbed_*` for what was rewritten, never a value.
+
+    `name` is the person's username as it is BEFORE the account row is overwritten (MIP-1821): the
+    name the derived stores hold. Without it only the rows keyed by id are handled."""
     # BEFORE the delete below: it finds the messages through the person's `MessageMention` rows.
     counts = {
         "anonymised_message_previews": _blank_mention_previews(
             [str(user_id)], apply=True, via_rows=True
         )
     }
-    counts.update({name: _delete_batched(qs) for name, qs in _scopes({"": user_id})})
-    counts["anonymised_summaries"] = _anonymise_summaries([str(user_id)])
+    uid = str(user_id)
+    names = {uid: (name,) if name else ()}
+    counts["forgotten_summaries"] = _forget_summaries_sent_in([uid], apply=True)
+    counts.update({name_: _delete_batched(qs) for name_, qs in _scopes({"": user_id})})
+    counts["anonymised_summaries"] = _anonymise_summaries([uid])
     counts["anonymised_reminder_cards"] = _anonymise_reminder_cards({"sender_id": user_id})
+    counts["scrubbed_notices"] = _scrub_notices(names, apply=True)
+    counts["scrubbed_outbox_rows"] = _scrub_outbox(names, apply=True)
+    if name:
+        _scrub_index_best_effort(uid)
     return {k: v for k, v in counts.items() if v}
 
 
@@ -302,6 +481,8 @@ def prune(*, apply: bool = False) -> PruneResult:
     ids = _deleted_account_ids()
     from origin.search_engine.models import NoteSummary, ThreadSummary
 
+    # The names are read from the index BEFORE anything is rewritten (the scrub below blanks them).
+    names_by_user = {uid: _names_in_index(uid) for uid in ids}
     by_table["anonymised_summaries"] = sum(
         m.objects.filter(generated_by_user_id__in=ids).count() for m in (ThreadSummary, NoteSummary)
     )
@@ -314,6 +495,10 @@ def prune(*, apply: bool = False) -> PruneResult:
         .count()
     )
     by_table["security_network_fields"] = _blank_network_fields({"actor_id__in": ids}, apply=False)
+    by_table["forgotten_summaries"] = _forget_summaries_sent_in(ids, apply=False)
+    by_table["index_author_names"] = _count_index_authors(ids) if ids else 0
+    by_table["inbox_notice_names"] = _scrub_notices(names_by_user, apply=False)
+    by_table["outbox_rows_names"] = _scrub_outbox(names_by_user, apply=False)
     by_table = {k: v for k, v in by_table.items() if v}
     matched = sum(by_table.values())
     accounts = len(ids)
@@ -324,4 +509,9 @@ def prune(*, apply: bool = False) -> PruneResult:
     changed += _anonymise_summaries(ids)
     changed += _anonymise_reminder_cards({"sender__is_deleted": True})
     changed += _blank_network_fields({"actor_id__in": ids}, apply=True)
+    changed += _forget_summaries_sent_in(ids, apply=True)
+    changed += _scrub_notices(names_by_user, apply=True)
+    changed += _scrub_outbox(names_by_user, apply=True)
+    for uid in ids:
+        changed += _scrub_index_author(uid)
     return PruneResult(matched, changed, accounts, by_table, dry_run=False)

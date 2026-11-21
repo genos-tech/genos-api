@@ -587,6 +587,8 @@ _PUBLIC_DRF = {
     # MIP-772: the uptime probe's check on the alert cron. Its own bearer
     # token, not a user's; 404 without it.
     "api/v2/health/alerting/",
+    # MIP-1261: the public contact form. Mails support, stores nothing; throttled per IP and per sender.
+    "api/v2/contact/",
     "api/v2/user/signup/",
     "api/v2/user/signin/",
     "api/v2/user/signin/refresh/",

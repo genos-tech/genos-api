@@ -110,6 +110,15 @@ class CompanyNotesContentTests(BaseAPITestCase):
         self.assertIn("What is not there yet", english)
         self.assertIn("the NAME of a private project still shows", english)
 
+    def test_group_chats_are_not_said_to_be_undeletable(self):
+        """MIP-1728: the owner can delete a group chat (MIP-1705), so the notes must not say it cannot."""
+        english = _text(COMPANY_NOTES["en"][0][1]) + _text(COMPANY_NOTES["en"][1][1])
+        japanese = _text(COMPANY_NOTES["ja"][0][1]) + _text(COMPANY_NOTES["ja"][1][1])
+        self.assertNotIn("but not deleted", english)
+        self.assertNotIn("削除はできず", japanese)
+        self.assertIn("Remove sample data", english)
+        self.assertIn("サンプルデータを削除", japanese)
+
     def test_japanese_has_no_broken_characters(self):
         for _, body in COMPANY_NOTES["ja"]:
             self.assertNotIn("�", _text(body))

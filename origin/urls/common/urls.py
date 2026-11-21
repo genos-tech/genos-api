@@ -1,5 +1,6 @@
 from django.urls import include, path
 
+from origin.views.common.agent_work_views import AgentWorkView
 from origin.views.common.api_key_views import (
     ApiKeyDetailView,
     ApiKeyListCreateView,
@@ -29,6 +30,7 @@ from origin.views.common.calendar_views import (
 )
 from origin.views.common.changes_views import ChangesView
 from origin.views.common.client_perf_views import ClientPerfView
+from origin.views.common.contact_views import ContactView
 from origin.views.common.email_unsubscribe_views import email_unsubscribe
 from origin.views.common.gif_views import GifSearchView
 from origin.views.common.github_views import (
@@ -119,6 +121,8 @@ urlpatterns = [
     # The outside probe's check on the alert pipeline (MIP-772). Bearer
     # OPS_HEALTH_TOKEN, else 404.
     path("api/v2/health/alerting/", AlertingHealthView.as_view(), name="health_alerting"),
+    # Public contact form (MIP-1261): mailed to support, not stored.
+    path("api/v2/contact/", ContactView.as_view(), name="contact"),
     # User
     path("api/v2/user/signup/", user_list, name="signup"),
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
@@ -469,6 +473,7 @@ urlpatterns = [
         ScheduleRunView.as_view(),
         name="schedule_run",
     ),
+    path("api/v2/agent/work/", AgentWorkView.as_view(), name="agent_work"),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),
     path(
         "api/v2/mcp/connections/<uuid:connection_id>/",

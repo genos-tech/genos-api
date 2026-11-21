@@ -33,6 +33,7 @@ from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from origin.models.common.member_event_models import KIND_DEPENDENCY_ADD, KIND_DEPENDENCY_REMOVE
+from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskDependency, TaskMaster
 from origin.services import member_events, task_ancestry
 from origin.services.task_blocking import CLOSED_STATUSES, sync_blocked_status
@@ -50,12 +51,34 @@ def dependency_saved(sender, instance: TaskDependency, created: bool, **kwargs):
         member_events.note_dependencies([instance], KIND_DEPENDENCY_ADD)
 
 
+def _blocked_task_goes_with_origin(blocked_task_id: int, origin) -> bool:
+    """Is the blocked task being deleted by the same cascade that deleted this dependency?
+
+    `origin` is what `.delete()` was called on. When it is a project or a task (instance), the
+    cascade takes the blocked task with it if the blocked task is in that project, or is that
+    task or one under it. Then re-deriving the blocked task's status is pointless, and the
+    status-change history it writes names a task the same cascade removes: the foreign key on
+    `TaskActivity` then fails at COMMIT (MIP-1726). Any other origin (a queryset, a team, a
+    dependency the person deleted) answers False, so the re-sync runs as before.
+    """
+    if isinstance(origin, ProjectMaster):
+        return TaskMaster.objects.filter(
+            task_id=blocked_task_id, project_id=origin.project_id
+        ).exists()
+    if isinstance(origin, TaskMaster) and origin.project_id is not None:
+        if blocked_task_id == origin.task_id:
+            return True
+        return blocked_task_id in task_ancestry.descendant_ids(origin.task_id, origin.project_id)
+    return False
+
+
 @receiver(post_delete, sender=TaskDependency)
 def dependency_deleted(sender, instance: TaskDependency, **kwargs):
-    sync_blocked_status([instance.blocked_task_id])
+    origin = kwargs.get("origin")
+    if not _blocked_task_goes_with_origin(instance.blocked_task_id, origin):
+        sync_blocked_status([instance.blocked_task_id])
     # The acting member's ledger notes a delete someone chose to make (MIP-1085), not the
     # rows that go because a task or project did: the cascade's `origin` is that task.
-    origin = kwargs.get("origin")
     asked_for = isinstance(origin, TaskDependency) or (
         isinstance(origin, QuerySet) and origin.model is TaskDependency
     )
@@ -75,9 +98,7 @@ def blocking_capture_previous(sender, instance: TaskMaster, **kwargs):
     if not instance.pk:
         instance._blocking_prev = None
         return
-    prev = (
-        TaskMaster.objects.filter(pk=instance.pk).values("status", "is_deleted").first()
-    )
+    prev = TaskMaster.objects.filter(pk=instance.pk).values("status", "is_deleted").first()
     instance._blocking_prev = prev
 
 

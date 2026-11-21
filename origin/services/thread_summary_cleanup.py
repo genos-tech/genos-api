@@ -38,6 +38,12 @@ def _delete(qs) -> list[tuple[int, object, object]]:
     return triples
 
 
+def forget_summaries(qs) -> int:
+    """Drop the summary rows of `qs` (a `ThreadSummary` queryset): rows in the caller's transaction,
+    chunks after commit. Returns how many rows went."""
+    return len(_delete(qs))
+
+
 def forget_thread(*, channel_id, thread_id) -> int:
     """Drop the summary of one thread. Returns how many rows went (0 or 1).
 

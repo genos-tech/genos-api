@@ -2974,7 +2974,13 @@ def delete_demo_team_data(team_id: uuid.UUID) -> None:
         # it, the comment/attachment post_delete receivers would re-insert
         # a TaskActivity mid-cascade and trip the deferred FK at COMMIT.
         TaskComments.objects.filter(task_id__in=task_ids).delete()
+        # The tasks' attachment and body-image files (MIP-1824): read before their rows go, and
+        # removed from storage after the commit.
+        from origin.services.task_files import remove_after_commit, stored_files_of_tasks
+
+        task_files, _kept = stored_files_of_tasks(task_ids)
         TaskMaster.objects.filter(team=team_id).delete()
+        remove_after_commit(task_files, family="task")
 
         # Projects (Sprint/SprintConfig/MilestoneMaster cascade on
         # project delete; MilestoneAssignees cascades on milestone).
