@@ -59,12 +59,14 @@ def archived_channel_response(channel: Channel) -> Response | None:
     return None
 
 
+def archived_project_of_task(task_id):
+    """The project id a task lives in (None for a missing task)."""
+    return TaskMaster.objects.filter(task_id=task_id).values_list("project_id", flat=True).first()
+
+
 def archived_task_response(task_id) -> Response | None:
     """409 when the task's project is archived, else None. For the task's own writes (edit, comment)."""
-    project_id = (
-        TaskMaster.objects.filter(task_id=task_id).values_list("project_id", flat=True).first()
-    )
-    return archived_project_response(project_id)
+    return archived_project_response(archived_project_of_task(task_id))
 
 
 def archived_task_note_response(note_id) -> Response | None:

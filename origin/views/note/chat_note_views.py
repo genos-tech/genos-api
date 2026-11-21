@@ -868,9 +868,6 @@ class ChatNoteMoveView(AuthenticatedAPIView):
                 {"error": "Target channel not found."}, status=status.HTTP_404_NOT_FOUND
             )
 
-        if res := archived_channel_response(target_channel):
-            return res
-
         # The mover must be an active member of the target channel —
         # is a member of it by the rule of `_chat_membership_filters` (`chat_member_q`: a
         # project chat is the project's people, a stray channel-member row is nobody).
@@ -881,6 +878,9 @@ class ChatNoteMoveView(AuthenticatedAPIView):
                 {"error": "You are not a member of the target chat."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        if res := archived_channel_response(target_channel):
+            return res
 
         now = timezone.now()
         with transaction.atomic():

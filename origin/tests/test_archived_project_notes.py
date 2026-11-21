@@ -13,6 +13,7 @@ from django.utils import timezone
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.project.prj_models import ProjectMembers
 from origin.services.archive import ARCHIVED_CODE
 from origin.tests import test_task_personal_note_roles_revoked as base
 
@@ -54,6 +55,30 @@ class ArchivedTaskNotes(base.TaskNoteBase):
         before = TaskNoteMaster.objects.count()
         self.assert_archived(self.client.post(NOTE, self.create_body(self.task), format="json"))
         self.assertEqual(TaskNoteMaster.objects.count(), before)
+
+    def test_create_cannot_dodge_the_guard_with_another_project_id(self):
+        self.archive()
+        body = self.create_body(self.task)
+        body["project_id"] = self.other.project_id  # a live project
+        before = TaskNoteMaster.objects.count()
+        self.assert_archived(self.client.post(NOTE, body, format="json"))
+        self.assertEqual(TaskNoteMaster.objects.count(), before)
+
+    def test_move_does_not_reveal_an_archived_project_to_a_non_member(self):
+        self.archive(self.other)
+        # The author leaves Beta: they can no longer see it, so the answer is the membership 403.
+        ProjectMembers.objects.filter(project=self.other, attendee=self.author).delete()
+        res = self.client.put(
+            NOTE + "move/",
+            {
+                "team_id": self.tid,
+                "user_id": str(self.author.id),
+                "note_id": self.note.note_id,
+                "task_id": self.other_task.task_id,
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 403, res.content)
 
     def test_autosave_refused(self):
         self.archive()

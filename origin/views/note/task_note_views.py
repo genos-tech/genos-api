@@ -12,6 +12,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
 from origin.services.archive import (
+    archived_project_of_task,
     archived_project_response,
     archived_task_note_response,
 )
@@ -36,7 +37,7 @@ from origin.views.utils.note_version import (
 )
 from origin.views.utils.quota_guards import check_monthly_creation_quota
 from origin.views.utils.request_validators import validate_request_data, validate_request_user
-from origin.views.utils.scope_guards import can_access_task
+from origin.views.utils.scope_guards import can_access_task, is_project_member
 from origin.views.utils.upload_validation import check_attachment_upload
 
 logger = logging.getLogger(__name__)
@@ -418,8 +419,14 @@ class TaskNoteMasterView(AuthenticatedAPIView):
         if res := validate_request_user(str(request_user_id), str(data["owner"])):
             return res
 
-        if res := archived_project_response(data["project"]):
-            return res
+        # The named project AND the task's own project: the body's `project_id` is the client's, so
+        # a live one could be paired with a task of an archived project. Only a project the caller is
+        # on is checked, so the answer never says whether someone else's project is archived.
+        for project_id in (data["project"], archived_project_of_task(data["task"])):
+            if is_project_member(project_id, request_user_id) and (
+                res := archived_project_response(project_id)
+            ):
+                return res
 
         # Tier quota: monthly note-creation cap (shared across
         # personal / task / chat notes).
@@ -765,9 +772,6 @@ class TaskNoteMoveView(AuthenticatedAPIView):
         except TaskMaster.DoesNotExist:
             return Response({"error": "Target task not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if res := archived_project_response(target_task.project_id):
-            return res
-
         # The mover must be a member of the target task's project —
         # mirrors the implicit-access rule in `_accessible_task_note_ids`.
         if not ProjectMembers.objects.filter(
@@ -777,6 +781,9 @@ class TaskNoteMoveView(AuthenticatedAPIView):
                 {"error": "You are not a member of the target task's project."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        if res := archived_project_response(target_task.project_id):
+            return res
 
         now = timezone.now()
         with transaction.atomic():
