@@ -81,6 +81,10 @@ def _origin_allowed(request) -> bool:
     carries no cookie anyway). The literal "null" (sandboxed frames, redirects) is refused. Not
     `CORS_ALLOW_ALL_ORIGINS`: it is on under DEBUG.
     """
+    # Browsers label who started the request. A cross-site one is never ours, and this also covers
+    # the GET that a link or redirect from another site sends with the Lax cookie and no Origin.
+    if request.META.get("HTTP_SEC_FETCH_SITE") == "cross-site":
+        return False
     origin = request.META.get("HTTP_ORIGIN")
     if not origin:
         return True

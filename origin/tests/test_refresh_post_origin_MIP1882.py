@@ -83,6 +83,14 @@ class RefreshPostOriginTests(BaseAPITestCase):
         self.assertEqual(BlacklistedToken.objects.count(), 0)
         self.assertEqual(self._call("post").status_code, 200, "the token was never spent")
 
+    def test_a_cross_site_request_is_refused_even_without_an_origin(self):
+        for method in ("get", "post"):
+            resp = self._call(method, HTTP_SEC_FETCH_SITE="cross-site")
+            self.assertEqual(resp.status_code, 403, method)
+            self.assertNotIn("refresh", resp.cookies, method)
+        self.assertEqual(BlacklistedToken.objects.count(), 0)
+        self.assertEqual(self._call("get", HTTP_SEC_FETCH_SITE="same-site").status_code, 200)
+
     def test_the_literal_null_origin_is_refused(self):
         self.assertEqual(self._call("post", HTTP_ORIGIN="null").status_code, 403)
         self.assertEqual(BlacklistedToken.objects.count(), 0)
