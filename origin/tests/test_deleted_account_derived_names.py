@@ -89,6 +89,30 @@ class DeletionTests(Base):
         self.assertEqual(body["script"]["params"]["name"], DELETED)
         self.assertNotIn(NAME, str(body))
 
+    def test_the_index_is_rewritten_only_on_commit(self):
+        """MIP-1893: not while the deletion's transaction is still open."""
+        client = _client()
+        with mock.patch(_CLIENT, return_value=client):
+            with self.captureOnCommitCallbacks(execute=False) as callbacks:
+                delete_account(self.doomed)
+            client.update_by_query.assert_not_called()
+            self.assertTrue(callbacks)
+            for callback in callbacks:
+                callback()
+        client.update_by_query.assert_called_once()
+
+    def test_a_deletion_that_fails_later_never_rewrites_the_index(self):
+        client = _client()
+        with mock.patch(_CLIENT, return_value=client):
+            with mock.patch(
+                "origin.services.deleted_account_channel_owners.reassign_owned_channels",
+                side_effect=RuntimeError("late"),
+            ):
+                with self.captureOnCommitCallbacks(execute=True):
+                    with self.assertRaises(RuntimeError):
+                        delete_account(self.doomed)
+        client.update_by_query.assert_not_called()
+
     def test_an_index_outage_does_not_block_the_deletion(self):
         client = _client()
         client.update_by_query.side_effect = ConnectionError("down")

@@ -1,0 +1,189 @@
+[
+  {
+    "chunks": [
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER1",
+        "author_name": "testuser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0001",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:msg:MSG-a0001",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:01:00+00:00",
+        "entity_id": "gm:CHANNEL",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "first plain message",
+        "snippet_text": "first plain message",
+        "team_id": "TEAM",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:01:00+00:00"
+      },
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER2",
+        "author_name": "otheruser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0002",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:msg:MSG-a0002",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:02:00+00:00",
+        "entity_id": "gm:CHANNEL",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "Previously:\nfirst plain message\n\nMessage:\nsecond plain message",
+        "snippet_text": "second plain message",
+        "team_id": "TEAM",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:02:00+00:00"
+      },
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER1",
+        "author_name": "testuser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0007",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:msg:MSG-a0007",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:07:00+00:00",
+        "entity_id": "gm:CHANNEL",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "Previously:\nfirst plain message\nsecond plain message\n\nMessage:\nthird plain message",
+        "snippet_text": "third plain message",
+        "team_id": "TEAM",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:07:00+00:00"
+      },
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER2",
+        "author_name": "otheruser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0009",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:msg:MSG-a0009",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:09:00+00:00",
+        "entity_id": "gm:CHANNEL",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "Previously:\nsecond plain message\nthird plain message\n\nMessage:\nfourth plain message",
+        "snippet_text": "fourth plain message",
+        "team_id": "TEAM",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:09:00+00:00"
+      }
+    ],
+    "entity_id": "gm:CHANNEL"
+  },
+  {
+    "chunks": [
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER1",
+        "author_name": "testuser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0003",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:thread:MSG-a0003:anchor:MSG-a0003",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:03:00+00:00",
+        "entity_id": "gm:CHANNEL:thread:MSG-a0003",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "thread root about the release",
+        "snippet_text": "thread root about the release",
+        "team_id": "TEAM",
+        "thread_id": "MSG-a0003",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:03:00+00:00"
+      },
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER2",
+        "author_name": "otheruser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0004",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:thread:MSG-a0003:msg:MSG-a0004",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:04:00+00:00",
+        "entity_id": "gm:CHANNEL:thread:MSG-a0003",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "Previously:\nthread root about the release\n\nMessage:\na reply",
+        "snippet_text": "a reply",
+        "team_id": "TEAM",
+        "thread_id": "MSG-a0003",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:04:00+00:00"
+      },
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "author_id": "USER1",
+        "author_name": "testuser",
+        "chat_id": "CHANNEL",
+        "chat_message_id": "MSG-a0005",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:thread:MSG-a0003:msg:MSG-a0005",
+        "chunk_type": "chat_message",
+        "created_at": "2026-11-01T09:05:00+00:00",
+        "entity_id": "gm:CHANNEL:thread:MSG-a0003",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "Previously:\nthread root about the release\na reply\n\nMessage:\nanother reply",
+        "snippet_text": "another reply",
+        "team_id": "TEAM",
+        "thread_id": "MSG-a0003",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:05:00+00:00"
+      },
+      {
+        "acl_user_ids": [
+          "USER2",
+          "USER1"
+        ],
+        "chat_id": "CHANNEL",
+        "chat_type": "gm",
+        "chunk_id": "chat:gm:CHANNEL:thread:MSG-a0003:window",
+        "chunk_type": "chat_thread_window",
+        "created_at": "2026-11-01T09:03:00+00:00",
+        "entity_id": "gm:CHANNEL:thread:MSG-a0003",
+        "entity_type": "chat",
+        "related_entity_ids": [],
+        "search_text": "thread root about the release\na reply\nanother reply",
+        "snippet_text": "thread root about the release a reply another reply",
+        "team_id": "TEAM",
+        "thread_id": "MSG-a0003",
+        "title": "Pinned GM",
+        "updated_at": "2026-11-01T09:05:00+00:00"
+      }
+    ],
+    "entity_id": "gm:CHANNEL:thread:MSG-a0003"
+  }
+]

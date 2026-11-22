@@ -559,6 +559,11 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         # (`comment_on_note` and `reply_to_note_comment` left this list in MIP-1669: a comment an AI app
         # writes on a note tells the key's owner, as a task comment does; resolving stays silent.)
         "resolve_note_comment",
+        # The task-body thread tools (MIP-1863) send no notice in this version: a comment on a task
+        # body reaches no activity surface yet (no surface type for it), so none is owed.
+        "comment_on_task_body",
+        "reply_to_task_body_comment",
+        "resolve_task_body_comment",
         "manage_note_sharing",
         "restore_note_version",
         "set_item_importance",

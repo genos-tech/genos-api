@@ -23,12 +23,12 @@ from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_notice, member_events, security_events
+from origin.services import mcp_notice, mcp_oauth, member_events, security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.anonymous_throttle import McpAnonymousThrottle
 from origin.views.public.credentials import credential_of
-from origin.views.public.mcp import limit_gate, prompts, protocol, request_guard, tools
+from origin.views.public.mcp import limit_gate, prompts, protocol, request_guard, surfaces, tools
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.mcp.result_log import note_result
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
@@ -76,6 +76,10 @@ class McpView(PublicApiView):
     # request object."), which a client shows. The base view's guard would
     # answer `[1]` with a bare 400 `{"error": ...}` instead.
     object_body_required = False
+
+    # Which endpoint this is (MIP-1594): `None` is the full catalog, otherwise a key of
+    # `surfaces.SURFACE_SEGMENTS`, set per URL with `as_view(surface=...)`, never per request.
+    surface: str | None = None
 
     def dispatch(self, request, *args, **kwargs):
         # Before DRF authenticates or parses anything: an oversized request is refused on its
@@ -171,13 +175,19 @@ class McpView(PublicApiView):
         )
         return response
 
-    @staticmethod
-    def challenge(*, failed: bool) -> str | None:
+    def _has_prompts(self) -> bool:
+        return surfaces.publishes(self.surface, "get_my_briefing")
+
+    def challenge(self, *, failed: bool) -> str | None:
         """The `WWW-Authenticate` challenge that points at the OAuth metadata, or None
-        when OAuth is not configured."""
+        when OAuth is not configured. On a surface it points at that URL's own metadata (RFC 9728
+        section 3.3: the document's `resource` must be the URL that was called), and only while
+        the setting is on, so it stays dark with the rest of OAuth."""
         url = (getattr(settings, "MCP_RESOURCE_METADATA_URL", "") or "").strip()
         if not url or '"' in url or "\n" in url or "\r" in url:
             return None
+        if self.surface is not None:
+            url = mcp_oauth.metadata_url_for(self.surface)
         params = []
         if failed:
             params.append('error="invalid_token"')
@@ -278,7 +288,9 @@ class McpView(PublicApiView):
         if method == "tools/list":
             listed = [
                 tools.describe(t, getattr(credential_of(request), "kind", "api_key"))
-                for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+                for t in tools.visible_tools(
+                    scope, allow_destructive=allow_destructive, surface=self.surface
+                )
             ]
             # The one cacheable result we serve, so the one that carries
             # cache hints. See `protocol.CACHE_HINTS_NO_STORE` for why the
@@ -305,6 +317,7 @@ class McpView(PublicApiView):
                     allow_destructive,
                     credential_kind=getattr(credential_of(request), "kind", "api_key"),
                     request=request,
+                    surface=self.surface,
                 ),
                 modern=modern,
             )
@@ -313,9 +326,11 @@ class McpView(PublicApiView):
         # ask the model to call: a prompt for a plan the member does not have would only
         # lead to a refusal on the first tool.
         if method == "prompts/list":
+            # The prompts send the model to `get_my_briefing`: a URL that does not publish it
+            # lists none (and `prompts/get` answers as for an unknown prompt, below).
             return self._ok(
                 request_id,
-                {"prompts": prompts.list_prompts()},
+                {"prompts": prompts.list_prompts() if self._has_prompts() else []},
                 modern=modern,
                 cache_hints=protocol.CACHE_HINTS_NO_STORE,
             )
@@ -325,9 +340,14 @@ class McpView(PublicApiView):
                 raise JsonRpcError(
                     protocol.INVALID_PARAMS, "`params` must be an object.", http_status=400
                 )
+            if not self._has_prompts():
+                raise prompts.unknown_prompt(params.get("name"), ())
             # Written for what this key can do: see `prompts.py`.
             visible = frozenset(
-                t.name for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+                t.name
+                for t in tools.visible_tools(
+                    scope, allow_destructive=allow_destructive, surface=self.surface
+                )
             )
             return self._ok(
                 request_id,
@@ -491,6 +511,7 @@ class McpView(PublicApiView):
         allow_destructive: bool,
         credential_kind: str = "api_key",
         request=None,
+        surface: str | None = None,
     ) -> dict[str, Any]:
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -501,7 +522,10 @@ class McpView(PublicApiView):
 
         def unknown(tool_name: str) -> Exception:
             available = ", ".join(
-                t.name for t in tools.visible_tools(scope, allow_destructive=allow_destructive)
+                t.name
+                for t in tools.visible_tools(
+                    scope, allow_destructive=allow_destructive, surface=surface
+                )
             )
             return JsonRpcError(
                 protocol.INVALID_PARAMS,
@@ -512,7 +536,9 @@ class McpView(PublicApiView):
 
         # The plan's bulk-size, page-size and chat-history limits (MIP-1367, phase 3): dark. A call
         # a tool would refuse first (read-only key, no destructive opt-in) is left to it.
-        arguments, limited = limit_gate.prepare(name, arguments, ctx, scope, allow_destructive)
+        arguments, limited = limit_gate.prepare(
+            name, arguments, ctx, scope, allow_destructive, surface=surface
+        )
         if limited is not None:
             note_result(request, name, limited)
             return limited
@@ -577,6 +603,7 @@ class McpView(PublicApiView):
                     audit=audit,
                     record_use=record_use,
                     notify=notify,
+                    surface=surface,
                 )
                 # Size and name for the `perf.request` line, and the shadow cap's log line
                 # (MIP-1367). Observes only: `result` goes back exactly as built.

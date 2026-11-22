@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 import zoneinfo
 
 from django.utils import timezone
@@ -208,6 +209,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         token = super().get_token(user)
         token["username"] = user.username  # Add username to JWT payload
+        # Family id of this login session (MIP-1907): copied by every rotation, so signout can
+        # revoke the siblings a grace-window replay minted.
+        token["fam"] = uuid.uuid4().hex
         # No `email` claim (MIP-619): a JWT is readable by anyone holding
         # it, it outlives sign-out in `token_blacklist_outstandingtoken`,
         # and nothing reads the claim.
