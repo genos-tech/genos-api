@@ -114,7 +114,7 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # (the task, note and milestone references, "which kind of note", the chip pointer, the approval tail of the write tools, the
 # house templates) is said once in the system prompt (REFS, +558 characters) and the in-app declarations point at it
 # (`references._WORDING`; MCP's `tools/list` keeps its full text), and the five largest tools lose the sentences their own
-# properties or the prompt already say. The constant goes DOWN to the next 500 over the measurement.
+# properties or the prompt already say. The constant goes DOWN to the next 500 over the measurement.# Merge with main (2026-11-22, genos-api PR 1089 edit_note_block / manage_project wording and the other merges): production re-measured 140,451 (+962 over the 139,489 above, all of it main's). The constants stay: 141,000 (549 left) and ALL_ON 142,500 (142,142 with a Long member's block, 358 left).
 BUDGET_CHARS = 141_000
 
 
