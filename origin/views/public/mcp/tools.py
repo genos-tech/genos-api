@@ -1839,7 +1839,7 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="manage_project",
         description=(
             "Create a project, or rename one or change its code. `action` "
-            "'create' needs `name` (unique in the team); `is_private` and "
+            "'create' needs `name` (refused when a project you can see already has it); `is_private` and "
             "`member_ids` (team members to add, from `get_team_members`) are "
             "optional. The caller becomes the owner and the code is derived from "
             "the name. `action` 'update' needs `project_id` (from "
@@ -2554,7 +2554,11 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
     if tool.mcp_only_args or tool.surface_args:
-        properties = dict(schema.get("properties") or {})
+        # An MCP-only argument keeps its own place even when a flag adds a property of the same name to
+        # the in-app tool (`include_blocks`, MIP-1656): drop it first, so the order never depends on a flag.
+        properties = {
+            k: v for k, v in (schema.get("properties") or {}).items() if k not in tool.mcp_only_args
+        }
         properties.update(tool.mcp_only_args)
         properties.update(tool.surface_args)
         schema = {**schema, "properties": properties}

@@ -165,6 +165,8 @@ UNDO_SUPPORT: dict[str, str] = {
     "delete_task_attachment": NONE,
     # --- a comment thread on a passage of a note (MIP-1671; flag-gated in the app) ---
     "comment_on_note": NONE,
+    # --- one block of a note (MIP-1656; flag-gated in the app) ---
+    "edit_note_block": NONE,
 }
 
 # tool name -> (reason code, one line) for every tool that is not `full`. The
@@ -254,6 +256,11 @@ UNDO_REASONS: dict[str, tuple[str, str]] = {
         NOTIFIED_PEOPLE,
         "the people the note reaches are told (an activity, a push), and removing the thread and its "
         "mark from the note's document is not built",
+    ),
+    "edit_note_block": (
+        NOT_YET,
+        "the replaced block is kept in the note's version history (restore_note_version puts it back by "
+        "hand); a one-block undo on the live document is not built",
     ),
 }
 

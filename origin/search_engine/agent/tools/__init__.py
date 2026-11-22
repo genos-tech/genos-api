@@ -77,6 +77,7 @@ from origin.search_engine.agent.tools.delete_project import DELETE_PROJECT
 from origin.search_engine.agent.tools.delete_sprint import DELETE_SPRINT
 from origin.search_engine.agent.tools.delete_task_attachment import DELETE_TASK_ATTACHMENT
 from origin.search_engine.agent.tools.delete_todo_item import DELETE_TODO_ITEM
+from origin.search_engine.agent.tools.edit_note_block import EDIT_NOTE_BLOCK_INAPP
 from origin.search_engine.agent.tools.favorite_note import FAVORITE_NOTE
 from origin.search_engine.agent.tools.fetch_chat_thread import FETCH_CHAT_THREAD
 from origin.search_engine.agent.tools.fetch_note import FETCH_NOTE
@@ -334,6 +335,9 @@ register_flagged_tool(GET_TIMELINE_INAPP, "AGENT_INAPP_TIMELINE_TOOL")
 # A WRITE tool (it asks for approval), dark until its eval: with the flag off it is declared and runnable
 # nowhere in the app, and MCP's own `comment_on_note` is untouched (`get_mcp_tool` prefers the MCP-only one).
 register_flagged_tool(COMMENT_ON_NOTE_INAPP, "AGENT_INAPP_NOTE_COMMENT_TOOL")
+# MIP-1656: one block of a note. The same flag adds `include_blocks` to `fetch_note` (`tool_flag_params`), so the model
+# can find a block id. MCP's own `edit_note_block` is untouched (`get_mcp_tool` prefers the MCP-only one).
+register_flagged_tool(EDIT_NOTE_BLOCK_INAPP, "AGENT_INAPP_NOTE_BLOCK_TOOL")
 # MIP-1563: a task's files can be deleted by the agent and MCP, behind the parity batch's flag. A
 # WRITE tool: filed here so that with the flag off it is declared, runnable and published nowhere.
 register_flagged_tool(DELETE_TASK_ATTACHMENT, PARITY_FLAG)

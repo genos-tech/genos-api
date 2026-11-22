@@ -31,27 +31,33 @@ log = logging.getLogger(__name__)
 OPS = ("replace", "insert_after", "delete")
 _BLOCK_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _BLOCK_HASH = re.compile(r"^[0-9a-f]{16}$")
-_READ_AGAIN = "Read the note with `get_note` and `include_blocks: true` to see its current blocks."
+
+#: The tool that lists a note's blocks: `get_note` over MCP, `fetch_note` in the app (MIP-1656).
+MCP_READ_TOOL = "get_note"
 
 
-def _block_id(raw: Any) -> str:
+def _read_again(read_tool: str) -> str:
+    return f"Read the note with `{read_tool}` and `include_blocks: true` to see its current blocks."
+
+
+def _block_id(raw: Any, read_tool: str = MCP_READ_TOOL) -> str:
     text = raw.strip() if isinstance(raw, str) else ""
     if not _BLOCK_ID.match(text):
         raise ToolError(
-            "`block_id` is the id of one block: take it from `blocks` in `get_note` "
+            f"`block_id` is the id of one block: take it from `blocks` in `{read_tool}` "
             "(call it with `include_blocks: true`), or pass the block's link (the note's URL "
             "ending `?block=<id>`) as `note_id`."
         )
     return text
 
 
-def _base_hash(raw: Any) -> str | None:
+def _base_hash(raw: Any, read_tool: str = MCP_READ_TOOL) -> str | None:
     if raw is None:
         return None
     text = raw.strip() if isinstance(raw, str) else ""
     if not _BLOCK_HASH.match(text):
         raise ToolError(
-            "`base_block_hash` must be the `block_hash` string from `get_note`'s `blocks`."
+            f"`base_block_hash` must be the `block_hash` string from `{read_tool}`'s `blocks`."
         )
     return text
 
@@ -71,18 +77,21 @@ def _new_blocks(op: str, raw: Any, ctx: ToolContext) -> list[dict[str, Any]]:
     return blocks
 
 
-def _refusal(err: collab_push.BlockEditError, block_id: str) -> ToolError:
+def _refusal(
+    err: collab_push.BlockEditError, block_id: str, read_tool: str = MCP_READ_TOOL
+) -> ToolError:
     """A collab "no" as the sentence the caller reads. Nothing here echoes a note's text."""
     kind = err.kind
+    read_again = _read_again(read_tool)
     if kind == "block_not_found":
         return ToolError(
             f"Block {block_id} was not found in this note (it may have been deleted or "
-            f"replaced). {_READ_AGAIN} Nothing was changed."
+            f"replaced). {read_again} Nothing was changed."
         )
     if kind == "stale":
         return ToolError(
             f"Block {block_id} changed since you read it (`base_block_hash` is stale). "
-            f"{_READ_AGAIN} Nothing was changed."
+            f"{read_again} Nothing was changed."
         )
     if kind == "refused":
         return ToolError(f"The editor service rejected the edit: {err}. Nothing was changed.")
@@ -94,7 +103,7 @@ def _refusal(err: collab_push.BlockEditError, block_id: str) -> ToolError:
     if kind == "unknown":
         return ToolError(
             "The edit was sent but no answer came back, so it may or may not have been made. "
-            "Read the note with `get_note` before editing again, or a block may appear twice."
+            f"Read the note with `{read_tool}` before editing again, or a block may appear twice."
         )
     return ToolError(
         "This note's editor service could not be reached right now. Nothing was changed; "
@@ -103,11 +112,18 @@ def _refusal(err: collab_push.BlockEditError, block_id: str) -> ToolError:
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    return run_edit(args, ctx)
+
+
+def run_edit(
+    args: dict[str, Any], ctx: ToolContext, *, read_tool: str = MCP_READ_TOOL
+) -> dict[str, Any]:
+    """The edit. `read_tool` only words the sentences that tell a caller where to read the blocks."""
     op = args.get("op")
     if op not in OPS:
         raise ToolError(f"`op` must be one of {', '.join(OPS)}.")
-    block_id = _block_id(args.get("block_id"))
-    base_hash = _base_hash(args.get("base_block_hash"))
+    block_id = _block_id(args.get("block_id"), read_tool)
+    base_hash = _base_hash(args.get("base_block_hash"), read_tool)
     new_blocks = _new_blocks(op, args.get("content_text"), ctx)
 
     ref = load_readable_note(args, ctx)
@@ -137,17 +153,17 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         body_after, new_ids, live = done["blocks"], list(done.get("newBlockIds") or []), "applied"
     except collab_push.BlockEditError as err:
         if err.kind != "no_document":
-            raise _refusal(err, block_id)
+            raise _refusal(err, block_id, read_tool)
         # Nobody ever opened this note, so there is no live doc and no editor to disturb: the stored
         # body is the whole truth, and it is edited here the same way collab would.
         current = _stored.find_block(note.body, block_id)
         if current is None:
-            raise _refusal(collab_push.BlockEditError("block_not_found"), block_id)
+            raise _refusal(collab_push.BlockEditError("block_not_found"), block_id, read_tool)
         if base_hash and _stored.block_hash(current) != base_hash:
-            raise _refusal(collab_push.BlockEditError("stale"), block_id)
+            raise _refusal(collab_push.BlockEditError("stale"), block_id, read_tool)
         spliced = _stored.splice(note.body, block_id, op, new_blocks)
         if spliced is None:  # pragma: no cover - find_block just found it
-            raise _refusal(collab_push.BlockEditError("block_not_found"), block_id)
+            raise _refusal(collab_push.BlockEditError("block_not_found"), block_id, read_tool)
         body_after, new_ids = spliced
         live = "not_open"
 
