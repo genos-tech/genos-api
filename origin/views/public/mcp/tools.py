@@ -2569,7 +2569,9 @@ def _require_task_refs(tool: McpTool, args: dict[str, Any]) -> None:
             )
 
 
-def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dict[str, Any]:
+def resolve_references(
+    tool: McpTool, args: dict[str, Any], team_id: str, user_id: str | None = None
+) -> dict[str, Any]:
     """`args` with every reference `tool` takes turned into the id it wants.
 
     The one place that says what a reference is, used by this endpoint and by
@@ -2581,7 +2583,7 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
         if arg in args and args[arg] is not None:
             if args[arg] == "" and arg in tool.clearable_task_ref_args:
                 continue
-            args[arg] = resolve_task_ref(args[arg], team_id)
+            args[arg] = resolve_task_ref(args[arg], team_id, user_id)
     for arg in tool.note_ref_args:
         if arg in args and args[arg] is not None:
             note_id, note_type = resolve_note_ref(args[arg], team_id)
@@ -2624,7 +2626,7 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
         resolved = []
         for entry in entries:
             if isinstance(entry, dict) and entry.get(item_key) is not None:
-                entry = {**entry, item_key: resolve_task_ref(entry[item_key], team_id)}
+                entry = {**entry, item_key: resolve_task_ref(entry[item_key], team_id, user_id)}
             resolved.append(entry)
         args[list_arg] = resolved
     return args
@@ -3155,7 +3157,7 @@ def call(
             return _text_result(str(exc), is_error=True)
     try:
         _require_task_refs(tool, args)
-        args = resolve_references(tool, args, ctx.team_id)
+        args = resolve_references(tool, args, ctx.team_id, ctx.user_id)
         if (
             limits
             and tool.write

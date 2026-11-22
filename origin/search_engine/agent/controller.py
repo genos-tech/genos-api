@@ -4075,7 +4075,7 @@ def _drive_loop(
         ref_errors: dict[int, str] = {}
         for i, c in enumerate(accumulated_function_calls):
             try:
-                resolved_args.append(resolve_call(c.name, c.args, ctx.team_id))
+                resolved_args.append(resolve_call(c.name, c.args, ctx.team_id, ctx.user_id))
             except ToolError as exc:
                 resolved_args.append(dict(c.args))
                 ref_errors[i] = str(exc)

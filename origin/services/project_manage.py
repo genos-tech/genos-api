@@ -20,7 +20,7 @@ import re
 import uuid
 from typing import Iterable
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
@@ -90,12 +90,34 @@ def new_system_user(team, name: str) -> CustomUser:
     `<team id>-<name with underscores>@genos.tech`; a taken address (a project of
     that name existed before) gets a short suffix instead of failing."""
     slug = re.sub(r"\s+", "_", name)
-    email = f"{team.team_id}-{slug}@genos.tech"
-    if CustomUser.objects.with_email(email).exists():
-        email = f"{team.team_id}-{slug}-{uuid.uuid4().hex[:6]}@genos.tech"
+    # Always suffixed (MIP-1957): the address of a project's own system user is readable by the
+    # project's members, and a suffix added only when the plain one was taken would tell the
+    # creator that a project of that name existed before, one they may not be allowed to see
+    # (hidden) or that was deleted.
+    email = f"{team.team_id}-{slug}-{uuid.uuid4().hex[:6]}@genos.tech"
     return CustomUser.objects.create_user(
         email=email, username=name, password=None, is_system_user=True
     )
+
+
+CODE_ATTEMPTS = 5
+
+
+def _create_row_with_free_code(*, team, project_name, **fields) -> ProjectMaster:
+    """The project row with the first free code. Two creates can read the same free code; the
+    database lets one win (`project_code_unique_per_team`) and the loser takes the next free code,
+    each try in its own savepoint so the outer transaction stays usable (MIP-1957)."""
+    for attempt in range(CODE_ATTEMPTS):
+        code = derive_project_code(project_name, taken_project_codes(team.team_id))
+        try:
+            with transaction.atomic():
+                return ProjectMaster.objects.create(
+                    team=team, project_name=project_name, code=code, **fields
+                )
+        except IntegrityError:
+            if attempt == CODE_ATTEMPTS - 1:
+                raise
+    raise AssertionError("unreachable")
 
 
 def create_project(
@@ -127,10 +149,9 @@ def create_project(
 
     with transaction.atomic():
         system_user = new_system_user(team, name)
-        project = ProjectMaster.objects.create(
+        project = _create_row_with_free_code(
             team=team,
             project_name=name,
-            code=derive_project_code(name, taken_project_codes(team.team_id)),
             owner=owner,
             project_system_user=system_user,
             is_private=bool(is_private),
