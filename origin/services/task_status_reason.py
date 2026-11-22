@@ -1,7 +1,7 @@
 """A status change made through an app leaves a visible comment saying why (MIP-1997).
 
 The rule. When a task's or milestone's STATUS is changed by the connector (the MCP tools and the public
-REST API) or by the in-app assistant, the caller must say why, and Genos posts that reason as a normal
+REST API) or by the in-app assistant, the caller should say why, and Genos posts that reason as a normal
 task comment in the caller's name: "Status: Open → Pending: waits for the release window". The reason
 used to live only in an `update_tasks_bulk` rationale in the task's change history, so a task that
 turned `Pending` or `Blocked` showed nobody why.
@@ -57,23 +57,45 @@ def clean_status_reason(raw: Any) -> str:
 
 
 def status_reason_error(old: str, new: str, raw_reason: Any, *, arg: str = "reason") -> str | None:
-    """Why this status change cannot go ahead, or None. No change (same status) needs no reason."""
+    """Why this status change cannot go ahead, or None. The only refusal left is a reason too long
+    to be one comment: a missing reason is NOT refused, it earns a suggestion
+    (`status_reason_suggestions`). Cutting a long reason would store words nobody wrote."""
     if old == new:
         return None
     reason = clean_status_reason(raw_reason)
-    if not reason:
-        return (
-            f"`{arg}` is required when you change `status` ({old} → {new}): say why in one "
-            "short sentence (Closed: what shipped; Pending or Blocked: what it waits for and "
-            f"when it comes back; reopened: why). It is posted on the task as a comment. "
-            "Nothing was changed."
-        )
     if len(reason) > STATUS_REASON_MAX:
         return (
             f"`{arg}` is too long ({len(reason)} characters; at most {STATUS_REASON_MAX}): "
             "one or two sentences. Nothing was changed."
         )
     return None
+
+
+STATUS_REASON_MESSAGE = (
+    "The status changed ({old} \u2192 {new}) but no `{arg}` was given, so the task shows nobody why. "
+    "Add a comment saying why: Closed = what shipped; Pending or Blocked = what it waits for and "
+    "when it comes back; reopened = why."
+)
+
+
+def status_reason_suggestions(
+    old: str, new: str, raw_reason: Any, *, arg: str = "reason"
+) -> list[dict[str, Any]]:
+    """The `suggestions` list for a status change made without a reason (MIP-1997), else [].
+
+    Decision (Ken, 2026-11-22, "Decision: Genos guides agents with suggestions in tool replies, not
+    hard rejections" on MIP-2014): the change goes ahead and the reply says what was forgotten. Same
+    shape as the organize suggestions of MIP-2015 (`kind`, `message`, `candidates`), so a caller
+    reads one `suggestions` key; `candidates` is empty, there is nothing to pick from."""
+    if old == new or clean_status_reason(raw_reason):
+        return []
+    return [
+        {
+            "kind": "status_reason",
+            "message": STATUS_REASON_MESSAGE.format(old=old, new=new, arg=arg),
+            "candidates": [],
+        }
+    ]
 
 
 def status_comment_text(old: str, new: str, reason: str) -> str:
@@ -112,7 +134,8 @@ def locked_status_change(task_id: int, new: str) -> tuple[str, str] | None:
 def post_status_change_comment(
     *, task_id: int, actor_id: str, old: str, new: str, reason: Any
 ) -> TaskComments | None:
-    """Post "Status: <old> → <new>: <reason>" on the task as `actor_id`. None when nothing changed.
+    """Post "Status: <old> → <new>: <reason>" on the task as `actor_id`. None when nothing changed
+    or no reason was given.
 
     Call it inside the same `transaction.atomic()` as the status write, so a status never lands
     without its comment (and a rolled-back bulk batch leaves no comments). The thread mirror and the
@@ -120,9 +143,12 @@ def post_status_change_comment(
     notified: the status change is already on the task, and a bulk change of twenty tasks should not
     ping twenty people; the comment still appears in the task's thread and its comment list.
     """
-    if old == new:
+    reason = clean_status_reason(reason)
+    if old == new or not reason:
+        # No reason given: the change stands and the reply suggests one; a comment with nothing
+        # after the colon would only repeat the history.
         return None
-    text = status_comment_text(old, new, clean_status_reason(reason))
+    text = status_comment_text(old, new, reason)
     with transaction.atomic():
         task = TaskMaster.objects.only("task_id").get(task_id=task_id)
         comment = TaskComments.objects.create(

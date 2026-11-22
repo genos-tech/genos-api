@@ -397,10 +397,12 @@ OPENAPI = {
                     "Requires `write` scope. Only `title`, `status` and "
                     "`priority` are writable: the field list is an allowlist, "
                     "not a passthrough, so a new model column never silently "
-                    "joins the public API. Changing `status` needs a `reason` "
+                    "joins the public API. When changing `status`, send a `reason` "
                     "(not stored on the task): Genos posts it on the task as a "
                     "comment in the key owner's name, \"Status: Open → Closed: "
-                    '...", marked as made through the connected app.'
+                    '...", marked as made through the connected app. Without one the '
+                    "change still goes through and the response carries a `suggestions` "
+                    "list asking for it."
                 ),
                 "requestBody": {
                     "required": True,
@@ -425,8 +427,8 @@ OPENAPI = {
                                     "type": "string",
                                     "maxLength": 1000,
                                     "description": (
-                                        "Why the status changes. Required when `status` "
-                                        "differs from the task's current status."
+                                        "Why the status changes. Optional, but a status "
+                                        "change without it gets a `suggestions` entry."
                                     ),
                                 },
                                 "priority": {"type": "string"},
@@ -441,7 +443,7 @@ OPENAPI = {
                     },
                     "400": _error(
                         "Empty title, no writable field supplied, an unknown status, or a "
-                        "status change without a `reason` (`field: reason`)."
+                        "`reason` over 1000 characters (`field: reason`)."
                     ),
                     "401": _error("Missing or invalid key."),
                     "403": _error("This key is read-only."),

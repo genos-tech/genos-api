@@ -58,6 +58,7 @@ from origin.services.task_status_reason import (
     locked_status_change,
     post_status_change_comment,
     status_reason_error,
+    status_reason_suggestions,
 )
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.object_body import ObjectBodyMixin
@@ -390,7 +391,8 @@ class TaskDetailView(PublicApiView):
                 value = request.data.get(field)
                 if field == "status":
                     # MIP-1997: the new status must be a real one (the change is posted as a
-                    # comment, "Open → banana" would read as a bug), and a change says why.
+                    # comment, "Open → banana" would read as a bug). A change should say why, but
+                    # a missing reason is only suggested in the response (never refused).
                     if not isinstance(value, str) or value not in _STATUSES:
                         return Response(
                             {"error": f"status must be one of {sorted(_STATUSES)}."},
@@ -444,4 +446,11 @@ class TaskDetailView(PublicApiView):
                     new=status_event[1],
                     reason=request.data.get("reason"),
                 )
-        return Response(_serialize_task(task), status=status.HTTP_200_OK)
+        body = _serialize_task(task)
+        if status_event is not None and (
+            suggestions := status_reason_suggestions(
+                status_event[0], status_event[1], request.data.get("reason")
+            )
+        ):
+            body["suggestions"] = suggestions
+        return Response(body, status=status.HTTP_200_OK)

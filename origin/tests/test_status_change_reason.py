@@ -1,10 +1,11 @@
 """MIP-1997: a status change made through an app says why, and the reason is a comment.
 
 The MCP tools (`update_task`, `update_tasks_bulk`, `manage_milestone`), the public REST API
-(`PATCH /api/public/v1/tasks/<id>/`) and the in-app assistant's tools refuse a status change without
-a reason, and post the reason as a normal task comment in the caller's name:
-"Status: Open → Pending: waits for the release window". The web app's own endpoints are not changed:
-a person clicking a status is not asked to type a reason.
+(`PATCH /api/public/v1/tasks/<id>/`) and the in-app assistant's tools post a given reason as a
+normal task comment in the caller's name: "Status: Open → Pending: waits for the release window".
+Without a reason the change still goes ahead and the reply carries a `suggestions` entry (Ken,
+2026-11-22: guide with suggestions, never refuse); only a reason too long for one comment is refused.
+The web app's own endpoints are not changed: a person clicking a status is not asked for a reason.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from unittest import mock
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
-from origin.search_engine.agent import approval_edits as edits
 from origin.search_engine.agent.tools import ToolContext, ToolError
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
@@ -27,6 +27,7 @@ from origin.services.task_status_reason import (
     post_status_change_comment,
     status_comment_text,
     status_reason_error,
+    status_reason_suggestions,
 )
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.tests.test_public_api_v1 import PublicApiBase
@@ -63,12 +64,36 @@ class TheHelper(McpBase):
         )
         self.assertEqual(comments_of(self.task.task_id), [])
 
-    def test_a_missing_blank_or_non_text_reason_is_refused(self):
+    def test_a_missing_blank_or_non_text_reason_is_suggested_not_refused(self):
         for raw in (None, "", "   ", "\n\t", 5, ["x"], "‮\x00"):
-            self.assertIn("`reason` is required", status_reason_error("Open", "Closed", raw))
+            self.assertIsNone(status_reason_error("Open", "Closed", raw))
+            (entry,) = status_reason_suggestions("Open", "Closed", raw)
+            # The shape MIP-2015's organize suggestions use: kind, message, candidates.
+            self.assertEqual(set(entry), {"kind", "message", "candidates"})
+            self.assertEqual(entry["kind"], "status_reason")
+            self.assertEqual(entry["candidates"], [])
+            self.assertIn("Open → Closed", entry["message"])
+            self.assertIn("what shipped", entry["message"])
+
+    def test_a_given_reason_or_no_change_has_no_suggestion(self):
+        self.assertEqual(status_reason_suggestions("Open", "Closed", "shipped"), [])
+        self.assertEqual(status_reason_suggestions("Open", "Open", None), [])
 
     def test_the_argument_name_is_the_callers(self):
-        self.assertIn("`rationale` is required", status_reason_error("A", "B", "", arg="rationale"))
+        (entry,) = status_reason_suggestions("A", "B", "", arg="rationale")
+        self.assertIn("`rationale`", entry["message"])
+
+    def test_no_reason_posts_no_comment(self):
+        self.assertIsNone(
+            post_status_change_comment(
+                task_id=self.task.task_id,
+                actor_id=str(self.user.id),
+                old="Open",
+                new="Closed",
+                reason="  ",
+            )
+        )
+        self.assertEqual(comments_of(self.task.task_id), [])
 
     def test_a_long_reason_is_refused_not_cut(self):
         self.assertIsNone(status_reason_error("Open", "Closed", "x" * STATUS_REASON_MAX))
@@ -113,19 +138,32 @@ class TheMcpUpdateTask(McpBase):
         self.assertEqual(len(res.data), 1)
         self.assertEqual(res.data[0]["via"]["kind"], "api_key")
 
-    def test_a_missing_reason_is_refused_and_nothing_is_written(self):
+    def test_a_missing_reason_is_accepted_and_the_reply_suggests_one(self):
         text, is_error = self.call(status="Closed")
-        self.assertTrue(is_error)
-        self.assertIn("`reason` is required", text)
-        self.assertIn("Nothing was changed", text)
+        self.assertFalse(is_error, text)
+        self.assertIn('"suggestions"', text)
+        self.assertIn("status_reason", text)
+        self.assertIn("what shipped", text)
         self.task.refresh_from_db()
-        self.assertEqual(self.task.status, "Open")
+        self.assertEqual(self.task.status, "Closed")
         self.assertEqual(comments_of(self.task.task_id), [])
 
-    def test_a_blank_reason_is_refused_too(self):
+    def test_a_blank_reason_is_treated_as_missing(self):
         text, is_error = self.call(status="Closed", reason="   ")
+        self.assertFalse(is_error, text)
+        self.assertIn("status_reason", text)
+
+    def test_a_given_reason_gets_no_suggestion(self):
+        text, is_error = self.call(status="Closed", reason="shipped")
+        self.assertFalse(is_error, text)
+        self.assertNotIn("suggestions", text)
+
+    def test_a_too_long_reason_is_still_refused(self):
+        text, is_error = self.call(status="Closed", reason="x" * (STATUS_REASON_MAX + 1))
         self.assertTrue(is_error)
-        self.assertIn("`reason` is required", text)
+        self.assertIn("too long", text)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, "Open")
 
     def test_another_field_needs_no_reason_and_posts_no_comment(self):
         text, is_error = self.call(priority="High", title="Renamed")
@@ -171,14 +209,16 @@ class TheMcpUpdateTask(McpBase):
         self.assertNotIn("'type': 'mention'", blob)
         self.assertNotIn('"type": "mention"', blob)
 
-    def test_the_published_schema_and_description_say_a_reason_is_needed(self):
+    def test_the_published_schema_and_description_ask_for_a_reason(self):
         self._key()
         listed = {t["name"]: t for t in self._result(self._rpc("tools/list"))["tools"]}
         tool = listed["update_task"]
         self.assertIn("reason", tool["inputSchema"]["properties"])
-        self.assertIn("needs a `reason`", tool["description"])
+        self.assertIn("`reason`", tool["description"])
+        self.assertNotIn("refuses the call", tool["description"])
         self.assertIn("reason", listed["manage_milestone"]["inputSchema"]["properties"])
-        self.assertIn("needs a `reason`", listed["manage_milestone"]["description"])
+        self.assertIn("`reason`", listed["manage_milestone"]["description"])
+        self.assertNotIn("needs a `reason`", listed["manage_milestone"]["description"])
         self.assertIn("comment", listed["update_tasks_bulk"]["description"])
 
 
@@ -210,12 +250,12 @@ class TheMcpMilestone(McpBase):
         self.assertEqual(text_of(rows[0]), "Status: Open → Closed: every task shipped")
         self.assertEqual(rows[0].sender_id, self.user.id)
 
-    def test_a_missing_reason_is_refused_and_nothing_is_written(self):
+    def test_a_missing_reason_is_accepted_and_the_reply_suggests_one(self):
         text, is_error = self.call(status="Closed")
-        self.assertTrue(is_error)
-        self.assertIn("`reason` is required", text)
+        self.assertFalse(is_error, text)
+        self.assertIn("status_reason", text)
         self.milestone.refresh_from_db()
-        self.assertEqual(self.milestone.status, "Open")
+        self.assertEqual(self.milestone.status, "Closed")
         self.assertEqual(comments_of(self.backing.task_id), [])
 
     def test_another_field_needs_no_reason(self):
@@ -356,23 +396,26 @@ class TheInAppAssistantTools(McpBase):
         super().setUp()
         self.ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
 
-    def test_update_task_refuses_without_a_reason_and_posts_with_one(self):
-        with self.assertRaises(ToolError) as caught:
-            UPDATE_TASK.run({"task_id": self.task.task_id, "status": "Closed"}, self.ctx)
-        self.assertIn("`reason` is required", str(caught.exception))
+    def test_update_task_suggests_without_a_reason_and_posts_with_one(self):
+        out = UPDATE_TASK.run({"task_id": self.task.task_id, "status": "Closed"}, self.ctx)
+        self.assertEqual(out["status"], "Closed")
+        self.assertEqual([s["kind"] for s in out["suggestions"]], ["status_reason"])
         self.assertEqual(comments_of(self.task.task_id), [])
 
-        UPDATE_TASK.run(
-            {"task_id": self.task.task_id, "status": "Closed", "reason": "shipped"}, self.ctx
+        out = UPDATE_TASK.run(
+            {"task_id": self.task.task_id, "status": "Open", "reason": "reopened: regressed"},
+            self.ctx,
         )
+        self.assertNotIn("suggestions", out)
         self.assertEqual(
-            [text_of(c) for c in comments_of(self.task.task_id)], ["Status: Open → Closed: shipped"]
+            [text_of(c) for c in comments_of(self.task.task_id)],
+            ["Status: Closed → Open: reopened: regressed"],
         )
 
-    def test_the_tool_declarations_say_so(self):
+    def test_the_tool_declarations_say_the_reason_is_optional(self):
         for tool in (UPDATE_TASK, MANAGE_MILESTONE):
             reason = tool.parameters_schema["properties"]["reason"]["description"]
-            self.assertIn("Required with `status`", reason)
+            self.assertNotIn("Required", reason)
             self.assertIn("comment", reason)
         self.assertIn(
             "comment",
@@ -381,15 +424,26 @@ class TheInAppAssistantTools(McpBase):
             ]["description"],
         )
 
-    def test_the_milestone_tool_refuses_without_a_reason(self):
+    def test_the_milestone_tool_suggests_without_a_reason(self):
         milestone = create_milestone(self.project, reporter_id=self.user.id, title="M")
+        out = MANAGE_MILESTONE.run(
+            {"action": "update", "milestone_id": milestone.milestone_id, "status": "Closed"},
+            self.ctx,
+        )
+        self.assertEqual([s["kind"] for s in out["suggestions"]], ["status_reason"])
+        self.assertEqual(MilestoneMaster.objects.get(pk=milestone.pk).status, "Closed")
+
+    def test_a_too_long_reason_is_still_refused(self):
         with self.assertRaises(ToolError) as caught:
-            MANAGE_MILESTONE.run(
-                {"action": "update", "milestone_id": milestone.milestone_id, "status": "Closed"},
+            UPDATE_TASK.run(
+                {
+                    "task_id": self.task.task_id,
+                    "status": "Closed",
+                    "reason": "x" * (STATUS_REASON_MAX + 1),
+                },
                 self.ctx,
             )
-        self.assertIn("`reason` is required", str(caught.exception))
-        self.assertEqual(MilestoneMaster.objects.get(pk=milestone.pk).status, "Open")
+        self.assertIn("too long", str(caught.exception))
 
 
 class ThePublicRestApi(PublicApiBase):
@@ -397,21 +451,29 @@ class ThePublicRestApi(PublicApiBase):
         with self.captureOnCommitCallbacks(execute=True):
             return self.client.patch(f"{TASKS}{task.task_id}/", body, format="json")
 
-    def test_a_status_change_without_a_reason_is_a_400_and_writes_nothing(self):
+    def test_a_status_change_without_a_reason_is_accepted_with_a_suggestion(self):
         self._key()
         res = self.patch(self.task, status="Closed")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual([s["kind"] for s in res.data["suggestions"]], ["status_reason"])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, "Closed")
+        self.assertEqual(comments_of(self.task.task_id), [])
+
+    def test_a_too_long_reason_is_a_400(self):
+        self._key()
+        res = self.patch(self.task, status="Closed", reason="x" * (STATUS_REASON_MAX + 1))
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["field"], "reason")
-        self.assertIn("`reason` is required", res.data["error"])
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, "Open")
-        self.assertEqual(comments_of(self.task.task_id), [])
 
     def test_a_status_change_with_a_reason_posts_one_comment(self):
         self._key()
         res = self.patch(self.task, status="Closed", reason="shipped in v2")
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(res.data["status"], "Closed")
+        self.assertNotIn("suggestions", res.data)
         rows = comments_of(self.task.task_id)
         self.assertEqual([text_of(r) for r in rows], ["Status: Open → Closed: shipped in v2"])
         self.assertEqual(rows[0].sender_id, self.user.id)
@@ -514,26 +576,3 @@ class TheStatusIsReadUnderTheLock(McpBase):
                 {"task_id": self.task.task_id, "status": "Closed", "reason": "shipped"}, ctx
             )
         self.assertEqual(comments_of(self.task.task_id), [])
-
-
-class TheCardEditNeedsTheReasonToo(McpBase):
-    """An edit that turns an unchanged status into a change must not pass the card and then be
-    refused by the tool after the one-shot approval is spent."""
-
-    def check(self, arguments, patch):
-        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
-        return edits.check_edits("update_task", arguments, patch, ctx)
-
-    def test_a_status_edited_to_a_real_change_without_a_reason_is_refused_on_the_card(self):
-        # The task is Open; the model proposed Open (no change, so no reason).
-        errors = self.check({"task_id": self.task.task_id, "status": "Open"}, {"status": "Closed"})
-        self.assertIn("needs a reason", errors["status"])
-
-    def test_with_a_reason_in_the_proposal_the_edit_is_fine(self):
-        args = {"task_id": self.task.task_id, "status": "Open", "reason": "Test."}
-        self.assertEqual(self.check(args, {"status": "Closed"}), {})
-
-    def test_an_edit_that_leaves_the_status_unchanged_is_fine(self):
-        self.assertEqual(
-            self.check({"task_id": self.task.task_id, "status": "WIP"}, {"status": "Open"}), {}
-        )

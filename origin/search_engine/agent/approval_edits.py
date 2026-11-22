@@ -69,13 +69,11 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskMaster
-from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.model_fence import escape_user_arguments, unfence_arguments
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tools import ToolContext, ToolError, get_app_tool
 from origin.search_engine.agent.tools.body_limits import check_body_size, max_body_bytes
 from origin.services.reminder_input import ReminderInputError, resolve_remind_at
-from origin.services.task_status_reason import clean_status_reason
 from origin.services.user_time import zone_for_user_id
 
 # --------------------------------------------------------------------------- #
@@ -478,42 +476,7 @@ def check_edits(
             message = _check_value(tool_name, template, spec, value, ctx)
             if message:
                 errors[key] = message
-    if "status" not in errors and (
-        message := _status_reason_problem(tool_name, arguments, patch, ctx)
-    ):
-        errors["status"] = message
     return errors
-
-
-def _status_reason_problem(
-    tool_name: str, arguments: dict[str, Any], patch: dict[Any, Any], ctx: ToolContext
-) -> str | None:
-    """MIP-1997: `update_task` refuses a status change without a `reason`. A call that proposed a
-    status the task already has carries none, so an edit that turns it into a real change would pass
-    the card and be refused after the one-shot approval is spent. (`update_tasks_bulk` rows always
-    carry their `rationale`, which is the reason.) Not an edit then: say so on the card."""
-    new_status = patch.get("status") if tool_name == "update_task" else None
-    if not isinstance(new_status, str) or clean_status_reason(arguments.get("reason")):
-        return None
-    if not isinstance(arguments.get("task_id"), int):
-        return None
-    row = (
-        TaskMaster.objects.filter(task_id=arguments["task_id"], team_id=ctx.team_id)
-        .values("status", "project_id", "assignee_id", "reporter_id")
-        .first()
-    )
-    # Only for a task the person may edit: for any other the tool's own refusal stands, and the
-    # card must not hint at a status it has no right to see.
-    if row is None or ctx.user_id not in task_acl_user_ids(
-        row["project_id"], row["assignee_id"], row["reporter_id"]
-    ):
-        return None
-    if row["status"] == new_status:
-        return None
-    return (
-        "A status change needs a reason, and this proposal has none. Reject it and say why, "
-        "or ask for the change again."
-    )
 
 
 def prepare(
