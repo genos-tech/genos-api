@@ -73,6 +73,14 @@ def _ai_available(user_id: Any) -> bool:
         return False
 
 
+def _ai_credits_out(user_id: Any) -> bool:
+    """True when the member has no AI credits left AND credits are their limit. Never raises
+    (`credit_block` fails open)."""
+    from origin.services.report_ai import llm  # noqa: PLC0415
+
+    return llm.credit_block(str(user_id)) == llm.SKIP_NO_CREDITS
+
+
 def _row(sched, zone) -> dict[str, Any]:
     """The service's words, with the camelCase keys the rest of Settings uses."""
     p = schedule_text.present(sched, zone)
@@ -206,6 +214,10 @@ class ScheduleListView(_Base):
                 # Whether AI reports can run here at all (MIP-1309): the same test a job makes
                 # before it calls a model. False hides the AI switch, the effort and the cost.
                 "aiAvailable": _ai_available(request.user.pk),
+                # The member's AI credits are used up (MIP-1967): the form shows the AI switch off
+                # and disabled, with the buy/upgrade actions, instead of offering a run that
+                # would skip its AI part.
+                "aiCreditsOut": _ai_credits_out(request.user.pk),
                 "timeZone": zone.key,
                 "limit": schedules.schedule_limit(request.user.pk),
                 "jobs": [_job(j) for j in schedule_text.job_catalog()],

@@ -70,13 +70,14 @@ class StubModel:
 
 
 class MeasureTests(McpBase):
-    def run_cmd(self, *argv, stub=None, live=True):
+    def run_cmd(self, *argv, stub=None, live=True, **engine_extra):
         stub = stub or StubModel()
         engine = {
             **settings.SEARCH_ENGINE,
             "AI_COST_METER": True,
             "GEMINI_API_KEY": "k",
             "GEMINI_USE_VERTEX": False,
+            **engine_extra,
         }
         out, err = io.StringIO(), io.StringIO()
         env = {"REPORT_AI_SENTENCES": "true"} if live else {}
@@ -201,6 +202,48 @@ class MeasureTests(McpBase):
             "--confirm-live", "--run-now-only", "--run-now-member", str(self.user.id)
         )
         self.assertEqual(stub2.calls, 3)
+
+    def test_run_now_is_our_cost_never_the_members_credits_even_at_zero_balance(self):
+        """MIP-1967: an operator measurement is logged as system cost on a surface nobody is
+        charged for, and it still measures when the member has no credits left."""
+        from origin.search_engine import credit_ledger
+        from origin.search_engine.models import AiCreditEntry, AiRequestCost
+
+        TeamMembers.objects.get_or_create(team=self.team, attendee=self.user)
+        task = TaskMaster.objects.filter(assignee=self.user).first()
+        TaskComments.objects.create(
+            task=task,
+            sender=self.user,
+            comment_id=1,
+            comment_body=[
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Waiting on the vendor about the API quota",
+                            "styles": {},
+                        }
+                    ],
+                }
+            ],
+        )
+        before = AiCreditEntry.objects.count()
+        with mock.patch.object(credit_ledger, "balance_milli", return_value=0):
+            out, stub = self.run_cmd(
+                "--confirm-live",
+                "--run-now-only",
+                "--run-now-member",
+                str(self.user.id),
+                AI_CREDITS_SHADOW=True,
+                AI_CREDITS_AUTHORITATIVE=True,
+            )
+        self.assertEqual(stub.calls, 3)  # measured although the balance is 0
+        self.assertEqual(AiCreditEntry.objects.count(), before)  # nobody was charged
+        rows = AiRequestCost.objects.filter(user_id=str(self.user.id))
+        self.assertEqual(rows.count(), 3)
+        self.assertEqual({r.surface for r in rows}, {"ops_measure"})
+        self.assertTrue(all(r.shadow_credits_milli == 0 for r in rows))
 
     def test_the_fixtures_are_what_they_claim(self):
         self.assertEqual(len(measure.fixture_tasks("useless")), 10)
