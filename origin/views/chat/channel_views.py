@@ -1736,7 +1736,10 @@ class ChannelProfileImageView(AuthenticatedAPIView):
         # Django's storage layer resolves the final on-disk path. Read
         # `.name` after save to capture whatever it actually stored.
         channel.profile_image_file = upload.file
-        channel.save(update_fields=["profile_image_file", "ts_updated_at"])
+        channel.profile_image_size_bytes = upload.size_bytes
+        channel.save(
+            update_fields=["profile_image_file", "profile_image_size_bytes", "ts_updated_at"]
+        )
         channel.profile_image_url = channel.profile_image_file.name
         channel.save(update_fields=["profile_image_url", "ts_updated_at"])
 

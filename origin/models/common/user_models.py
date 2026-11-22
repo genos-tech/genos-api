@@ -119,6 +119,8 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     email_hash = models.CharField(max_length=64, unique=True, null=True, editable=False)
     phone_number = crypto.EncryptedCharField(max_length=20, blank=True, null=True)
     profile_image_url = models.FileField(upload_to=user_profile_image_path)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    profile_image_size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     profile_image_file_name = models.CharField(blank=True, null=True)
     is_offline_forced = models.BooleanField(default=False)
     custom_status = models.CharField(max_length=50, blank=True, null=True)

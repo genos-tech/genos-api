@@ -96,7 +96,7 @@ def add_attachment(serializer) -> TaskAttachments:
     """
     data = dict(serializer.validated_data)
     upload = data.pop("attached_file")
-    attachment = TaskAttachments(**data)
+    attachment = TaskAttachments(**data, size_bytes=int(getattr(upload, "size", 0) or 0))
     attachment.attached_file.save(upload.name, upload, save=False)  # the file reaches storage here
     stored = attachment.attached_file
     try:

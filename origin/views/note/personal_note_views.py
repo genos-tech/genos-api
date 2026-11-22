@@ -341,12 +341,8 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             # earlier version of this did — meant a mention into a private
             # folder reached nobody and the recipient never learned of it.
             if not is_team_folder(note.folder_id):
-                reachable = reachable_mentions(
-                    full_mentioned, personal_note_id=note.note_id
-                )
-                newly_mentioned_user_ids = [
-                    u for u in newly_mentioned_user_ids if u in reachable
-                ]
+                reachable = reachable_mentions(full_mentioned, personal_note_id=note.note_id)
+                newly_mentioned_user_ids = [u for u in newly_mentioned_user_ids if u in reachable]
                 all_mentioned_user_ids = [u for u in all_mentioned_user_ids if u in reachable]
 
         serializer = PersonalNoteMasterSerializer(note, data=update_data, partial=True)
@@ -500,7 +496,7 @@ class PersonalNoteAttachmentView(AuthenticatedAPIView):
 
         serializer = PersonalNoteAttachmentFactSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(size_bytes=upload.size_bytes)
             res = {
                 "noteType": NOTE_TYPE,
                 "noteId": serializer.data["note"],

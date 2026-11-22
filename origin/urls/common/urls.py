@@ -119,6 +119,7 @@ from origin.views.common.team_connection_views import (
     TeamConnectionView,
 )
 from origin.views.common.team_emoji_views import TeamEmojiView
+from origin.views.common.team_storage_views import TeamStorageUsageView
 from origin.views.common.team_views import *
 from origin.views.common.user_views import *
 from origin.views.common.webhook_views import WebhookDetailView, WebhookListCreateView
@@ -522,6 +523,11 @@ urlpatterns = [
         "api/v2/team/security-events/",
         TeamSecurityEventListView.as_view(),
         name="team_security_events",
+    ),
+    path(
+        "api/v2/team/storage/",
+        TeamStorageUsageView.as_view(),
+        name="team_storage_usage",
     ),
     path(
         "api/v2/user/security-events/",

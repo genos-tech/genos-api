@@ -157,7 +157,9 @@ class TeamEmojiView(AuthenticatedAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        emoji = TeamEmojiMaster(team=team, name=name, created_by=request.user)
+        emoji = TeamEmojiMaster(
+            team=team, name=name, created_by=request.user, image_size_bytes=file.size
+        )
         # Transient carrier read by the model's upload_to path builder;
         # the client filename itself is discarded there.
         emoji.image_ext = ext
