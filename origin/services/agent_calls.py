@@ -26,9 +26,25 @@ The write is in its own savepoint so a database error cannot poison a surroundin
     fixed keys (`task_id`, `note_id` ...). Never a title, a name or a text;
   * how much: duration, the length of the result text, and the AI credits a search was charged.
 
-**Run ids.** A synthetic session: one id per credential, kept in the cache, renewed once the
-credential has been quiet for `RUN_QUIET_SECONDS`. If the `Mcp-Session-Id` spike (D6) works, that
-id replaces it.
+**Run ids** (MIP-2008; the spike's findings, note "which MCP clients send Mcp-Session-Id back").
+A `run_id` is one agent session, chosen in this order:
+
+  1. ChatGPT's per-conversation id (`params._meta["openai/session"]`) when the call carries one: the
+     run id is a keyed hash of it, so a conversation is one run however long it lasts;
+  2. otherwise a synthetic session: one id per credential AND client name (the `clientInfo` name
+     the client sends, else the first User-Agent token without its version), kept in the cache and
+     renewed once that pair has been quiet for `RUN_QUIET_SECONDS`, so two apps on one key do not
+     merge;
+  3. an `Mcp-Session-Id` is only an EXTRA split signal on top of 2: a pair that presents an id it
+     has not presented before, while it holds others, starts a new run; an id it has presented
+     (up to five are remembered) returns to its own run, so two windows of one client on one key
+     keep two runs instead of one run per call. A call with no id stays in the pair's current run.
+     It is never the only key (claude.ai sends one id for every chat; Claude Code sends none).
+
+Only keyed hashes of the conversation id and the session id are kept, in the cache and (as the run
+id) in the row; the raw values are never stored. A repeated read collapses only within one run.
+When the cache cannot answer (production's cache ignores Redis errors and then reports a miss) every
+call gets a fresh run id: the rows are right, the grouping is lost until the cache is back.
 """
 
 from __future__ import annotations
@@ -37,6 +53,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -47,6 +64,7 @@ from django.core.cache import cache
 from django.db import connection, transaction
 from django.db.models import F, QuerySet
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 
 from origin.models.common.agent_call_models import (
     APP_OTHER,
@@ -85,6 +103,14 @@ RUN_QUIET_SECONDS = 20 * 60
 UNKNOWN_TOOL = "unknown"
 _BATCH = 1_000
 
+# Where a client names itself and its conversation (`protocol.py` / OpenAI Apps SDK).
+_CLIENT_INFO_META = "io.modelcontextprotocol/clientInfo"
+_OPENAI_SESSION_META = "openai/session"
+_SESSION_HEADER = "Mcp-Session-Id"
+_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
+_MAX_NAME = 40
+_MAX_RAW_ID = 200
+
 # Tools that change who can see or do something, a class of their own for the owner's counts.
 ADMIN_TOOLS = frozenset(
     {
@@ -111,6 +137,58 @@ def enabled() -> bool:
     return os.environ.get(FLAG_ENV, "").strip().lower() in _ON
 
 
+@dataclass(frozen=True)
+class RunKeys:
+    """What names the session a call belongs to. Hashes and a client word only: the conversation
+    id and the session id are reduced to keyed hashes the moment they are read."""
+
+    client: str = ""  # the client's name, `[A-Za-z0-9_.-]`, at most 40 characters
+    conversation: str = ""  # keyed hash of `_meta["openai/session"]`
+    transport: str = ""  # keyed hash of the `Mcp-Session-Id` header
+
+
+def _keyed(*parts: str) -> str:
+    """A 32-character keyed hash (Django's `salted_hmac`, keyed by `SECRET_KEY`): stable for equal
+    input, not reversible, not comparable with a hash from another purpose. It is an identifier for
+    grouping, not a password hash: the inputs are client-chosen conversation and session ids."""
+    value = "\x1f".join(p[:_MAX_RAW_ID] for p in parts)
+    return salted_hmac("agent-call-run", value).hexdigest()[:32]
+
+
+def _name(value: Any) -> str:
+    return _NAME_UNSAFE.sub("", value)[:_MAX_NAME] if isinstance(value, str) else ""
+
+
+def identify(request: Any, params: Any) -> RunKeys:
+    """The run keys of one `tools/call` request. Never raises: an unreadable request is `RunKeys()`
+    (one synthetic session per credential)."""
+    try:
+        params = params if isinstance(params, dict) else {}
+        meta = params.get("_meta")
+        meta = meta if isinstance(meta, dict) else {}
+        info = meta.get(_CLIENT_INFO_META)
+        client = _name(info.get("name")) if isinstance(info, dict) else ""
+        if not client:
+            # A legacy client names itself once, in `initialize`; its later calls carry only the
+            # User-Agent. The product token without its version, so an upgrade does not split a run.
+            raw = request.headers.get("User-Agent") or ""
+            client = _name(raw.split(" ", 1)[0].split("/", 1)[0])
+        conversation = meta.get(_OPENAI_SESSION_META)
+        conversation = (
+            _keyed("conversation", conversation)
+            if isinstance(conversation, str) and conversation.strip()
+            else ""
+        )
+        sid = (request.headers.get(_SESSION_HEADER) or "").strip()
+        return RunKeys(
+            client=client,
+            conversation=conversation,
+            transport=_keyed("transport", sid) if sid else "",
+        )
+    except Exception:  # noqa: BLE001 - the log never fails a call
+        return RunKeys()
+
+
 @dataclass
 class CallTrace:
     """The facts of one `tools/call`, gathered while it runs. Holds no copy of any text: the
@@ -131,6 +209,7 @@ class CallTrace:
     failed: bool = False
     credit_request_id: str | None = None
     duration_ms: int = 0
+    run_keys: RunKeys = field(default_factory=RunKeys)
 
     def finish(self) -> None:
         self.duration_ms = max(0, int((time.perf_counter() - self.started) * 1000))
@@ -269,15 +348,48 @@ def _credits_for(request_id: str | None) -> Decimal | None:
         return None
 
 
-def _run_id(credential_kind: str, credential_id: str) -> str:
-    """The credential's current run id. A cache that cannot answer gives a fresh id, never an error."""
-    key = f"agentcall:run:{credential_kind}:{credential_id}"
+def _run_id(credential_kind: str, credential_id: str, keys: RunKeys | None = None) -> str:
+    """The run this call belongs to (see the module docstring). A cache that cannot answer gives a
+    fresh id, never an error."""
+    keys = keys or RunKeys()
+    if keys.conversation:
+        # The client says which conversation this is: no gap, no cache.
+        return _keyed("run", credential_kind, credential_id, keys.conversation)
+    key = f"agentcall:run:{credential_kind}:{credential_id}:{keys.client or '-'}"
     try:
-        run = cache.get(key) or new_run_id()
-        cache.set(key, run, RUN_QUIET_SECONDS)
+        fresh = new_run_id()
+        # `add` first: parallel calls at the start of a session must all land in ONE run.
+        if cache.add(
+            key, {"run": fresh, "sids": _bind({}, keys.transport, fresh)}, RUN_QUIET_SECONDS
+        ):
+            return fresh
+        state = cache.get(key)
+        state = state if isinstance(state, dict) and state.get("run") else {"run": None}
+        sids = dict(state.get("sids") or {})
+        run = state["run"]
+        if not run:
+            run = fresh  # the entry expired between `add` and `get`
+        elif keys.transport and keys.transport in sids:
+            run = sids[keys.transport]  # a window we have seen: back to its own run
+        elif keys.transport and sids:
+            run = fresh  # a session id this pair has not presented while others are live
+        # no session id: the pair's current run. A first id after id-less calls joins that run.
+        cache.set(key, {"run": run, "sids": _bind(sids, keys.transport, run)}, RUN_QUIET_SECONDS)
         return run
     except Exception:  # noqa: BLE001 - a run id is a convenience; the row is what matters
         return new_run_id()
+
+
+_MAX_SIDS = 5
+
+
+def _bind(sids: dict[str, str], transport: str, run: str) -> dict[str, str]:
+    """`sids` with `transport` bound to `run` (the newest kept, at most `_MAX_SIDS`)."""
+    if not transport:
+        return sids
+    out = {t: r for t, r in sids.items() if t != transport}
+    out[transport] = run
+    return dict(list(out.items())[-_MAX_SIDS:])
 
 
 def _lock_key(fields: dict[str, Any], targets: list[dict[str, str]]) -> int:
@@ -301,19 +413,22 @@ def record(trace: CallTrace, *, now: datetime | None = None) -> AgentCall | None
     user_id = getattr(trace.user, "id", None)
     if user_id is None:
         return None
+    # Everything that can fail on its own is read BEFORE the transaction, so a failed lookup can
+    # never abort the one the insert is in.
+    credits = _credits_for(trace.credit_request_id)
+    run_id = _run_id(kind, credential_id, trace.run_keys)
     fields = {
         "user_id": user_id,
         "team_id": trace.team_id or None,
         "credential_kind": kind,
         "credential_id": credential_id,
+        # A repeated read collapses only inside ONE run: two conversations that read the same task
+        # are two sessions, each with its own row (MIP-2008).
+        "run_id": run_id,
         "tool": tool.name if tool is not None else UNKNOWN_TOOL,
     }
     chars = _result_chars(trace.result)
     collapsible = op == OP_READ and outcome == OUTCOME_OK and len(targets) == 1
-    # Everything that can fail on its own is read BEFORE the transaction, so a failed lookup can
-    # never abort the one the insert is in.
-    credits = _credits_for(trace.credit_request_id)
-    run_id = _run_id(kind, credential_id)
     with transaction.atomic():
         if collapsible:
             # Two identical reads sent together would both find nothing and both insert; the
@@ -343,7 +458,6 @@ def record(trace: CallTrace, *, now: datetime | None = None) -> AgentCall | None
         return AgentCall.objects.create(
             ts=now,
             app_family=family,
-            run_id=run_id,
             op=op,
             outcome=outcome,
             error_code=error_code,

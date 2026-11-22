@@ -436,6 +436,7 @@ class McpView(PublicApiView):
                 tool_name=name,
                 scope=scope,
                 raw_args=args if isinstance(args, dict) else None,
+                run_keys=agent_calls.identify(request, params),
             )
         except Exception:  # noqa: BLE001 - the log never fails a call
             log.warning("agent call log trace failed", exc_info=True)

@@ -200,9 +200,12 @@ class TheEndpointContract(_Base):
                 "groups",
                 "decisions",
                 "connections",
+                "sessions",
                 "next_cursor",
             },
         )
+        # The call log is off or empty: an empty block, not an error (MIP-2008).
+        self.assertEqual(data["sessions"], {"items": [], "total": 0})
         self.assertEqual(
             data["totals"]["by_agent"],
             {"claude": 0, "chatgpt": 0, "api_key": 0, "other_app": 0, "person": 0},
