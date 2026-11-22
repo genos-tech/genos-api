@@ -1762,6 +1762,78 @@ class PlansViewTests(BillingTestBase):
             )
             self.assertEqual(limits["integrations"], cfg["integrations"])
 
+    # What the pricing page shows per tier: free, core, pro, max, enterprise. A COPY of the adopted tier plan
+    # v2 numbers (MIP-1614, Ken 2026-11-22), kept equal to genos-frontend
+    # src/__tests__/fixtures/plansPayloadTierPlanV2.json: change a number in TIER_QUOTAS, this table and that
+    # fixture together (the page renders this payload, so it follows the server; the two copies keep a
+    # change on purpose and visible).
+    PLAN_V2_PAYLOAD = {
+        "webhooks_max": [0, 3, 10, 25, None],
+        "schedules_max": [0, 5, 20, 20, 20],
+        "mcp_calls_per_min": [None, 60, 120, 240, None],
+        "mcp_calls_per_day": [None, 3000, 10000, 30000, None],
+        "mcp_max_api_keys": [None, 3, 10, 25, None],
+        "mcp_max_connections": [None, 3, 10, 25, None],
+        "mcp_bulk_max_tasks": [None, 10, 30, 30, None],
+        "mcp_bulk_max_plan_tasks": [None, 10, 20, 20, None],
+        "mcp_list_page_max": [None, 50, 100, 100, None],
+    }
+
+    def test_plans_payload_carries_the_plan_v2_counts_and_mcp_limits(self):
+        # MIP-1614: the pricing page and Compare plans render these from this payload, so a tier-table
+        # change reaches both pages with no frontend edit. A missing key would hide a row on the pages.
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        # The suite's own table turns the webhook and schedule counts off; the production table is the one
+        # the pages show.
+        prod = {
+            **dj_settings.SEARCH_ENGINE,
+            "TIER_QUOTAS": dj_settings.PRODUCTION_TIER_QUOTAS,
+        }
+        with override_settings(SEARCH_ENGINE=prod), self._price_mock():
+            res = self.client.get(PLANS_URL)
+        self.assertEqual(res.status_code, 200)
+        by_tier = {t["tier"]: t["limits"] for t in res.data["tiers"]}
+        order = ["free", "core", "pro", "max", "enterprise"]
+        for key, expected in self.PLAN_V2_PAYLOAD.items():
+            shown = [by_tier[t][key] for t in order]
+            self.assertEqual(shown, expected, key)
+
+    def test_plans_payload_counts_follow_the_enforced_tier_default_not_unlimited(self):
+        # A TIER_QUOTAS table that predates webhooks_max / schedules_max resolves to the tier default on the
+        # server, so the page must show that default, never "unlimited" (a missing key reads as None).
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        bare = {
+            name: {k: v for k, v in cfg.items() if k not in ("webhooks_max", "schedules_max")}
+            for name, cfg in dj_settings.SEARCH_ENGINE["TIER_QUOTAS"].items()
+        }
+        with override_settings(SEARCH_ENGINE={**dj_settings.SEARCH_ENGINE, "TIER_QUOTAS": bare}):
+            with self._price_mock():
+                res = self.client.get(PLANS_URL)
+        by_tier = {t["tier"]: t["limits"] for t in res.data["tiers"]}
+        self.assertEqual(
+            [by_tier[t]["webhooks_max"] for t in ("free", "core", "pro", "max", "enterprise")],
+            [0, 3, 10, 25, None],
+        )
+        self.assertEqual(
+            [by_tier[t]["schedules_max"] for t in ("free", "core", "pro", "max", "enterprise")],
+            [0, 5, 20, 20, 20],
+        )
+
+    def test_plans_payload_schedule_cap_none_reads_as_the_enforced_ceiling(self):
+        # `schedule_limit` enforces the per-member ceiling when a plan's cap is None, so the page says that
+        # number, not "unlimited".
+        from django.conf import settings as dj_settings  # noqa: PLC0415
+
+        quotas = {k: dict(v) for k, v in dj_settings.SEARCH_ENGINE["TIER_QUOTAS"].items()}
+        quotas["pro"]["schedules_max"] = None
+        with override_settings(SEARCH_ENGINE={**dj_settings.SEARCH_ENGINE, "TIER_QUOTAS": quotas}):
+            with self._price_mock():
+                res = self.client.get(PLANS_URL)
+        pro = next(t for t in res.data["tiers"] if t["tier"] == "pro")
+        self.assertEqual(pro["limits"]["schedules_max"], 20)
+
     def test_plans_flags_and_prices(self):
         with self._price_mock():
             res = self.client.get(PLANS_URL)

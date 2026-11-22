@@ -19,8 +19,8 @@ from rest_framework.views import APIView
 
 from apis.request_id import error_response
 from origin.models.common.team_models import TeamMaster
-from origin.search_engine import credit_ledger
-from origin.services import first_month_trial, stripe_billing
+from origin.search_engine import credit_ledger, quota
+from origin.services import first_month_trial, schedules, stripe_billing
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import (
     as_uuid,
@@ -283,6 +283,18 @@ _PLAN_LIMIT_KEYS = (
     "integrations",
     "mcp_enabled",
     "schedules_enabled",
+    # Tier plan v2 (MIP-1614, MIP-1960): the webhook and scheduled-report counts and the MCP volume
+    # limits, so the pricing page and Settings > Compare plans read the SAME numbers the server
+    # enforces (the tier table here is the only source; the pages used to show none of them).
+    "webhooks_max",
+    "schedules_max",
+    "mcp_calls_per_min",
+    "mcp_calls_per_day",
+    "mcp_max_api_keys",
+    "mcp_max_connections",
+    "mcp_bulk_max_tasks",
+    "mcp_bulk_max_plan_tasks",
+    "mcp_list_page_max",
 )
 
 
@@ -325,6 +337,14 @@ class BillingPlansView(AuthenticatedAPIView):
             else:
                 price = None
             limits = {k: cfg.get(k) for k in _PLAN_LIMIT_KEYS}
+            # The two counts the server resolves with a tier default (a TIER_QUOTAS table that predates a key
+            # must not read "unlimited" here while the server enforces the default), and a schedule cap of
+            # None is enforced as the old per-member ceiling (`schedules.schedule_limit`), so say that.
+            limits["webhooks_max"] = quota.get_webhooks_max(tier)
+            schedules_cap = quota.get_tier_schedules_max(tier)
+            limits["schedules_max"] = (
+                schedules.MAX_SCHEDULES_PER_MEMBER if schedules_cap is None else schedules_cap
+            )
             # The plan's monthly AI credits, present ONLY when credits
             # are the limit the server actually enforces. Its presence is
             # the client's render switch — the same payload-shape
