@@ -176,6 +176,7 @@ REGISTRY = {
         "pins in channels the caller is a member of"
     ),
     "origin.views.chat.pin_flag_views.PinView": checked("_verify_member_or_404"),
+    "origin.views.chat.pin_flag_views.ChannelHideView": checked("_verify_member_or_404"),
     # views.chat.reaction_views_v3
     "origin.views.chat.reaction_views_v3.MessageReactionsView": checked("_verify_message_member"),
     # views.chat.read_cursor_views
