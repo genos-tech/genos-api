@@ -460,6 +460,30 @@ class IngestionAttributionTests(_RestoresRecorder, TestCase):
         self.assertEqual(AiSpendEvent.objects.get().surface, "index")
         _assert_nothing_unattributed(self)
 
+    @METER_ON
+    def test_personal_note_folder_move_embed_lands_on_the_index_surface(self):
+        """A moved note whose text changed is re-embedded by `refresh_personal_notes`;
+        that spend used to land on `unattributed` (the two 2026-10-31 rows, MIP-1969)."""
+        from origin.views.utils import personal_note_move as pnm
+
+        def fake_refresh(note_ids):
+            self._fake_ingest_entity(None, None, dry_run=False)
+
+        plan = SimpleNamespace(target_folder_id=None, leaves_team_space=False)
+        note = SimpleNamespace(note_id="n1", team_id="t1", folder_id=None, parent_note_id=None)
+        with (
+            patch.object(pnm.PersonalNoteMaster, "objects"),
+            patch.object(pnm.change_feed, "bump_notes"),
+            patch.object(pnm, "collect_note_subtree_ids", return_value=["n1"]),
+            patch.object(pnm, "refresh_personal_notes", side_effect=fake_refresh),
+        ):
+            pnm.apply_personal_note_move(team_id="t1", note=note, plan=plan)
+
+        event = AiSpendEvent.objects.get()
+        self.assertEqual(event.surface, "index")
+        self.assertEqual(event.purpose, "index")
+        _assert_nothing_unattributed(self)
+
 
 # --------------------------------------------------------------------------- #
 # The full ask flow — post-run embed + run linkage                            #
