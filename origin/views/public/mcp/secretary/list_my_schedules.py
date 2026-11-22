@@ -26,7 +26,7 @@ def _list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "schedules": rows,
         "jobs": schedule_text.job_catalog(),
         "suggested": schedule_defaults.suggestions_for(mine),
-        "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
+        "limit": schedules.schedule_limit(ctx.user_id),
         "__summary__": f"{len(rows)} schedule(s).",
     }
 

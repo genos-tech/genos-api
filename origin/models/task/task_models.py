@@ -344,6 +344,8 @@ class TaskAttachments(models.Model):
     )
     attachment_id = models.IntegerField()
     attached_file = models.FileField(upload_to=task_attachment_path)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     attached_type = models.CharField(blank=True, default="")
     original_filename = models.CharField(max_length=512, blank=True, default="")
     ts_created_at = models.DateTimeField(auto_now_add=True)
@@ -351,9 +353,7 @@ class TaskAttachments(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(
-                fields=["task", "attachment_id"], name="unique_task_attachment"
-            )
+            models.UniqueConstraint(fields=["task", "attachment_id"], name="unique_task_attachment")
         ]
 
 
@@ -380,9 +380,7 @@ class TaskTags(models.Model):
     ts_updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["task", "tag_name"], name="unique_task_tag")
-        ]
+        constraints = [models.UniqueConstraint(fields=["task", "tag_name"], name="unique_task_tag")]
 
 
 class TaskComments(models.Model):
@@ -522,6 +520,8 @@ class TaskBodyAttachmentFact(models.Model):
     )
     attachment_id = models.BigAutoField(primary_key=True, unique=True)
     body_attachment_url = models.FileField(upload_to=task_body_attachment_path)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

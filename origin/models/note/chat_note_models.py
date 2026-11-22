@@ -81,5 +81,7 @@ class ChatNoteAttachmentFact(models.Model):
     thread_root_id = models.UUIDField(null=True, blank=True)
     attachment_id = models.BigAutoField(primary_key=True, unique=True)
     note_attachment_url = models.FileField(upload_to=chat_note_attachment_path)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

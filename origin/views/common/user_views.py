@@ -168,7 +168,9 @@ class UserProfileImageView(AuthenticatedAPIView):
             try:
                 previous_file.delete(save=False)
             except Exception as err:  # pragma: no cover - best-effort cleanup
-                logger.warning("Failed to delete previous profile image: %s", describe_exception(err))
+                logger.warning(
+                    "Failed to delete previous profile image: %s", describe_exception(err)
+                )
 
         # Only update the FileField
         new_profile_image_data = {
@@ -177,7 +179,7 @@ class UserProfileImageView(AuthenticatedAPIView):
 
         serializer = UserSerializer(user_data, data=new_profile_image_data, partial=True)
         if serializer.is_valid():
-            saved_user = serializer.save()
+            saved_user = serializer.save(profile_image_size_bytes=upload.size_bytes)
 
             # `profile_image_url.name` is already the storage path that
             # Django actually wrote (relative to MEDIA_ROOT and reflecting
@@ -359,8 +361,7 @@ class UiSettingsPreferenceView(AuthenticatedAPIView):
             return all(v is None or isinstance(v, (bool, int, float, str)) for v in value)
         if isinstance(value, dict):
             return all(
-                isinstance(k, str)
-                and (v is None or isinstance(v, (bool, int, float, str)))
+                isinstance(k, str) and (v is None or isinstance(v, (bool, int, float, str)))
                 for k, v in value.items()
             )
         return False
@@ -386,7 +387,9 @@ class UiSettingsPreferenceView(AuthenticatedAPIView):
                 )
             if not self._value_ok(value):
                 return Response(
-                    {"error": f"Unsupported value for {key!r} — use JSON scalars or a flat list/object."},
+                    {
+                        "error": f"Unsupported value for {key!r} — use JSON scalars or a flat list/object."
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 

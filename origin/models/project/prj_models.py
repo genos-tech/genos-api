@@ -30,6 +30,8 @@ class ProjectMaster(models.Model):
     # display ids.
     project_name = models.CharField(blank=False)
     profile_image_url = models.FileField(upload_to=profile_image_path, blank=True, null=True)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    profile_image_size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     profile_image_file_name = models.CharField(blank=True, null=True)
     project_system_user = models.ForeignKey(
         CustomUser,

@@ -97,7 +97,10 @@ AGENT_FLAGS_ON_IN_PRODUCTION = (
 SEARCH_ENGINE = {  # noqa: F405
     **SEARCH_ENGINE,  # noqa: F405
     "TIER_QUOTAS": {
-        tier: {**cfg, "schedules_enabled": True} for tier, cfg in PRODUCTION_TIER_QUOTAS.items()
+        # MIP-1960: the per-tier counts of webhooks and schedules are off here too (the suites about
+        # webhooks and schedules run on Free teams); `test_tier_plan_v2_caps` puts the table back.
+        tier: {**cfg, "schedules_enabled": True, "webhooks_max": None, "schedules_max": 20}
+        for tier, cfg in PRODUCTION_TIER_QUOTAS.items()
     },
     **{flag: False for flag in AGENT_FLAGS_ON_IN_PRODUCTION},
 }

@@ -110,6 +110,7 @@ class AddStampTests(AttachmentsBase):
                 "ts_created_at",
                 "ts_updated_at",
                 "file_base64",
+                "size_bytes",
                 "name",
             },
         )

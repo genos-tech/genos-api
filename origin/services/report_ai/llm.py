@@ -42,6 +42,8 @@ SKIP_METER_OFF = "cost_meter_off"
 SKIP_NOT_CONFIGURED = "model_unavailable"
 SKIP_NO_MODEL = "no_model_for_level"
 SKIP_FAILED = "call_failed"
+# The member has no AI credits left (MIP-1960): the report runs without its AI sentences and says so.
+SKIP_NO_CREDITS = "no_credits"
 
 
 @dataclass
@@ -72,6 +74,24 @@ def configured(provider: str) -> bool:
     if provider == "openai":
         return bool(cfg.get("OPENAI_API_KEY"))
     return False
+
+
+def credit_block(user_id: str) -> str:
+    """`SKIP_NO_CREDITS` when the member's AI credits are used up AND credits are the customer's
+    limit (`credits_authoritative`); else "". In shadow-only mode a charge is recorded but nothing
+    is refused, as for an ask. An unlimited plan has no balance to run out of. Never raises: a doubt
+    is "may call", the same fail-open a plan gate has."""
+    try:
+        from origin.search_engine import credit_ledger, quota  # noqa: PLC0415
+
+        if not credit_ledger.credits_authoritative():
+            return ""
+        balance = credit_ledger.balance_milli(str(user_id), quota.get_effective_tier(str(user_id)))
+        if balance is not None and balance <= 0:
+            return SKIP_NO_CREDITS
+    except Exception:  # noqa: BLE001
+        log.warning("report_ai: credit check failed", exc_info=True)
+    return ""
 
 
 def _client():
