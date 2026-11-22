@@ -280,7 +280,7 @@ def clean_branch(value) -> str | None:
 def delivery_as_dict(row: TaskDelivery, wrap=lambda s: s) -> dict:
     """The shape every tool returns a delivery in. `wrap` marks the PR
     title, which comes from GitHub, as data."""
-    return {
+    out = {
         "repo": f"{row.repo_owner}/{row.repo_name}",
         "branch": row.branch or None,
         "pr_url": row.pr_url,
@@ -290,6 +290,18 @@ def delivery_as_dict(row: TaskDelivery, wrap=lambda s: s) -> dict:
         "merged_at": row.merged_at.isoformat() if row.merged_at else None,
         "source": row.source,
     }
+    if row.state == TaskDeliveryState.OPEN:
+        # MIP-2056: what the reconcile cron last read (review, CI, conflicts, idle days). Only while
+        # `PR_NUDGES_ENABLED` and only once the cron has read it; never a GitHub call from here.
+        from origin.services.pr_merge_readiness import cached_readiness
+
+        readiness = cached_readiness(row.pr_url)
+        if readiness is not None:
+            out["merge_readiness"] = {
+                k: readiness[k]
+                for k in ("state", "review", "ci", "idle_days", "stale", "checked_at")
+            }
+    return out
 
 
 class DeliveryNotRemovable(Exception):

@@ -28,6 +28,11 @@ Deliberately narrow, so it only ever acts on a transition:
 * GitHub answering 401 / 403 / 429 (or erroring, or not answering) stops
   that repo for this run; the next run tries again. Other repos go on.
 
+With `PR_NUDGES_ENABLED` it also hands each PR that is still open to
+`pr_merge_readiness.check_open_pr` (MIP-2056): the "ready to merge" and "no activity" task comments
+and the cached `merge_readiness` that `get_task` shows. No new service: this cron has the token and
+the open PRs already.
+
 Runs every 15 minutes (`.railway/railway.ts`, service
 `reconcile-pr-deliveries`), which bounds a missed close to about that.
 """
@@ -41,6 +46,7 @@ import requests
 from origin.management.cron_command import CronCommand
 from origin.models.common.user_models import GithubWebhookRegistration
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
+from origin.services import pr_merge_readiness as readiness
 from origin.services.github_webhooks import GITHUB_API_BASE, hook_admin_headers
 from origin.views.common.github_views import (
     _invalidate_pr_caches,
@@ -53,6 +59,10 @@ log = logging.getLogger(__name__)
 # GitHub answers these when the token or the quota is the problem; asking
 # the same repo again in this run would only repeat it.
 _STOP_STATUSES = frozenset({401, 403, 429})
+
+# Most merge-readiness comments one run posts (MIP-2056), so switching the nudges on over a board
+# with many old PRs cannot flood it; the rest follow on the next runs.
+MAX_NUDGES_PER_RUN = 25
 
 
 class Command(CronCommand):
@@ -67,7 +77,8 @@ class Command(CronCommand):
 
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
-        totals = {"repos": 0, "checked": 0, "still_open": 0, "closed": 0, "tasks": 0}
+        totals = {"repos": 0, "checked": 0, "still_open": 0, "closed": 0, "tasks": 0, "nudges": 0}
+        self._nudge_budget = [MAX_NUDGES_PER_RUN]
         seen: set[tuple[str, str]] = set()
         for registration in GithubWebhookRegistration.objects.order_by("owner", "repo"):
             key = (registration.owner.lower(), registration.repo.lower())
@@ -80,6 +91,7 @@ class Command(CronCommand):
             f"{prefix}reconcile_pr_deliveries: repos={totals['repos']} "
             f"checked={totals['checked']} still_open={totals['still_open']} "
             f"closed_on_github={totals['closed']} tasks_closed={totals['tasks']}"
+            + (f" nudges={totals['nudges']}" if readiness.enabled() else "")
         )
 
     def _reconcile_repo(self, registration, totals: dict, *, dry_run: bool) -> None:
@@ -164,6 +176,17 @@ class Command(CronCommand):
             totals["checked"] += 1
             if pr.get("state") != "closed":
                 totals["still_open"] += 1
+                if readiness.enabled() and not dry_run:
+                    totals["nudges"] += readiness.check_open_pr(
+                        owner=owner,
+                        repo=repo,
+                        pr=pr,
+                        team_ids=team_ids,
+                        get=lambda path: requests.get(
+                            f"{GITHUB_API_BASE}{path}", headers=headers, timeout=15
+                        ),
+                        budget=self._nudge_budget,
+                    )
                 continue
             totals["closed"] += 1
             merged = bool(pr.get("merged"))
