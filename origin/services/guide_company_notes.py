@@ -7,7 +7,7 @@ Genos for your company" is the owner's checklist for building it.
 
 Only what the app does TODAY is written here, using the names the app shows (a project label is
 a "tag", mention groups live in Settings, "Team Notes", "Join Project"). Things that are planned
-but not built (hiding a private project's name, archiving a project, a chat directory) are not
+but not built (hiding a private project's name, a chat directory) are not
 promised; the "limits" section says what is missing now. When one of them ships, change that
 section.
 
@@ -164,9 +164,10 @@ _ORGANISING_EN = _body(
     (
         "What is not there yet",
         [
-            "So that nothing surprises you: today a project cannot be archived (only deleted), "
-            "there is no list of all group chats to browse (search by name), and the task "
-            "dashboard shows one project at a time. The habits above work around each of these.",
+            "So that nothing surprises you: today there is no list of all group chats to browse "
+            "(search by name), and the task dashboard shows one project at a time. The habits "
+            "above work around each of these. A project or a group chat you no longer use can be "
+            "archived instead of deleted.",
         ],
     ),
     (
@@ -388,10 +389,11 @@ _ORGANISING_JA = _body(
     (
         "まだできないこと",
         [
-            "驚かないように書いておきます。今のところ、プロジェクトはアーカイブできず（削除のみ）、"
+            "驚かないように書いておきます。今のところ、"
             "すべてのグループチャットを一覧で見る画面はなく（名前で検索します）、"
             "タスクのダッシュボードは一度にひとつのプロジェクトしか表示しません。"
-            "上の習慣は、これらを補うものです。",
+            "上の習慣は、これらを補うものです。使わなくなったプロジェクトやグループチャットは、"
+            "削除せずにアーカイブできます。",
         ],
     ),
     (
