@@ -18,6 +18,7 @@ from origin.views.public.mcp.note_threads._common import (
     clean_thread_id,
     reduced_via,
     refusal,
+    refuse_if_archived,
 )
 
 # One comment, not a document: the same size `get_note` shows a comment at.
@@ -42,6 +43,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     thread_id = clean_thread_id(args.get("thread_id"))
     text = _text(args.get("text"))
     ref = load_readable_note(args, ctx)
+    refuse_if_archived(ref)
     try:
         done = collab_push.reply_note_thread(
             ref.family,

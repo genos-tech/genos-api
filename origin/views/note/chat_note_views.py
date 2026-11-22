@@ -10,6 +10,7 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.quota import NOTE_CREATE_KEY, increment_usage
 from origin.serializers.note.note_serializers import *
+from origin.services.archive import archived_channel_response, archived_chat_note_response
 from origin.services.channel_scope import chat_member_q, chat_note_member_q
 from origin.services.chat_note_access import rederive_on_move
 from origin.services.note_delete import DeleteRefused, delete_note
@@ -415,6 +416,8 @@ class ChatNoteMasterView(AuthenticatedAPIView):
             )
         except ChatNoteTargetNotFound as e:
             return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        if res := archived_channel_response(target.channel):
+            return res
         data["chat_type"] = target.chat_type
 
         # Tier quota: monthly note-creation cap (shared across
@@ -505,6 +508,9 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
+        if res := archived_chat_note_response(data["note_id"]):
+            return res
+
         try:
             note = ChatNoteMaster.objects.get(note_id=data["note_id"])
         except ChatNoteMaster.DoesNotExist:
@@ -590,6 +596,9 @@ class ChatNoteMasterView(AuthenticatedAPIView):
             return res
 
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
+            return res
+
+        if res := archived_chat_note_response(data["note_id"]):
             return res
 
         try:
@@ -693,6 +702,9 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
             return res
 
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note"]):
+            return res
+
+        if res := archived_chat_note_response(data["note"]):
             return res
 
         upload, res = check_attachment_upload(request.user, data["note_attachment_url"])
@@ -839,6 +851,9 @@ class ChatNoteMoveView(AuthenticatedAPIView):
         if res := require_write_role(request_user_id, NOTE_TYPE, data["note_id"]):
             return res
 
+        if res := archived_chat_note_response(data["note_id"]):
+            return res
+
         try:
             note = ChatNoteMaster.objects.get(team=data["team_id"], note_id=data["note_id"])
         except ChatNoteMaster.DoesNotExist:
@@ -863,6 +878,9 @@ class ChatNoteMoveView(AuthenticatedAPIView):
                 {"error": "You are not a member of the target chat."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        if res := archived_channel_response(target_channel):
+            return res
 
         now = timezone.now()
         with transaction.atomic():

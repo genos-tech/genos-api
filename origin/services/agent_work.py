@@ -319,6 +319,9 @@ def build(*, viewer_id: Any, team_id: str, f: Filters, offset: int, limit: int, 
         key = (row["note_type"], row["note_id"])
         if key not in readable:
             continue
+        # The project filter narrows the totals and groups, not only the item list (MIP-1888).
+        if f.project_id is not None and note_project.get(key) != f.project_id:
+            continue
         _add_count(counts_by_agent, by_project, by_user, row, note_project.get(key))
 
     total_changes = sum(counts_by_agent.values())
@@ -606,6 +609,7 @@ def _decisions(viewer_id, team_id, since, f: Filters) -> tuple[list[dict], int]:
         ).values("note_type", "note_id", "editor_id", "via")
     }
     out = []
+    total = 0
     for m in masters:
         key = (m["note_type"], m["note_id"])
         if key not in readable:
@@ -617,6 +621,8 @@ def _decisions(viewer_id, team_id, since, f: Filters) -> tuple[list[dict], int]:
             continue
         if f.user_id is not None and str(actor) != f.user_id:
             continue
+        # The summary count ignores the agent filter (it shows every agent); the list honours it.
+        total += 1
         if f.agent is not None and label != f.agent:
             continue
         out.append(
@@ -629,7 +635,6 @@ def _decisions(viewer_id, team_id, since, f: Filters) -> tuple[list[dict], int]:
                 "agent": _agent_obj(label),
             }
         )
-    total = len(out)
     return out[:DECISION_LIMIT], total
 
 

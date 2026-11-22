@@ -18,6 +18,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -32,6 +33,7 @@
    "ownerName": "a_editor",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -46,6 +48,7 @@
    "ownerName": "testuser",
    "memberCount": 2,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -60,6 +63,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -74,6 +78,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -88,6 +93,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -115,6 +121,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -129,6 +136,7 @@
    "ownerName": "testuser",
    "memberCount": 0,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -143,6 +151,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -164,6 +173,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   }
@@ -310,6 +320,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -324,6 +335,7 @@
    "ownerName": "a_editor",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -338,6 +350,7 @@
    "ownerName": "testuser",
    "memberCount": 2,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -352,6 +365,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -379,6 +393,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -393,6 +408,7 @@
    "ownerName": "a_editor",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   }
@@ -495,6 +511,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -509,6 +526,7 @@
    "ownerName": "a_editor",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -523,6 +541,7 @@
    "ownerName": "testuser",
    "memberCount": 2,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -537,6 +556,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -564,6 +584,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   }
@@ -650,6 +671,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>",
    "isExternal": true,
@@ -674,6 +696,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>",
    "isExternal": true,
@@ -728,6 +751,7 @@
    "ownerName": "testuser",
    "memberCount": 1,
    "tags": [],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   },
@@ -749,6 +773,7 @@
      "textColor": null
     }
    ],
+   "defaultTemplateId": null,
    "tsCreated": "<time>",
    "tsUpdated": "<time>"
   }

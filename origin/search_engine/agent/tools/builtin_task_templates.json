@@ -9,44 +9,124 @@
                     "items": [
                         {
                             "kind": "placeholder",
-                            "text": "One or two lines on what this task delivers."
+                            "text": "One or two lines on what this task delivers.",
+                            "i18n": {
+                                "ja": "このタスクで何を届けるのかを1〜2行で。",
+                                "zh": "用一两句话说明此任务要交付什么。",
+                                "es": "Una o dos líneas sobre lo que entrega esta tarea.",
+                                "fr": "Une ou deux lignes sur ce que livre cette tâche.",
+                                "hi": "यह टास्क क्या देता है, इसे एक-दो पंक्तियों में लिखें।",
+                                "ar": "سطر أو سطران عمّا ستقدّمه هذه المهمة."
+                            }
                         }
-                    ]
+                    ],
+                    "heading_i18n": {
+                        "ja": "🧾 概要",
+                        "zh": "🧾 概述",
+                        "es": "🧾 Resumen",
+                        "fr": "🧾 Résumé",
+                        "hi": "🧾 सारांश",
+                        "ar": "🧾 ملخص"
+                    }
                 },
                 {
                     "heading": "🪜 Motivation",
                     "items": [
                         {
                             "kind": "placeholder",
-                            "text": "Why does this matter? What problem are we solving?"
+                            "text": "Why does this matter? What problem are we solving?",
+                            "i18n": {
+                                "ja": "なぜ重要なのか。どんな課題を解決するのか？",
+                                "zh": "为什么这很重要？我们要解决什么问题？",
+                                "es": "¿Por qué importa? ¿Qué problema resolvemos?",
+                                "fr": "Pourquoi est-ce important ? Quel problème résolvons-nous ?",
+                                "hi": "यह क्यों मायने रखता है? हम कौन-सी समस्या हल कर रहे हैं?",
+                                "ar": "لماذا يهم هذا؟ ما المشكلة التي نحلّها؟"
+                            }
                         }
-                    ]
+                    ],
+                    "heading_i18n": {
+                        "ja": "🪜 背景",
+                        "zh": "🪜 背景",
+                        "es": "🪜 Motivación",
+                        "fr": "🪜 Contexte",
+                        "hi": "🪜 प्रेरणा",
+                        "ar": "🪜 الدافع"
+                    }
                 },
                 {
                     "heading": "✅ Acceptance criteria",
                     "items": [
                         {
                             "kind": "bullet",
-                            "text": "First condition that must be true when this is done."
+                            "text": "First condition that must be true when this is done.",
+                            "i18n": {
+                                "ja": "完了時に満たすべき1つ目の条件。",
+                                "zh": "完成时必须满足的第一个条件。",
+                                "es": "Primera condición que debe cumplirse al terminar.",
+                                "fr": "Première condition à remplir une fois la tâche terminée.",
+                                "hi": "पूरा होने पर जो पहली शर्त सही होनी चाहिए।",
+                                "ar": "الشرط الأول الذي يجب تحققه عند الانتهاء."
+                            }
                         },
                         {
                             "kind": "bullet",
-                            "text": "Second condition…"
+                            "text": "Second condition…",
+                            "i18n": {
+                                "ja": "2つ目の条件…",
+                                "zh": "第二个条件…",
+                                "es": "Segunda condición…",
+                                "fr": "Deuxième condition…",
+                                "hi": "दूसरी शर्त…",
+                                "ar": "الشرط الثاني…"
+                            }
                         },
                         {
                             "kind": "bullet",
-                            "text": "Third condition…"
+                            "text": "Third condition…",
+                            "i18n": {
+                                "ja": "3つ目の条件…",
+                                "zh": "第三个条件…",
+                                "es": "Tercera condición…",
+                                "fr": "Troisième condition…",
+                                "hi": "तीसरी शर्त…",
+                                "ar": "الشرط الثالث…"
+                            }
                         }
-                    ]
+                    ],
+                    "heading_i18n": {
+                        "ja": "✅ 受け入れ条件",
+                        "zh": "✅ 验收标准",
+                        "es": "✅ Criterios de aceptación",
+                        "fr": "✅ Critères d’acceptation",
+                        "hi": "✅ स्वीकृति मानदंड",
+                        "ar": "✅ معايير القبول"
+                    }
                 },
                 {
                     "heading": "🎯 Notes & links",
                     "items": [
                         {
                             "kind": "placeholder",
-                            "text": "Anything else worth pinning here."
+                            "text": "Anything else worth pinning here.",
+                            "i18n": {
+                                "ja": "ここに残しておきたいその他の情報。",
+                                "zh": "其他值得在此记录的内容。",
+                                "es": "Cualquier otra cosa que valga la pena anotar aquí.",
+                                "fr": "Tout ce qui mérite d’être noté ici.",
+                                "hi": "यहाँ रखने लायक कोई और बात।",
+                                "ar": "أي شيء آخر يستحق التثبيت هنا."
+                            }
                         }
-                    ]
+                    ],
+                    "heading_i18n": {
+                        "ja": "🎯 メモとリンク",
+                        "zh": "🎯 备注与链接",
+                        "es": "🎯 Notas y enlaces",
+                        "fr": "🎯 Notes et liens",
+                        "hi": "🎯 नोट्स और लिंक",
+                        "ar": "🎯 ملاحظات وروابط"
+                    }
                 }
             ]
         },

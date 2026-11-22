@@ -88,13 +88,15 @@ class DerivedFromTheSharedFileTests(SimpleTestCase):
                 self.assertEqual(built_in_body(tid, "T"), expected)
 
     def test_the_prompts_a_reader_skips_are_what_they_were(self):
-        self.assertEqual(template_prompts.PROMPTS, PROMPTS_BEFORE)
+        # The English prompts are exactly what they were; the translations (MIP-1894) are added.
+        self.assertLessEqual(PROMPTS_BEFORE, template_prompts.PROMPTS)
+        self.assertGreater(len(template_prompts.PROMPTS), len(PROMPTS_BEFORE))
         self.assertIsInstance(template_prompts.PROMPTS, frozenset)
 
 
 # The hash of the parsed content of `builtin_task_templates.json`. The SAME value is pinned in
 # `genos-frontend` `src/__tests__/builtinTaskTemplates.test.ts`, against its vendored copy of the file.
-PINNED_SHA256 = "7cbb3cae38bae98e63f653558ab4d9a43fa17da2f0163112ae1614913e55c62e"
+PINNED_SHA256 = "73d0ff35da9f95845a4f0f6fa342825414073ec643fcd2c107d7da9cc0e63317"
 
 
 class SharedFileTests(SimpleTestCase):
@@ -157,5 +159,11 @@ class SharedFileTests(SimpleTestCase):
             {t["id"]: (t["label"], [s["heading"] for s in t["sections"]]) for t in raw},
             {k: (label, list(h)) for k, (label, h) in BUILT_IN_TEMPLATES.items()},
         )
-        every_item = {i["text"] for t in raw for s in t["sections"] for i in s["items"]}
+        every_item = {
+            text
+            for t in raw
+            for s in t["sections"]
+            for i in s["items"]
+            for text in (i["text"], *i.get("i18n", {}).values())
+        }
         self.assertEqual(template_prompts.PROMPTS, every_item)

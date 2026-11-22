@@ -866,16 +866,15 @@ CSRF_COOKIE_SAMESITE = "Lax"
 
 # Refresh-token cookie attributes.
 #
-# The frontend and backend are deployed to *different* hostnames in
-# production (e.g. on Railway), so every API call is a cross-site
-# request from the browser's point of view. For the browser to accept
-# `Set-Cookie` on those responses *and* replay the cookie on the next
-# `/user/signin/refresh/` fetch, the cookie must be sent with
-# `SameSite=None; Secure`. In local dev we keep `SameSite=Lax` and
-# `Secure=False` because Chrome won't set a `Secure` cookie over plain
-# HTTP localhost.
+# The frontend (genosai.dev) and the API (api.genosai.dev) share a registrable domain, so they
+# are SAME-SITE and the cookie is sent with `SameSite=Lax` on every app request (MIP-1882). With
+# `None` the browser also attached it to requests started by ANY other site, which let a foreign
+# page sign a member out or rotate the token. Do not move the frontend or the API to a host on a
+# different site (e.g. two `*.up.railway.app` hosts are cross-site: that suffix is on the Public
+# Suffix List) without revisiting this. `Secure` is off in local dev because Chrome won't set a
+# `Secure` cookie over plain HTTP localhost.
 AUTH_COOKIE_SECURE = not DEBUG
-AUTH_COOKIE_SAMESITE = "None" if not DEBUG else "Lax"
+AUTH_COOKIE_SAMESITE = "Lax"
 
 
 MEDIA_URL = "/media/"  # URL prefix
@@ -903,6 +902,10 @@ MEDIA_ROOT = os.environ.get(
 _OPENSEARCH_INDEX, _OPENSEARCH_ALIAS = resolve_index_names(
     os.environ.get("OPENSEARCH_INDEX"), os.environ.get("OPENSEARCH_ALIAS")
 )
+# MIP-1879: the demo visitor's sample workspace is built on a background thread after sign-in
+# returns. "0" builds it inside the request again (tests do).
+DEMO_PROVISION_IN_BACKGROUND = os.environ.get("DEMO_PROVISION_IN_BACKGROUND", "1") != "0"
+
 SEARCH_ENGINE = {
     "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
     "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),

@@ -9,7 +9,7 @@ tasks store an empty body, and the one-off command empties the stored rows.
 from io import StringIO
 from unittest import mock
 
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
@@ -190,16 +190,34 @@ class CleanupCommandTests(_ProjectCase):
         self._task(_template())
         self._milestone(_template())
         dry, _ = self._run()
-        applied, _ = self._run("--apply")
+        applied, _ = self._run("--apply", "--yes")
         # 1 milestone (with its backing task folded in) + 1 plain task.
         self.assertIn("1 milestone description(s) and 1 task body(ies)", dry)
         self.assertIn("1 milestone description(s) and 1 task body(ies)", applied)
+
+    def test_apply_without_yes_refuses_and_writes_nothing(self):
+        t = self._task(_template())
+        with self.assertRaises(CommandError):
+            self._run("--apply")
+        t.refresh_from_db()
+        self.assertNotEqual(t.content, [])
+
+    def test_a_ja_quick_created_body_is_cleaned_and_a_title_is_never_printed(self):
+        from .test_localized_template_prompts import _body
+
+        t = self._task(_body("ja"))
+        dry, _ = self._run()
+        self.assertIn(f"task {t.task_id}", dry)
+        self.assertNotIn(t.title, dry)
+        self._run("--apply", "--yes")
+        t.refresh_from_db()
+        self.assertEqual(t.content, [])
 
     def test_apply_empties_both_copies_and_pushes_the_editor_doc(self):
         t = self._task(_template())
         m = self._milestone(_template())
         backing_id = m.task_id
-        _, push = self._run("--apply")
+        _, push = self._run("--apply", "--yes")
         t.refresh_from_db()
         m.refresh_from_db()
         self.assertEqual(t.content, [])
@@ -216,7 +234,7 @@ class CleanupCommandTests(_ProjectCase):
         before_task = TaskMaster.objects.get(pk=t.pk).ts_updated_at
         before_ms = MilestoneMaster.objects.get(pk=m.pk).ts_updated_at
         before_backing = TaskMaster.objects.get(pk=m.task_id).ts_updated_at
-        self._run("--apply")
+        self._run("--apply", "--yes")
         self.assertEqual(TaskMaster.objects.get(pk=t.pk).ts_updated_at, before_task)
         self.assertEqual(MilestoneMaster.objects.get(pk=m.pk).ts_updated_at, before_ms)
         self.assertEqual(TaskMaster.objects.get(pk=m.task_id).ts_updated_at, before_backing)
@@ -226,7 +244,7 @@ class CleanupCommandTests(_ProjectCase):
         empty = self._task([])
         deleted = self._task(_template(), is_deleted=True)
         written_ms = self._milestone(_touched_template())
-        _, push = self._run("--apply")
+        _, push = self._run("--apply", "--yes")
         touched.refresh_from_db()
         empty.refresh_from_db()
         deleted.refresh_from_db()
@@ -239,7 +257,7 @@ class CleanupCommandTests(_ProjectCase):
 
     def test_team_scope(self):
         t = self._task(_template())
-        text, _ = self._run("--apply", "--team", "00000000-0000-0000-0000-000000000000")
+        text, _ = self._run("--apply", "--yes", "--team", "00000000-0000-0000-0000-000000000000")
         t.refresh_from_db()
         self.assertEqual(t.content, _template())
         self.assertIn("0 milestone description(s) and 0 task body(ies)", text)

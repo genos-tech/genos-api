@@ -25,6 +25,7 @@ from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, 
 from origin.search_engine.agent.tools.note_access import has_write_permission, load_readable_note
 from origin.search_engine.agent.tools.task_access import as_int
 from origin.search_engine.agent.undo import UNDO_KEY, live_note_state, note_restore_capture
+from origin.services.archive import archived_note_refusal
 from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.services.note_version_restore import RestoreRefused, restore_note_version
 
@@ -41,6 +42,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ctx=ctx,
     ):
         raise ToolForbidden(f'Not authorized: you can read "{title}" but not edit it.')
+
+    if why := archived_note_refusal(ref.family, ref.note_id):
+        raise ToolError(f"{why} Nothing was changed.")
 
     # Undo (`agent/undo.py`): what the note is, before the restore replaces it.
     before_state = live_note_state(ref.family, ref.note_id) if ctx.capture_undo else None

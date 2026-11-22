@@ -54,6 +54,7 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from origin.models.common.change_models import ChangeVersion
+from origin.services.project_list_cache import project_list_keys
 
 log = logging.getLogger(__name__)
 
@@ -283,7 +284,7 @@ def _clear_project_lists(teams: set[str]) -> None:
         attendees.update(
             ProjectMembers.objects.filter(team_id=team).values_list("attendee_id", flat=True)
         )
-        keys.update(f"project:list:{team}:{a}" for a in attendees if a)
+        keys.update(key for a in attendees if a for key in project_list_keys(team, a))
     if keys:
         cache.delete_many(sorted(keys))
 

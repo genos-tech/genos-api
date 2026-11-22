@@ -20,7 +20,7 @@ import json
 from unittest import mock
 
 from django.conf import settings
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from origin.search_engine import search as S
 from origin.search_engine.agent.tools import search_kb
@@ -107,7 +107,7 @@ class SkipRewriteArgumentTests(SimpleTestCase):
             self.assertFalse(skip_rewrite({"rewrite": value}, APP_CTX))
 
 
-class ToolPassesItOnTests(SimpleTestCase):
+class ToolPassesItOnTests(TestCase):
     def test_false_turns_the_rewrite_off_for_that_call(self):
         self.assertTrue(_rewrite_kwarg({}))  # the server default is on
         self.assertFalse(_rewrite_kwarg({"rewrite": False}))

@@ -2561,6 +2561,18 @@ def _rank_sources_by_citation(
 # --------------------------------------------------------------------------- #
 
 
+def _archived_write_refusal(tool_name: str, args: dict[str, Any]) -> str | None:
+    """The shared archive refusal when an approved write would change an archived project's data
+    (MIP-1917). These tools write straight to the database, so the services' guard cannot reach
+    them. Same tool list and same text as the MCP surface."""
+    from origin.services.archive import archived_refusal_for_args  # noqa: PLC0415
+    from origin.views.public.mcp.tools import ARCHIVE_GUARDED_TOOLS  # noqa: PLC0415
+
+    if tool_name not in ARCHIVE_GUARDED_TOOLS:
+        return None
+    return archived_refusal_for_args(args)
+
+
 def run_agent(
     query: str,
     ctx: ToolContext,
@@ -2866,6 +2878,10 @@ def resume_agent(
             try:
                 if edit_error is not None:
                     raise ToolError(edit_error)
+                # MIP-1917: approval can come after the project was archived, so the check runs
+                # now, with the arguments the tool will really receive.
+                if why := _archived_write_refusal(call_name, run_args):
+                    raise ToolError(why)
                 # The one place a write is asked for its pre-image (`agent/undo.py`):
                 # nothing else that runs a tool sets this.
                 result = tool.run(run_args, dataclasses.replace(ctx, capture_undo=True))

@@ -11,6 +11,7 @@ from origin.serializers.note.note_serializers import (
     NoteVersionDetailSerializer,
     NoteVersionListItemSerializer,
 )
+from origin.services.archive import archived_chat_note_response, archived_task_note_response
 from origin.services.note_version_restore import RestoreRefused, restore_note_version
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
@@ -159,6 +160,10 @@ class NoteVersionRestoreView(AuthenticatedAPIView):
         note_type, note_id, version_no = parsed
 
         if res := require_write_role(request_user_id, note_type, note_id, data["team_id"]):
+            return res
+
+        guard = {2: archived_task_note_response, 3: archived_chat_note_response}.get(note_type)
+        if guard and (res := guard(note_id)):
             return res
 
         try:

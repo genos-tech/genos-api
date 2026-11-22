@@ -363,26 +363,34 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         pid = self.project.project_id
 
         self.assertEqual(
-            resolve_note_entity_link(f"task:{task.task_id}", team_id=team_id),
+            resolve_note_entity_link(
+                f"task:{task.task_id}", team_id=team_id, user_id=str(self.user.id)
+            ),
             (f"/workspace/tasks/project/{pid}/task/{task.task_id}", task.display_id),
         )
         self.assertEqual(
-            resolve_note_entity_link(f"project:{pid}", team_id=team_id),
+            resolve_note_entity_link(f"project:{pid}", team_id=team_id, user_id=str(self.user.id)),
             (f"/workspace/tasks/project/{pid}", "Website Redesign"),
         )
         self.assertEqual(
-            resolve_note_entity_link(f"milestone:{milestone.milestone_id}", team_id=team_id),
+            resolve_note_entity_link(
+                f"milestone:{milestone.milestone_id}", team_id=team_id, user_id=str(self.user.id)
+            ),
             (
                 f"/workspace/tasks/project/{pid}/milestone/{milestone.milestone_id}",
                 "Perf hardening",
             ),
         )
         self.assertEqual(
-            resolve_note_entity_link(f"note:personal:{my_note.note_id}", team_id=team_id),
+            resolve_note_entity_link(
+                f"note:personal:{my_note.note_id}", team_id=team_id, user_id=str(self.user.id)
+            ),
             (f"/workspace/notes/my/{my_note.note_id}", "Research"),
         )
         self.assertEqual(
-            resolve_note_entity_link(f"note:task:{task_note.note_id}", team_id=team_id),
+            resolve_note_entity_link(
+                f"note:task:{task_note.note_id}", team_id=team_id, user_id=str(self.user.id)
+            ),
             (
                 f"/workspace/notes/task/project/{pid}/task/{task.task_id}/note/{task_note.note_id}",
                 "Plan",
@@ -394,6 +402,7 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
                 "chat:pm:11111111-2222-3333-4444-555555555555:thread:"
                 "66666666-7777-8888-9999-000000000000",
                 team_id=team_id,
+                user_id=str(self.user.id),
             ),
             (
                 "/workspace/chat/pm/11111111-2222-3333-4444-555555555555"
@@ -408,7 +417,9 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         )
         todo = ToDoItem.objects.create(group=group, title="ship the fix")
         self.assertEqual(
-            resolve_note_entity_link(f"todo:2026-01-01:item:{todo.item_id}", team_id=team_id),
+            resolve_note_entity_link(
+                f"todo:2026-01-01:item:{todo.item_id}", team_id=team_id, user_id=str(self.user.id)
+            ),
             (f"/workspace/todo/2026-07-12/item/{todo.item_id}", "ship the fix"),
         )
 
@@ -416,31 +427,117 @@ class NoteBodyEntityLinkTests(NoteWriteToolTestBase):
         task = self._task()
         team_id = str(self.team.team_id)
         # Foreign team.
-        self.assertIsNone(resolve_note_entity_link(f"task:{task.task_id}", team_id="other"))
+        self.assertIsNone(
+            resolve_note_entity_link(
+                f"task:{task.task_id}", team_id="other", user_id=str(self.user.id)
+            )
+        )
         # Deleted task.
         task.is_deleted = True
         task.save(update_fields=["is_deleted"])
-        self.assertIsNone(resolve_note_entity_link(f"task:{task.task_id}", team_id=team_id))
+        self.assertIsNone(
+            resolve_note_entity_link(
+                f"task:{task.task_id}", team_id=team_id, user_id=str(self.user.id)
+            )
+        )
         # Unknown id / malformed token / project-level task note (no route).
-        self.assertIsNone(resolve_note_entity_link("task:999999", team_id=team_id))
+        self.assertIsNone(
+            resolve_note_entity_link("task:999999", team_id=team_id, user_id=str(self.user.id))
+        )
         # Nonexistent todo item.
-        self.assertIsNone(resolve_note_entity_link("todo:2026-07-10:item:5", team_id=team_id))
+        self.assertIsNone(
+            resolve_note_entity_link(
+                "todo:2026-07-10:item:5", team_id=team_id, user_id=str(self.user.id)
+            )
+        )
         # Foreign-team todo item.
         group = ToDoGroup.objects.create(
             team=self.team, user=self.user, local_date=date(2026, 7, 10)
         )
         todo = ToDoItem.objects.create(group=group, title="mine")
         self.assertIsNone(
-            resolve_note_entity_link(f"todo:2026-07-10:item:{todo.item_id}", team_id="other")
+            resolve_note_entity_link(
+                f"todo:2026-07-10:item:{todo.item_id}", team_id="other", user_id=str(self.user.id)
+            )
         )
         # Malformed todo token (missing item segment).
-        self.assertIsNone(resolve_note_entity_link("todo:2026-07-10", team_id=team_id))
+        self.assertIsNone(
+            resolve_note_entity_link("todo:2026-07-10", team_id=team_id, user_id=str(self.user.id))
+        )
         project_note = TaskNoteMaster.objects.create(
             team=self.team, project=self.project, owner=self.user, title="P", body=[]
         )
         self.assertIsNone(
-            resolve_note_entity_link(f"note:task:{project_note.note_id}", team_id=team_id)
+            resolve_note_entity_link(
+                f"note:task:{project_note.note_id}", team_id=team_id, user_id=str(self.user.id)
+            )
         )
+
+    def test_resolver_hides_names_from_non_members_mip1945(self):
+        """A teammate who is not on the project gets no link, and so no name:
+        the label is the project name / task display id / milestone title."""
+        task = self._task()
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, title="Secret roadmap"
+        )
+        outsider = str(self.user2.id)
+        member = str(self.user.id)
+        team_id = str(self.team.team_id)
+        pid = self.project.project_id
+        for token in (
+            f"project:{pid}",
+            f"task:{task.task_id}",
+            f"milestone:{milestone.milestone_id}",
+        ):
+            self.assertIsNone(
+                resolve_note_entity_link(token, team_id=team_id, user_id=outsider), token
+            )
+            self.assertIsNotNone(
+                resolve_note_entity_link(token, team_id=team_id, user_id=member), token
+            )
+        group = ToDoGroup.objects.create(
+            team=self.team, user=self.user, local_date=date(2026, 7, 12)
+        )
+        todo = ToDoItem.objects.create(group=group, title="private errand")
+        self.assertIsNone(
+            resolve_note_entity_link(
+                f"todo:2026-07-12:item:{todo.item_id}", team_id=team_id, user_id=outsider
+            )
+        )
+        # A private note title is no more readable than the project's name.
+        my_note = self._personal_note(title="Private plan")
+        self.assertIsNone(
+            resolve_note_entity_link(
+                f"note:personal:{my_note.note_id}", team_id=team_id, user_id=outsider
+            )
+        )
+        task_note = self._task_note(title="Project-only")
+        self.assertIsNone(
+            resolve_note_entity_link(
+                f"note:task:{task_note.note_id}", team_id=team_id, user_id=outsider
+            )
+        )
+
+    def test_create_note_does_not_echo_hidden_project_name_mip1945(self):
+        hidden = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Hidden Acquisition",
+            code="HAQ",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=hidden, attendee=self.user)
+        res = create_note_run(
+            {
+                "note_type": "personal",
+                "title": "probe",
+                "content_text": f"see [project:{hidden.project_id}] and [x](project:{hidden.project_id})",
+            },
+            self.ctx2,
+        )
+        note = PersonalNoteMaster.objects.get(note_id=res["note_id"])
+        self.assertNotIn("Hidden Acquisition", str(note.body))
+        self.assertEqual(_links_in(note.body), [])
 
     def test_create_note_body_carries_working_task_link(self):
         task = self._task()
