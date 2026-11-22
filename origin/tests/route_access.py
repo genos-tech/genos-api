@@ -691,6 +691,9 @@ REGISTRY = {
     # views.task.search_views
     "origin.views.task.search_views.GetSearchTeamTasksView": checked("is_project_member"),
     "origin.views.task.search_views.GetTaskByDisplayIdView": checked("reachable_project_ids"),
+    "origin.views.task.task_query_search_views.SearchTasksView": checked(
+        "reachable_project_ids", "is_project_member"
+    ),
     # views.task.sprint_views
     "origin.views.task.sprint_views.ProjectSprintsView": checked("is_project_member"),
     "origin.views.task.sprint_views.SprintConfigView": checked("is_project_member"),
