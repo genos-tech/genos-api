@@ -404,6 +404,8 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
 CONNECTED_PROVIDER_CHOICES = [
     ("google", "google"),
     ("github", "github"),
+    # The GitHub App's user-to-server token (MIP-2086): repository access, never a sign-in.
+    ("github_app", "github_app"),
 ]
 
 

@@ -35,6 +35,17 @@ from origin.tests.status_reason_support import with_reason
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.views.public.mcp import tools as mcp_tools
 
+# The four risky kinds MIP-2063 added to the table. The migrations that carried an opt-out to an
+# earlier switch (0241, 0248) spell out their own keys and know nothing of these.
+RISKY_KINDS_2063 = frozenset(
+    {
+        "ai_app_note_sharing",
+        "ai_app_project_members",
+        "ai_app_refusal_burst",
+        "ai_app_app_connected",
+    }
+)
+
 
 def notices(user):
     return list(
@@ -252,14 +263,18 @@ class TheSwitchAndTheFailureModeTests(NoticeBase):
         self.assertEqual(
             sorted(k for k, on in switches.DEFAULTS.items() if on),
             [
+                "ai_app_app_connected",
                 "ai_app_comment_deleted",
                 "ai_app_milestone_deleted",
                 "ai_app_note_deleted",
+                "ai_app_note_sharing",
+                "ai_app_project_members",
+                "ai_app_refusal_burst",
                 "ai_app_todo_deleted",
             ],
         )
-        self.assertEqual(len(switches.KEYS), 13)
-        self.assertEqual(len(set(switches.KEYS)), 13)
+        self.assertEqual(len(switches.KEYS), 17)
+        self.assertEqual(len(set(switches.KEYS)), 17)
 
     def test_on_by_default_and_another_category_does_not_turn_it_off(self):
         NotificationPreference.objects.create(user=self.user, category_settings={"chats": False})
@@ -296,7 +311,10 @@ class TheOldSwitchIsCarriedOverTests(NoticeBase):
         module = importlib.import_module("origin.migrations.0241_notification_enable_ai_apps")
         # The table has grown since (0248 carries the opt-out to "note commented"): 0241 itself only
         # ever knew the twelve it spells out, and must not change when the table does.
-        self.assertEqual(set(module.AI_APP_KEYS), set(switches.KEYS) - {"ai_app_note_commented"})
+        self.assertEqual(
+            set(module.AI_APP_KEYS),
+            set(switches.KEYS) - {"ai_app_note_commented"} - RISKY_KINDS_2063,
+        )
         module.carry_the_old_switch(apps, None)
         return module
 
@@ -329,8 +347,8 @@ class TheNewSwitchFollowsAnOptOutTests(NoticeBase):
         module = importlib.import_module("origin.migrations.0248_ai_app_note_commented_carry")
         self.assertEqual(
             set(module.EARLIER_KEYS) | {module.NEW_KEY},
-            set(switches.KEYS),
-            "the table and the migration agree",
+            set(switches.KEYS) - RISKY_KINDS_2063,
+            "the table (before the four risky kinds of MIP-2063) and the migration agree",
         )
         module.carry_the_opt_out(apps, None)
         return module
@@ -558,10 +576,10 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "manage_sprint",
         "delete_sprint",
         "manage_project",
-        "manage_project_members",
+        # (`manage_project_members`, `approve_join_request` and `manage_note_sharing` left this
+        # list in MIP-2063: who is in a project and who can open a note are risky kinds.)
         "add_project_tag",
         "manage_project_labels",
-        "approve_join_request",
         "decline_join_request",
         "manage_note_folder",
         "favorite_note",
@@ -574,7 +592,6 @@ class EveryWriteToolIsDecidedTests(NoticeBase):
         "comment_on_task_body",
         "reply_to_task_body_comment",
         "resolve_task_body_comment",
-        "manage_note_sharing",
         "restore_note_version",
         "set_item_importance",
         "tune_my_importance",
