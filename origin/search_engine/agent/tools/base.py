@@ -60,6 +60,10 @@ class ToolContext:
     # every other caller (MCP, tests, evals): their results carry no pre-image
     # and cost no extra reads. Server-set, NEVER from the LLM.
     capture_undo: bool = False
+    # Set ONLY by the MCP layer for a `search_workspace` call whose caller has no AI credits
+    # left (MIP-1965): the tool then runs a plain search, no query rewrite and no rerank, and
+    # adds one notice line. Server-set, NEVER from the LLM or the caller; off everywhere else.
+    plain_search: bool = False
 
 
 class ToolError(Exception):

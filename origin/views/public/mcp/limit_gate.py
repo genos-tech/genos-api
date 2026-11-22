@@ -5,7 +5,7 @@ anything, and the answer is what it always was, byte for byte.
 
 Two kinds of limit, answered two ways, because a protocol client and a model need different things:
 
-* TRANSPORT limits (calls per minute, per day, searches per day) stop the call before it runs:
+* TRANSPORT limits (calls per minute, per day) stop the call before it runs:
   HTTP 429 with `Retry-After` and a JSON-RPC error whose `error.data` is
   `{limit_reached: true, used, limit, category, retry_after}`, the shape the plan limits answer
   with everywhere else (`parseLimitReached` in the web app reads the same four names). The
@@ -75,21 +75,15 @@ def _transport_message(refusal: limits.Refusal) -> str:
             f"({refusal.limit} per minute; {refusal.used} used).{heavy} Wait {wait}, then "
             "continue. Fewer, larger reads (one list instead of many single reads) use less."
         )
-    if refusal.category == limits.CATEGORY[limits.PER_DAY]:
-        return (
-            f"The daily limit for your plan is reached ({refusal.limit} calls a day across all "
-            f"your keys and apps; {refusal.used} used).{heavy} It resets at 00:00 UTC, in "
-            f"{wait}. Stop here and tell the user."
-        )
     return (
-        f"The daily limit of workspace searches for your plan is reached ({refusal.limit} a "
-        f"day; {refusal.used} used). It resets at 00:00 UTC, in {wait}. Other tools still "
-        "work: read a list or an item directly instead of searching."
+        f"The daily limit for your plan is reached ({refusal.limit} calls a day across all "
+        f"your keys and apps; {refusal.used} used).{heavy} It resets at 00:00 UTC, in "
+        f"{wait}. Stop here and tell the user."
     )
 
 
 def admit_response(request, request_id: Any, params: Any, user_id: Any) -> Response | None:
-    """The 429 for a `tools/call` the plan's per-minute, per-day or search limit stops, else None.
+    """The 429 for a `tools/call` the plan's per-minute or per-day limit stops, else None.
 
     `off`: returns None on the first line. Counts `tools/call` only: the handshake, `tools/list`
     and prompts are not calls in the sense the plan limits mean.

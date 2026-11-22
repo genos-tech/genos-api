@@ -865,6 +865,7 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
                 "limit": None,
                 "used": None,
                 "purchased_balance": None,
+                "mcp_search_used": None,
                 "period_end_iso": _period_end_iso(),
                 "per_request_max": round(credits.quote_max_credits_milli(policy) / 1000, 2),
             }
@@ -892,6 +893,11 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
             # than folded in, because the client shows the two under
             # different reset copy: one resets on the 1st, one does not.
             "purchased_balance": round(breakdown.purchased_milli / 1000, 2),
+            # Of `used`, what searches by connected AI apps took this month (MIP-1965): its own
+            # line on Plan & Usage, so the spend is not a mystery.
+            "mcp_search_used": round(
+                credit_ledger.spent_on_surface_milli(str(user_id), "mcp_search") / 1000, 2
+            ),
             "period_end_iso": _period_end_iso(),
             # What a single request can cost at most — the quote. The UI
             # uses it to warn when the remaining balance can no longer

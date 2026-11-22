@@ -66,9 +66,11 @@ policy:
     request_max_credits: 5
 
     # The surfaces a customer can be charged for. Everything else —
-    # search (deliberate: consumes no ask today, and V2 §3.4's "paid
+    # search (Spotlight: deliberate, consumes no ask; V2 §3.4's "paid
     # searches" means searches INSIDE an ask), index, eval, judge,
-    # unattributed — is measured, never billable. An UNLISTED surface
+    # unattributed — is measured, never billable. `mcp_search` is a
+    # search by a connected AI app (MCP `search_workspace`), billed since
+    # MIP-1965: its rewrite and rerank are paid model calls. An UNLISTED surface
     # is not billable by construction, so forgetting to classify a new
     # surface fails customer-favorably.
     billable_surfaces:
@@ -78,6 +80,7 @@ policy:
         # A scheduled report's AI sentences (MIP-1960, decided 2026-11-22): one charge per run
         # that made the model call, like any other AI use. The digest is a plan feature and not here.
         - schedule
+        - mcp_search
 
     # The request outcomes that can carry a charge. The discriminator is
     # NOT "did the user get what they wanted" — it is "did the provider

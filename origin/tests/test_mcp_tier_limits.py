@@ -42,7 +42,6 @@ OK = {"content": [{"type": "text", "text": "ok"}], "isError": False}
 CORE_PROPOSED = {
     "mcp_calls_per_min": 60,
     "mcp_calls_per_day": 3000,
-    "mcp_search_daily": 100,
     "mcp_max_api_keys": 3,
     "mcp_max_connections": 3,
     "mcp_bulk_max_tasks": 10,
@@ -158,7 +157,6 @@ class TestTheTable(McpBase):
             {
                 "mcp_calls_per_min": 120,
                 "mcp_calls_per_day": 10000,
-                "mcp_search_daily": 300,
                 "mcp_max_api_keys": 10,
                 "mcp_max_connections": 10,
                 "mcp_bulk_max_tasks": 30,
@@ -172,7 +170,6 @@ class TestTheTable(McpBase):
             {
                 "mcp_calls_per_min": 240,
                 "mcp_calls_per_day": 30000,
-                "mcp_search_daily": 1000,
                 "mcp_max_api_keys": 25,
                 "mcp_max_connections": 25,
                 "mcp_bulk_max_tasks": 30,
@@ -216,7 +213,6 @@ class TestTheTable(McpBase):
                     "| --- | --- | --- | --- | --- |",
                     "| MCP calls per minute, per key or connected app | 60 | 120 | 240 | unlimited |",
                     "| MCP calls per day, per person across all keys and apps | 3,000 | 10,000 | 30,000 | unlimited |",
-                    "| `search_workspace` calls per day | 100 | 300 | 1,000 | unlimited |",
                     "| API keys per person (new ones only) | 3 | 10 | 25 | unlimited |",
                     "| Connected AI apps per person (new ones only) | 3 | 10 | 25 | unlimited |",
                     "| `update_tasks_bulk` items per call | 10 | 30 | 30 | unlimited |",
@@ -285,7 +281,6 @@ class TestDarkMeansNothing(LimitsBase):
         self.rig(
             mcp_calls_per_min=1,
             mcp_calls_per_day=1,
-            mcp_search_daily=1,
             mcp_bulk_max_tasks=1,
             mcp_list_page_max=1,
             mcp_apply_message_retention=True,
@@ -515,45 +510,20 @@ class TestPerDay(LimitsBase):
         self.assertEqual(self.counter(":day:"), 1)
 
 
-class TestSearchPerDay(LimitsBase):
-    def test_search_workspace_has_its_own_daily_limit(self):
-        spy = self.stub()
-        self.rig(mcp_search_daily=2)
-        for _ in range(2):
-            self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 200)
-        res = self._call("search_workspace", {"query": "x"}, rid=9)
-        self.assertEqual(res.status_code, 429)
-        data = res.json()["error"]["data"]
-        self.assertEqual(
-            {k: data[k] for k in ("limit_reached", "used", "limit", "category")},
-            {"limit_reached": True, "used": 2, "limit": 2, "category": "mcp_search_daily"},
-        )
-        self.assertIn("Other tools still work", res.json()["error"]["message"])
-        # Other tools are not stopped by it.
-        self.assertEqual(self.call_ok().status_code, 200)
-        self.assertEqual(spy.call_count, 3)
+class TestSearchHasNoOwnDailyCap(LimitsBase):
+    """MIP-1965: a search is paid by AI credits, not by a separate daily count."""
 
-    def test_the_search_total_is_per_person_across_every_key(self):
-        self.stub()
-        self.rig(mcp_search_daily=2)
-        for raw in (self.raw, self._key(scope=SCOPE_READ)):
-            self.client.credentials(HTTP_AUTHORIZATION=f"ApiKey {raw}")
-            self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 200)
-        self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 429)
+    def test_the_key_is_gone(self):
+        self.assertNotIn("mcp_search_daily", limits.CAPABILITY_KEYS)
+        for tier, cfg in limits.MCP_TIER_LIMITS_PROPOSED.items():
+            self.assertNotIn("mcp_search_daily", cfg, tier)
 
-    def test_search_counts_one_per_call_for_the_search_limit_not_five(self):
+    def test_search_is_only_held_to_the_general_call_limits(self):
         self.stub()
-        self.rig(mcp_search_daily=5)
-        for _ in range(5):
+        self.rig(mcp_calls_per_min=1000, mcp_calls_per_day=1000)
+        for _ in range(6):
             self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 200)
-        self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 429)
-
-    def test_a_search_refused_on_the_minute_is_not_counted_as_a_search(self):
-        self.stub()
-        self.rig(mcp_calls_per_min=5, mcp_search_daily=2)
-        self._call("search_workspace", {"query": "x"})  # weight 5: fills the minute
-        self.assertEqual(self._call("search_workspace", {"query": "x"}).status_code, 429)
-        self.assertEqual(self.counter(":srch:"), 1)
+        self.assertEqual([k for k in self.counters() if ":srch:" in k], [])
 
 
 class TestAFreeCredentialStillGetsItsExistingRefusal(LimitsBase):
@@ -1041,8 +1011,8 @@ class TestFailurePolicy(LimitsBase):
     def test_with_the_store_down_the_totals_fall_back_to_cores_numbers(self):
         self.stub()
         self.rig_core_and_pro(
-            {"mcp_calls_per_day": 2, "mcp_search_daily": 1},
-            {"mcp_calls_per_day": 1000, "mcp_search_daily": 1000},
+            {"mcp_calls_per_day": 2},
+            {"mcp_calls_per_day": 1000},
         )
         with mock.patch.object(
             limits, "throttle_cache", side_effect=ConnectionInterrupted(connection=None)

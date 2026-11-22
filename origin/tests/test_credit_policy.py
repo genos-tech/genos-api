@@ -198,8 +198,9 @@ class ShippedPolicyTests(SimpleTestCase):
     def test_the_billable_surfaces_are_exactly_the_user_charged_ones(self):
         self.assertEqual(
             self.policy.billable_surfaces,
-            frozenset({"ask", "thread_summary", "note_summary", "schedule"}),
-            "search is measured but deliberately not billable; index/eval/judge are our own cost",
+            frozenset({"ask", "thread_summary", "note_summary", "schedule", "mcp_search"}),
+            "a search by a connected app is billed (MIP-1965); Spotlight search, "
+            "index/eval/judge are our own cost",
         )
 
     def test_result_success_pin_matches_the_model(self):
