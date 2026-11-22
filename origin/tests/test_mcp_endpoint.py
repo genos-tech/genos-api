@@ -49,6 +49,7 @@ from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine import quota
 from origin.search_engine.agent.tools import REGISTRY, get_mcp_tool
 from origin.search_engine.agent.tools.base import ToolError
+from origin.tests.ai_app_defaults import all_notices_on_by_default
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.public.mcp import protocol, tools
 from origin.views.public.mcp.resolve import resolve_note_ref
@@ -80,6 +81,7 @@ def _mcp_enabled_everywhere():
 class McpBase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        all_notices_on_by_default(self)  # MIP-2009: the notice tests are not about its default
         # The effective tier is cached per user for 60s, so the override
         # above only takes effect once the previous verdict is dropped.
         quota.invalidate_effective_tier([str(self.user.id), str(self.user2.id)])

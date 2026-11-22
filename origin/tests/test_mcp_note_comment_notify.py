@@ -26,6 +26,7 @@ from origin.services import ai_app_switches as switches
 from origin.services import mcp_notice, note_comment_notify
 from origin.services.v3_activity import surface_activity_id
 from origin.services.webpush_gating import _COARSE_FIELD, _PUSH_DEFAULTS
+from origin.tests.ai_app_defaults import all_notices_on_by_default
 
 from .test_mcp_note_thread_writes import (
     EDITOR_ROLE,
@@ -60,6 +61,7 @@ def notices(user):
 class NotifyBase(NoteThreadWriteBase):
     def setUp(self):
         super().setUp()
+        all_notices_on_by_default(self)  # MIP-2009
         self._key(scope=SCOPE_WRITE)
         # The second member can open the note (an editor), so the comment reaches them.
         self._grant(self.user2, EDITOR_ROLE)

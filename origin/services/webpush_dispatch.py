@@ -202,8 +202,11 @@ def _full_push_spec(act) -> dict | None:
         meta = act.meta or {}
         items = meta.get("items") or []
         app = meta.get("app") or "Your AI app"
+        # A bulk change (10+) is pushed under the group's own category, not its action's switch
+        # (which starts off): the row exists only if the member did not turn that switch off.
+        category = "ai_app" if meta.get("bulk") else key_for(meta.get("verb"), meta.get("kind"))
         return {
-            "category": key_for(meta.get("verb"), meta.get("kind")) or "ai_app",
+            "category": category or "ai_app",
             "title": f"{app} {sentence(meta)}",
             "body": _truncate((items[0].get("title") if items else "") or ""),
             "url": meta.get("url") or "/workspace",
