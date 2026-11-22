@@ -10,8 +10,9 @@ autosaves a note's `body` here only after a pause, so splicing this process's co
 whole could undo words typed seconds ago in other blocks. Only a note nobody has ever opened has no live
 doc; then the stored `body` is the whole truth and is edited directly (`_stored`).
 
-MCP-only, like `note_threads`: filed in `MCP_ONLY_REGISTRY`, never declared to the in-app agent (a
-model-visible tool needs an eval), and kept outside `origin/search_engine/` so a change here starts no
+MCP-only, like `note_threads`: filed in `MCP_ONLY_REGISTRY`. The in-app agent has a twin of `edit_note_block`
+(`agent/tools/edit_note_block.py`, MIP-1656) behind the default-off flag `AGENT_INAPP_NOTE_BLOCK_TOOL`: it runs this
+module's `run_edit`. This module is kept outside `origin/search_engine/` so a change here starts no
 billed eval run.
 """
 

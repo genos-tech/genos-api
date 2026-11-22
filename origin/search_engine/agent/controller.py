@@ -1373,6 +1373,8 @@ _FRIENDLY_NESTED_ENRICHERS: dict[
     "update_tasks_bulk": _friendly_bulk_update_arguments,
     "update_task_dependencies": _friendly_dependency_arguments,
     "update_note": _friendly_update_note_arguments,
+    # MIP-1656 (flag-gated): the card names the note, not just its id.
+    "edit_note_block": _friendly_update_note_arguments,
     "create_note": _friendly_create_note_arguments,
     "create_task": _friendly_create_task_arguments,
 }
@@ -1898,6 +1900,8 @@ _NOTE_SOURCE_TOOLS = frozenset(
         "update_note",
         "restore_note_version",
         "manage_note_sharing",
+        # MIP-1656 (flag-gated): its result names the note, so an approved edit gets its chip.
+        "edit_note_block",
         # MIP-1059: its result names the note's `note_type` while `AGENT_PARITY_TOOLS` is on. A folder
         # has no note, so a favorite of a folder yields no chip.
         "favorite_note",

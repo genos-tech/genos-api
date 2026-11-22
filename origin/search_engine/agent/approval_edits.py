@@ -179,6 +179,10 @@ EDITABLE_FIELDS: dict[str, dict[str, Field]] = {
     # approval is spent; `anchor_text` is a reference into the note, never an editable value. A person who
     # wants other words rejects the card, with the reason (`AGENT_REJECT_REASON`).
     "comment_on_note": _NONE,
+    # MIP-1656 (flag `AGENT_INAPP_NOTE_BLOCK_TOOL`): one block of a note. Nothing is editable on the card: a
+    # `delete` has no text, and an edited text would skip the tool's size and op checks after the approval is
+    # spent. A person who wants other words rejects the card, with the reason (`AGENT_REJECT_REASON`).
+    "edit_note_block": _NONE,
     "update_comment": {"body_text": Field(BODY, "Comment", required=True)},
     # --- notes ---
     "create_note": {

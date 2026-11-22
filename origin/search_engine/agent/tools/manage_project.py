@@ -107,7 +107,7 @@ MANAGE_PROJECT = Tool(
         "Create a project, or rename one or change its code. A project is the workspace that "
         "holds tasks; a milestone, sprint or task is not one (use manage_milestone, "
         "manage_sprint or create_task). REQUIRES USER APPROVAL. action "
-        "'create': needs name (unique in the team); is_private (default false) and member_ids "
+        "'create': needs name (refused when a project you can see already has it); is_private (default false) and member_ids "
         "(team members to add, from get_team_members) are optional. You become its owner and "
         "the code is derived from the name. action 'update': call `list_projects` FIRST for "
         "the project_id, then send name and/or code (2-6 uppercase letters or digits, starting "

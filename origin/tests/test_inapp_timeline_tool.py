@@ -145,7 +145,8 @@ class TestFlagOffIsByteIdenticalToMain(SimpleTestCase):
         # the names the flagged app registry shares with the MCP-only one are the in-app twins: this
         # tool's, and (MIP-1671, `AGENT_INAPP_NOTE_COMMENT_TOOL`) `comment_on_note`'s
         self.assertEqual(
-            set(FLAGGED_REGISTRY) & set(MCP_ONLY_REGISTRY), {"get_timeline", "comment_on_note"}
+            set(FLAGGED_REGISTRY) & set(MCP_ONLY_REGISTRY),
+            {"get_timeline", "comment_on_note", "edit_note_block"},
         )
         self.assertEqual(set(FLAGGED_REGISTRY) & set(REGISTRY), set())
 

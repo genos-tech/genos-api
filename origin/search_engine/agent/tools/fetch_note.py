@@ -51,6 +51,25 @@ THREADS_FLAG = "AGENT_NOTE_THREADS_IN_GET_NOTE"
 #: each socket read), so nothing runs on after it: no thread, no greenlet is left behind.
 IN_APP_THREAD_READ_TIMEOUT_S = 2
 
+#: MIP-1656 (default off): the in-app `fetch_note` takes `include_blocks`, the ids `edit_note_block` needs.
+BLOCKS_FLAG = "AGENT_INAPP_NOTE_BLOCK_TOOL"
+#: The most blocks the in-app answer lists (MCP pages by the result cap; the app has none).
+IN_APP_MAX_BLOCKS = 100
+#: Properties added to the declaration while `BLOCKS_FLAG` is on (`tool_flag_params`).
+BLOCKS_PROPERTIES: dict[str, dict[str, Any]] = {
+    "include_blocks": {
+        "type": "BOOLEAN",
+        "description": (
+            "Also list the note's blocks (`blocks`: block_id, type, text, block_hash), for edit_note_block. "
+            "Default false."
+        ),
+    },
+    "blocks_matching": {
+        "type": "STRING",
+        "description": "With include_blocks: only the blocks whose text contains this phrase.",
+    },
+}
+
 #: The sentence the flag adds to the tool's description (`tool_flag_text`).
 DESCRIPTION_ADDITION = (
     " It also returns the note's open comment threads (`comment_threads`: reviewers' comments "
@@ -95,6 +114,40 @@ def _with_threads(out: dict[str, Any], note_type: str, note_id: int, ctx: ToolCo
     return out
 
 
+def blocks_enabled() -> bool:
+    return bool(settings.SEARCH_ENGINE.get(BLOCKS_FLAG))
+
+
+def _with_blocks(out: dict[str, Any], args: dict[str, Any], note_type: str, note_id: int, ctx):
+    """`out` plus the note's blocks (MIP-1656), in front of `__summary__`. Called only on a note the
+    caller may read. The reader is MCP's (`note_blocks.read`); its `text` is what a person wrote, so
+    it is fenced here, and the list is cut at `IN_APP_MAX_BLOCKS`."""
+    # Imported here: the same cycle as `_with_threads`.
+    from origin.views.public.mcp.note_blocks import read  # noqa: PLC0415
+
+    matching = read.blocks_matching_arg(args.get("blocks_matching"))
+    fields = read.note_block_fields(note_type, note_id, ctx, matching=matching)
+    blocks = fields.get("blocks")
+    if isinstance(blocks, list):
+        total = len(blocks)
+        shown = [
+            {**b, "text": wrap_workspace_content(str(b.get("text") or ""))}
+            for b in blocks[:IN_APP_MAX_BLOCKS]
+        ]
+        fields["blocks"] = shown
+        if total > len(shown):
+            fields.pop("blocks_next_offset", None)
+            fields["blocks_note"] = (
+                f"Showing the first {len(shown)} of {total} blocks: find the one you want with "
+                "`blocks_matching`."
+            )
+    summary = out.pop("__summary__", None)
+    out.update(fields)
+    if summary is not None:
+        out["__summary__"] = summary
+    return out
+
+
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     note_type = (args.get("note_type") or "").lower().strip()
     if note_type not in _VALID_TYPES:
@@ -116,6 +169,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # `include_resolved`), added after this tool, so it is left to that layer there.
     if ctx.surface != "mcp" and threads_enabled():
         out = _with_threads(out, note_type, note_id, ctx)
+    wanted = args.get("include_blocks")
+    if (
+        ctx.surface != "mcp"
+        and blocks_enabled()
+        and (wanted is True or str(wanted).lower() == "true")
+    ):
+        out = _with_blocks(out, args, note_type, note_id, ctx)
     return out
 
 
