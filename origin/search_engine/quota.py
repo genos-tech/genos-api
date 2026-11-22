@@ -526,22 +526,3 @@ def get_schedules_max(user_id: str) -> int | None:
         log.exception("schedules_max: tier lookup failed for user=%s", user_id)
         return None
     return _tier_count_cap(tier, SCHEDULES_MAX_KEY, _SCHEDULES_MAX_DEFAULT)
-
-
-def get_digest_cadence(user_id: str) -> str | None:
-    """None (no digest) | 'weekly' | 'daily'.
-
-    Deliberately fails CLOSED (None): a digest is unsolicited outbound,
-    so on any infra doubt we stay silent rather than risk noise.
-    """
-    try:
-        v = _user_cfg(user_id).get("digest_cadence")
-    except Exception:  # noqa: BLE001
-        log.exception("get_digest_cadence failed for user=%s", user_id)
-        return None
-    if v is None:
-        return None
-    if v not in _DIGEST_CADENCES:
-        log.warning("TIER_QUOTAS digest_cadence=%r not in %s; off", v, _DIGEST_CADENCES)
-        return None
-    return v
