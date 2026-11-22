@@ -128,6 +128,19 @@ class MemberSchedule(models.Model):
     claimed_at = models.DateTimeField(null=True, blank=True)
     # Unused until the Inbox step: whether a run also sends a push.
     deliver_push = models.BooleanField(default=False)
+    # Where the report goes (MIP-1420): null = the owner's Inbox (every schedule so far), else
+    # a chat the owner is in, and the report is posted there as a message. A shared chat takes
+    # only a report whose readers are all allowed to read it (`services/schedule_audience`),
+    # checked when the schedule is saved AND at every run. CASCADE: a chat that is deleted for
+    # good must not turn its schedule into an Inbox one without anyone choosing that.
+    deliver_channel = models.ForeignKey(
+        "origin.Channel",
+        on_delete=models.CASCADE,
+        to_field="id",
+        null=True,
+        blank=True,
+        related_name="report_schedules",
+    )
 
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)

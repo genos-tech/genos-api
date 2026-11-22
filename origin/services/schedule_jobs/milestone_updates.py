@@ -22,7 +22,7 @@ from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.get_milestone_summary import GET_MILESTONE_SUMMARY
 from origin.services import briefing
 from origin.services.milestone_rollup import milestone_work_q
-from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
+from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
 from origin.services.user_time import zone_for_user_id
 
@@ -84,7 +84,8 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     by_task: dict[int, dict[str, Any]] = {}
     for a in activities:
         if a.task_id in readable:
-            event = briefing.activity_event(a, ctx.user_id)
+            # In a chat other people read nothing is "you": the owner is one reader of several.
+            event = briefing.activity_event(a, "" if params.get(SHARED_KEY) else ctx.user_id)
             slot = by_task.setdefault(
                 a.task_id, {"at": a.ts_created_at, "n": 0, "what": "", "who": None, "label": None}
             )
@@ -197,6 +198,19 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     }
 
 
+def _share_project(params: dict[str, Any], team_id: str) -> int | None:
+    """The project of the milestone this report is about: a chat of its people may read it
+    (MIP-1420). None when the milestone is not in this team (the run then names it)."""
+    milestone_id = params.get("milestone_id")
+    if not isinstance(milestone_id, int) or isinstance(milestone_id, bool):
+        return None
+    return (
+        MilestoneMaster.objects.filter(milestone_id=milestone_id, team_id=team_id, is_deleted=False)
+        .values_list("project_id", flat=True)
+        .first()
+    )
+
+
 register_job(
     Job(
         key="milestone_updates",
@@ -208,6 +222,7 @@ register_job(
         ),
         agent_note="`milestone_id` is the milestone's numeric id, from `list_milestones`.",
         run=run,
+        share_project=_share_project,
         params_schema={
             "properties": {
                 "milestone_id": {"type": "integer", "minimum": 1},

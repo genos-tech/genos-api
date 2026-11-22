@@ -392,6 +392,7 @@ def build_export(user) -> dict:
             "enabled": sc.enabled,
             "paused_reason": sc.paused_reason,
             "ai_effort": sc.ai_effort,
+            "deliver_channel_id": str(sc.deliver_channel_id) if sc.deliver_channel_id else None,
             "next_run_at": _iso(sc.next_run_at),
             "last_run_at": _iso(sc.last_run_at),
             "last_status": sc.last_status,
