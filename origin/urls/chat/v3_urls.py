@@ -106,7 +106,11 @@ from origin.views.force_delete_views import (
     TaskCommentForceDeleteView,
     TaskForceDeleteView,
 )
-from origin.views.project.archive_views import GroupChatArchiveView, GroupChatRestoreView
+from origin.views.project.archive_views import (
+    GroupChatArchiveView,
+    GroupChatChangesView,
+    GroupChatRestoreView,
+)
 
 urlpatterns = [
     # Channels
@@ -134,6 +138,11 @@ urlpatterns = [
         "api/v3/channels/<uuid:channel_id>/archive/",
         GroupChatArchiveView.as_view(),
         name="v3_channel_archive",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/changes/",
+        GroupChatChangesView.as_view(),
+        name="v3_channel_changes",
     ),
     path(
         "api/v3/channels/<uuid:channel_id>/unarchive/",
