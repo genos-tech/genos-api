@@ -22,9 +22,9 @@ When a task in the report has comments or changes that explain its state, one pl
 about it goes in the item's `detail` ("Blocked: waiting for the vendor's reply, asked again on
 7 Nov"). One batched model call per report, on the model the schedule's effort level names,
 cached per task until the task changes, at most `report_ai.sentences.MAX_SENTENCES` of them, and
-only for tasks the member can open. The parameter `ai_sentences` turns it off (default ON, Core
-and up are the only members with schedules: it is the paid part of a report, the cost is on the
-item and the item has its one-click off). A run that could not or need not ask the model
+only for tasks the member can open. The parameter `ai_sentences` turns it on: it is OFF unless
+the member opts in per schedule (MIP-1969), because it is the paid part of a report and spends
+the owner's AI credits (the cost is on the item and the item has its one-click off). A run that could not or need not ask the model
 (switch off, nothing worth asking, the model unreachable from the process that runs the tick, all
 cached) is the plain report, filed with no cost block, and never fails.
 """
@@ -64,8 +64,11 @@ EFFORT_DEFAULT = "low"
 
 
 def ai_sentences_on(params: dict[str, Any]) -> bool:
-    """The AI sentences are on unless the member turned them off (`ai_sentences: false`)."""
-    return params.get("ai_sentences", True) is not False
+    """The AI sentences are an OPT-IN (MIP-1969): on only when the member set `ai_sentences: true`.
+
+    Schedules that existed before the opt-in were given an explicit `true` by migration 0267, so
+    they keep what they did."""
+    return params.get("ai_sentences") is True
 
 
 # What each section is, for the card (MIP-1208). "Changed in the last N hours" carries N.
@@ -493,8 +496,8 @@ register_job(
                     "type": "boolean",
                     "description": (
                         "One short AI-written sentence under a task when its comments or "
-                        "history explain its state. On by default; false gives the plain "
-                        "report, with no AI usage."
+                        "history explain its state. Off by default (it spends the owner's AI "
+                        "credits); true turns it on, and the plain report has no AI usage."
                     ),
                 },
             }
