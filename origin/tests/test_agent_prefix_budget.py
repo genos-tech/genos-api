@@ -106,7 +106,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # The collaborator wording (create_task / update_task `collaborators`: "a member of the task's project, or its assignee or
 # reporter" instead of "on the team or project", and no pointer to get_team_members): -2 x 19 + 74 = +36, 146,457 measured
 # with the production flags and with every flag on. Nothing is raised: 43 characters are left.
-BUDGET_CHARS = 146_500
+# THE GROUPED BATCH OF 2026-11-22 (MIP-1769 + MIP-1852): the in-app create_task "search first" sentence (+139) and the
+# `archived: true` sentence on list_projects (+133) take production to 146,729 characters (+272 over 146,457). The paid
+# measurement is the one grouped agent-evals run of that batch, approved by the maintainer. The constant goes up to the
+# next 500, 147,000 (271 characters left); `ALL_ON_BUDGET_CHARS` goes to 148,500 (148,184 with a Long member's block).
+BUDGET_CHARS = 147_000
 
 
 def _declared_chars() -> int:

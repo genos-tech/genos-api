@@ -16,7 +16,6 @@ from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
@@ -42,7 +41,7 @@ from origin.services.demo_seeder import (
     start_demo_provisioning,
 )
 from origin.services.security_events import record_security_event, typed_address_label
-from origin.services.throttles import AuthThrottle
+from origin.services.throttles import AuthThrottle, WindowRateThrottle
 from origin.views.utils.request_validators import body_object
 
 from .base_auth_api_view import AuthenticatedAPIView
@@ -443,7 +442,7 @@ def _demo_language(request: Request) -> str:
     return "en"
 
 
-class DemoWorkspaceThrottle(UserRateThrottle):
+class DemoWorkspaceThrottle(WindowRateThrottle):
     """The app polls this about once a second while the sample workspace is built."""
 
     rate = "600/hour"

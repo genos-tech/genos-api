@@ -61,6 +61,7 @@ EXEMPT = {
     # MIP-1261: a body that is not an object is treated as empty and answered with 400 field codes.
     "origin.views.common.contact_views.ContactView": "contact form: non-object body is a 400",
     "origin.views.common.auth_views.DemoSignInView": "reads only an optional lang",
+    "origin.views.common.auth_views.DemoWorkspaceView": "reads no body (MIP-1879)",
     "origin.views.common.auth_views.LogoutView": "reads the cookie, not the body",
     # MIP-1858: the body's `phase` is checked by the view; a body that is not an object is no phase, a 400.
     "origin.views.common.health_views.ExternalCronHeartbeatView": "phase check: a 400, never a 500",
@@ -175,7 +176,7 @@ class RouteBodyShapeTests(BaseAPITestCase):
         self.addCleanup(cache.clear)
         # Demo sign-in (exempt, probed only for "not a 500") starts a background
         # OpenSearch reindex; nothing here may leave a thread behind.
-        patcher = mock.patch("origin.views.common.auth_views.kick_off_demo_reindex")
+        patcher = mock.patch("origin.services.demo_seeder.kick_off_demo_reindex")
         patcher.start()
         self.addCleanup(patcher.stop)
         self.client = APIClient(raise_request_exception=False)
