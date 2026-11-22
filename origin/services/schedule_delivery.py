@@ -77,6 +77,7 @@ from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
 from origin.services import inbox_ai, report_memory
 from origin.services.mcp_oauth import clean_name
+from origin.services.report_ai import llm
 from origin.services.report_memory import WHY_VALUES
 from origin.services.schedule_jobs import (
     EMOJI,
@@ -330,6 +331,9 @@ def deliver(
             # The job says it spent nothing this time, and why (a code, never text a person
             # wrote): filed plain, with no cost block, and the run's result says so.
             result["ai_skipped"] = _text(report["ai_skipped"], 40)
+            if report["ai_skipped"] == llm.SKIP_NO_CREDITS:
+                # The card says why there is no AI part, in the member's language (MIP-1960).
+                optionals["ai_skipped"] = llm.SKIP_NO_CREDITS
 
     with transaction.atomic():
         # Lock the schedule row: of two deliveries of one run (a taken-over claim), the second

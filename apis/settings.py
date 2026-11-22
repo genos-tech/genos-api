@@ -1592,6 +1592,10 @@ SEARCH_ENGINE = {
             "mcp_enabled": False,
             # Scheduled jobs and Genos reports are Core and up (MIP-1213), a reason to upgrade.
             "schedules_enabled": False,
+            # Tier plan v2 (MIP-1960, decided 2026-11-22): webhook endpoints per TEAM and scheduled reports per
+            # PERSON. New ones over the cap are refused; existing ones are kept. None = unlimited.
+            "webhooks_max": 0,
+            "schedules_max": 0,
             # MCP volume and reach limits (MIP-1367 phase 3), in every tier below. DARK: None =
             # unlimited, so nothing is enforced. The proposed numbers and the switch
             # (MCP_TIER_LIMITS_MODE: off / shadow / enforce) are in
@@ -1675,6 +1679,8 @@ SEARCH_ENGINE = {
             "digest_cadence": None,
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "webhooks_max": 3,
+            "schedules_max": 5,
             "mcp_calls_per_min": None,
             "mcp_calls_per_day": None,
             "mcp_search_daily": None,
@@ -1705,6 +1711,8 @@ SEARCH_ENGINE = {
             "digest_cadence": "weekly",
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "webhooks_max": 10,
+            "schedules_max": 20,
             "mcp_calls_per_min": None,
             "mcp_calls_per_day": None,
             "mcp_search_daily": None,
@@ -1736,6 +1744,8 @@ SEARCH_ENGINE = {
             "digest_cadence": "daily",
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "webhooks_max": 25,
+            "schedules_max": 20,
             "mcp_calls_per_min": None,
             "mcp_calls_per_day": None,
             "mcp_search_daily": None,
@@ -1766,6 +1776,8 @@ SEARCH_ENGINE = {
             "digest_cadence": "daily",
             "mcp_enabled": True,
             "schedules_enabled": True,
+            "webhooks_max": None,
+            "schedules_max": 20,
             "mcp_calls_per_min": None,
             "mcp_calls_per_day": None,
             "mcp_search_daily": None,

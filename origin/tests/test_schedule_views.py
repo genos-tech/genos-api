@@ -346,8 +346,9 @@ class TestListAndCreate(ScheduleViewBase):
         for n in range(schedules.MAX_SCHEDULES_PER_MEMBER):
             self.create(name=f"s{n}")
         res = self.client.post(LIST, self.body(name="one more"), format="json")
-        self.assertEqual(res.status_code, 400)
-        self.assertIn("at most", res.data["error"])
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.data["code"], "plan_limit")
+        self.assertIn("allows", res.data["error"])
 
     def test_a_team_is_required_and_must_be_a_uuid(self):
         for res in (

@@ -198,9 +198,8 @@ class ShippedPolicyTests(SimpleTestCase):
     def test_the_billable_surfaces_are_exactly_the_user_charged_ones(self):
         self.assertEqual(
             self.policy.billable_surfaces,
-            frozenset({"ask", "thread_summary", "note_summary"}),
-            "search is measured but deliberately not billable; index/eval/"
-            "judge are our own cost",
+            frozenset({"ask", "thread_summary", "note_summary", "schedule"}),
+            "search is measured but deliberately not billable; index/eval/judge are our own cost",
         )
 
     def test_result_success_pin_matches_the_model(self):
@@ -289,8 +288,7 @@ class CreditsConversionTests(SimpleTestCase):
         p = _policy()
         self.assertFalse(
             [f for f in vars(p) if "jpy" in f or "fx" in f],
-            "a currency rate on the credit policy would put FX back in the "
-            "credit path",
+            "a currency rate on the credit policy would put FX back in the credit path",
         )
 
     def test_purity_same_inputs_same_output(self):
@@ -342,9 +340,7 @@ class RollupCreditFieldsTests(_RestoresRecorder, TestCase):
             policy=policy,
         )
         self.assertEqual(row.eligible_usd_micro, expected_eligible)
-        self.assertEqual(
-            row.shadow_credits_milli, credits.credits_milli(expected_eligible, policy)
-        )
+        self.assertEqual(row.shadow_credits_milli, credits.credits_milli(expected_eligible, policy))
         self.assertEqual(row.credit_policy_version, policy.version)
         self.assertEqual(row.plan_entitlement_version, policy.entitlement_version)
 
@@ -369,6 +365,7 @@ class RollupCreditFieldsTests(_RestoresRecorder, TestCase):
         policy = dj_settings.CREDIT_POLICY
         self.assertEqual(row.eligible_usd_micro, policy.request_max_usd_micro())
         self.assertEqual(
-            row.shadow_credits_milli, policy.request_max_credits_milli,
+            row.shadow_credits_milli,
+            policy.request_max_credits_milli,
             "at the cap, the charge IS the quote ceiling",
         )

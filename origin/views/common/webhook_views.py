@@ -13,6 +13,7 @@ add an exfiltration target.
 import uuid
 from urllib.parse import urlsplit
 
+from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -26,6 +27,7 @@ from origin.models.common.webhook_models import (
     WebhookEndpoint,
     generate_secret,
 )
+from origin.search_engine import quota
 from origin.services.member_roles import can_manage, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.webhook_delivery import WebhookUrlError, validate_webhook_url
@@ -41,6 +43,34 @@ def _host_label(url: str) -> str:
         return urlsplit(url).hostname or ""
     except ValueError:
         return ""
+
+
+def _limit_response(plan: str, used: int, limit: int) -> Response:
+    """The plan's count of webhook endpoints is reached (MIP-1960): 429 like the other plan
+    limits, NOT 403, which the page reads as "not a manager". The sentence is English; the page
+    words it in the member's language from `code` and the two numbers."""
+    if limit == 0:
+        sentence = (
+            f"Webhooks are not included in the {plan.capitalize()} plan. Upgrade the team's plan "
+            "to add one."
+        )
+    else:
+        sentence = (
+            f"Your team's plan allows {limit} webhook endpoint{'s' if limit != 1 else ''}, and it "
+            f"has {used}. Delete one, or upgrade the team's plan. Existing endpoints keep "
+            "delivering."
+        )
+    return Response(
+        {
+            "error": sentence,
+            "code": "plan_limit",
+            "limit_reached": True,
+            "used": used,
+            "limit": limit,
+            "category": "webhooks",
+        },
+        status=status.HTTP_429_TOO_MANY_REQUESTS,
+    )
 
 
 def _serialize(e: WebhookEndpoint) -> dict:
@@ -260,17 +290,28 @@ class WebhookListCreateView(AuthenticatedAPIView):
             return scope_err
 
         raw_secret = generate_secret()
-        endpoint = WebhookEndpoint(
-            team=team,
-            url=url,
-            description=(request.data.get("description") or "")[:200],
-            events=events,
-            project_ids=project_ids,
-            channel_ids=channel_ids,
-            created_by=request.user,
-        )
-        endpoint.set_secret(raw_secret)
-        endpoint.save()
+        # The plan's count per team (MIP-1960). The TEAM's own plan decides, not the clicker's
+        # effective tier: an endpoint belongs to the team and outlives whoever made it. Only a NEW
+        # endpoint is refused; the ones that exist (also after a downgrade) keep delivering.
+        # Auto-disabled endpoints count: deleting one is how a slot is freed. The team row is
+        # locked so two creates at once cannot both slip under the cap.
+        with transaction.atomic():
+            locked = TeamMaster.objects.select_for_update().get(pk=team.pk)
+            cap = quota.get_webhooks_max(locked.plan or "free")
+            used = WebhookEndpoint.objects.filter(team=locked).count()
+            if cap is not None and used >= cap:
+                return _limit_response(locked.plan or "free", used, cap)
+            endpoint = WebhookEndpoint(
+                team=team,
+                url=url,
+                description=(request.data.get("description") or "")[:200],
+                events=events,
+                project_ids=project_ids,
+                channel_ids=channel_ids,
+                created_by=request.user,
+            )
+            endpoint.set_secret(raw_secret)
+            endpoint.save()
         record_security_event(
             SecurityAction.WEBHOOK_CREATED,
             request=request,
