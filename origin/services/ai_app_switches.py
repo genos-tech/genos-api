@@ -6,8 +6,9 @@ decide whether the notice is MADE (`mcp_notice`), whether it is pushed (`webpush
 the push is filed under (`webpush_dispatch`), so the client's registry
 (`categories.ts`) and this table must agree.
 
-Only the RISKY actions start on (MIP-2009, decision D4 of the agent audit trail): a delete, and any
-call that changes 10 or more items at once (`BULK_THRESHOLD`, whatever its action). Every other write
+Only the RISKY actions start on (MIP-2009, decision D4 of the agent audit trail): a delete, a change
+to who can open a note or who is in a project, a burst of refused calls, a new app or API key
+connected (MIP-2063), and any call that changes 10 or more items at once (`BULK_THRESHOLD`, whatever its action). Every other write
 makes no feed row, toast or push by default: about 23 a day for one person was noise, and what the
 app did shows in the Today card instead. A member who set a switch (either way) keeps that choice;
 the new defaults reach only a switch they never touched.
@@ -33,6 +34,12 @@ ACTIONS: dict[tuple[str, str], str] = {
     ("deleted", "note"): "ai_app_note_deleted",
     ("created", "todo"): "ai_app_todo_created",
     ("deleted", "todo"): "ai_app_todo_deleted",
+    # The risky kinds that are not a write of an item (MIP-2063, decision D4 of MIP-1998):
+    # who can open a note, who is in a project, a burst of refused calls, a new app or key.
+    ("sharing", "note"): "ai_app_note_sharing",
+    ("members", "project"): "ai_app_project_members",
+    ("refused", "burst"): "ai_app_refusal_burst",
+    ("connected", "app"): "ai_app_app_connected",
 }
 
 KEYS: tuple[str, ...] = tuple(ACTIONS.values())
@@ -47,6 +54,10 @@ ON_BY_DEFAULT = frozenset(
         "ai_app_milestone_deleted",
         "ai_app_note_deleted",
         "ai_app_todo_deleted",
+        "ai_app_note_sharing",
+        "ai_app_project_members",
+        "ai_app_refusal_burst",
+        "ai_app_app_connected",
     }
 )
 

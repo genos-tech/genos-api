@@ -38,8 +38,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from django.db import transaction
+
 from origin.models.chat.unified_models import Activity, ActivityType
 from origin.models.common.notification_models import NotificationPreference
+from origin.models.common.team_models import TeamMembers
+from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services import ai_app_switches as switches
 from origin.services.mcp_client_family import credential_family
@@ -56,6 +60,11 @@ VERB_STATUS = "status"
 VERB_COMMENTED = "commented"
 VERB_DELETED = "deleted"
 VERB_EDITED = "edited"
+# The risky kinds that are not a write of an item (MIP-2063).
+VERB_SHARING = "sharing"  # who can open a note
+VERB_MEMBERS = "members"  # who is in a project
+VERB_REFUSED = "refused"  # a burst of refused calls
+VERB_CONNECTED = "connected"  # a new app or API key
 
 
 @dataclass
@@ -67,6 +76,11 @@ class Notice:
     status: str | None = None
     # A plan that creates a milestone: how many tasks went with it.
     task_count: int | None = None
+    # What was done, for a verb that covers several acts (`share` | `unshare`, `add` | `set_role`
+    # | `remove`, `oauth` | `api_key`): a fact for the client's wording, never a sentence.
+    action: str | None = None
+    # More facts for the row, merged into `meta` (a refusal burst: how many in how many seconds).
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 def _clip(text: Any) -> str:
@@ -284,6 +298,53 @@ def _created_todo(args, payload) -> Notice | None:
     return Notice(VERB_CREATED, "todo", 1, [item])
 
 
+def _note_sharing(args, payload) -> Notice | None:
+    """A note shared with a person, or a share taken away. The tool's answer carries ids and no
+    title, and it is the model's own view (not changed for a notice), so the notice names neither
+    the note nor the person: the row says "shared a note" and the note's access list is one click
+    away. A re-share with the same role is noticed too: the tool does not say it changed nothing."""
+    if not payload.get("note_id") or payload.get("action") not in ("share", "unshare"):
+        return None
+    item = _note_item(
+        {**payload, "note_type": payload.get("note_type") or args.get("note_type")}, args
+    )
+    return Notice(VERB_SHARING, "note", 1, [item], action=payload["action"])
+
+
+def _project_members(args, payload) -> Notice | None:
+    """A person added to a project, their role changed, or removed. An `add` of someone already in
+    it changed nothing, and neither did a `set_role` to the role they already had."""
+    project_id = payload.get("project_id")
+    action = args.get("action")
+    if not project_id or action not in ("add", "set_role", "remove"):
+        return None
+    if payload.get("already_member"):
+        return None
+    if action == "set_role" and payload.get("previous_role") == payload.get("role"):
+        return None
+    return Notice(VERB_MEMBERS, "project", 1, [_project_item(project_id)], action=action)
+
+
+def _approved_join(args, payload) -> Notice | None:
+    """A request to join a project approved: the person is let in (a member change)."""
+    project_id = payload.get("project_id")
+    if not project_id or payload.get("already_member"):
+        return None
+    return Notice(VERB_MEMBERS, "project", 1, [_project_item(project_id)], action="add")
+
+
+def _project_item(project_id) -> dict[str, Any]:
+    project = ProjectMaster.objects.filter(project_id=project_id).first()
+    return {
+        "kind": "project",
+        "id": project_id,
+        "projectId": project_id,
+        "displayId": getattr(project, "code", None),
+        "title": _clip(getattr(project, "project_name", "")),
+        "url": f"/workspace/tasks/project/{project_id}",
+    }
+
+
 def _deleted(kind: str, make_item: Callable[[dict, dict], dict]):
     def rule(args, payload) -> Notice | None:
         if payload.get("already_deleted") or payload.get("deleted") is False:
@@ -323,6 +384,10 @@ RULES: dict[str, Callable[[dict, dict], Notice | None]] = {
     # One block of a note is still an edit of the note: the same notice, under the same switch.
     "edit_note_block": _edited_note,
     "create_todo_item": _created_todo,
+    # Who can open a note and who is in a project: risky, so on by default (MIP-2063).
+    "manage_note_sharing": _note_sharing,
+    "manage_project_members": _project_members,
+    "approve_join_request": _approved_join,
     "delete_comment": _deleted("comment", _deleted_comment_item),
     "delete_note": _deleted("note", lambda a, p: {**_note_item(p, a), "url": ""}),
     "delete_milestone": _deleted("milestone", lambda a, p: {**_milestone_item(p), "url": ""}),
@@ -366,6 +431,21 @@ def sentence(meta: dict[str, Any]) -> str:
         return f"edited {noun}" + (f" {label}" if count == 1 and label else "")
     if verb == VERB_DELETED:
         return f"deleted {noun}" + (f" {label}" if count == 1 and label else "")
+    action = meta.get("action")
+    if verb == VERB_SHARING:
+        what = f"note {label}" if label else "a note"
+        return f"stopped sharing {what}" if action == "unshare" else f"shared {what}"
+    if verb == VERB_MEMBERS:
+        what = f"project {label}" if label else "a project"
+        if action == "remove":
+            return f"removed someone from {what}"
+        if action == "set_role":
+            return f"changed a member's role in {what}"
+        return f"added someone to {what}"
+    if verb == VERB_REFUSED:
+        return "was refused many requests in a minute"
+    if verb == VERB_CONNECTED:
+        return "API key was created" if action == "api_key" else "was connected to your account"
     if verb == VERB_STATUS:
         status = meta.get("status")
         return f"set {target} to {status}" if status else f"changed the status of {target}"
@@ -411,52 +491,115 @@ def notify_owner(
         notice = build_notice(tool_name, args, payload)
         if notice is None or not _enabled(user.id, notice):
             return []
-        meta: dict[str, Any] = {
-            "aiApp": True,
-            "app": _app_name(credential),
-            "credentialKind": getattr(credential, "kind", "api_key"),
-            "tool": tool_name,
-            "verb": notice.verb,
-            "kind": notice.kind,
-            "count": notice.count,
-            "items": notice.items[:MAX_ITEMS],
-        }
-        if switches.is_bulk(notice.count):
-            meta["bulk"] = True
-        # The official family of the connected app (`claude` | `chatgpt`), for its icon on the
-        # notice (MIP-1571); absent for any other app, an API key, and every older notice. The
-        # notice is the owner's alone (recipient == actor), who is also the one reader of the
-        # app's name above, so `via_privacy.SHOW_OAUTH_APP_TO_EVERYONE` has nothing to decide.
-        if family := credential_family(credential):
-            meta["appFamily"] = family
-        if notice.status:
-            meta["status"] = notice.status
-        if notice.task_count is not None:
-            meta["taskCount"] = notice.task_count
-        first = notice.items[0] if notice.items else {}
-        meta["url"] = first.get("url") or ""
-        if first.get("projectId"):
-            meta["projectId"] = first["projectId"]
-        if first.get("taskId"):
-            meta["taskId"] = first["taskId"]
-        activity = Activity.objects.create(
-            team_id=team_id,
-            recipient=user,
-            actor=user,
-            activity_type=ActivityType.AI_APP,
-            surface_type=SURFACE_AI_APP,
-            meta=meta,
-        )
-        # Lazy: the push stack imports the activity helpers.
-        from origin.services.webpush_dispatch import schedule_push_for_activities  # noqa: PLC0415
-
-        schedule_push_for_activities([activity])
-        # And tell the member's open app now (best effort; the push and the next refetch
-        # still find the row if sockets is down).
-        from origin.services.realtime_push import push_activity  # noqa: PLC0415
-
-        push_activity(activity)
-        return [activity]
+        return [_emit(user, team_id, credential, tool_name, notice)]
     except Exception:  # noqa: BLE001 - a notice never fails the write it follows
         log.warning("MCP notice failed for %s", tool_name, exc_info=True)
         return []
+
+
+def _owner_team_id(user_id) -> str | None:
+    """A team to file a notice under when the credential names none (a personal API key): the
+    owner's earliest live membership."""
+    team_id = (
+        TeamMembers.objects.filter(
+            attendee_id=user_id, is_deleted=False, team__isnull=False, team__is_deleted=False
+        )
+        .order_by("ts_joined_at", "id")
+        .values_list("team_id", flat=True)
+        .first()
+    )
+    return str(team_id) if team_id else None
+
+
+def connected_notice(credential, *, action: str) -> Notice:
+    """A new app (`oauth`) or API key (`api_key`) was connected to the member's account."""
+    item = {"kind": "app", "id": str(credential.id), "title": _app_name(credential), "url": ""}
+    return Notice(VERB_CONNECTED, "app", 1, [item], action=action)
+
+
+def refusal_burst_notice(refused: int, window_seconds: int) -> Notice:
+    """The credential was refused `refused` requests inside `window_seconds`: what walking through
+    other people's ids looks like. `count` stays 1 (it counts items, and 10+ would read as a
+    bulk change); the number is a fact of its own."""
+    return Notice(
+        VERB_REFUSED,
+        "burst",
+        1,
+        extra={"refused": int(refused), "windowSeconds": int(window_seconds)},
+    )
+
+
+def notify_credential_event(*, credential, notice: Notice, tool_name: str) -> list[Activity]:
+    """A notice about the credential itself, not a tool call (MIP-2063): a new app or API key
+    connected, or a burst of refused calls. Goes to the credential's owner under the same
+    switches and the same feed and push as a write's notice. Never raises."""
+    try:
+        user = getattr(credential, "user", None)
+        if user is None or not getattr(user, "is_authenticated", True):
+            return []
+        team_id = getattr(credential, "pinned_team_id", None) or getattr(
+            credential, "default_team_id", None
+        )
+        team_id = team_id or _owner_team_id(user.id)
+        if team_id is None or not _enabled(user.id, notice):
+            return []
+        # A savepoint: the callers run inside a request transaction, and a failed insert must not
+        # poison it for the consent or key creation it follows.
+        with transaction.atomic():
+            return [_emit(user, team_id, credential, tool_name, notice)]
+    except Exception:  # noqa: BLE001 - a notice never fails what it follows
+        log.warning("Credential notice failed for %s", tool_name, exc_info=True)
+        return []
+
+
+def _emit(user, team_id, credential, tool_name: str, notice: Notice) -> Activity:
+    """Make the feed row and push it. The caller has checked the switches."""
+    meta: dict[str, Any] = {
+        "aiApp": True,
+        "app": _app_name(credential),
+        "credentialKind": getattr(credential, "kind", "api_key"),
+        "tool": tool_name,
+        "verb": notice.verb,
+        "kind": notice.kind,
+        "count": notice.count,
+        "items": notice.items[:MAX_ITEMS],
+    }
+    if notice.action:
+        meta["action"] = notice.action
+    meta.update(notice.extra)
+    if switches.is_bulk(notice.count):
+        meta["bulk"] = True
+    # The official family of the connected app (`claude` | `chatgpt`), for its icon on the
+    # notice (MIP-1571); absent for any other app, an API key, and every older notice. The
+    # notice is the owner's alone (recipient == actor), who is also the one reader of the
+    # app's name above, so `via_privacy.SHOW_OAUTH_APP_TO_EVERYONE` has nothing to decide.
+    if family := credential_family(credential):
+        meta["appFamily"] = family
+    if notice.status:
+        meta["status"] = notice.status
+    if notice.task_count is not None:
+        meta["taskCount"] = notice.task_count
+    first = notice.items[0] if notice.items else {}
+    meta["url"] = first.get("url") or ""
+    if first.get("projectId"):
+        meta["projectId"] = first["projectId"]
+    if first.get("taskId"):
+        meta["taskId"] = first["taskId"]
+    activity = Activity.objects.create(
+        team_id=team_id,
+        recipient=user,
+        actor=user,
+        activity_type=ActivityType.AI_APP,
+        surface_type=SURFACE_AI_APP,
+        meta=meta,
+    )
+    # Lazy: the push stack imports the activity helpers.
+    from origin.services.webpush_dispatch import schedule_push_for_activities  # noqa: PLC0415
+
+    schedule_push_for_activities([activity])
+    # And tell the member's open app now (best effort; the push and the next refetch
+    # still find the row if sockets is down).
+    from origin.services.realtime_push import push_activity  # noqa: PLC0415
+
+    push_activity(activity)
+    return activity

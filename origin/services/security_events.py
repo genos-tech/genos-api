@@ -468,6 +468,30 @@ def note_forbidden(request) -> None:
             "method": request.method,
         },
     )
+    _tell_owner_of_burst(request, count)
+
+
+def _tell_owner_of_burst(request, count: int) -> None:
+    """A burst by a KEY or connected app tells its owner (MIP-2063): a leaked credential walking
+    other people's ids is the case the alert exists for, and the owner is the one who can revoke
+    it. A person's own browser session is not an AI app and is not told. At most one notice per
+    credential per hour, so a long scan is one notice, not one a minute. Never raises."""
+    try:
+        credential = _api_key(request)
+        if credential is None:
+            return
+        hour = int(time.time() // _KEY_USE_WINDOW)
+        if not _first_in_window(f"secburstnotice:{credential.audit_ref()}:{hour}", 7200):
+            return
+        from origin.services import mcp_notice  # noqa: PLC0415
+
+        mcp_notice.notify_credential_event(
+            credential=credential,
+            notice=mcp_notice.refusal_burst_notice(count, _BURST_WINDOW),
+            tool_name="refusal_burst",
+        )
+    except Exception:
+        logger.exception("security.refusal burst notice failed")
 
 
 def note_refusal() -> None:

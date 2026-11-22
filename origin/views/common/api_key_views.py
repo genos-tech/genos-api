@@ -34,7 +34,7 @@ from origin.models.common.api_key_models import (
 )
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import mcp_tier_limits
+from origin.services import mcp_notice, mcp_tier_limits
 from origin.services.api_keys import key_label, revoke_api_key
 from origin.services.member_roles import OWNER, can_manage, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
@@ -210,6 +210,13 @@ class ApiKeyListCreateView(AuthenticatedAPIView):
                 "allow_destructive": key.allow_destructive,
                 "expires_at": key.expires_at.isoformat() if key.expires_at else None,
             },
+        )
+        # A new key on the account is a risky kind (MIP-2063): tell its owner (the account's own
+        # settings page made it; the notice is for the day it was not them).
+        mcp_notice.notify_credential_event(
+            credential=key,
+            notice=mcp_notice.connected_notice(key, action="api_key"),
+            tool_name="api_key_created",
         )
         payload = _serialize(key)
         # The one and only time the plaintext exists in a response. The
