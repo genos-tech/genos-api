@@ -124,6 +124,8 @@ class Command(BaseCommand):
             stack.enter_context(override_settings(SEARCH_ENGINE=overrides))
 
             fixture = reseed_fixture() if opts["reseed"] else ensure_fixture()
+            self._index_fixture(fixture)
+            self._sanity(queries, fixture)
             rows = self._measure(queries, fixture, opts["repeat"])
 
         summary = {arm: self._summary(rows, arm) for arm in ("rewrite_on", "rewrite_off")}
@@ -141,8 +143,63 @@ class Command(BaseCommand):
         }
         out = Path(opts["out"]).resolve()
         out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        for arm in ("rewrite_on", "rewrite_off"):
+            s = summary[arm]
+            self.stdout.write(
+                f"{arm}: {s['queries_with_any_hits']}/{s['runs']} runs returned any hit, "
+                f"recall@10 {s['recall_at_10']}"
+            )
         self.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2))
         self.stdout.write(self.style.SUCCESS(f"result written to {out}"))
+
+    def _index_fixture(self, fixture):
+        """Index the fixture with a FULL pass, then prove the index holds the team's chunks.
+
+        `reseed_fixture` only reindexes the last 60 minutes and `ensure_fixture` not at all, so a
+        fixture whose rows are older (or whose first pass failed) was never indexed: the 2026-11-22
+        run found nothing at all. A full pass re-embeds only chunks whose text changed.
+        """
+        from origin.search_engine.ingestion import ingest_all  # noqa: PLC0415
+        from origin.search_engine.opensearch_client import (  # noqa: PLC0415
+            get_client,
+            get_index_alias,
+        )
+
+        self.stdout.write("indexing the fixture (full pass)...")
+        stats = ingest_all(since=None).as_dict()
+        self.stdout.write(json.dumps(stats, ensure_ascii=False))
+        if stats["errors"]:
+            raise CommandError(f"indexing the fixture failed: {stats['errors'][:3]}")
+        client = get_client()
+        alias = get_index_alias()
+        client.indices.refresh(index=alias)
+        n = client.count(index=alias, body={"query": {"term": {"team_id": fixture["team_id"]}}})[
+            "count"
+        ]
+        self.stdout.write(f"index {alias}: {n} chunks for team {fixture['team_id']}")
+        if n == 0:
+            raise CommandError(
+                f"the index {alias} holds no chunk for the fixture team {fixture['team_id']} "
+                "after the full pass (embedding failed, or another OPENSEARCH_ALIAS?). "
+                "Nothing to measure."
+            )
+
+    def _sanity(self, queries, fixture):
+        """One plain query (rewrite off) for a title the fixture is known to hold: 0 hits = STOP."""
+        from origin.search_engine.agent.tools.base import ToolContext  # noqa: PLC0415
+        from origin.search_engine.agent.tools.search_kb import _run  # noqa: PLC0415
+
+        ctx = ToolContext(team_id=fixture["team_id"], user_id=fixture["user_id"], surface="mcp")
+        title = queries[0]["expected_title_substrings"][0]
+        res = _run({"query": title, "limit": 10, "rewrite": False}, ctx)
+        n = len(res.get("matches") or [])
+        if n == 0:
+            raise CommandError(
+                f"sanity check failed: the plain query {title!r} (rewrite off) returned 0 hits "
+                f"for team {fixture['team_id']} / user {fixture['user_id']}. The fixture is not "
+                "searchable (index, team, user or ACL); the measurement would be invalid."
+            )
+        self.stdout.write(f"sanity ok: {title!r} -> {n} hits")
 
     def _measure(self, queries, fixture, repeat):
         from origin.search_engine.agent.evals.group import usage as group_usage  # noqa: PLC0415
@@ -204,6 +261,7 @@ class Command(BaseCommand):
         n = len(runs)
         return {
             "runs": n,
+            "queries_with_any_hits": sum(bool(r["top10_titles"]) for r in runs),
             "recall_at_10": round(sum(r["hit_at_10"] for r in runs) / n, 4),
             "hit_at_1": round(sum(r["best_rank"] == 1 for r in runs) / n, 4),
             "hit_at_3": round(
