@@ -2,6 +2,7 @@ from .chat.auto_join_models import *
 from .chat.personal_tag_models import *
 from .chat.todo_models import *
 from .chat.unified_models import *
+from .common.agent_call_models import *
 from .common.briefing_models import *
 from .common.change_models import *
 from .common.feature_models import *

@@ -213,6 +213,7 @@ def _delete_personal_data(user, closing_team_ids=()) -> None:
     # tag, whose owner IS the user.
     PersonalChannelTag.objects.filter(user=user).delete()
     user.member_events.all().delete()  # what their AI apps opened (MIP-1143)
+    user.agent_calls.all().delete()  # what their AI apps called (MIP-2006)
     purge_item_activity(user.pk)  # the per-day table (MIP-1084)
     purge_importance(user.pk)  # what they marked and tuned (MIP-1087)
 

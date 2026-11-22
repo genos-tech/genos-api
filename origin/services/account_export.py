@@ -57,6 +57,8 @@ ROW_LIMITS = {
     "api_keys": 1000,
     "connected_apps": 1000,
     "connected_accounts": 100,
+    # The agent call log (MIP-2006): 90 days at a heavy user's few hundred calls a day.
+    "agent_calls": 50000,
 }
 
 # Task-history fields whose old/new values are the person's own plain words or enum values. Any other
@@ -101,6 +103,7 @@ def _more_data(user) -> dict:
     from origin.models.task.task_activity_models import TaskActivity
     from origin.models.task.task_models import TaskBodyAttachmentFact
     from origin.search_engine.models import AgentRun, AgentRunFeedback
+    from origin.services import agent_calls
 
     uid = str(user.id)
     limits: dict = {}
@@ -265,6 +268,15 @@ def _more_data(user) -> dict:
         },
     )
 
+    # What their AI apps called (MIP-2006): one row per MCP tool call, ids and tool names only,
+    # kept 90 days. Empty until the log is switched on.
+    agent_call_rows = _capped(
+        "agent_calls",
+        agent_calls.export_queryset(user),
+        limits,
+        agent_calls.export_row,
+    )
+
     data = {
         "ai_questions": ai_questions,
         "ai_feedback": ai_feedback,
@@ -277,6 +289,7 @@ def _more_data(user) -> dict:
         "api_keys": api_keys,
         "connected_apps": connected_apps,
         "connected_accounts": connected_accounts,
+        "agent_calls": agent_call_rows,
     }
     data["more_counts"] = {k: len(v) for k, v in data.items()}
     data["export_limits"] = limits
