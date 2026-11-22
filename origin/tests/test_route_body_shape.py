@@ -96,6 +96,8 @@ MULTIPART_ONLY = {
     "origin.views.chat.channel_views.ChannelProfileImageView",
     "origin.views.chat.message_views.MessageAttachmentsView",
     "origin.views.common.team_emoji_views.TeamEmojiView",
+    "origin.views.common.slack_import_views.SlackImportPreviewView",
+    "origin.views.common.slack_import_views.SlackImportView",
     "origin.views.common.team_views.TeamProfileImageView",
     "origin.views.common.user_views.UserProfileImageView",
     "origin.views.project.prj_views.ProjectProfileImageView",
