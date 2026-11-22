@@ -157,7 +157,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Enabled by default (see apis/settings.py) — measured +2 net pass /
     # 0 regressions on the agent eval suite (roadmap §1.1).
     use_rewrite = bool(settings.SEARCH_ENGINE.get("RAG_USE_QUERY_REWRITE", False))
-    # MCP-only opt-out (`rewrite: false`): searches the raw query, no rewrite LLM call. It can
+    # MCP default is no rewrite (`rewrite: true` opts back in to the server setting). It can
     # only switch the rewrite off, never on; inert for the in-app agent (see `skip_rewrite`).
     if no_rewrite:
         use_rewrite = False

@@ -86,7 +86,9 @@ class _Base(McpBase):
 
     def search(self, calls, **args):
         with mock.patch.object(search_kb, "search", side_effect=_paid_search(calls)):
-            return self._tool_text(self._call("search_workspace", {"query": "login", **args}))
+            return self._tool_text(
+                self._call("search_workspace", {"query": "login", "rewrite": True, **args})
+            )
 
 
 class ChargedTests(_Base):
