@@ -270,3 +270,35 @@ class OrganisationExamplesTests(BaseAPITestCase):
         self.assertFalse(PersonalNoteFolder.objects.filter(team=team, scope="team").exists())
         names = set(ProjectMaster.objects.filter(team=team).values_list("project_name", flat=True))
         self.assertEqual(names, {STARTER_BLUEPRINT["name"], JAPANESE_STARTER_BLUEPRINT["name"]})
+
+
+class JapaneseCopyMIP1712Tests(BaseAPITestCase):
+    """MIP-1712: the Japanese sample milestone and bodies use Japanese headings, and the invite
+    path named in the Japanese guide is the real one."""
+
+    def _headings(self, node):
+        found = []
+        if isinstance(node, dict):
+            if node.get("type") == "heading":
+                found.append("".join(c.get("text", "") for c in node.get("content", [])))
+            for v in node.values():
+                found += self._headings(v)
+        elif isinstance(node, list):
+            for v in node:
+                found += self._headings(v)
+        return found
+
+    def test_japanese_sample_milestones_have_no_english_headings(self):
+        ja = COPY["ja"]
+        for key in ("project_milestone", "private_project_milestone"):
+            for h in self._headings(ja[key]["body"]):
+                self.assertFalse(h.split(" ", 1)[-1].isascii(), h)
+
+    def test_invite_path_names_the_real_button(self):
+        import json
+
+        from origin.services.guide_company_notes import _SETUP_JA
+
+        text = json.dumps(_SETUP_JA, ensure_ascii=False)
+        self.assertIn("メンバーを招待する", text)
+        self.assertNotIn("「招待」を選び", text)
