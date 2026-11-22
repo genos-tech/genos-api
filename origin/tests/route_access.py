@@ -84,6 +84,13 @@ _INBOX = "acts on an inbox item addressed to the caller (receiver=request.user)"
 
 REGISTRY = {
     # search_engine.agent_views
+    # Force delete (MIP-1584): the caller must see the object (404 otherwise), then the service
+    # applies the who-may rule (sender / creator / owner role) and answers 403.
+    "origin.views.force_delete_views.MessageForceDeleteView": checked("is_chat_member"),
+    "origin.views.force_delete_views.MyMessagesForceDeleteView": checked("is_chat_member"),
+    "origin.views.force_delete_views.TaskForceDeleteView": checked("can_access_task"),
+    "origin.views.force_delete_views.TaskCommentForceDeleteView": checked("can_access_task"),
+    "origin.views.force_delete_views.NoteForceDeleteView": checked("get_effective_role"),
     "origin.search_engine.agent_views.AgentAskView": checked("participates_in_team"),
     "origin.search_engine.agent_views.AgentDecideView": self_only(
         "approves a paused run; the run's user_id must equal request.user.id"
@@ -208,6 +215,13 @@ REGISTRY = {
     "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
+    ),
+    # views.common.briefing_today_views (MIP-1005, MIP-1696): the member comes from the token, the
+    # team is checked with require_team_member_or_response, and the briefing reads only what that
+    # member may open (LabelAccess, readable_chats_qs, live project membership)
+    "origin.views.common.briefing_today_views.BriefingTodayView": self_only(
+        "the caller's own briefing (a ToolContext built from request.user; the briefing's own "
+        "access rules decide what is listed)"
     ),
     # views.common.memory_views (MIP-1088): the member comes from the token, the team is checked
     # with require_team_member_or_response, and every query in the services filters on the

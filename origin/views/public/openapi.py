@@ -30,10 +30,14 @@ key check.
 
 from __future__ import annotations
 
+import copy
+
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from origin.views.public.mcp import surfaces
 
 API_VERSION = "1.0.0"
 
@@ -476,6 +480,19 @@ OPENAPI = {
         },
     },
 }
+
+# MIP-1594: each surface is the same POST as `/api/public/v1/mcp`, with its own path. Only the
+# tool list differs (see `origin/views/public/mcp/surfaces.py`); the auth and the plan rule are the same.
+for _segment in surfaces.SURFACE_SEGMENTS:
+    _surface_path = copy.deepcopy(OPENAPI["paths"]["/api/public/v1/mcp"])
+    _surface_post = _surface_path["post"]
+    _surface_post["summary"] = f"Model Context Protocol endpoint, `{_segment}` tools only"
+    _surface_post["description"] = (
+        f"The same server as `/api/public/v1/mcp`, publishing only the `{_segment}` tools "
+        "(a fixed list: a tool outside it is refused as unknown). Authentication, the plan "
+        "rule and `?team_id=` are the same as on the full endpoint."
+    )
+    OPENAPI["paths"][f"/api/public/v1/mcp/{_segment}"] = _surface_path
 
 
 class OpenApiSchemaView(APIView):

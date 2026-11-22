@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, Max, OuterRef, Q
 from django.db.models.functions import Lower
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -31,6 +31,7 @@ from origin.services.project_catalog import (
 )
 from origin.services.project_code import derive_project_code
 from origin.services.project_delete import delete_project
+from origin.services.project_list_cache import project_list_key
 from origin.services.project_manage import (
     PROJECT_CODE_RE,
     ProjectRefused,
@@ -553,9 +554,7 @@ class ProjectsView(AuthenticatedAPIView):
         # Archived projects are hidden unless the caller asks for them (MIP-1693). The flag is part of
         # the cache key, so the two answers never share an entry.
         include_archived = request.GET.get("include_archived") in ("1", "true", "True")
-        cache_key = f"project:list:{team_id}:{attendee_id}" + (
-            ":archived" if include_archived else ""
-        )
+        cache_key = project_list_key(team_id, attendee_id, include_archived=include_archived)
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
@@ -633,6 +632,10 @@ class ProjectsView(AuthenticatedAPIView):
                 "projectLabels": project_labels[project.project_id],
                 "isPrivate": project.is_private,
                 "isJoined": project.is_joined,
+                # Archived projects come back only with `include_archived=true` (MIP-1693); the
+                # row says so itself (MIP-1853), so the client needs no second request.
+                "archived": project.archived_at is not None,
+                "archivedAt": project.archived_at.isoformat() if project.archived_at else None,
                 # The FK column, not `project_system_user.id`: that loaded
                 # the user once per project. Null (a deleted system user)
                 # reads as null rather than failing the whole list.
@@ -939,6 +942,15 @@ class ProjectMembersView(AuthenticatedAPIView):
         return Response({"project_members": project_members}, status=status.HTTP_200_OK)
 
 
+def _project_team_id(project_id):
+    """The project's own team: tag rows can carry NULL or another team, the change log must not."""
+    return (
+        ProjectMaster.objects.filter(project_id=project_id)
+        .values_list("team_id", flat=True)
+        .first()
+    )
+
+
 class ProjectTagsView(AuthenticatedAPIView):
     """Task-tag vocabulary for one project.
 
@@ -956,28 +968,39 @@ class ProjectTagsView(AuthenticatedAPIView):
         # The rest were `request.data[...]`: a KeyError (500) when missing.
         if res := require_fields(body, "team_id", "tag_name", "tag_color", "tag_text_color"):
             return res
-        tag_count = ProjectTags.objects.filter(project=body["project_id"]).count()
-
-        data = {
-            "team": body["team_id"],
-            "project": body["project_id"],
-            "tag_id": tag_count + 1,
-            "tag_name": body["tag_name"],
-            "tag_color": body["tag_color"],
-            "tag_text_color": body["tag_text_color"],
-        }
-
-        serializer = ProjectTagsSerializer(data=data)
-        if serializer.is_valid():
-            tag = serializer.save()
-            record_workspace_change(
-                team_id=tag.team_id,
-                project_id=tag.project_id,
-                entity_kind="tag",
-                entity_id=tag.tag_id,
-                action="create",
-            )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # The tag belongs to the project's own team, whatever `team_id` the body names: it
+        # would otherwise file the tag, and its change-log row, under another team (MIP-1889).
+        project_team_id = (
+            ProjectMaster.objects.filter(project_id=body["project_id"])
+            .values_list("team_id", flat=True)
+            .first()
+        )
+        with transaction.atomic():
+            # The highest id plus one: a count repeats an id once a tag was deleted, and the
+            # change log would then show two tags as one entity.
+            highest = ProjectTags.objects.filter(project=body["project_id"]).aggregate(
+                m=Max("tag_id")
+            )["m"]
+            data = {
+                "team": project_team_id,
+                "project": body["project_id"],
+                "tag_id": (highest or 0) + 1,
+                "tag_name": body["tag_name"],
+                "tag_color": body["tag_color"],
+                "tag_text_color": body["tag_text_color"],
+            }
+            serializer = ProjectTagsSerializer(data=data)
+            if serializer.is_valid():
+                tag = serializer.save()
+                # Same transaction as the tag: a failing audit row leaves no tag behind.
+                record_workspace_change(
+                    team_id=project_team_id,
+                    project_id=tag.project_id,
+                    entity_kind="tag",
+                    entity_id=tag.tag_id,
+                    action="create",
+                )
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
@@ -1058,7 +1081,7 @@ class ProjectTagsView(AuthenticatedAPIView):
             tag.save()
             if changed_tag_fields:
                 record_workspace_change(
-                    team_id=tag.team_id,
+                    team_id=_project_team_id(tag.project_id),
                     project_id=tag.project_id,
                     entity_kind="tag",
                     entity_id=tag.tag_id,
@@ -1146,7 +1169,7 @@ class ProjectTagsView(AuthenticatedAPIView):
         with transaction.atomic():
             tag.delete()
             record_workspace_change(
-                team_id=tag.team_id,
+                team_id=_project_team_id(tag.project_id),
                 project_id=tag.project_id,
                 entity_kind="tag",
                 entity_id=tag.tag_id,
