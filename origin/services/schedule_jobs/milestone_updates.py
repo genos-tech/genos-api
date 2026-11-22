@@ -81,6 +81,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     readable = LabelAccess(ctx).tasks(
         {a.task_id for a in activities} | {c.task_id for c in comments}
     )
+    # A milestone's work can sit in other projects (a task moved out, a child of its backing
+    # row). In a chat other people read, only the milestone's own project is named: its readers
+    # are that project's people, not the owner's (MIP-1420).
+    shared = bool(params.get(SHARED_KEY))
+    if shared:
+        readable = {i: t for i, t in readable.items() if t.project_id == milestone.project_id}
     by_task: dict[int, dict[str, Any]] = {}
     for a in activities:
         if a.task_id in readable:
@@ -111,6 +117,8 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     # open must not be named in their report, whatever project it sits in.
     listed = [*summary.get("ready_now", []), *summary.get("blocked", [])]
     openable = LabelAccess(ctx).tasks(r["task_id"] for r in listed)
+    if shared:
+        openable = {i: t for i, t in openable.items() if t.project_id == milestone.project_id}
     all_openable = all(r["task_id"] in openable for r in listed)
     summary["ready_now"] = [r for r in summary.get("ready_now", []) if r["task_id"] in openable]
     summary["blocked"] = [r for r in summary.get("blocked", []) if r["task_id"] in openable]

@@ -30,7 +30,7 @@ from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule, MemberScheduleSeed
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.services import schedule_audience as audience
 from origin.services import schedule_delivery, schedule_text, schedules
 from origin.services.account_export import build_export
@@ -60,6 +60,7 @@ class ChatBase(JobBase):
         )[0]
 
     def gm(self, *members, title="Squad", **extra) -> Channel:
+        extra.setdefault("is_private", True)  # a public chat is refused as a target
         channel = Channel.objects.create(
             team=self.team, kind=ChannelKind.GM, title=title, owner=self.user, **extra
         )
@@ -168,6 +169,26 @@ class TestWhoMayReadIt(ChatBase):
         self.assertEqual(self.refusal(archived), audience.ARCHIVED)
         self.assertEqual(self.refusal(shared), audience.EXTERNAL)
 
+    def test_a_public_chat_is_refused_because_anyone_could_join_and_read_the_history(self):
+        public = self.gm(self.user, self.user2, title="Open", is_private=False)
+        alone = self.gm(self.user, title="Open and alone", is_private=False)
+        self.assertEqual(self.refusal(public), audience.PUBLIC)
+        self.assertEqual(self.refusal(alone, job="what_to_do_today"), audience.PUBLIC)
+        self.assertNotIn(
+            "Open", {t["title"] for t in audience.chat_targets(self.user.id, self.team.team_id)}
+        )
+
+    def test_the_project_owner_who_left_the_team_does_not_count_as_a_reader_who_may_read(self):
+        # The owner of the project reads it only while on the team (`active_project_owners`).
+        ProjectMembers.objects.filter(project=self.project, attendee=self.user).delete()
+        left = CustomUser.objects.create_user(
+            username="left", email="left@example.com", password="pw-left-123"
+        )
+        ProjectMaster.objects.filter(pk=self.project.pk).update(owner=left)
+        chat = self.gm(self.user, left, title="With the old owner")
+        # `left` is not on the team: they are not an allowed reader just for owning the project.
+        self.assertEqual(self.refusal(chat), audience.NOT_EVERYONE)
+
     def test_the_picker_lists_only_chats_the_member_can_use(self):
         mine = self.gm(self.user, self.user2, title="Squad")
         self.gm(self.user2, title="Not mine")
@@ -252,7 +273,8 @@ class TestRunning(ChatBase):
         self.assertIn("bulletListItem", {b["type"] for b in message.body})
         self.assertFalse(InboxItems.objects.filter(item_type=ITEM_TYPE_GENOS_REPORT).exists())
         sched.refresh_from_db()
-        self.assertTrue(sched.last_result["chat"])
+        # The connected-AI tools read `last_result`: it has the shape it always had.
+        self.assertEqual(set(sched.last_result), {"title", "items"})
         self.assertEqual(sched.last_result["title"], f"Project: {self.project.project_name}")
 
     def test_it_rings_nobody_and_makes_no_activity(self):
@@ -376,6 +398,64 @@ class TestInThirdPerson(ChatBase):
         )
         self.assertIn("assigned this to you", " ".join(self.texts(mine)))
         self.assertNotIn("you", " ".join(self.texts(shared)).replace("your", "").split())
+
+
+class TestOnlyTheProjectsOwnTasksAreNamed(ChatBase):
+    """The owner may read tasks of other projects; a chat of this project's people may not."""
+
+    def other_project(self):
+        other = ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Secret",
+            code="SEC",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        ProjectMembers.objects.create(team=self.team, project=other, attendee=self.user)
+        return other
+
+    def test_a_blocker_in_another_project_is_not_named_in_a_chat(self):
+        from origin.models.task.task_models import TaskDependency
+
+        other = self.other_project()
+        blocker = self.make_task("Secret blocker", project=other)
+        blocked = self.make_task("Ship", status="Blocked")
+        TaskDependency.objects.create(blocker_task=blocker, blocked_task=blocked, team=self.team)
+        self.activity(
+            blocked, self.user2, "status_changed", "Open", "Blocked", at=self.ago(hours=1)
+        )
+        mine = self.run_job("project_updates", project_id=self.project.project_id)
+        shared = self.run_job(
+            "project_updates", project_id=self.project.project_id, **{SHARED_KEY: True}
+        )
+        self.assertIn(blocker.display_id, " ".join(self.texts(mine)))
+        self.assertNotIn(blocker.display_id, " ".join(self.texts(shared)))
+        self.assertIn(blocked.display_id, " ".join(self.texts(shared)))
+
+    def test_a_milestones_task_in_another_project_is_not_named_in_a_chat(self):
+        from origin.models.task.milestone_models import MilestoneMaster
+
+        other = self.other_project()
+        milestone = MilestoneMaster.objects.create(
+            team=self.team, project=self.project, reporter=self.user, title="v1", status="Open"
+        )
+        here = self.make_task("Visible work", milestone=milestone)
+        away = self.make_task("Hidden work", milestone=milestone, project=other)
+        for task in (here, away):
+            self.activity(task, self.user2, "status_changed", "Open", "WIP", at=self.ago(hours=1))
+        mine = " ".join(
+            self.texts(self.run_job("milestone_updates", milestone_id=milestone.milestone_id))
+        )
+        shared = " ".join(
+            self.texts(
+                self.run_job(
+                    "milestone_updates", milestone_id=milestone.milestone_id, **{SHARED_KEY: True}
+                )
+            )
+        )
+        self.assertIn(away.display_id, mine)
+        self.assertNotIn(away.display_id, shared)
+        self.assertIn(here.display_id, shared)
 
 
 class TestTheMessage(ChatBase):
@@ -521,6 +601,17 @@ class TestRest(ChatBase):
             )
         self.assertEqual(count(), one)
         self.assertEqual(MemberSchedule.objects.count(), 4)
+
+    def test_a_chat_the_member_left_keeps_its_row_but_not_its_title(self):
+        chat = self.gm(self.user, self.user2, title="Secret plans")
+        created = self.client.post(LIST, self.body(chat), format="json").data["schedule"]
+        self.assertEqual(created["deliverChannel"]["title"], "Secret plans")
+        ChannelMember.objects.filter(channel=chat, user=self.user).update(is_deleted=True)
+        Channel.objects.filter(pk=chat.pk).update(title="Renamed after they left")
+        res = self.client.get(f"{LIST}{self.team_q}")
+        row = res.data["schedules"][0]
+        self.assertEqual(row["deliverChannel"]["title"], "")
+        self.assertNotIn("Renamed", str(res.data))
 
     def test_another_members_chat_is_not_found_not_leaked(self):
         theirs = self.gm(self.user2, title="Theirs")

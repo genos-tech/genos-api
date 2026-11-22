@@ -200,6 +200,10 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ):
             waits.setdefault(blocked_id, []).append(blocker_id)
     blockers = access.tasks({b for ids in waits.values() for b in ids})
+    if params.get(SHARED_KEY):
+        # A blocker can sit in another project; in a chat of this project's people it is not
+        # named (MIP-1420).
+        blockers = {i: t for i, t in blockers.items() if t.project_id == project_id}
 
     ranked = sorted(slipped, key=lambda i: (readable[i].due_date or date.max, readable[i].task_id))
     links = Links(ctx)

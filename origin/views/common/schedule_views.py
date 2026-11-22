@@ -83,7 +83,7 @@ def _ai_credits_out(user_id: Any) -> bool:
     return llm.credit_block(str(user_id)) == llm.SKIP_NO_CREDITS
 
 
-def _row(sched, zone) -> dict[str, Any]:
+def _row(sched, zone, readable_chats: set[Any] | None = None) -> dict[str, Any]:
     """The service's words, with the camelCase keys the rest of Settings uses."""
     p = schedule_text.present(sched, zone)
     out: dict[str, Any] = {
@@ -118,10 +118,13 @@ def _row(sched, zone) -> dict[str, Any]:
     # keep their shape.
     if sched.deliver_channel_id:
         channel = sched.deliver_channel
+        title = channel.title or (channel.project.project_name if channel.project_id else "")
+        if readable_chats is not None and sched.deliver_channel_id not in readable_chats:
+            title = ""  # the member is no longer in that chat: its name is not theirs to read
         out["deliverChannelId"] = str(sched.deliver_channel_id)
         out["deliverChannel"] = {
             "id": str(sched.deliver_channel_id),
-            "title": channel.title or (channel.project.project_name if channel.project_id else ""),
+            "title": title,
             "kind": "project" if channel.project_id else "group",
         }
     # The stable code beside the English label above (MIP-1231): `manual`, `failures`,
@@ -223,6 +226,9 @@ class ScheduleListView(_Base):
         if problem:
             return problem
         zone = user_zone(request.user)
+        readable = schedule_audience.readable_ids(
+            request.user.pk, (s.deliver_channel_id for s in rows)
+        )
         return Response(
             {
                 # Core and up (MIP-1213): False shows the upgrade call instead of the form.
@@ -238,7 +244,7 @@ class ScheduleListView(_Base):
                 "timeZone": zone.key,
                 "limit": schedules.schedule_limit(request.user.pk),
                 "jobs": [_job(j) for j in schedule_text.job_catalog()],
-                "schedules": [_row(s, zone) for s in rows],
+                "schedules": [_row(s, zone, readable) for s in rows],
                 # The chats a report can be pointed at (MIP-1420), for the form's picker. Whether
                 # a given report may go to one is decided when the schedule is saved.
                 "chatTargets": schedule_audience.chat_targets(request.user.pk, ctx.team_id),

@@ -25,8 +25,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from django.db.models import Q
+
 from origin.models.chat.unified_models import Channel, ChannelKind
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.search_engine.agent.acl import active_project_owners
 from origin.services.channel_scope import can_read_chat, chat_member_q, chat_member_rows
 from origin.services.schedule_jobs import JOBS
 
@@ -38,6 +41,10 @@ MAX_TARGETS = 200
 NOT_FOUND = "That chat was not found."
 ARCHIVED = "That chat is archived, so nothing can be posted in it."
 KIND = "A report can be posted in a group chat or a project chat."
+PUBLIC = (
+    "Anyone on the team can join a public chat later and read the reports already in it. Post "
+    "it in a private chat instead."
+)
 EXTERNAL = "A chat shared with other teams cannot take a scheduled report."
 HAS_AI = (
     "A report with AI sentences goes to your Inbox only. Turn its AI sentences off to post it "
@@ -95,6 +102,8 @@ def problem(
         return KIND
     if channel.is_external:
         return EXTERNAL
+    if channel.kind == ChannelKind.GM and not channel.is_private:
+        return PUBLIC
     if not can_read_chat(channel, team_id, user_id):
         return NOT_FOUND
     job = JOBS.get(job_key)
@@ -121,9 +130,25 @@ def problem(
             project_id=project_id, attendee_id__in=readers
         ).values_list("attendee_id", flat=True)
     }
-    if project.owner_id:
-        allowed.add(str(project.owner_id))
+    # The project's owner reads it while still on the team (`agent.acl.active_project_owners`).
+    owner = active_project_owners([project_id]).get(project_id)
+    if owner:
+        allowed.add(str(owner))
     return None if readers <= allowed else NOT_EVERYONE
+
+
+def readable_ids(user_id: Any, channel_ids: Any) -> set[Any]:
+    """Of these chat ids, the ones this member is still in (`chat_member_q`): one query. A schedule
+    row shows a chat's title only for these, so a person taken out of a private chat does not keep
+    reading its (renamed) title from their schedule list."""
+    ids = {i for i in channel_ids if i}
+    if not ids:
+        return set()
+    return set(
+        Channel.objects.filter(chat_member_q(user_id), id__in=ids, is_deleted=False).values_list(
+            "id", flat=True
+        )
+    )
 
 
 def chat_targets(user_id: Any, team_id: Any) -> list[dict[str, Any]]:
@@ -133,6 +158,7 @@ def chat_targets(user_id: Any, team_id: Any) -> list[dict[str, Any]]:
     rows = (
         Channel.objects.filter(
             chat_member_q(user_id),
+            Q(kind=ChannelKind.PM) | Q(is_private=True),
             team_id=team_id,
             is_deleted=False,
             archived_at__isnull=True,

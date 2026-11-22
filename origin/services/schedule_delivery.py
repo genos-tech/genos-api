@@ -377,7 +377,7 @@ def deliver_to_chat(
 
     body = clean_report(report, schedule.name)
     delivered = sum(len(section["items"]) for section in body["sections"])
-    result = {"title": body["title"], "items": delivered, "chat": True}
+    result = {"title": body["title"], "items": delivered}
     key = _chat_key(schedule, run_at) if run_at is not None else None
     with transaction.atomic():
         row = MemberSchedule.objects.select_for_update().filter(pk=schedule.pk).first()
