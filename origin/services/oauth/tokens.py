@@ -10,6 +10,11 @@ Refresh policy:
     decrypt and return.
   - Google: refresh when `access_token_expires_at` is within
     `REFRESH_LEEWAY_SECONDS` of now (or already past).
+  - GitHub App (`github_app`, MIP-2086): same expiry rule, but GitHub ROTATES the refresh
+    token: using it kills the old refresh token and access token. So the refresh runs under a
+    row lock (`select_for_update`) and re-reads the row first: a request that lost the race
+    finds the winner's fresh token instead of spending a dead refresh token and losing the
+    connection.
 """
 
 from __future__ import annotations
@@ -17,11 +22,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 import requests
+from django.db import transaction
 from django.utils import timezone
 
 from origin.models.common.user_models import ConnectedAccount
 from origin.services import crypto
 
+from .base import InvalidGrantError
 from .registry import get_provider
 
 # How early before expiry we refresh. 5 minutes is comfortably longer
@@ -77,20 +84,77 @@ def get_valid_access_token(account: ConnectedAccount) -> str:
     if not provider.supports_refresh:
         return crypto.decrypt(account.access_token_encrypted)
 
-    expires_at = account.access_token_expires_at
     now = timezone.now()
-    needs_refresh = expires_at is None or expires_at <= now + timedelta(
-        seconds=REFRESH_LEEWAY_SECONDS
-    )
-    if not needs_refresh:
+    if not _needs_refresh(account, now):
         return crypto.decrypt(account.access_token_encrypted)
 
+    # `is True`: a provider stand-in (a test's MagicMock) must not read as rotating.
+    rotates = provider.rotates_refresh_token is True
+    if rotates and account.access_token_expires_at is None and not account.refresh_token_encrypted:
+        # An App registered with "Expire user authorization tokens" OFF: GitHub sends neither an
+        # expiry nor a refresh token, and the token never expires. Not a reason to demand a
+        # reconnect on every call. (The runbook says to keep expiry on.)
+        return crypto.decrypt(account.access_token_encrypted)
+
+    if rotates:
+        return _refresh_locked(account, provider)
+    return _refresh(account, provider, now)
+
+
+def _needs_refresh(account: ConnectedAccount, now) -> bool:
+    expires_at = account.access_token_expires_at
+    return expires_at is None or expires_at <= now + timedelta(seconds=REFRESH_LEEWAY_SECONDS)
+
+
+_SYNCED_FIELDS = (
+    "access_token_encrypted",
+    "refresh_token_encrypted",
+    "access_token_expires_at",
+    "ts_updated_at",
+)
+
+
+def _refresh_locked(account: ConnectedAccount, provider) -> str:
+    """Refresh a provider that rotates its refresh token, under a row lock.
+
+    The caller's `account` may be stale: a concurrent request can have rotated the token since it
+    was loaded. The locked re-read decides, so at most one request spends a given refresh token.
+    The lock is held across the provider call (3 s connect, 10 s read) on purpose: releasing it
+    before the new token is saved would let a second request spend the old, now dead, refresh
+    token. Do not call this inside a long outer transaction: the lock would last until it commits.
+
+    Known limit: the "needs a refresh?" test in `get_valid_access_token` runs on the caller's
+    instance BEFORE this lock, so an instance held for minutes (a cron loop over accounts) can
+    return a token another request has since rotated away. It recovers on the next call; load the
+    account fresh before use.
+    """
+    with transaction.atomic():
+        locked = ConnectedAccount.objects.select_for_update().filter(pk=account.pk).first()
+        if locked is None:
+            # Disconnected while this request was in flight.
+            raise ReauthRequired(account)
+        try:
+            now = timezone.now()
+            if _needs_refresh(locked, now):
+                return _refresh(locked, provider, now)
+            return crypto.decrypt(locked.access_token_encrypted)
+        finally:
+            # Hand the caller's instance what the row holds now, whether this request refreshed
+            # or found another's refresh, so a later save of `account` cannot write stale tokens.
+            for field in _SYNCED_FIELDS:
+                setattr(account, field, getattr(locked, field))
+
+
+def _refresh(account: ConnectedAccount, provider, now) -> str:
     if not account.refresh_token_encrypted:
         raise ReauthRequired(account)
 
     refresh_token = crypto.decrypt(account.refresh_token_encrypted)
     try:
         fresh = provider.refresh(refresh_token=refresh_token)
+    except InvalidGrantError as exc:
+        # A provider that reports a dead refresh token as HTTP 200 + `error` (GitHub).
+        raise ReauthRequired(account) from exc
     except requests.HTTPError as exc:
         # A dead refresh token (revoked / expired) comes back as a 400
         # `invalid_grant`. That's unrecoverable without user action, so

@@ -41,10 +41,29 @@ class ProviderProfile:
     email_verified: bool = False
 
 
+class InvalidGrantError(Exception):
+    """The provider rejected a refresh token (revoked, expired or already used).
+
+    For a provider that reports it as HTTP 200 with an `error` body, as GitHub does, where
+    `requests.HTTPError` is never raised. `tokens.get_valid_access_token` turns it into
+    `ReauthRequired`, like the standard HTTP 400 `invalid_grant`.
+    """
+
+
 class OAuthProvider(ABC):
     """Minimal interface a concrete provider must implement."""
 
-    name: str  # "google" | "github"
+    name: str  # "google" | "github" | "github_app"
+
+    # Whether `oauth_views` serves this provider's initiate / callback / disconnect routes. False
+    # for a provider whose flow is not wired yet (`github_app`, MIP-2086): it can refresh and
+    # revoke tokens, but nobody can start a sign-in or connect with it.
+    has_flow: bool = True
+
+    # True when a refresh makes the OLD refresh token (and access token) stop working, as GitHub
+    # does. Two concurrent refreshes would then lose the connection, so `tokens` refreshes such a
+    # provider under a row lock.
+    rotates_refresh_token: bool = False
 
     @abstractmethod
     def authorize_url(self, *, state: str, intent: FlowIntent, redirect_uri: str) -> str:

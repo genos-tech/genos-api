@@ -51,6 +51,7 @@ _TRUE = frozenset({"1", "true", "yes", "on"})
 TIMEOUT_SECONDS = 3
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GITHUB_GRANT_URL = "https://api.github.com/applications/{client_id}/grant"
+GITHUB_APP_GRANT_URL = "https://api.github.com/applications/{client_id}/grant"
 
 #: Answers that mean "the provider no longer has this token": the goal is met.
 _ALREADY_INVALID = frozenset({400, 404})
@@ -70,6 +71,26 @@ class Grant:
     refresh_token: str | None = field(default=None, repr=False)
 
 
+def _usable_access_token(account) -> str:
+    """The access token to revoke with.
+
+    A `github_app` access token lives 8 hours, and GitHub's revoke endpoint identifies the grant BY
+    a live access token: sent an expired one it answers 404, which would be logged as "already
+    invalid" while the 6-month refresh token still worked. So for that provider the token is
+    refreshed first if it has expired (`get_valid_access_token`, under its row lock); a refresh
+    token that is already dead means the grant is dead too, and the stored token is kept (the call
+    then truthfully finds nothing to revoke). Every other provider: the stored token, as before.
+    """
+    if account.provider == "github_app":
+        from .tokens import ReauthRequired, get_valid_access_token
+
+        try:
+            return get_valid_access_token(account)
+        except ReauthRequired:
+            pass
+    return crypto.decrypt(account.access_token_encrypted)
+
+
 def capture(accounts: Iterable) -> list[Grant]:
     """Decrypt the tokens of `accounts` for a later revoke. `[]` when the switch is off.
 
@@ -82,7 +103,7 @@ def capture(accounts: Iterable) -> list[Grant]:
     try:
         for account in accounts:
             try:
-                access = crypto.decrypt(account.access_token_encrypted)
+                access = _usable_access_token(account)
                 refresh = (
                     crypto.decrypt(account.refresh_token_encrypted)
                     if account.refresh_token_encrypted
@@ -161,6 +182,27 @@ def _call(grant: Grant) -> tuple[str, str]:
         # "Authorized OAuth Apps". `safe=""` keeps a client id from changing the path.
         resp = requests.delete(
             GITHUB_GRANT_URL.format(client_id=quote(client_id, safe="")),
+            auth=(client_id, client_secret),
+            json={"access_token": grant.access_token},
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    elif grant.provider == "github_app":
+        # The GitHub App's user authorization (MIP-2086). Deleting the AUTHORIZATION (not only the
+        # access token) also kills its refresh token, which GitHub honours for 6 months; the
+        # installation stays (removing it is done on GitHub by whoever installed it). Basic auth
+        # is the App's own client id and secret, never the OAuth App's. Not verified against live
+        # GitHub yet (the App is not registered): check at registration.
+        client_id = settings.GITHUB_APP_CLIENT_ID
+        client_secret = settings.GITHUB_APP_CLIENT_SECRET
+        if not (client_id and client_secret):
+            return "not_configured", ""
+        resp = requests.delete(
+            GITHUB_APP_GRANT_URL.format(client_id=quote(client_id, safe="")),
             auth=(client_id, client_secret),
             json={"access_token": grant.access_token},
             headers={
