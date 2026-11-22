@@ -213,6 +213,38 @@ class BriefingTodayStructuredTests(BriefingBase):
         self.assertEqual(len(row["reasonCodes"]), len(row["reasons"]))
 
 
+    def test_rows_carry_what_the_page_draws(self):
+        today = timezone.now().date()
+        task = self.make_task(
+            "Launch",
+            due_date=today,
+            is_milestone=True,
+            tags=[{"tagName": "ux", "tagColor": "#111", "tagTextColor": "#fff", "extra": 1}],
+        )
+        row = self.get().json()["dueToday"][0]
+        self.assertEqual(row["taskId"], task.task_id)
+        self.assertIs(row["isMilestone"], True)
+        self.assertEqual(row["assigneeId"], str(self.user.id))
+        self.assertEqual(row["assigneeName"], self.user.username)
+        self.assertEqual(
+            row["tags"], [{"tagName": "ux", "tagColor": "#111", "tagTextColor": "#fff"}]
+        )
+
+    def test_done_today_counts_my_tasks_closed_today_that_stay_closed(self):
+        mine = self.make_task("Done now", status="Closed")
+        self.activity(mine, self.user, old="Open", new="Closed", at=timezone.now())
+        reopened = self.make_task("Reopened", status="Open")
+        self.activity(reopened, self.user, old="Open", new="Closed", at=timezone.now())
+        old = self.make_task("Two days ago", status="Closed")
+        self.activity(old, self.user, old="Open", new="Closed", at=self.ago(days=2))
+        theirs = self.make_task("Theirs", status="Closed", assignee=self.user2)
+        self.activity(theirs, self.user2, old="Open", new="Closed", at=timezone.now())
+        self.assertEqual(self.get().json()["doneToday"], {"count": 1})
+
+    def test_done_today_is_zero_on_a_quiet_day(self):
+        self.assertEqual(self.get().json()["doneToday"], {"count": 0})
+
+
 class BriefingMcpUnchangedTests(BriefingBase):
     def test_mcp_briefing_is_unchanged(self):
         today = timezone.now().date()

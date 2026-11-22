@@ -25,6 +25,7 @@ and "waits on me" have one definition and the page and Claude can never disagree
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from rest_framework import status
@@ -32,10 +33,13 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.models.project.prj_models import ProjectMembers
+from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.services import briefing
 from origin.services.throttles import WindowRateThrottle
+from origin.services.user_time import zone_for_user_id
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.common.memory_views import camel, plain
 from origin.views.utils.request_validators import as_uuid
@@ -145,14 +149,68 @@ def _links(payload: dict[str, Any], ctx: ToolContext) -> None:
         if found:
             r["task_id"], r["project_id"] = found["task_id"], found["project_id"]
     task_ids = {r["task_id"] for r in (*task_rows, *note_rows) if r.get("task_id")}
-    projects = dict(
-        TaskMaster.objects.filter(task_id__in=task_ids, team_id=ctx.team_id).values_list(
-            "task_id", "project_id"
+    found_tasks = {
+        t["task_id"]: t
+        for t in TaskMaster.objects.filter(task_id__in=task_ids, team_id=ctx.team_id).values(
+            "task_id", "project_id", "is_milestone", "assignee_id", "assignee__username", "tags"
         )
-    )
+    }
     for r in (*task_rows, *note_rows):
-        if r.get("task_id") in projects:
-            r["project_id"] = projects[r["task_id"]]
+        found = found_tasks.get(r.get("task_id"))
+        if found:
+            r["project_id"] = found["project_id"]
+    # What a row of the page draws beyond the briefing's own words (MIP-1992): a milestone's flag,
+    # who it is assigned to and its tags, from the same query (no extra one). Only the rows that
+    # are tasks the page lists; a changed item or a mention keeps its own shape.
+    for r in task_rows:
+        found = found_tasks.get(r.get("task_id"))
+        if found is None or r.get("type") or r.get("source"):
+            continue
+        r["is_milestone"] = bool(found["is_milestone"])
+        r["assignee_id"] = str(found["assignee_id"]) if found["assignee_id"] else None
+        r["assignee_name"] = found["assignee__username"]
+        r["tags"] = _tags_of(found["tags"])
+
+
+def _tags_of(raw: Any) -> list[dict[str, str]]:
+    """The tags as the page's chips want them: name and colours, nothing else."""
+    out = []
+    for tag in raw if isinstance(raw, list) else []:
+        if isinstance(tag, dict) and tag.get("tagName"):
+            out.append(
+                {
+                    "tagName": str(tag["tagName"]),
+                    "tagColor": str(tag.get("tagColor") or ""),
+                    "tagTextColor": str(tag.get("tagTextColor") or ""),
+                }
+            )
+    return out
+
+
+def _done_today(ctx: ToolContext) -> int:
+    """How many of my tasks were closed today in my own time zone and are still closed: the
+    "done" half of the page's progress bar. One query; only projects I am in."""
+    zone = zone_for_user_id(ctx.user_id)
+    now = datetime.now(zone)
+    start = datetime.combine(now.date(), datetime.min.time(), tzinfo=zone)
+    member_projects = ProjectMembers.objects.filter(
+        attendee_id=ctx.user_id, project__team_id=ctx.team_id, project__is_deleted=False
+    ).values("project_id")
+    closed_today = TaskActivity.objects.filter(
+        team_id=ctx.team_id,
+        action_type=TaskActivityActionType.STATUS,
+        new_value="Closed",
+        ts_created_at__gte=start,
+    ).values("task_id")
+    return TaskMaster.objects.filter(
+        team_id=ctx.team_id,
+        assignee_id=ctx.user_id,
+        status="Closed",
+        is_deleted=False,
+        is_init_task=False,
+        project_id__in=member_projects,
+        task_id__in=closed_today,
+    ).count()
 
 
 class BriefingTodayView(AuthenticatedAPIView):
@@ -218,6 +276,7 @@ class BriefingTodayView(AuthenticatedAPIView):
             ],
             "delegated": _task_rows(others["delegated"]),
             "delegatedTotal": others["delegated_total"],
+            "doneToday": {"count": _done_today(ctx)},
         }
         _links(payload, ctx)
         return Response(camel(_plain_all(payload)))
