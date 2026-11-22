@@ -90,7 +90,11 @@ from origin.services.task_reparent import (
     parent_move_error,
     project_move_error,
 )
-from origin.services.task_status_reason import post_status_change_comment, status_reason_error
+from origin.services.task_status_reason import (
+    locked_status_change,
+    post_status_change_comment,
+    status_reason_error,
+)
 from origin.views.utils.scope_guards import is_team_member
 
 # Backing-task columns whose milestone twin has a different name. Every
@@ -541,6 +545,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             else None
         )
         with transaction.atomic():
+            if status_change is not None:
+                # Re-read under the row lock: a concurrent identical change posts once (MIP-1997).
+                status_change = locked_status_change(task.task_id, status_change[1])
             if not update_fields:
                 pass  # milestone move or collaborators only — applied below
             elif milestone is not None:

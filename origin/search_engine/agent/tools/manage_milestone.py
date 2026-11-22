@@ -95,7 +95,10 @@ from origin.services.task_project_move import (
     move_report_clauses,
     move_report_said,
 )
-from origin.services.task_status_reason import post_status_change_comment, status_reason_error
+from origin.services.task_status_reason import (
+    post_status_change_comment,
+    status_reason_error,
+)
 from origin.views.utils.scope_guards import can_access_task, is_project_member
 
 _TITLE_MAX = MilestoneMaster._meta.get_field("title").max_length
@@ -553,6 +556,13 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 raise ToolError(
                     f"Milestone {milestone.milestone_id} was changed while this was being applied "
                     "(converted, deleted or moved by someone else). Nothing was changed."
+                )
+            if status_change is not None:
+                # `milestone` was just re-read under its lock: a concurrent identical change posts once.
+                status_change = (
+                    (milestone.status, status_change[1])
+                    if milestone.status != status_change[1]
+                    else None
                 )
             added_assignees = update_milestone(
                 milestone,

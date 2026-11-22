@@ -9,9 +9,12 @@ a person clicking a status is not asked to type a reason.
 
 from __future__ import annotations
 
+from unittest import mock
+
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.models.task.task_models import TaskComments, TaskMaster
+from origin.search_engine.agent import approval_edits as edits
 from origin.search_engine.agent.tools import ToolContext, ToolError
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
@@ -20,6 +23,7 @@ from origin.services.milestone_service import create_milestone
 from origin.services.task_status_reason import (
     STATUS_REASON_MAX,
     clean_status_reason,
+    locked_status_change,
     post_status_change_comment,
     status_comment_text,
     status_reason_error,
@@ -480,3 +484,56 @@ class TheWebAppIsUnchanged(McpBase):
         self.task.status = "Blocked"
         self.task.save()
         self.assertEqual(comments_of(self.task.task_id), [])
+
+
+class TheStatusIsReadUnderTheLock(McpBase):
+    """Two callers setting the same status at the same moment post one comment."""
+
+    def test_the_status_now_is_the_one_named_as_replaced(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(status="WIP")  # another caller got there
+        self.assertEqual(locked_status_change(self.task.task_id, "Closed"), ("WIP", "Closed"))
+
+    def test_a_status_that_is_already_set_posts_nothing(self):
+        TaskMaster.objects.filter(pk=self.task.pk).update(status="Closed")
+        self.assertIsNone(locked_status_change(self.task.task_id, "Closed"))
+
+    def test_update_task_that_lost_the_race_to_the_same_status_posts_nothing(self):
+        """The tool read `Open`; by the time it writes, the task is `Closed` already."""
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+
+        def another_caller_first(old, new, reason, **kwargs):
+            # Runs after the tool read `Open` and before its transaction.
+            TaskMaster.objects.filter(pk=self.task.pk).update(status="Closed")
+            return None
+
+        with mock.patch(
+            "origin.search_engine.agent.tools.update_task.status_reason_error",
+            side_effect=another_caller_first,
+        ):
+            UPDATE_TASK.run(
+                {"task_id": self.task.task_id, "status": "Closed", "reason": "shipped"}, ctx
+            )
+        self.assertEqual(comments_of(self.task.task_id), [])
+
+
+class TheCardEditNeedsTheReasonToo(McpBase):
+    """An edit that turns an unchanged status into a change must not pass the card and then be
+    refused by the tool after the one-shot approval is spent."""
+
+    def check(self, arguments, patch):
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        return edits.check_edits("update_task", arguments, patch, ctx)
+
+    def test_a_status_edited_to_a_real_change_without_a_reason_is_refused_on_the_card(self):
+        # The task is Open; the model proposed Open (no change, so no reason).
+        errors = self.check({"task_id": self.task.task_id, "status": "Open"}, {"status": "Closed"})
+        self.assertIn("needs a reason", errors["status"])
+
+    def test_with_a_reason_in_the_proposal_the_edit_is_fine(self):
+        args = {"task_id": self.task.task_id, "status": "Open", "reason": "Test."}
+        self.assertEqual(self.check(args, {"status": "Closed"}), {})
+
+    def test_an_edit_that_leaves_the_status_unchanged_is_fine(self):
+        self.assertEqual(
+            self.check({"task_id": self.task.task_id, "status": "WIP"}, {"status": "Open"}), {}
+        )

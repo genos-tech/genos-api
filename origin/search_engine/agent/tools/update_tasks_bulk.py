@@ -52,7 +52,11 @@ from origin.services.milestone_service import sync_backing_task
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
-from origin.services.task_status_reason import post_status_change_comment, status_reason_error
+from origin.services.task_status_reason import (
+    locked_status_change,
+    post_status_change_comment,
+    status_reason_error,
+)
 from origin.views.utils.scope_guards import is_team_member
 
 _MAX_BULK_UPDATES = 30
@@ -325,7 +329,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             for task, changes, rationale in planned:
                 update_fields: list[str] = []
                 changed: list[str] = []
-                status_before = task.status
+                # MIP-1997: the status this row replaces, read under the row's lock (a concurrent
+                # identical change posts once); None when the row sets no status or it is set already.
+                status_event = (
+                    locked_status_change(task.task_id, changes["status"])
+                    if "status" in changes
+                    else None
+                )
                 move = _MILESTONE_KEY in changes
                 target_milestone_id = changes.pop(_MILESTONE_KEY, None)
                 for field, new_value in changes.items():
@@ -375,14 +385,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     # the backing row wholesale, bumping every auto_now
                     # field, so the milestone branch needs no explicit list.)
                     task.save(update_fields=[*update_fields, "ts_updated_at"])
-                if "status" in update_fields:
-                    # MIP-1997: the rationale is the comment, one per task whose status changed
-                    # (a row that only moves priority posts nothing), in the batch's transaction.
+                if status_event is not None and "status" in update_fields:
+                    # The rationale is the comment, one per task whose status changed (a row that
+                    # only moves priority posts nothing), in the batch's transaction.
                     post_status_change_comment(
                         task_id=task.task_id,
                         actor_id=ctx.user_id,
-                        old=status_before,
-                        new=task.status,
+                        old=status_event[0],
+                        new=status_event[1],
                         reason=rationale,
                     )
                 if move and move_task_to_milestone(task, target_milestone_id):

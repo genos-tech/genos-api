@@ -90,6 +90,25 @@ def _paragraph(text: str) -> dict[str, Any]:
     }
 
 
+def locked_status_change(task_id: int, new: str) -> tuple[str, str] | None:
+    """`(status now, new)` read under the task row's lock, or None when the task already has `new`.
+
+    The caller read the status a moment before its transaction. Two callers setting the same status at the
+    same moment both read it, and both would post "Status: Open → Closed": the second finds the
+    status already set and posts nothing, and one that lost a race to a DIFFERENT status names the
+    status it really replaced. Call it first thing inside the caller's `transaction.atomic()`, before
+    the status is written (the lock is held to the end of that transaction)."""
+    current = (
+        TaskMaster.objects.select_for_update()
+        .filter(task_id=task_id)
+        .values_list("status", flat=True)
+        .first()
+    )
+    if current is None or current == new:
+        return None
+    return (current, new)
+
+
 def post_status_change_comment(
     *, task_id: int, actor_id: str, old: str, new: str, reason: Any
 ) -> TaskComments | None:

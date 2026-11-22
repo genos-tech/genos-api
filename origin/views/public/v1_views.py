@@ -54,7 +54,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services.task_card_post import post_task_created_card
-from origin.services.task_status_reason import post_status_change_comment, status_reason_error
+from origin.services.task_status_reason import (
+    locked_status_change,
+    post_status_change_comment,
+    status_reason_error,
+)
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.public.credentials import credential_of, reaches_team, team_for
@@ -426,13 +430,18 @@ class TaskDetailView(PublicApiView):
             )
         task.ts_updated_at = timezone.now()
         with transaction.atomic():
+            # The status this replaces, read under the row's lock (MIP-1997): a concurrent
+            # identical change posts once.
+            status_event = (
+                locked_status_change(task.task_id, task.status) if "status" in fields else None
+            )
             task.save(update_fields=[*fields, "ts_updated_at"])
-            if "status" in fields:
+            if status_event is not None:
                 post_status_change_comment(
                     task_id=task.task_id,
                     actor_id=request.user.id,
-                    old=status_before,
-                    new=task.status,
+                    old=status_event[0],
+                    new=status_event[1],
                     reason=request.data.get("reason"),
                 )
         return Response(_serialize_task(task), status=status.HTTP_200_OK)
