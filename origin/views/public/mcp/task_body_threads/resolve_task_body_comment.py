@@ -17,12 +17,14 @@ from origin.views.public.mcp.task_body_threads._common import (
     clean_thread_id,
     may_resolve_any,
     refusal,
+    refuse_if_archived,
 )
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     thread_id = clean_thread_id(args.get("thread_id"))
     task = load_task(args.get("task_id"), ctx, action="resolve a comment on")
+    refuse_if_archived(task)
     try:
         done = collab_push.resolve_thread_in(
             collab_push.task_body_document(task.task_id),
