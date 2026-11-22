@@ -81,6 +81,7 @@ NEW_KEYS = [
     "api_keys",
     "connected_apps",
     "connected_accounts",
+    "agent_calls",  # MIP-2006
     "more_counts",
     "export_limits",
 ]

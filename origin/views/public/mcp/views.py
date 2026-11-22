@@ -22,9 +22,10 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.common.api_key_models import SCOPE_READ
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.search_engine.llm import spend as llm_spend
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_notice, mcp_oauth, member_events, security_events
+from origin.services import agent_calls, mcp_notice, mcp_oauth, member_events, security_events
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.anonymous_throttle import McpAnonymousThrottle
@@ -46,6 +47,27 @@ from origin.views.public.v1_views import PublicApiView
 from origin.views.utils.scope_guards import participates_in_team
 
 log = logging.getLogger(__name__)
+
+
+def _limit_category(refusal: Any) -> str:
+    """Which plan limit refused a call, from the refusal's own `limit_reached` data (the 429 body
+    or the result's `_meta`), else `limit`."""
+    try:
+        data = getattr(refusal, "data", None)
+        if isinstance(data, dict):
+            found = (data.get("error") or {}).get("data") or {}
+            if found.get("category"):
+                return str(found["category"])
+            found = (data.get("_meta") or {}).get("genos/limit") or {}
+            if found.get("category"):
+                return str(found["category"])
+        elif isinstance(refusal, dict):
+            found = (refusal.get("_meta") or {}).get("genos/limit") or {}
+            if found.get("category"):
+                return str(found["category"])
+    except Exception:  # noqa: BLE001 - a category we cannot read is just `limit`
+        pass
+    return "limit"
 
 
 class McpView(PublicApiView):
@@ -205,6 +227,8 @@ class McpView(PublicApiView):
         return "Bearer " + ", ".join(params)
 
     def post(self, request):
+        # The agent call log's facts for a `tools/call` (MIP-2006), set by `_dispatch`.
+        self._agent_trace: agent_calls.CallTrace | None = None
         body = None
         try:
             self._check_origin(request)
@@ -214,11 +238,24 @@ class McpView(PublicApiView):
             request_id = None
             if isinstance(getattr(request, "data", None), dict):
                 request_id = request.data.get("id")
+            if self._agent_trace is not None:
+                self._agent_trace.mark_failed(exc)
             response = Response(exc.as_response(request_id), status=exc.http_status)
+        except Exception as exc:
+            # Not ours to answer (DRF makes the 500), but the call still leaves its row, written
+            # at once because there is no response to attach it to.
+            if self._agent_trace is not None:
+                self._agent_trace.mark_failed(exc)
+                agent_calls.schedule(object(), self._agent_trace)
+                self._agent_trace = None
+            raise
         if body is not None:
             # MIP-2010 spike, off unless `MCP_SESSION_ID_PROBE`: adds `Mcp-Session-Id` to a
             # successful `initialize` and logs whether later calls send it back. Never raises.
             session_probe.observe(request, body, response)
+        if self._agent_trace is not None:
+            # After the response has gone out; never blocks or fails the call.
+            agent_calls.schedule(response, self._agent_trace)
         return response
 
     def http_method_not_allowed(self, request, *args, **kwargs):
@@ -327,8 +364,11 @@ class McpView(PublicApiView):
         if method == "tools/call":
             # The plan's calls-per-minute / per-day / search limits (MIP-1367, phase 3): dark. With
             # `MCP_TIER_LIMITS_MODE` unset this returns None on its first line.
+            self._agent_trace = self._start_agent_trace(request, ctx, scope, params)
             limited = limit_gate.admit_response(request, request_id, params, ctx.user_id)
             if limited is not None:
+                if self._agent_trace is not None:
+                    self._agent_trace.mark_limited(_limit_category(limited))
                 return limited
             return self._ok(
                 request_id,
@@ -378,6 +418,28 @@ class McpView(PublicApiView):
             )
 
         raise protocol.method_not_found(str(method), modern=modern)
+
+    def _start_agent_trace(self, request, ctx, scope, params) -> agent_calls.CallTrace | None:
+        """The agent call log's record of this call (MIP-2006), or None while the log is off."""
+        try:
+            if not agent_calls.enabled():
+                return None
+            credential = credential_of(request)
+            if credential is None:
+                return None
+            name = params.get("name") if isinstance(params, dict) else None
+            args = params.get("arguments") if isinstance(params, dict) else None
+            return agent_calls.CallTrace(
+                user=getattr(request, "user", None),
+                team_id=ctx.team_id,
+                credential=credential,
+                tool_name=name,
+                scope=scope,
+                raw_args=args if isinstance(args, dict) else None,
+            )
+        except Exception:  # noqa: BLE001 - the log never fails a call
+            log.warning("agent call log trace failed", exc_info=True)
+            return None
 
     def _ok(
         self,
@@ -555,6 +617,7 @@ class McpView(PublicApiView):
             )
 
         credential = credential_of(request) if request is not None else None
+        trace = getattr(self, "_agent_trace", None)
 
         # The plan's bulk-size, page-size and chat-history limits (MIP-1367, phase 3): dark. A call
         # a tool would refuse first (read-only key, no destructive opt-in) is left to it.
@@ -563,11 +626,16 @@ class McpView(PublicApiView):
         )
         if limited is not None:
             note_result(request, name, limited)
+            if trace is not None:
+                trace.mark_limited(_limit_category(limited))
+                trace.result = limited
             return limited
 
         def audit(tool_name: str, outcome: str, args: dict[str, Any], declared) -> None:
             # A destructive call leaves a trace of which key or connected app made it
             # (MIP-1140). Names and ids only: `note_mcp_destructive` decides what is kept.
+            if trace is not None and outcome == security_events.DESTRUCTIVE_REFUSED:
+                trace.destructive_refused = True
             if credential is None:
                 return
             security_events.note_mcp_destructive(
@@ -583,6 +651,8 @@ class McpView(PublicApiView):
         def record_use(tool, resolved_args: dict[str, Any]) -> None:
             # Which item the member's AI app opened or changed, as a marker (MIP-1143):
             # ids from the call's own arguments, never anything it returned.
+            if trace is not None:
+                trace.resolved_args = resolved_args
             member_events.record_call(
                 user=getattr(request, "user", None),
                 team_id=ctx.team_id,
@@ -623,6 +693,10 @@ class McpView(PublicApiView):
             else:
                 spend_surface = mcp_search_credits.MCP_SEARCH_SURFACE
         with metered_request(surface=spend_surface, user_id=ctx.user_id, team_id=ctx.team_id):
+            if trace is not None and spend_surface != "mcp":
+                # A billable surface: the log copies what the credit engine charged for this call.
+                spend_ctx = llm_spend.current_context()
+                trace.credit_request_id = getattr(spend_ctx, "request_id", None)
             try:
                 result = tools.call(
                     name,
@@ -640,6 +714,8 @@ class McpView(PublicApiView):
                 # Size and name for the `perf.request` line, and the shadow cap's log line
                 # (MIP-1367). Observes only: `result` goes back exactly as built.
                 note_result(request, name, result)
+                if trace is not None:
+                    trace.result = result
                 return result
             except JsonRpcError:
                 raise
