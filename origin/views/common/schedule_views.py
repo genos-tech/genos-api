@@ -145,9 +145,7 @@ def _job(entry: dict[str, Any]) -> dict[str, Any]:
         "usesAi": entry["uses_ai"],
         # Whether its report may be posted in a chat other people read (MIP-1420): it is about
         # one project. Any job may go to a chat the member is alone in.
-        "shareable": JOBS[entry["job"]].share_project is not None
-        if entry["job"] in JOBS
-        else False,
+        "shareable": JOBS[entry["job"]].shareable if entry["job"] in JOBS else False,
         "effortDefault": entry["effort_default"],
         "effortCost": _camel_cost(entry["effort_cost"]),
     }

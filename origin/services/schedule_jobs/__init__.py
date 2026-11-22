@@ -79,6 +79,11 @@ EMOJI = {
     # member's own answer.
     "still_same": "🔁",
     "quieted": "🔕",
+    # Team and group-chat reports (MIP-2061).
+    "projects": "🗂️",
+    "new_members": "🆕",
+    "top": "🏆",
+    "chats": "🗨️",
 }
 
 
@@ -173,6 +178,18 @@ class Job:
     # Inbox or to a chat the owner is alone in. The report is read through the owner's access, so
     # every reader of the chat must be on that project (`services/schedule_audience`).
     share_project: Callable[[dict[str, Any], str], int | None] | None = None
+    # A job about the TEAM (MIP-2061) may be posted into a chat whose readers are all on the team
+    # (never a guest or an external member). It reads `AUDIENCE_KEY` and names only what every
+    # reader may read, so it needs no project of its own.
+    share_team: bool = False
+    # A job about the owner's group chats (MIP-2061) may be posted into a chat whose readers are
+    # in the chats it names: it reads `AUDIENCE_KEY` and names only chats every reader is in.
+    share_chats: bool = False
+
+    @property
+    def shareable(self) -> bool:
+        """Whether its report may be posted in a chat other people read."""
+        return self.share_project is not None or self.share_team or self.share_chats
 
     def ai_applies(self, params: dict[str, Any] | None) -> bool:
         """Whether a run with `params` spends AI usage, and so must name what it cost."""
@@ -189,6 +206,10 @@ AI_EFFORT_KEY = "_ai_effort"
 # (MIP-1420): the job then writes in the third person ("assigned this to you" would name the
 # schedule's owner as "you" to everyone). Run-time only, never stored or accepted from a member.
 SHARED_KEY = "_shared"
+# The key under which the runner hands a `share_team` / `share_chats` job the ids of everyone who
+# reads the chat it posts into (MIP-2061), as strings. Run-time only, never stored or accepted
+# from a member.
+AUDIENCE_KEY = "_audience"
 
 JOBS: dict[str, Job] = {}
 
@@ -210,8 +231,10 @@ def item_count(report: Report) -> int:
 
 # The built-in jobs. Imported last: each registers itself with the registry above.
 from origin.services.schedule_jobs import (  # noqa: E402, F401
+    chat_catch_up,
     milestone_updates,
     project_updates,
+    team_activity,
     what_is_left,
     what_to_do_today,
     what_you_did,
