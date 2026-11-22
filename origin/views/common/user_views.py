@@ -240,44 +240,6 @@ class AutoCloseOnPrMergePreferenceView(AuthenticatedAPIView):
         )
 
 
-class DigestPreferenceView(AuthenticatedAPIView):
-    """GET / PATCH the calling user's email-digest opt-out. Operates on
-    `request.user`; no user_id is accepted, so a leaked token can't
-    toggle someone else's setting. (The proactive AI digest this URL
-    used to carry was decommissioned, MIP-1968.)
-    """
-
-    def get(self, request):
-        return Response(
-            {
-                "email_digest_enabled": bool(request.user.email_digest_enabled),
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    def patch(self, request):
-        updates = {}
-        for key in ("email_digest_enabled",):
-            if key not in request.data:
-                continue
-            value = request.data.get(key)
-            if not isinstance(value, bool):
-                return Response(
-                    {"error": f"{key} must be a boolean."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            updates[key] = value
-        if not updates:
-            return Response(
-                {"error": "email_digest_enabled is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        for key, value in updates.items():
-            setattr(request.user, key, value)
-        request.user.save(update_fields=list(updates))
-        return Response(updates, status=status.HTTP_200_OK)
-
-
 class SpotlightWebSearchPreferenceView(AuthenticatedAPIView):
     """GET / PATCH the calling user's "Spotlight web search" preference.
     Operates on `request.user`; no user_id is accepted, so a leaked token

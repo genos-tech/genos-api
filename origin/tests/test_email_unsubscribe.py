@@ -175,3 +175,10 @@ class PublicBaseUrlNormalizationTests(BaseAPITestCase):
         # a relative URI there is silently unusable.
         headers = unsubscribe_headers(self.user.id)
         self.assertTrue(headers["List-Unsubscribe"].startswith("<https://"), headers)
+
+
+class RetiredDigestPreferenceRouteTests(BaseAPITestCase):
+    def test_the_digest_preference_endpoint_is_gone(self):
+        # The daily email summary was decommissioned (MIP-1979).
+        self.authenticate(self.user)
+        self.assertEqual(self.client.get("/api/v2/user/preferences/digest/").status_code, 404)

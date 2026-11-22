@@ -152,34 +152,6 @@ export default defineRailway(() => {
       limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
     },
   });
-  const emailDigest = service("email-digest", {
-    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
-    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
-    replicas: { "asia-southeast1-eqsg3a": 1 },
-    env: {
-      ALLOWED_HOSTS: preserve(),
-      API_PUBLIC_BASE_URL: preserve(),
-      BLIND_INDEX_KEYS: preserve(),
-      DATABASE_URL: preserve(),
-      DEFAULT_FROM_EMAIL: preserve(),
-      DJANGO_DEBUG: preserve(),
-      DJANGO_SECRET_KEY: preserve(),
-      EMAIL_BACKEND: preserve(),
-      EMAIL_NOTIFICATIONS_ENABLED: preserve(),
-      FIELD_ENCRYPTION_KEYS: preserve(),
-      FRONTEND_BASE_URL: preserve(),
-      JWT_SECRET_KEY: preserve(),
-      LOG_FORMAT: preserve(),
-      REDIS_URL: preserve(),
-      RESEND_API_KEY: preserve(),
-    },
-    deploy: {
-      cronSchedule: "0 * * * *",
-      startCommand: "sh /app/railway-email-digest-entrypoint.sh --at-hour 8 --heartbeat email-digest",
-      restartPolicyType: "NEVER",
-      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
-    },
-  });
   const emailNotify = service("email-notify", {
     source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
@@ -562,5 +534,5 @@ export default defineRailway(() => {
     },
   });
 
-  return project("genos", { resources: [agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, closedTeamPurge, collabOrphanSweep, demoUserCleanup, emailDigest, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
+  return project("genos", { resources: [agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, closedTeamPurge, collabOrphanSweep, demoUserCleanup, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
 });

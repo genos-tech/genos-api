@@ -163,7 +163,7 @@ class TestCatchUpWindow(TestCase):
 
     def test_another_services_heartbeat_is_not_used(self):
         CronHeartbeat.objects.create(
-            name="email-digest", last_succeeded_at=timezone.now() - dt.timedelta(hours=5)
+            name="agent-judge-sampler", last_succeeded_at=timezone.now() - dt.timedelta(hours=5)
         )
         since = self._catch_up()
         self.assertGreater(since, timezone.now() - dt.timedelta(minutes=12))
@@ -247,8 +247,8 @@ class TestSuccessMarkIsTheRunStart(TestCase):
     def test_another_cron_still_records_its_finish_time(self):
         from origin.services import ops_alerts
 
-        ops_alerts.cron_started("email-digest")
+        ops_alerts.cron_started("agent-judge-sampler")
         self.clock[0] += dt.timedelta(minutes=5)
-        ops_alerts.cron_succeeded("email-digest")
-        beat = CronHeartbeat.objects.get(name="email-digest")
+        ops_alerts.cron_succeeded("agent-judge-sampler")
+        beat = CronHeartbeat.objects.get(name="agent-judge-sampler")
         self.assertEqual(beat.last_succeeded_at, self.t0 + dt.timedelta(minutes=5))

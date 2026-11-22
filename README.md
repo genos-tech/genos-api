@@ -170,7 +170,6 @@ Additional cron services share the same image, each with its own config and
 | `railway-webhook-deliver.toml`      | every minute    | Drain the outbound webhook outbox              |
 | `railway-email-notify.toml`         | every 5 min     | Drain the email notification outbox            |
 | `railway-reindexer.toml`            | every 10 min    | Incremental OpenSearch reindex                 |
-| `railway-email-digest.toml`         | hourly          | Per-user email digest                          |
 | `railway-judge-sampler.toml`        | hourly          | Online LLM-judge quality sampling              |
 | `railway-demo-cleanup.toml`         | daily 03:00 UTC | Delete expired demo users + their data         |
 | `railway-opensearch-maintenance.toml`| daily 05:00 UTC| Index maintenance                              |

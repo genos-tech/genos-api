@@ -526,7 +526,7 @@ class TestSuppression(_Keys, TestCase):
 class TestCronsRefuseAMissingKey(_Keys, TestCase):
     @override_settings(EMAIL_NOTIFICATIONS_ENABLED=True)
     def test_the_email_crons_refuse_to_start(self):
-        for command in ("email_notify_tick", "email_digest"):
+        for command in ("email_notify_tick",):
             with (
                 self.subTest(command=command),
                 self.keys(),
@@ -535,7 +535,7 @@ class TestCronsRefuseAMissingKey(_Keys, TestCase):
                 call_command(command, stdout=StringIO())
 
     def test_off_they_need_no_key(self):
-        for command in ("email_notify_tick", "email_digest"):
+        for command in ("email_notify_tick",):
             with self.subTest(command=command), self.keys():
                 call_command(command, stdout=StringIO())
 

@@ -17,12 +17,9 @@ the task. Nothing else of the chat is opened by that.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from django.utils import timezone
 
 from origin.models.chat.unified_models import Activity, ActivityType, Message
 from origin.models.common.notification_models import (
@@ -131,15 +128,6 @@ class TheCommenterWhoIsNotOnTheProject(ReactionRowBase):
         self.assertEqual(self.pushes[self.aid]["category"], "reactions")
         self.assertEqual(self.pushes[self.aid]["title"], f"{self.user.username} reacted 👍")
         self.assertIn(COMMENT_TEXT, self.pushes[self.aid]["body"])
-
-    def test_the_daily_digest_line_links_to_the_task(self):
-        from origin.management.commands.email_digest import Command
-
-        _, lines = Command()._collect(self.aid, None, timezone.now() + timedelta(seconds=1))
-
-        reaction = [x for x in lines if "reacted" in x["title"]]
-        self.assertEqual(len(reaction), 1)
-        self.assertTrue(reaction[0]["url"].endswith(self.url))
 
     def test_the_chat_and_its_messages_stay_closed_to_them(self):
         self.authenticate(self.assignee)

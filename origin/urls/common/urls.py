@@ -364,11 +364,6 @@ urlpatterns = [
         UiSettingsPreferenceView.as_view(),
         name="ui_settings_preference",
     ),
-    path(
-        "api/v2/user/preferences/digest/",
-        DigestPreferenceView.as_view(),
-        name="digest_preference",
-    ),
     # Break-glass team-ownership recovery. See
     # `origin/services/ownership_claim.py` for the policy.
     path(

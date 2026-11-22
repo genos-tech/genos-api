@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 # locale plumbing needed for an anonymous reader.
 _SCOPE_LABELS = {
     SCOPE_ALL: ("すべての通知メール", "all notification emails"),
-    SCOPE_DIGEST: ("デイリーダイジェストメール", "the daily digest email"),
+    SCOPE_DIGEST: (
+        "デイリーダイジェストメール",
+        "the daily digest email",
+    ),  # legacy links, MIP-1979
     "mention_chat": ("メンション通知メール", "mention notification emails"),
     "mention_thread": ("メンション通知メール", "mention notification emails"),
     "mention_task": ("メンション通知メール", "mention notification emails"),

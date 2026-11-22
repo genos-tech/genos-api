@@ -383,30 +383,6 @@ class WhatElseAStrangerCanReach(Cards):
 
 
 class OtherRenderingsTests(Cards):
-    def test_the_daily_digest_line_of_a_stranger_is_the_minimal_one(self):
-        from origin.management.commands.email_digest import Command
-
-        self.body_mention(self.task, [self.member, self.colleague])
-        self.comment_mention(self.task, [self.member, self.colleague])
-        now = timezone.now() + timedelta(seconds=1)
-
-        _, stranger = Command()._collect(str(self.member.id), None, now)
-        _, reader = Command()._collect(str(self.colleague.id), None, now)
-
-        self.assertEqual(
-            {e["title"] for e in stranger},
-            {f"{self.user.username} mentioned you in a task you can't open"},
-        )
-        self.assertTrue(all(e["url"].endswith(MINIMAL_URL) for e in stranger))
-        self.assertEqual(self.leaks(stranger), [])
-        self.assertEqual(
-            {e["title"] for e in reader},
-            {
-                f"{self.user.username} mentioned you in a task",
-                f"{self.user.username} mentioned you",
-            },
-        )
-
     def test_a_failing_check_shows_the_minimal_card_not_the_full_one(self):
         with mock.patch(
             "origin.services.activity_minimal_card.minimal_card_activity_ids",
