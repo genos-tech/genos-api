@@ -85,7 +85,7 @@ class CreditUsageTests(BaseAPITestCase):
         recent = self.client.get(URL).data["recent"]
         self.assertEqual(len(recent), 50)
         self.assertEqual(recent, sorted(recent, key=lambda r: r["id"], reverse=True))
-        self.assertEqual(set(recent[0]), {"id", "at", "job", "credits", "detail"})
+        self.assertEqual(set(recent[0]), {"id", "at", "job", "credits", "reversed", "detail"})
 
     def test_empty_state(self):
         data = self.client.get(URL).data
@@ -145,6 +145,25 @@ class CreditUsageTests(BaseAPITestCase):
         self.assertIsNone(data["credits"])
         self.assertIsNone(data["period_end_iso"])
         self.assertEqual(data["by_job"][0]["job"], "ask")
+
+    def test_a_reversed_charge_is_netted_out(self):
+        full = charge(self.user, "ask", 1000)
+        part = charge(self.user, "ask", 600)
+        for rid, back in ((full, 1000), (part, 200)):
+            entry = AiCreditEntry.objects.get(request_id=rid)
+            AiCreditEntry.objects.create(
+                user_id=str(self.user.id),
+                entry_type=AiCreditEntry.ENTRY_REVERSAL,
+                credits_milli=back,
+                ref_id=entry.id,
+                period=entry.period,
+                actor="op",
+            )
+        data = self.client.get(URL).data
+        self.assertEqual(data["by_job"], [{"job": "ask", "count": 1, "credits": 0.4}])
+        self.assertEqual(data["month_total_credits"], 0.4)
+        by_credits = {r["credits"]: r["reversed"] for r in data["recent"]}
+        self.assertEqual(by_credits, {0.0: True, 0.4: True})
 
     def test_job_mapping_tolerates_unknown_and_empty(self):
         for s in (None, "", "zzz", "digest", "index"):

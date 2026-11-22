@@ -95,6 +95,9 @@ REGISTRY = {
     "origin.search_engine.agent_views.AgentDecideView": self_only(
         "approves a paused run; the run's user_id must equal request.user.id"
     ),
+    "origin.search_engine.credit_usage_views.CreditUsageView": self_only(
+        "the caller's own AI credit ledger rows (user_id=request.user); the view takes no user id"
+    ),
     "origin.search_engine.agent_views.AgentFeaturesView": self_only(
         "feature flags resolved for request.user"
     ),

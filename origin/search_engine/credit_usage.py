@@ -11,6 +11,7 @@ The job names are plain-language KEYS, translated by the client. A surface this 
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -19,6 +20,7 @@ from django.utils import timezone
 log = logging.getLogger(__name__)
 
 RECENT_LIMIT = 50
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 # surface (AiRequestCost.surface) -> job key. Anything else is JOB_OTHER.
 JOB_ASK = "ask"
@@ -77,7 +79,7 @@ def _schedule_names(user, request_ids: list[str]) -> dict[str, str]:
             if isinstance(optionals, dict):
                 rid = str((optionals.get("ai") or {}).get("request_id") or "")
                 sid = str(optionals.get("schedule_id") or "")
-                if rid and sid:
+                if rid and _UUID.match(sid):
                     by_request[rid] = sid
         names = {
             str(s.id): s.name
@@ -102,23 +104,34 @@ def usage_for(user, *, tier: str, period: str | None = None) -> dict[str, Any]:
     block = _credits_block(user_id, tier)  # None unless credits are authoritative
 
     base = AiCreditEntry.objects.filter(user_id=user_id, entry_type=AiCreditEntry.ENTRY_CHARGE)
-    month_rows = list(base.filter(period=period).values_list("request_id", "credits_milli"))
+    month_rows = list(base.filter(period=period).values_list("id", "request_id", "credits_milli"))
     recent = list(
         base.order_by("-created_at", "-id").values_list(
             "id", "request_id", "credits_milli", "created_at"
         )[:RECENT_LIMIT]
     )
+    # A refund is a separate `reversal` row pointing at the charge (`ref_id`): net it, so the
+    # totals here agree with the balance, which already includes it.
+    reversed_milli: dict[int, int] = defaultdict(int)
+    wanted = {r[0] for r in month_rows} | {r[0] for r in recent}
+    for ref_id, milli in AiCreditEntry.objects.filter(
+        user_id=user_id, entry_type=AiCreditEntry.ENTRY_REVERSAL, ref_id__in=wanted
+    ).values_list("ref_id", "credits_milli"):
+        reversed_milli[ref_id] += int(milli)
 
     surfaces = _surfaces(
-        {r for r, _ in month_rows if r is not None} | {r[1] for r in recent if r[1] is not None}
+        {r for _, r, _ in month_rows if r is not None} | {r[1] for r in recent if r[1] is not None}
     )
 
     counts: dict[str, int] = defaultdict(int)
     totals: dict[str, int] = defaultdict(int)
-    for rid, milli in month_rows:
+    for entry_id, rid, milli in month_rows:
+        net = -int(milli) - reversed_milli.get(entry_id, 0)  # a reversal is positive
+        if net <= 0:
+            continue  # fully refunded: not a use of credits any more
         job = job_for_surface(surfaces.get(str(rid)))
         counts[job] += 1
-        totals[job] += -int(milli)
+        totals[job] += net
 
     schedule_rids = [
         str(r[1]) for r in recent if job_for_surface(surfaces.get(str(r[1]))) == JOB_SCHEDULE
@@ -133,7 +146,8 @@ def usage_for(user, *, tier: str, period: str | None = None) -> dict[str, Any]:
                 "id": entry_id,
                 "at": created_at.isoformat(),
                 "job": job,
-                "credits": _credits(-int(milli)),
+                "credits": _credits(max(-int(milli) - reversed_milli.get(entry_id, 0), 0)),
+                "reversed": reversed_milli.get(entry_id, 0) > 0,
                 "detail": names.get(str(rid), "") if job == JOB_SCHEDULE else "",
             }
         )
