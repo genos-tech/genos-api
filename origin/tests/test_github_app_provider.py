@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import requests
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from origin.models.common.user_models import ConnectedAccount
@@ -24,6 +24,7 @@ from origin.services.oauth.base import InvalidGrantError, TokenResponse
 from origin.services.oauth.github_app import GitHubAppOAuthProvider
 from origin.services.oauth.registry import get_provider, supported_provider_names
 from origin.services.oauth.tokens import ReauthRequired, get_valid_access_token
+from origin.tests.transaction_support import CheapFlushTransactionTestCase
 
 User = get_user_model()
 
@@ -256,7 +257,7 @@ class TestRefresh(TestCase):
 
 
 @override_settings(**APP)
-class TestConcurrentRefresh(TransactionTestCase):
+class TestConcurrentRefresh(CheapFlushTransactionTestCase):
     """Two real threads, two connections, one row. Only one may spend the refresh token."""
 
     def test_two_requests_refresh_once(self):
