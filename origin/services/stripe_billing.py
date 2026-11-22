@@ -59,6 +59,7 @@ import time
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import connection, transaction
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import (
@@ -1242,13 +1243,52 @@ def create_team_portal_session(
     return _portal_url(stripe, team.stripe_customer_id, flow, plan, "team billing portal")
 
 
+SEAT_HWM_KEY = "genos_seat_hwm"
+
+
+def _parse_seat_hwm(sub: dict, period_start) -> int | None:
+    """The seats already paid for in THIS billing period, from the
+    subscription metadata `genos_seat_hwm = "<period_start>:<quantity>"`.
+    None when absent, malformed, or from an earlier period (the mark
+    resets with each period)."""
+    raw = (sub.get("metadata") or {}).get(SEAT_HWM_KEY)
+    try:
+        start, qty = str(raw).split(":", 1)
+        if period_start is not None and start == str(period_start):
+            return max(int(qty), 0)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _seat_hwm_metadata(period_start, paid: int) -> dict:
+    """Metadata for `Subscription.modify` (Stripe merges keys, so only ours
+    is sent). Empty when the period is unknown."""
+    if period_start is None:
+        return {}
+    return {SEAT_HWM_KEY: f"{period_start}:{paid}"}
+
+
 def sync_team_subscription_quantity(team_id) -> str:
     """Best-effort seat sync, called from the TeamMembers signal on
     every membership change. Updates the active subscription's quantity
-    to the current member count. An increase uses `create_prorations`
-    (the charge folds into the NEXT invoice, no surprise immediate
-    charge). A decrease uses `none`: no credit for the unused part of a
-    started period (MIP-1840, policy D9).
+    to the current member count.
+
+    Money policy (MIP-1840, policy D9, Ken 2026-11-22): a seat removed
+    mid-period is not credited (`none`), and a seat re-added in the SAME
+    billing period costs nothing extra. To know what is already paid for
+    we keep a per-period high-water mark in the Stripe subscription
+    metadata (`genos_seat_hwm = "<current_period_start>:<qty>"`, no
+    migration, survives restarts, resets when the period changes):
+
+      * seats <= paid mark          -> proration_behavior="none"
+      * seats above the paid mark   -> create_prorations for ONLY the seats
+        above the mark (quantity is first set to the mark with `none`,
+        then to the target with `create_prorations`).
+
+    The mark is written in the same `modify` call as the quantity, so a
+    failed Stripe call leaves it unchanged. A per-team Postgres advisory
+    lock serializes concurrent syncs (read-modify-write on the mark).
 
     Fail-SOFT by design: this runs inside member-management writes, and
     a Stripe hiccup must never block adding or removing a member. Bulk
@@ -1259,41 +1299,69 @@ def sync_team_subscription_quantity(team_id) -> str:
     if team is None or not team.stripe_customer_id or not billing_enabled():
         return "no-op"
     try:
-        stripe = _stripe()
-        resp = json.loads(
-            str(
-                stripe.Subscription.list(
-                    customer=team.stripe_customer_id, status="active", limit=10
+        with transaction.atomic():
+            with connection.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    [f"seat-sync:{team.team_id}"],
                 )
-            )
-        )
-        subs = resp.get("data") or []
-        if not subs:
-            return "no active subscription"
-        sub = subs[0]
-        item = ((sub.get("items") or {}).get("data") or [{}])[0]
-        seats = team_seats(team_id)
-        current = item.get("quantity")
-        if current == seats:
-            return "in sync"
-        # MIP-1840 / policy D9: a seat removed mid-period is not credited
-        # (no refund for a started month). Additions still prorate as before.
-        proration = "none" if current is not None and seats < current else "create_prorations"
-        stripe.Subscription.modify(
-            sub["id"],
-            items=[{"id": item.get("id"), "quantity": seats}],
-            proration_behavior=proration,
-        )
-        log.info(
-            "stripe billing: team %s seats %s -> %s (membership change)",
-            team.team_id,
-            item.get("quantity"),
-            seats,
-        )
-        return f"quantity set to {seats}"
+            return _sync_team_quantity_locked(team)
     except Exception as e:  # noqa: BLE001 — never block member management
         log.warning("stripe seat sync failed for team %s: %s", team_id, e)
         return "failed (logged)"
+
+
+def _sync_team_quantity_locked(team: TeamMaster) -> str:
+    stripe = _stripe()
+    resp = json.loads(
+        str(stripe.Subscription.list(customer=team.stripe_customer_id, status="active", limit=10))
+    )
+    subs = resp.get("data") or []
+    if not subs:
+        return "no active subscription"
+    sub = subs[0]
+    item = ((sub.get("items") or {}).get("data") or [{}])[0]
+    seats = team_seats(team.team_id)
+    current = item.get("quantity")
+    if current == seats:
+        return "in sync"
+    period_start = sub.get("current_period_start") or item.get("current_period_start")
+    mark = _parse_seat_hwm(sub, period_start)
+    # Seats already paid for this period: the mark, never below what the
+    # subscription currently bills.
+    paid = max(mark if mark is not None else 0, current or 0)
+    item_id = item.get("id")
+    if current is not None and seats < current:
+        proration = "none"
+    elif current is None or seats > paid:
+        proration = "create_prorations"
+    else:
+        proration = "none"
+    metadata = _seat_hwm_metadata(period_start, max(paid, seats))
+    extra = {"metadata": metadata} if metadata else {}
+    if proration == "create_prorations" and current is not None and paid > current:
+        # Seats between current and the mark are already paid: restore them
+        # without a charge, then prorate only the seats above the mark.
+        stripe.Subscription.modify(
+            sub["id"],
+            items=[{"id": item_id, "quantity": paid}],
+            proration_behavior="none",
+        )
+    stripe.Subscription.modify(
+        sub["id"],
+        items=[{"id": item_id, "quantity": seats}],
+        proration_behavior=proration,
+        **extra,
+    )
+    log.info(
+        "stripe billing: team %s seats %s -> %s (paid mark %s, proration %s)",
+        team.team_id,
+        current,
+        seats,
+        paid,
+        proration,
+    )
+    return f"quantity set to {seats}"
 
 
 def reconcile_team_from_stripe(team: TeamMaster) -> str:

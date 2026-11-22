@@ -416,7 +416,8 @@ class AccountDeletion(_Base):
         with mock.patch(POST) as post, mock.patch(DELETE) as delete:
             with self.captureOnCommitCallbacks(execute=False) as callbacks:
                 delete_account(self.user)
-        self.assertEqual(callbacks, [])
+        # The search-index scrub is also an on-commit callback (MIP-1893); no OAuth one is.
+        self.assertEqual([c for c in callbacks if "delete_for_user" not in c.__qualname__], [])
         post.assert_not_called()
         delete.assert_not_called()
 

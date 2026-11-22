@@ -1718,6 +1718,7 @@ class TeamInviteListView(AuthenticatedAPIView):
                         "memberRole": i.member_role,
                         "projectId": i.project_id,
                         "projectName": _invite_project_name(i, request.user.id),
+                        "projectHidden": _invite_project_hidden(i, request.user.id),
                         "invitedBy": i.invited_by.username if i.invited_by_id else None,
                         "expiresAt": i.expires_at,
                         "createdAt": i.ts_created_at,
@@ -1730,12 +1731,18 @@ class TeamInviteListView(AuthenticatedAPIView):
 
 
 def _invite_project_name(invite, viewer_id):
-    """The project's name for the invite list; a hidden one the viewer is not in is masked (MIP-1699)."""
-    if not invite.project_id:
+    """The project's name for the invite list; a hidden one the viewer is not in is masked (MIP-1699).
+
+    The mask is null, not a word: the client shows its own translated label (MIP-1949), keyed on
+    `projectHidden`.
+    """
+    if not invite.project_id or project_hidden_from(invite.project, viewer_id):
         return None
-    if project_hidden_from(invite.project, viewer_id):
-        return "Hidden project"
     return invite.project.project_name
+
+
+def _invite_project_hidden(invite, viewer_id):
+    return bool(invite.project_id) and project_hidden_from(invite.project, viewer_id)
 
 
 class TeamInviteRevokeView(AuthenticatedAPIView):

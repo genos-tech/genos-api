@@ -25,6 +25,7 @@ from rest_framework.response import Response
 
 from origin.search_engine.metered import metered_request
 from origin.search_engine.search import memory_exclude_lanes, search
+from origin.services.archive import mark_archived_hits
 from origin.services.live_projects import gone_project_ids
 from origin.services.throttles import SearchThrottle, with_defaults
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -156,4 +157,6 @@ class SearchView(AuthenticatedAPIView):
                 exclude_project_ids=[str(p) for p in sorted(gone_project_ids())] or None,
                 **extra_kwargs,
             )
+        # MIP-1852: archived items stay found and ranked as before; the row says it is archived.
+        mark_archived_hits(result.get("results") or [])
         return Response(result, status=status.HTTP_200_OK)

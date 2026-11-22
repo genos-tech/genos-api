@@ -37,6 +37,7 @@ from origin.search_engine.agent.tools.milestone_order import order_of_work
 from origin.search_engine.agent.tools.project_gone import in_deleted_project
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.template_prompts import has_written_body
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_rollup import milestone_tasks_q, milestone_work_q
 from origin.services.user_time import today_for_user_id
 
@@ -71,6 +72,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # MIP-1621 (flag `AGENT_PARITY_FOLLOWUPS`): a milestone of a soft-deleted project reads as a missing one,
         # before the membership answer, and its rollup names none of the project's tasks.
         raise ToolError(f"Milestone {milestone_id} not found.")
+
+    if project_hidden_from(m.project, ctx.user_id):
+        # A milestone of a hidden project reads as a missing one to a non-member (MIP-1947).
+        raise ToolForbidden(f"Milestone {milestone_id} not found.")
 
     is_member = ProjectMembers.objects.filter(
         project_id=m.project_id,

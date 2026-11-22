@@ -1452,7 +1452,7 @@ class TeamBillingTests(BillingTestBase):
 
     # ---- seat auto-sync ---------------------------------------------- #
 
-    def _seat_sync_mocks(self, current_quantity=2):
+    def _seat_sync_mocks(self, current_quantity=2, period_start=None, metadata=None):
         list_obj = self._sdk(
             "ListObject",
             {
@@ -1462,6 +1462,8 @@ class TeamBillingTests(BillingTestBase):
                         "id": "sub_t1",
                         "object": "subscription",
                         "status": "active",
+                        "current_period_start": period_start,
+                        "metadata": metadata or {},
                         "items": {"data": [{"id": "si_1", "quantity": current_quantity}]},
                     }
                 ],
@@ -1483,8 +1485,8 @@ class TeamBillingTests(BillingTestBase):
             email="third@example.com", username="third", password="x" * 24
         )
         list_mock, modify_mock = self._seat_sync_mocks(current_quantity=2)
-        with list_mock, modify_mock as modify:
-            TeamMembers.objects.create(team=self.team, attendee=user3)  # signal fires
+        with list_mock, modify_mock as modify, self.captureOnCommitCallbacks(execute=True):
+            TeamMembers.objects.create(team=self.team, attendee=user3)  # signal fires on commit
         modify.assert_called_once()
         self.assertEqual(modify.call_args.kwargs["items"][0]["quantity"], 3)
         self.assertEqual(modify.call_args.kwargs["proration_behavior"], "create_prorations")
@@ -1509,6 +1511,110 @@ class TeamBillingTests(BillingTestBase):
         self.assertEqual(out, "quantity set to 2")
         self.assertEqual(modify.call_args.kwargs["items"][0]["quantity"], 2)
         self.assertEqual(modify.call_args.kwargs["proration_behavior"], "create_prorations")
+
+    # ---- per-period seat high-water mark (MIP-1840) ------------------ #
+
+    def _calls(self, modify):
+        return [
+            (
+                c.kwargs["items"][0]["quantity"],
+                c.kwargs["proration_behavior"],
+                c.kwargs.get("metadata"),
+            )
+            for c in modify.call_args_list
+        ]
+
+    def test_remove_keeps_mark_in_metadata(self):
+        self._bind_team()  # 2 seats
+        lm, mm = self._seat_sync_mocks(current_quantity=3, period_start=1000)
+        with lm, mm as modify:
+            stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(self._calls(modify), [(2, "none", {"genos_seat_hwm": "1000:3"})])
+
+    def test_readd_in_same_period_costs_nothing(self):
+        # Subscription already decreased to 1, mark says 2 were paid this period.
+        self._bind_team()  # 2 seats
+        lm, mm = self._seat_sync_mocks(
+            current_quantity=1, period_start=1000, metadata={"genos_seat_hwm": "1000:2"}
+        )
+        with lm, mm as modify:
+            stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(self._calls(modify), [(2, "none", {"genos_seat_hwm": "1000:2"})])
+
+    def test_readd_above_mark_charges_only_the_extra(self):
+        from origin.models.common.team_models import TeamMembers  # noqa: PLC0415
+        from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+        self._bind_team()
+        u3 = CustomUser.objects.create_user(
+            email="x3@example.com", username="x3", password="x" * 24
+        )
+        # Bulk create bypasses the signal: 3 seats, sub at 1, 2 paid this period.
+        TeamMembers.objects.bulk_create([TeamMembers(team=self.team, attendee=u3)])
+        lm, mm = self._seat_sync_mocks(
+            current_quantity=1, period_start=1000, metadata={"genos_seat_hwm": "1000:2"}
+        )
+        with lm, mm as modify:
+            stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(
+            self._calls(modify),
+            [(2, "none", None), (3, "create_prorations", {"genos_seat_hwm": "1000:3"})],
+        )
+
+    def test_new_period_resets_mark(self):
+        # Mark is from the previous period: sub at 1 is what is paid now,
+        # so going to 2 is a normal prorated increase.
+        self._bind_team()  # 2 seats
+        lm, mm = self._seat_sync_mocks(
+            current_quantity=1, period_start=2000, metadata={"genos_seat_hwm": "1000:2"}
+        )
+        with lm, mm as modify:
+            stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(
+            self._calls(modify), [(2, "create_prorations", {"genos_seat_hwm": "2000:2"})]
+        )
+
+    def test_malformed_mark_is_ignored(self):
+        self._bind_team()
+        lm, mm = self._seat_sync_mocks(
+            current_quantity=1, period_start=1000, metadata={"genos_seat_hwm": "garbage"}
+        )
+        with lm, mm as modify:
+            stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertEqual(self._calls(modify)[0][1], "create_prorations")
+
+    def test_failed_modify_writes_no_mark_and_is_soft(self):
+        self._bind_team()
+        lm, mm = self._seat_sync_mocks(current_quantity=3, period_start=1000)
+        with lm, mock.patch("stripe.Subscription.modify", side_effect=RuntimeError("x")) as modify:
+            out = stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        self.assertIn("failed", out)
+        modify.assert_called_once()  # mark travels inside the failed call: nothing persisted
+
+    def test_concurrent_syncs_take_a_per_team_lock(self):
+        self._bind_team()
+        lm, mm = self._seat_sync_mocks(current_quantity=3, period_start=1000)
+        with lm, mm, mock.patch("origin.services.stripe_billing.connection") as conn:
+            stripe_billing.sync_team_subscription_quantity(self.team.team_id)
+        sql, params = conn.cursor.return_value.__enter__.return_value.execute.call_args.args
+        self.assertIn("pg_advisory_xact_lock", sql)
+        self.assertIn(str(self.team.team_id), params[0])
+
+    def test_signal_defers_sync_until_commit(self):
+        from origin.models.common.team_models import TeamMembers  # noqa: PLC0415
+        from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+        self._bind_team()
+        u = CustomUser.objects.create_user(
+            email="late@example.com", username="late", password="x" * 24
+        )
+        with mock.patch("origin.services.stripe_billing.sync_team_subscription_quantity") as sync:
+            with self.captureOnCommitCallbacks(execute=False) as cbs:
+                TeamMembers.objects.create(team=self.team, attendee=u)
+            sync.assert_not_called()  # a rolled-back write never reaches Stripe
+            for cb in cbs:
+                cb()
+            sync.assert_called_once_with(self.team.team_id)
 
     def test_sync_noop_when_already_true(self):
         self._bind_team()

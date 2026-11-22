@@ -21,6 +21,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.user_time import today_for_user_id
 
 _STATUS_LABELS = ["Open", "WIP", "Blocked", "Pending", "Closed"]
@@ -43,6 +44,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # The words of a missing one, so a guessed id does not say which projects exist in
         # other teams (MIP-1519). Only the class differs: it counts toward the MCP refusal
         # alarm. Same pattern as `milestone_access.load_project`.
+        raise ToolForbidden(f"Project {project_id} not found.")
+
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947); the class still
+        # counts toward the refusal alarm.
         raise ToolForbidden(f"Project {project_id} not found.")
 
     is_member = ProjectMembers.objects.filter(

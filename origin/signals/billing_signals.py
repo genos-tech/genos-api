@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 
+from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
@@ -34,6 +35,13 @@ def _sync_team_seats(sender, instance, **kwargs):
     team_id = getattr(instance, "team_id", None)
     if team_id is None:
         return
+    # After COMMIT (MIP-1840): the sync charges money and moves the per-period
+    # seat mark, so it must not run for a membership write that later rolls
+    # back, nor hold its advisory lock inside the caller's transaction.
+    transaction.on_commit(lambda: _run_sync(team_id))
+
+
+def _run_sync(team_id):
     try:
         from origin.services import stripe_billing  # noqa: PLC0415 — avoid import cycles
 

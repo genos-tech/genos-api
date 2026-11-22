@@ -759,6 +759,7 @@ def commit(
                         external_ids=r["external_ids"],
                         fingerprint=_fingerprint(task),
                     )
+                    n_comments = _create_comments(task, user, project, r.get("_comments") or [])
             except IntegrityError:
                 skipped += 1
                 report.append({"row": r["row"], "outcome": "skipped", "code": "already_imported"})
@@ -770,14 +771,15 @@ def commit(
                 continue
             created_tasks[r["row"]] = task
             created += 1
-            report.append(
-                {
-                    "row": r["row"],
-                    "outcome": "created",
-                    "task_id": task.task_id,
-                    "display_id": task.display_id,
-                }
-            )
+            entry = {
+                "row": r["row"],
+                "outcome": "created",
+                "task_id": task.task_id,
+                "display_id": task.display_id,
+            }
+            if n_comments:
+                entry["comments"] = n_comments  # a count, never the text
+            report.append(entry)
             if r["parent_row"] and parent_task is None and all_rows.get(r["parent_row"]):
                 report.append({"row": r["row"], "outcome": "warning", "code": "parent_failed"})
     finally:
@@ -791,6 +793,40 @@ def commit(
             increment_usage(str(user.id), TASK_CREATE_KEY, created)
             invalidate_project_tasks_cache(project.team_id, project.project_id)
     return run
+
+
+def _comment_markdown(comment: dict) -> str:
+    """The comment's text under a first line that keeps who wrote it and when, as text."""
+    author = re.sub(r"[_*\[\]`<>]", "", comment.get("author") or "").strip()
+    when = re.sub(r"[^0-9-]", "", comment.get("created") or "")
+    who = ", ".join(x for x in (author, when) if x)
+    head = f"_Imported from Jira ({who})_" if who else "_Imported from Jira_"
+    return f"{head}\n\n{comment['markdown']}"
+
+
+def _create_comments(task: TaskMaster, user, project, comments: list[dict]) -> int:
+    """Comments of an imported issue, written the way the comment API writes them (the row, and
+    its mirror under the task's chat card) but NOT `fan_out_task_comment`: an import must not
+    notify anyone, call the webhook or push to genos-sockets. Ids 1..n: `undo_plan` relies on it
+    to tell these from a comment a person added later."""
+    from origin.services.unified_writer import write_task_comment_as_thread_reply  # noqa: PLC0415
+
+    for i, comment in enumerate(comments, 1):
+        row = TaskComments.objects.create(
+            task=task,
+            sender=user,
+            comment_id=i,
+            comment_body=task_body_blocks(_comment_markdown(comment)),
+        )
+        write_task_comment_as_thread_reply(
+            task_id=task.task_id,
+            comment_id=row.comment_id,
+            sender_id=str(user.id),
+            body=row.comment_body,
+            project_id=project.project_id,
+            bypass_flag=True,
+        )
+    return len(comments)
 
 
 def _create_tags(project, names: list[str]) -> None:
@@ -826,19 +862,34 @@ def _create_tags(project, names: list[str]) -> None:
 # ── undo ────────────────────────────────────────────────────────────────────
 
 
+EDITED_COMMENT_SECONDS = 5
+
+
+def _person_commented(task: TaskMaster, imported: int) -> bool:
+    """A comment the import did not make (ids 1..imported are its own), or one it made that was
+    edited since (an update is stamped well after the send)."""
+    comments = TaskComments.objects.filter(task=task, is_deleted=False)
+    if comments.filter(comment_id__gt=imported).exists():
+        return True
+    return any(
+        (c.ts_updated_at - c.ts_sent_at).total_seconds() > EDITED_COMMENT_SECONDS
+        for c in comments.filter(comment_id__lte=imported)
+    )
+
+
 def undo_plan(run: TaskImportRun) -> dict:
     """Which of the run's tasks an undo removes and which stay: a task someone edited since
     (title, body, status, priority, assignee, due date) or commented on is the person's now, and
     so is any task that still has a live child that stays (nothing is left without its parent)."""
     markers = list(run.rows.select_related("task"))
+    imported = {e["task_id"]: e["comments"] for e in run.report if e.get("comments")}
     keep: set[int] = set()
     for marker in markers:
         task = marker.task
         if task.status == "Deleted":
             continue  # already gone: only its marker is cleared
-        if (
-            _fingerprint(task) != marker.fingerprint
-            or TaskComments.objects.filter(task=task).exists()
+        if _fingerprint(task) != marker.fingerprint or _person_commented(
+            task, imported.get(task.task_id, 0)
         ):
             keep.add(task.task_id)
     remove_ids = {m.task_id for m in markers} - keep

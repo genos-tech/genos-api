@@ -220,7 +220,12 @@ def remove_team_member(team_id, attendee_id) -> int:
             member.is_deleted = True
             member.save(update_fields=["is_deleted", "ts_updated_at"])
         drop_in_team_access(team_id, attendee_id)
-        return drop_team_member_participation(team_id, attendee_id)
+        withdrawn = drop_team_member_participation(team_id, attendee_id)
+        # The last live member going closes the team; its data is purged by the cron (MIP-1958).
+        from origin.services.team_purge import close_team_if_empty
+
+        close_team_if_empty(team_id)
+        return withdrawn
 
 
 def add_project_guest(team_id, project_id, attendee_id) -> None:

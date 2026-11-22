@@ -9,9 +9,12 @@ typed the headings (`plan_task_bodies`) and the grey prompts (`template_prompts`
 Shape: `{"templates": [{"id", "label", "sections": [{"heading", "items": [{"kind", "text"}]}]}]}`.
 `label` is the English name the agent matches a `template` argument against. `kind` is
 `placeholder` (a grey italic paragraph) or `bullet` (a grey italic bullet); both are prompts: text
-the template shows and an author is meant to replace. Headings and prompts are English in the
-app too (only the picker's label and description are translated, in the browser), so there is no
-per-language data here.
+the template shows and an author is meant to replace. The default template's headings and prompts also
+carry translations (MIP-1894): a section's `heading_i18n` and an item's `i18n` map a locale code
+(ja, zh, es, fr, hi, ar) to the text the app shows in that language, and the browser builds the
+default body from them. The English `heading` / `text` stay the source and the agent's vocabulary;
+every locale's prompt counts as a prompt (`PROMPT_TEXTS`), because a task quick-created in
+Japanese is saved with the Japanese hints.
 
 DRIFT: the two copies must stay equal. Each repo pins the value of `CANONICAL_SHA256` below (the same
 value) in a test; that value is the hash of the file's parsed content, so formatting differences between the
@@ -35,6 +38,15 @@ def canonical_sha256(data: Any) -> str:
     reformat of the file (indent, line breaks) is not a change."""
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _check_i18n(tid: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict) or not all(
+        isinstance(k, str) and k and isinstance(v, str) and v.strip() for k, v in value.items()
+    ):
+        raise ValueError(f"builtin_task_templates.json: {tid}: bad translations {value!r}")
 
 
 def _validated(data: Any) -> list[dict[str, Any]]:
@@ -61,6 +73,8 @@ def _validated(data: Any) -> list[dict[str, Any]]:
                 text = item.get("text")
                 if item.get("kind") not in _KINDS or not isinstance(text, str) or not text.strip():
                     raise ValueError(f"builtin_task_templates.json: {tid}: bad item {item!r}")
+                _check_i18n(tid, item.get("i18n"))
+            _check_i18n(tid, section.get("heading_i18n"))
     return templates
 
 
@@ -76,7 +90,12 @@ BUILT_IN_TEMPLATES: dict[str, tuple[str, tuple[str, ...]]] = {
     tpl["id"]: (tpl["label"], tuple(s["heading"] for s in tpl["sections"])) for tpl in _TEMPLATES
 }
 
-#: The text of every grey prompt in the four templates (see `template_prompts`).
+#: The text of every grey prompt in the four templates, English and every translation
+#: (see `template_prompts`).
 PROMPT_TEXTS: frozenset[str] = frozenset(
-    item["text"] for tpl in _TEMPLATES for s in tpl["sections"] for item in s.get("items", [])
+    text
+    for tpl in _TEMPLATES
+    for s in tpl["sections"]
+    for item in s.get("items", [])
+    for text in (item["text"], *item.get("i18n", {}).values())
 )

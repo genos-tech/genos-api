@@ -10,19 +10,19 @@ import json
 from datetime import date
 from unittest import mock
 
-from django.db import DatabaseError
+from django.db import DatabaseError, IntegrityError
 from django.test import TestCase
 
 from origin.middleware.current_user import clear_current_user, set_current_user
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
-from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers, ProjectTags
 from origin.models.project.workspace_change_models import WorkspaceChange
 from origin.models.task.sprint_models import Sprint
 from origin.services import retention
 from origin.services.account_export import build_export
-from origin.services.project_catalog import add_project_tag, create_label
+from origin.services.project_catalog import CatalogRefused, add_project_tag, create_label
 from origin.services.project_manage import set_project_code, set_project_name
 from origin.services.sprint_manage import create_sprint, delete_sprint, update_sprint
 from origin.services.workspace_changes import record
@@ -300,6 +300,81 @@ class FailureRuleTests(ChangeBase):
                 )
         self.assertFalse(Sprint.objects.filter(name="Lost").exists())
         self.assertEqual(_rows(), [])
+
+
+class TagChangeLogTests(ChangeBase):
+    """MIP-1889: the tag paths and their change-log rows."""
+
+    URL = "/api/v2/project/tag/"
+
+    def _post(self, name, **extra):
+        body = {
+            "team_id": self.team.team_id,
+            "project_id": self.project.project_id,
+            "tag_name": name,
+            "tag_color": "#ff0000",
+            "tag_text_color": "#ffffff",
+            **extra,
+        }
+        return self.client.post(self.URL, body, format="json")
+
+    def test_an_audit_failure_is_not_reported_as_a_duplicate_tag(self):
+        with mock.patch(
+            "origin.services.project_catalog.record_workspace_change",
+            side_effect=IntegrityError("audit row"),
+        ):
+            with self.assertRaises(IntegrityError):
+                add_project_tag(self.project, "bug")
+        self.assertFalse(ProjectTags.objects.filter(project=self.project).exists())
+
+    def test_a_real_duplicate_is_still_a_409(self):
+        add_project_tag(self.project, "bug")
+        with self.assertRaises(CatalogRefused):
+            add_project_tag(self.project, "BUG")
+
+    def test_a_failing_audit_row_leaves_no_tag_over_rest(self):
+        self.authenticate()
+        with mock.patch(
+            "origin.views.project.prj_views.record_workspace_change",
+            side_effect=DatabaseError("boom"),
+        ):
+            with self.assertRaises(DatabaseError):
+                self._post("lost")
+        self.assertFalse(ProjectTags.objects.filter(tag_name="lost").exists())
+
+    def test_a_tag_added_after_a_delete_gets_a_new_entity_id(self):
+        self.authenticate()
+        self.assertEqual(self._post("a").status_code, 201)
+        self.assertEqual(self._post("b").status_code, 201)
+        self.client.generic(
+            "DELETE",
+            self.URL,
+            json.dumps({"project_id": self.project.project_id, "tag_name": "a"}),
+            content_type="application/json",
+        )
+        self.assertEqual(self._post("c").status_code, 201)
+        ids = [r.entity_id for r in _rows(entity_kind="tag", action="create")]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+
+    def test_a_tag_and_its_row_are_filed_under_the_projects_team(self):
+        self.authenticate()
+        self.assertEqual(self._post("mine").status_code, 201)
+        tag = ProjectTags.objects.get(tag_name="mine")
+        self.assertEqual(tag.team_id, self.project.team_id)
+        self.assertEqual(self.only_row().team_id, self.project.team_id)
+
+    def test_a_legacy_tag_without_a_team_can_still_be_renamed_and_deleted(self):
+        self.authenticate()
+        ProjectTags.objects.create(
+            team=None, project=self.project, tag_id=1, tag_name="old", tag_color="#fff"
+        )
+        res = self.client.put(
+            self.URL,
+            {"project_id": self.project.project_id, "old_tag_name": "old", "tag_name": "new"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, getattr(res, "data", ""))
+        self.assertEqual(_rows(entity_kind="tag", action="update")[0].team_id, self.team.team_id)
 
 
 class DeletedActorTests(ChangeBase):

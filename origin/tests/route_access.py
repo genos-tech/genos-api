@@ -217,6 +217,13 @@ REGISTRY = {
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
     ),
+    # views.common.briefing_today_views (MIP-1005, MIP-1696): the member comes from the token, the
+    # team is checked with require_team_member_or_response, and the briefing reads only what that
+    # member may open (LabelAccess, readable_chats_qs, live project membership)
+    "origin.views.common.briefing_today_views.BriefingTodayView": self_only(
+        "the caller's own briefing (a ToolContext built from request.user; the briefing's own "
+        "access rules decide what is listed)"
+    ),
     # views.common.memory_views (MIP-1088): the member comes from the token, the team is checked
     # with require_team_member_or_response, and every query in the services filters on the
     # member (and team); no call takes a user id
@@ -271,6 +278,9 @@ REGISTRY = {
     ),
     "origin.views.common.auth_views.DemoSignInView": public(
         "creates a throwaway demo tenant; DemoSignInThrottle per IP"
+    ),
+    "origin.views.common.auth_views.DemoWorkspaceView": self_only(
+        "the caller's own demo team only: TeamMaster filtered by owner=request.user, is_demo"
     ),
     "origin.views.common.auth_views.LogoutView": public(
         "clears the caller's own auth cookies; must work with an expired access token"
@@ -480,6 +490,10 @@ REGISTRY = {
     "origin.views.common.team_views.TeamMasterView": checked("can_manage"),
     "origin.views.common.team_views.RemoveTeamMemberView": checked("can_remove_member"),
     "origin.views.common.sample_data_views.SampleDataView": checked("_require_team_owner"),
+    "origin.views.common.slack_import_views.SlackImportPreviewView": checked("_team_for_import"),
+    "origin.views.common.slack_import_views.SlackImportRunsView": checked("_team_for_import"),
+    "origin.views.common.slack_import_views.SlackImportUndoView": checked("_team_for_import"),
+    "origin.views.common.slack_import_views.SlackImportView": checked("_team_for_import"),
     "origin.views.common.team_views.TeamInviteListView": checked("can_manage"),
     "origin.views.common.team_views.TeamInviteRevokeView": checked("can_manage"),
     "origin.views.common.team_views.TeamMemberRoleView": checked("can_manage"),

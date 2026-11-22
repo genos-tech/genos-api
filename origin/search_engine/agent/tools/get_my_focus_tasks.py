@@ -178,6 +178,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "project_id": t.project_id,
             "project_name": t.project.project_name if t.project else None,
         }
+        if t.project and t.project.archived_at:  # MIP-1852: only when true
+            row["archived"] = True
         if delivery in ("open_pr", "merged_pr"):
             row["prs"] = prs_by_task.get(t.task_id, [])
         tasks.append(row)

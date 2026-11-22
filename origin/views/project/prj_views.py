@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, Max, OuterRef, Q
 from django.db.models.functions import Lower
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -14,6 +14,7 @@ from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMemb
 from origin.models.project.prj_models import *
 from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
+from origin.services.archive import archived_project_response
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
 from origin.services.hidden_scope import (
@@ -504,6 +505,10 @@ class ProjectMasterView(AuthenticatedAPIView):
             if not is_project_member(target_project.project_id, request_user_id):
                 raise ProjectMaster.DoesNotExist
             if target_project.owner and str(request_user_id) == str(target_project.owner.id):
+                # An archive is read-only and deleting is a content change: unarchive first
+                # (MIP-1693). Members leaving or being removed stay allowed elsewhere.
+                if target_project.archived_at is not None:
+                    return archived_project_response(target_project.project_id)
                 # Why the PM channel is soft-deleted and released first is in the service.
                 delete_project(target_project)
                 return Response(
@@ -909,10 +914,13 @@ class LeaveProjectView(AuthenticatedAPIView):
             team=team_id, project=project_id, attendee=attendee_id
         ).delete()
         if deleted == 0:
-            return Response(
-                {"error": "You are not a member of this project."},
-                status=status.HTTP_404_NOT_FOUND,
+            # A hidden project reads as a missing one to a non-member (MIP-1947).
+            message = (
+                "Project not found."
+                if project.is_hidden
+                else "You are not a member of this project."
             )
+            return Response({"error": message}, status=status.HTTP_404_NOT_FOUND)
         _record_project_member(
             SecurityAction.MEMBER_REMOVED, request, project, attendee_id, via="left"
         )
@@ -1029,6 +1037,15 @@ class ProjectMembersView(AuthenticatedAPIView):
         return Response({"project_members": project_members}, status=status.HTTP_200_OK)
 
 
+def _project_team_id(project_id):
+    """The project's own team: tag rows can carry NULL or another team, the change log must not."""
+    return (
+        ProjectMaster.objects.filter(project_id=project_id)
+        .values_list("team_id", flat=True)
+        .first()
+    )
+
+
 class ProjectTagsView(AuthenticatedAPIView):
     """Task-tag vocabulary for one project.
 
@@ -1046,28 +1063,39 @@ class ProjectTagsView(AuthenticatedAPIView):
         # The rest were `request.data[...]`: a KeyError (500) when missing.
         if res := require_fields(body, "team_id", "tag_name", "tag_color", "tag_text_color"):
             return res
-        tag_count = ProjectTags.objects.filter(project=body["project_id"]).count()
-
-        data = {
-            "team": body["team_id"],
-            "project": body["project_id"],
-            "tag_id": tag_count + 1,
-            "tag_name": body["tag_name"],
-            "tag_color": body["tag_color"],
-            "tag_text_color": body["tag_text_color"],
-        }
-
-        serializer = ProjectTagsSerializer(data=data)
-        if serializer.is_valid():
-            tag = serializer.save()
-            record_workspace_change(
-                team_id=tag.team_id,
-                project_id=tag.project_id,
-                entity_kind="tag",
-                entity_id=tag.tag_id,
-                action="create",
-            )
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # The tag belongs to the project's own team, whatever `team_id` the body names: it
+        # would otherwise file the tag, and its change-log row, under another team (MIP-1889).
+        project_team_id = (
+            ProjectMaster.objects.filter(project_id=body["project_id"])
+            .values_list("team_id", flat=True)
+            .first()
+        )
+        with transaction.atomic():
+            # The highest id plus one: a count repeats an id once a tag was deleted, and the
+            # change log would then show two tags as one entity.
+            highest = ProjectTags.objects.filter(project=body["project_id"]).aggregate(
+                m=Max("tag_id")
+            )["m"]
+            data = {
+                "team": project_team_id,
+                "project": body["project_id"],
+                "tag_id": (highest or 0) + 1,
+                "tag_name": body["tag_name"],
+                "tag_color": body["tag_color"],
+                "tag_text_color": body["tag_text_color"],
+            }
+            serializer = ProjectTagsSerializer(data=data)
+            if serializer.is_valid():
+                tag = serializer.save()
+                # Same transaction as the tag: a failing audit row leaves no tag behind.
+                record_workspace_change(
+                    team_id=project_team_id,
+                    project_id=tag.project_id,
+                    entity_kind="tag",
+                    entity_id=tag.tag_id,
+                    action="create",
+                )
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
         return Response(error, status=status.HTTP_400_BAD_REQUEST)
@@ -1148,7 +1176,7 @@ class ProjectTagsView(AuthenticatedAPIView):
             tag.save()
             if changed_tag_fields:
                 record_workspace_change(
-                    team_id=tag.team_id,
+                    team_id=_project_team_id(tag.project_id),
                     project_id=tag.project_id,
                     entity_kind="tag",
                     entity_id=tag.tag_id,
@@ -1236,7 +1264,7 @@ class ProjectTagsView(AuthenticatedAPIView):
         with transaction.atomic():
             tag.delete()
             record_workspace_change(
-                team_id=tag.team_id,
+                team_id=_project_team_id(tag.project_id),
                 project_id=tag.project_id,
                 entity_kind="tag",
                 entity_id=tag.tag_id,
