@@ -302,3 +302,15 @@ class JapaneseCopyMIP1712Tests(BaseAPITestCase):
         text = json.dumps(_SETUP_JA, ensure_ascii=False)
         self.assertIn("メンバーを招待する", text)
         self.assertNotIn("「招待」を選び", text)
+
+
+class EnglishInvitePathTests(BaseAPITestCase):
+    """The English guide and starter task name the real invite path (MIP-1712)."""
+
+    def test_english_texts_name_the_real_invite_button(self):
+        from origin.services.guide_company_notes import _SETUP_EN
+
+        text = repr(_SETUP_EN) + repr(STARTER_BLUEPRINT)
+        self.assertIn("Show Team Profile", text)
+        self.assertIn("Invite members", text)
+        self.assertNotIn("choose Invite", text)

@@ -238,7 +238,7 @@ _SETUP_EN = _body(
     (
         "6. Invite people",
         [
-            "Open the team menu (your avatar, top left) and choose Invite. Then add each "
+            "Open the Team menu (top left), choose Show Team Profile, then click Invite members. Then add each "
             "person to their department's mention group, folder, chat and projects. Guests "
             "are invited to a single project.",
         ],
