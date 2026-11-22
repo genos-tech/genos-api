@@ -108,6 +108,7 @@ from origin.views.common.slack_import_views import (
     SlackImportUndoView,
     SlackImportView,
 )
+from origin.views.common.team_agent_use_views import TeamAgentUseView
 from origin.views.common.team_connection_views import (
     CrossTeamNoticeView,
     ExternalShareObjectView,
@@ -524,6 +525,11 @@ urlpatterns = [
         "api/v2/team/security-events/",
         TeamSecurityEventListView.as_view(),
         name="team_security_events",
+    ),
+    path(
+        "api/v2/team/agent-use/",
+        TeamAgentUseView.as_view(),
+        name="team_agent_use",
     ),
     path(
         "api/v2/team/storage/",

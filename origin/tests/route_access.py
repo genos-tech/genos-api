@@ -451,6 +451,7 @@ REGISTRY = {
         "the caller's own account; nothing in the request names whose rows to read"
     ),
     "origin.views.common.security_event_views.TeamSecurityEventListView": checked("_owned_team"),
+    "origin.views.common.team_agent_use_views.TeamAgentUseView": checked("_owned_team"),
     "origin.views.common.team_storage_views.TeamStorageUsageView": checked("_owned_team"),
     # views.common.team_connection_views
     "origin.views.common.team_connection_views.CrossTeamNoticeView": checked("is_team_member"),
