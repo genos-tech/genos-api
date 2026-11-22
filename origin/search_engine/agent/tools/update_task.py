@@ -825,10 +825,7 @@ UPDATE_TASK = Tool(
             },
             "reason": {
                 "type": "STRING",
-                "description": (
-                    "Why `status` changes, posted as a comment. Optional, but without it the "
-                    "reply suggests adding one."
-                ),
+                "description": ("Why `status` changes; posted as a comment."),
             },
             "priority": {
                 "type": "STRING",

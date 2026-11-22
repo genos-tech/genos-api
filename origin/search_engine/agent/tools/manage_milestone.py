@@ -944,10 +944,7 @@ MANAGE_MILESTONE = Tool(
             },
             "reason": {
                 "type": "STRING",
-                "description": (
-                    "'update': why `status` changes, posted as a comment. Optional, but "
-                    "without it the reply suggests adding one."
-                ),
+                "description": ("'update': why `status` changes; posted as a comment."),
             },
             "tags": {
                 "type": "ARRAY",
