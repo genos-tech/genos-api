@@ -112,6 +112,11 @@ class LimitsBase(McpBase):
         self.addCleanup(ctx.disable)
         quota.invalidate_effective_tier([str(self.user.id), str(self.user2.id)])
 
+    def rig_none(self, tier=None):
+        """The plan has no MCP limit at all (the shape of Enterprise, and of the whole table before
+        MIP-1614): the 'nothing changes' tests run against it."""
+        self.rig(tier, **dict.fromkeys(limits.CAPABILITY_KEYS))
+
     def stub(self, result=OK):
         patcher = mock.patch.object(tools, "call", return_value=result)
         spy = patcher.start()
@@ -183,24 +188,53 @@ class TestTheTable(McpBase):
             self.assertEqual(set(proposed[tier].values()), {None}, tier)
         self.assertEqual(set(proposed), {"free", "core", "pro", "max", "enterprise"})
 
-    def test_heavy_calls_weigh_five_and_are_the_four_ken_named(self):
-        self.assertEqual(limits.HEAVY_WEIGHT, 5)
-        self.assertEqual(
-            limits.HEAVY_TOOLS,
-            {"get_my_briefing", "get_timeline", "search_workspace", "get_item_line"},
-        )
-        self.assertEqual(limits.weight_of("get_timeline"), 5)
+    def test_no_call_is_heavy_every_call_weighs_one(self):
+        # Ken, 2026-11-22 (MIP-1214 "Decision: no MCP heavy-call weights").
+        self.assertEqual(limits.HEAVY_WEIGHT, 1)
+        self.assertEqual(limits.HEAVY_TOOLS, frozenset())
+        for name in ("get_my_briefing", "get_timeline", "search_workspace", "get_item_line"):
+            self.assertEqual(limits.weight_of(name), 1, name)
         self.assertEqual(limits.weight_of("get_task"), 1)
         self.assertEqual(limits.weight_of(None), 1)
         self.assertEqual(limits.weight_of(["get_timeline"]), 1)
 
-    def test_every_tier_carries_every_key_and_all_of_them_are_dark(self):
+    def test_the_live_table_is_the_adopted_numbers(self):
+        """MIP-1614: the LIVE `TIER_QUOTAS` carry the numbers Ken adopted (2026-11-22): Core, Pro
+        and Max as proposed; Free (no MCP) and Enterprise (unlimited) carry None throughout."""
         table = settings.SEARCH_ENGINE["TIER_QUOTAS"]
         self.assertEqual(set(table), set(limits.MCP_TIER_LIMITS_PROPOSED))
         for tier, row in table.items():
             for key in limits.CAPABILITY_KEYS:
                 self.assertIn(key, row, f"{tier} lacks {key}")
-                self.assertIsNone(row[key], f"{tier}.{key} must ship None (unlimited)")
+                self.assertEqual(
+                    row[key], limits.MCP_TIER_LIMITS_PROPOSED[tier][key], f"{tier}.{key}"
+                )
+        for tier in ("free", "enterprise"):
+            self.assertEqual({table[tier][k] for k in limits.CAPABILITY_KEYS}, {None}, tier)
+        self.assertEqual(
+            [table[t]["mcp_calls_per_min"] for t in ("core", "pro", "max")], [60, 120, 240]
+        )
+        self.assertEqual(
+            [table[t]["mcp_calls_per_day"] for t in ("core", "pro", "max")],
+            [3000, 10000, 30000],
+        )
+        self.assertEqual(
+            [table[t]["mcp_max_api_keys"] for t in ("core", "pro", "max")], [3, 10, 25]
+        )
+        self.assertEqual(
+            [table[t]["mcp_max_connections"] for t in ("core", "pro", "max")], [3, 10, 25]
+        )
+        self.assertEqual(
+            [table[t]["mcp_bulk_max_tasks"] for t in ("core", "pro", "max")], [10, 30, 30]
+        )
+        self.assertEqual(
+            [table[t]["mcp_bulk_max_plan_tasks"] for t in ("core", "pro", "max")], [10, 20, 20]
+        )
+        self.assertEqual(
+            [table[t]["mcp_list_page_max"] for t in ("core", "pro", "max")], [50, 100, 100]
+        )
+        # No separate search cap exists (the decision: searches spend AI credits).
+        self.assertFalse([k for k in table["core"] if "search" in k and k.startswith("mcp_")])
         for tier, row in limits.MCP_TIER_LIMITS_PROPOSED.items():
             self.assertEqual(set(row), set(limits.CAPABILITY_KEYS), tier)
 
@@ -303,6 +337,7 @@ class TestDarkMeansNothing(LimitsBase):
 
     def test_off_and_enforce_with_every_live_value_none_answer_identically(self):
         """The twin: same requests, same bytes, same number of queries, no counter."""
+        self.rig_none()
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
@@ -335,7 +370,8 @@ class TestDarkMeansNothing(LimitsBase):
 class TestDarkMeansNothingTwo(LimitsBase):
     mode = "enforce"
 
-    def test_enforce_with_the_table_as_shipped_changes_no_argument(self):
+    def test_enforce_on_a_plan_with_no_limit_changes_no_argument(self):
+        self.rig_none()
         spy = self.stub()
         for name, args in [
             ("list_tasks", {"limit": 500}),
@@ -381,7 +417,7 @@ class TestPerMinute(LimitsBase):
         message = body["error"]["message"]
         self.assertIn("3 per minute", message)
         self.assertIn(f"Wait {wait} second", message)
-        self.assertIn("count as 5", message)
+        self.assertNotIn("Heavy calls", message)
 
     def test_a_refused_call_is_given_back_so_used_does_not_grow(self):
         self.stub()
@@ -391,24 +427,23 @@ class TestPerMinute(LimitsBase):
         used = {self.call_ok().json()["error"]["data"]["used"] for _ in range(4)}
         self.assertEqual(used, {2})
 
-    def test_heavy_calls_weigh_five_against_the_minute(self):
+    def test_heavy_looking_calls_weigh_one_against_the_minute(self):
         spy = self.stub()
         self.rig(mcp_calls_per_min=6)
-        first = self._call("get_timeline", {"anchor_type": "task", "anchor_id": "WRD-7"})
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(self.call_ok().status_code, 200)  # 5 + 1 = 6
+        for _ in range(6):
+            res = self._call("get_timeline", {"anchor_type": "task", "anchor_id": "WRD-7"})
+            self.assertEqual(res.status_code, 200)
         over = self.call_ok()
         self.assertEqual(over.status_code, 429)
         self.assertEqual(over.json()["error"]["data"]["used"], 6)
-        self.assertEqual(spy.call_count, 2)
+        self.assertEqual(spy.call_count, 6)
 
-    def test_one_heavy_call_is_refused_alone_when_the_limit_is_under_its_weight(self):
+    def test_a_search_and_a_briefing_each_cost_one_not_five(self):
         self.stub()
-        self.rig(mcp_calls_per_min=4)
-        for heavy in ("get_my_briefing", "get_timeline", "search_workspace", "get_item_line"):
-            res = self._call(heavy, {})
-            self.assertEqual(res.status_code, 429, heavy)
-        self.assertEqual(self.call_ok().status_code, 200)
+        self.rig(mcp_calls_per_min=2)
+        for heavy in ("search_workspace", "get_my_briefing"):
+            self.assertEqual(self._call(heavy, {}).status_code, 200, heavy)
+        self.assertEqual(self._call("get_item_line", {}).status_code, 429)
 
     def test_it_is_per_credential_not_per_person(self):
         self.stub()
@@ -471,15 +506,14 @@ class TestPerDay(LimitsBase):
         self.assertIn("00:00 UTC", res.json()["error"]["message"])
         self.assertIn("3 calls a day", res.json()["error"]["message"])
 
-    def test_heavy_calls_weigh_five_against_the_day(self):
+    def test_heavy_looking_calls_weigh_one_against_the_day(self):
         self.stub()
-        self.rig(mcp_calls_per_day=7)
-        self._call("get_my_briefing", {})
-        self.assertEqual(self.call_ok().status_code, 200)
-        self.assertEqual(self.call_ok().status_code, 200)
-        over = self._call("get_item_line", {})
+        self.rig(mcp_calls_per_day=3)
+        for heavy in ("get_my_briefing", "get_timeline", "get_item_line"):
+            self.assertEqual(self._call(heavy, {}).status_code, 200, heavy)
+        over = self._call("search_workspace", {})
         self.assertEqual(over.status_code, 429)
-        self.assertEqual(over.json()["error"]["data"]["used"], 7)
+        self.assertEqual(over.json()["error"]["data"]["used"], 3)
 
     def test_one_person_cannot_use_up_another_persons_day(self):
         self.stub()
@@ -627,14 +661,14 @@ class TestShadow(LimitsBase):
             for _ in range(3):
                 self.call_ok()
 
-    def test_shadow_weighs_heavy_calls(self):
-        self.proposed(mcp_calls_per_min=6)
+    def test_shadow_counts_every_call_as_one(self):
+        self.proposed(mcp_calls_per_min=2)
         self.stub()
         with self.assertLogs("origin.services.mcp_tier_limits", "INFO") as logs:
             self._call("get_timeline", {})
             self.call_ok()
             self.call_ok()
-        self.assertTrue(any("used=6" in r.getMessage() for r in logs.records))
+        self.assertTrue(any("used=2" in r.getMessage() for r in logs.records))
 
     def test_shadow_tool_limits_log_and_change_nothing(self):
         self.proposed(mcp_bulk_max_tasks=2, mcp_list_page_max=5)
@@ -1112,6 +1146,7 @@ class TestHistoryOnGetChatThread(McpChatBase):
         return [m["text"] for m in payload["messages"]]
 
     def test_with_the_live_key_none_the_old_message_is_still_there(self):
+        self.rig(mcp_apply_message_retention=None)
         payload = self.read()
         self.assertEqual(len(payload["messages"]), 2)
 
@@ -1207,6 +1242,7 @@ class TestHistoryOnGetChatThread(McpChatBase):
         payload = {"messages": [{"ts": "2000-01-01T00:00:00+00:00"}]}
         with _env(None):
             self.assertIs(hide_old_messages(payload, {}, {}, mock.Mock(user_id="x")), payload)
+        self.rig(mcp_apply_message_retention=None)
         with _env("enforce"):  # live key None: same object back
             self.assertIs(
                 hide_old_messages(payload, {}, {}, mock.Mock(user_id=str(self.user.id))), payload

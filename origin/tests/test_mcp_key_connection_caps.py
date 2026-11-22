@@ -112,7 +112,8 @@ class TestDarkMeansNothing(ApiKeyCaps):
 
 
 class TestEnforceWithNoLiveValue(ApiKeyCaps):
-    def test_enforce_with_the_table_as_shipped_creates_exactly_as_before(self):
+    def test_enforce_on_a_plan_with_no_limit_creates_exactly_as_before(self):
+        self.rig(mcp_max_api_keys=None)
         with mock.patch("origin.views.common.api_key_views._active_key_count") as count:
             for _ in range(5):
                 res = self.create()
@@ -302,6 +303,7 @@ class TestConnectionsDark(ConnectionCaps):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
+        self.rig(mcp_max_connections=None)
         self.connect(1)
         quota.get_effective_tier(str(self.user.id))  # warm the tier cache
         with _env("enforce"), CaptureQueriesContext(connection) as queries:
@@ -310,7 +312,9 @@ class TestConnectionsDark(ConnectionCaps):
                     self.user, self.app
                 )
             )
-        self.assertEqual([q for q in queries.captured_queries if "mcpconnection" in q["sql"].lower()], [])
+        self.assertEqual(
+            [q for q in queries.captured_queries if "mcpconnection" in q["sql"].lower()], []
+        )
 
     def test_off_connects_any_number_and_counts_nothing(self):
         self.rig(mcp_max_connections=0)

@@ -68,6 +68,8 @@ def _transport_message(refusal: limits.Refusal) -> str:
     heavy = (
         f" Heavy calls (a briefing, a timeline, a search, an item's line) count as "
         f"{limits.HEAVY_WEIGHT}."
+        if limits.HEAVY_WEIGHT > 1 and limits.HEAVY_TOOLS
+        else ""
     )
     if refusal.category == limits.CATEGORY[limits.PER_MINUTE]:
         return (

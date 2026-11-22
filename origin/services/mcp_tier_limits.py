@@ -141,11 +141,12 @@ MCP_TIER_LIMITS_PROPOSED: dict[str, dict[str, Any]] = {
     "enterprise": dict.fromkeys(CAPABILITY_KEYS),
 }
 
-# Calls that cost the server (and the person's model) far more than a read of one item: a briefing,
-# a timeline, a workspace search, an item's line. They weigh this much against the per-minute and
-# the per-day counter.
-HEAVY_TOOLS = frozenset({"get_my_briefing", "get_timeline", "search_workspace", "get_item_line"})
-HEAVY_WEIGHT = 5
+# Heavy-call weights are OFF (Ken, 2026-11-22, MIP-1214 "Decision: no MCP heavy-call weights"):
+# every call weighs 1 against the per-minute and per-day counters, and a search spends AI credits
+# instead of a separate cap. The mechanism stays (a tool named in HEAVY_TOOLS weighs HEAVY_WEIGHT)
+# so a later decision is a one-line change; both are neutral today.
+HEAVY_TOOLS: frozenset[str] = frozenset()
+HEAVY_WEIGHT = 1
 
 FALLBACK_TIER = "core"
 _COUNTER_TTL_DAY = 2 * 24 * 3600
