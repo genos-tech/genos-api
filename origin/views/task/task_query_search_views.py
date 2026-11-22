@@ -24,6 +24,8 @@ MAX_LIMIT = 50
 MAX_QUERY_CHARS = 100
 # "WEB-12" / "#web-12": a project code, then the task number.
 _ID_RE = re.compile(r"^#?([A-Za-z][A-Za-z0-9]{1,5})-(\d{1,9})$")
+# "web12" / "web 12": letters, then the number, the way people type it without the hyphen.
+_COMPACT_ID_RE = re.compile(r"^#?([A-Za-z]{2,6})\s?(\d{1,9})$")
 # "12" / "#12": a bare task number.
 _NUMBER_RE = re.compile(r"^#?(\d{1,9})$")
 
@@ -67,6 +69,8 @@ class SearchTasksView(AuthenticatedAPIView):
         raw_statuses = request.GET.get("statuses")
         statuses = [STATUS_MAP.get(s.strip().lower()) for s in (raw_statuses or "").split(",")]
         statuses = [s for s in statuses if s and s != "Deleted"]
+        if raw_statuses and not statuses:
+            return Response({"error": "statuses has no usable value."}, status=400)
         tasks = TaskMaster.objects.filter(scope, is_init_task=False, is_deleted=False).exclude(
             status="Deleted"
         )
@@ -77,7 +81,7 @@ class SearchTasksView(AuthenticatedAPIView):
         if query:
             match = Q(title__icontains=query)
             id_match = None
-            if m := _ID_RE.match(query):
+            if m := (_ID_RE.match(query) or _COMPACT_ID_RE.match(query)):
                 id_match = Q(project__code__iexact=m.group(1), project_task_number=int(m.group(2)))
             elif m := _NUMBER_RE.match(query):
                 id_match = Q(project_task_number=int(m.group(1)))
@@ -90,7 +94,7 @@ class SearchTasksView(AuthenticatedAPIView):
         rows = list(
             tasks.annotate(_rank=rank)
             .select_related("project", "assignee")
-            .order_by("_rank", "-ts_updated_at", "-task_id")[offset : offset + limit + 1]
+            .order_by("_rank", "-task_id")[offset : offset + limit + 1]
         )
         has_more = len(rows) > limit
         return Response(

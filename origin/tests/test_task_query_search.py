@@ -74,7 +74,9 @@ class TaskQuerySearchTests(BaseAPITestCase):
         task = self._task("Alpha")
         for spelled in (task.display_id, task.display_id.lower(), f"#{task.display_id}"):
             self.assertIn(task.task_id, self._ids(self._get(q=spelled)), spelled)
-        self.assertIn(task.task_id, self._ids(self._get(q=str(task.project_task_number))))
+        n = task.project_task_number
+        for spelled in (f"web{n}", f"WEB {n}", str(n)):
+            self.assertIn(task.task_id, self._ids(self._get(q=spelled)), spelled)
 
     def test_an_id_match_comes_before_a_title_match(self):
         title_hit = self._task("see WEB-1 for details")
@@ -112,6 +114,10 @@ class TaskQuerySearchTests(BaseAPITestCase):
         self._task("b open", project=other)
         res = self._get(project_id=self.project.project_id, statuses="open,wip", limit=5)
         self.assertEqual(self._ids(res), [a.task_id])
+
+    def test_statuses_with_no_usable_value_is_a_400(self):
+        for bad in ("deleted", "nope", "deleted,nope"):
+            self.assertEqual(self._get(q="x", statuses=bad).status_code, 400, bad)
 
     def test_a_project_the_caller_is_not_in_is_a_404(self):
         owner = User.objects.create_user(username="own", email="own@example.com", password="x")
