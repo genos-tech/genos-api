@@ -629,6 +629,7 @@ REGISTRY = {
     ),
     "origin.views.project.archive_views.GroupChatArchiveView": checked("_owned_group_chat"),
     "origin.views.project.archive_views.GroupChatRestoreView": checked("_owned_group_chat"),
+    "origin.views.project.archive_views.GroupChatChangesView": checked("_member_group_chat"),
     "origin.views.project.prj_views.ProjectMasterView": checked(
         "require_project_member_or_response",
         "require_team_member_or_response",

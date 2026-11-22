@@ -17,6 +17,7 @@ from origin.services.archive import (
     restore_group_chat,
     restore_project,
 )
+from origin.services.workspace_changes import for_channel
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import is_project_member
 
@@ -72,6 +73,17 @@ class ProjectRestoreView(AuthenticatedAPIView):
         )
 
 
+def _member_group_chat(request, channel_id):
+    channel = Channel.objects.filter(id=channel_id, is_deleted=False).first()
+    if (
+        channel is None
+        or channel.kind != ChannelKind.GM
+        or not ChannelMember.objects.filter(channel=channel, user=request.user).exists()
+    ):
+        return None
+    return channel
+
+
 def _owned_group_chat(request, channel_id):
     channel = Channel.objects.filter(id=channel_id, is_deleted=False).first()
     is_member = (
@@ -110,3 +122,23 @@ class GroupChatRestoreView(AuthenticatedAPIView):
         if channel.archived_at is not None:
             restore_group_chat(channel, request=request)
         return Response({"id": str(channel.id), "archived": False}, status=status.HTTP_200_OK)
+
+
+class GroupChatChangesView(AuthenticatedAPIView):
+    """GET /api/v3/channels/{id}/changes/ — who archived or restored a group chat (MIP-1959).
+
+    Members of the chat only; a stranger gets the same 404 as a missing chat."""
+
+    def get(self, request, channel_id):
+        channel = _member_group_chat(request, channel_id)
+        if channel is None:
+            return Response({"error": "Group chat not found."}, status=status.HTTP_404_NOT_FOUND)
+        before = request.GET.get("before")
+        try:
+            before_id = int(before) if before else None
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "before must be a change id."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        rows = for_channel(channel.id, channel.team_id, before=before_id)
+        return Response({"changes": rows}, status=status.HTTP_200_OK)
