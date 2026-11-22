@@ -1,7 +1,8 @@
 """`GET /api/v2/agent/work/?team_id=&days=&project_id=&agent=&user_id=&kind=&limit=&cursor=` (MIP-1613).
 
 What the AI apps did in one team, for the Agent Activity tab: totals by agent, who used which agent,
-the work by project, the decisions recorded, and the viewer's connected apps. The rules are in
+the work by project, the decisions recorded, the viewer's connected apps and the viewer's own agent
+sessions (`sessions`, from the call log; `days`, `agent` and `user_id` narrow it). The rules are in
 `services/agent_work`. A viewer outside the team gets the sibling endpoints' 404.
 
 Query: `days` 1 to 31 (default 7); `agent` one of claude, chatgpt, api_key, other_app, person;

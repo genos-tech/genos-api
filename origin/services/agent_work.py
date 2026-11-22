@@ -10,6 +10,9 @@ Four sources, each with its own access rule, merged into one answer:
   `note_scope.readable_note_rows`, the one batch rule the timeline uses.
 * **decisions**: notes titled "Decision: ..." (personal and task notes) the viewer may open.
 * **connections**: the viewer's own live connected apps (family and last use).
+* **sessions** (MIP-2008): the viewer's own agent runs, summed from the agent call log
+  (`services/agent_sessions`). Not one of the shared sources: a call row is private to the person,
+  so this block never holds a teammate's session and is empty while the log is switched off.
 
 **Who an agent is.** A row's agent is read through `via_for_viewer`: an API key is `api_key` for
 everyone; a connected Claude or ChatGPT is its family for everyone; any other connected app is
@@ -47,6 +50,7 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_models import TaskComments, TaskMaster
 from origin.search_engine.agent.tools.base import ToolContext
+from origin.services import agent_sessions
 from origin.services.mcp_client_family import APP_FAMILIES, app_family
 from origin.services.note_scope import readable_note_rows
 from origin.services.plain_text import body_text
@@ -380,6 +384,11 @@ def build(*, viewer_id: Any, team_id: str, f: Filters, offset: int, limit: int, 
         "groups": groups,
         "decisions": decisions,
         "connections": _connections(viewer_id, team_id),
+        # The viewer's OWN agent sessions from the call log (MIP-2008, D3). Narrowed by the window,
+        # `agent` and `user_id` only: a call row names no project and no kind of change.
+        "sessions": agent_sessions.build(
+            viewer_id=viewer_id, team_id=team_id, since=since, agent=f.agent, user_id=f.user_id
+        ),
         "next_cursor": str(offset + limit) if has_more else None,
     }
 

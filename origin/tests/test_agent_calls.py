@@ -592,12 +592,16 @@ class TestReviewFindings(LogBase):
 
     def test_with_two_open_read_rows_only_the_newest_is_bumped(self):
         # What two identical reads sent in parallel can leave behind.
+        credential_id = str(ApiKey.objects.latest("ts_created_at").id)
+        # Reads collapse inside one run (MIP-2008): the leftovers belong to the run the calls get.
+        run_id = agent_calls._run_id("api_key", credential_id)  # noqa: SLF001
         for _ in range(2):
             AgentCall.objects.create(
                 user=self.user,
                 team=self.team,
                 credential_kind="api_key",
-                credential_id=str(ApiKey.objects.latest("ts_created_at").id),
+                credential_id=credential_id,
+                run_id=run_id,
                 tool="get_task",
                 op="read",
                 targets=[{"type": "task", "id": str(self.task.task_id)}],
