@@ -13,7 +13,7 @@ fails when a new place appears that is not listed, so the question is asked of e
   * the Genos digest (item type 6, `agent_digest`): AI. Source: the member's `digest_enabled`;
   * a scheduled report (item type 10, `schedule_delivery`): AI only when its job says
     `uses_ai` (of the built-in jobs only "What to do today", the Morning plan, does, and only while
-    its `ai_sentences` parameter is not false; a job that uses AI must also report the
+    its `ai_sentences` parameter is true (opt-in, MIP-1969); a job that uses AI must also report the
     request that paid for it). Source: that schedule, AI or not (MIP-1234);
   * everything else (requests to join or approve, ownership claims, project and cross-team
     notices, to-do and message reminders): no AI, nothing to attach.
