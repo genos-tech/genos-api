@@ -102,6 +102,18 @@ from origin.views.common.security_event_views import (
     MySecurityEventListView,
     TeamSecurityEventListView,
 )
+from origin.views.common.skill_views import (
+    SkillCopyView,
+    SkillDetailView,
+    SkillExportView,
+    SkillImportView,
+    SkillInstallView,
+    SkillListView,
+    SkillPublishView,
+    SkillStarView,
+    SkillVersionDetailView,
+    SkillVersionListView,
+)
 from origin.views.common.slack_import_views import (
     SlackImportPreviewView,
     SlackImportRunsView,
@@ -488,6 +500,28 @@ urlpatterns = [
         ScheduleRunView.as_view(),
         name="schedule_run",
     ),
+    path("api/v2/skills/", SkillListView.as_view(), name="skills"),
+    path("api/v2/skills/import/", SkillImportView.as_view(), name="skill_import"),
+    path("api/v2/skills/<uuid:skill_id>/", SkillDetailView.as_view(), name="skill_detail"),
+    path(
+        "api/v2/skills/<uuid:skill_id>/versions/",
+        SkillVersionListView.as_view(),
+        name="skill_versions",
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/versions/<int:version_no>/",
+        SkillVersionDetailView.as_view(),
+        name="skill_version_detail",
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/publish/", SkillPublishView.as_view(), name="skill_publish"
+    ),
+    path("api/v2/skills/<uuid:skill_id>/copy/", SkillCopyView.as_view(), name="skill_copy"),
+    path(
+        "api/v2/skills/<uuid:skill_id>/install/", SkillInstallView.as_view(), name="skill_install"
+    ),
+    path("api/v2/skills/<uuid:skill_id>/star/", SkillStarView.as_view(), name="skill_star"),
+    path("api/v2/skills/<uuid:skill_id>/export/", SkillExportView.as_view(), name="skill_export"),
     path("api/v2/agent/work/", AgentWorkView.as_view(), name="agent_work"),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),
     path(

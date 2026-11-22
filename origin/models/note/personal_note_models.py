@@ -34,6 +34,12 @@ class PersonalNoteFolder(models.Model):
 
     SCOPE_PERSONAL = "personal"
     SCOPE_TEAM = "team"
+    # The hidden per-owner folder a Genos Skill's body note is filed in (MIP-2040). Never listed
+    # in My Notes or Team Notes; the `Skill` row, not the folder, decides who may read the skill.
+    # For the search index the note is its owner's alone: `team_folder_acl_user_ids` answers an
+    # empty set for any scope but "team", so the ACL stamped on its chunks is the owner plus
+    # explicit shares and never the team (pinned by `test_skills_api`).
+    SCOPE_SKILL = "skill"
 
     VISIBILITY_PUBLIC = "public"
     VISIBILITY_PRIVATE = "private"

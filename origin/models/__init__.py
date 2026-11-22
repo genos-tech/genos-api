@@ -35,6 +35,7 @@ from .note.task_note_models import *
 # `unified_models` (Channel / Message / ChannelMember / …).
 from .project.prj_models import *
 from .project.workspace_change_models import *
+from .skills.skill_models import *
 from .task.milestone_models import *
 from .task.sprint_models import *
 from .task.task_activity_models import *
