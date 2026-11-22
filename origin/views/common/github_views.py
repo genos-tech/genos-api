@@ -52,6 +52,7 @@ from origin.services.github_webhooks import (
 )
 from origin.services.oauth.tokens import get_valid_access_token
 from origin.services.pr_merge_comment import post_merge_comments
+from origin.services.pr_needs_you import notify_review_requested_tasks
 from origin.services.pr_references import CLOSES as PR_CLOSES
 from origin.services.pr_references import PART_OF as PR_PART_OF
 from origin.services.pr_references import parse_pr_references
@@ -1025,6 +1026,42 @@ def _comment_on_merged_pr(owner: str, repo: str, pr: dict, head_ref: str, team_i
         return 0
 
 
+def _notify_review_requested(
+    owner: str, repo: str, pr: dict, requested_reviewer, head_ref: str, team_ids: list
+) -> int:
+    """Tell the reviewer GitHub named (Inbox item + one task comment, `origin.services.pr_needs_you`,
+    MIP-2054) about each task this PR is linked to. Never raises: a failure here must not cost the
+    answer GitHub is waiting for. Idempotent per PR, reviewer and task."""
+    try:
+        number = pr.get("number")
+        if number is None or not team_ids or not isinstance(requested_reviewer, dict):
+            return 0
+        pr_url = canonical_pr_url(owner, repo, number)
+        task_ids = set(
+            TaskDelivery.objects.filter(team_id__in=team_ids, pr_url=pr_url).values_list(
+                "task_id", flat=True
+            )
+        )
+        task_ids |= {task.task_id for task in _tasks_for_branch(head_ref, team_ids)}
+        if not task_ids:
+            return 0
+        tasks = TaskMaster.objects.filter(
+            task_id__in=task_ids, team_id__in=team_ids, is_deleted=False
+        ).order_by("task_id")
+        return notify_review_requested_tasks(
+            tasks,
+            requested_reviewer=requested_reviewer,
+            owner=owner.lower(),
+            repo=repo.lower(),
+            number=int(number),
+            title=pr.get("title") or "",
+            pr_url=pr_url,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("GitHub webhook: review-requested notice failed for %s/%s", owner, repo)
+        return 0
+
+
 # Why a registration did not happen, as an HTTP status for the client.
 _REGISTER_FAILURE_STATUS = {
     "not_connected": status.HTTP_400_BAD_REQUEST,
@@ -1243,6 +1280,22 @@ class GithubWebhookView(APIView):
                 # recovered event and a live one close tasks by one rule.
                 applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
                 deliveries, updated = applied["deliveries"], applied["updated"]
+
+            # A reviewer was asked for: tell them through the Inbox and the task (MIP-2054).
+            # Team reviewers (`requested_team`) carry no `requested_reviewer` and are ignored.
+            if action == "review_requested" and ref is not None and not pr.get("draft"):
+                notified = _notify_review_requested(
+                    owner_inv,
+                    repo_inv,
+                    pr,
+                    payload.get("requested_reviewer"),
+                    head_ref,
+                    team_ids,
+                )
+                return Response(
+                    {"detail": "ok", "notified": notified, "deliveries": deliveries},
+                    status=status.HTTP_200_OK,
+                )
 
             # MVP: only the merge transition fires. Other action types
             # (opened, ready_for_review, closed-unmerged, etc.) are

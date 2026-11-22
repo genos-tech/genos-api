@@ -17,7 +17,7 @@ fails when a new place appears that is not listed, so the question is asked of e
     its `ai_sentences` parameter is true (opt-in, MIP-1969); a job that uses AI must also report the
     request that paid for it). Source: that schedule, AI or not (MIP-1234);
   * everything else (requests to join or approve, ownership claims, project and cross-team
-    notices, to-do and message reminders): no AI, nothing to attach.
+    notices, to-do and message reminders, a PR review requested of them): no AI, nothing to attach.
 
 An item that used no AI says nothing about cost: no `ai` key, no "0 credits" noise. A digest or
 a scheduled report says so in words instead: its `aiSource.used_ai` is false (MIP-1234), and the
@@ -89,6 +89,7 @@ PRODUCERS: dict[str, dict[str, Any]] = {
     "origin/services/todo_reminders.py": {"types": (9,), "ai": False},
     "origin/services/message_reminders.py": {"types": (9,), "ai": False},
     "origin/services/first_month_trial_notices.py": {"types": (0,), "ai": False},
+    "origin/services/pr_needs_you.py": {"types": (0,), "ai": False},  # a GitHub webhook, MIP-2054
 }
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)

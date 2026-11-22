@@ -43,3 +43,5 @@ cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:g
 # A made-up marker the MIP-1367 result-log test puts in an argument to prove it never reaches
 # the log (renamed afterwards; the first commit of that branch still carries the old value).
 179956be6292c6f82b6e5f7a233d0223809f1648:origin/tests/test_mcp_result_log.py:generic-api-key:29
+# Fake webhook signing secret the MIP-2054 review-requested test signs its own payloads with.
+6a6e69798e02e54e07048495821cdc059b5e6056:origin/tests/test_pr_review_requested_signal.py:generic-api-key:24
