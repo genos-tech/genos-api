@@ -72,6 +72,12 @@ from origin.services.task_reparent import normalize_task_id as _normalize_task_i
 from origin.services.task_reparent import parent_implied_milestone as _parent_implied_milestone
 from origin.services.task_reparent import payload_contradicts_tree as _payload_contradicts_tree
 from origin.services.task_reparent import reparent_task as _reparent_task
+from origin.services.task_status_scope import (
+    BadStatuses,
+    count_statuses,
+    parse_statuses,
+    scope_rows,
+)
 from origin.services.thread_link import (
     THREAD_NOT_FOUND,
     find_thread_link_conflict,
@@ -1591,13 +1597,19 @@ class ChildTaskView(AuthenticatedAPIView):
             output_field=IntegerField(),
         )
 
+        try:
+            wanted = parse_statuses(request.GET.get("statuses"))
+        except BadStatuses as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        all_children = TaskMaster.objects.filter(
+            is_init_task=False,
+            team=team_id,
+            project_id=project_id,
+            parent_task_id=current_task_id,
+        )
         child_tasks = (
-            TaskMaster.objects.filter(
-                is_init_task=False,
-                team=team_id,
-                project_id=project_id,
-                parent_task_id=current_task_id,
-            )
+            (all_children if wanted is None else all_children.filter(status__in=wanted))
             .annotate(_status_rank=status_order_expr)
             .order_by("_status_rank", "-ts_updated_at")
             .values(
@@ -1665,7 +1677,16 @@ class ChildTaskView(AuthenticatedAPIView):
                 },
             )
 
-        return Response(response_data, status=status.HTTP_200_OK)
+        if wanted is None:
+            return Response(response_data, status=status.HTTP_200_OK)
+        # MIP-1994: only the asked-for statuses are rows; the counts say what is left out.
+        return Response(
+            {
+                "tasks": response_data,
+                "statusCounts": count_statuses(all_children.values_list("status", flat=True)),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 def _serialize_task_attachments(task, *, meta_only: bool, include_ids: bool) -> list[dict]:
@@ -2100,6 +2121,17 @@ class GetTaskView(AuthenticatedAPIView):
             )
 
 
+def _scoped_project_payload(rows, wanted):
+    """The full-list payload: every row (no `statuses`), or the wanted ones plus their ancestors
+    and the milestone rows, with `statusCounts` over the whole list (MIP-1994)."""
+    if wanted is None:
+        return {"tasks": rows}
+    return {
+        "tasks": scope_rows(rows, wanted),
+        "statusCounts": count_statuses(r["status"] for r in rows),
+    }
+
+
 class GetProjectTasksView(AuthenticatedAPIView):
     """One project's whole task list — the rows the table, board and
     dashboard are drawn from.
@@ -2148,6 +2180,11 @@ class GetProjectTasksView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        try:
+            wanted = parse_statuses(request.GET.get("statuses"))
+        except BadStatuses as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         # Snapshot server time BEFORE any query runs. See utils/incremental.py.
         server_time = capture_server_time()
         since, force_full = check_since(request)
@@ -2167,7 +2204,7 @@ class GetProjectTasksView(AuthenticatedAPIView):
             if cached is not None:
                 return Response(
                     build_delta_response(
-                        {"tasks": cached},
+                        _scoped_project_payload(cached, wanted),
                         server_time,
                         force_full_reload=force_full,
                     ),
@@ -2247,14 +2284,23 @@ class GetProjectTasksView(AuthenticatedAPIView):
 
         if since is None:
             set_cached_project_tasks(team_id, project_id, response_data)
-        payload = {"tasks": response_data}
-        if since is not None:
+        if since is None:
+            payload = _scoped_project_payload(response_data, wanted)
+        else:
+            # A delta is never narrowed by status: a task that moved into a hidden status must
+            # still reach the client so it can drop the row (MIP-1994).
+            payload = {"tasks": response_data}
             # Only on the incremental path: a full answer IS the count,
             # and the full path is the cached one — no reason to spend a
             # query there.
-            held = TaskMaster.objects.filter(
+            live = TaskMaster.objects.filter(
                 team=team_id, project=project_id, is_init_task=False, is_deleted=False
-            ).aggregate(count=Count("task_id"), id_sum=Sum("task_id"))
+            )
+            if wanted is not None:
+                # What the client holds is counted by the statuses it asked for.
+                payload["statusCounts"] = count_statuses(live.values_list("status", flat=True))
+                live = live.filter(status__in=wanted)
+            held = live.aggregate(count=Count("task_id"), id_sum=Sum("task_id"))
             payload["totalCount"] = held["count"]
             payload["idSum"] = held["id_sum"] or 0
         return Response(
