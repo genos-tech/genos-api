@@ -90,6 +90,7 @@ from origin.search_engine.quota import (
     increment_usage,
 )
 from origin.services.archive import archived_refusal
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_service import ensure_backing_task
 from origin.services.task_card_post import post_task_created_card
 from origin.services.task_collaborators import sync_task_collaborators
@@ -206,6 +207,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # Tenant guard: project must be in the requesting team.
     if str(getattr(project, "team_id", "") or "") != ctx.team_id:
         # The words of a missing one (MIP-1519), as `milestone_access.load_project` does.
+        raise ToolForbidden(f"Project {project_id} not found.")
+
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947).
         raise ToolForbidden(f"Project {project_id} not found.")
 
     # ACL: requesting user must be a project member. Reuses the same

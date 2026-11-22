@@ -879,10 +879,13 @@ class LeaveProjectView(AuthenticatedAPIView):
             team=team_id, project=project_id, attendee=attendee_id
         ).delete()
         if deleted == 0:
-            return Response(
-                {"error": "You are not a member of this project."},
-                status=status.HTTP_404_NOT_FOUND,
+            # A hidden project reads as a missing one to a non-member (MIP-1947).
+            message = (
+                "Project not found."
+                if project.is_hidden
+                else "You are not a member of this project."
             )
+            return Response({"error": message}, status=status.HTTP_404_NOT_FOUND)
         _record_project_member(
             SecurityAction.MEMBER_REMOVED, request, project, attendee_id, via="left"
         )

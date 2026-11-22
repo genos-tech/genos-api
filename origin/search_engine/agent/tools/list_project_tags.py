@@ -47,6 +47,7 @@ from origin.search_engine.agent.tools.project_field_rules import rules_block, te
 from origin.search_engine.agent.tools.task_custom_fields import field_definitions, project_fields
 from origin.search_engine.agent.tools.task_enums import VALID_EFFORTS, VALID_PRIORITIES
 from origin.search_engine.agent.tools.task_tags import project_tag_catalogue
+from origin.services.hidden_scope import project_hidden_from
 
 # What a saved filter stores for "no restriction on this dimension", and for
 # "tasks with none" (no milestone, no sprint, nobody assigned). The app has
@@ -165,6 +166,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # The words of a missing one, so a guessed id does not say which projects exist in
         # other teams (MIP-1519). Only the class differs: it counts toward the MCP refusal
         # alarm. Same pattern as `milestone_access.load_project`.
+        raise ToolForbidden(f"Project {project_id} not found.")
+
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947); the class still
+        # counts toward the refusal alarm.
         raise ToolForbidden(f"Project {project_id} not found.")
 
     if not ProjectMembers.objects.filter(project_id=project_id, attendee_id=ctx.user_id).exists():
