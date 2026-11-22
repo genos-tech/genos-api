@@ -35,6 +35,7 @@ from origin.views.public.mcp import (
     prompts,
     protocol,
     request_guard,
+    session_probe,
     surfaces,
     tools,
 )
@@ -204,15 +205,27 @@ class McpView(PublicApiView):
         return "Bearer " + ", ".join(params)
 
     def post(self, request):
+        body = None
         try:
             self._check_origin(request)
             body = self._parse(request)
-            return self._dispatch(request, body)
+            response = self._dispatch(request, body)
         except JsonRpcError as exc:
             request_id = None
             if isinstance(getattr(request, "data", None), dict):
                 request_id = request.data.get("id")
-            return Response(exc.as_response(request_id), status=exc.http_status)
+            response = Response(exc.as_response(request_id), status=exc.http_status)
+        if body is not None:
+            # MIP-2010 spike, off unless `MCP_SESSION_ID_PROBE`: adds `Mcp-Session-Id` to a
+            # successful `initialize` and logs whether later calls send it back. Never raises.
+            session_probe.observe(request, body, response)
+        return response
+
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        # GET and DELETE stay 405. With the session probe on, they are logged first: a DELETE is
+        # a client ending its session, which is what the probe wants to see (MIP-2010).
+        session_probe.observe_other_method(request)
+        return super().http_method_not_allowed(request, *args, **kwargs)
 
     # -- transport concerns ------------------------------------------------
 
