@@ -39,6 +39,7 @@ from origin.models.note.common_note_models import (
     NoteFolderPermission,
     NoteFolderTagLink,
 )
+from origin.models.note.note_template_models import NoteTemplate
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.services.external_grants import external_objects_for_member, externally_shared
 from origin.services.group_expansion import expand_groups
@@ -89,7 +90,9 @@ def _effective_visibility(folder_id, folders):
     return None
 
 
-def _folder_dict(folder, *, role_id, folders, owner_names, member_counts, tags_by_folder):
+def _folder_dict(
+    folder, *, role_id, folders, owner_names, member_counts, tags_by_folder, default_templates=None
+):
     """CamelCase wire shape, mirroring the meta endpoints' manual style."""
     return {
         "folderId": folder.folder_id,
@@ -102,12 +105,13 @@ def _folder_dict(folder, *, role_id, folders, owner_names, member_counts, tags_b
         "ownerName": owner_names.get(str(folder.owner_id)),
         "memberCount": member_counts.get(folder.folder_id, 0),
         "tags": tags_by_folder.get(folder.folder_id, []),
+        "defaultTemplateId": (default_templates or {}).get(folder.folder_id),
         "tsCreated": folder.ts_created_at,
         "tsUpdated": folder.ts_updated_at,
     }
 
 
-def _serialize_folders(folder_ids, roles, folders):
+def _serialize_folders(folder_ids, roles, folders, *, include_defaults=True):
     """Batch every per-folder lookup the wire shape needs, so listing the
     space stays a fixed number of queries rather than one per folder."""
     owner_ids = {str(folders[fid].owner_id) for fid in folder_ids if folders[fid].owner_id}
@@ -136,6 +140,18 @@ def _serialize_folders(folder_ids, roles, folders):
             }
         )
 
+    # MIP-1697: the team template a new note in the folder starts from. A shared (external)
+    # folder belongs to another team, whose templates the viewer cannot read: left out.
+    default_templates = (
+        dict(
+            NoteTemplate.objects.filter(default_for_folder_id__in=folder_ids).values_list(
+                "default_for_folder_id", "template_id"
+            )
+        )
+        if include_defaults
+        else {}
+    )
+
     return [
         _folder_dict(
             folders[fid],
@@ -144,6 +160,7 @@ def _serialize_folders(folder_ids, roles, folders):
             owner_names=owner_names,
             member_counts=member_counts,
             tags_by_folder=tags_by_folder,
+            default_templates=default_templates,
         )
         for fid in sorted(folder_ids, key=lambda f: folders[f].name.lower())
     ]
@@ -309,7 +326,9 @@ def _external_folders(user_id, viewing_team_id) -> list:
 
     out = []
     for host_team_id, roots, host_folders, reachable in reach:
-        for row in _serialize_folders(list(reachable.keys()), reachable, host_folders):
+        for row in _serialize_folders(
+            list(reachable.keys()), reachable, host_folders, include_defaults=False
+        ):
             row["isExternal"] = True
             row["hostTeamId"] = host_team_id
             row["hostTeamName"] = host_names.get(host_team_id, "")
@@ -512,9 +531,8 @@ class TeamNoteFolderView(AuthenticatedAPIView):
             # mean two things at once; inherit would let an ancestor
             # silently redefine what was shared. Ending the share is the
             # way out, and it is one action.
-            if (
-                visibility != PersonalNoteFolder.VISIBILITY_PRIVATE
-                and externally_shared(ExternalGrant.ObjectType.NOTE_FOLDER, folder.folder_id)
+            if visibility != PersonalNoteFolder.VISIBILITY_PRIVATE and externally_shared(
+                ExternalGrant.ObjectType.NOTE_FOLDER, folder.folder_id
             ):
                 return Response(
                     {
@@ -623,9 +641,7 @@ class TeamNoteFolderView(AuthenticatedAPIView):
                 team_id=owning_team_id, user_id=request_user_id, folder=folder
             )
         except DeleteRefused as refused:
-            return Response(
-                {"error": refused.message, **refused.extra}, status=refused.status
-            )
+            return Response({"error": refused.message, **refused.extra}, status=refused.status)
 
         return Response(
             {

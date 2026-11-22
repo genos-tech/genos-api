@@ -34,6 +34,7 @@ from origin.models.project.prj_models import (
     ProjectTags,
 )
 from origin.services import change_feed
+from origin.services.archive import ensure_project_writable
 from origin.services.project_list_cache import project_list_keys
 from origin.services.workspace_changes import record as record_workspace_change
 
@@ -110,6 +111,7 @@ def clean_label_color(raw, *, field: str, current: str | None = None) -> str | N
 
 
 def add_project_tag(project: ProjectMaster, raw_name, raw_color=None) -> ProjectTags:
+    ensure_project_writable(project.project_id, CatalogRefused)
     name = raw_name.strip() if isinstance(raw_name, str) else ""
     if not name:
         raise CatalogRefused("tag_name is required.", 400)
@@ -224,6 +226,7 @@ def replace_project_labels(project: ProjectMaster, raw_ids: list):
     Ids that are not labels of the project's own team are dropped, so a caller can't
     attach another team's label by guessing an id. Returns the labels now on the project.
     """
+    ensure_project_writable(project.project_id, CatalogRefused)
     valid_labels = ProjectLabel.objects.filter(team=project.team_id, label_id__in=raw_ids)
     valid_ids = set(valid_labels.values_list("label_id", flat=True))
 
@@ -261,6 +264,7 @@ def _own_team_label_ids(project: ProjectMaster, label_ids: list[int]) -> tuple[s
 def assign_labels(project: ProjectMaster, label_ids: list[int]) -> tuple[list[int], list[int]]:
     """Put `label_ids` on the project, keeping the ones it has. Returns
     `(newly added ids, ids that are not this team's labels)`."""
+    ensure_project_writable(project.project_id, CatalogRefused)
     found, unknown = _own_team_label_ids(project, label_ids)
     if unknown:
         return [], unknown
@@ -282,6 +286,7 @@ def assign_labels(project: ProjectMaster, label_ids: list[int]) -> tuple[list[in
 def unassign_labels(project: ProjectMaster, label_ids: list[int]) -> tuple[list[int], list[int]]:
     """Take `label_ids` off the project. Returns `(ids actually removed, ids that are not
     this team's labels)`. A label the project doesn't carry is not an error."""
+    ensure_project_writable(project.project_id, CatalogRefused)
     found, unknown = _own_team_label_ids(project, label_ids)
     if unknown:
         return [], unknown
