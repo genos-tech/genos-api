@@ -107,8 +107,8 @@ STARTER_BLUEPRINT = {
                 (
                     "🧾 What to do",
                     [
-                        "Open the team menu (your avatar, top left) and choose "
-                        "Invite. Genos is chat + tasks + notes in one place, so it "
+                        "Open the Team menu (top left), choose Show Team Profile, "
+                        "then click Invite members. Genos is chat + tasks + notes in one place, so it "
                         "gets useful the moment a second person is here.",
                     ],
                 ),

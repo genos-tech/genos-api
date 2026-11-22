@@ -676,7 +676,7 @@ GUIDE_NOTES: list[tuple[str, list]] = [
                 [
                     (
                         _B,
-                        "Invite teammates by email from the team menu; they "
+                        "Invite teammates by email (Team menu, Show Team Profile, Invite members); they "
                         "get a link that lands them in your team. People "
                         "can also request to join by team ID, which you "
                         "approve from the Inbox.",
