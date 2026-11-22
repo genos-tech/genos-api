@@ -50,7 +50,6 @@ call gets a fresh run id: the rows are right, the grouping is lost until the cac
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -61,11 +60,11 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.conf import settings
 from django.core.cache import cache
 from django.db import connection, transaction
 from django.db.models import F, QuerySet
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 
 from origin.models.common.agent_call_models import (
     APP_OTHER,
@@ -149,11 +148,11 @@ class RunKeys:
 
 
 def _keyed(*parts: str) -> str:
-    """A 32-character keyed hash (HMAC-SHA256 under a key derived from `SECRET_KEY`): stable for
-    equal input, not reversible, not comparable with a hash from another purpose."""
-    key = hashlib.sha256(f"agent-call-run|{settings.SECRET_KEY}".encode()).digest()
-    data = "\x1f".join(p[:_MAX_RAW_ID] for p in parts).encode("utf-8", "replace")
-    return hmac.new(key, data, hashlib.sha256).hexdigest()[:32]
+    """A 32-character keyed hash (Django's `salted_hmac`, keyed by `SECRET_KEY`): stable for equal
+    input, not reversible, not comparable with a hash from another purpose. It is an identifier for
+    grouping, not a password hash: the inputs are client-chosen conversation and session ids."""
+    value = "\x1f".join(p[:_MAX_RAW_ID] for p in parts)
+    return salted_hmac("agent-call-run", value).hexdigest()[:32]
 
 
 def _name(value: Any) -> str:
