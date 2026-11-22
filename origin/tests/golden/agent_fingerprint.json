@@ -2,35 +2,35 @@
   "about": "sha256 of every surface the in-app agent's model is shown. Re-record with `python manage.py record_agent_goldens` when a change is MEANT to move one, in the same PR, and say so in the PR body.",
   "states": {
     "flags_off": {
-      "all": "e770bb9143f480f260c84c11d9cb7d1df6d22a34c8efef6d21913d0654ca1381",
+      "all": "0c4f2933fe7bdf4a687656fe3909bbacf9bdee6d47e9e8f92e650691f05f2842",
       "surfaces": {
         "prompt.level.act": {
-          "bytes": 27254,
-          "sha256": "1f7efebf6cb8a12d3ab1205ddcbc8ba27c2574437bfce2c8217e67807e02a80c"
+          "bytes": 27488,
+          "sha256": "5a50902c84b68ca8af1f4848cf6a24cd5ed5fe3c7e0d8fd4aaf1dbe301808a41"
         },
         "prompt.level.organize": {
-          "bytes": 27329,
-          "sha256": "6d0675d04061f7bb1fe7c047f83025f04ebbcbb5cd87d8ae2449f76487eeb9d9"
+          "bytes": 27563,
+          "sha256": "b579756b42ebb67c3fb016e296c320746e33f00a9578ad136229fa21b84ccf66"
         },
         "prompt.level.read": {
-          "bytes": 27203,
-          "sha256": "3fd1eb4fdd055cd92f117fe66fdc2ecd73e451aa2c968ac2092a714827a3d14c"
+          "bytes": 27437,
+          "sha256": "3545497d622fd93a7a3aefa4f47307f4dff43fe3caad7b81e8c2ac703e5ba6ea"
         },
         "prompt.mentions": {
-          "bytes": 28541,
-          "sha256": "25ddf2ea80fb337486e591b5b192bfcabb064d7de8e8fb9bf2a621599725dd5c"
+          "bytes": 28775,
+          "sha256": "f2eb0ee4704f84301449be6de834597e5878ec026897ba0c2aee636a37820cc8"
         },
         "prompt.note_ask.template": {
           "bytes": 1080,
           "sha256": "2c1fac5ba2514815ce404a1539f45009ecb13e81148992bb63f0ae6843f96fde"
         },
         "prompt.plain": {
-          "bytes": 27329,
-          "sha256": "6d0675d04061f7bb1fe7c047f83025f04ebbcbb5cd87d8ae2449f76487eeb9d9"
+          "bytes": 27563,
+          "sha256": "b579756b42ebb67c3fb016e296c320746e33f00a9578ad136229fa21b84ccf66"
         },
         "prompt.plain.ja": {
-          "bytes": 27630,
-          "sha256": "1cc639c476cfaa782bd1a461a18dd67cd853e6b5a6ba99e5d509c746be137faa"
+          "bytes": 27864,
+          "sha256": "1f3c77ac986dc92c9d9dee7ddb6fbdb59dedef446c6a251f6966a6f422007e3e"
         },
         "prompt.thread_ask.template": {
           "bytes": 1114,
@@ -153,69 +153,69 @@
           "sha256": "deed7095a5f946277261de9695683e2dda795f9398a1b162bbfd5e89f7d39659"
         },
         "tools.claude.full": {
-          "bytes": 131801,
-          "sha256": "7f64f8eb8b8d483ecb2f082b169d3b26da6005c2d6925b031c1565df450b6c62"
+          "bytes": 125455,
+          "sha256": "571a8927c9c76b603b07d6efabb45910754e4c730a42927dd4ff6d386f2bf51b"
         },
         "tools.claude.read": {
-          "bytes": 58566,
-          "sha256": "fb369943a2027eb79cbc2a630fc3a1a731b5f7dac6272aa3e62c2c2f79a6558a"
+          "bytes": 57235,
+          "sha256": "8e13606641ff139a3d960122cd4ed2180e1b7a6c72107e656e299d89d9c0952f"
         },
         "tools.gemini.full": {
-          "bytes": 139945,
-          "sha256": "19c15c228c2ec18cf03fe029364d0d808d2507ac6465e6da429700b1a3f34a04"
+          "bytes": 133599,
+          "sha256": "7fbc773c41be75edf01c0739b7c9d0394a986ef3af259821811040f5d1df750e"
         },
         "tools.gemini.read": {
-          "bytes": 61882,
-          "sha256": "6ecebadc1399f6f09f4708fec97b6c4cbce21d50ba1e02f746db619d1c28fd4e"
+          "bytes": 60551,
+          "sha256": "4c9a1a825fff926026219365b5f3e1a24ac56e4050b41ef3bbe518608badf20e"
         },
         "tools.neutral.full": {
-          "bytes": 128201,
-          "sha256": "e25bfc954a50d918ee995d1a66a6814001d1ddd9e7f228d7f7567330f6dec04e"
+          "bytes": 121855,
+          "sha256": "1a532d04ebabf4d7c7fd3527ea6155d261101b855b5133115644f5aa1f52c0a4"
         },
         "tools.neutral.read": {
-          "bytes": 56822,
-          "sha256": "3e2a0331ef764bd579a4b860788cd74506d15521fc9043aefd874b5825cad1fc"
+          "bytes": 55491,
+          "sha256": "70ef816870b665644160321886695f8c8179b52a8acf1d2f6b9e4f55a9a23d8f"
         },
         "tools.openai.full": {
-          "bytes": 138189,
-          "sha256": "a4f96dcbde031b5c1ed626aac9c897bb22be9b8f4be8025b601b1953d6a838f5"
+          "bytes": 131843,
+          "sha256": "12908cd8c9f546eee4c464c17d82a97bf67a8acb771f875a267e2bd3cd16f529"
         },
         "tools.openai.read": {
-          "bytes": 61803,
-          "sha256": "73230e6f296ccbf71cf0b67fb573880946138c3e32acf76b84ba5769183fa713"
+          "bytes": 60472,
+          "sha256": "afc3289f73d546115d47cf82882d7b8ab9a52032eaaa311fe3560a09a98630d7"
         }
       }
     },
     "production": {
-      "all": "bc9cfa103d9f6e5e6a60f419cd19f7c3252a49cb0f4dfe7a4e72bf412824b9fd",
+      "all": "a801a64615ea74a0cbc191585eb1ef73350554f1aa1c3bea40f4fb7c99058d89",
       "surfaces": {
         "prompt.level.act": {
-          "bytes": 27627,
-          "sha256": "60978f7f6b6c38959a6c38159ef56a06c31d18f59db113950975c2e29ad83a5e"
+          "bytes": 27861,
+          "sha256": "b1f1a971b46721ef79a93532d1f3e5e8fe5bf6ec39f7d316d2b296c97e45ccfe"
         },
         "prompt.level.organize": {
-          "bytes": 27702,
-          "sha256": "9b40868e5be2f056b28eb5826e0b4ff5c5485863faf73d92de2472c9aea6ed1c"
+          "bytes": 27936,
+          "sha256": "2542959c427c8ce1e144de2786571ddc0213aab7c271b9fc862fc468f3f24ea9"
         },
         "prompt.level.read": {
-          "bytes": 27548,
-          "sha256": "b7e6bfcce145cb22a60abdf0a92261cc7766eff53402b6eb7b6112f3dfafb7a3"
+          "bytes": 27782,
+          "sha256": "5d4596962eb1c1124a08025a867e14f97ed8b6c94826ce62197d506f40e92acd"
         },
         "prompt.mentions": {
-          "bytes": 29104,
-          "sha256": "158ef2b1bbaad4d760a879f1e69ec022acf29636c48138483e47775d4dee21f7"
+          "bytes": 29338,
+          "sha256": "44a89023903cf9d11a5ee19547e50c6b22068f16bd3b42037d3c47bad62fb0db"
         },
         "prompt.note_ask.template": {
           "bytes": 1080,
           "sha256": "2c1fac5ba2514815ce404a1539f45009ecb13e81148992bb63f0ae6843f96fde"
         },
         "prompt.plain": {
-          "bytes": 27702,
-          "sha256": "9b40868e5be2f056b28eb5826e0b4ff5c5485863faf73d92de2472c9aea6ed1c"
+          "bytes": 27936,
+          "sha256": "2542959c427c8ce1e144de2786571ddc0213aab7c271b9fc862fc468f3f24ea9"
         },
         "prompt.plain.ja": {
-          "bytes": 28003,
-          "sha256": "682210c304bd33a2ce2457c1da363013f062d6094ed75e6a00f57f1d6da2d8d5"
+          "bytes": 28237,
+          "sha256": "88dbd794d8e175c3b8f696d999634ea44eec8c60076c9cf673daa570610a100a"
         },
         "prompt.thread_ask.template": {
           "bytes": 1114,
@@ -338,36 +338,36 @@
           "sha256": "0f91563de066d29a0bad81904b1a05efe0a8a1637549055ebb210e6b9de27d7c"
         },
         "tools.claude.full": {
-          "bytes": 144910,
-          "sha256": "004c24c53e9314e6a6342196c52d116ddf406dd4ba441caf0296ef65330c7af2"
+          "bytes": 138524,
+          "sha256": "443de5989f81c46761d94b8fd5bf9f7cfa0adb0fa4f9aa779e1f0af4e7a61544"
         },
         "tools.claude.read": {
-          "bytes": 65416,
-          "sha256": "4318d2c193ba5b596f3ef78b42a45d7abe1bfba2da64ca7b6fd865fde4f96cb0"
+          "bytes": 64085,
+          "sha256": "5cd3f488d386377b6266fff639f9227a2efeb31fab66675e9020124ae2c811cf"
         },
         "tools.gemini.full": {
-          "bytes": 153690,
-          "sha256": "0c75a018060335ff7eb12730fd12b4275c648c2f0f28b4a2ff697f712cada169"
+          "bytes": 147304,
+          "sha256": "f199fe075f044829249e2445502c8e8c7ddd2206e89e4b595a5f4be2eb92743e"
         },
         "tools.gemini.read": {
-          "bytes": 68953,
-          "sha256": "a1d5673621ce263ca369fbbaf39c7196bed0d9a86b9fe026dffa1f162822499d"
+          "bytes": 67622,
+          "sha256": "59ce0e0e98908b0bb131e03ab73c720d2663fc010502bb70e5361c00d6692c37"
         },
         "tools.neutral.full": {
-          "bytes": 141078,
-          "sha256": "021afde2dbe722935cb886cc2abbbbdfb8173f2938ea3844357530da81b69c52"
+          "bytes": 134692,
+          "sha256": "37d36ce8550c87e28cabdf8e82da21f2830cc0153859340c03cf2a89eb8c1802"
         },
         "tools.neutral.read": {
-          "bytes": 63585,
-          "sha256": "ae11abe8f596fc69f7d4a41367a6e13d7eeae7798dc98f58611ed1354621ff78"
+          "bytes": 62254,
+          "sha256": "74ecaf8451985694d6ce1694a280b8ce734a913f1b13ad3e8100ce4329bcf20b"
         },
         "tools.openai.full": {
-          "bytes": 151635,
-          "sha256": "2abeae1e6c426bf9c3988eda3a9850c35b84093983307f791222f9b565c4198c"
+          "bytes": 145249,
+          "sha256": "cf00409ff0915a411b5f0dcf01a15bd0f7f67d48b45a695d164ff3f909e1dbfc"
         },
         "tools.openai.read": {
-          "bytes": 68810,
-          "sha256": "24d8ed8f49bf85461186b4d5836d29af5e613d58e59c913b036d4f0b43b1f40a"
+          "bytes": 67479,
+          "sha256": "9e50ac3213d23afd09d7538a0e81aa9fbacabe4aa003d99fa9cad280e4a3b366"
         }
       }
     }

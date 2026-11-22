@@ -20,16 +20,45 @@ straight through without a query.
 from __future__ import annotations
 
 import copy
+import re
 from functools import lru_cache
 from typing import Any
 
 from origin.search_engine.agent.chip_syntax import CHIP_POINTER, CHIP_SYNTAX_HINT
 
-_MILESTONE_HINT = (
-    " Also accepts the milestone's display id (the id of its backing task, e.g. "
-    "PRJ-123) or its Genos URL; a bare number is always the milestone id."
+# The wording of a reference, said ONCE in the system prompt (REFS) and short here (MIP-952). The
+# milestone rule (a bare number is always the milestone id; the backing task's display id also works)
+# and the note rule (id + `note_type`, ids repeat across families) live in the prompt.
+_MILESTONE_HINT = " Also its display id or URL."
+_TASK_REF = "Task: PRJ-123, its URL or id."
+
+# MCP words these arguments in full and keeps doing so; the in-app declarations carry the short form.
+# Exact text first, then the long variants that name a task the same way inside a longer sentence.
+_WORDING: tuple[tuple[str, str], ...] = (
+    ("The task: its display id (PRJ-123), its Genos URL, or its numeric id.", _TASK_REF),
+    (
+        "The note: its Genos URL, or its numeric id. Note ids are only unique within a note "
+        "family, so pass `note_type` too \u2014 unless you paste a URL, which carries both.",
+        "Note: its URL, or id + `note_type`.",
+    ),
+    ("Which kind of note (personal = My Notes).", "Note family."),
 )
-_TASK_REF = "The task: its display id (PRJ-123), its Genos URL, or its numeric id."
+# The house templates are in the system prompt (rule for create_task_plan); the schemas only point at them.
+_TEMPLATES = (
+    (
+        re.compile(r"Follow the house task template: '### .*?Summary'.*?Actual behavior'\."),
+        "Follow the house task template (system prompt).",
+    ),
+    (
+        re.compile(r"following the house milestone template: '### .*?Goal'.*?the critical path\."),
+        "following the house milestone template (system prompt).",
+    ),
+    (
+        re.compile(r"Follow the house milestone template: '### .*?Goal'.*?once it has tasks\."),
+        "Follow the house milestone template (system prompt).",
+    ),
+)
+_TASK_NAME = re.compile(r"[Ii]ts display id \(PRJ-123\), its Genos URL,? or its numeric id")
 
 
 @lru_cache(maxsize=1)
@@ -52,6 +81,32 @@ def _with_hint(prop: dict[str, Any]) -> dict[str, Any]:
     return {**prop, "type": "STRING", "description": wording + _MILESTONE_HINT}
 
 
+def _shorten(text: str) -> str:
+    for old, new in _WORDING:
+        text = text.replace(old, new)
+    for pattern, short in _TEMPLATES:
+        text = pattern.sub(short, text)
+    return _TASK_NAME.sub("PRJ-123, its URL or id", text)
+
+
+def _in_app_wording(node: Any) -> bool:
+    """Shorten every description under `node` in place; True when one changed."""
+    changed = False
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str):
+                short = _shorten(value)
+                if short != value:
+                    node[key] = short
+                    changed = True
+            else:
+                changed = _in_app_wording(value) or changed
+    elif isinstance(node, list):
+        for value in node:
+            changed = _in_app_wording(value) or changed
+    return changed
+
+
 def _point_at_chips(prop: dict[str, Any]) -> None:
     """The system prompt carries the chip syntax once, so a body argument only
     has to point at it. MCP has no such prompt and keeps the full text."""
@@ -68,7 +123,8 @@ def declared_schema(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     is module state, and MCP builds its own declaration from it."""
     tool = _catalog().get(name)
     if tool is None:
-        return schema
+        declared = copy.deepcopy(schema)
+        return declared if _in_app_wording(declared) else schema
     declared = copy.deepcopy(schema)
     props = declared.get("properties") or {}
     for prop in props.values():
@@ -88,6 +144,7 @@ def declared_schema(name: str, schema: dict[str, Any]) -> dict[str, Any]:
         items = ((props.get(list_arg) or {}).get("items") or {}).get("properties") or {}
         if item_key in items:
             items[item_key] = _with_hint(items[item_key])
+    _in_app_wording(declared)
     return declared
 
 

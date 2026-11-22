@@ -20,6 +20,8 @@ The parameters themselves are `tool_flag_params`.
 
 from __future__ import annotations
 
+import re
+
 from django.conf import settings
 
 from origin.search_engine.agent.parity import FOLLOWUPS_FLAG, PARITY_FLAG
@@ -129,6 +131,18 @@ MCP_REPLACEMENTS: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
+#: The long approval tail of a write tool's description, which the system prompt says once (MIP-952).
+_APPROVAL_TAIL = re.compile(
+    r"(REQUIRES USER APPROVAL) \u2014 the user (?:will see|sees) "
+    r"(?:your proposed (?:arguments|event|title and body|changes)|the full proposed plan)"
+    r"[^.]*\."
+)
+
+
+#: Tools whose tests hold the declaration to the registry's own text, word for word.
+_KEEPS_APPROVAL_TAIL = frozenset({"create_calendar_event", "create_todo_item"})
+
+
 def declared_description(tool: Tool) -> str:
     text = tool.description
     for name, flag, old, new in REPLACEMENTS:
@@ -137,4 +151,6 @@ def declared_description(tool: Tool) -> str:
     for name, flag, addition in ADDITIONS:
         if name == tool.name and settings.SEARCH_ENGINE.get(flag):
             text += addition
-    return text
+    if tool.name in _KEEPS_APPROVAL_TAIL:
+        return text
+    return _APPROVAL_TAIL.sub(r"\1.", text)

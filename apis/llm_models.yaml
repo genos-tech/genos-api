@@ -87,9 +87,16 @@
 #                  written deliberately.
 #
 #                  Use 0 for "this provider does not bill this line" —
-#                  Gemini's implicit cache and OpenAI's automatic cache
-#                  have no separate write charge, so their `cache_write`
-#                  is a real 0, not a missing value.
+#                  OpenAI's automatic cache and Gemini's IMPLICIT cache
+#                  have no separate write charge (a call with no explicit
+#                  cache never reports cache_write_tokens, so the rate is
+#                  never applied to it). Gemini's EXPLICIT cache
+#                  (`gemini_cache`, GEMINI_EXPLICIT_CACHE) bills the tokens it
+#                  stores once, at creation, at the input rate, so a Gemini
+#                  model's `cache_write` equals its `input` (MIP-952): the
+#                  only call that reports cache_write_tokens is
+#                  `gemini_cache._record_create`. Storage ($1.00 per million
+#                  token-hours) is NOT in this card.
 #
 #                  Two conventions the current numbers follow (re-derive
 #                  rather than assume on a swap — providers change these
@@ -304,7 +311,7 @@ providers:
           class: light
           label: Gemini 3.5 Flash-Lite
           note: Fastest and cheapest — great for everyday questions.
-          price: { input: 0.30, output: 2.50, cached_input: 0.03, cache_write: 0 }
+          price: { input: 0.30, output: 2.50, cached_input: 0.03, cache_write: 0.30 }
           # Released 2026-07-21. Replaces gemini-3.5-flash as the light
           # rung: 5x cheaper in, 3.6x cheaper out. Since Gemini is the
           # server default and the free tier's headline number, this is
@@ -316,7 +323,7 @@ providers:
           class: light
           label: Gemini 3.6 Flash
           note: Balanced speed and quality — the default.
-          price: { input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 0 }
+          price: { input: 1.50, output: 7.50, cached_input: 0.15, cache_write: 1.50 }
           # Released 2026-07-21. The server default (GEMINI_MODEL), and
           # the direct successor to gemini-3.5-flash: same input price,
           # 17% cheaper output, and it beats 3.1 Pro on coding.
@@ -335,7 +342,7 @@ providers:
           class: middle
           label: Gemini 3.1 Pro Preview
           note: Extended thinking, for the hardest questions.
-          price: { input: 2.00, output: 12.00, cached_input: 0.20, cache_write: 0 }
+          price: { input: 2.00, output: 12.00, cached_input: 0.20, cache_write: 2.00 }
           # Gemini's TOP rung as the user sees it (third of three), but
           # cost class `middle` — at $2/$12 it is nowhere near the
           # ~JPY60-70/ask premium band that opus-5 and sol occupy, and a
