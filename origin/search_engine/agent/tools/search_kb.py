@@ -34,6 +34,11 @@ from origin.services.archive import mark_archived_hits
 
 _MAX_LIMIT = 20
 
+# The one line a caller reads when its search ran plain for lack of AI credits (MIP-1965).
+PLAIN_SEARCH_NOTICE = (
+    "No AI credits left, so this was a plain search (no AI rephrasing or re-ranking)."
+)
+
 # What a caller may ask for. `milestone` and `note_folder` are in the index (MIP-1377); a
 # folder stays out of an unrestricted search on purpose (MIP-841: it has no body to ground an
 # answer on), so it only comes back when named here. The ACL filter is the same for all six.
@@ -156,6 +161,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # only switch the rewrite off, never on; inert for the in-app agent (see `skip_rewrite`).
     if no_rewrite:
         use_rewrite = False
+    # MIP-1965: the caller of this MCP search has no AI credits, so run it without any model
+    # call: no rewrite, and `overlays=False` switches the reranker off (and the free graph
+    # expansion with it). Set by the MCP layer only; `plain` is False for every in-app call.
+    plain = ctx.surface == "mcp" and ctx.plain_search
+    if plain:
+        use_rewrite = False
+    plain_kwargs: dict[str, Any] = {"overlays": False} if plain else {}
 
     # Mentions v2 — explicit person filter (LLM-chosen). A bogus or
     # unauthorized id simply matches nothing: the ACL filter still
@@ -195,6 +207,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # loop guard is a standing rule — see chunkers/spotlight docs).
         exclude_lanes=frozenset({"conversation", "spotlight_answer"}),
         **window.search_kwargs(),
+        **plain_kwargs,
     )
 
     # Trim the per-entity payload to what the LLM actually needs:
@@ -253,9 +266,12 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # MIP-1852: archived items stay found and ranked as before; the hit says it is archived.
     mark_archived_hits(matches)
 
+    summary = f"Searched knowledge base — {len(matches)} matches"
+    if plain:
+        summary += f"\n{PLAIN_SEARCH_NOTICE}"
     return {
         "matches": matches,
-        "__summary__": f"Searched knowledge base — {len(matches)} matches",
+        "__summary__": summary,
     }
 
 

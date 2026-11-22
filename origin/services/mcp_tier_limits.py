@@ -32,13 +32,13 @@ for the key, and logged.
 
 WHEN THE COUNTER STORE IS UNREACHABLE. The per-minute limit stays fail-open in the sense the
 house policy means (a Redis hiccup must not take paying users down): it counts in this process
-instead, against the plan's own number. The per-day and search totals count in this process
+instead, against the plan's own number. The per-day total counts in this process
 against CORE's numbers instead, the conservative end, because they bound paid work. In shadow
 mode a store failure just skips the measurement.
 
 Counting. A call's weight is 1; the heavy ones (`HEAVY_TOOLS`) weigh `HEAVY_WEIGHT` against both
 the per-minute and the per-day counter. The per-minute counter is per CREDENTIAL (a key or a
-connected app), the per-day counter and the search counter are per PERSON across every key and app.
+connected app), the per-day counter is per PERSON across every key and app.
 A refused call is given back to every counter it had been added to, so `used` stays honest and one
 refusal cannot cause the next.
 """
@@ -68,7 +68,6 @@ OFF, SHADOW, ENFORCE = "off", "shadow", "enforce"
 # -- the capability keys (one per limit, in every tier's dict in apis/settings.py) ---------------
 PER_MINUTE = "mcp_calls_per_min"
 PER_DAY = "mcp_calls_per_day"
-SEARCH_DAILY = "mcp_search_daily"
 MAX_API_KEYS = "mcp_max_api_keys"
 MAX_CONNECTIONS = "mcp_max_connections"
 BULK_TASKS = "mcp_bulk_max_tasks"
@@ -83,7 +82,6 @@ HISTORY = "mcp_apply_message_retention"
 INT_KEYS = (
     PER_MINUTE,
     PER_DAY,
-    SEARCH_DAILY,
     MAX_API_KEYS,
     MAX_CONNECTIONS,
     BULK_TASKS,
@@ -96,7 +94,6 @@ CAPABILITY_KEYS = (*INT_KEYS, HISTORY)
 CATEGORY = {
     PER_MINUTE: "mcp_per_minute",
     PER_DAY: "mcp_per_day",
-    SEARCH_DAILY: "mcp_search_daily",
     MAX_API_KEYS: "mcp_api_keys",
     MAX_CONNECTIONS: "mcp_connections",
     BULK_TASKS: "mcp_bulk_tasks",
@@ -114,7 +111,6 @@ MCP_TIER_LIMITS_PROPOSED: dict[str, dict[str, Any]] = {
     "core": {
         PER_MINUTE: 60,
         PER_DAY: 3_000,
-        SEARCH_DAILY: 100,
         MAX_API_KEYS: 3,
         MAX_CONNECTIONS: 3,
         BULK_TASKS: 10,
@@ -125,7 +121,6 @@ MCP_TIER_LIMITS_PROPOSED: dict[str, dict[str, Any]] = {
     "pro": {
         PER_MINUTE: 120,
         PER_DAY: 10_000,
-        SEARCH_DAILY: 300,
         MAX_API_KEYS: 10,
         MAX_CONNECTIONS: 10,
         BULK_TASKS: 30,
@@ -136,7 +131,6 @@ MCP_TIER_LIMITS_PROPOSED: dict[str, dict[str, Any]] = {
     "max": {
         PER_MINUTE: 240,
         PER_DAY: 30_000,
-        SEARCH_DAILY: 1_000,
         MAX_API_KEYS: 25,
         MAX_CONNECTIONS: 25,
         BULK_TASKS: 30,
@@ -152,8 +146,6 @@ MCP_TIER_LIMITS_PROPOSED: dict[str, dict[str, Any]] = {
 # the per-day counter.
 HEAVY_TOOLS = frozenset({"get_my_briefing", "get_timeline", "search_workspace", "get_item_line"})
 HEAVY_WEIGHT = 5
-# The tool the search counter is about (it embeds its query, which costs money).
-SEARCH_TOOL = "search_workspace"
 
 FALLBACK_TIER = "core"
 _COUNTER_TTL_DAY = 2 * 24 * 3600
@@ -357,7 +349,7 @@ def _seconds_to_next_utc_midnight(now: datetime) -> int:
 
 
 def admit_call(plan: Plan, *, user_id: Any, credential_ident: str, tool: Any) -> Refusal | None:
-    """Count one `tools/call` against the per-minute, per-day and (for search) daily-search limits.
+    """Count one `tools/call` against the per-minute and per-day limits.
 
     Returns a `Refusal` when `enforce` stops it. In `shadow` it only logs. In `off` it is not
     called. A dimension whose limit is None is not counted at all: nothing is written for a plan
@@ -395,17 +387,6 @@ def admit_call(plan: Plan, *, user_id: Any, credential_ident: str, tool: Any) ->
                 _COUNTER_TTL_DAY,
                 _seconds_to_next_utc_midnight(now),
                 cost,
-                uid,
-            )
-        )
-    if tool == SEARCH_TOOL and plan.value(SEARCH_DAILY) is not None:
-        steps.append(
-            (
-                SEARCH_DAILY,
-                f"mcp_tl:{ns}:srch:{uid}:{day}",
-                _COUNTER_TTL_DAY,
-                _seconds_to_next_utc_midnight(now),
-                1,
                 uid,
             )
         )
@@ -576,7 +557,6 @@ def _cell(value: Any) -> str:
 _ROW_LABELS = (
     (PER_MINUTE, "MCP calls per minute, per key or connected app"),
     (PER_DAY, "MCP calls per day, per person across all keys and apps"),
-    (SEARCH_DAILY, "`search_workspace` calls per day"),
     (MAX_API_KEYS, "API keys per person (new ones only)"),
     (MAX_CONNECTIONS, "Connected AI apps per person (new ones only)"),
     (BULK_TASKS, "`update_tasks_bulk` items per call"),

@@ -347,6 +347,34 @@ def _purchased_remaining_milli(rows) -> int:
     return max(0, purchased_sum - overspend)
 
 
+def spent_on_surface_milli(user_id: str, surface: str, *, period: str | None = None) -> int:
+    """Milli-credits the user was charged this period for requests of one surface, net of reversals.
+
+    The ledger rows carry no surface; it lives on `AiRequestCost`, joined by `request_id`. Feeds the
+    Plan & Usage line "AI searches from connected apps" (MIP-1965). Never raises: a display number
+    must not break the settings fetch, so a failure reads as 0.
+    """
+    try:
+        from origin.search_engine.models import AiCreditEntry, AiRequestCost  # noqa: PLC0415
+
+        request_ids = AiRequestCost.objects.filter(user_id=str(user_id), surface=surface).values(
+            "request_id"
+        )
+        total = (
+            AiCreditEntry.objects.filter(
+                user_id=str(user_id),
+                period=period or period_for(),
+                entry_type__in=(AiCreditEntry.ENTRY_CHARGE, AiCreditEntry.ENTRY_REVERSAL),
+                request_id__in=request_ids,
+            ).aggregate(s=Sum("credits_milli"))["s"]
+            or 0
+        )
+        return max(-int(total), 0)
+    except Exception:  # noqa: BLE001
+        log.debug("spent_on_surface_milli failed", exc_info=True)
+        return 0
+
+
 def balance_milli(user_id: str, plan: str, *, period: str | None = None) -> int | None:
     """Everything the user can spend right now; None = unlimited.
 
