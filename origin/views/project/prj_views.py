@@ -41,6 +41,7 @@ from origin.services.project_code import derive_project_code
 from origin.services.project_delete import delete_project
 from origin.services.project_list_cache import project_list_key
 from origin.services.project_manage import (
+    CODE_ATTEMPTS,
     PROJECT_CODE_RE,
     ProjectRefused,
     change_member_role,
@@ -308,25 +309,35 @@ class ProjectMasterView(AuthenticatedAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = ProjectMasterSerializer(data=data)
-        if serializer.is_valid():
+        # Two creates can read the same free code; the database lets one win and the other takes
+        # the next free code (MIP-1957), each try in its own savepoint.
+        for attempt in range(CODE_ATTEMPTS):
+            serializer = ProjectMasterSerializer(data=data)
+            if not serializer.is_valid():
+                break
             # The project's own system user is made here, with the project
             # and after the body has validated, so a refused create leaves
             # no stray account and no client can mint one (MIP-1031). The
             # address is the server's too (`<team id>-<name>@genos.tech`); a
             # client-chosen one could reserve anyone's real address.
-            with transaction.atomic():
-                team = serializer.validated_data["team"]
-                system_user = new_system_user(team, serializer.validated_data["project_name"])
-                project = serializer.save(project_system_user=system_user)
-                TeamMembers.objects.get_or_create(team=team, attendee=system_user)
-                record_workspace_change(
-                    team_id=project.team_id,
-                    project_id=project.project_id,
-                    entity_kind="project",
-                    entity_id=project.project_id,
-                    action="create",
-                )
+            try:
+                with transaction.atomic():
+                    team = serializer.validated_data["team"]
+                    system_user = new_system_user(team, serializer.validated_data["project_name"])
+                    project = serializer.save(project_system_user=system_user)
+                    TeamMembers.objects.get_or_create(team=team, attendee=system_user)
+                    record_workspace_change(
+                        team_id=project.team_id,
+                        project_id=project.project_id,
+                        entity_kind="project",
+                        entity_id=project.project_id,
+                        action="create",
+                    )
+            except IntegrityError:
+                if attempt == CODE_ATTEMPTS - 1:
+                    raise
+                data["code"] = derive_project_code(data["code"], taken_project_codes(team_id))
+                continue
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors

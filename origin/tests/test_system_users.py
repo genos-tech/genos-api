@@ -120,12 +120,14 @@ class ServerMadeSystemUserTests(BaseAPITestCase):
         )
         self.assertEqual(res.status_code, 201, res.data)
         email, password = _derived_credentials(self.team.team_id, "Roadmap")
-        user = User.objects.with_email(email).get()
+        # The address carries a random suffix (MIP-1957), so find the account through the project.
+        user = User.objects.get(id=res.data["project_system_user"])
         self.assertTrue(user.is_system_user)
         self.assertFalse(user.has_usable_password())
-        res = APIClient().post(SIGNIN, {"email": email, "password": password}, format="json")
-        self.assertEqual(res.status_code, 401)
-        self.assertNotIn("access", res.json())
+        for address in (email, user.email):
+            res = APIClient().post(SIGNIN, {"email": address, "password": password}, format="json")
+            self.assertEqual(res.status_code, 401)
+            self.assertNotIn("access", res.json())
 
 
 class SystemUserResetTests(BaseAPITestCase):

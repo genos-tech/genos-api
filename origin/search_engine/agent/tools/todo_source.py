@@ -70,7 +70,9 @@ def source_from(args: dict[str, Any], ctx: ToolContext) -> TodoSource | None:
         return None
     if raw_task in (None, ""):
         raise ToolError("`comment_id` needs `task_id`: the task the comment is on.")
-    task = load_task(resolve_task_ref(raw_task, ctx.team_id), ctx, action="link a to-do to")
+    task = load_task(
+        resolve_task_ref(raw_task, ctx.team_id, ctx.user_id), ctx, action="link a to-do to"
+    )
     comment = None
     if raw_comment not in (None, ""):
         comment = load_comment(task, raw_comment, ctx)

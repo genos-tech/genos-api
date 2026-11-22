@@ -49,7 +49,9 @@ class ProjectCreateMintsItsSystemUserTests(BaseAPITestCase):
         self.assertFalse(sys_user.has_usable_password())
         self.assertEqual(sys_user.username, "Fresh Start")
         # The address is the server's, not a client's.
-        self.assertEqual(sys_user.email, f"{self.team.team_id}-Fresh_Start@genos.tech")
+        self.assertRegex(
+            sys_user.email, rf"^{self.team.team_id}-Fresh_Start-[0-9a-f]{{6}}@genos\.tech$"
+        )
         self.assertTrue(TeamMembers.objects.filter(team=self.team, attendee=sys_user).exists())
         self.assertEqual(str(res.data["project_system_user"]), str(sys_user.id))
         self.assertEqual(len(mail.outbox), 0)
