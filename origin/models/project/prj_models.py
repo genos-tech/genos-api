@@ -23,11 +23,11 @@ class ProjectMaster(models.Model):
         to_field="team_id",
     )
     project_id = models.BigAutoField(primary_key=True, unique=True)
-    # Unique per team (`project_name_unique_per_team` below), not across every
-    # company: the views only ever checked the caller's own team, so a global
-    # constraint made a name another team used a 500 on rename, and made the
-    # starter workspace (fixed project names) fail for every team after the
-    # first (MIP-942).
+    # NOT unique in the database (MIP-1935). It was unique per team, but a refusal of a name
+    # the caller cannot see in their list confirmed that a Hidden project uses it. The views
+    # and services refuse a duplicate only among projects the caller can see
+    # (`hidden_scope.project_name_taken_for`). The code stays unique per team: it prefixes task
+    # display ids.
     project_name = models.CharField(blank=False)
     profile_image_url = models.FileField(upload_to=profile_image_path, blank=True, null=True)
     profile_image_file_name = models.CharField(blank=True, null=True)
@@ -89,10 +89,6 @@ class ProjectMaster(models.Model):
                 fields=["team", "code"],
                 name="project_code_unique_per_team",
                 condition=models.Q(code__isnull=False),
-            ),
-            models.UniqueConstraint(
-                fields=["team", "project_name"],
-                name="project_name_unique_per_team",
             ),
             models.CheckConstraint(
                 condition=~models.Q(is_hidden=True, is_private=False),

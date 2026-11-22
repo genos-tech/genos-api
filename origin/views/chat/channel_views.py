@@ -65,7 +65,7 @@ from origin.services.external_grants import (
     remove_external_participants,
     visible_shares_for_object,
 )
-from origin.services.hidden_scope import channel_hidden_from
+from origin.services.hidden_scope import channel_hidden_from, project_name_taken_for
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
     OWNER,
@@ -1115,10 +1115,8 @@ class ChannelDetailView(AuthenticatedAPIView):
                 {"error": "Only the project owner can change name or owner."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        collision = (
-            ProjectMaster.objects.filter(team=project.team_id, project_name=title)
-            .exclude(project_id=project.project_id)
-            .exists()
+        collision = project_name_taken_for(
+            project.team_id, title, request.user.id, project.project_id
         )
         if collision:
             return Response(
