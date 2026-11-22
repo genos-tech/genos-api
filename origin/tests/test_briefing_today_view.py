@@ -8,6 +8,7 @@ number of projects.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 from django.db import connection
@@ -163,3 +164,63 @@ class BriefingTodayViewTests(BriefingBase):
         self.assertEqual(page["what_you_did"], {})
         for key in ("overdue", "due_today", "overdue_count"):
             self.assertEqual(page["agenda"][key], full["agenda"][key])
+
+
+class BriefingTodayStructuredTests(BriefingBase):
+    """MIP-1936: the page words come from locale keys, so the answer carries the same facts as
+    data (`latest.data`, `reasonCodes`) next to the English sentence; the MCP briefing does not."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.credentials()
+        self.client.force_authenticate(user=self.user)
+        self.user.timezone = "UTC"
+        self.user.save(update_fields=["timezone"])
+
+    def get(self, **params):
+        params.setdefault("team_id", str(self.team.team_id))
+        return self.client.get(URL, params)
+
+    def test_status_change_comes_as_field_old_new(self):
+        task = self.make_task("Moves")
+        self.activity(task, self.user2, old="Open", new="Review", at=self.ago(minutes=5))
+        item = self.get(since=self.ago(hours=1).isoformat()).json()["changed"]["items"][0]
+        self.assertEqual(item["latest"]["summary"], "status: Open → Review")  # the sentence stays
+        self.assertEqual(
+            item["latest"]["data"],
+            {"code": "field_changed", "field": "status", "old": "Open", "new": "Review"},
+        )
+
+    def test_comment_and_assignment_codes(self):
+        task = self.make_task("Talks")
+        self.comment(task, self.user2, "Looks good", at=self.ago(minutes=5))
+        item = self.get(since=self.ago(hours=1).isoformat()).json()["changed"]["items"][0]
+        self.assertEqual(item["latest"]["data"], {"code": "comment"})
+        self.assertEqual(item["latest"]["text"], "Looks good")
+
+    def test_reason_codes_overdue_activity_priority(self):
+        today = timezone.now().date()
+        task = self.make_task("Late", due_date=today - timedelta(days=4), priority="High")
+        self.activity(task, self.user2, at=self.ago(minutes=5))
+        self.comment(task, self.user2, at=self.ago(minutes=4))
+        row = self.get(since=self.ago(hours=1).isoformat()).json()["suggestedNext"][0]
+        self.assertIn("overdue by 4 days", row["reasons"][0])  # the sentence stays
+        codes = {c["code"]: c for c in row["reasonCodes"]}
+        self.assertEqual(codes["overdue"]["days"], 4)
+        self.assertEqual(codes["activity"]["comments"], 1)
+        self.assertEqual(codes["activity"]["changes"], 1)
+        self.assertEqual(codes["priority"]["priority"], "High")
+        self.assertEqual(len(row["reasonCodes"]), len(row["reasons"]))
+
+
+class BriefingMcpUnchangedTests(BriefingBase):
+    def test_mcp_briefing_is_unchanged(self):
+        today = timezone.now().date()
+        task = self.make_task("Late", due_date=today - timedelta(days=4))
+        self.activity(task, self.user2, at=self.ago(minutes=5))
+        body = self.brief(since=self.ago(hours=1).isoformat())
+        text = json.dumps(body)
+        self.assertNotIn("reason_codes", text)
+        self.assertNotIn("reasonCodes", text)
+        event = body["changed_for_me"]["items"][0]["events"][0]
+        self.assertEqual(set(event), {"at", "what", "summary", "by"})
