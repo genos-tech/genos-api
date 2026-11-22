@@ -423,6 +423,8 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         summary += f" {verdict.same} unchanged since your last report."
     if verdict.quieted:
         summary += f" {verdict.quieted} quieted by you."
+    if ai_sentences_on(params) and ai.skipped == report_ai.llm.SKIP_NO_CREDITS:
+        summary += " AI notes were left out: you have no AI credits left this month."
     report: Report = {
         "title": f"What to do today, {agenda['local_date']}",
         "summary": clip(summary),

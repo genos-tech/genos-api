@@ -57,6 +57,8 @@ class TeamEmojiMaster(models.Model):
     # build the path without re-deriving it. Not a DB field.
     image_ext = ""
     image = models.FileField(upload_to=_team_emoji_path, max_length=500)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    image_size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     created_by = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,

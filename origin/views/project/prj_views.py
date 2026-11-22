@@ -2196,7 +2196,7 @@ class ProjectProfileImageView(AuthenticatedAPIView):
             project_data, data=new_profile_image_data, partial=True
         )
         if serializer.is_valid():
-            saved_user = serializer.save()
+            saved_user = serializer.save(profile_image_size_bytes=upload.size_bytes)
 
             # At this point, Django has stored the file, possibly renamed
             # Now get the actual stored filename

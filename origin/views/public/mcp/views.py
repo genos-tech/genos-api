@@ -8,6 +8,7 @@ the caller.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import uuid
@@ -28,7 +29,15 @@ from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.anonymous_throttle import McpAnonymousThrottle
 from origin.views.public.credentials import credential_of
-from origin.views.public.mcp import limit_gate, prompts, protocol, request_guard, surfaces, tools
+from origin.views.public.mcp import (
+    limit_gate,
+    mcp_search_credits,
+    prompts,
+    protocol,
+    request_guard,
+    surfaces,
+    tools,
+)
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.mcp.result_log import note_result
 from origin.views.public.permissions import HasCredential, PublicApiThrottle
@@ -590,7 +599,17 @@ class McpView(PublicApiView):
         # `CurrentUserMiddleware` sets per request. Hand this to a worker
         # thread and every task Claude edits shows up in the activity feed
         # with no author.
-        with metered_request(surface="mcp", user_id=ctx.user_id, team_id=ctx.team_id):
+        #
+        # MIP-1965: `search_workspace` is metered under the billable surface `mcp_search`, so its
+        # rewrite and rerank are charged to the caller's AI credits. With no credits left it runs
+        # plain (no model call, metered under `mcp`, never charged) and says so.
+        spend_surface = "mcp"
+        if name == mcp_search_credits.SEARCH_TOOL:
+            if mcp_search_credits.out_of_credits(ctx.user_id):
+                ctx = dataclasses.replace(ctx, plain_search=True)
+            else:
+                spend_surface = mcp_search_credits.MCP_SEARCH_SURFACE
+        with metered_request(surface=spend_surface, user_id=ctx.user_id, team_id=ctx.team_id):
             try:
                 result = tools.call(
                     name,

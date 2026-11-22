@@ -251,7 +251,7 @@ class TestCreateAndList(ScheduleToolBase):
         for n in range(schedules.MAX_SCHEDULES_PER_MEMBER):
             self.create(name=f"s{n}")
         self.assertIn(
-            "at most",
+            "allows",
             self.refused(
                 "create_my_schedule",
                 name="one more",

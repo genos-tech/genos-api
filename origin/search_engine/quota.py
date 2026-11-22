@@ -467,3 +467,81 @@ def get_schedules_enabled(user_id: str) -> bool:
         log.warning("TIER_QUOTAS schedules_enabled=%r is not a bool; using the tier default", v)
         return paid
     return v
+
+
+# --- Tier plan v2 counts (MIP-1960) ------------------------------------
+#
+# Webhook endpoints per TEAM and scheduled reports per PERSON. A cap only ever refuses NEW rows:
+# what exists is kept and keeps working. In `TIER_QUOTAS` a present key is the value (an integer, or
+# None = unlimited); a MISSING or malformed key reads as the tier's own default below, because a
+# `TIER_QUOTAS_JSON` override is a FULL replace and one written before these keys existed must not
+# turn a Free team's cap into "unlimited" or a paying member's into zero.
+
+WEBHOOKS_MAX_KEY = "webhooks_max"
+SCHEDULES_MAX_KEY = "schedules_max"
+_WEBHOOKS_MAX_DEFAULT: dict[str, int | None] = {
+    "free": 0,
+    "core": 3,
+    "pro": 10,
+    "max": 25,
+    "enterprise": None,
+}
+_SCHEDULES_MAX_DEFAULT: dict[str, int | None] = {
+    "free": 0,
+    "core": 5,
+    "pro": 20,
+    "max": 20,
+    "enterprise": 20,
+}
+
+
+def _tier_count_cap(tier: str, key: str, defaults: dict[str, int | None]) -> int | None:
+    """The count cap of `key` for `tier`; None = unlimited."""
+    tier = tier if tier in _TIER_RANK else "free"
+    cfg = _tier_cfg(tier)
+    if key not in cfg:
+        return defaults[tier]
+    v = cfg[key]
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        log.warning("TIER_QUOTAS %s=%r is not a count; using the tier default", key, v)
+        return defaults[tier]
+    return v
+
+
+def get_webhooks_max(tier: str) -> int | None:
+    """Webhook endpoints a team on `tier` may have (Free 0, Core 3, Pro 10, Max 25, Enterprise
+    unlimited); None = unlimited."""
+    return _tier_count_cap(tier, WEBHOOKS_MAX_KEY, _WEBHOOKS_MAX_DEFAULT)
+
+
+def get_schedules_max(user_id: str) -> int | None:
+    """Scheduled reports this member may keep, by their EFFECTIVE tier (Free 0, Core 5, Pro 20,
+    Max 20, Enterprise 20); None = unlimited. Fail-open on an infrastructure error, like the
+    other gates of a paid feature: the plan's own cap, never a blocked member."""
+    try:
+        tier = get_effective_tier(user_id)
+    except Exception:  # noqa: BLE001
+        log.exception("schedules_max: tier lookup failed for user=%s", user_id)
+        return None
+    return _tier_count_cap(tier, SCHEDULES_MAX_KEY, _SCHEDULES_MAX_DEFAULT)
+
+
+def get_digest_cadence(user_id: str) -> str | None:
+    """None (no digest) | 'weekly' | 'daily'.
+
+    Deliberately fails CLOSED (None): a digest is unsolicited outbound,
+    so on any infra doubt we stay silent rather than risk noise.
+    """
+    try:
+        v = _user_cfg(user_id).get("digest_cadence")
+    except Exception:  # noqa: BLE001
+        log.exception("get_digest_cadence failed for user=%s", user_id)
+        return None
+    if v is None:
+        return None
+    if v not in _DIGEST_CADENCES:
+        log.warning("TIER_QUOTAS digest_cadence=%r not in %s; off", v, _DIGEST_CADENCES)
+        return None
+    return v

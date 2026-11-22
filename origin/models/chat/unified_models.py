@@ -77,6 +77,9 @@ class Channel(models.Model):
         blank=True,
         null=True,
     )
+    # Bytes of `profile_image_file` (MIP-1962). Not `profile_image_url`: a PM channel's points at the
+    # project's file, which the project's own size already counts.
+    profile_image_size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
 
     # PM-only: 1:1 with ProjectMaster.
     project = models.ForeignKey(

@@ -107,7 +107,9 @@ class Command(BaseCommand):
             if dry_run:
                 continue
             ext, content = bundle[name]
-            emoji = TeamEmojiMaster(team=None, name=name, created_by=None)
+            emoji = TeamEmojiMaster(
+                team=None, name=name, created_by=None, image_size_bytes=len(content)
+            )
             # Transient carrier read by the model's upload_to path builder.
             emoji.image_ext = ext
             emoji.image.save(f"{name}.{ext}", ContentFile(content), save=True)

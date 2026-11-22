@@ -347,7 +347,7 @@ class TeamProfileImageView(AuthenticatedAPIView):
 
         serializer = TeamMasterSerializer(team_data, data=new_profile_image_data, partial=True)
         if serializer.is_valid():
-            saved_team = serializer.save()
+            saved_team = serializer.save(profile_image_size_bytes=upload.size_bytes)
 
             # At this point, Django has stored the file, possibly renamed
             # Now get the actual stored filename

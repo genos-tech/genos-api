@@ -163,6 +163,8 @@ class Source:
     # Whether this item spent AI usage (MIP-1234): a digest always did; a report did when it
     # carries its cost block. The card says "No AI used" when False. Never decides the source.
     used_ai: bool = False
+    # Why a report that could use AI did not (MIP-1960): only "no_credits" is ever carried.
+    ai_skipped: str = ""
 
     def public(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -171,6 +173,8 @@ class Source:
             "label": self.label,
             "used_ai": self.used_ai,
         }
+        if self.ai_skipped:
+            out["ai_skipped"] = self.ai_skipped
         if self.schedule_id:
             out["schedule_id"] = self.schedule_id
         if self.gone:
@@ -196,6 +200,7 @@ def sources_for(user, items: list) -> dict[int, Source]:
     from origin.models.common.schedule_models import MemberSchedule  # noqa: PLC0415
 
     wanted: dict[int, tuple[str, str | None, bool]] = {}
+    skipped: dict[int, str] = {}
     for item in items:
         ai = _ai(item)
         if item.item_type == ITEM_TYPE_DIGEST:
@@ -207,6 +212,8 @@ def sources_for(user, items: list) -> dict[int, Source]:
             if _UUID.match(sid):
                 used = ai is not None and ai["producer"] == PRODUCER_SCHEDULE
                 wanted[item.item_id] = (PRODUCER_SCHEDULE, sid, used)
+                if optionals.get("ai_skipped") == "no_credits":
+                    skipped[item.item_id] = "no_credits"
     schedules = {
         str(s.id): s
         for s in MemberSchedule.objects.filter(
@@ -228,9 +235,18 @@ def sources_for(user, items: list) -> dict[int, Source]:
                     sid,
                     team_id=str(sched.team_id),
                     used_ai=used,
+                    ai_skipped=skipped.get(item_id, ""),
                 )
                 if sched
-                else Source(kind, False, "", sid, gone=True, used_ai=used)
+                else Source(
+                    kind,
+                    False,
+                    "",
+                    sid,
+                    gone=True,
+                    used_ai=used,
+                    ai_skipped=skipped.get(item_id, ""),
+                )
             )
     return out
 

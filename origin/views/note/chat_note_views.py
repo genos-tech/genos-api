@@ -727,7 +727,7 @@ class ChatNoteAttachmentView(AuthenticatedAPIView):
 
         serializer = ChatNoteAttachmentFactSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(size_bytes=upload.size_bytes)
             res = {
                 "noteType": NOTE_TYPE,
                 "noteId": serializer.data["note"],

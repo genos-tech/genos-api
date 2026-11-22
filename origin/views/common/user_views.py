@@ -179,7 +179,7 @@ class UserProfileImageView(AuthenticatedAPIView):
 
         serializer = UserSerializer(user_data, data=new_profile_image_data, partial=True)
         if serializer.is_valid():
-            saved_user = serializer.save()
+            saved_user = serializer.save(profile_image_size_bytes=upload.size_bytes)
 
             # `profile_image_url.name` is already the storage path that
             # Django actually wrote (relative to MEDIA_ROOT and reflecting
