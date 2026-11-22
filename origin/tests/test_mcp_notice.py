@@ -30,6 +30,7 @@ from origin.services import mcp_notice
 from origin.services.email_enqueue import _email_spec
 from origin.services.webpush_dispatch import _push_spec
 from origin.services.webpush_gating import should_push
+from origin.tests.ai_app_defaults import restore_real_defaults
 from origin.tests.status_reason_support import with_reason
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.views.public.mcp import tools as mcp_tools
@@ -246,10 +247,16 @@ class TheSwitchAndTheFailureModeTests(NoticeBase):
         self.call("create_task", project_id=self.project.project_id, title="Loud 2")
         self.assertEqual(len(notices(self.user)), 1)
 
-    def test_note_edited_starts_off_and_the_rest_start_on(self):
-        self.assertFalse(switches.DEFAULTS["ai_app_note_edited"])
+    def test_only_the_risky_actions_start_on(self):
+        restore_real_defaults(self)
         self.assertEqual(
-            [k for k, on in switches.DEFAULTS.items() if not on], ["ai_app_note_edited"]
+            sorted(k for k, on in switches.DEFAULTS.items() if on),
+            [
+                "ai_app_comment_deleted",
+                "ai_app_milestone_deleted",
+                "ai_app_note_deleted",
+                "ai_app_todo_deleted",
+            ],
         )
         self.assertEqual(len(switches.KEYS), 13)
         self.assertEqual(len(set(switches.KEYS)), 13)

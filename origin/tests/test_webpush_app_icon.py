@@ -28,6 +28,7 @@ from origin.models.common.notification_models import PushSubscription
 from origin.services import webpush_dispatch
 from origin.services.mcp_client_family import APP_FAMILIES
 from origin.services.v3_activity import SURFACE_TASK_BODY
+from origin.tests.ai_app_defaults import all_notices_on_by_default
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.public.mcp import via_privacy
 
@@ -46,6 +47,7 @@ CHATGPT_VIA = {"kind": "oauth", "app": "chatgpt"}
 class AppIconPushTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        all_notices_on_by_default(self)  # MIP-2009: these tests are about the icon, not the default
         cache.clear()
         PushSubscription.objects.create(
             user=self.user2,

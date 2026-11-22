@@ -6,9 +6,11 @@ decide whether the notice is MADE (`mcp_notice`), whether it is pushed (`webpush
 the push is filed under (`webpush_dispatch`), so the client's registry
 (`categories.ts`) and this table must agree.
 
-All are on unless the member turned them off, except `ai_app_note_edited`: an AI app can edit one
-note dozens of times in a row and each call is its own notice, so that one starts off and the
-member opts in.
+Only the RISKY actions start on (MIP-2009, decision D4 of the agent audit trail): a delete, and any
+call that changes 10 or more items at once (`BULK_THRESHOLD`, whatever its action). Every other write
+makes no feed row, toast or push by default: about 23 a day for one person was noise, and what the
+app did shows in the Today card instead. A member who set a switch (either way) keeps that choice;
+the new defaults reach only a switch they never touched.
 """
 
 from __future__ import annotations
@@ -35,9 +37,20 @@ ACTIONS: dict[tuple[str, str], str] = {
 
 KEYS: tuple[str, ...] = tuple(ACTIONS.values())
 
-OFF_BY_DEFAULT = frozenset({"ai_app_note_edited"})
+# A call that changes this many items at once is a bulk change, which alerts whatever its action.
+BULK_THRESHOLD = 10
 
-DEFAULTS: dict[str, bool] = {key: key not in OFF_BY_DEFAULT for key in KEYS}
+# The risky actions, on until the member turns them off.
+ON_BY_DEFAULT = frozenset(
+    {
+        "ai_app_comment_deleted",
+        "ai_app_milestone_deleted",
+        "ai_app_note_deleted",
+        "ai_app_todo_deleted",
+    }
+)
+
+DEFAULTS: dict[str, bool] = {key: key in ON_BY_DEFAULT for key in KEYS}
 
 
 def key_for(verb: Any, kind: Any) -> str | None:
@@ -50,3 +63,21 @@ def is_on(category_settings: dict[str, Any] | None, key: str | None) -> bool:
     if key is None:
         return True
     return bool((category_settings or {}).get(key, DEFAULTS.get(key, True)))
+
+
+def is_bulk(count: Any) -> bool:
+    try:
+        return int(count) >= BULK_THRESHOLD
+    except (TypeError, ValueError):
+        return False
+
+
+def allows(category_settings: dict[str, Any] | None, key: str | None, count: Any) -> bool:
+    """Whether a notice of `count` items under `key` is made. An explicit choice of the member wins;
+    otherwise the default, which a bulk change overrides to on."""
+    if key is None:
+        return True
+    settings = category_settings or {}
+    if key in settings:
+        return bool(settings[key])
+    return DEFAULTS.get(key, True) or is_bulk(count)

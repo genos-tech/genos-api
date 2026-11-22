@@ -17,8 +17,8 @@ up to `MAX_ITEMS` of them named.
 
 **Switches** (MIP-1452). Their own group: `NotificationPreference.enable_ai_apps` is the master, and
 `category_settings` has one key per ACTION ("task created", "note deleted", ...; the table is
-`ai_app_switches.ACTIONS`). All are on unless the member turned them off, except "note edited"
-(an app can edit one note dozens of times in a row). The master and the action's key both gate
+`ai_app_switches.ACTIONS`). Only the risky ones start on (MIP-2009): a delete, or any call that
+changes 10+ items; the rest are off until the member turns them on (they show in the Today card). The master and the action's key both gate
 the feed row AND the Web Push (a row that is never made cannot be pushed). The in-app agent is not covered: it pauses for the member's approval on every write, so they know.
 Plain REST API-key calls are not covered either: there is no app to name.
 
@@ -390,9 +390,9 @@ def _enabled(user_id, notice: Notice) -> bool:
     )
     key = switches.key_for(notice.verb, notice.kind)
     if row is None:
-        return switches.is_on({}, key)
+        return switches.allows({}, key, notice.count)
     master, settings = row
-    return bool(master) and switches.is_on(settings, key)
+    return bool(master) and switches.allows(settings, key, notice.count)
 
 
 def notify_owner(
@@ -421,6 +421,8 @@ def notify_owner(
             "count": notice.count,
             "items": notice.items[:MAX_ITEMS],
         }
+        if switches.is_bulk(notice.count):
+            meta["bulk"] = True
         # The official family of the connected app (`claude` | `chatgpt`), for its icon on the
         # notice (MIP-1571); absent for any other app, an API key, and every older notice. The
         # notice is the owner's alone (recipient == actor), who is also the one reader of the
