@@ -47,11 +47,11 @@ class TestRegistry(SimpleTestCase):
     def test_github_app_is_a_registered_provider(self):
         self.assertIsInstance(get_provider("github_app"), GitHubAppOAuthProvider)
 
-    def test_github_app_flow_routes_are_not_served_yet(self):
-        # No sign-in, connect or disconnect route may start with it until its flow lands: a
-        # login with this provider would create users.
-        self.assertNotIn("github_app", supported_provider_names())
-        self.assertEqual(set(supported_provider_names()), {"google", "github"})
+    def test_github_app_flow_routes_are_served_but_never_as_a_login(self):
+        # The flow is wired (MIP-2087); the views additionally need GITHUB_APP_ENABLED, and the
+        # login (GET initiate) refuses this provider: a login with it would create users. Both
+        # are pinned in test_github_app_install_flow.
+        self.assertEqual(set(supported_provider_names()), {"google", "github", "github_app"})
 
     def test_flags(self):
         provider = get_provider("github_app")

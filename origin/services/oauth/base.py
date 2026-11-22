@@ -56,8 +56,9 @@ class OAuthProvider(ABC):
     name: str  # "google" | "github" | "github_app"
 
     # Whether `oauth_views` serves this provider's initiate / callback / disconnect routes. False
-    # for a provider whose flow is not wired yet (`github_app`, MIP-2086): it can refresh and
-    # revoke tokens, but nobody can start a sign-in or connect with it.
+    # for a provider whose flow is not wired: it can refresh and revoke tokens, but nobody can
+    # start a sign-in or connect with it. (`github_app` is wired since MIP-2087; its views also
+    # need GITHUB_APP_ENABLED.)
     has_flow: bool = True
 
     # True when a refresh makes the OLD refresh token (and access token) stop working, as GitHub
