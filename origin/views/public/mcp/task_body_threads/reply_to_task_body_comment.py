@@ -13,7 +13,11 @@ from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.task_access import load_task
 from origin.services import collab_push
 from origin.views.public.mcp.note_threads._common import actor_id, reduced_via
-from origin.views.public.mcp.task_body_threads._common import clean_thread_id, refusal
+from origin.views.public.mcp.task_body_threads._common import (
+    clean_thread_id,
+    refusal,
+    refuse_if_archived,
+)
 
 MAX_TEXT_CHARS = 4000
 MAX_LINES = 50
@@ -36,6 +40,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     thread_id = clean_thread_id(args.get("thread_id"))
     text = _text(args.get("text"))
     task = load_task(args.get("task_id"), ctx, action="reply to a comment on")
+    refuse_if_archived(task)
     try:
         done = collab_push.reply_thread_in(
             collab_push.task_body_document(task.task_id),

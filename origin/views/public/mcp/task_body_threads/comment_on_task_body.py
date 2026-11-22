@@ -17,7 +17,7 @@ from origin.search_engine.agent.tools.task_access import load_task
 from origin.services import collab_push
 from origin.views.public.mcp.note_threads._common import actor_id, reduced_via
 from origin.views.public.mcp.resolve import BLOCK_ID
-from origin.views.public.mcp.task_body_threads._common import create_refusal
+from origin.views.public.mcp.task_body_threads._common import create_refusal, refuse_if_archived
 
 MAX_TEXT_CHARS = 4000
 MAX_LINES = 50
@@ -85,6 +85,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     block_id = _block_id(args.get("block_id"))
     occurrence = _occurrence(args.get("occurrence"))
     task = load_task(args.get("task_id"), ctx, action="comment on")
+    refuse_if_archived(task)
     try:
         done = collab_push.create_thread_in(
             collab_push.task_body_document(task.task_id),
