@@ -89,6 +89,7 @@ from origin.views.chat.personal_tag_views import (
     PersonalTagListView,
 )
 from origin.views.chat.pin_flag_views import (
+    ChannelHideView,
     FlagListView,
     FlagView,
     MessageReminderListView,
@@ -225,6 +226,11 @@ urlpatterns = [
         name="v3_read_cursor",
     ),
     # Pin / Flag
+    path(
+        "api/v3/channels/<uuid:channel_id>/hide/",
+        ChannelHideView.as_view(),
+        name="v3_channel_hide",
+    ),
     path(
         "api/v3/channels/<uuid:channel_id>/pin/",
         PinView.as_view(),

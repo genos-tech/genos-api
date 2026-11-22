@@ -395,6 +395,19 @@ class ChannelListView(AuthenticatedAPIView):
                 )
             )
 
+        # A DM / multi-person DM the caller removed from their sidebar leaves the list (MIP-1414),
+        # for the caller only; `include_hidden=1` lists it anyway. A display preference: the chat
+        # stays readable and reachable by id.
+        if request.GET.get("include_hidden") not in ("1", "true", "True"):
+            qs = qs.exclude(
+                Exists(
+                    ChannelMember.objects.filter(
+                        channel=OuterRef("pk"), user=user, hidden_at__isnull=False
+                    )
+                ),
+                kind__in=(ChannelKind.DM, ChannelKind.MDM),
+            )
+
         # Paging is opt-in: with neither `cursor` nor `limit` this is every
         # channel, as it has always been (MIP-808). Applied to the queryset
         # BEFORE it is evaluated, so the latest-message, member and unread work
@@ -625,17 +638,22 @@ class ChannelListView(AuthenticatedAPIView):
                 had_live_row = ChannelMember.objects.filter(
                     channel=channel, user=request.user, is_deleted=False
                 ).exists()
+                # Starting the DM again shows a chat the caller had removed from their sidebar
+                # (MIP-1414); their other devices re-read the list.
+                was_hidden = ChannelMember.objects.filter(
+                    channel=channel, user=request.user, hidden_at__isnull=False
+                ).exists()
                 ChannelMember.objects.update_or_create(
                     channel=channel,
                     user=request.user,
-                    defaults={"is_deleted": False, "role": "member"},
+                    defaults={"is_deleted": False, "role": "member", "hidden_at": None},
                 )
                 # MIP-1722: a plain re-open of a live DM changes nothing for anyone, so it
                 # announces nothing. A DM that was deleted comes back for everyone still in it;
                 # a requester who had left gets it back on their other devices only.
                 if revived:
                     ChannelListView._announce_dm(request, team, channel, everyone=True)
-                elif not had_live_row:
+                elif not had_live_row or was_hidden:
                     ChannelListView._announce_dm(request, team, channel, everyone=False)
                 return Response(
                     {"channel": ChannelSerializer(channel, context={"request": request}).data},
