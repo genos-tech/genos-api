@@ -27,9 +27,9 @@
       "declarations": "c1350bc47207699f3da658920164f4d15c2f943e1fc270a7cac8054c918cec4d",
       "prompt/legacy": "5c584581f941d6eaf4464bb4e5dede88bb9a0fecc149641af789ba7d7b4d2ab2",
       "prompt/registry": "06561aa5442dd7d0c7ea7461edb8daf7172760b9a800cb10584182629bf1ecb6",
-      "result/client": "dc7ad1d0955fd6d24c93bfd9c1f1416cb3cf4d099008de0677652ae1b61f1f9d",
-      "result/dev": "dc7ad1d0955fd6d24c93bfd9c1f1416cb3cf4d099008de0677652ae1b61f1f9d",
-      "result/pm": "dc7ad1d0955fd6d24c93bfd9c1f1416cb3cf4d099008de0677652ae1b61f1f9d"
+      "result/client": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
+      "result/dev": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
+      "result/pm": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0"
     },
     "test_agent_inbox_report_label": {
       "declarations": "c1350bc47207699f3da658920164f4d15c2f943e1fc270a7cac8054c918cec4d",
