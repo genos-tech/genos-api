@@ -59,6 +59,7 @@ from origin.views.common.inbox_views import *
 from origin.views.common.mcp_connection_views import (
     McpConnectionDetailView,
     McpConnectionListView,
+    McpConnectionQuietView,
     TeamMcpConnectionDetailView,
     TeamMcpConnectionListView,
 )
@@ -488,6 +489,11 @@ urlpatterns = [
     ),
     path("api/v2/agent/work/", AgentWorkView.as_view(), name="agent_work"),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),
+    path(
+        "api/v2/mcp/connections/quiet/",
+        McpConnectionQuietView.as_view(),
+        name="mcp_connections_quiet",
+    ),
     path(
         "api/v2/mcp/connections/<uuid:connection_id>/",
         McpConnectionDetailView.as_view(),
