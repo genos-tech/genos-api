@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 BROADCAST_PATH = "/internal/broadcast/task-comment"
 ACTIVITY_PATH = "/internal/broadcast/activity"
 MESSAGE_PATH = "/internal/broadcast/message"
+MESSAGES_DELETED_PATH = "/internal/broadcast/messages-deleted"
 INBOX_PATH = "/internal/broadcast/inbox"
 MEMBERSHIP_PATH = "/internal/membership/removed"
 # Must match genos-sockets `utils/internal_auth`.
@@ -102,6 +103,10 @@ def _log_fields(payload: dict[str, Any]) -> str:
                 if value is not None:
                     found.setdefault(label, str(value)[:64])
     # A membership push names the rooms it removes: show the first few, and how many more.
+    # A bulk message push names how many messages, never which.
+    ids = payload.get("messageIds")
+    if isinstance(ids, list):
+        found["messages"] = str(len(ids))
     for key, label in (("projectIds", "projects"), ("channels", "channels")):
         items = payload.get(key)
         if isinstance(items, list) and items:
@@ -331,41 +336,28 @@ def push_message(message, event) -> None:
         logger.warning("sockets message push could not be scheduled", exc_info=True)
 
 
-def push_messages(messages, event) -> None:
-    """`push_message` for a batch (MIP-1943: "Delete all my messages" blanks up to a few hundred
-    rows in one call). One query reads them all; after the commit they are sent one by one and the
-    first failure ends the run, so an unreachable sockets costs one timeout and not one per row.
-    Whatever is not pushed is found by the next sync. Never raises."""
+def push_messages_deleted(channel, messages) -> None:
+    """Tell the chat's open clients that these messages were force-deleted (MIP-1951): ONE post
+    per batch to genos-sockets, which sends `messages.deleted` (the chat and the ids, never any
+    text) to the channel's room, so the rows are blanked now instead of at the next sync. Sent after
+    the commit; a no-op when sockets is not configured. Never raises: the rows are erased, and the
+    next sync still finds them."""
     try:
         if not settings.SOCKETS_INTERNAL_URL or not messages:
             return
         if not settings.SOCKETS_INTERNAL_SECRET:
             logger.warning("sockets message push skipped: SOCKETS_INTERNAL_SECRET is unset")
             return
-        from rest_framework.renderers import JSONRenderer  # noqa: PLC0415
-
-        from origin.models.chat.unified_models import Message  # noqa: PLC0415
-        from origin.serializers.chat.unified_serializers import MessageSerializer  # noqa: PLC0415
-        from origin.views.chat.message_views import _prefetched_messages  # noqa: PLC0415
-
-        fresh = _prefetched_messages(Message.objects.filter(pk__in=[m.pk for m in messages]))
-        payloads = [
-            {
-                "event": event,
-                "message": json.loads(JSONRenderer().render(MessageSerializer(m).data)),
-                "taskId": m.task_id,
-            }
-            for m in fresh
-        ]
-
-        def send_all() -> None:
-            for payload in payloads:
-                if not _post(payload, MESSAGE_PATH, "message"):
-                    return
-
-        transaction.on_commit(send_all, robust=True)
-    except Exception:  # noqa: BLE001 — the rows are saved; an observer must not break them
-        logger.warning("sockets messages push could not be scheduled", exc_info=True)
+        payload: dict[str, Any] = {
+            "channelId": str(channel.id),
+            "channelKind": int(channel.kind),
+            "messageIds": [str(m.pk) for m in messages],
+        }
+        transaction.on_commit(
+            lambda: _post(payload, MESSAGES_DELETED_PATH, "messages-deleted"), robust=True
+        )
+    except Exception:  # noqa: BLE001 — the rows are erased; an observer must not break it
+        logger.warning("sockets messages-deleted push could not be scheduled", exc_info=True)
 
 
 # Sockets takes at most this many of each (genos-sockets `MAX_ROOMS`); a person in more than that
