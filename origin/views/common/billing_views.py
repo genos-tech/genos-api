@@ -281,7 +281,6 @@ _PLAN_LIMIT_KEYS = (
     "agent_memory",
     "agent_history_retention_days",
     "integrations",
-    "digest_cadence",
     "mcp_enabled",
     "schedules_enabled",
 )

@@ -88,10 +88,8 @@ class UnsubscribeGetTests(BaseAPITestCase):
         self.assertEqual(self.client.post(_url(token)).status_code, 200)
         self.user.refresh_from_db()
         self.assertFalse(self.user.email_digest_enabled)
-        # The digest scope touches neither the prefs row nor the agent
-        # digest's opt-out.
+        # The digest scope does not touch the prefs row.
         self.assertFalse(NotificationPreference.objects.filter(user=self.user).exists())
-        self.assertTrue(self.user.digest_enabled)
 
 
 class UnsubscribePostTests(BaseAPITestCase):

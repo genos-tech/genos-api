@@ -4,7 +4,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 
 # The Activities half of the inbox: things that HAPPENED and need no answer
-# (0 notice, 6 Genos digest, 9 reminder, 10 Genos report). Every other item_type is a REQUEST
+# (0 notice, 6 Genos digest (retired, old items stay), 9 reminder, 10 Genos report). Every other item_type is a REQUEST
 # somebody is waiting on. The split decides which inbox tab an item lands on, whether the card
 # offers approve/reject, what "mark all as read" touches (`InboxMarkReadView`: Activities only)
 # and which tab's count it adds to. Unread items of BOTH halves count toward the sidebar badge and
@@ -14,6 +14,10 @@ ACTIVITY_INBOX_ITEM_TYPES = frozenset({0, 6, 9, 10})
 
 # `item_type` of the report a member's schedule filed (see the map on `InboxItems.item_type`).
 ITEM_TYPE_GENOS_REPORT = 10
+
+# `item_type` of the proactive Genos digest. RETIRED (MIP-1968): nothing files it any more, but
+# the items already delivered stay readable.
+ITEM_TYPE_GENOS_DIGEST = 6
 
 
 class InboxItems(models.Model):
@@ -49,7 +53,7 @@ class InboxItems(models.Model):
     #    5: "team ownership claim" (break-glass recovery for an absent
     #       owner — see origin/services/ownership_claim.py; `receiver` is
     #       the CURRENT owner, `sender` the editor claiming)
-    #    6: "Genos digest" (proactive tier digest, UX tier model §8 —
+    #    6: "Genos digest" (RETIRED: proactive tier digest, UX tier model §8 —
     #       system-authored: `sender` is NULL, `item_body` carries
     #       {title, text}; not a request, `request_status` is "")
     #    7: "team connection request" (another TEAM asks to connect — see

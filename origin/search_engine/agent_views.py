@@ -185,7 +185,6 @@ from origin.search_engine.quota import (
     get_agent_memory,
     get_agent_tool_level,
     get_auto_effort,
-    get_digest_cadence,
     get_effective_tier,
     get_integrations,
     get_max_effort,
@@ -3707,8 +3706,7 @@ class AgentFeaturesView(AuthenticatedAPIView):
             "auto_effort":      bool,
             "agent_memory":     "none" | "own" | "team",
             "agent_history_retention_days": int | null,  # null = unlimited
-            "integrations":     ["web", "google_calendar", "github"],
-            "digest_cadence":   null | "weekly" | "daily"
+            "integrations":     ["web", "google_calendar", "github"]
         }
     """
 
@@ -3744,7 +3742,6 @@ class AgentFeaturesView(AuthenticatedAPIView):
             "agent_memory": get_agent_memory(user_id),
             "agent_history_retention_days": get_agent_history_retention_days(user_id),
             "integrations": get_integrations(user_id),
-            "digest_cadence": get_digest_cadence(user_id),
         }
         # ADDITIVE, and present only when credits are authoritative —
         # its presence is the client's render switch.

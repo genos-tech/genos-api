@@ -10,8 +10,7 @@ link back, and closes it — you only ever write the description.
 
 The whole thing is a thin dispatcher, because the hard parts already
 exist. `Tool.run(args, ctx)` in `search_engine/agent/tools/` is
-self-contained and enforces its own ACL, and `agent_digest` already
-proves a tool can be invoked outside any HTTP request from a bare
+self-contained and enforces its own ACL, and a tool can be invoked outside any HTTP request from a bare
 `ToolContext`. So there is no LLM here and no agent loop — just JSON-RPC
 in, `run()`, JSON-RPC out.
 

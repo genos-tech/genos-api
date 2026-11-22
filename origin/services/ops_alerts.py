@@ -76,7 +76,6 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     # */15
     "reconcile-pr-deliveries": timedelta(minutes=50),
     # hourly
-    "agent-digest": timedelta(hours=3),
     "agent-judge-sampler": timedelta(hours=3),
     "email-digest": timedelta(hours=3),
     "reap-stale-agent-runs": timedelta(hours=3),

@@ -45,7 +45,6 @@ from origin.search_engine.agent.tools import (
     register_flagged_tool,
 )
 from origin.search_engine.agent.tools.delete_task_attachment import DELETE_TASK_ATTACHMENT
-from origin.search_engine.management.commands.agent_digest import _digest_disabled_tools
 from origin.search_engine.models import AgentRun, AgentStep
 
 NAME = "delete_task_attachment"
@@ -122,7 +121,6 @@ class FlagOffTests(SimpleTestCase):
         with flag(**OFF):
             for level in ("read", "act", "organize"):
                 self.assertNotIn(NAME, tool_tiers.disabled_tools_for_level(level))
-            self.assertNotIn(NAME, _digest_disabled_tools())
             self.assertEqual(tool_tiers.disabled_tools_for_level("read"), registered_writes())
 
     def test_the_operator_kill_switch_may_name_it_without_reading_as_a_typo(self):
@@ -166,10 +164,6 @@ class FlagOnTests(SimpleTestCase):
             }
         self.assertNotIn(NAME, declared)
         self.assertIn(NAME, tool_tiers.SINGLE_WRITE_TOOLS)
-
-    def test_the_digest_has_no_approver_so_it_never_sees_it(self):
-        with flag(**ON):
-            self.assertIn(NAME, _digest_disabled_tools())
 
     def test_the_critique_pass_is_read_only(self):
         seen = {}

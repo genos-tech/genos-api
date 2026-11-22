@@ -502,7 +502,6 @@ def delete_account(user) -> dict:
         user.is_email_verified = False
         user.password_reset_token_hash = None
         user.password_reset_token_expires_at = None
-        user.digest_enabled = False
         user.email_digest_enabled = False
         user.save()
 

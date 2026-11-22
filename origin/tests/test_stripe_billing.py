@@ -1761,7 +1761,6 @@ class PlansViewTests(BillingTestBase):
                 cfg["agent_history_retention_days"],
             )
             self.assertEqual(limits["integrations"], cfg["integrations"])
-            self.assertEqual(limits["digest_cadence"], cfg["digest_cadence"])
 
     def test_plans_flags_and_prices(self):
         with self._price_mock():

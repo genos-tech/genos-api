@@ -23,12 +23,10 @@ import re
 import uuid
 from datetime import datetime
 from datetime import timezone as dt_timezone
-from io import StringIO
 from pathlib import Path
 from unittest import mock
 
 from django.conf import settings
-from django.core.management import call_command
 from django.test import SimpleTestCase
 from django.utils import timezone
 
@@ -41,12 +39,9 @@ from origin.models.common.schedule_models import MemberSchedule
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.search_engine.agent.tools import ToolContext
 from origin.search_engine.agent.tools.list_my_inbox import LIST_MY_INBOX
-from origin.search_engine.llm import spend
-from origin.search_engine.management.commands import agent_digest as digest_mod
 from origin.search_engine.models import AiRequestCost
 from origin.services import inbox_ai, schedule_delivery, schedules
 from origin.services.schedule_jobs import JOBS, Job
-from origin.tests.test_agent_digest import _fake_run_agent
 from origin.tests.test_base import BaseAPITestCase
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -106,15 +101,10 @@ class TestTheInventory(SimpleTestCase):
                 )
                 self.assertNotIn("metered_request(", text, f"{rel} meters AI but says it uses none")
 
-    def test_the_two_that_can_spend_are_the_digest_and_the_reports(self):
+    def test_the_only_one_that_can_spend_is_the_reports(self):
+        # The digest was decommissioned (MIP-1968).
         spends = {rel for rel, e in inbox_ai.PRODUCERS.items() if e["ai"]}
-        self.assertEqual(
-            spends,
-            {
-                "origin/search_engine/management/commands/agent_digest.py",
-                "origin/services/schedule_delivery.py",
-            },
-        )
+        self.assertEqual(spends, {"origin/services/schedule_delivery.py"})
 
     def test_only_the_jobs_known_to_use_ai_claim_it(self):
         # A job that can use AI must name the request that paid, or say why it spent nothing
@@ -171,55 +161,19 @@ class TestTheCostBlock(BaseAPITestCase):
         self.assertFalse(block["metered"])
 
 
-class TestTheDigest(BaseAPITestCase):
-    def setUp(self):
-        super().setUp()
-        self.team.plan = "max"
-        self.team.save(update_fields=["plan"])
-        self.user.timezone = "Asia/Tokyo"
-        self.user.save(update_fields=["timezone"])
+class TestRetiredDigestItems(BaseAPITestCase):
+    """The digest is decommissioned (MIP-1968); the items it already delivered stay readable."""
 
-    def tick(self, run_agent=None):
-        with (
-            mock.patch.object(digest_mod.timezone, "now", return_value=_MONDAY_8AM_JST),
-            mock.patch.object(digest_mod, "run_agent", side_effect=run_agent or _fake_run_agent()),
-            mock.patch.object(digest_mod, "dispatch_push_for_inbox_item"),
-        ):
-            call_command("agent_digest", stdout=StringIO(), at_hour=8)
-        return list(InboxItems.objects.filter(item_type=digest_mod.ITEM_TYPE_DIGEST))
-
-    def test_the_digest_item_always_carries_its_cost_block(self):
-        [item] = self.tick()
-        ai = item.item_optionals["ai"]
-        self.assertEqual(ai["producer"], "digest")
-        self.assertEqual(set(ai), set(inbox_ai.cost_block("digest", None, 0)))
-
-    def test_it_is_the_request_that_paid_for_the_run(self):
-        seen = {}
-        text = "- Task X slipped.\nNext: review X."
-        inner = _fake_run_agent(text)
-
-        def paid(query, ctx, emit, **kwargs):
-            bound = spend.current_context()
-            seen["request_id"] = bound.request_id
-            cost_row(self.user, request_id=bound.request_id)
-            return inner(query, ctx, emit, **kwargs)
-
-        [item] = self.tick(run_agent=paid)
-        ai = item.item_optionals["ai"]
-        self.assertEqual(ai["request_id"], seen["request_id"])
-        self.assertTrue(ai["metered"])
-        self.assertEqual(ai["credits_milli"], 1830)
-        self.assertEqual(ai["deducted_credits_milli"], 0)
-        self.assertEqual(ai["calls"], 7)
-
-    def test_the_cost_is_in_the_optionals_and_not_in_the_body(self):
-        [item] = self.tick()
-        self.assertNotIn("ai", item.item_body)
-        self.assertNotIn("credits", json.dumps(item.item_body))
-
-    def test_the_in_app_models_inbox_tool_shows_no_cost(self):
-        [item] = self.tick()
+    def test_the_in_app_models_inbox_tool_shows_an_old_digest_and_no_cost(self):
+        item = InboxItems.objects.create(
+            team=self.team,
+            sender=None,
+            receiver=self.user,
+            item_type=6,
+            item_body={"title": "Digest", "text": "x"},
+            item_optionals={"ai": inbox_ai.cost_block("digest", None, self.user.id)},
+            request_status="",
+        )
         ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
         out = LIST_MY_INBOX.run({"include_read": True}, ctx)
         blob = json.dumps(out)
@@ -349,27 +303,24 @@ class TestTurnItOff(AiJobBase):
     def url(self, item, tail=""):
         return f"{LIST}{item.item_id}/ai/{tail}"
 
-    def test_the_digest_is_turned_off_and_back_on_and_the_item_stays(self):
+    def test_a_retired_digest_item_has_no_switch_and_stays(self):
         item = self.digest_item()
         before = self.client.get(self.url(item)).data
         self.assertEqual(
-            before, {"kind": "digest", "enabled": True, "label": "Genos digest", "used_ai": True}
+            before,
+            {
+                "kind": "digest",
+                "enabled": False,
+                "label": "Genos digest",
+                "used_ai": True,
+                "gone": True,
+            },
         )
-        off = self.client.post(self.url(item, "off/"))
-        self.assertEqual(off.status_code, 200, off.data)
-        self.assertEqual(
-            (off.data["kind"], off.data["enabled"], off.data["was_enabled"]),
-            ("digest", False, True),
-        )
-        self.assertIn("digest is off", off.data["what"])
-        self.user.refresh_from_db()
-        self.assertFalse(self.user.digest_enabled)
+        for tail in ("off/", "on/"):
+            res = self.client.post(self.url(item, tail))
+            self.assertEqual(res.status_code, 404, res.data)
+            self.assertIn("retired", res.data["error"])
         self.assertTrue(InboxItems.objects.filter(pk=item.pk, is_deleted=False).exists())
-        self.assertFalse(self.client.get(self.url(item)).data["enabled"])
-        on = self.client.post(self.url(item, "on/"))
-        self.assertEqual((on.status_code, on.data["enabled"]), (200, True))
-        self.user.refresh_from_db()
-        self.assertTrue(self.user.digest_enabled)
 
     def test_a_report_pauses_its_schedule_and_the_undo_resumes_it(self):
         item, sched = self.report_item()
@@ -410,12 +361,6 @@ class TestTurnItOff(AiJobBase):
             res = self.client.post(self.url(item, "off/"))
         self.assertEqual((res.status_code, res.data), (400, {"error": "No."}))
 
-    def test_turning_off_twice_says_it_was_already_off(self):
-        item = self.digest_item()
-        self.client.post(self.url(item, "off/"))
-        again = self.client.post(self.url(item, "off/"))
-        self.assertEqual((again.data["enabled"], again.data["was_enabled"]), (False, False))
-
     def test_a_second_off_or_a_replayed_on_says_so_and_writes_nothing(self):
         item, sched = self.report_item()
         MemberSchedule.objects.filter(pk=sched.pk).update(consecutive_failures=2)
@@ -431,8 +376,6 @@ class TestTurnItOff(AiJobBase):
         self.client.post(self.url(item, "off/"))
         again = self.client.post(self.url(item, "off/"))
         self.assertIn("already off", again.data["what"])
-        digest = self.digest_item()
-        self.assertIn("already on", self.client.post(self.url(digest, "on/")).data["what"])
 
     def test_a_schedule_is_switched_in_its_own_team_not_the_items(self):
         item, sched = self.report_item()
@@ -455,10 +398,7 @@ class TestTurnItOff(AiJobBase):
         self.assertEqual(res.status_code, 200)
         other.refresh_from_db()
         sched.refresh_from_db()
-        self.user.refresh_from_db()
-        self.assertEqual(
-            (other.enabled, sched.enabled, self.user.digest_enabled), (True, False, True)
-        )
+        self.assertEqual((other.enabled, sched.enabled), (True, False))
 
     def test_someone_elses_item_an_item_without_ai_and_a_deleted_one_are_the_same_404(self):
         theirs = self.digest_item(self.user2)
@@ -475,8 +415,6 @@ class TestTurnItOff(AiJobBase):
                 self.assertEqual(res.status_code, 404, (item.item_id, tail))
                 answers.add(json.dumps(res.data))
         self.assertEqual(len(answers), 1)
-        self.user2.refresh_from_db()
-        self.assertTrue(self.user2.digest_enabled)
         missing = self.client.post(f"{LIST}999999/ai/off/")
         self.assertEqual(json.dumps(missing.data), next(iter(answers)))
 
@@ -490,8 +428,6 @@ class TestTurnItOff(AiJobBase):
             request_status="pending",
         )
         self.assertEqual(self.client.post(self.url(forged, "off/")).status_code, 404)
-        self.user.refresh_from_db()
-        self.assertTrue(self.user.digest_enabled)
 
     def test_a_forged_block_naming_someone_elses_schedule_switches_nothing(self):
         theirs = schedules.create(
@@ -551,6 +487,7 @@ class TestTurnItOff(AiJobBase):
         res = self.client.get(f"{LIST}?team_id={self.team.team_id}")
         rows = {r["itemId"]: r for r in res.data["data"]["items"]}
         self.assertEqual(rows[digest.item_id]["aiSource"]["kind"], "digest")
+        self.assertTrue(rows[digest.item_id]["aiSource"]["gone"])
         self.assertEqual(
             rows[report.item_id]["aiSource"],
             {
@@ -567,7 +504,6 @@ class TestTurnItOff(AiJobBase):
         res = self.client.get(f"{LIST}?team_id={self.team.team_id}")
         rows = {r["itemId"]: r for r in res.data["data"]["items"]}
         self.assertFalse(rows[report.item_id]["aiSource"]["enabled"])
-        self.assertTrue(rows[digest.item_id]["aiSource"]["enabled"])
 
     # -- every digest and every report has a switch, AI or not (MIP-1234) --
 
@@ -678,7 +614,7 @@ class TestTurnItOff(AiJobBase):
             item_optionals={"ai": {"producer": "schedule"}, "schedule_id": str(theirs.id)},
             request_status="",
         )
-        res = self.client.post(self.url(digest_forged, "off/"))
+        res = self.client.get(self.url(digest_forged))
         self.assertEqual((res.data["kind"], res.data["label"]), ("digest", "Genos digest"))
         for row in (sched, theirs):
             row.refresh_from_db()
@@ -789,12 +725,6 @@ class TestTurnItOff(AiJobBase):
             self.client.get(f"{LIST}?team_id={self.team.team_id}")
         schedule_reads = [s for s in q.captured_queries if "origin_memberschedule" in s["sql"]]
         self.assertEqual(len(schedule_reads), 1)
-
-    def test_the_cap_of_one_digest_flag_is_the_members_own(self):
-        item = self.digest_item()
-        self.client.post(self.url(item, "off/"))
-        self.user2.refresh_from_db()
-        self.assertTrue(self.user2.digest_enabled)
 
 
 class TestTheSentences(SimpleTestCase):

@@ -298,7 +298,6 @@ class DefaultConfigShapeTests(TestCase):
         "agent_memory",
         "agent_history_retention_days",
         "integrations",
-        "digest_cadence",
     }
 
     def test_all_tiers_have_all_dimensions(self):
@@ -375,8 +374,8 @@ class DefaultConfigShapeTests(TestCase):
         # The experience ladder itself (UX_TIER_MODEL_PLAN.md §3.1).
         tq = settings.SEARCH_ENGINE["TIER_QUOTAS"]
         expected = {
-            # (agency, max_effort, auto, memory, history_days, integrations, digest)
-            "free": ("read", "low", False, "none", 30, [], None),
+            # (agency, max_effort, auto, memory, history_days, integrations)
+            "free": ("read", "low", False, "none", 30, []),
             "core": (
                 "act",
                 "medium",
@@ -384,7 +383,6 @@ class DefaultConfigShapeTests(TestCase):
                 "own",
                 180,
                 ["web", "google_calendar"],
-                None,
             ),
             "pro": (
                 "organize",
@@ -393,7 +391,6 @@ class DefaultConfigShapeTests(TestCase):
                 "team",
                 365,
                 ["web", "google_calendar", "github"],
-                "weekly",
             ),
             "max": (
                 "organize",
@@ -402,7 +399,6 @@ class DefaultConfigShapeTests(TestCase):
                 "team",
                 None,
                 ["web", "google_calendar", "github"],
-                "daily",
             ),
             "enterprise": (
                 "organize",
@@ -411,10 +407,9 @@ class DefaultConfigShapeTests(TestCase):
                 "team",
                 None,
                 ["web", "google_calendar", "github"],
-                "daily",
             ),
         }
-        for tier, (agency, effort, auto, memory, days, integ, digest) in expected.items():
+        for tier, (agency, effort, auto, memory, days, integ) in expected.items():
             cfg = tq[tier]
             self.assertEqual(cfg["agent_tool_level"], agency, tier)
             self.assertEqual(cfg["max_effort"], effort, tier)
@@ -422,4 +417,3 @@ class DefaultConfigShapeTests(TestCase):
             self.assertEqual(cfg["agent_memory"], memory, tier)
             self.assertEqual(cfg["agent_history_retention_days"], days, tier)
             self.assertEqual(cfg["integrations"], integ, tier)
-            self.assertEqual(cfg["digest_cadence"], digest, tier)

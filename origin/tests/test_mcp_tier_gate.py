@@ -12,7 +12,7 @@ tier that cannot use MCP, or the client reports a connection failure and
 never displays the message explaining the real reason.
 
 **It fails OPEN.** The permissive default is the house contract for
-every capability key except `digest_cadence`, and it is easy to
+every capability key, and it is easy to
 "correct" into a fail-closed check that looks more secure and quietly
 disconnects paying customers during a Redis incident.
 """

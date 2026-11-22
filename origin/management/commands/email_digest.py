@@ -1,10 +1,10 @@
 """The email digest — a plain "what you missed" summary, all tiers.
 
-NOT the tier-gated AI agent digest (`agent_digest`, in-app + push,
-pro/max only, LLM-generated). This one is a daily unread summary built
+NOT the AI agent digest (in-app + push, LLM-generated), which was
+decommissioned (MIP-1968). This one is a daily unread summary built
 from two DB queries, costs nothing per user, and exists for retention:
 it is the mail that brings people back. Same hourly local-time-tick
-skeleton as `agent_digest`:
+skeleton as the retired AI digest:
 
   * HOURLY cron (railway-email-digest.toml); each pass selects users
     whose LOCAL clock (CustomUser.timezone) is at --at-hour (default 8).
@@ -17,7 +17,7 @@ skeleton as `agent_digest`:
     MINUS anything a coalesced notification email already delivered
     (join against the outbox's `sent` rows — the outbox doubles as the
     dedupe ledger between the two email surfaces).
-  * Empty digest -> stamp, send nothing (the agent_digest rule: a mail
+  * Empty digest -> stamp, send nothing (the old AI-digest rule: a mail
     that says nothing useful is worse than no mail).
   * Gates: `email_digest_enabled` (its own opt-out, flipped by the
     "digest"-scope unsubscribe), the `email_enabled`/`master_enabled`
