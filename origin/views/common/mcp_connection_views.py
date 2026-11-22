@@ -25,7 +25,7 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_connections, mcp_oauth
+from origin.services import agent_quiet, mcp_connections, mcp_oauth
 from origin.services.member_roles import OWNER, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
@@ -87,6 +87,14 @@ class McpConnectionListView(_Base):
                 "availableTeams": [{"id": t, "name": n} for t, n in teams.items()],
             }
         )
+
+
+class McpConnectionQuietView(_Base):
+    """`GET /api/v2/mcp/connections/quiet/` (MIP-2022): the caller's connected apps are connected but
+    no agent wrote anything for N days. A quiet line on the page, never a message."""
+
+    def get(self, request):
+        return Response(agent_quiet.quiet_state(request.user))
 
 
 class McpConnectionDetailView(_Base):
