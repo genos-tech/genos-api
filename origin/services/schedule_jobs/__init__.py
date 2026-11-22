@@ -167,6 +167,12 @@ class Job:
     # member picks a project or a milestone by NAME there, so an id instruction does not belong
     # in it. The catalog carries this beside it for `list_my_schedules`; the REST page leaves it out.
     agent_note: str = ""
+    # For a job that may be posted into a chat other people read (MIP-1420): `share_project(params,
+    # team_id)` is the id of the ONE project the report is about, or None when it has none. A job
+    # without it (None) is about its owner (their tasks, to-dos, calendar) and goes only to the
+    # Inbox or to a chat the owner is alone in. The report is read through the owner's access, so
+    # every reader of the chat must be on that project (`services/schedule_audience`).
+    share_project: Callable[[dict[str, Any], str], int | None] | None = None
 
     def ai_applies(self, params: dict[str, Any] | None) -> bool:
         """Whether a run with `params` spends AI usage, and so must name what it cost."""
@@ -179,6 +185,10 @@ class Job:
 # stored and never accepted from a member (`clean_params` refuses unknown names): a run-time
 # value only.
 AI_EFFORT_KEY = "_ai_effort"
+# The key under which the runner tells a job its report goes to a chat other people read
+# (MIP-1420): the job then writes in the third person ("assigned this to you" would name the
+# schedule's owner as "you" to everyone). Run-time only, never stored or accepted from a member.
+SHARED_KEY = "_shared"
 
 JOBS: dict[str, Job] = {}
 

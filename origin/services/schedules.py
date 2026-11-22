@@ -89,9 +89,9 @@ from origin.models.common.schedule_models import (
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_delivery, schedule_text
+from origin.services import schedule_audience, schedule_delivery, schedule_text
 from origin.services.mcp_oauth import clean_name
-from origin.services.schedule_jobs import AI_EFFORT_KEY, JOBS, Report
+from origin.services.schedule_jobs import AI_EFFORT_KEY, JOBS, SHARED_KEY, Report
 from origin.services.user_time import user_zone
 
 log = logging.getLogger("origin.schedules")
@@ -497,15 +497,16 @@ _EDITABLE = {
     "time_of_day",
     "deliver_push",
     "ai_effort",
+    "deliver_channel_id",
 }
 _RECURRENCE_FIELDS = {"frequency", "weekdays", "month_day", "run_date", "time_of_day"}
 
 
 def list_schedules(ctx: ToolContext) -> list[MemberSchedule]:
     return list(
-        MemberSchedule.objects.filter(user_id=ctx.user_id, team_id=ctx.team_id).order_by(
-            "time_of_day", "ts_created_at"
-        )
+        MemberSchedule.objects.filter(user_id=ctx.user_id, team_id=ctx.team_id)
+        .select_related("deliver_channel__project")
+        .order_by("time_of_day", "ts_created_at")
     )
 
 
@@ -523,6 +524,23 @@ def _name_key(name: str) -> str:
     return clean_name(name).casefold()
 
 
+def _clean_target(
+    ctx: ToolContext, value: Any, job: str, params: dict[str, Any]
+) -> uuid.UUID | None:
+    """The chat a schedule posts its report in (MIP-1420): None (empty) is the Inbox. A chat the
+    member cannot read, or one this report may not be posted in (who would read it, an AI part),
+    is refused in words; see `schedule_audience`."""
+    if value is None or value == "":
+        return None
+    channel = schedule_audience.load_target(ctx.user_id, ctx.team_id, value)
+    if channel is None:
+        raise ScheduleError(schedule_audience.NOT_FOUND)
+    why = schedule_audience.problem(ctx.user_id, ctx.team_id, channel, job, params)
+    if why:
+        raise ScheduleError(why)
+    return channel.id
+
+
 def _refuse_duplicate(
     ctx: ToolContext,
     *,
@@ -530,6 +548,7 @@ def _refuse_duplicate(
     job: str,
     params: dict[str, Any],
     rec: Recurrence,
+    target: Any = None,
     check_name: bool = True,
     check_content: bool = True,
 ) -> None:
@@ -547,7 +566,12 @@ def _refuse_duplicate(
     others = list_schedules(ctx)
     if check_content:
         for other in others:
-            if other.job == job and (other.params or {}) == params and _recurrence_of(other) == rec:
+            if (
+                other.job == job
+                and (other.params or {}) == params
+                and _recurrence_of(other) == rec
+                and other.deliver_channel_id == target
+            ):
                 raise ScheduleError(
                     f"You already have {other.name!r} {schedule_text.describe_recurrence(other)}, "
                     "which does the same thing."
@@ -575,6 +599,7 @@ def create(
     run_date: Any = None,
     deliver_push: bool = True,
     ai_effort: Any = None,
+    deliver_channel_id: Any = None,
     now: datetime | None = None,
 ) -> MemberSchedule:
     now = now or timezone.now()
@@ -583,6 +608,7 @@ def create(
     clean = _clean_name(name)
     effort = clean_ai_effort(ai_effort)
     cleaned_params = clean_params(job, params)
+    target = _clean_target(ctx, deliver_channel_id, job, cleaned_params)
     rec = clean_recurrence(
         frequency=frequency,
         time_of_day=time_of_day,
@@ -604,13 +630,14 @@ def create(
                 limit=cap,
                 used=used,
             )
-        _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec)
+        _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec, target=target)
         return MemberSchedule.objects.create(
             user_id=user.pk,
             team_id=ctx.team_id,
             name=clean,
             job=job,
             params=cleaned_params,
+            deliver_channel_id=target,
             frequency=rec.frequency,
             weekdays=list(rec.weekdays),
             month_day=rec.month_day,
@@ -641,7 +668,12 @@ def update(
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         sched = _get(ctx, schedule_id, lock=True)
         was_name = _name_key(sched.name)
-        was_content = (sched.job, dict(sched.params or {}), _recurrence_of(sched))
+        was_content = (
+            sched.job,
+            dict(sched.params or {}),
+            _recurrence_of(sched),
+            sched.deliver_channel_id,
+        )
         dirty = ["claimed_at", "ts_updated_at"]
         if "name" in changes:
             sched.name = _clean_name(changes["name"])
@@ -651,6 +683,16 @@ def update(
             sched.params = clean_params(job, changes.get("params", sched.params))
             sched.job = job
             dirty += ["job", "params"]
+        if {"deliver_channel_id", "job", "params"} & set(changes):
+            # A new report for the same chat, or a new chat for the same report: the rule that
+            # decides who may read it is asked again, of what the schedule is now.
+            sched.deliver_channel_id = _clean_target(
+                ctx,
+                changes.get("deliver_channel_id", sched.deliver_channel_id),
+                sched.job,
+                dict(sched.params or {}),
+            )
+            dirty.append("deliver_channel_id")
         if "deliver_push" in changes:
             sched.deliver_push = bool(changes["deliver_push"])
             dirty.append("deliver_push")
@@ -678,13 +720,19 @@ def update(
         # already duplicated stay editable (deliver_push, a pause, a rename, a time that makes
         # them different), and an edit that leaves the name or the settings alone is not asked
         # about them.
-        content = (sched.job, dict(sched.params or {}), _recurrence_of(sched))
+        content = (
+            sched.job,
+            dict(sched.params or {}),
+            _recurrence_of(sched),
+            sched.deliver_channel_id,
+        )
         _refuse_duplicate(
             ctx,
             name=sched.name,
             job=sched.job,
             params=dict(sched.params or {}),
             rec=content[2],
+            target=sched.deliver_channel_id,
             check_name=_name_key(sched.name) != was_name,
             check_content=content != was_content,
         )
@@ -776,6 +824,9 @@ def _run_params(sched: MemberSchedule, job) -> dict[str, Any]:
     schedule's effort level under a key no member can send (`AI_EFFORT_KEY`). An empty or
     unknown level is the job's default (`report_ai.effort.resolve`)."""
     params = dict(sched.params or {})
+    if sched.deliver_channel_id:
+        # Posted in a chat: the job writes for everyone who reads it, not for its owner.
+        params[SHARED_KEY] = True
     if job.uses_ai:
         params[AI_EFFORT_KEY] = sched.ai_effort or ""
     return params

@@ -37,7 +37,7 @@ from origin.search_engine.agent.tools.base import ToolContext, ToolError
 from origin.search_engine.agent.tools.get_project_summary import GET_PROJECT_SUMMARY
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.services import briefing
-from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
+from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import (
     Links,
     arrange,
@@ -200,6 +200,10 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ):
             waits.setdefault(blocked_id, []).append(blocker_id)
     blockers = access.tasks({b for ids in waits.values() for b in ids})
+    if params.get(SHARED_KEY):
+        # A blocker can sit in another project; in a chat of this project's people it is not
+        # named (MIP-1420).
+        blockers = {i: t for i, t in blockers.items() if t.project_id == project_id}
 
     ranked = sorted(slipped, key=lambda i: (readable[i].due_date or date.max, readable[i].task_id))
     links = Links(ctx)
@@ -218,7 +222,9 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         )
 
     def moved_line(task: Any, row: TaskActivity):
-        said = f"{briefing.activity_event(row, ctx.user_id)['summary']} by {who(row)}"
+        # In a chat other people read nothing is "you": the owner is one reader of several.
+        viewer = "" if params.get(SHARED_KEY) else ctx.user_id
+        said = f"{briefing.activity_event(row, viewer)['summary']} by {who(row)}"
         return line(task, said)
 
     def capped(items: list, total: int) -> list:
@@ -323,6 +329,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     }
 
 
+def _share_project(params: dict[str, Any], team_id: str) -> int | None:
+    """The project this report is about: a chat of its people may read it (MIP-1420)."""
+    project_id = params.get("project_id")
+    return project_id if isinstance(project_id, int) and not isinstance(project_id, bool) else None
+
+
 register_job(
     Job(
         key="project_updates",
@@ -334,6 +346,7 @@ register_job(
         ),
         agent_note="`project_id` is the project's numeric id, from `list_projects`.",
         run=run,
+        share_project=_share_project,
         params_schema={
             "properties": {
                 "project_id": {"type": "integer", "minimum": 1},
