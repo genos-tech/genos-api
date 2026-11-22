@@ -6,7 +6,7 @@ the team, and adds the people it was given. A tool has no browser, so `create_pr
 does every one of those steps on the server, in one transaction: either the whole
 project exists or none of it does.
 
-The rules are the page's. A project's name is unique within its team; its code
+The rules are the page's. A project's name is unique among the projects its caller can see (a hidden one never counts, MIP-1935); its code
 (the prefix of its task ids) is 2 to 6 uppercase letters or digits starting with
 a letter and unique within its team; a rename or a code change is for the owner or
 an editor; a role is `editor` or `viewer`, never `owner` (that is a transfer).
@@ -20,7 +20,7 @@ import re
 import uuid
 from typing import Iterable
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
@@ -28,6 +28,11 @@ from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.services.archive import ensure_project_writable
+from origin.services.hidden_scope import (
+    project_code_visibly_taken,
+    project_name_taken_for,
+    taken_project_codes,
+)
 from origin.services.member_removal import clean_up_after_removal
 from origin.services.member_roles import (
     ASSIGNABLE_ROLES,
@@ -86,12 +91,34 @@ def new_system_user(team, name: str) -> CustomUser:
     `<team id>-<name with underscores>@genos.tech`; a taken address (a project of
     that name existed before) gets a short suffix instead of failing."""
     slug = re.sub(r"\s+", "_", name)
-    email = f"{team.team_id}-{slug}@genos.tech"
-    if CustomUser.objects.with_email(email).exists():
-        email = f"{team.team_id}-{slug}-{uuid.uuid4().hex[:6]}@genos.tech"
+    # Always suffixed (MIP-1957): the address of a project's own system user is readable by the
+    # project's members, and a suffix added only when the plain one was taken would tell the
+    # creator that a project of that name existed before, one they may not be allowed to see
+    # (hidden) or that was deleted.
+    email = f"{team.team_id}-{slug}-{uuid.uuid4().hex[:6]}@genos.tech"
     return CustomUser.objects.create_user(
         email=email, username=name, password=None, is_system_user=True
     )
+
+
+CODE_ATTEMPTS = 5
+
+
+def _create_row_with_free_code(*, team, project_name, **fields) -> ProjectMaster:
+    """The project row with the first free code. Two creates can read the same free code; the
+    database lets one win (`project_code_unique_per_team`) and the loser takes the next free code,
+    each try in its own savepoint so the outer transaction stays usable (MIP-1957)."""
+    for attempt in range(CODE_ATTEMPTS):
+        code = derive_project_code(project_name, taken_project_codes(team.team_id))
+        try:
+            with transaction.atomic():
+                return ProjectMaster.objects.create(
+                    team=team, project_name=project_name, code=code, **fields
+                )
+        except IntegrityError:
+            if attempt == CODE_ATTEMPTS - 1:
+                raise
+    raise AssertionError("unreachable")
 
 
 def create_project(
@@ -109,7 +136,7 @@ def create_project(
     in an outsider. Nothing is created if any of that fails.
     """
     name = _clean_name(name)
-    if ProjectMaster.objects.filter(team=team, project_name=name).exists():
+    if project_name_taken_for(team.team_id, name, owner.id):
         raise ProjectRefused("Another project in this team already uses that name.", 409)
 
     wanted = []
@@ -123,15 +150,9 @@ def create_project(
 
     with transaction.atomic():
         system_user = new_system_user(team, name)
-        taken = set(
-            ProjectMaster.objects.filter(team=team, code__isnull=False).values_list(
-                "code", flat=True
-            )
-        )
-        project = ProjectMaster.objects.create(
+        project = _create_row_with_free_code(
             team=team,
             project_name=name,
-            code=derive_project_code(name, taken),
             owner=owner,
             project_system_user=system_user,
             is_private=bool(is_private),
@@ -153,7 +174,7 @@ def create_project(
     return project
 
 
-def set_project_code(project: ProjectMaster, raw) -> ProjectMaster:
+def set_project_code(project: ProjectMaster, raw, actor_id) -> ProjectMaster:
     ensure_project_writable(project.project_id, ProjectRefused)
     code = (raw or "").strip().upper()
     if not code:
@@ -162,12 +183,13 @@ def set_project_code(project: ProjectMaster, raw) -> ProjectMaster:
         raise ProjectRefused(
             "Code must be 2-6 uppercase letters/digits, starting with a letter.", 400
         )
-    if (
-        ProjectMaster.objects.filter(team=project.team_id, code=code)
-        .exclude(project_id=project.project_id)
-        .exists()
-    ):
+    if project_code_visibly_taken(project.team_id, code, actor_id, project.project_id):
         raise ProjectRefused("Another project in this team already uses that code.", 409)
+    taken = taken_project_codes(project.team_id) - {project.code}
+    if code in taken:
+        # Only a project the actor cannot see uses it: take a free code instead of refusing, so
+        # the refusal does not confirm that a hidden project has this code (MIP-1935).
+        code = derive_project_code(code, taken)
     with transaction.atomic():
         project.code = code
         project.save(update_fields=["code", "ts_updated_at"])
@@ -187,14 +209,10 @@ def set_project_code(project: ProjectMaster, raw) -> ProjectMaster:
     return project
 
 
-def set_project_name(project: ProjectMaster, raw) -> ProjectMaster:
+def set_project_name(project: ProjectMaster, raw, actor_id) -> ProjectMaster:
     ensure_project_writable(project.project_id, ProjectRefused)
     name = _clean_name(raw)
-    if (
-        ProjectMaster.objects.filter(team=project.team_id, project_name=name)
-        .exclude(project_id=project.project_id)
-        .exists()
-    ):
+    if project_name_taken_for(project.team_id, name, actor_id, project.project_id):
         raise ProjectRefused("Another project in this team already uses that name.", 409)
     with transaction.atomic():
         project.project_name = name

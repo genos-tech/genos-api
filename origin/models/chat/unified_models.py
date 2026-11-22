@@ -97,6 +97,10 @@ class Channel(models.Model):
         to_field="id",
     )
     is_private = models.BooleanField(default=False)
+    # Hidden (MIP-1699): a private group chat whose name non-members never see (not in the chat
+    # search, the directory or mentions); people join by invitation only. Only valid while
+    # `is_private` is on.
+    is_hidden = models.BooleanField(default=False)
     # A cross-team chat: members come from more than one team, admitted
     # through `ExternalGrant` rows on this channel (see
     # `origin/services/external_grants.py`).
@@ -149,11 +153,24 @@ class Channel(models.Model):
                 condition=models.Q(legacy_chat_id__isnull=False),
                 name="uniq_channel_legacy_chat_id",
             ),
+            models.CheckConstraint(
+                condition=~models.Q(is_hidden=True, is_private=False),
+                name="channel_hidden_requires_private",
+            ),
         ]
         indexes = [
             models.Index(fields=["team", "kind", "is_deleted"], name="channel_team_kind_idx"),
             models.Index(fields=["project"], name="channel_project_idx"),
         ]
+
+    def save(self, *args, **kwargs):
+        # Hidden only makes sense on a private chat: a public one could not be joined.
+        if not self.is_private and self.is_hidden:
+            self.is_hidden = False
+            fields = kwargs.get("update_fields")
+            if fields is not None and "is_hidden" not in fields:
+                kwargs["update_fields"] = [*fields, "is_hidden"]
+        super().save(*args, **kwargs)
 
 
 class ChannelDirectPair(models.Model):

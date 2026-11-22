@@ -148,10 +148,12 @@ def declared_schema(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     return declared
 
 
-def resolve_call(name: str, args: dict[str, Any], team_id: str) -> dict[str, Any]:
+def resolve_call(
+    name: str, args: dict[str, Any], team_id: str, user_id: str | None = None
+) -> dict[str, Any]:
     """`args` with references turned into ids. Raises `ToolError` when one names
     nothing, worded for the model to correct on its next step."""
     from origin.views.public.mcp.tools import resolve_references  # noqa: PLC0415
 
     tool = _catalog().get(name)
-    return dict(args) if tool is None else resolve_references(tool, args, team_id)
+    return dict(args) if tool is None else resolve_references(tool, args, team_id, user_id)

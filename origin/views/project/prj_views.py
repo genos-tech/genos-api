@@ -17,9 +17,16 @@ from origin.serializers.project.prj_serializers import *
 from origin.services.archive import archived_project_response
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
+from origin.services.hidden_scope import (
+    project_code_visibly_taken,
+    project_name_taken_for,
+    taken_project_codes,
+    visible_projects_q,
+)
 from origin.services.member_removal import count_open_work
 from origin.services.member_roles import (
     OWNER,
+    VIEWER,
     can_manage,
     resolve_project_role,
 )
@@ -34,6 +41,7 @@ from origin.services.project_code import derive_project_code
 from origin.services.project_delete import delete_project
 from origin.services.project_list_cache import project_list_key
 from origin.services.project_manage import (
+    CODE_ATTEMPTS,
     PROJECT_CODE_RE,
     ProjectRefused,
     change_member_role,
@@ -79,7 +87,7 @@ from origin.views.utils.upload_validation import check_image_upload
 # the endpoints that validate them. The app sends `team`, `project_name`,
 # `owner`, `is_private` and, from the create modal, `project_system_user`.
 # `code` is the one optional extra: it is checked like `PUT code` is.
-CREATE_PROJECT_FIELDS = ("team", "project_name", "is_private")
+CREATE_PROJECT_FIELDS = ("team", "project_name", "is_private", "is_hidden")
 CREATE_PROJECT_SERVER_VALUES = {
     "is_deleted": False,
     "profile_image_file_name": None,
@@ -102,6 +110,8 @@ class ProjectMasterView(AuthenticatedAPIView):
         new_code = request.data.get("code")
         new_name = request.data.get("project_name")
         new_owner_id = request.data.get("owner_id")
+        new_private = request.data.get("is_private")
+        new_hidden = request.data.get("is_hidden")
         if not project_id:
             return Response(
                 {"error": "project_id is required."},
@@ -120,6 +130,10 @@ class ProjectMasterView(AuthenticatedAPIView):
         # — so anyone could rewrite any project's display-id prefix. It
         # joins rename under owner/editor. Transfer stays owner-only.
         actor_role = resolve_project_role(project, request.user.id)
+        # A caller outside the project learns nothing about it, not even its name or that it
+        # exists (MIP-1699): the response below is the whole project row.
+        if actor_role == VIEWER and not is_project_member(project.project_id, request.user.id):
+            return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
         if (
             new_code is not None or new_name is not None or new_owner_id is not None
         ) and not can_manage(actor_role):
@@ -133,11 +147,39 @@ class ProjectMasterView(AuthenticatedAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Private and Hidden are the owner's switches (MIP-1699), like archive.
+        if (new_private is not None or new_hidden is not None) and actor_role != OWNER:
+            return Response(
+                {"error": "Only the project owner can change who can see the project."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        for value in (new_private, new_hidden):
+            if value is not None and not isinstance(value, bool):
+                return Response(
+                    {"error": "is_private and is_hidden must be true or false."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        # Computed now so a refused request changes nothing; written after the rest is applied.
+        privacy_change = None
+        if new_private is not None or new_hidden is not None:
+            next_private = project.is_private if new_private is None else new_private
+            next_hidden = project.is_hidden if new_hidden is None else new_hidden
+            if not next_private:
+                if new_hidden:
+                    return Response(
+                        {"error": "Only a private project can be hidden."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # Making a project public also unhides it.
+                next_hidden = False
+            if (next_private, next_hidden) != (project.is_private, project.is_hidden):
+                privacy_change = (next_private, next_hidden)
+
         try:
             if new_code is not None:
-                set_project_code(project, new_code)
+                set_project_code(project, new_code, request.user.id)
             if new_name is not None:
-                set_project_name(project, new_name)
+                set_project_name(project, new_name, request.user.id)
         except ProjectRefused as refused:
             return Response({"error": refused.message}, status=refused.status)
 
@@ -183,6 +225,10 @@ class ProjectMasterView(AuthenticatedAPIView):
                 },
             )
 
+        if privacy_change is not None:
+            project.is_private, project.is_hidden = privacy_change
+            project.save(update_fields=["is_private", "is_hidden", "ts_updated_at"])
+
         return Response(ProjectMasterSerializer(project).data, status=status.HTTP_200_OK)
 
     def post(self, request):
@@ -221,6 +267,14 @@ class ProjectMasterView(AuthenticatedAPIView):
             return res
         data = {key: request.data.get(key) for key in CREATE_PROJECT_FIELDS if key in request.data}
         data["owner"] = request.user.pk
+        if "is_hidden" in data and (
+            not isinstance(data["is_hidden"], bool)
+            or (data["is_hidden"] and data.get("is_private") is not True)
+        ):
+            return Response(
+                {"error": "Only a private project can be hidden."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if request.data.get("code"):
             code = str(request.data.get("code")).strip().upper()
             if not PROJECT_CODE_RE.match(code):
@@ -229,34 +283,61 @@ class ProjectMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             data["code"] = code
+        team_id = data.get("team")
+        taken = taken_project_codes(team_id)
+        if data.get("code") and data["code"] in taken:
+            # A code only a hidden project uses is replaced by a free one, never refused (a
+            # refusal would confirm that hidden project, MIP-1935); a code a visible project
+            # uses stays refused by the serializer below.
+            if not project_code_visibly_taken(team_id, data["code"], request.user.id):
+                data["code"] = derive_project_code(data["code"], taken)
         if not data.get("code"):
-            team_id = data.get("team")
-            taken = set(
-                ProjectMaster.objects.filter(team=team_id, code__isnull=False).values_list(
-                    "code", flat=True
-                )
-            )
             data["code"] = derive_project_code(data.get("project_name", "") or "", taken)
+        # Names are not unique in the database (MIP-1935): only a project the caller can see
+        # counts as a duplicate.
+        if isinstance(data.get("project_name"), str):
+            # The serializer trims it on save, so the check must see the trimmed name.
+            data["project_name"] = data["project_name"].strip()
+        if isinstance(data.get("project_name"), str) and project_name_taken_for(
+            team_id, data["project_name"], request.user.id
+        ):
+            return Response(
+                {
+                    "project_name": ["Another project in this team already uses that name."],
+                    "hint": "Try with different project_name",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        serializer = ProjectMasterSerializer(data=data)
-        if serializer.is_valid():
+        # Two creates can read the same free code; the database lets one win and the other takes
+        # the next free code (MIP-1957), each try in its own savepoint.
+        for attempt in range(CODE_ATTEMPTS):
+            serializer = ProjectMasterSerializer(data=data)
+            if not serializer.is_valid():
+                break
             # The project's own system user is made here, with the project
             # and after the body has validated, so a refused create leaves
             # no stray account and no client can mint one (MIP-1031). The
             # address is the server's too (`<team id>-<name>@genos.tech`); a
             # client-chosen one could reserve anyone's real address.
-            with transaction.atomic():
-                team = serializer.validated_data["team"]
-                system_user = new_system_user(team, serializer.validated_data["project_name"])
-                project = serializer.save(project_system_user=system_user)
-                TeamMembers.objects.get_or_create(team=team, attendee=system_user)
-                record_workspace_change(
-                    team_id=project.team_id,
-                    project_id=project.project_id,
-                    entity_kind="project",
-                    entity_id=project.project_id,
-                    action="create",
-                )
+            try:
+                with transaction.atomic():
+                    team = serializer.validated_data["team"]
+                    system_user = new_system_user(team, serializer.validated_data["project_name"])
+                    project = serializer.save(project_system_user=system_user)
+                    TeamMembers.objects.get_or_create(team=team, attendee=system_user)
+                    record_workspace_change(
+                        team_id=project.team_id,
+                        project_id=project.project_id,
+                        entity_kind="project",
+                        entity_id=project.project_id,
+                        action="create",
+                    )
+            except IntegrityError:
+                if attempt == CODE_ATTEMPTS - 1:
+                    raise
+                data["code"] = derive_project_code(data["code"], taken_project_codes(team_id))
+                continue
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         error = serializer.errors
@@ -393,6 +474,7 @@ class ProjectMasterView(AuthenticatedAPIView):
                 "ownerUserId": project_data["owner_id"],
                 "profileImagePath": project_data["profile_image_file_name"],
                 "isPrivate": project_data["is_private"],
+                "isHidden": project_data["is_hidden"],
                 "tsCreatedAt": project_data["ts_created_at"],
                 "projectMembers": project_members,
                 "projectLabels": project_labels,
@@ -461,7 +543,9 @@ class CheckProjectExistsView(AuthenticatedAPIView):
         if res := require_team_member_or_response(request.user, team_id):
             return res
 
-        exists = ProjectMaster.objects.filter(Q(team=team_id, project_name=project_name)).exists()
+        # Only a project the caller can see: a hidden one answers false, or this is a yes/no
+        # oracle on its name (MIP-1935).
+        exists = project_name_taken_for(team_id, project_name.strip(), request.user.id)
 
         return Response({"project_exists": exists}, status=status.HTTP_200_OK)
 
@@ -588,6 +672,8 @@ class ProjectsView(AuthenticatedAPIView):
             owned_or_shared |= Q(project_id__in=list(external_grants.keys()))
         projects = (
             ProjectMaster.objects.filter(owned_or_shared)
+            # A hidden project is listed to its members only (MIP-1699).
+            .filter(visible_projects_q(attendee_id))
             .annotate(is_joined=Exists(member_exists_subquery))
             .order_by("ts_updated_at")
             .reverse()
@@ -636,6 +722,7 @@ class ProjectsView(AuthenticatedAPIView):
                 "projectTags": project_tags[project.project_id],
                 "projectLabels": project_labels[project.project_id],
                 "isPrivate": project.is_private,
+                "isHidden": project.is_hidden,
                 "isJoined": project.is_joined,
                 # Archived projects come back only with `include_archived=true` (MIP-1693); the
                 # row says so itself (MIP-1853), so the client needs no second request.
@@ -827,10 +914,13 @@ class LeaveProjectView(AuthenticatedAPIView):
             team=team_id, project=project_id, attendee=attendee_id
         ).delete()
         if deleted == 0:
-            return Response(
-                {"error": "You are not a member of this project."},
-                status=status.HTTP_404_NOT_FOUND,
+            # A hidden project reads as a missing one to a non-member (MIP-1947).
+            message = (
+                "Project not found."
+                if project.is_hidden
+                else "You are not a member of this project."
             )
+            return Response({"error": message}, status=status.HTTP_404_NOT_FOUND)
         _record_project_member(
             SecurityAction.MEMBER_REMOVED, request, project, attendee_id, via="left"
         )

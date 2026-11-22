@@ -46,6 +46,7 @@ from urllib.parse import parse_qs
 
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.search_engine.agent.acl import task_acl_user_ids
 from origin.search_engine.agent.tools.base import ToolError
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
 
@@ -75,12 +76,16 @@ def _checked_text(ref) -> str:
     return text
 
 
-def resolve_task_ref(ref, team_id: str) -> int:
+def resolve_task_ref(ref, team_id: str, user_id: str | None = None) -> int:
     """`ref` -> a task id, or `ToolError` naming what we tried.
 
     The error text is written for a model to act on, not a human to
     debug: it says which forms are accepted, so a wrong guess can be
     corrected on the next call instead of ending the turn.
+
+    With `user_id`, a display id whose task that user cannot open answers exactly like a code
+    nobody has (MIP-1957): the tool it is passed to would otherwise say "Not authorized ... task
+    12345", which confirms a hidden project's code and hands over a task id.
     """
     if isinstance(ref, int):
         return ref
@@ -105,7 +110,7 @@ def resolve_task_ref(ref, team_id: str) -> int:
     if display:
         code = display.group("code")
         number = int(display.group("number"))
-        task_id = (
+        row = (
             TaskMaster.objects.filter(
                 # A task of a soft-deleted project has no display id to find, as a missing one has none
                 # (MIP-1621, flag `AGENT_PARITY_FOLLOWUPS`): the tool it is passed to would otherwise answer
@@ -116,9 +121,14 @@ def resolve_task_ref(ref, team_id: str) -> int:
                 project_task_number=number,
                 is_deleted=False,
             )
-            .values_list("task_id", flat=True)
+            .values_list("task_id", "project_id", "assignee_id", "reporter_id")
             .first()
         )
+        task_id = None
+        if row is not None:
+            task_id = row[0]
+            if user_id is not None and str(user_id) not in task_acl_user_ids(*row[1:]):
+                task_id = None
         if task_id is None:
             raise ToolError(
                 f"No task {text} in this team. Check the project code, or find "

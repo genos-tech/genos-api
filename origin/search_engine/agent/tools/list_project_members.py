@@ -22,6 +22,7 @@ from typing import Any
 
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
+from origin.services.hidden_scope import project_hidden_from
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -42,11 +43,15 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # alarm. Same pattern as `milestone_access.load_project`.
         raise ToolForbidden(f"Project {project_id} not found.")
 
+    if project_hidden_from(project, ctx.user_id):
+        # A hidden project reads as a missing one to a non-member (MIP-1947); the class still
+        # counts toward the refusal alarm.
+        raise ToolForbidden(f"Project {project_id} not found.")
+
     memberships = ProjectMembers.objects.filter(project_id=project_id).select_related("attendee")
     if not any(str(m.attendee_id) == ctx.user_id for m in memberships):
         raise ToolForbidden(
-            f"Not authorized to access project {project_id}. "
-            "You are not a member of that project."
+            f"Not authorized to access project {project_id}. You are not a member of that project."
         )
 
     include_email = args.get("include_email") is True

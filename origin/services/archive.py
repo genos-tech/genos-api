@@ -24,7 +24,11 @@ from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.models.project.workspace_change_models import ACTION_UPDATE, ENTITY_PROJECT
+from origin.models.project.workspace_change_models import (
+    ACTION_UPDATE,
+    ENTITY_CHANNEL,
+    ENTITY_PROJECT,
+)
 from origin.models.task.task_models import TaskMaster
 from origin.services.security_events import record_security_event
 from origin.services.workspace_changes import record as record_workspace_change
@@ -233,6 +237,13 @@ def _set_channel_archived(channel: Channel, *, archived: bool, request=None, act
                 "channel_id": str(channel.id),
                 "messages": Message.objects.filter(channel=channel).count(),
             },
+        )
+        record_workspace_change(
+            team_id=channel.team_id,
+            entity_kind=ENTITY_CHANNEL,
+            entity_uuid=channel.id,
+            action=ACTION_UPDATE,
+            fields=["archived_at"],
         )
 
 

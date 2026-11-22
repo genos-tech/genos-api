@@ -34,7 +34,9 @@ ENTITY_PROJECT = "project"
 ENTITY_SPRINT = "sprint"
 ENTITY_LABEL = "label"
 ENTITY_TAG = "tag"
-ENTITY_KINDS = (ENTITY_PROJECT, ENTITY_SPRINT, ENTITY_LABEL, ENTITY_TAG)
+# A group chat (MIP-1959). Its id is a UUID, so its row carries `entity_uuid` and no `entity_id`.
+ENTITY_CHANNEL = "channel"
+ENTITY_KINDS = (ENTITY_PROJECT, ENTITY_SPRINT, ENTITY_LABEL, ENTITY_TAG, ENTITY_CHANNEL)
 
 ACTION_CREATE = "create"
 ACTION_UPDATE = "update"
@@ -63,7 +65,9 @@ class WorkspaceChange(models.Model):
     # by its id. A label or a tag of the team's catalogue has no project (null for a label).
     project_id = models.BigIntegerField(null=True, blank=True)
     entity_kind = models.CharField(max_length=16, choices=[(k, k) for k in ENTITY_KINDS])
-    entity_id = models.BigIntegerField()
+    # NULL for a channel row (its id is `entity_uuid`); every other kind always has it.
+    entity_id = models.BigIntegerField(null=True, blank=True)
+    entity_uuid = models.UUIDField(null=True, blank=True)
     action = models.CharField(max_length=16, choices=[(a, a) for a in ACTIONS])
     actor = models.ForeignKey(
         CustomUser,
@@ -83,6 +87,10 @@ class WorkspaceChange(models.Model):
             models.Index(
                 fields=["team", "entity_kind", "entity_id", "created_at"],
                 name="workchg_entity_idx",
+            ),
+            models.Index(
+                fields=["team", "entity_kind", "entity_uuid", "created_at"],
+                name="workchg_entity_uuid_idx",
             ),
             models.Index(fields=["created_at"], name="workchg_created_idx"),
         ]

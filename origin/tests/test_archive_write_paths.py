@@ -78,7 +78,7 @@ class ArchivedRestWritesTests(BaseAPITestCase):
         with self.assertRaises(CatalogRefused):
             add_project_tag(self.project, "bug")
         with self.assertRaises(ProjectRefused):
-            set_project_name(self.project, "Renamed")
+            set_project_name(self.project, "Renamed", self.user.id)
 
     def test_the_target_scan_finds_task_project_and_nested_items(self):
         self.assertEqual(

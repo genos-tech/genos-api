@@ -186,7 +186,10 @@ class AllOnDeclarationTests(SimpleTestCase):
         # swapped in place, `tool_flag_text.REPLACEMENTS`).
         added: dict[str, list] = {}
         for a in tool_flag_params.ADDITIONS:
-            added.setdefault(a.tool, []).append(a)
+            # A flag outside the all-on arm (MIP-1656's `AGENT_INAPP_NOTE_BLOCK_TOOL`, dark until its eval
+            # arm exists) adds nothing here.
+            if ALL_ON.get(a.flag):
+                added.setdefault(a.tool, []).append(a)
         replaced: dict[str, list[tuple[str, str]]] = {}
         for name, _flag, old, new in tool_flag_text.REPLACEMENTS:
             replaced.setdefault(name, []).append((old, new))

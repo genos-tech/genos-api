@@ -39,6 +39,8 @@ SINGLE_WRITE_TOOLS = frozenset(
         "add_comment",
         # MIP-1671 (flag `AGENT_INAPP_NOTE_COMMENT_TOOL`): one comment thread, one approval.
         "comment_on_note",
+        # MIP-1656 (flag `AGENT_INAPP_NOTE_BLOCK_TOOL`): one block of a note, one approval.
+        "edit_note_block",
         "update_comment",
         "delete_comment",
         "restore_task_body",

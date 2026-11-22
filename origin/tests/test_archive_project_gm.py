@@ -13,6 +13,7 @@ from django.core.cache import cache
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.security_event_models import SecurityAction, SecurityEvent
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.project.workspace_change_models import WorkspaceChange
 from origin.models.task.task_models import TaskMaster
 from origin.serializers.project.prj_serializers import ProjectMasterSerializer
 from origin.services.archive import archived_project_response
@@ -169,6 +170,42 @@ class ArchiveGroupChatTests(BaseAPITestCase):
         )
         ChannelMember.objects.create(channel=self.gm, user=self.user)
         ChannelMember.objects.create(channel=self.gm, user=self.user2)
+
+    def test_archive_and_restore_write_workspace_change_rows(self):
+        base = f"/api/v3/channels/{self.gm.id}"
+        self.client.post(f"{base}/archive/", {}, format="json")
+        self.client.post(f"{base}/archive/", {}, format="json")  # already archived: no new row
+        self.client.post(f"{base}/unarchive/", {}, format="json")
+        rows = list(
+            WorkspaceChange.objects.filter(entity_kind="channel", entity_uuid=self.gm.id).order_by(
+                "change_id"
+            )
+        )
+        self.assertEqual(len(rows), 2)
+        for r in rows:
+            self.assertEqual((r.action, r.fields, r.entity_id), ("update", ["archived_at"], None))
+            self.assertEqual(r.team_id, self.team.team_id)
+
+        res = self.client.get(f"{base}/changes/")
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(len(res.data["changes"]), 2)
+        self.assertEqual(res.data["changes"][0]["entity_id"], str(self.gm.id))
+
+    def test_changes_hidden_from_a_non_member(self):
+        stranger = User.objects.create_user(
+            username="stranger", email="s@example.com", password="x"
+        )
+        self.authenticate(stranger)
+        res = self.client.get(f"/api/v3/channels/{self.gm.id}/changes/")
+        self.assertEqual(res.status_code, 404)
+
+    def test_account_export_lists_the_channel_row(self):
+        from origin.services.account_export import build_export
+
+        self.client.post(f"/api/v3/channels/{self.gm.id}/archive/", {}, format="json")
+        data = build_export(self.user)
+        text = str(data)
+        self.assertIn(str(self.gm.id), text)
 
     def test_owner_archives_and_archived_gm_rejects_messages(self):
         res = self.client.post(f"/api/v3/channels/{self.gm.id}/archive/", {}, format="json")

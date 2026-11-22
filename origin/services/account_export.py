@@ -191,7 +191,7 @@ def _more_data(user) -> dict:
             "team_id": str(c.team_id),
             "project_id": c.project_id,
             "entity": c.entity_kind,
-            "entity_id": c.entity_id,
+            "entity_id": c.entity_id if c.entity_id is not None else str(c.entity_uuid),
             "action": c.action,
             "fields": list(c.fields or []),
             "source": {k: v for k, v in (("kind", c.source_kind), ("app", c.source_app)) if v},

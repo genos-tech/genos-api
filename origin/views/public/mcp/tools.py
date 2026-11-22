@@ -1839,7 +1839,7 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="manage_project",
         description=(
             "Create a project, or rename one or change its code. `action` "
-            "'create' needs `name` (unique in the team); `is_private` and "
+            "'create' needs `name` (refused when a project you can see already has it); `is_private` and "
             "`member_ids` (team members to add, from `get_team_members`) are "
             "optional. The caller becomes the owner and the code is derived from "
             "the name. `action` 'update' needs `project_id` (from "
@@ -2554,7 +2554,11 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         properties.update(tool.schema_overrides)
         schema = {**schema, "properties": properties}
     if tool.mcp_only_args or tool.surface_args:
-        properties = dict(schema.get("properties") or {})
+        # An MCP-only argument keeps its own place even when a flag adds a property of the same name to
+        # the in-app tool (`include_blocks`, MIP-1656): drop it first, so the order never depends on a flag.
+        properties = {
+            k: v for k, v in (schema.get("properties") or {}).items() if k not in tool.mcp_only_args
+        }
         properties.update(tool.mcp_only_args)
         properties.update(tool.surface_args)
         schema = {**schema, "properties": properties}
@@ -2658,7 +2662,9 @@ def _require_task_refs(tool: McpTool, args: dict[str, Any]) -> None:
             )
 
 
-def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dict[str, Any]:
+def resolve_references(
+    tool: McpTool, args: dict[str, Any], team_id: str, user_id: str | None = None
+) -> dict[str, Any]:
     """`args` with every reference `tool` takes turned into the id it wants.
 
     The one place that says what a reference is, used by this endpoint and by
@@ -2670,7 +2676,7 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
         if arg in args and args[arg] is not None:
             if args[arg] == "" and arg in tool.clearable_task_ref_args:
                 continue
-            args[arg] = resolve_task_ref(args[arg], team_id)
+            args[arg] = resolve_task_ref(args[arg], team_id, user_id)
     for arg in tool.note_ref_args:
         if arg in args and args[arg] is not None:
             note_id, note_type = resolve_note_ref(args[arg], team_id)
@@ -2713,7 +2719,7 @@ def resolve_references(tool: McpTool, args: dict[str, Any], team_id: str) -> dic
         resolved = []
         for entry in entries:
             if isinstance(entry, dict) and entry.get(item_key) is not None:
-                entry = {**entry, item_key: resolve_task_ref(entry[item_key], team_id)}
+                entry = {**entry, item_key: resolve_task_ref(entry[item_key], team_id, user_id)}
             resolved.append(entry)
         args[list_arg] = resolved
     return args
@@ -3247,7 +3253,7 @@ def call(
             return _text_result(str(exc), is_error=True)
     try:
         _require_task_refs(tool, args)
-        args = resolve_references(tool, args, ctx.team_id)
+        args = resolve_references(tool, args, ctx.team_id, ctx.user_id)
         if tool.write and tool.name in ARCHIVE_GUARDED_TOOLS:
             # MIP-1887: an archived project is read-only on this surface too. The tools write
             # through the registry, not the REST views, so the guard has to sit here.

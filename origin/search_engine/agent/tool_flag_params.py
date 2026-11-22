@@ -33,6 +33,8 @@ from origin.search_engine.agent.tools.create_calendar_event import (
 )
 from origin.search_engine.agent.tools.create_task import PARITY_PROPERTIES as _CREATE_TASK
 from origin.search_engine.agent.tools.create_task_plan import PARITY_ROW_PROPERTIES as _PLAN_ROWS
+from origin.search_engine.agent.tools.fetch_note import BLOCKS_FLAG as _BLOCKS_FLAG
+from origin.search_engine.agent.tools.fetch_note import BLOCKS_PROPERTIES as _BLOCKS_PROPERTIES
 from origin.search_engine.agent.tools.list_calendar_events import (
     FOLLOWUPS_ACCOUNT_DESCRIPTION as _ALL_ACCOUNTS_DESCRIPTION,
 )
@@ -132,6 +134,8 @@ ADDITIONS: tuple[ParamAddition, ...] = (
         FOLLOWUPS_FLAG,
         descriptions={"account": _ALL_ACCOUNTS_DESCRIPTION},
     ),
+    # MIP-1656 (AGENT_INAPP_NOTE_BLOCK_TOOL): `fetch_note` lists a note's blocks, for `edit_note_block`.
+    ParamAddition("fetch_note", _BLOCKS_FLAG, properties=_BLOCKS_PROPERTIES),
 )
 
 

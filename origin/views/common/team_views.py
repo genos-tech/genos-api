@@ -32,6 +32,7 @@ from origin.serializers.common.team_serializers import TeamMasterSerializer, Tea
 from origin.services import blind_index
 from origin.services.email import send_templated_email
 from origin.services.external_grants import host_team_ids_for_user
+from origin.services.hidden_scope import project_hidden_from
 from origin.services.member_removal import (
     clean_up_after_removal,
     count_open_work,
@@ -1716,7 +1717,8 @@ class TeamInviteListView(AuthenticatedAPIView):
                         "email": i.invited_email,
                         "memberRole": i.member_role,
                         "projectId": i.project_id,
-                        "projectName": i.project.project_name if i.project_id else None,
+                        "projectName": _invite_project_name(i, request.user.id),
+                        "projectHidden": _invite_project_hidden(i, request.user.id),
                         "invitedBy": i.invited_by.username if i.invited_by_id else None,
                         "expiresAt": i.expires_at,
                         "createdAt": i.ts_created_at,
@@ -1726,6 +1728,21 @@ class TeamInviteListView(AuthenticatedAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def _invite_project_name(invite, viewer_id):
+    """The project's name for the invite list; a hidden one the viewer is not in is masked (MIP-1699).
+
+    The mask is null, not a word: the client shows its own translated label (MIP-1949), keyed on
+    `projectHidden`.
+    """
+    if not invite.project_id or project_hidden_from(invite.project, viewer_id):
+        return None
+    return invite.project.project_name
+
+
+def _invite_project_hidden(invite, viewer_id):
+    return bool(invite.project_id) and project_hidden_from(invite.project, viewer_id)
 
 
 class TeamInviteRevokeView(AuthenticatedAPIView):

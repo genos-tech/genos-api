@@ -23,11 +23,11 @@ class ProjectMaster(models.Model):
         to_field="team_id",
     )
     project_id = models.BigAutoField(primary_key=True, unique=True)
-    # Unique per team (`project_name_unique_per_team` below), not across every
-    # company: the views only ever checked the caller's own team, so a global
-    # constraint made a name another team used a 500 on rename, and made the
-    # starter workspace (fixed project names) fail for every team after the
-    # first (MIP-942).
+    # NOT unique in the database (MIP-1935). It was unique per team, but a refusal of a name
+    # the caller cannot see in their list confirmed that a Hidden project uses it. The views
+    # and services refuse a duplicate only among projects the caller can see
+    # (`hidden_scope.project_name_taken_for`). The code stays unique per team: it prefixes task
+    # display ids.
     project_name = models.CharField(blank=False)
     profile_image_url = models.FileField(upload_to=profile_image_path, blank=True, null=True)
     profile_image_file_name = models.CharField(blank=True, null=True)
@@ -46,6 +46,9 @@ class ProjectMaster(models.Model):
         to_field="id",
     )
     is_private = models.BooleanField(default=False)
+    # Hidden (MIP-1699): a private project whose name non-members never see (not in the Join list,
+    # search or mentions); people join by invitation only. Only valid while `is_private` is on.
+    is_hidden = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     # Set by the owner to archive the project (MIP-1693): read-only and hidden from the default
     # lists until restored. Nothing about the project is removed.
@@ -87,11 +90,20 @@ class ProjectMaster(models.Model):
                 name="project_code_unique_per_team",
                 condition=models.Q(code__isnull=False),
             ),
-            models.UniqueConstraint(
-                fields=["team", "project_name"],
-                name="project_name_unique_per_team",
+            models.CheckConstraint(
+                condition=~models.Q(is_hidden=True, is_private=False),
+                name="project_hidden_requires_private",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        # Hidden only makes sense on a private project: a public one could not be joined.
+        if not self.is_private and self.is_hidden:
+            self.is_hidden = False
+            fields = kwargs.get("update_fields")
+            if fields is not None and "is_hidden" not in fields:
+                kwargs["update_fields"] = [*fields, "is_hidden"]
+        super().save(*args, **kwargs)
 
 
 class ProjectMembers(models.Model):
