@@ -50,6 +50,19 @@ CORE_TOOLS: tuple[str, ...] = (
     "create_note",
     "update_note",
     "edit_note_block",
+    # MIP-2049 (D1 of the skills v2 design): every tool a shipped general skill calls.
+    "get_current_user",
+    "get_team_members",
+    "list_projects",
+    "list_milestones",
+    "list_my_inbox",
+    "list_my_mentions",
+    "get_chat_thread",
+    "list_today_todos",
+    "create_todo_item",
+    "list_calendar_events",
+    "get_stale_tasks",
+    "update_task_dependencies",
 )
 
 # Domain endpoints. Each name here is in exactly one domain, and every catalog tool is in one.
