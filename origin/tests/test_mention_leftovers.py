@@ -370,23 +370,6 @@ class WhatElseANonReaderCanSee(PrivateNotes):
 
         self.assertIn(CHAT_TITLE, json.dumps(item))
 
-    def test_the_daily_digest_line_is_the_minimal_one(self):
-        from origin.management.commands.email_digest import Command
-
-        now = timezone.now() + timedelta(seconds=1)
-
-        _, stranger = Command()._collect(str(self.member.id), None, now)
-        _, grantee = Command()._collect(str(self.grantee.id), None, now)
-
-        self.assertEqual(
-            sorted(e["title"] for e in stranger),
-            [f"{self.user.username} mentioned you in a note you can't open"] * 2,
-        )
-        for line in stranger:
-            self.assertTrue(line["url"].endswith(MINIMAL_NOTE_URL))
-            self.assertEqual(self.leaks(line, PERSONAL), [])
-        self.assertIn(f"/notes/my/{self.personal.note_id}", grantee[0]["url"])
-
 
 class FailClosedAndCost(PrivateNotes):
     def test_a_failing_check_shows_the_minimal_card_not_the_full_one(self):
@@ -743,15 +726,6 @@ class ParticipantRowOfAHolder(Cards):
             self.pushes[self.aid]["title"], f"{self.user.username} commented on a task"
         )
         self.assertIn(COMMENT_TEXT, self.pushes[self.aid]["body"])
-
-    def test_the_daily_digest_line_links_to_the_task(self):
-        from origin.management.commands.email_digest import Command
-
-        _, lines = Command()._collect(self.aid, None, timezone.now() + timedelta(seconds=1))
-
-        (line,) = lines
-        self.assertEqual(line["title"], f"{self.user.username} commented on a task")
-        self.assertTrue(line["url"].endswith(self.url))
 
     def test_a_project_member_keeps_the_link_to_the_chat(self):
         mine = TaskMaster.objects.create(

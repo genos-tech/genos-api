@@ -2427,7 +2427,7 @@ ANYMAIL = {
 }
 
 # Dark-ship flag for the NOTIFICATION email channel (the outbox enqueue in
-# `email_enqueue.py` plus the `email_notify_tick` / `email_digest` crons).
+# `email_enqueue.py` plus the `email_notify_tick` cron).
 # The transactional mails (verification, password reset, team invite, ops
 # report) are NOT gated by this — they must always work. Flip to true in
 # prod only once bounce/complaint suppression is live: the notification

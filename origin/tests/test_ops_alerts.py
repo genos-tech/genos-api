@@ -108,7 +108,7 @@ class TestEveryCronReports(TestCase):
         crons = _crons()
         # Not vacuous: the ts file and the tomls were both found.
         self.assertGreaterEqual(len(_ts_crons()), 15)
-        self.assertGreaterEqual(len(_tomls()), 14)
+        self.assertGreaterEqual(len(_tomls()), 13)
         for label, start in crons:
             with self.subTest(cron=label):
                 self.assertTrue(start, "no startCommand")
@@ -341,11 +341,11 @@ class TestHeartbeat(_NoReconnect, TestCase):
         self.assertEqual(self.beat().last_error, "ValueError")
 
     def test_a_heartbeat_command_has_no_tripwire(self):
-        # ai_cost_dashboard and email_digest: an ERROR line alone doesn't
+        # ai_cost_dashboard and the judge sampler: an ERROR line alone doesn't
         # fail them, but a raise does, and is recorded.
         with self.assertRaises(CommandError):
-            _PlainCrashes().execute(**_EXEC_OPTS, heartbeat="email-digest")
-        self.assertEqual(self.beat("email-digest").last_error, "CommandError: render failed")
+            _PlainCrashes().execute(**_EXEC_OPTS, heartbeat="agent-judge-sampler")
+        self.assertEqual(self.beat("agent-judge-sampler").last_error, "CommandError: render failed")
 
     def test_success_resolves_the_failure(self):
         with self.assertRaises(CommandError):
@@ -436,7 +436,7 @@ class TestMissedCrons(_NoReconnect, TestCase):
             last_succeeded_at=now - timedelta(minutes=21),
         )
         CronHeartbeat.objects.create(
-            name="email-digest",
+            name="agent-judge-sampler",
             first_seen_at=now - timedelta(days=3),
             last_succeeded_at=now - timedelta(minutes=70),
         )

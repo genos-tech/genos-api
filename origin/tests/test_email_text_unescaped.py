@@ -24,17 +24,6 @@ LINK = "https://app.genos.example/open?x=1&y=2"
 WHEN = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc)
 
 
-def _digest_ctx():
-    return {
-        "user_name": NASTY,
-        "total": 2,
-        "more": 1,
-        "entries": [{"title": NASTY, "url": LINK}],
-        "app_url": LINK,
-        "unsubscribe_url": LINK,
-    }
-
-
 def _batch_ctx():
     return {
         "user_name": NASTY,
@@ -59,8 +48,6 @@ CASES = {
         [NASTY, LINK],
     ),
     "ai_cost_report": ({"window": NASTY, "body": NASTY}, [NASTY]),
-    "digest": (_digest_ctx(), [NASTY, LINK]),
-    "ja/digest": (_digest_ctx(), [NASTY, LINK]),
     "notification_batch": (_batch_ctx(), [NASTY, LINK]),
     "ja/notification_batch": (_batch_ctx(), [NASTY, LINK]),
     "ops_alert": (
@@ -119,11 +106,11 @@ class TextPartIsNotEscapedTests(SimpleTestCase):
         on_disk = {
             str(p.relative_to(root).with_suffix(""))
             for p in root.rglob("*.txt")
-            if p.name != "base.txt"  # the footer: reached through the digest and batch
+            if p.name != "base.txt"  # the footer: reached through the batch
         }
         self.assertEqual(on_disk, set(CASES))
 
     def test_the_footer_links_keep_their_ampersand(self):
-        text, _ = self._send("digest")
+        text, _ = self._send("notification_batch")
         self.assertIn(f"Open Genos: {LINK}", text)
-        self.assertIn(f"Stop the digest: {LINK}", text)
+        self.assertIn(f"Unsubscribe: {LINK}", text)

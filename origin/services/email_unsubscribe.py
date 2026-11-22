@@ -1,14 +1,16 @@
 """Signed unsubscribe tokens and the List-Unsubscribe header pair.
 
-Every notification/digest email must carry a working unsubscribe path
+Every notification email must carry a working unsubscribe path
 for an anonymous, logged-out reader (the recipient is by definition not
 in the app). The token is a `django.core.signing` payload — stateless,
 verified by SECRET_KEY — carrying the user id and a scope:
 
   - "all"                → flip `NotificationPreference.email_enabled` off
   - a fine category key  → write `category_settings["email:<cat>"] = False`
-  - "digest"             → reserved; wired when the email digest lands
-                           (`CustomUser.email_digest_enabled`, PR A6)
+  - "digest"             → LEGACY: the daily email summary was decommissioned
+                           (MIP-1979), but links in mail already sent keep
+                           working (they flip the retired
+                           `CustomUser.email_digest_enabled`)
 
 Deliberately NO max_age: an unsubscribe link that stops working is a
 compliance failure, and the action is benign and idempotent. The header

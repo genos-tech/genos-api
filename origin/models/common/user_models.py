@@ -193,11 +193,10 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # data deleted); nothing reads or writes them any more.
     digest_enabled = models.BooleanField(default=True)
     digest_last_sent_at = models.DateTimeField(blank=True, null=True)
-    # EMAIL digest (the plain all-tiers unread summary, `email_digest`
-    # cron) — deliberately its OWN opt-out + idempotency stamp, never
-    # shared with the agent digest above: sharing the stamp would let one
-    # channel's send suppress the other, and one opt-out kill both. The
-    # opt-out is also flipped by the "digest"-scope unsubscribe link.
+    # RETIRED (MIP-1979): the daily email summary was decommissioned. Same
+    # as above: the columns stay (no migration, no data deleted); nothing
+    # reads them, and only an old "digest"-scope unsubscribe link still
+    # writes `email_digest_enabled` (harmless; the link must keep working).
     email_digest_enabled = models.BooleanField(default=True)
     email_digest_last_sent_at = models.DateTimeField(blank=True, null=True)
     last_seen = models.DateTimeField(auto_now=True)

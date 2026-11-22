@@ -309,22 +309,6 @@ class WhatElseANonReaderCanSee(NoteCards):
         (item,) = unread["items"]
         self.assertIn(NOTE_TITLE, json.dumps(item))
 
-    def test_the_daily_digest_line_is_the_minimal_one(self):
-        from origin.management.commands.email_digest import Command
-
-        now = timezone.now() + timedelta(seconds=1)
-
-        _, stranger = Command()._collect(str(self.member.id), None, now)
-        _, reader = Command()._collect(str(self.colleague.id), None, now)
-
-        self.assertEqual(
-            [e["title"] for e in stranger],
-            [f"{self.user.username} mentioned you in a note you can't open"],
-        )
-        self.assertTrue(stranger[0]["url"].endswith(MINIMAL_NOTE_URL))
-        self.assertEqual(self.note_leaks(stranger), [])
-        self.assertIn(f"/note/{self.note.note_id}", reader[0]["url"])
-
 
 class FailClosedAndCost(NoteCards):
     def rows(self, users, key):
