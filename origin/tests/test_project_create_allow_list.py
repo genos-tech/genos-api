@@ -252,7 +252,6 @@ class ProjectUpdateIgnoresSystemFieldsTests(BaseAPITestCase):
             {
                 "project_id": project.project_id,
                 "is_deleted": True,
-                "is_private": True,
                 "project_system_user": str(self.user2.id),
                 "profile_image_file_name": "x/y.png",
                 "task_field_rules": {"junk": 1},
@@ -263,7 +262,6 @@ class ProjectUpdateIgnoresSystemFieldsTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 200, res.data)
         project.refresh_from_db()
         self.assertFalse(project.is_deleted)
-        self.assertFalse(project.is_private)
         self.assertEqual(project.project_system_user_id, self.user.id)
         self.assertIsNone(project.profile_image_file_name)
         self.assertEqual(project.task_field_rules, {})

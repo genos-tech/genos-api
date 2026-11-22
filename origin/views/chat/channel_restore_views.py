@@ -47,6 +47,7 @@ class DeletedChannelListView(AuthenticatedAPIView):
                         "id": str(c.id),
                         "title": c.title,
                         "isPrivate": c.is_private,
+                        "isHidden": c.is_hidden,
                         "deletedAt": c.ts_updated_at,
                         "memberCount": counts.get(c.id, 0),
                     }

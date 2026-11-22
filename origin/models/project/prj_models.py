@@ -46,6 +46,9 @@ class ProjectMaster(models.Model):
         to_field="id",
     )
     is_private = models.BooleanField(default=False)
+    # Hidden (MIP-1699): a private project whose name non-members never see (not in the Join list,
+    # search or mentions); people join by invitation only. Only valid while `is_private` is on.
+    is_hidden = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
     # Set by the owner to archive the project (MIP-1693): read-only and hidden from the default
     # lists until restored. Nothing about the project is removed.
@@ -91,7 +94,20 @@ class ProjectMaster(models.Model):
                 fields=["team", "project_name"],
                 name="project_name_unique_per_team",
             ),
+            models.CheckConstraint(
+                condition=~models.Q(is_hidden=True, is_private=False),
+                name="project_hidden_requires_private",
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        # Hidden only makes sense on a private project: a public one could not be joined.
+        if not self.is_private and self.is_hidden:
+            self.is_hidden = False
+            fields = kwargs.get("update_fields")
+            if fields is not None and "is_hidden" not in fields:
+                kwargs["update_fields"] = [*fields, "is_hidden"]
+        super().save(*args, **kwargs)
 
 
 class ProjectMembers(models.Model):

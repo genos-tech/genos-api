@@ -21,6 +21,7 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
 from origin.models.common.team_models import TeamMembers
+from origin.services.hidden_scope import visible_channels_q
 from origin.views.chat.channel_views import _verify_team_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.scope_guards import guest_visible_user_ids
@@ -97,7 +98,7 @@ class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
                     team_id=team_id,
                     kind=ChannelKind.GM,
                     is_deleted=False,
-                )
+                ).filter(visible_channels_q(request.user.id))
             )
         )
         joined_channel_ids = set(
@@ -114,6 +115,7 @@ class SearchTeamMembersAndGroupsView(AuthenticatedAPIView):
                     "channelId": str(ch.id),
                     "name": ch.title,
                     "isPrivate": ch.is_private,
+                    "isHidden": ch.is_hidden,
                     "isJoined": ch.id in joined_channel_ids,
                     "profileImageUrl": ch.profile_image_url or None,
                     # Retained for back-compat while other legacy entry

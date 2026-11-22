@@ -12,6 +12,7 @@ from origin.models.project.prj_models import *
 from origin.serializers.common.inbox_serializers import *
 from origin.services import inbox_ai, inbox_via, realtime_push
 from origin.services.deleted_account_channel_owners import join_request_receiver
+from origin.services.hidden_scope import channel_hidden_from, visible_projects_q
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
 from origin.views.utils.inbox_approval import (
@@ -503,6 +504,8 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
         if project_id is not None:
             project_owner_id = list(
                 ProjectMaster.objects.filter(team_id=body["team_id"], project_id=project_id)
+                # A hidden project does not take join requests from outsiders (MIP-1699).
+                .filter(visible_projects_q(request.user.id))
                 .exclude(owner__isnull=True)
                 .values_list("owner", flat=True)
             )
@@ -682,7 +685,13 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
         # A group with no live owner (none, or a deleted account) addresses the request to its
         # longest-standing host-side member instead (MIP-1550); with nobody to receive it, 404.
         gm_owner_id = join_request_receiver(gm_channel) if gm_channel is not None else None
-        if gm_channel is None or not gm_owner_id or gm_channel.team_id != as_uuid(body["team_id"]):
+        if (
+            gm_channel is None
+            or not gm_owner_id
+            or gm_channel.team_id != as_uuid(body["team_id"])
+            # A hidden group does not take join requests from outsiders (MIP-1699).
+            or channel_hidden_from(gm_channel, request.user.id)
+        ):
             return Response(
                 {"error": "GM not found or has no owner."},
                 status=status.HTTP_404_NOT_FOUND,
