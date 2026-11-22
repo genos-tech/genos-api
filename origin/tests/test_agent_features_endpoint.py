@@ -59,7 +59,7 @@ class AgentFeaturesPayloadTests(FeaturesTestBase):
         # TEST_QUOTAS predates the UX-pillar keys, so this pins BOTH
         # that the payload always carries them AND that a config table
         # without them resolves permissive (the TIER_QUOTAS_JSON
-        # override contract) — except digest_cadence, which stays off.
+        # override contract).
         res = self.client.get(URL)
         self.assertEqual(res.status_code, 200)
         data = res.data
@@ -69,7 +69,7 @@ class AgentFeaturesPayloadTests(FeaturesTestBase):
         self.assertEqual(data["agent_memory"], "team")
         self.assertIsNone(data["agent_history_retention_days"])
         self.assertEqual(data["integrations"], ["web", "google_calendar", "github"])
-        self.assertIsNone(data["digest_cadence"])
+        self.assertNotIn("digest_cadence", data)
 
     def test_team_plan_reflected_with_source_and_name(self):
         self.team.plan = "max"
@@ -116,4 +116,3 @@ class AgentFeaturesShippedDefaultsTests(FeaturesTestBase):
         self.assertEqual(data["agent_memory"], "none")
         self.assertEqual(data["agent_history_retention_days"], 30)
         self.assertEqual(data["integrations"], [])
-        self.assertIsNone(data["digest_cadence"])

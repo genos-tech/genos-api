@@ -186,14 +186,9 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # frontend locale set is the vocabulary ("en", "ja", "zh", "ar",
     # "hi", "fr", "es").
     language = models.CharField(max_length=16, blank=True, null=True)
-    # Proactive digest (UX tier model §8). Whether it FIRES at all comes
-    # from the tier (`digest_cadence`: pro=weekly, max=daily) — cadence
-    # is deliberately not user config; the tier is the felt difference.
-    # `digest_enabled` is the opt-OUT (default on: the digest is the
-    # top tiers' marquee "comes to you" feature, and opt-in would mean
-    # most payers never see what they pay for). `digest_last_sent_at`
-    # is the idempotency stamp — the hourly cron re-running inside a
-    # window must not double-send.
+    # RETIRED (MIP-1968): the proactive AI digest was decommissioned. The
+    # two columns stay only so old rows keep loading (no migration, no
+    # data deleted); nothing reads or writes them any more.
     digest_enabled = models.BooleanField(default=True)
     digest_last_sent_at = models.DateTimeField(blank=True, null=True)
     # EMAIL digest (the plain all-tiers unread summary, `email_digest`

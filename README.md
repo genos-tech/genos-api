@@ -171,7 +171,6 @@ Additional cron services share the same image, each with its own config and
 | `railway-email-notify.toml`         | every 5 min     | Drain the email notification outbox            |
 | `railway-reindexer.toml`            | every 10 min    | Incremental OpenSearch reindex                 |
 | `railway-email-digest.toml`         | hourly          | Per-user email digest                          |
-| `railway-agent-digest.toml`         | hourly          | Proactive Genos digest (fires at 08:00 local)   |
 | `railway-judge-sampler.toml`        | hourly          | Online LLM-judge quality sampling              |
 | `railway-demo-cleanup.toml`         | daily 03:00 UTC | Delete expired demo users + their data         |
 | `railway-opensearch-maintenance.toml`| daily 05:00 UTC| Index maintenance                              |

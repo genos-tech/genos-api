@@ -9,7 +9,7 @@
 #   variable cannot hold a file, so the key is stored as text and written to the file the model
 #   client reads ($GEMINI_SERVICE_ACCOUNT_FILE). Without it the model is unreachable and a
 #   scheduled report that would use AI is a plain one (`last_result.ai_skipped = "model_unavailable"`).
-#   No-op when unset. Keep in sync with the Dockerfile and railway-agent-digest-entrypoint.sh.
+#   No-op when unset. Keep in sync with the Dockerfile and the other railway-*-entrypoint.sh scripts.
 #
 # No migrations and no opensearch_setup here: backend-django migrates on boot, and a cron racing
 # it would be worse than waiting one deploy. The tick reads the database; the report's AI step

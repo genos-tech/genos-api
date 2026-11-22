@@ -10,7 +10,8 @@ PRODUCER of an AI item, not only scheduled reports.
 Every place that files an Inbox item, and whether it spends AI usage (`PRODUCERS`; a test
 fails when a new place appears that is not listed, so the question is asked of each new one):
 
-  * the Genos digest (item type 6, `agent_digest`): AI. Source: the member's `digest_enabled`;
+  * the Genos digest (item type 6): RETIRED (MIP-1968), nothing files it any more; items already
+    delivered stay readable and keep their cost line, with no switch (their source is gone);
   * a scheduled report (item type 10, `schedule_delivery`): AI only when its job says
     `uses_ai` (of the built-in jobs only "What to do today", the Morning plan, does, and only while
     its `ai_sentences` parameter is not false; a job that uses AI must also report the
@@ -65,18 +66,18 @@ from typing import Any
 
 from django.conf import settings
 
+from origin.models.common.inbox_models import ITEM_TYPE_GENOS_DIGEST as ITEM_TYPE_DIGEST
+
 log = logging.getLogger(__name__)
 
 PRODUCER_DIGEST = "digest"
 PRODUCER_SCHEDULE = "schedule"
-ITEM_TYPE_DIGEST = 6
 ITEM_TYPE_REPORT = 10
 
 # Every file that files Inbox items: its item types, and whether it spends AI usage. A new file
 # that creates an `InboxItems` must be added here by someone who has answered "does it use AI,
 # and where is the cost attached?" (`origin/tests/test_inbox_ai.py`).
 PRODUCERS: dict[str, dict[str, Any]] = {
-    "origin/search_engine/management/commands/agent_digest.py": {"types": (6,), "ai": True},
     "origin/services/schedule_delivery.py": {"types": (10,), "ai": "when the job uses_ai"},
     "origin/views/common/inbox_views.py": {
         "types": (1, 2, 3, 4),
@@ -215,7 +216,8 @@ def sources_for(user, items: list) -> dict[int, Source]:
     out: dict[int, Source] = {}
     for item_id, (kind, sid, used) in wanted.items():
         if kind == PRODUCER_DIGEST:
-            out[item_id] = Source(kind, bool(user.digest_enabled), "Genos digest", used_ai=used)
+            # Retired producer: nothing to switch, the item only shows what it cost.
+            out[item_id] = Source(kind, False, "Genos digest", gone=True, used_ai=used)
         else:
             sched = schedules.get(sid or "")
             out[item_id] = (
@@ -243,19 +245,9 @@ def source_of(user, item) -> Source | None:
 
 
 def _set(user, item, source: Source, on: bool) -> str:
-    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
     from origin.search_engine.agent.tools.base import ToolContext  # noqa: PLC0415
     from origin.services import schedules  # noqa: PLC0415
 
-    if source.kind == PRODUCER_DIGEST:
-        CustomUser.objects.filter(pk=user.pk).update(digest_enabled=on)
-        user.digest_enabled = on
-        return (
-            "Your Genos digest is on again."
-            if on
-            else "Your Genos digest is off. No more will be written (and no more AI usage spent "
-            "on it) until you turn it back on."
-        )
     ctx = ToolContext(team_id=str(source.team_id), user_id=str(user.pk))
     sched = schedules.set_enabled(ctx, source.schedule_id, on)
     return (
@@ -268,8 +260,7 @@ def _set(user, item, source: Source, on: bool) -> str:
 
 def _already(source: Source, on: bool) -> str:
     state = "on" if on else "off"
-    name = "Your Genos digest" if source.kind == PRODUCER_DIGEST else repr(source.label)
-    return f"{name} is already {state}."
+    return f"{source.label!r} is already {state}."
 
 
 class NothingToSwitch(Exception):
@@ -283,7 +274,11 @@ def switch(user, item, on: bool) -> dict[str, Any]:
     if source is None:
         raise NothingToSwitch("This item has no AI source to switch.")
     if source.gone:
-        raise NothingToSwitch("The schedule that made this report no longer exists.")
+        raise NothingToSwitch(
+            "The Genos digest has been retired; there is nothing to turn off."
+            if source.kind == PRODUCER_DIGEST
+            else "The schedule that made this report no longer exists."
+        )
     was_on = source.enabled
     # Already in the state asked for (a double click, a replayed undo, a source changed elsewhere):
     # say so and write nothing, so a resumed schedule is not rescheduled from now and its failure

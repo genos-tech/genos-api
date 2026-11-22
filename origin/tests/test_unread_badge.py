@@ -49,7 +49,6 @@ from origin.models.common.inbox_models import ACTIVITY_INBOX_ITEM_TYPES, InboxIt
 from origin.models.common.notification_models import PushSubscription
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.search_engine.management.commands import agent_digest
 from origin.services import unread_badge, webpush_dispatch
 from origin.services.message_reminders import ITEM_TYPE_MESSAGE_REMINDER
 from origin.services.todo_reminders import ITEM_TYPE_REMINDER
@@ -237,7 +236,7 @@ class InboxTermTests(_Fixture):
         # keep covering what the server files there, or a new digest/reminder would be offered
         # approve/reject and left out of mark-all.
         self.assertTrue(
-            {agent_digest.ITEM_TYPE_DIGEST, ITEM_TYPE_MESSAGE_REMINDER, ITEM_TYPE_REMINDER, 0}
+            {DIGEST, ITEM_TYPE_MESSAGE_REMINDER, ITEM_TYPE_REMINDER, 0}
             <= set(ACTIVITY_INBOX_ITEM_TYPES)
         )
         self.assertFalse(set(REQUEST_TYPES) & set(ACTIVITY_INBOX_ITEM_TYPES))

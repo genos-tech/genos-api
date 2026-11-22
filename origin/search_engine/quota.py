@@ -342,8 +342,7 @@ def get_upload_max_bytes(user_id: str) -> int | None:
 #     TIER_QUOTAS_JSON override written before the key existed), or an
 #     unrecognized value all resolve to the PERMISSIVE default — a
 #     Redis hiccup or a stale ops override must never silently
-#     downgrade someone. (`digest_cadence` is the one deliberate
-#     exception: on any doubt we do NOT send an unsolicited digest.)
+#     downgrade someone.
 #   * Normalization: enforcement sites only ever see values from the
 #     declared vocabulary; anything else is logged and replaced.
 
@@ -351,7 +350,6 @@ _AGENT_TOOL_LEVELS = ("read", "act", "organize")
 _EFFORT_LEVELS = ("low", "medium", "high")
 _AGENT_MEMORY_LEVELS = ("none", "own", "team")
 _ALL_INTEGRATIONS = ("web", "google_calendar", "github")
-_DIGEST_CADENCES = ("weekly", "daily")
 
 
 def _capability(user_id: str, key: str, default):
@@ -438,10 +436,6 @@ def get_mcp_enabled(user_id: str) -> bool:
     asymmetry decides it — a paying user whose coding agent dies mid-task
     files a support ticket and loses work in progress; a Free user who
     briefly reaches MCP during an incident costs us a few tool calls.
-
-    Not the `digest_cadence` exception: that one fails CLOSED because
-    the doubtful action is *sending an unsolicited email*, which cannot
-    be taken back. Answering a tool call can.
     """
     v = _capability(user_id, "mcp_enabled", True)
     if not isinstance(v, bool):
@@ -472,23 +466,4 @@ def get_schedules_enabled(user_id: str) -> bool:
     if not isinstance(v, bool):
         log.warning("TIER_QUOTAS schedules_enabled=%r is not a bool; using the tier default", v)
         return paid
-    return v
-
-
-def get_digest_cadence(user_id: str) -> str | None:
-    """None (no digest) | 'weekly' | 'daily'.
-
-    Deliberately fails CLOSED (None): a digest is unsolicited outbound,
-    so on any infra doubt we stay silent rather than risk noise.
-    """
-    try:
-        v = _user_cfg(user_id).get("digest_cadence")
-    except Exception:  # noqa: BLE001
-        log.exception("get_digest_cadence failed for user=%s", user_id)
-        return None
-    if v is None:
-        return None
-    if v not in _DIGEST_CADENCES:
-        log.warning("TIER_QUOTAS digest_cadence=%r not in %s; off", v, _DIGEST_CADENCES)
-        return None
     return v

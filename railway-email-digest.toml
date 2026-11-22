@@ -2,7 +2,7 @@
 # channel, PR A6 — see genos-docs operations/RAILWAY_DEPLOY.md).
 #
 # Same Docker image as `backend-django`, run as a cron. NOT the agent
-# digest (`agent-digest`, tier-gated, LLM): this one is the plain
+# digest (decommissioned, MIP-1968): this one is the plain
 # unread-summary EMAIL, all tiers, two DB queries per user, no model
 # calls.
 #

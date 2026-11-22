@@ -102,8 +102,6 @@ class SelectionTests(DigestTestBase):
         self.assertIn("List-Unsubscribe", msg.extra_headers)
         self.user.refresh_from_db()
         self.assertIsNotNone(self.user.email_digest_last_sent_at)
-        # The AGENT digest's stamp is untouched — separate channels.
-        self.assertIsNone(self.user.digest_last_sent_at)
 
     def test_wrong_local_hour_selects_nobody(self):
         self._unread_mention()
@@ -270,3 +268,32 @@ class ContentTests(DigestTestBase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("Genosダイジェスト", mail.outbox[0].subject)
         self.assertIn("ダイジェストを停止", mail.outbox[0].body)
+
+
+class DigestPreferenceEndpointTests(BaseAPITestCase):
+    """The preference URL carries the email digest only (the AI digest was retired, MIP-1968)."""
+
+    URL = "/api/v2/user/preferences/digest/"
+
+    def setUp(self):
+        super().setUp()
+        self.authenticate()
+
+    def test_get_carries_only_the_email_digest(self):
+        self.assertEqual(self.client.get(self.URL).data, {"email_digest_enabled": True})
+
+    def test_round_trip(self):
+        resp = self.client.patch(self.URL, {"email_digest_enabled": False}, format="json")
+        self.assertEqual((resp.status_code, resp.data), (200, {"email_digest_enabled": False}))
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.email_digest_enabled)
+
+    def test_non_boolean_is_rejected(self):
+        resp = self.client.patch(self.URL, {"email_digest_enabled": "yes"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_the_retired_key_alone_is_rejected_and_changes_nothing(self):
+        resp = self.client.patch(self.URL, {"digest_enabled": False}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.digest_enabled)

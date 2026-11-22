@@ -1562,7 +1562,7 @@ SEARCH_ENGINE = {
         #
         # UX-pillar capability keys (agent_tool_level, max_effort,
         # auto_effort, agent_memory, agent_history_retention_days,
-        # integrations, digest_cadence, mcp_enabled, schedules_enabled) carry the LIVE experience
+        # integrations, mcp_enabled, schedules_enabled) carry the LIVE experience
         # ladder — tiers sell capability, volume caps are the fair-use
         # footer. Rationale and target table: genos-docs
         # operations/UX_TIER_MODEL_PLAN.md. A MISSING capability key
@@ -1588,7 +1588,6 @@ SEARCH_ENGINE = {
             "agent_memory": "none",
             "agent_history_retention_days": 30,
             "integrations": [],
-            "digest_cadence": None,
             "mcp_enabled": False,
             # Scheduled jobs and Genos reports are Core and up (MIP-1213), a reason to upgrade.
             "schedules_enabled": False,
@@ -1672,7 +1671,6 @@ SEARCH_ENGINE = {
             "agent_memory": "own",
             "agent_history_retention_days": 180,
             "integrations": ["web", "google_calendar"],
-            "digest_cadence": None,
             "mcp_enabled": True,
             "schedules_enabled": True,
             "mcp_calls_per_min": None,
@@ -1702,7 +1700,6 @@ SEARCH_ENGINE = {
             "agent_memory": "team",
             "agent_history_retention_days": 365,
             "integrations": ["web", "google_calendar", "github"],
-            "digest_cadence": "weekly",
             "mcp_enabled": True,
             "schedules_enabled": True,
             "mcp_calls_per_min": None,
@@ -1733,7 +1730,6 @@ SEARCH_ENGINE = {
             "agent_memory": "team",
             "agent_history_retention_days": None,
             "integrations": ["web", "google_calendar", "github"],
-            "digest_cadence": "daily",
             "mcp_enabled": True,
             "schedules_enabled": True,
             "mcp_calls_per_min": None,
@@ -1763,7 +1759,6 @@ SEARCH_ENGINE = {
             "agent_memory": "team",
             "agent_history_retention_days": None,
             "integrations": ["web", "google_calendar", "github"],
-            "digest_cadence": "daily",
             "mcp_enabled": True,
             "schedules_enabled": True,
             "mcp_calls_per_min": None,
@@ -1894,21 +1889,6 @@ SEARCH_ENGINE["AGENT_THINKING_BUDGETS"] = (
 # RAG_PLANNING_MODEL still wins as the no-deploy operator override.
 SEARCH_ENGINE["AGENT_TWO_TIER_LOOP"] = (
     os.environ.get("AGENT_TWO_TIER_LOOP", "false").lower() == "true"
-)
-
-# The proactive digest (`agent_digest`) runs its agent loop at the SERVER
-# DEFAULT provider's MEDIUM effort, so the two-tier loop above applies to
-# it too: planning steps on the rung-0 model, the final answer on the
-# model the digest already uses. Before this the digest bound no LLM
-# choice at all, `active_effort_profile()` was None for it, and all of a
-# digest's ~7 calls ran on the final model (MIP-928). Deliberately NOT
-# the user's own effort preference: the digest is a fixed product, not
-# their ask. The no-deploy rollback is AGENT_DIGEST_TWO_TIER=false, which
-# restores the unbound run exactly. Also inert unless BOTH
-# AGENT_EFFORT_LEVELS and AGENT_TWO_TIER_LOOP are on, so rolling either
-# of those back rolls the digest back with it.
-SEARCH_ENGINE["AGENT_DIGEST_TWO_TIER"] = (
-    os.environ.get("AGENT_DIGEST_TWO_TIER", "true").lower() == "true"
 )
 
 # Claude prompt caching (LLM_TIER_COST_OPTIMIZATION.md §8.2). Anthropic

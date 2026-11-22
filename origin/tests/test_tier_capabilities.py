@@ -6,8 +6,7 @@ keys. Two contracts pinned here:
 
   - Fail-open: an infra error, a MISSING key (a TIER_QUOTAS_JSON
     override written before the key existed), or an unknown value all
-    resolve PERMISSIVE — never a downgrade. `digest_cadence` is the
-    deliberate exception: on any doubt, no unsolicited digest.
+    resolve PERMISSIVE — never a downgrade.
   - Explicit restrictive values pass through untouched — including
     `integrations: []`, which is a real restriction, not a missing key.
 """
@@ -35,7 +34,6 @@ _RESTRICTED_QUOTAS = {
         "agent_memory": "none",
         "agent_history_retention_days": 30,
         "integrations": [],
-        "digest_cadence": "weekly",
     },
 }
 
@@ -47,7 +45,6 @@ _GARBAGE_QUOTAS = {
         "max_effort": "ultra",
         "agent_memory": "everything",
         "integrations": "github",
-        "digest_cadence": "hourly",
     },
 }
 
@@ -69,11 +66,7 @@ class CapabilityAccessorTests(BaseAPITestCase):
         self.assertTrue(quota.get_auto_effort(uid))
         self.assertEqual(quota.get_agent_memory(uid), "team")
         self.assertIsNone(quota.get_agent_history_retention_days(uid))
-        self.assertEqual(
-            quota.get_integrations(uid), ["web", "google_calendar", "github"]
-        )
-        # The exception: a missing cadence means NO digest, not "daily".
-        self.assertIsNone(quota.get_digest_cadence(uid))
+        self.assertEqual(quota.get_integrations(uid), ["web", "google_calendar", "github"])
 
     @override_settings(SEARCH_ENGINE=_search_engine_with_quotas(_RESTRICTED_QUOTAS))
     def test_explicit_values_pass_through(self):
@@ -85,7 +78,6 @@ class CapabilityAccessorTests(BaseAPITestCase):
         self.assertEqual(quota.get_agent_history_retention_days(uid), 30)
         # [] is a restriction, not an accident — it must NOT widen.
         self.assertEqual(quota.get_integrations(uid), [])
-        self.assertEqual(quota.get_digest_cadence(uid), "weekly")
 
     @override_settings(SEARCH_ENGINE=_search_engine_with_quotas(_GARBAGE_QUOTAS))
     def test_unknown_values_normalize_permissive(self):
@@ -94,11 +86,7 @@ class CapabilityAccessorTests(BaseAPITestCase):
         self.assertEqual(quota.get_max_effort(uid), "high")
         self.assertEqual(quota.get_agent_memory(uid), "team")
         # A bare string (not a list) is malformed config, not a grant.
-        self.assertEqual(
-            quota.get_integrations(uid), ["web", "google_calendar", "github"]
-        )
-        # Unknown cadence: silence, not a guessed schedule.
-        self.assertIsNone(quota.get_digest_cadence(uid))
+        self.assertEqual(quota.get_integrations(uid), ["web", "google_calendar", "github"])
 
     def test_infra_error_fails_open(self):
         uid = str(self.user.id)
@@ -108,7 +96,4 @@ class CapabilityAccessorTests(BaseAPITestCase):
             self.assertTrue(quota.get_auto_effort(uid))
             self.assertEqual(quota.get_agent_memory(uid), "team")
             self.assertIsNone(quota.get_agent_history_retention_days(uid))
-            self.assertEqual(
-                quota.get_integrations(uid), ["web", "google_calendar", "github"]
-            )
-            self.assertIsNone(quota.get_digest_cadence(uid))
+            self.assertEqual(quota.get_integrations(uid), ["web", "google_calendar", "github"])

@@ -400,7 +400,7 @@ class TestCronsRefuseAMissingKey(_FreshKeyring, TestCase):
     """Push dispatch swallows errors, so a missing key must fail the run."""
 
     def test_each_cron_refuses_to_start(self):
-        for command in ("message_reminder_tick", "agent_digest", "webhook_deliver_tick"):
+        for command in ("message_reminder_tick", "webhook_deliver_tick"):
             with (
                 self.subTest(command=command),
                 self.keys(),
@@ -409,14 +409,14 @@ class TestCronsRefuseAMissingKey(_FreshKeyring, TestCase):
                 call_command(command, stdout=StringIO())
 
     def test_dry_runs_need_no_key(self):
-        for command in ("message_reminder_tick", "agent_digest", "webhook_deliver_tick"):
+        for command in ("message_reminder_tick", "webhook_deliver_tick"):
             with self.subTest(command=command), self.keys():
                 call_command(command, dry_run=True, stdout=StringIO())
 
     @override_settings(WEBPUSH_VAPID_PRIVATE_KEY="", WEBPUSH_VAPID_PUBLIC_KEY="")
     def test_push_crons_need_no_key_without_vapid(self):
         # Nothing is pushed, so nothing is decrypted.
-        for command in ("message_reminder_tick", "agent_digest"):
+        for command in ("message_reminder_tick",):
             with self.subTest(command=command), self.keys():
                 call_command(command, stdout=StringIO())
 

@@ -168,7 +168,9 @@ class UserProfileImageView(AuthenticatedAPIView):
             try:
                 previous_file.delete(save=False)
             except Exception as err:  # pragma: no cover - best-effort cleanup
-                logger.warning("Failed to delete previous profile image: %s", describe_exception(err))
+                logger.warning(
+                    "Failed to delete previous profile image: %s", describe_exception(err)
+                )
 
         # Only update the FileField
         new_profile_image_data = {
@@ -239,21 +241,15 @@ class AutoCloseOnPrMergePreferenceView(AuthenticatedAPIView):
 
 
 class DigestPreferenceView(AuthenticatedAPIView):
-    """GET / PATCH the calling user's proactive-digest opt-out
-    (UX tier model §8). Operates on `request.user`; no user_id is
-    accepted, so a leaked token can't toggle someone else's setting.
-
-    Note this is the OPT-OUT only — whether a digest fires at all, and
-    how often, comes from the tier (`digest_cadence`), deliberately not
-    from user config.
+    """GET / PATCH the calling user's email-digest opt-out. Operates on
+    `request.user`; no user_id is accepted, so a leaked token can't
+    toggle someone else's setting. (The proactive AI digest this URL
+    used to carry was decommissioned, MIP-1968.)
     """
 
     def get(self, request):
         return Response(
             {
-                "digest_enabled": bool(request.user.digest_enabled),
-                # The EMAIL digest (all-tiers unread summary) — a separate
-                # opt-out from the tier-gated agent digest above.
                 "email_digest_enabled": bool(request.user.email_digest_enabled),
             },
             status=status.HTTP_200_OK,
@@ -261,7 +257,7 @@ class DigestPreferenceView(AuthenticatedAPIView):
 
     def patch(self, request):
         updates = {}
-        for key in ("digest_enabled", "email_digest_enabled"):
+        for key in ("email_digest_enabled",):
             if key not in request.data:
                 continue
             value = request.data.get(key)
@@ -273,7 +269,7 @@ class DigestPreferenceView(AuthenticatedAPIView):
             updates[key] = value
         if not updates:
             return Response(
-                {"error": "digest_enabled or email_digest_enabled is required."},
+                {"error": "email_digest_enabled is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         for key, value in updates.items():
@@ -359,8 +355,7 @@ class UiSettingsPreferenceView(AuthenticatedAPIView):
             return all(v is None or isinstance(v, (bool, int, float, str)) for v in value)
         if isinstance(value, dict):
             return all(
-                isinstance(k, str)
-                and (v is None or isinstance(v, (bool, int, float, str)))
+                isinstance(k, str) and (v is None or isinstance(v, (bool, int, float, str)))
                 for k, v in value.items()
             )
         return False
@@ -386,7 +381,9 @@ class UiSettingsPreferenceView(AuthenticatedAPIView):
                 )
             if not self._value_ok(value):
                 return Response(
-                    {"error": f"Unsupported value for {key!r} — use JSON scalars or a flat list/object."},
+                    {
+                        "error": f"Unsupported value for {key!r} — use JSON scalars or a flat list/object."
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
