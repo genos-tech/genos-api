@@ -73,14 +73,18 @@ def _task(title, body, due_offset_days=3, priority="Normal"):
     }
 
 
-def _milestone(title, goal, how, due_offset_days=14):
+def _milestone(title, goal, how, due_offset_days=14, headings=("🎯 Goal", "🪜 How to use this")):
     return {
         "title": title,
-        "body": _body(("🎯 Goal", [goal]), ("🪜 How to use this", [how])),
+        "body": _body((headings[0], [goal]), (headings[1], [how])),
         "status": "Open",
         "priority": "Normal",
         "due_offset_days": due_offset_days,
     }
+
+
+def _milestone_ja(*args, **kwargs):
+    return _milestone(*args, headings=("🎯 目標", "🪜 使い方"), **kwargs)
 
 
 COPY = {
@@ -334,7 +338,7 @@ COPY = {
                     "（プロジェクトのメニューの「プロジェクトを削除」）、2つのフォルダ（「フォルダを削除」）、"
                     "「サンプル部署」タグ（プロジェクトを開いて「タグを編集する」から「タグの削除」）、"
                     "メンショングループ @sample-dept（設定の「メンショングループ」から"
-                    "「グループの削除」）、2つのグループチャット（グループのプロフィールの"
+                    "「グループを削除」）、2つのグループチャット（グループのプロフィールの"
                     "「グループを削除」）を削除してください。",
                 ],
             ),
@@ -357,7 +361,7 @@ COPY = {
             ),
         ),
         "project": "サンプル部署：Webサイト刷新",
-        "project_milestone": _milestone(
+        "project_milestone": _milestone_ja(
             "サンプルのマイルストーン：Webサイトを刷新する",
             "部署の仕事のひとつを、プロジェクトでどう進めるかを示します。",
             "各タスクは例です。完了にしても、変更しても、プロジェクトごと削除してもかまいません。",
@@ -401,7 +405,7 @@ COPY = {
             ),
         ],
         "private_project": "サンプル部署：採用計画（非公開）",
-        "private_project_milestone": _milestone(
+        "private_project_milestone": _milestone_ja(
             "サンプルのマイルストーン：募集ポジション",
             "一部の人だけが参加できるプロジェクトを示します。",
             "このプロジェクトは非公開で、あなたが承認した人だけが参加できます。",

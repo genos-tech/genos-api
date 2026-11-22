@@ -62,7 +62,15 @@ GROUP_SLUGS = ("product", "engineering", "design", "quality")
 
 
 def _task(
-    title, body, assignee, status="Open", priority="Normal", due=7, effort="Moderate", tags=(0,)
+    title,
+    body,
+    assignee,
+    status="Open",
+    priority="Normal",
+    due=7,
+    effort="Moderate",
+    tags=(0,),
+    heading="🧾 Summary",
 ):
     return {
         "title": title,
@@ -72,20 +80,28 @@ def _task(
         "is_milestone_child": True,
         "parent_idx": None,
         "due_offset_days": due,
-        "body": _body(("🧾 Summary", [body])),
+        "body": _body((heading, [body])),
         "effort_level": effort,
         "_tag_indexes": tags,
     }
 
 
-def _milestone(title, goal, due=21):
+def _milestone(title, goal, due=21, heading="🎯 Goal"):
     return {
         "title": title,
-        "body": _body(("🎯 Goal", [goal])),
+        "body": _body((heading, [goal])),
         "status": "WIP",
         "priority": "Normal",
         "due_offset_days": due,
     }
+
+
+def _task_ja(*args, **kwargs):
+    return _task(*args, heading="🧾 概要", **kwargs)
+
+
+def _milestone_ja(*args, **kwargs):
+    return _milestone(*args, heading="🎯 目標", **kwargs)
 
 
 COPY = {
@@ -538,12 +554,12 @@ COPY = {
                     ("コンポーネント", "#7c3aed", "#ffffff"),
                     ("ドキュメント", "#0ea5e9", "#ffffff"),
                 ],
-                "milestone": _milestone(
+                "milestone": _milestone_ja(
                     "デザインシステム v1",
                     "プロダクトとエンジニアリングの両方が使う、ひとつのコンポーネントとトークンのセット。",
                 ),
                 "tasks": [
-                    _task(
+                    _task_ja(
                         "ボタンとフォームのコンポーネントを棚卸しする",
                         "何があり、何が違うかを一覧にします。",
                         "bot2",
@@ -553,7 +569,7 @@ COPY = {
                         "Moderate",
                         (0,),
                     ),
-                    _task(
+                    _task_ja(
                         "色と余白のトークンを公開する",
                         "デザインとコードで、ひとつの情報源にします。",
                         "bot2",
@@ -563,7 +579,7 @@ COPY = {
                         "High",
                         (0,),
                     ),
-                    _task(
+                    _task_ja(
                         "使い方のガイドラインを書く",
                         "各コンポーネントをいつ使うか、例と一緒に書きます。",
                         "bot1",
@@ -583,9 +599,9 @@ COPY = {
                 "visitor": False,
                 "private": False,
                 "tags": [("iOS", "#0ea5e9", "#ffffff"), ("Android", "#10b981", "#ffffff")],
-                "milestone": _milestone("モバイルのベータ版", "チームが毎日使えるベータ版。"),
+                "milestone": _milestone_ja("モバイルのベータ版", "チームが毎日使えるベータ版。"),
                 "tasks": [
-                    _task(
+                    _task_ja(
                         "プッシュ通知の種類を決める",
                         "どのイベントをプッシュにする価値があるか、ないかを決めます。",
                         "bot1",
@@ -595,7 +611,7 @@ COPY = {
                         "Moderate",
                         (0, 1),
                     ),
-                    _task(
+                    _task_ja(
                         "オフラインのタスク一覧を試作する",
                         "接続なしでタスクを開いて編集できるようにします。",
                         "bot1",
@@ -615,11 +631,11 @@ COPY = {
                 "visitor": False,
                 "private": False,
                 "tags": [("スイート", "#f59e0b", "#ffffff"), ("不安定", "#ef4444", "#ffffff")],
-                "milestone": _milestone(
+                "milestone": _milestone_ja(
                     "安定した回帰テストスイート", "すべてのリリースを、まずスイートが承認する。"
                 ),
                 "tasks": [
-                    _task(
+                    _task_ja(
                         "サインインの回帰テストを自動化する",
                         "パスワード、OAuth、招待からのサインインを網羅します。",
                         "bot3",
@@ -629,7 +645,7 @@ COPY = {
                         "High",
                         (0,),
                     ),
-                    _task(
+                    _task_ja(
                         "不安定なテストを毎週月曜に報告する",
                         "ひとつのリスト、ひとりの担当、ひとつの場所。",
                         "bot3",
@@ -649,9 +665,9 @@ COPY = {
                 "visitor": False,
                 "private": True,
                 "tags": [("OKR", "#7c3aed", "#ffffff"), ("採用", "#f59e0b", "#ffffff")],
-                "milestone": _milestone("来四半期のOKR", "発表前に、会社の目標を合意する。"),
+                "milestone": _milestone_ja("来四半期のOKR", "発表前に、会社の目標を合意する。"),
                 "tasks": [
-                    _task(
+                    _task_ja(
                         "来四半期の全社OKRの案を作る",
                         "3つの目標と、それぞれの測定可能な成果。",
                         "bot0",
@@ -661,7 +677,7 @@ COPY = {
                         "High",
                         (0,),
                     ),
-                    _task(
+                    _task_ja(
                         "人員計画をレビューする",
                         "どの職種を、どの順で、いくらで採るか。",
                         "bot0",
