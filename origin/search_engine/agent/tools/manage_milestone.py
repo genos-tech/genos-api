@@ -69,6 +69,7 @@ from origin.search_engine.agent.tools.task_enums import (
 )
 from origin.search_engine.agent.tools.task_tags import resolve_tags, tag_names
 from origin.search_engine.quota import TASK_CREATE_KEY, check_remaining_monthly, increment_usage
+from origin.services.archive import archived_refusal
 from origin.services.collab_push import push_task_body
 from origin.services.milestone_manage import (
     FOLDER_NAME_MAX,
@@ -359,6 +360,8 @@ def _label(payload: dict[str, Any]) -> str:
 
 def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     project = load_project(args["project_id"], ctx)
+    if why := archived_refusal(project):  # MIP-1852
+        raise ToolError(f"{why} Nothing was created.")
     parsed, errors = _parse_fields(args, project, ctx, creating=True)
     if errors:
         raise _refuse(errors, "Nothing was created")

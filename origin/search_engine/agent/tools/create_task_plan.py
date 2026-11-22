@@ -78,6 +78,7 @@ from origin.search_engine.quota import (
     check_remaining_monthly,
     increment_usage,
 )
+from origin.services.archive import archived_refusal
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card, post_task_created_card
@@ -241,6 +242,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     allowed = task_acl_user_ids(project_id=project_id, assignee_id=None, reporter_id=None)
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create tasks in project {project_id}.")
+    if why := archived_refusal(project):  # MIP-1852
+        raise ToolError(f"{why} Nothing was created.")
 
     # A task proposed without a body gets the project's template (MIP-1510): the same text the
     # approval card showed. After the size check and the ACL gate, on a copy.

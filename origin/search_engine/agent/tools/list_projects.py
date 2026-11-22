@@ -58,6 +58,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "code": p.code,
                 "is_private": p.is_private,
                 "member_count": member_count,
+                # MIP-1852: only when true. An archived project is read-only: no new work in it.
+                **({"archived": True} if p.archived_at else {}),
             }
         )
 
@@ -74,7 +76,8 @@ LIST_PROJECTS = Tool(
         "Use this to resolve a project name to its numeric project_id before "
         "calling create_task, create_note, or get_project_summary. Also useful "
         "for answering 'what projects do we have?' questions. Only returns "
-        "projects the requesting user can access — no cross-user data leakage."
+        "projects the requesting user can access — no cross-user data leakage. "
+        "A result marked `archived: true` (a project, or a task, chat or hit in one) is read-only: show it, but never propose new work in it."
     ),
     parameters_schema={
         "type": "OBJECT",

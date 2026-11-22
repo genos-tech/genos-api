@@ -296,6 +296,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "effort_level": task.effort_level or None,
         "due_date": task.due_date.isoformat() if task.due_date else None,
         "project_id": task.project_id or None,
+        # MIP-1852: only when true, so a live project's task reads as it did.
+        **({"archived": True} if task.project and task.project.archived_at else {}),
         "assignee_id": str(task.assignee_id) if task.assignee_id else None,
         "reporter_id": str(task.reporter_id) if task.reporter_id else None,
         "tags": tag_names(task.tags),
