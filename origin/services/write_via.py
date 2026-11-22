@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from origin.middleware.current_user import get_current_source
+from origin.middleware.current_user import get_current_run_id, get_current_source
 
 # The credential kinds `McpOAuthCredential.via()` and `ApiKey.via()` stamp.
 RECORDED_KINDS = frozenset({"api_key", "oauth"})
@@ -28,4 +28,15 @@ def recorded_via() -> dict[str, Any] | None:
     source = get_current_source()
     if not isinstance(source, dict) or source.get("kind") not in RECORDED_KINDS:
         return None
-    return dict(source)
+    return with_run_id(source)
+
+
+def with_run_id(source: dict[str, Any]) -> dict[str, Any]:
+    """A copy of `source` carrying the MCP call's `run_id` (MIP-2053), when the agent call log
+    gave this call one. The id is the keyed hash `AgentCall.run_id` holds, an opaque group key; no
+    text. `via_for_viewer` shows it only to the row's actor."""
+    out = dict(source)
+    run_id = get_current_run_id()
+    if run_id and out.get("kind") in RECORDED_KINDS:
+        out["run_id"] = run_id
+    return out

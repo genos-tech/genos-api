@@ -73,6 +73,17 @@ def get_current_source():
     return {"kind": "app"}
 
 
+def get_current_run_id():
+    """The agent-call-log run id of the MCP call in progress, or None (log off, not an MCP call)."""
+    return getattr(_state, "run_id", None)
+
+
+def set_current_run_id(run_id):
+    """Pin the MCP call's run id (`services.agent_calls._run_id`) for the writes it makes.
+    Cleared with the request by `clear_current_user`."""
+    _state.run_id = run_id
+
+
 def set_current_user(user, via=None):
     """Manually set the current user (and, optionally, the `via` source
     `get_current_source` reports). Pair with `clear_current_user()` in a
@@ -109,7 +120,7 @@ def via_override(via):
 
 def clear_current_user():
     """Drop the explicit user/source and cached request from this thread."""
-    for attr in ("user", "via", "request"):
+    for attr in ("user", "via", "request", "run_id"):
         if hasattr(_state, attr):
             delattr(_state, attr)
 

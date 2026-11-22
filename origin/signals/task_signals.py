@@ -56,6 +56,7 @@ from origin.services.task_cache import (
     clear_project_tasks_cache,
     invalidate_project_tasks_cache,
 )
+from origin.services.write_via import with_run_id
 
 _calendar_logger = logging.getLogger("origin.calendar_sync")
 _webhook_logger = logging.getLogger("origin.webhooks")
@@ -420,7 +421,7 @@ def _record(
     # task's history can tell an unattended API write from a UI edit by
     # the same person. Absent when unknown (webhooks, commands).
     if "via" not in metadata and (via := get_current_source()) is not None:
-        metadata["via"] = via
+        metadata["via"] = with_run_id(via) if isinstance(via, dict) else via
     activity = TaskActivity.objects.create(
         team=task.team,
         project=task.project,
