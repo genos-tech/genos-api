@@ -94,6 +94,7 @@ from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_service import ensure_backing_task
 from origin.services.task_card_post import post_task_created_card
 from origin.services.task_collaborators import sync_task_collaborators
+from origin.services.task_organize_suggestions import suggestions_for_new_task
 from origin.services.task_reparent import find_parent, milestone_for_parent
 from origin.views.utils.scope_guards import is_team_member
 
@@ -441,6 +442,21 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             result["reporter_id"] = str(reporter.id)
         if links is not None:
             result["links"] = [{"title": link["title"], "url": link["url"]} for link in links]
+    # MIP-2015: only on the public MCP surface, and only for a task with no parent task. The write
+    # has happened; this is a hint about what was probably forgotten, never a refusal. The in-app
+    # agent's reply is unchanged. A failure to find candidates must not turn a created task into an error.
+    if ctx.surface == "mcp" and parent is None:
+        try:
+            result["suggestions"] = suggestions_for_new_task(
+                project_id=project_id,
+                team_id=ctx.team_id,
+                task_id=task.task_id,
+                title=task.title,
+                body_text=str(args.get("content_text") or ""),
+                in_milestone=milestone is not None,
+            )
+        except Exception as e:  # noqa: BLE001 — the task exists; the hint is best effort
+            log_failure("create_task suggestions failed", e)
     # Undo (`agent/undo.py`): a stamp of the task as made, taken last, once every
     # post-save write (collaborators, root, mentions) has landed.
     if ctx.capture_undo and (image := created_task_capture(task)):

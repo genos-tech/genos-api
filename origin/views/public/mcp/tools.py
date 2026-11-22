@@ -1474,7 +1474,15 @@ CATALOG: tuple[McpTool, ...] = (
             "`list_project_members`; members of the project) and `custom_fields` (the project's own "
             "fields by name, as `{name, value}` or `{name, values}` for a tag "
             "field; `list_project_tags` lists them with their types and "
-            "options) are set at creation too. Requires a "
+            "options) are set at creation too. The task is always created; "
+            "when it has no `parent_task_id` the reply also carries "
+            "`suggestions` (a list of {kind, message, candidates}): "
+            "`parent_task` lists up to 3 open tasks it may belong under, "
+            "`dependencies` up to 3 that may block it or wait on it, each "
+            "{task_id, display_id, title}. They are guesses from the title: "
+            "act on one only if it is right (`update_task` with "
+            "`parent_task_id`, `update_task_dependencies`), or say why the "
+            "task has none. Requires a "
             "write-scoped API key."
         ),
         write=True,
@@ -1555,8 +1563,11 @@ CATALOG: tuple[McpTool, ...] = (
             "index (`blocked_by_indexes`). Max 20 tasks. A new milestone can "
             "take `tags`; `default_assignee_id` assigns every task that has no "
             "`assignee_id` of its own, and a new milestone with exactly one "
-            "assignee passes that person on to those tasks. Requires a "
-            "write-scoped API key."
+            "assignee passes that person on to those tasks. A batch with no "
+            "new milestone and no `parent_task_id` also gets `suggestions` "
+            "({kind, message, candidates}: likely parents and related open "
+            "tasks, as for `create_task`): act on them only if they are right. "
+            "Requires a write-scoped API key."
         ),
         write=True,
         task_ref_args=("parent_task_id",),

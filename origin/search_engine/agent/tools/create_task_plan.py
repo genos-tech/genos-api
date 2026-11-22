@@ -83,6 +83,7 @@ from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card, post_task_created_card
+from origin.services.task_organize_suggestions import suggestions_for_new_plan
 from origin.views.utils.scope_guards import is_team_member
 
 # Hard cap on tasks per plan. Keeps the single function-call emission
@@ -669,7 +670,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             f", {n_deps} dependency(ies)" if n_deps else ""
         )
 
-    return {
+    result = {
         "milestone": milestone_out,
         "parent_task": parent_out,
         "project_id": project_id,
@@ -678,6 +679,32 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "dependencies_created": n_deps,
         "__summary__": summary,
     }
+    # MIP-2015: on the public MCP surface, a batch that is neither a new milestone's tree nor the
+    # sub-tasks of one task leaves its top-level tasks with no parent task. The plan is written; this
+    # is one hint for the whole batch (what was probably forgotten), never a refusal. The bodies are
+    # what the model wrote (`own_tasks`), not the template text `fill_plan_task_bodies` added.
+    if ctx.surface == "mcp" and milestone_spec is None and parent_task is None:
+        parentless = [
+            (
+                t.task_id,
+                t.title,
+                str((own_tasks[i] if i < len(own_tasks) else {}).get("content_markdown") or ""),
+            )
+            for i, (t, spec) in enumerate(zip(created, tasks))
+            if spec.get("parent_index") is None
+        ]
+        try:
+            if suggestions := suggestions_for_new_plan(
+                project_id=project_id,
+                team_id=ctx.team_id,
+                parentless=parentless,
+                all_task_ids=[t.task_id for t in created],
+                in_milestone=existing_milestone is not None,
+            ):
+                result["suggestions"] = suggestions
+        except Exception as e:  # noqa: BLE001 — the plan exists; the hint is best effort
+            log_failure("create_task_plan suggestions failed", e)
+    return result
 
 
 _TASK_ITEM_SCHEMA: dict[str, Any] = {
