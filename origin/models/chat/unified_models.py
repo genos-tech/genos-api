@@ -218,6 +218,10 @@ class ChannelMember(models.Model):
     )
     role = models.CharField(max_length=16, default="member")  # owner | admin | member | system
     is_deleted = models.BooleanField(default=False)
+    # "Remove from sidebar" (MIP-1414): when this person hid a DM / MDM from THEIR chat list. A
+    # display preference only: membership, messages and access are untouched, and a new message in
+    # the chat clears it. Not `is_deleted`, which means the person is no longer in the chat.
+    hidden_at = models.DateTimeField(null=True, blank=True)
     ts_joined_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 

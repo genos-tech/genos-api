@@ -13,6 +13,9 @@ JSON lists), so a deleted channel's pins are auto-removed on cascade.
 `DELETE /api/v3/channels/{channel_id}/pin/`     unpin
 `GET    /api/v3/pins/`                          list the user's pins
 
+`POST   /api/v3/channels/{channel_id}/hide/`    hide a DM / MDM from MY chat list (MIP-1414)
+`DELETE /api/v3/channels/{channel_id}/hide/`    show it again
+
 `POST   /api/v3/messages/{message_id}/flag/`    flag a message
 `PATCH  /api/v3/messages/{message_id}/flag/`    mark done / reopen
 `DELETE /api/v3/messages/{message_id}/flag/`    unflag (hard delete)
@@ -34,6 +37,8 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
     Channel,
+    ChannelKind,
+    ChannelMember,
     Flag,
     Pin,
 )
@@ -44,6 +49,7 @@ from origin.serializers.chat.unified_serializers import (
 )
 from origin.services import message_flags, message_reminders
 from origin.services.channel_scope import chat_member_q
+from origin.services.realtime_push import push_channel_appeared
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -72,6 +78,52 @@ class PinView(AuthenticatedAPIView):
         channel = _verify_member_or_404(channel_id, request.user)
         Pin.objects.filter(user=request.user, channel=channel).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+HIDEABLE_KINDS = (ChannelKind.DM, ChannelKind.MDM)
+
+
+class ChannelHideView(AuthenticatedAPIView):
+    """POST / DELETE /api/v3/channels/{channel_id}/hide/
+
+    "Remove from sidebar" for a DM or multi-person DM (MIP-1414): a per-person display flag
+    (`ChannelMember.hidden_at`). Nothing is deleted and the person stays a member; the chat only
+    leaves THEIR `GET /api/v3/channels/` (unless `include_hidden=1`). A new message in the chat
+    clears it (`message_views`), as does opening the DM again.
+
+    Only the caller's own row is ever written. Both calls answer 404 to a non-member, 400 for a
+    chat that is not a DM / MDM, 204 otherwise (idempotent). The caller's other open apps are told
+    to re-read the list only when the flag actually changed.
+    """
+
+    def _set(self, request, channel_id, hide):
+        channel = _verify_member_or_404(channel_id, request.user)
+        if channel.kind not in HIDEABLE_KINDS:
+            return Response(
+                {"error": "Only direct messages can be removed from the sidebar."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        rows = ChannelMember.objects.filter(
+            channel=channel,
+            user=request.user,
+            is_deleted=False,
+            hidden_at__isnull=hide,
+        )
+        changed = rows.update(hidden_at=timezone.now() if hide else None)
+        if changed:
+            push_channel_appeared(
+                user_ids=[request.user.id],
+                team_id=channel.team_id,
+                channel_id=channel.id,
+                kind=channel.kind,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def post(self, request, channel_id):
+        return self._set(request, channel_id, True)
+
+    def delete(self, request, channel_id):
+        return self._set(request, channel_id, False)
 
 
 class PinListView(AuthenticatedAPIView):

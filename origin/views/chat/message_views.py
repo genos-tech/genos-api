@@ -39,6 +39,8 @@ from rest_framework.response import Response
 
 from origin.models.chat.unified_models import (
     Channel,
+    ChannelKind,
+    ChannelMember,
     Message,
     MessageAttachment,
     MessageMention,
@@ -52,6 +54,7 @@ from origin.serializers.chat.unified_serializers import (
 from origin.services import (
     message_tombstone,
     message_via,
+    realtime_push,
     thread_summary_cleanup,
     webhook_enqueue,
 )
@@ -331,6 +334,22 @@ def _allocate_seq_and_create_message_with_activities(
     return msg, activities
 
 
+def _unhide_for_new_message(channel) -> None:
+    """A new message brings a DM / MDM back into the sidebar of everyone who had removed it
+    (MIP-1414), the sender included (they may write from another device). Their open apps are told
+    to re-read the chat list. A no-op for any other kind of chat and for a chat nobody hid."""
+    if channel.kind not in (ChannelKind.DM, ChannelKind.MDM):
+        return
+    rows = ChannelMember.objects.filter(channel=channel, hidden_at__isnull=False)
+    user_ids = list(rows.values_list("user_id", flat=True))
+    if not user_ids:
+        return
+    rows.update(hidden_at=None)
+    realtime_push.push_channel_appeared(
+        user_ids=user_ids, team_id=channel.team_id, channel_id=channel.id, kind=channel.kind
+    )
+
+
 def _allocate_seq_and_create_message(
     *,
     channel,
@@ -440,6 +459,8 @@ def _allocate_seq_and_create_message(
             metadata=metadata or {},
             correlation_id=correlation_id,
         )
+
+        _unhide_for_new_message(channel)
 
         # Outbound webhook for `message.created`.
         #
