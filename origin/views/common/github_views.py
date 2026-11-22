@@ -51,6 +51,7 @@ from origin.services.github_webhooks import (
     register_repo_webhook,
 )
 from origin.services.oauth.tokens import get_valid_access_token
+from origin.services.pr_merge_comment import post_merge_comments
 from origin.services.task_delivery import canonical_pr_url, sync_pull_request
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
@@ -908,7 +909,46 @@ def apply_pull_request(owner: str, repo: str, pr: dict, action: str | None, team
     head_ref = ((pr.get("head") or {}).get("ref")) or ""
     if action == "closed" and pr.get("merged") and head_ref:
         updated = _close_tasks_for_merged_pr(head_ref, team_ids, pr.get("html_url") or "")
+        # After the close, so the comment reads the status the task ended up in (MIP-2016).
+        _comment_on_merged_pr(owner, repo, pr, head_ref, team_ids)
     return {"deliveries": deliveries, "updated": updated}
+
+
+def _comment_on_merged_pr(owner: str, repo: str, pr: dict, head_ref: str, team_ids: list) -> int:
+    """One Genos comment on each task this merged PR is linked to, saying what is still open
+    (`origin.services.pr_merge_comment`, MIP-2016). The tasks are the ones a delivery row links
+    to the PR plus the ones its branch names, inside `team_ids` (the tenant boundary).
+
+    Never raises and never changes a status: a failure here must not cost the answer GitHub is
+    waiting for (a 5xx is not retried, MIP-861). Idempotent per PR and task, so a redelivery, a
+    `reconcile_pr_deliveries` run and a second event for the same merge post nothing more."""
+    try:
+        number = pr.get("number")
+        if number is None or not team_ids:
+            return 0
+        pr_url = canonical_pr_url(owner, repo, number)
+        task_ids = set(
+            TaskDelivery.objects.filter(team_id__in=team_ids, pr_url=pr_url).values_list(
+                "task_id", flat=True
+            )
+        )
+        task_ids |= {task.task_id for task in _tasks_for_branch(head_ref, team_ids)}
+        if not task_ids:
+            return 0
+        tasks = TaskMaster.objects.filter(
+            task_id__in=task_ids, team_id__in=team_ids, is_deleted=False
+        ).order_by("task_id")
+        return post_merge_comments(
+            tasks,
+            owner=owner.lower(),
+            repo=repo.lower(),
+            number=int(number),
+            title=pr.get("title") or "",
+            pr_url=pr_url,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("GitHub webhook: merge comment failed for %s/%s", owner, repo)
+        return 0
 
 
 # Why a registration did not happen, as an HTTP status for the client.
