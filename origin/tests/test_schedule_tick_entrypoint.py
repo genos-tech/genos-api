@@ -75,8 +75,8 @@ class TestTheScheduleTickEntrypoint(SimpleTestCase):
             text,
         )
         self.assertNotIn("python /app/manage.py schedule_tick", text)
-        digest = REPO / "railway-email-notify-entrypoint.sh"
+        sibling = REPO / "railway-email-notify-entrypoint.sh"
         self.assertEqual(
-            os.access(SCRIPT, os.X_OK), os.access(digest, os.X_OK), "same mode as its sibling"
+            os.access(SCRIPT, os.X_OK), os.access(sibling, os.X_OK), "same mode as its sibling"
         )
         self.assertTrue(SCRIPT.read_text().startswith("#!/bin/sh"))
