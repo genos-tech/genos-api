@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.search_engine.chunkers.note_chunker import refresh_personal_notes
+from origin.search_engine.llm import spend
 from origin.services import change_feed
 from origin.views.utils.note_acl_resync import collect_note_subtree_ids, purge_notes_from_index
 from origin.views.utils.note_folder_role import get_folder_role
@@ -121,7 +122,12 @@ def apply_personal_note_move(*, team_id, note: PersonalNoteMaster, plan: MovePla
     # the `.update()` above hides the move from the incremental window.
     # After the purge: a note that just left Team Notes is re-added with
     # its new, narrower access.
-    refresh_personal_notes(collect_note_subtree_ids(note.note_id, team_id))
+    #
+    # It CAN embed (a note whose text changed since the last index), so it binds the
+    # `index` surface like every other index-time path: an unbound call would be logged
+    # as `unattributed` (two such rows, 2026-10-31, MIP-1969). Not charged: system cost.
+    with spend.spend_context(surface="index"), spend.spend_purpose("index"):
+        refresh_personal_notes(collect_note_subtree_ids(note.note_id, team_id))
 
 
 def move_personal_note(*, user_id, team_id, note: PersonalNoteMaster, target_folder_id) -> None:
