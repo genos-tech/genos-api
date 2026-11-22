@@ -376,9 +376,9 @@ def delete_account(user) -> dict:
     avatar_path = user.profile_image_url.name if user.profile_image_url else ""
 
     with transaction.atomic():
-        # Teams where this user was the last member go with them. Soft,
-        # not a purge: support can still answer "what happened to this
-        # team", and nothing cascades into rows shared with anyone else.
+        # Teams where this user was the last member go with them: closed here, in this
+        # transaction, and their data is purged by the `closed-team-purge` cron right after
+        # (MIP-1958, `origin/services/team_purge.py`), never inside the request.
         solo_team_ids = list(
             TeamMaster.objects.filter(owner=user, is_deleted=False).values_list(
                 "team_id", flat=True
@@ -405,6 +405,14 @@ def delete_account(user) -> dict:
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
         )
+        # A team nobody else is live in goes with the person (MIP-1958): the owned one above, and
+        # also a team they were a plain member of whose owner is long gone. Closing is the
+        # "enqueue"; the cron `closed-team-purge` deletes its data, outside this request.
+        from origin.services.team_purge import close_team_if_empty
+
+        for team_id in left_team_ids:
+            if close_team_if_empty(team_id):
+                solo_team_ids.append(team_id)
         # The person is no longer a participant of a group or a project chat (MIP-1546). A DM
         # or multi-person DM row stays: the others keep the conversation.
         end_group_memberships(user.pk)

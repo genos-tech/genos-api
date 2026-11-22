@@ -89,6 +89,7 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     "schedule-report-prune": timedelta(hours=26),
     "ai-app-notice-prune": timedelta(hours=26),
     "retention-purge": timedelta(hours=26),
+    "closed-team-purge": timedelta(hours=26),
     # genos-collab's orphan sweep, reporting through ExternalCronHeartbeatView (MIP-1858).
     "collab-orphan-sweep": timedelta(hours=26),
     # weekly, monthly
