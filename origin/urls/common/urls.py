@@ -22,6 +22,7 @@ from origin.views.common.billing_views import (
     TeamBillingConfigView,
     TeamBillingPortalView,
 )
+from origin.views.common.briefing_today_views import BriefingTodayView
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,
     CalendarEventsAggregateView,
@@ -435,6 +436,8 @@ urlpatterns = [
         MemberEventsPreferenceView.as_view(),
         name="member_events_preference",
     ),
+    # The "today" briefing for the Tasks dashboard and the Genos page (MIP-1005, MIP-1696).
+    path("api/v2/briefing/today/", BriefingTodayView.as_view(), name="briefing_today"),
     # What Genos remembers: see, correct, delete (MIP-1088). The delete route is last so the
     # fixed words above it are never read as a `what`.
     path("api/v2/user/memory/", MemoryOverviewView.as_view(), name="memory_overview"),
