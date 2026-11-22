@@ -521,6 +521,13 @@ def get_webhooks_max(tier: str) -> int | None:
     return _tier_count_cap(tier, WEBHOOKS_MAX_KEY, _WEBHOOKS_MAX_DEFAULT)
 
 
+def get_tier_schedules_max(tier: str) -> int | None:
+    """Scheduled reports a member on `tier` may keep (the plan's own value, with the tier default
+    for a table that predates the key); None = unlimited. For the public plans payload, which
+    describes a tier rather than a member."""
+    return _tier_count_cap(tier, SCHEDULES_MAX_KEY, _SCHEDULES_MAX_DEFAULT)
+
+
 def get_schedules_max(user_id: str) -> int | None:
     """Scheduled reports this member may keep, by their EFFECTIVE tier (Free 0, Core 5, Pro 20,
     Max 20, Enterprise 20); None = unlimited. Fail-open on an infrastructure error, like the
