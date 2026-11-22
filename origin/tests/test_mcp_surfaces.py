@@ -61,8 +61,26 @@ class TestTheSurfaceLists(McpBase):
 
     def test_core_is_small_and_has_no_duplicates(self):
         self.assertEqual(len(set(surfaces.CORE_TOOLS)), len(surfaces.CORE_TOOLS))
-        # MIP-1594 design: about 20. A bigger core needs a decision, so it fails here.
-        self.assertLessEqual(len(surfaces.CORE_TOOLS), 22)
+        # MIP-1594 design: about 20; MIP-2049 (D1, approved 2026-11-23) grew it to 34 with the tools
+        # the shipped general skills call. A bigger core needs a decision, so it fails here.
+        self.assertLessEqual(len(surfaces.CORE_TOOLS), 34)
+
+    def test_the_tools_the_general_skills_call_are_on_core(self):
+        for name in (
+            "get_current_user",
+            "get_team_members",
+            "list_projects",
+            "list_milestones",
+            "list_my_inbox",
+            "list_my_mentions",
+            "get_chat_thread",
+            "list_today_todos",
+            "create_todo_item",
+            "list_calendar_events",
+            "get_stale_tasks",
+            "update_task_dependencies",
+        ):
+            self.assertIn(name, surfaces.CORE_TOOLS)
 
     def test_the_genos_workflow_tools_the_core_is_for_are_on_it(self):
         # The genos-workflow skill's core calls (genos-docs skills/genos-workflow). Four it names are
@@ -338,11 +356,11 @@ class TestThePlanGateKnowsTheSurface(LimitsBase):
     def test_an_off_surface_tool_is_unknown_not_a_plan_answer(self):
         self.rig(mcp_list_page_max=5)
         res = self._call(
-            "list_milestones", {"limit": 100}, url=f"{CORE_URL}?team_id={self.team.team_id}"
+            "list_sprints", {"limit": 100}, url=f"{CORE_URL}?team_id={self.team.team_id}"
         )
         self.assertIn("Unknown tool", res.json()["error"]["message"])
         # the same call on the full endpoint is the plan's answer, as before
-        full = self._result(self._call("list_milestones", {"limit": 100}))
+        full = self._result(self._call("list_sprints", {"limit": 100}))
         self.assertEqual(full["_meta"]["genos/limit"]["category"], "mcp_list_page")
 
 
@@ -364,7 +382,7 @@ class TestTheShadowGateKnowsTheSurface(LimitsBase):
         self.proposed_page_cap()
         with self.assertNoLogs("origin.services.mcp_tier_limits", "INFO"):
             res = self._call(
-                "list_milestones", {"limit": 100}, url=f"{CORE_URL}?team_id={self.team.team_id}"
+                "list_sprints", {"limit": 100}, url=f"{CORE_URL}?team_id={self.team.team_id}"
             )
         self.assertIn("Unknown tool", res.json()["error"]["message"])
 
