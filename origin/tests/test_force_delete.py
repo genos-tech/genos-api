@@ -348,13 +348,15 @@ class MyMessagesForceDelete(Base):
     def test_the_batch_is_small_enough_for_one_request(self):
         self.assertLessEqual(svc.MY_MESSAGES_BATCH, 200)
 
-    def test_the_open_chats_are_told_once_per_erased_message(self):
-        """MIP-1943: no push meant the text stayed on screen until the next sync."""
-        with mock.patch("origin.services.realtime_push.push_messages") as push:
+    def test_the_open_chats_get_one_bulk_event_per_batch(self):
+        """MIP-1943 / MIP-1951: no push meant the text stayed on screen until the next sync; one
+        `messages-deleted` post per batch (ids only), not one `message.updated` per message."""
+        with mock.patch("origin.services.realtime_push.push_messages_deleted") as push:
             self.post(self.url, self.user)
         push.assert_called_once()
-        pushed = {m.pk for m in push.call_args.args[0]}
-        self.assertEqual(pushed, {m.pk for m in self.mine})
+        channel, rows = push.call_args.args
+        self.assertEqual(channel.pk, self.dm.pk)
+        self.assertEqual({m.pk for m in rows}, {m.pk for m in self.mine})
 
     def test_queries_per_message_stay_bounded(self):
         from django.db import connection

@@ -68,7 +68,9 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # (146,500) holds the production number (79 left). Evidence: the second grouped run of 2026-11-15, see `apis/settings.py`.
 # The collaborator wording (+36, see `test_agent_prefix_budget`): 146,457 all-on, 147,912 with a Long member's block, so 88
 # characters are left and the constant stays.
-ALL_ON_BUDGET_CHARS = 148_000
+# THE GROUPED BATCH OF 2026-11-22 (MIP-1769 + MIP-1852): +272, so 148,184 with a Long member's block, over 148,000:
+# the constant goes up to 148,500 (316 characters left). See `test_agent_prefix_budget`.
+ALL_ON_BUDGET_CHARS = 148_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped

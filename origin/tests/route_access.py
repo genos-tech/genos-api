@@ -140,6 +140,7 @@ REGISTRY = {
         "restorable_channels_qs"
     ),
     "origin.views.chat.channel_views.ChannelDetailView": checked("_get_channel_for_user"),
+    "origin.views.chat.channel_views.ChannelDirectoryView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelInlineUploadView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelJoinView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelListView": checked(
@@ -277,6 +278,9 @@ REGISTRY = {
     ),
     "origin.views.common.auth_views.DemoSignInView": public(
         "creates a throwaway demo tenant; DemoSignInThrottle per IP"
+    ),
+    "origin.views.common.auth_views.DemoWorkspaceView": self_only(
+        "the caller's own demo team only: TeamMaster filtered by owner=request.user, is_demo"
     ),
     "origin.views.common.auth_views.LogoutView": public(
         "clears the caller's own auth cookies; must work with an expired access token"

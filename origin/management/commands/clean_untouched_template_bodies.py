@@ -26,10 +26,14 @@ every cleaned task would jump to the top of Recents. Search's incremental
 indexing keys on `ts_updated_at`, so run a full
 `opensearch_reindex --entity-types task milestone` afterwards.
 
-Dry-run by default; pass --apply to write.
+Since MIP-1894 the prompts of every app language (ja, zh, es, fr, hi, ar as well as English) count,
+because a task quick-created in Japanese was saved with the Japanese hints.
+
+Dry-run by default; it prints ids and counts only (never a title). `--apply --yes` writes: the
+second flag is a deliberate "yes, this is the production run".
 """
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from origin.models.task.milestone_models import MilestoneMaster
@@ -48,6 +52,11 @@ class Command(BaseCommand):
             help="Write the changes. Without this flag the command only lists the rows.",
         )
         parser.add_argument(
+            "--yes",
+            action="store_true",
+            help="Confirm --apply. Without it --apply refuses to write.",
+        )
+        parser.add_argument(
             "--team",
             default=None,
             help="Optional team_id to scope the scan.",
@@ -55,6 +64,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         apply_changes = options["apply"]
+        if apply_changes and not options["yes"]:
+            raise CommandError("--apply writes to the database: add --yes to confirm.")
         team = options["team"]
 
         milestones = tasks = 0
@@ -75,7 +86,7 @@ class Command(BaseCommand):
             backing = m.task
             clean_backing = backing is not None and is_untouched_template(backing.content)
             self.stdout.write(
-                f"  milestone {m.milestone_id} ({m.title!r}): description is only the template"
+                f"  milestone {m.milestone_id}: description is only the template"
                 + (f"; backing task {backing.task_id} too" if clean_backing else "")
             )
             if clean_backing:
@@ -93,7 +104,7 @@ class Command(BaseCommand):
         # tasks already handled with their milestone are skipped, so dry-run
         # and apply report the same rows.
         task_qs = TaskMaster.objects.filter(is_deleted=False, is_init_task=False).only(
-            "task_id", "title", "content", "team_id"
+            "task_id", "content", "team_id"
         )
         if team:
             task_qs = task_qs.filter(team_id=team)
@@ -101,7 +112,7 @@ class Command(BaseCommand):
             if t.task_id in handled_task_ids or not is_untouched_template(t.content):
                 continue
             tasks += 1
-            self.stdout.write(f"  task {t.task_id} ({t.title!r}): body is only the template")
+            self.stdout.write(f"  task {t.task_id}: body is only the template")
             if apply_changes:
                 with transaction.atomic():
                     TaskMaster.objects.filter(pk=t.pk).update(content=[])

@@ -137,6 +137,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     qs = qs.annotate(
         _last_at=Subquery(last_message_at),
         _member_count=Coalesce(Subquery(member_count), 0),
+        _project_archived_at=F("project__archived_at"),
     )
 
     # Most recently active first, id to break ties and to place the chats with
@@ -170,6 +171,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         }
         if c.kind == ChannelKind.PM and c.project_id:
             row["project_id"] = c.project_id
+        # MIP-1852: an archived group chat, or the chat of an archived project; only when true.
+        if c.archived_at or c._project_archived_at:
+            row["archived"] = True
         chats.append(row)
 
     result: dict[str, Any] = {"chats": chats, "has_more": has_more}

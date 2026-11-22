@@ -902,6 +902,10 @@ MEDIA_ROOT = os.environ.get(
 _OPENSEARCH_INDEX, _OPENSEARCH_ALIAS = resolve_index_names(
     os.environ.get("OPENSEARCH_INDEX"), os.environ.get("OPENSEARCH_ALIAS")
 )
+# MIP-1879: the demo visitor's sample workspace is built on a background thread after sign-in
+# returns. "0" builds it inside the request again (tests do).
+DEMO_PROVISION_IN_BACKGROUND = os.environ.get("DEMO_PROVISION_IN_BACKGROUND", "1") != "0"
+
 SEARCH_ENGINE = {
     "OPENSEARCH_HOST": os.environ.get("OPENSEARCH_HOST", "opensearch"),
     "OPENSEARCH_PORT": int(os.environ.get("OPENSEARCH_PORT", "9200")),
