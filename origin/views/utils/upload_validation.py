@@ -143,6 +143,12 @@ class CheckedUpload:
     # The client's filename, for display only. Never part of a path.
     display_name: str
     mime: str
+    # The upload's size in bytes, for the team's storage figure (MIP-1962).
+    size_bytes: int = 0
+
+
+def upload_size(file) -> int:
+    return int(getattr(file, "size", 0) or 0)
 
 
 def _generated_name(ext: str) -> str:
@@ -167,7 +173,9 @@ def check_image_upload(user, file) -> tuple[CheckedUpload | None, Response | Non
         return None, Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
     original = display_name(file.name)
     file.name = _generated_name(f".{ext}")
-    return CheckedUpload(file=file, display_name=original, mime=RASTER_MIME[ext]), None
+    return CheckedUpload(
+        file=file, display_name=original, mime=RASTER_MIME[ext], size_bytes=upload_size(file)
+    ), None
 
 
 def check_attachment_upload(
@@ -185,4 +193,6 @@ def check_attachment_upload(
     ext = _stored_ext(original)
     mime = _attachment_mime(read_head(file), ext)
     file.name = _generated_name(ext)
-    return CheckedUpload(file=file, display_name=original, mime=mime), None
+    return CheckedUpload(
+        file=file, display_name=original, mime=mime, size_bytes=upload_size(file)
+    ), None

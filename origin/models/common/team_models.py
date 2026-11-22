@@ -36,6 +36,8 @@ class TeamMaster(blind_index.BlindIndexMixin, models.Model):
         to_field="id",
     )
     profile_image_file = models.FileField(upload_to=profile_image_path, blank=True, null=True)
+    # Bytes of the stored file, set at upload (MIP-1962); 0 until the backfill reads old rows.
+    profile_image_size_bytes = models.BigIntegerField(default=0, db_default=0, editable=False)
     profile_image_file_name = models.CharField(blank=True, null=True)
     # Team subscription plan ("one member pays, every member benefits").
     # Same ladder as CustomUser.tier; a member's effective tier is the
@@ -235,7 +237,7 @@ class TeamConnection(models.Model):
 
 
 class ExternalGrant(models.Model):
-    """"Team B may participate in object X, which team A owns."
+    """ "Team B may participate in object X, which team A owns."
 
     The unit of consent, and the only thing either side approves. Once
     active, the guest team's own owner/editors decide WHICH of their

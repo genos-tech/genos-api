@@ -3119,7 +3119,7 @@ class TaskBodyAttachmentView(AuthenticatedAPIView):
 
         serializer = TaskBodyAttachmentFactSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(size_bytes=upload.size_bytes)
             res = {
                 "taskId": serializer.data["task"],
                 "uploader": serializer.data["uploader"],
