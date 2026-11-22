@@ -730,7 +730,9 @@ def _grant_members(*, folder, team_id, granted_by_id, user_ids, groups, role_id)
         role_id = ROLE_EDITOR
 
     targets = {}
-    for user_id, (group_type, group_id) in expand_groups(team_id, groups).items():
+    for user_id, (group_type, group_id) in expand_groups(
+        team_id, groups, viewer_id=granted_by_id
+    ).items():
         targets[str(user_id)] = (group_type, group_id)
     for user_id in user_ids or []:
         targets[str(user_id)] = (None, None)
