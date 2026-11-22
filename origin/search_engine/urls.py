@@ -17,6 +17,7 @@ from origin.search_engine.agent_views import (
     SharedAnswersView,
     ThreadSummaryView,
 )
+from origin.search_engine.credit_usage_views import CreditUsageView
 from origin.search_engine.views import SearchView
 
 urlpatterns = [
@@ -43,6 +44,7 @@ urlpatterns = [
         AgentStepUndoView.as_view(),
         name="agent_step_undo",
     ),
+    path("api/v2/agent/credits/usage/", CreditUsageView.as_view(), name="agent_credit_usage"),
     path("api/v2/agent/usage/", AgentUsageView.as_view(), name="agent_usage"),
     path("api/v2/agent/features/", AgentFeaturesView.as_view(), name="agent_features"),
     path("api/v2/agent/models/", AgentModelsView.as_view(), name="agent_models"),
