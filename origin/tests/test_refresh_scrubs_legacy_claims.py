@@ -10,8 +10,8 @@ the claim was removed.
 What these pin:
 
   1. Rotating a token that carries `email` yields a refresh token AND an access
-     token without it, through both ways into the endpoint (GET with the
-     cookie, and the inherited POST).
+     token without it, through both ways into the endpoint (GET and POST,
+     both with the cookie).
   2. Nothing else is stripped: `username`, `user_id` and the rest survive.
   3. A token that never had the claim rotates as before.
 """
@@ -79,12 +79,11 @@ class RefreshScrubsLegacyClaimsTests(BaseAPITestCase):
         self.assertNotIn("email", _claims(resp.data["access"]))
 
     def test_rotation_over_post_drops_the_claim_from_both_tokens(self):
-        resp = self.client.post(
-            reverse("token_refresh"), {"refresh": self._legacy_refresh()}, format="json"
-        )
+        self.client.cookies["refresh"] = self._legacy_refresh()
+        resp = self.client.post(reverse("token_refresh"))
 
         self.assertEqual(resp.status_code, 200, resp.content[:200])
-        self.assertNotIn("email", _claims(resp.data["refresh"]))
+        self.assertNotIn("email", _claims(resp.cookies["refresh"].value))
         self.assertNotIn("email", _claims(resp.data["access"]))
 
     def test_other_claims_survive_the_scrub(self):

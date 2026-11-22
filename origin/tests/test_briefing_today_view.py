@@ -136,6 +136,35 @@ class BriefingTodayViewTests(BriefingBase):
         # 5x the projects, tasks and events: a few queries more at most, never one per row.
         self.assertLessEqual(len(large), len(small) + 6, (len(small), len(large)))
 
+    def test_warm_query_count_is_a_small_constant(self):
+        """MIP-1005: the page skips what it never shows (calendar, what you did, stale items,
+        chat answers, me/team), so a warm call is a fixed ~50 queries: 5x the items add few."""
+        today = timezone.now().date()
+        for i in range(3):
+            project = self.other_project(f"Q{i}")
+            task = self.make_task(f"Q{i}", project=project, due_date=today - timedelta(days=1))
+            self.activity(task, self.user2, at=self.ago(minutes=3))
+        self.get()  # the per-day table is filled once per day (up to a week on the first call)
+        with CaptureQueriesContext(connection) as ctx:
+            self.assertEqual(self.get().status_code, 200)
+        self.assertLessEqual(len(ctx), 55, len(ctx))
+
+    def test_mcp_briefing_still_has_every_section(self):
+        """The page-only switch must not change the MCP tool: the default keeps all sections."""
+        from origin.search_engine.agent.tools.base import ToolContext
+        from origin.services import briefing
+
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        full = briefing.build_briefing(ctx, window="today")
+        page = briefing.build_briefing(ctx, window="today", page_only=True)
+        self.assertIsNotNone(full["agenda"]["calendar"])
+        self.assertIn("today", full["what_you_did"])
+        self.assertTrue(full["me"]["user_id"])
+        self.assertIsNone(page["agenda"]["calendar"])
+        self.assertEqual(page["what_you_did"], {})
+        for key in ("overdue", "due_today", "overdue_count"):
+            self.assertEqual(page["agenda"][key], full["agenda"][key])
+
 
 class BriefingTodayStructuredTests(BriefingBase):
     """MIP-1936: the page words come from locale keys, so the answer carries the same facts as

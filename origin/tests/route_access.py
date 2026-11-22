@@ -84,6 +84,13 @@ _INBOX = "acts on an inbox item addressed to the caller (receiver=request.user)"
 
 REGISTRY = {
     # search_engine.agent_views
+    # Force delete (MIP-1584): the caller must see the object (404 otherwise), then the service
+    # applies the who-may rule (sender / creator / owner role) and answers 403.
+    "origin.views.force_delete_views.MessageForceDeleteView": checked("is_chat_member"),
+    "origin.views.force_delete_views.MyMessagesForceDeleteView": checked("is_chat_member"),
+    "origin.views.force_delete_views.TaskForceDeleteView": checked("can_access_task"),
+    "origin.views.force_delete_views.TaskCommentForceDeleteView": checked("can_access_task"),
+    "origin.views.force_delete_views.NoteForceDeleteView": checked("get_effective_role"),
     "origin.search_engine.agent_views.AgentAskView": checked("participates_in_team"),
     "origin.search_engine.agent_views.AgentDecideView": self_only(
         "approves a paused run; the run's user_id must equal request.user.id"
@@ -479,6 +486,10 @@ REGISTRY = {
     "origin.views.common.team_views.TeamMasterView": checked("can_manage"),
     "origin.views.common.team_views.RemoveTeamMemberView": checked("can_remove_member"),
     "origin.views.common.sample_data_views.SampleDataView": checked("_require_team_owner"),
+    "origin.views.common.slack_import_views.SlackImportPreviewView": checked("_team_for_import"),
+    "origin.views.common.slack_import_views.SlackImportRunsView": checked("_team_for_import"),
+    "origin.views.common.slack_import_views.SlackImportUndoView": checked("_team_for_import"),
+    "origin.views.common.slack_import_views.SlackImportView": checked("_team_for_import"),
     "origin.views.common.team_views.TeamInviteListView": checked("can_manage"),
     "origin.views.common.team_views.TeamInviteRevokeView": checked("can_manage"),
     "origin.views.common.team_views.TeamMemberRoleView": checked("can_manage"),

@@ -56,7 +56,9 @@ class ChannelDeletedEventTests(GroupChatDeleteTestCase):
         self.assertEqual(event.metadata["members"], 3)
         self.assertEqual(event.metadata["messages"], 3)
         self.assertEqual(event.target_id, str(self.channel.id))
-        self.assertEqual(event.target_label, "Doomed")
+        # MIP-1584: a hard delete does not keep the title in the log.
+        self.assertEqual(event.target_label, "")
+        self.assertEqual(event.metadata["channel"], "")
 
     def test_no_default_mode_is_a_soft_event(self):
         self.delete(self.user)
@@ -170,7 +172,7 @@ class TheTeamLogShowsItTests(GroupChatDeleteTestCase):
         self.assertEqual(row["actorId"], str(self.user2.id))
         self.assertEqual(row["targetType"], "channel")
         self.assertEqual(row["targetId"], str(self.chat2.id))
-        self.assertEqual(row["targetLabel"], "Made by user2")
+        self.assertEqual(row["targetLabel"], "")  # MIP-1584: a hard delete keeps no title
         self.assertEqual(row["metadata"]["mode"], "hard")
 
     def test_the_action_filter_accepts_it(self):

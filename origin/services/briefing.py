@@ -960,7 +960,9 @@ def _calendar_today(ctx: ToolContext, now: datetime, zone) -> dict[str, Any]:
     return {"events": out.get("events", [])}
 
 
-def agenda(ctx: ToolContext, now: datetime, zone, project_id: int | None) -> dict[str, Any]:
+def agenda(
+    ctx: ToolContext, now: datetime, zone, project_id: int | None, *, calendar: bool = True
+) -> dict[str, Any]:
     today = now.astimezone(zone).date()
     due = list(
         _my_active_tasks(ctx, project_id)
@@ -989,7 +991,7 @@ def agenda(ctx: ToolContext, now: datetime, zone, project_id: int | None) -> dic
             {**i, "title": wrap_workspace_content(i.get("title") or "")}
             for i in earlier[:MAX_TODOS]
         ],
-        "calendar": _calendar_today(ctx, now, zone),
+        "calendar": _calendar_today(ctx, now, zone) if calendar else None,
     }
 
 
@@ -1943,9 +1945,14 @@ def build_briefing(
     since: Any = None,
     project_id: Any = None,
     now: datetime | None = None,
+    page_only: bool = False,
     structured: bool = False,
 ) -> dict[str, Any]:
-    """`structured` (the Today page, MIP-1936) adds, beside every English sentence, the same
+    """`page_only` (the REST page, MIP-1005) skips what a page never shows: the calendar (a live
+    Google call), what you did, stale items, chat answers and the me/team lines. Those keys are
+    then empty; every section a page reads is computed exactly as for the MCP tool (the default).
+
+    `structured` (the Today page, MIP-1936) adds, beside every English sentence, the same
     facts as data (`events[].data`, `suggested_next[].reason_codes`) so a page can say them in
     the member's language. Off by default: what the MCP tool returns is unchanged."""
     now = now or timezone.now()
@@ -1955,16 +1962,20 @@ def build_briefing(
     names = _Names(ctx)
 
     items, total_changed, automated_only = changed_for_me(ctx, win, project, names, structured)
-    me = CustomUser.objects.filter(id=ctx.user_id).first()
-    team = TeamMaster.objects.filter(team_id=ctx.team_id).first()
-    agenda_section = agenda(ctx, now, zone, project)
+    me = None if page_only else CustomUser.objects.filter(id=ctx.user_id).first()
+    team = None if page_only else TeamMaster.objects.filter(team_id=ctx.team_id).first()
+    agenda_section = agenda(ctx, now, zone, project, calendar=not page_only)
     waiting_me = waiting_on_me(ctx, now, names)
-    chat_answers = answers_in_chats(
-        ctx,
-        now,
-        project,
-        names,
-        {str(m["message_id"]) for m in waiting_me["mentions"] if m.get("source") == "chat"},
+    chat_answers = (
+        {"chats": [], "total": 0, "truncated": False}
+        if page_only
+        else answers_in_chats(
+            ctx,
+            now,
+            project,
+            names,
+            {str(m["message_id"]) for m in waiting_me["mentions"] if m.get("source") == "chat"},
+        )
     )
     waiting_others = waiting_on_others(ctx, names)
     # The per-day table (MIP-1084): brought up to yesterday and read ONCE, before anything is
@@ -1980,7 +1991,7 @@ def build_briefing(
         if ranked is not None
         else suggested_next(ctx, now, zone, win, items, project, excluded, structured)
     )
-    did = what_you_did(ctx, now, zone, names)
+    did = {} if page_only else what_you_did(ctx, now, zone, names)
 
     # People are named in one batch, after every section has said who it needs.
     for item in items:
@@ -2015,7 +2026,7 @@ def build_briefing(
         },
         "waiting_on_me": waiting_me,
         "waiting_on_others": waiting_others,
-        "stale_mine": stale_mine(ctx, now, zone, project),
+        "stale_mine": {} if page_only else stale_mine(ctx, now, zone, project),
         "what_you_did": did,
         "activity": activity,
         "suggested_next": suggestions,

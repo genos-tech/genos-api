@@ -606,6 +606,8 @@ export default defineRailway(() => {
     replicas: { "asia-southeast1-eqsg3a": 1 },
     env: {
       COLLAB_SWEEP_DELETE: preserve(),
+      DJANGO_BASE_URL: preserve(),
+      EXTERNAL_CRON_HEARTBEAT_TOKEN: preserve(),
       LOG_FORMAT: preserve(),
       PG_DATABASE: preserve(),
       PG_HOST: preserve(),

@@ -22,7 +22,12 @@ from django.core.management.base import CommandError
 from django.test import override_settings
 
 from origin.models.project.prj_models import ProjectMaster
-from origin.models.task.task_models import TaskAttachments, TaskBodyAttachmentFact, TaskMaster
+from origin.models.task.task_models import (
+    TaskAttachments,
+    TaskBodyAttachmentFact,
+    TaskComments,
+    TaskMaster,
+)
 from origin.services import orphaned_task_files as svc
 from origin.tests.test_base import BaseAPITestCase
 
@@ -58,6 +63,7 @@ class OrphanedTaskFiles(BaseAPITestCase):
         path = os.path.join(_MEDIA_ROOT, stored)
         when = time.time() - age
         os.utime(path, (when, when))
+        self.addCleanup(lambda: default_storage.exists(stored) and default_storage.delete(stored))
         return stored
 
     def row_for(self, name):
@@ -100,12 +106,38 @@ class DryRunAndSafety(OrphanedTaskFiles):
 
 
 class WhatIsRemoved(OrphanedTaskFiles):
-    def test_old_orphans_go_on_apply_whether_their_task_is_gone_or_live(self):
+    def test_old_orphans_of_a_gone_task_go_on_apply(self):
         gone = self.put("task_attachments/999999/gone.txt")
-        unref = self.put(f"tasks/{self.live.task_id}/unref.png")
         self.run_apply()
         self.assertFalse(self.exists(gone))
+
+    def test_an_unnamed_file_of_a_live_task_is_kept_by_default(self):
+        """MIP-1890: its body may still show it; only an explicit flag deletes it."""
+        unref = self.put(f"tasks/{self.live.task_id}/unref.png")
+        report = svc.scan(apply=True)
+        self.assertTrue(self.exists(unref))
+        self.assertEqual(report.removed, 0)
+        self.assertEqual(report.orphan_task_live, 1)
+
+    def test_a_live_task_file_goes_with_the_flag(self):
+        unref = self.put(f"tasks/{self.live.task_id}/unref.png")
+        self.run_apply("--include-live-tasks")
         self.assertFalse(self.exists(unref))
+
+    def test_a_file_the_live_task_body_names_is_kept_even_with_the_flag(self):
+        name = self.put(f"tasks/{self.live.task_id}/x.png")
+        self.live.content = [{"type": "image", "props": {"url": f"/media/{name}"}}]
+        self.live.save(update_fields=["content"])
+        self.run_apply("--include-live-tasks")
+        self.assertTrue(self.exists(name))
+
+    def test_a_file_a_live_task_comment_names_is_kept_even_with_the_flag(self):
+        name = self.put(f"tasks/{self.live.task_id}/c.png")
+        TaskComments.objects.create(
+            task=self.live, sender=self.user, comment_id=1, comment_body=[{"text": name}]
+        )
+        self.run_apply("--include-live-tasks")
+        self.assertTrue(self.exists(name))
 
     def test_a_file_a_live_row_names_is_never_touched(self):
         name = self.put(f"task_attachments/{self.live.task_id}/kept.txt")

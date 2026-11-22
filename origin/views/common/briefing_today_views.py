@@ -173,6 +173,7 @@ class BriefingTodayView(AuthenticatedAPIView):
                 window="today",
                 since=since,
                 project_id=request.query_params.get("project_id") or None,
+                page_only=True,
                 structured=True,
             )
         except ToolError as exc:

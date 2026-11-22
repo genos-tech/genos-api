@@ -14,6 +14,8 @@ Runbook (owner), production, count first:
     railway ssh --service backend-django
     python manage.py purge_orphaned_task_files                    # counts only
     python manage.py purge_orphaned_task_files --apply --yes --limit 100
+
+Files of a task that still exists are NOT deleted unless `--include-live-tasks` is passed (MIP-1890).
 """
 
 from __future__ import annotations
@@ -46,6 +48,13 @@ class Command(CronCommand):
             help="Confirm --apply (it deletes files from storage for good).",
         )
         parser.add_argument(
+            "--include-live-tasks",
+            action="store_true",
+            help="Also delete unnamed files of tasks that still exist (kept by default: a live "
+            "task's body may still show them). Files whose name is in the task's body or "
+            "comments are kept either way.",
+        )
+        parser.add_argument(
             "--limit",
             type=int,
             default=svc.DEFAULT_LIMIT,
@@ -59,7 +68,11 @@ class Command(CronCommand):
         if not 1 <= options["limit"] <= svc.MAX_LIMIT:
             raise CommandError(f"--limit must be between 1 and {svc.MAX_LIMIT}.")
 
-        report = svc.scan(apply=apply_changes, limit=options["limit"])
+        report = svc.scan(
+            apply=apply_changes,
+            limit=options["limit"],
+            include_live_tasks=options["include_live_tasks"],
+        )
         say = self.stdout.write
 
         say(
