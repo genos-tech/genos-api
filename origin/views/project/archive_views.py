@@ -58,7 +58,7 @@ class ProjectArchiveView(AuthenticatedAPIView):
 
 
 class ProjectRestoreView(AuthenticatedAPIView):
-    """POST /api/v2/project/restore/?team_id=&project_id= — the owner puts an archive back."""
+    """POST /api/v2/project/unarchive/?team_id=&project_id= — the owner puts an archive back."""
 
     def post(self, request):
         project, error = _owned_project(request)
@@ -101,7 +101,7 @@ class GroupChatArchiveView(AuthenticatedAPIView):
 
 
 class GroupChatRestoreView(AuthenticatedAPIView):
-    """POST /api/v3/channels/{id}/restore/ — the owner puts a group chat back."""
+    """POST /api/v3/channels/{id}/unarchive/ — the owner puts a group chat back."""
 
     def post(self, request, channel_id):
         channel, error = _owned_group_chat(request, channel_id)
