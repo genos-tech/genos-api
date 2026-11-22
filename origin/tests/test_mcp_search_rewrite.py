@@ -1,15 +1,15 @@
 """`search_workspace`: an opt-out of the query rewrite, on MCP only.
 
-`rewrite: false` searches the raw query and makes no rewrite LLM call. Nothing here uses a model:
-the model client is a stub that counts its calls. The task this belongs to is NOT done by this
-change: whether skipping the rewrite costs recall is a paid measurement that has not been run.
+MCP default (Ken, 2026-11-22, MIP-1378): no query rewrite, no rewrite LLM call; `rewrite: true`
+opts back in to the server setting. Nothing here uses a model: the model client is a stub that
+counts its calls. The in-app agent keeps its rewrite. Recall was not measured (no paid A/B).
 
 What is pinned:
-  * `rewrite: false` reaches `search()` as `rewrite=False`; absent, `true`, blank and any
-    in-app call are the server setting exactly as before (golden sha256 taken on `origin/main`);
+  * absent, blank and `false` reach `search()` as `rewrite=False` on MCP; `true` and every
+    in-app call are the server setting (goldens taken on `origin/main`);
   * `true` can never force a rewrite where the server has it off;
   * through the real `search()`, the rewriter's model client is not called and only the raw
-    query is run when it is false, and is called once (with three variants run) by default;
+    query is run by default, and is called once (with three variants run) with `rewrite: true`;
   * the reranker is a different model call and is not touched by this option.
 """
 
@@ -85,16 +85,16 @@ def _rewrite_kwarg(args, ctx=MCP_CTX):
 
 
 class SkipRewriteArgumentTests(SimpleTestCase):
-    def test_only_an_explicit_false_on_mcp_skips_it(self):
-        for value in (False, "false", "FALSE", " False "):
+    def test_mcp_skips_it_by_default_and_on_false(self):
+        for value in (False, "false", "FALSE", " False ", None, ""):
             with self.subTest(value=value):
                 self.assertTrue(skip_rewrite({"rewrite": value}, MCP_CTX))
+        self.assertTrue(skip_rewrite({}, MCP_CTX))
 
-    def test_everything_else_leaves_the_server_setting_alone(self):
-        for value in (True, "true", "True", None, ""):
+    def test_an_explicit_true_leaves_the_server_setting_alone(self):
+        for value in (True, "true", "True"):
             with self.subTest(value=value):
                 self.assertFalse(skip_rewrite({"rewrite": value}, MCP_CTX))
-        self.assertFalse(skip_rewrite({}, MCP_CTX))
 
     def test_a_value_that_is_neither_is_refused(self):
         for bad in ("no", 0, 1, [], "off"):
@@ -103,17 +103,17 @@ class SkipRewriteArgumentTests(SimpleTestCase):
                     skip_rewrite({"rewrite": bad}, MCP_CTX)
 
     def test_in_app_never_skips_it_whatever_it_sends(self):
-        for value in (False, "false", "garbage"):
+        for value in (False, "false", "garbage", None):
             self.assertFalse(skip_rewrite({"rewrite": value}, APP_CTX))
+        self.assertFalse(skip_rewrite({}, APP_CTX))
 
 
 class ToolPassesItOnTests(TestCase):
-    def test_false_turns_the_rewrite_off_for_that_call(self):
-        self.assertTrue(_rewrite_kwarg({}))  # the server default is on
-        self.assertFalse(_rewrite_kwarg({"rewrite": False}))
-
-    def test_true_or_absent_is_the_default(self):
-        for args in ({}, {"rewrite": True}, {"rewrite": "true"}, {"rewrite": None}):
+    def test_mcp_default_is_no_rewrite_and_true_opts_back_in(self):
+        for args in ({}, {"rewrite": False}, {"rewrite": None}, {"rewrite": ""}):
+            with self.subTest(args=args):
+                self.assertFalse(_rewrite_kwarg(args))
+        for args in ({"rewrite": True}, {"rewrite": "true"}):
             with self.subTest(args=args):
                 self.assertTrue(_rewrite_kwarg(args))
 
@@ -125,8 +125,10 @@ class ToolPassesItOnTests(TestCase):
                 with self.subTest(args=args):
                     self.assertFalse(_rewrite_kwarg(args))
 
-    def test_the_in_app_agent_ignores_an_invented_argument(self):
-        self.assertTrue(_rewrite_kwarg({"rewrite": False}, ctx=APP_CTX))
+    def test_the_in_app_agent_keeps_the_rewrite(self):
+        for args in ({}, {"rewrite": False}):
+            with self.subTest(args=args):
+                self.assertTrue(_rewrite_kwarg(args, ctx=APP_CTX))
 
     def test_a_bad_value_is_refused_before_any_search(self):
         with mock.patch.object(search_kb, "search") as s:
@@ -134,29 +136,26 @@ class ToolPassesItOnTests(TestCase):
                 search_kb._run({"query": "q", "rewrite": "maybe"}, MCP_CTX)
         s.assert_not_called()
 
-    def test_the_default_is_byte_identical_to_origin_main(self):
-        PINS.check(self, "mcp", _golden(MCP_CTX, {}))
+    def test_the_in_app_call_is_byte_identical_to_origin_main(self):
         PINS.check(self, "app", _golden(APP_CTX, {}))
-        # Arguments that mean "the default" produce the very same call and result.
-        for args in ({"rewrite": True}, {"rewrite": None}, {"rewrite": ""}):
-            with self.subTest(args=args):
-                PINS.check(self, "mcp", _golden(MCP_CTX, args))
-        # And an in-app call with the argument invented is the in-app call.
         PINS.check(self, "app", _golden(APP_CTX, {"rewrite": False}))
 
-    def test_false_changes_only_the_rewrite_kwarg(self):
+    def test_rewrite_true_on_mcp_is_the_old_mcp_default(self):
+        PINS.check(self, "mcp", _golden(MCP_CTX, {"rewrite": True}))
+
+    def test_the_default_changes_only_the_rewrite_kwarg(self):
         with mock.patch.object(search_kb, "search", return_value=RESULTS) as s:
             out_default = search_kb._run({"query": "q"}, MCP_CTX)
             default_kwargs = dict(s.call_args.kwargs)
-            out_skip = search_kb._run({"query": "q", "rewrite": False}, MCP_CTX)
-            skip_kwargs = dict(s.call_args.kwargs)
-        self.assertEqual(out_default, out_skip)
+            out_on = search_kb._run({"query": "q", "rewrite": True}, MCP_CTX)
+            on_kwargs = dict(s.call_args.kwargs)
+        self.assertEqual(out_default, out_on)
         self.assertEqual(
             {k: v for k, v in default_kwargs.items() if k != "rewrite"},
-            {k: v for k, v in skip_kwargs.items() if k != "rewrite"},
+            {k: v for k, v in on_kwargs.items() if k != "rewrite"},
         )
-        self.assertTrue(default_kwargs["rewrite"])
-        self.assertFalse(skip_kwargs["rewrite"])
+        self.assertFalse(default_kwargs["rewrite"])
+        self.assertTrue(on_kwargs["rewrite"])
 
 
 class FakeRewriteClient:
@@ -214,21 +213,24 @@ class RealSearchRewriteTests(SimpleTestCase):
         self.variants_run.clear()
         search_kb._run({"query": "payment retries", **args}, MCP_CTX)
 
-    def test_by_default_the_rewrite_runs_and_its_variants_are_searched(self):
-        self._search({})
+    def test_with_true_the_rewrite_runs_and_its_variants_are_searched(self):
+        self._search({"rewrite": True})
         self.assertEqual(self.client.calls, 1)
         self.assertEqual(
             set(self.variants_run),
             {"payment retries", "retry backoff", "failed payment retry"},
         )
 
-    def test_false_makes_no_rewrite_call_and_searches_only_the_raw_query(self):
-        self._search({"rewrite": False})
-        self.assertEqual(self.client.calls, 0)
-        self.assertEqual(set(self.variants_run), {"payment retries"})
+    def test_by_default_no_rewrite_call_and_only_the_raw_query_is_searched(self):
+        for args in ({}, {"rewrite": False}):
+            with self.subTest(args=args):
+                self._search(args)
+                self.assertEqual(self.client.calls, 0)
+                self.assertEqual(set(self.variants_run), {"payment retries"})
 
-    def test_true_is_the_default(self):
-        self._search({"rewrite": True})
+    def test_in_app_still_rewrites(self):
+        self.client.calls = 0
+        search_kb._run({"query": "payment retries"}, APP_CTX)
         self.assertEqual(self.client.calls, 1)
 
 
@@ -239,15 +241,17 @@ class McpEndpointTests(McpBase):
         props = tools.input_schema(tools.BY_NAME["search_workspace"])["properties"]
         self.assertEqual(props["rewrite"]["type"], "boolean")
         self.assertIn("false", props["rewrite"]["description"])
-        self.assertIn("rewrite: false", tools.BY_NAME["search_workspace"].description)
+        self.assertIn("rewrite: true", tools.BY_NAME["search_workspace"].description)
 
     def test_the_shared_declaration_does_not_have_it(self):
         props = search_kb.SEARCH_KNOWLEDGE_BASE.parameters_schema["properties"]
         self.assertNotIn("rewrite", props)
 
-    def test_a_call_with_rewrite_false_reaches_the_search_unrewritten(self):
+    def test_a_call_without_the_flag_reaches_the_search_unrewritten(self):
         self._key()
-        with mock.patch.object(search_kb, "search", return_value={"results": []}) as s:
-            resp = self._call("search_workspace", {"query": "q", "rewrite": False})
-        self.assertFalse(self._result(resp).get("isError"))
-        self.assertFalse(s.call_args.kwargs["rewrite"])
+        for args, expected in (({}, False), ({"rewrite": False}, False), ({"rewrite": True}, True)):
+            with self.subTest(args=args):
+                with mock.patch.object(search_kb, "search", return_value={"results": []}) as s:
+                    resp = self._call("search_workspace", {"query": "q", **args})
+                self.assertFalse(self._result(resp).get("isError"))
+                self.assertIs(s.call_args.kwargs["rewrite"], expected)
