@@ -63,7 +63,7 @@ class CreditUsageTests(BaseAPITestCase):
         charge(self.user, "thread_summary", 300)
         charge(self.user, "note_summary", 200)
         charge(self.user, "schedule", 100)
-        charge(self.user, "mcp", 50)
+        charge(self.user, "mcp_search", 50)  # the billable MCP surface (MIP-1965)
         charge(self.user, "brand_new_source", 40)  # unknown: never an error
         charge(self.user, "ask", 9000, period="2020-01")  # another month: not in this month
         data = self.client.get(URL).data
@@ -79,13 +79,77 @@ class CreditUsageTests(BaseAPITestCase):
         # the order is fixed, `other` last
         self.assertEqual(data["by_job"][-1]["job"], "other")
 
-    def test_recent_is_the_last_50_newest_first(self):
-        for _ in range(55):
+    def test_every_billable_surface_has_its_own_job(self):
+        """No billable source may fall into `other` (MIP-2024): the ledger names MCP searches
+        `mcp_search`, and the first version of the map only knew `mcp`."""
+
+        for surface in dj_settings.CREDIT_POLICY.billable_surfaces:
+            self.assertNotEqual(credit_usage.job_for_surface(surface), "other", surface)
+
+    def test_recent_starts_with_the_newest_5(self):
+        for _ in range(12):
             charge(self.user, "ask", 10)
-        recent = self.client.get(URL).data["recent"]
-        self.assertEqual(len(recent), 50)
+        data = self.client.get(URL).data
+        recent = data["recent"]
+        self.assertEqual(len(recent), 5)
         self.assertEqual(recent, sorted(recent, key=lambda r: r["id"], reverse=True))
-        self.assertEqual(set(recent[0]), {"id", "at", "job", "credits", "reversed", "detail"})
+        self.assertEqual(
+            set(recent[0]), {"id", "at", "job", "credits", "reversed", "detail", "source"}
+        )
+        self.assertEqual(data["next_cursor"], recent[-1]["id"])
+        # the totals still count every charge, not just the page
+        self.assertEqual(data["by_job"], [{"job": "ask", "count": 12, "credits": 0.12}])
+
+    def test_recent_pages_by_cursor_until_the_end(self):
+        for _ in range(12):
+            charge(self.user, "ask", 10)
+        first = self.client.get(URL).data
+        ids = [r["id"] for r in first["recent"]]
+        cursor = first["next_cursor"]
+        while cursor is not None:
+            page = self.client.get(URL, {"cursor": cursor, "limit": 5}).data
+            self.assertEqual(set(page), {"recent", "next_cursor"}, "later pages carry no totals")
+            ids += [r["id"] for r in page["recent"]]
+            cursor = page["next_cursor"]
+        self.assertEqual(len(ids), 12)
+        self.assertEqual(len(set(ids)), 12, "no row twice")
+        self.assertEqual(ids, sorted(ids, reverse=True))
+
+    def test_exactly_one_page_has_no_next_cursor(self):
+        for _ in range(5):
+            charge(self.user, "ask", 10)
+        data = self.client.get(URL).data
+        self.assertEqual((len(data["recent"]), data["next_cursor"]), (5, None))
+
+    def test_limit_is_clamped_and_a_bad_cursor_is_refused(self):
+        for _ in range(30):
+            charge(self.user, "ask", 10)
+        self.assertEqual(len(self.client.get(URL, {"limit": 1000}).data["recent"]), 25)
+        self.assertEqual(len(self.client.get(URL, {"limit": "abc"}).data["recent"]), 5)
+        self.assertEqual(len(self.client.get(URL, {"limit": 0}).data["recent"]), 1)
+        for bad in ("abc", "0", "-3", ""):
+            self.assertEqual(self.client.get(URL, {"cursor": bad}).status_code, 400, bad)
+
+    def test_a_cursor_cannot_reach_another_persons_charges(self):
+        charge(self.user2, "ask", 700)
+        mine = charge(self.user, "ask", 10)
+        # another person's row id as the cursor only moves a position inside MY rows
+        theirs = AiCreditEntry.objects.get(user_id=str(self.user2.id)).id
+        page = self.client.get(URL, {"cursor": theirs + 1000}).data
+        self.assertEqual([r["credits"] for r in page["recent"]], [0.01])
+        self.assertEqual(AiCreditEntry.objects.get(request_id=mine).user_id, str(self.user.id))
+        self.assertEqual(self.client.get(URL, {"cursor": theirs}).data["recent"], [])
+
+    def test_a_row_without_a_named_job_carries_its_source(self):
+        charge(self.user, "brand_new_source", 40)
+        charge(self.user, "mcp_search", 40)
+        recent = self.client.get(URL).data["recent"]
+        by_job = {r["job"]: r["source"] for r in recent}
+        self.assertEqual(by_job, {"other": "brand_new_source", "connected_app": ""})
+
+    def test_requires_login_for_a_later_page_too(self):
+        self.unauthenticate()
+        self.assertIn(self.client.get(URL, {"cursor": 5}).status_code, (401, 403))
 
     def test_empty_state(self):
         data = self.client.get(URL).data
