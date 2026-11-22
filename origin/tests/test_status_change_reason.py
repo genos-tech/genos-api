@@ -19,7 +19,7 @@ from origin.search_engine.agent.tools import ToolContext, ToolError
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.search_engine.agent.tools.update_tasks_bulk import UPDATE_TASKS_BULK
-from origin.services.milestone_service import create_milestone
+from origin.services.milestone_service import create_milestone, sync_backing_task
 from origin.services.task_status_reason import (
     STATUS_REASON_MAX,
     clean_status_reason,
@@ -419,6 +419,40 @@ class ThePublicRestApi(PublicApiBase):
             task_id=self.task.task_id, action_type="comment_added"
         ).get()
         self.assertEqual((via.metadata or {}).get("via", {}).get("kind"), "api_key")
+
+    def test_a_milestone_backing_row_is_written_through_the_milestone(self):
+        """MIP-2017: the PATCH used to change only the mirror; the next milestone edit reverted it."""
+        milestone = create_milestone(self.project, reporter_id=self.user.id, title="Launch")
+        backing = milestone.task
+        self._key()
+        res = self.patch(backing, status="Closed", title="Launch 2", reason="all shipped")
+        self.assertEqual(res.status_code, 200, res.content)
+        milestone.refresh_from_db()
+        self.assertEqual((milestone.status, milestone.title), ("Closed", "Launch 2"))
+        # A later milestone edit re-syncs the backing row: the change must survive it.
+        milestone.priority = "High"
+        milestone.save()
+        sync_backing_task(milestone)
+        backing.refresh_from_db()
+        self.assertEqual((backing.status, backing.title), ("Closed", "Launch 2"))
+        self.assertEqual(
+            [text_of(r) for r in comments_of(backing.task_id)],
+            ["Status: Open → Closed: all shipped"],
+        )
+
+    def test_a_drifted_milestone_names_its_own_status_as_the_old_one(self):
+        milestone = create_milestone(self.project, reporter_id=self.user.id, title="Drift")
+        backing = milestone.task
+        TaskMaster.objects.filter(task_id=backing.task_id).update(status="Closed")
+        self._key()
+        res = self.patch(backing, status="Closed", reason="really closing it")
+        self.assertEqual(res.status_code, 200, res.content)
+        milestone.refresh_from_db()
+        self.assertEqual(milestone.status, "Closed")
+        self.assertEqual(
+            [text_of(r) for r in comments_of(backing.task_id)],
+            ["Status: Open → Closed: really closing it"],
+        )
 
     def test_another_field_needs_no_reason(self):
         self._key()

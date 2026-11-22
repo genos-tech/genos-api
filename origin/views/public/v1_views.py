@@ -52,7 +52,9 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.project.prj_models import ProjectMaster
+from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.task_models import TaskMaster
+from origin.services.milestone_service import sync_backing_task
 from origin.services.task_card_post import post_task_created_card
 from origin.services.task_status_reason import (
     locked_status_change,
@@ -384,7 +386,14 @@ class TaskDetailView(PublicApiView):
         # keys would let an integrator write columns nobody meant to
         # expose, and every new model field would silently join the API.
         fields = []
-        status_before = task.status
+        # MIP-2017: a milestone's backing row is a mirror; its authoritative values (the
+        # status the caller is changing included) live on the MilestoneMaster.
+        milestone = (
+            MilestoneMaster.objects.filter(task_id=task.task_id, is_deleted=False).first()
+            if task.is_milestone
+            else None
+        )
+        status_before = milestone.status if milestone is not None else task.status
         for field, cap in (("title", 255), ("status", None), ("priority", None)):
             if field in request.data:
                 value = request.data.get(field)
@@ -430,12 +439,25 @@ class TaskDetailView(PublicApiView):
             )
         task.ts_updated_at = timezone.now()
         with transaction.atomic():
-            # The status this replaces, read under the row's lock (MIP-1997): a concurrent
-            # identical change posts once.
-            status_event = (
-                locked_status_change(task.task_id, task.status) if "status" in fields else None
-            )
-            task.save(update_fields=[*fields, "ts_updated_at"])
+            if milestone is not None:
+                # Same path as `update_task` / `manage_milestone`: write the milestone, then let
+                # `sync_backing_task` push it down, or the next milestone edit reverts this.
+                milestone = MilestoneMaster.objects.select_for_update().get(pk=milestone.pk)
+                status_event = None
+                if "status" in fields and milestone.status != task.status:
+                    status_event = (milestone.status, task.status)
+                for field in fields:
+                    setattr(milestone, field, getattr(task, field))
+                milestone.save()
+                sync_backing_task(milestone)
+                task.refresh_from_db()
+            else:
+                # The status this replaces, read under the row's lock (MIP-1997): a concurrent
+                # identical change posts once.
+                status_event = (
+                    locked_status_change(task.task_id, task.status) if "status" in fields else None
+                )
+                task.save(update_fields=[*fields, "ts_updated_at"])
             if status_event is not None:
                 post_status_change_comment(
                     task_id=task.task_id,
