@@ -1281,7 +1281,18 @@ def waiting_on_me(ctx: ToolContext, now: datetime, names: _Names) -> dict[str, A
         }
         names.put(request, "from", item.get("sender_id"))
         requests.append(request)
-    return {"requests": requests, "mentions": _unanswered_mentions(ctx, now, names)}
+    waiting: dict[str, Any] = {
+        "requests": requests,
+        "mentions": _unanswered_mentions(ctx, now, names),
+    }
+    # PRs whose review was asked of the caller (MIP-2054): the unread Inbox items of that kind.
+    # The key is absent when there are none, so a briefing without PR reviews is unchanged.
+    from origin.services.pr_needs_you import pending_review_rows  # noqa: PLC0415
+
+    pr_reviews = pending_review_rows(ctx.user_id, ctx.team_id)
+    if pr_reviews:
+        waiting["pr_reviews"] = pr_reviews
+    return waiting
 
 
 def _delegated(ctx: ToolContext, names: _Names) -> tuple[list[dict[str, Any]], int]:
