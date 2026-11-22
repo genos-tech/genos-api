@@ -1,0 +1,313 @@
+{
+  "version": 1,
+  "note": "30 MCP-style queries written by Claude against the eval fixture (agent_eval_setup). Expected = any of these title substrings (case-insensitive) in the result titles. cross_language=true: query language differs from the content language.",
+  "queries": [
+    {
+      "id": "en_perf_budget",
+      "query": "perf budget lighthouse JS size",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "perf budget",
+        "framer-motion",
+        "design system v3"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_framer_decision",
+      "query": "framer-motion decision native CSS animation",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "framer-motion"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_interviews",
+      "query": "customer interviews synthesis themes",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "customer interview"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_plausible",
+      "query": "Plausible analytics events",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Plausible"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_hero_handoff",
+      "query": "hero illustration handoff Carol SVG",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "hero illustration",
+        "Hero + FeatureGrid",
+        "SVG variant"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_responsive_nav",
+      "query": "responsive navigation mobile drawer",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "responsive navigation"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_q3_okrs",
+      "query": "Q3 OKRs draft",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Q3 OKRs"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_competitors",
+      "query": "competitor analysis Notion Slack Linear",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Competitor analysis"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_safari",
+      "query": "slow homepage mobile Safari",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "mobile Safari"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_a11y",
+      "query": "accessibility audit remediation",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Accessibility audit"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_billing_matrix",
+      "query": "billing plans entitlements matrix",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "billing plans and entitlements"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_metering",
+      "query": "usage metering plan limits",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Usage metering"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_invoice",
+      "query": "invoice PDF receipt email templates",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Invoice PDF"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_onboarding",
+      "query": "onboarding funnel drop off",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Onboarding funnel"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_dovetail",
+      "query": "Dovetail coding recordings themes",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Dovetail"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_roadmap",
+      "query": "roadmap proposal top bets Q3",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Roadmap proposal",
+        "Q3"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_spotlight_tips",
+      "query": "Spotlight Cmd-K tips",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Spotlight"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_kickoff",
+      "query": "sprint 1 kickoff recap",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Sprint 1 kickoff"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_design_inventory",
+      "query": "design system inventory stable primitives",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "Design system inventory"
+      ],
+      "note": ""
+    },
+    {
+      "id": "en_stakeholders",
+      "query": "internal stakeholder map",
+      "language": "en",
+      "cross_language": false,
+      "expected_title_substrings": [
+        "stakeholder map"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_animation",
+      "query": "アニメーションライブラリの選定 framer-motion",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "framer-motion"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_a11y",
+      "query": "アクセシビリティ監査と改善",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "Accessibility audit"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_interviews",
+      "query": "顧客インタビューの統合とテーマ分け",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "customer interview"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_billing",
+      "query": "課金プランと権限マトリクス",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "billing plans and entitlements"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_competitor",
+      "query": "競合分析 NotionとSlackとLinear",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "Competitor analysis"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_perf_budget",
+      "query": "パフォーマンス予算の承認 Lighthouse",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "perf budget"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_ja_safari",
+      "query": "モバイルSafariでホームページが遅い",
+      "language": "ja",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "mobile Safari"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_en_ja_marathon",
+      "query": "machine learning team Tokyo marathon run",
+      "language": "en",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "東京マラソン",
+        "機械学習"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_en_zh_nlp",
+      "query": "Beijing team natural language processing search engine project",
+      "language": "en",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "自然语言处理",
+        "北京团队"
+      ],
+      "note": ""
+    },
+    {
+      "id": "x_en_es_cafe",
+      "query": "marketing plan for the coffee shop page",
+      "language": "en",
+      "cross_language": true,
+      "expected_title_substrings": [
+        "café"
+      ],
+      "note": ""
+    }
+  ]
+}
