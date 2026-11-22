@@ -72,12 +72,13 @@ STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}(?:Z|[+-]\d{2}:\d
 #                               3 owner names, members per folder, tags per folder
 #   guest, host's own list      1 auth
 #                               4 the host's folders, grants, owner? member?
-#                               3 owner names, members per folder, tags per folder
+#                               4 owner names, members per folder, tags per folder, and each
+#                                 folder's default note template (MIP-1697)
 #                               1 what other teams shared with the host (none)
 #
 # Notes list: the same resolution without the serialization and the host's name,
 # plus one notes query per team that has readable folders.
-FOLDER_BUDGET = {"owner": 8, "member": 9, "guest_own": 15, "guest_host": 9}
+FOLDER_BUDGET = {"owner": 9, "member": 10, "guest_own": 15, "guest_host": 10}
 META_BUDGET = {"owner": 6, "member": 7, "guest_own": 12, "guest_host": 7}
 
 # NOT constant in the number of HOST teams. Every other team that shares a folder with
