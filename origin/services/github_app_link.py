@@ -42,6 +42,7 @@ from origin.models.common.github_app_models import (
 )
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.services.member_roles import can_manage, resolve_team_role
+from origin.views.utils.scope_guards import is_team_member
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,8 @@ class Installation:
     account_type: str
     repository_selection: str
     suspended_at: Optional[datetime]
+    # GitHub's id of the account that owns the installation (a user id for a User account).
+    account_id: Optional[int] = None
 
 
 # ---- which team ----------------------------------------------------------------------------
@@ -165,8 +168,12 @@ def _parse_installation(raw) -> Optional[Installation]:
     if not isinstance(login, str) or not login or account_type not in _ACCOUNT_TYPES:
         return None
     selection = raw.get("repository_selection")
+    account_id = account.get("id")
     return Installation(
         installation_id=installation_id,
+        account_id=account_id
+        if isinstance(account_id, int) and not isinstance(account_id, bool)
+        else None,
         account_login=login[:255],
         account_type=account_type,
         repository_selection=selection if selection in _SELECTIONS else "selected",
@@ -221,31 +228,67 @@ def parse_installation_hint(raw) -> Optional[int]:
     return int(raw)
 
 
+def _may_link(item: Installation, *, user, team: TeamMaster, github_user_id: str) -> bool:
+    """Whether this person may bring this (listed) installation into this team.
+
+    `/user/installations` also lists installations the person only reaches through ONE repository
+    (an outside collaborator with read access), so being listed is not ownership. What can be
+    checked with the App's own permissions:
+
+      * A **User** account's installation: its `account.id` must be the person's own GitHub id.
+        A collaborator on someone else's personal repository can never link it.
+      * An **Organization** installation: GitHub tells us nothing about the person's role in the
+        organization without an organization permission the App deliberately does not have. So the
+        installation is linked only if no other team holds it yet, the team already holds it, or
+        the person already belongs to a team that holds it. A person who is not in the team that
+        adopted an organization's installation cannot pull it into their own team.
+    """
+    if item.account_type == "User":
+        return item.account_id is not None and str(item.account_id) == str(github_user_id)
+    links = GithubAppInstallationTeam.objects.filter(
+        installation__installation_id=item.installation_id
+    ).values_list("team_id", flat=True)
+    holders = set(links)
+    if not holders or team.team_id in holders:
+        return True
+    return any(is_team_member(team_id, user.id) for team_id in holders)
+
+
 def confirmed_installations(
-    user_token: str, *, hinted_installation_id: Optional[int], hint_present: bool
+    user_token: str,
+    *,
+    hinted_installation_id: Optional[int],
+    hint_present: bool,
+    user,
+    team: TeamMaster,
+    github_user_id: str,
 ) -> list[Installation]:
-    """What may be linked: installations GitHub itself lists for this person's token.
+    """What may be linked: installations GitHub itself lists for this person's token AND that the
+    person may bring into this team (`_may_link`).
 
     * With an `installation_id` in the URL (just installed): only that installation, and only if it
-      is in the person's list. A value that is not there (spoofed, someone else's, a typo) fails
-      the whole connect: nothing is linked and nothing is stored.
-    * Without one (the authorize path, a second press): every listed installation, because the
-      person proved access to each with their own token.
+      is in the person's list and passes `_may_link`. Anything else (spoofed, someone else's, a
+      typo, not theirs to link) fails the whole connect: nothing is linked and nothing is stored.
+    * Without one (the authorize path, a second press): every listed installation that passes
+      `_may_link`; the others are left out.
 
     Raises `LinkError("installation_not_confirmed")` for a hint that does not answer and
-    `LinkError("no_installation")` when the list is empty.
+    `LinkError("no_installation")` when nothing passes.
     """
     listed = list_user_installations(user_token)
+    allowed = [
+        i for i in listed if _may_link(i, user=user, team=team, github_user_id=github_user_id)
+    ]
     if hint_present:
         if hinted_installation_id is None:
             raise LinkError("installation_not_confirmed")
-        chosen = [i for i in listed if i.installation_id == hinted_installation_id]
+        chosen = [i for i in allowed if i.installation_id == hinted_installation_id]
         if not chosen:
             raise LinkError("installation_not_confirmed")
         return chosen
-    if not listed:
+    if not allowed:
         raise LinkError("no_installation")
-    return listed
+    return allowed
 
 
 # ---- the write ------------------------------------------------------------------------------
@@ -259,14 +302,17 @@ def link_installations(
     updates the stored facts and keeps the original link (and who made it)."""
     rows: list[GithubAppInstallation] = []
     for item in installations:
+        # `suspended_at` is set only when the row is created: after that the installation's
+        # webhook events own it, so a slow listing cannot undo a fresh suspension.
+        facts = {
+            "account_login": item.account_login,
+            "account_type": item.account_type,
+            "repository_selection": item.repository_selection,
+        }
         row, _ = GithubAppInstallation.objects.update_or_create(
             installation_id=item.installation_id,
-            defaults={
-                "account_login": item.account_login,
-                "account_type": item.account_type,
-                "repository_selection": item.repository_selection,
-                "suspended_at": item.suspended_at,
-            },
+            defaults=facts,
+            create_defaults={**facts, "suspended_at": item.suspended_at},
         )
         GithubAppInstallationTeam.objects.get_or_create(
             installation=row, team=team, defaults={"linked_by": user}

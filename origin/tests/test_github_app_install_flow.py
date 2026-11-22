@@ -25,9 +25,15 @@ from origin.models.common.security_event_models import SecurityEvent
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
 from origin.services import crypto
-from origin.views.common.oauth_views import _sign_state, _verify_state
+from origin.views.common.oauth_views import (
+    GITHUB_APP_BIND_COOKIE,
+    _bind_hash,
+    _sign_state,
+    _verify_state,
+)
 
 User = get_user_model()
+BIND = "the-bind-cookie-value"
 
 APP = dict(
     GITHUB_APP_ENABLED=True,
@@ -65,11 +71,13 @@ def _resp(body, status=200):
     return resp
 
 
-def _installation(installation_id, login="genos-tech", type_="Organization", **extra):
+def _installation(
+    installation_id, login="genos-tech", type_="Organization", account_id=5000, **extra
+):
     return {
         "id": installation_id,
         "app_id": 4242,
-        "account": {"login": login, "type": type_},
+        "account": {"login": login, "type": type_, "id": account_id},
         "repository_selection": "selected",
         "suspended_at": None,
         **extra,
@@ -140,6 +148,7 @@ class _Base(TestCase):
 
     def _state(self, user=None, team=None, **kw):
         kw.setdefault("provider", "github_app")
+        kw.setdefault("bind", _bind_hash(BIND))
         return _sign_state(
             intent="connect",
             user_id=str((user or self.owner).id),
@@ -148,8 +157,12 @@ class _Base(TestCase):
             **kw,
         )
 
-    def _callback(self, **params):
+    def _callback(self, cookie=BIND, **params):
+        """GitHub sends the browser back: an unauthenticated top-level GET carrying the flow's
+        cookie (set at initiate) unless `cookie` is None."""
         anon = APIClient()
+        if cookie is not None:
+            anon.cookies[GITHUB_APP_BIND_COOKIE] = cookie
         return anon.get(CALLBACK, params)
 
     def _link(self, installation_id=7001, team=None):
@@ -391,7 +404,8 @@ class CallbackTests(_Base):
     def test_the_authorize_path_links_what_github_lists_for_the_person(self):
         # No installation_id: a second press of Connect GitHub (the team already had one, or the
         # install redirect carried no state the first time).
-        with GitHubStub([_installation(7001), _installation(7002, login="me", type_="User")]):
+        mine = _installation(7002, login="me", type_="User", account_id=9001)
+        with GitHubStub([_installation(7001), mine]):
             resp = self._callback(code="c", state=self._state())
         self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
         self.assertEqual(
@@ -553,7 +567,9 @@ class CallbackTests(_Base):
         self.assertEqual(GithubAppInstallation.objects.count(), 1)
         row = GithubAppInstallation.objects.get()
         self.assertEqual(row.account_login, "genos-tech-renamed")
-        self.assertIsNotNone(row.suspended_at)
+        # `suspended_at` belongs to the installation webhooks after creation: a listing that says
+        # "suspended" (or "not") does not rewrite it.
+        self.assertIsNone(row.suspended_at)
         # One link, still the first person's (the pair is unique; the editor's connect is a no-op).
         link = GithubAppInstallationTeam.objects.get()
         self.assertEqual((link.pk, link.linked_by_id), (first_link.pk, self.owner.id))
@@ -627,6 +643,7 @@ class CallbackTests(_Base):
             next_path="@evil.example",
             provider="github_app",
             team_id=str(self.team.team_id),
+            bind=_bind_hash(BIND),
         )
         with GitHubStub([_installation(7001)]):
             resp = self._callback(code="c", state=state, installation_id="7001")
@@ -638,3 +655,164 @@ class CallbackTests(_Base):
         self.assertEqual(
             list(GithubAppInstallation.objects.values_list("installation_id", flat=True)), [7002]
         )
+
+    def test_a_listed_suspension_does_not_rewrite_an_existing_row(self):
+        row = self._link()
+        row.suspended_at = row.ts_created_at
+        row.save()
+        with GitHubStub([_installation(7001)]):
+            self._callback(code="c", state=self._state(), installation_id="7001")
+        row.refresh_from_db()
+        self.assertIsNotNone(row.suspended_at)
+
+    def test_a_new_row_takes_the_suspension_github_lists(self):
+        with GitHubStub([_installation(7001, suspended_at="2026-11-23T10:00:00Z")]):
+            self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertIsNotNone(GithubAppInstallation.objects.get().suspended_at)
+
+
+@override_settings(**APP)
+class BrowserBindingTests(_Base):
+    """The state is a bearer ticket unless it is tied to the browser that started the flow: an
+    attacker who starts a connect for THEIR team could hand the GitHub URL to a victim, and the
+    victim's own authorization would store the victim's token and link the victim's installations
+    under the attacker's account and team."""
+
+    def test_initiate_sets_a_scoped_httponly_cookie_and_the_state_carries_only_its_hash(self):
+        resp = self.client.post(INITIATE.format("github"), {"intent": "connect"}, format="json")
+        cookie = resp.cookies[GITHUB_APP_BIND_COOKIE]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["path"], "/api/v2/oauth/github_app/")
+        self.assertEqual(int(cookie["max-age"]), 600)
+        state = parse_qs(urlparse(resp.json()["url"]).query)["state"][0]
+        bind = _verify_state(state)["bind"]
+        self.assertEqual(bind, _bind_hash(cookie.value))
+        self.assertNotIn(cookie.value, state)  # the secret itself never rides in the URL
+
+    def test_the_legacy_flow_sets_no_cookie(self):
+        with override_settings(**OLD):
+            resp = self.client.post(INITIATE.format("github"), {"intent": "connect"}, format="json")
+        self.assertNotIn(GITHUB_APP_BIND_COOKIE, resp.cookies)
+
+    def test_a_browser_without_the_cookie_links_nothing(self):
+        # The victim of a handed-over URL: a valid state, a valid code, but not the cookie.
+        with GitHubStub([_installation(7001)]) as gh:
+            resp = self._callback(cookie=None, code="victims-code", state=self._state())
+        self.assertFailure(resp, "github_app_state_missing")
+        self.assertEqual(gh.calls, [])  # not even the token exchange
+        self.assertNothingStored()
+
+    def test_a_browser_with_another_cookie_links_nothing(self):
+        for value in ("another-value", "", _bind_hash(BIND), BIND + " "):
+            with self.subTest(cookie=value[:8]):
+                with GitHubStub([_installation(7001)]) as gh:
+                    resp = self._callback(cookie=value, code="c", state=self._state())
+                self.assertFailure(resp, "github_app_state_missing")
+                self.assertEqual(gh.calls, [])
+                self.assertNothingStored()
+
+    def test_a_state_without_a_bind_is_refused(self):
+        state = self._state(bind=None)
+        with GitHubStub([_installation(7001)]) as gh:
+            resp = self._callback(code="c", state=state)
+        self.assertFailure(resp, "github_app_state_missing")
+        self.assertEqual(gh.calls, [])
+
+    def test_the_cookie_is_dropped_after_one_use_success_or_failure(self):
+        with GitHubStub([_installation(7001)]):
+            ok = self._callback(code="c", state=self._state(), installation_id="7001")
+            bad = self._callback(code="c", state=self._state(), installation_id="9999")
+        for resp in (ok, bad):
+            self.assertEqual(resp.cookies[GITHUB_APP_BIND_COOKIE]["max-age"], 0)
+
+    def test_the_matching_browser_links(self):
+        with GitHubStub([_installation(7001)]):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(GithubAppInstallationTeam.objects.count(), 1)
+
+
+@override_settings(**APP)
+class WhoMayLinkTests(_Base):
+    """`/user/installations` also lists installations a person reaches through a single repository
+    (an outside collaborator), so being listed is not ownership of the installation."""
+
+    def test_a_user_account_installation_of_someone_else_is_never_linked(self):
+        # Mallory (GitHub id 9001) is a collaborator on a repo of the personal account 1234.
+        theirs = _installation(7001, login="alice", type_="User", account_id=1234)
+        for hint in ({"installation_id": "7001"}, {}):
+            with self.subTest(hint=hint):
+                with GitHubStub([theirs]):
+                    resp = self._callback(code="c", state=self._state(), **hint)
+                self.assertFailure(
+                    resp,
+                    "installation_not_confirmed" if hint else "no_installation",
+                )
+                self.assertNothingStored()
+
+    def test_a_user_account_installation_of_the_person_is_linked(self):
+        mine = _installation(7001, login="octo", type_="User", account_id=9001)
+        with GitHubStub([mine]):
+            self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(GithubAppInstallationTeam.objects.get().installation.installation_id, 7001)
+
+    def test_a_user_installation_with_no_account_id_is_not_linked(self):
+        odd = _installation(7001, login="octo", type_="User")
+        odd["account"].pop("id")
+        with GitHubStub([odd]):
+            resp = self._callback(code="c", state=self._state())
+        self.assertFailure(resp, "no_installation")
+
+    def _acme_team(self):
+        acme_owner = User.objects.create_user(
+            username="acme", email="acme@example.com", password="pw123456"
+        )
+        acme = TeamMaster.objects.create(
+            team_name="Acme", team_email="acme@example.com", owner=acme_owner
+        )
+        TeamMembers.objects.create(team=acme, attendee=acme_owner)
+        self._link(7001, team=acme)
+        return acme
+
+    def test_an_organization_installation_adopted_by_another_team_is_not_pulled_in(self):
+        # Acme's team holds the installation; Mallory, who is not in it, presses Connect.
+        self._acme_team()
+        for hint in ({"installation_id": "7001"}, {}):
+            with self.subTest(hint=hint):
+                with GitHubStub([_installation(7001, login="acme")]):
+                    resp = self._callback(code="c", state=self._state(), **hint)
+                self.assertFailure(
+                    resp,
+                    "installation_not_confirmed" if hint else "no_installation",
+                )
+                self.assertFalse(GithubAppInstallationTeam.objects.filter(team=self.team).exists())
+                self.assertFalse(ConnectedAccount.objects.filter(provider="github_app").exists())
+
+    def test_the_other_listed_installations_still_link_when_one_is_refused(self):
+        self._acme_team()
+        listed = [_installation(7001, login="acme"), _installation(7002, login="mine-org")]
+        with GitHubStub(listed):
+            self._callback(code="c", state=self._state())
+        self.assertEqual(
+            list(
+                GithubAppInstallationTeam.objects.filter(team=self.team).values_list(
+                    "installation__installation_id", flat=True
+                )
+            ),
+            [7002],
+        )
+
+    def test_a_person_in_a_team_that_holds_it_may_link_it_to_their_other_team(self):
+        acme = self._acme_team()
+        TeamMembers.objects.create(team=acme, attendee=self.owner)
+        with GitHubStub([_installation(7001, login="acme")]):
+            self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(
+            set(GithubAppInstallationTeam.objects.values_list("team_id", flat=True)),
+            {acme.team_id, self.team.team_id},
+        )
+
+    def test_an_unlinked_organization_installation_can_be_claimed(self):
+        with GitHubStub([_installation(7001, login="acme")]):
+            self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(GithubAppInstallationTeam.objects.get().team_id, self.team.team_id)

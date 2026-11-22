@@ -23,6 +23,8 @@ route refuses to delete the row the user signs in with.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import secrets
 from datetime import timedelta
@@ -104,6 +106,7 @@ def _sign_state(
     terms_accepted: bool = False,
     provider: Optional[str] = None,
     team_id: Optional[str] = None,
+    bind: Optional[str] = None,
 ) -> str:
     payload = {
         "intent": intent,
@@ -119,6 +122,10 @@ def _sign_state(
         # The Genos team a GitHub App installation is linked into: decided here, by the person's
         # authenticated request, and carried in the signed state, never taken from the callback URL.
         payload["team_id"] = team_id
+    if bind:
+        # SHA-256 of the random value held in the starting browser's cookie (`_new_bind`): the
+        # state alone is not proof the browser coming back is the one that started the flow.
+        payload["bind"] = bind
     if terms_accepted:
         # The signup screen's checkbox, carried through the provider round trip
         # inside the signed state so the callback can trust it (a query
@@ -131,6 +138,37 @@ def _sign_state(
 
 def _verify_state(state: str) -> dict:
     return signing.loads(state, salt=STATE_SALT, max_age=STATE_TOKEN_MAX_AGE_SECONDS)
+
+
+# The GitHub App flow binds its state to the browser that started it (MIP-2087). Without this, a
+# signed state is a bearer ticket: an attacker who starts a connect for THEIR team can hand the
+# GitHub URL (with their state) to someone else, and when that person authorizes, the callback
+# stores THEIR token and links THEIR installations under the attacker's account and team. The
+# random value lives in an HttpOnly cookie scoped to this flow's routes; the state carries only its
+# hash, so the callback links nothing unless the same browser comes back.
+GITHUB_APP_BIND_COOKIE = "github_app_bind"
+GITHUB_APP_BIND_PATH = "/api/v2/oauth/github_app/"
+
+
+def _bind_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _bind_matches(request: Request, state_payload: dict) -> bool:
+    cookie = request.COOKIES.get(GITHUB_APP_BIND_COOKIE)
+    expected = state_payload.get("bind")
+    if not cookie or not isinstance(expected, str):
+        return False
+    return hmac.compare_digest(_bind_hash(cookie), expected)
+
+
+def _clear_bind_cookie(response) -> None:
+    """One use: the cookie is dropped as soon as the callback has looked at it."""
+    response.delete_cookie(
+        GITHUB_APP_BIND_COOKIE,
+        path=GITHUB_APP_BIND_PATH,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+    )
 
 
 def _provider_allows_additional_account(user, provider_name: str) -> bool:
@@ -303,12 +341,14 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
             team = github_app_link.resolve_link_team(request.user, request.data.get("team_id"))
         except github_app_link.LinkError as exc:
             return Response({"detail": exc.reason}, status=exc.status)
+        bind = secrets.token_urlsafe(24)
         state = _sign_state(
             intent="connect",
             user_id=str(request.user.id),
             next_path=_safe_next(next_path, "/workspace/integrations"),
             provider="github_app",
             team_id=str(team.team_id),
+            bind=_bind_hash(bind),
         )
         if github_app_link.team_has_active_installation(team):
             url = provider.authorize_url(
@@ -316,7 +356,19 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
             )
         else:
             url = github_app_link.install_url(state=state)
-        return Response({"url": url})
+        response = Response({"url": url})
+        # Same attributes as the refresh cookie (the client's XHR must send credentials for the
+        # browser to keep it); HttpOnly, scoped to this flow's routes, gone with the state.
+        response.set_cookie(
+            GITHUB_APP_BIND_COOKIE,
+            bind,
+            max_age=STATE_TOKEN_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=settings.AUTH_COOKIE_SECURE,
+            samesite=settings.AUTH_COOKIE_SAMESITE,
+            path=GITHUB_APP_BIND_PATH,
+        )
+        return response
 
 
 class OAuthCallbackView(APIView):
@@ -351,7 +403,9 @@ class OAuthCallbackView(APIView):
             return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
 
         if provider_name == "github_app":
-            return self._handle_github_app(request, code=code, state_payload=state_payload)
+            response = self._handle_github_app(request, code=code, state_payload=state_payload)
+            _clear_bind_cookie(response)
+            return response
         if state_payload.get("provider") not in (None, provider_name):
             # A state minted for another provider (e.g. the GitHub App's) is not valid here.
             return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
@@ -636,6 +690,11 @@ class OAuthCallbackView(APIView):
             or not state_payload.get("user_id")
         ):
             return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
+        if not _bind_matches(request, state_payload):
+            # The browser coming back is not the one that started this connect (or its cookie is
+            # gone): the state may have been handed over by someone else. Nothing is exchanged,
+            # linked or stored; the person presses Connect GitHub again.
+            return HttpResponseRedirect(_frontend_failure_url(reason="github_app_state_missing"))
         user = User.objects.filter(id=state_payload["user_id"], is_active=True).first()
         if user is None:
             return HttpResponseRedirect(_frontend_failure_url(reason="not_authenticated"))
@@ -647,23 +706,32 @@ class OAuthCallbackView(APIView):
                 code=code, redirect_uri=_redirect_uri("github_app")
             )
             profile = provider.fetch_profile(access_token=token_response.access_token)
-            hint_raw = request.GET.get("installation_id")
-            installations = github_app_link.confirmed_installations(
-                token_response.access_token,
-                hinted_installation_id=github_app_link.parse_installation_hint(hint_raw),
-                hint_present=hint_raw is not None,
-            )
-        except github_app_link.LinkError as exc:
-            return HttpResponseRedirect(_frontend_failure_url(reason=exc.reason))
         except Exception as exc:  # noqa: BLE001 — network / provider failures vary
             # The class only: a library message can quote the request.
             logger.error("OAuth github_app callback failed: %s", type(exc).__name__)
             return HttpResponseRedirect(_frontend_failure_url(reason="provider_error"))
 
+        # The role is checked again here, after the round trip: it can change in between.
         try:
             team = github_app_link.resolve_link_team(user, state_payload.get("team_id"))
         except github_app_link.LinkError:
             return HttpResponseRedirect(_frontend_failure_url(reason="team_not_allowed"))
+
+        try:
+            hint_raw = request.GET.get("installation_id")
+            installations = github_app_link.confirmed_installations(
+                token_response.access_token,
+                hinted_installation_id=github_app_link.parse_installation_hint(hint_raw),
+                hint_present=hint_raw is not None,
+                user=user,
+                team=team,
+                github_user_id=profile.provider_user_id,
+            )
+        except github_app_link.LinkError as exc:
+            return HttpResponseRedirect(_frontend_failure_url(reason=exc.reason))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("OAuth github_app callback failed: %s", type(exc).__name__)
+            return HttpResponseRedirect(_frontend_failure_url(reason="provider_error"))
 
         with transaction.atomic():
             failure = self._connect_account(
