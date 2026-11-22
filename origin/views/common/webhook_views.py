@@ -290,17 +290,24 @@ class WebhookListCreateView(AuthenticatedAPIView):
             return scope_err
 
         raw_secret = generate_secret()
-        # The plan's count per team (MIP-1960). The TEAM's own plan decides, not the clicker's
-        # effective tier: an endpoint belongs to the team and outlives whoever made it. Only a NEW
+        # The plan's count per team (MIP-1960). The tier is the better of the TEAM's plan and the
+        # team OWNER's effective tier (their own plan, a paying team of theirs, or the first-month
+        # trial: MIP-1969), the rule the rest of the app uses, so a Core-trial user or someone who
+        # pays personally on a Free team is not left with 0. The clicker's own tier does not count:
+        # an endpoint belongs to the team and outlives whoever made it. Only a NEW
         # endpoint is refused; the ones that exist (also after a downgrade) keep delivering.
         # Auto-disabled endpoints count: deleting one is how a slot is freed. The team row is
         # locked so two creates at once cannot both slip under the cap.
         with transaction.atomic():
             locked = TeamMaster.objects.select_for_update().get(pk=team.pk)
-            cap = quota.get_webhooks_max(locked.plan or "free")
+            tier = quota.better_tier(
+                locked.plan or "free",
+                quota.resolve_effective_tier(str(locked.owner_id))["tier"],
+            )
+            cap = quota.get_webhooks_max(tier)
             used = WebhookEndpoint.objects.filter(team=locked).count()
             if cap is not None and used >= cap:
-                return _limit_response(locked.plan or "free", used, cap)
+                return _limit_response(tier, used, cap)
             endpoint = WebhookEndpoint(
                 team=team,
                 url=url,

@@ -127,11 +127,61 @@ class WebhookCapTests(WebhookApiBase):
         self.fill(30)
         self.assertEqual(self.create().status_code, 201)
 
-    def test_the_teams_plan_decides_not_the_creators_own_tier(self):
+    def test_a_free_team_whose_owner_pays_personally_may_create_one(self):
+        # The same rule as everywhere else: the better of the team's plan and the owner's
+        # effective personal tier (MIP-1969).
         self.set_plan("free")
-        type(self.user).objects.filter(pk=self.user.pk).update(tier="max")
+        type(self.user).objects.filter(pk=self.user.pk).update(tier="core")
         quota.invalidate_effective_tier([str(self.user.id)])
-        self.assertEqual(self.create().status_code, 429)
+        self.assertEqual(self.create().status_code, 201)
+
+    def test_a_free_team_whose_owner_is_in_the_first_month_trial_may_create_one(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from origin.models.common.trial_models import CoreTrial
+
+        self.set_plan("free")
+        CoreTrial.objects.create(user=self.user, ends_at=timezone.now() + timedelta(days=10))
+        quota.invalidate_effective_tier([str(self.user.id)])
+        self.assertEqual(self.create().status_code, 201)
+
+    def test_a_paid_team_with_a_free_owner_keeps_its_own_cap(self):
+        self.set_plan("core")
+        self.assertEqual(self.create().status_code, 201)
+
+    def test_the_cap_is_the_better_tier_not_the_sum(self):
+        self.set_plan("free")
+        type(self.user).objects.filter(pk=self.user.pk).update(tier="core")
+        quota.invalidate_effective_tier([str(self.user.id)])
+        self.fill(2)
+        self.assertEqual(self.create().status_code, 201)
+        refused = self.create()
+        self.assertEqual(refused.status_code, 429)
+        self.assertEqual((refused.data["used"], refused.data["limit"]), (3, 3))
+
+    def test_a_non_owner_creators_own_tier_does_not_count(self):
+        from origin.models.common.team_models import TeamMembers
+
+        self.set_plan("free")
+        TeamMembers.objects.update_or_create(
+            team=self.team, attendee=self.user2, defaults={"member_role": "editor"}
+        )
+        type(self.user2).objects.filter(pk=self.user2.pk).update(tier="max")
+        quota.invalidate_effective_tier([str(self.user.id), str(self.user2.id)])
+        self.authenticate(self.user2)
+        with self._public_dns():
+            res = self.client.post(
+                WEBHOOKS,
+                {
+                    "team_id": str(self.team.team_id),
+                    "url": "https://example.com/hook",
+                    "events": [EVENT_TASK_CREATED],
+                },
+                format="json",
+            )
+        self.assertEqual(res.status_code, 429)
 
     def test_a_downgraded_team_keeps_its_endpoints_and_a_delete_frees_a_slot(self):
         self.set_plan("pro")
