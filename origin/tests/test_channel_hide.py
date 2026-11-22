@@ -17,6 +17,8 @@ from origin.models.chat.unified_models import (
     ChannelKind,
     ChannelMember,
     Message,
+    Pin,
+    ReadCursor,
 )
 from origin.models.common.team_models import TeamMembers
 from origin.services import realtime_push
@@ -138,6 +140,75 @@ class HideTests(_Base):
     def test_unauthenticated_is_refused(self):
         self.unauthenticate()
         self.assertIn(self.client.post(self.hide_url).status_code, (401, 403))
+
+
+class HideFollowUpTests(_Base):
+    """MIP-1991: hiding marks the chat read for me and drops my pin."""
+
+    def _msgs(self, n=3):
+        return [
+            Message.objects.create(
+                channel=self.dm, sender=self.user2, seq=i, body=blocks("x"), body_text="x"
+            )
+            for i in range(1, n + 1)
+        ]
+
+    def test_hide_marks_the_chat_read_for_me_only(self):
+        from origin.services.unread_badge import _unread_chats
+
+        msgs = self._msgs()
+        self.assertEqual(_unread_chats(self.user.id, self.team.team_id), 1)
+        self.call(self.user, "post", self.hide_url)
+        cursor = ReadCursor.objects.get(user=self.user, channel=self.dm, thread_root__isnull=True)
+        self.assertEqual(cursor.last_read_message_id, msgs[-1].id)
+        self.assertEqual(_unread_chats(self.user.id, self.team.team_id), 0)
+        self.assertFalse(ReadCursor.objects.filter(user=self.user2, channel=self.dm).exists())
+
+    def test_hide_never_rewinds_a_cursor_already_ahead(self):
+        msgs = self._msgs()
+        ReadCursor.objects.create(user=self.user, channel=self.dm, last_read_message=msgs[-1])
+        self.call(self.user, "post", self.hide_url)
+        cursor = ReadCursor.objects.get(user=self.user, channel=self.dm, thread_root__isnull=True)
+        self.assertEqual(cursor.last_read_message_id, msgs[-1].id)
+
+    def test_hide_an_empty_chat_makes_no_cursor(self):
+        res = self.call(self.user, "post", self.hide_url)
+        self.assertEqual(res.status_code, 204)
+        self.assertFalse(ReadCursor.objects.filter(user=self.user, channel=self.dm).exists())
+
+    def test_hide_clears_my_unread_activities_for_the_chat(self):
+        from origin.models.chat.unified_models import Activity, ActivityType
+
+        msgs = self._msgs(1)
+        act = Activity.objects.create(
+            recipient=self.user,
+            channel=self.dm,
+            message=msgs[0],
+            activity_type=ActivityType.MESSAGE,
+            team=self.team,
+        )
+        self.call(self.user, "post", self.hide_url)
+        act.refresh_from_db()
+        self.assertTrue(act.is_read)
+
+    def test_hide_removes_my_pin_only(self):
+        Pin.objects.create(user=self.user, channel=self.dm)
+        Pin.objects.create(user=self.user2, channel=self.dm)
+        self.call(self.user, "post", self.hide_url)
+        self.assertFalse(Pin.objects.filter(user=self.user, channel=self.dm).exists())
+        self.assertTrue(Pin.objects.filter(user=self.user2, channel=self.dm).exists())
+
+    def test_a_repeat_hide_changes_nothing_more(self):
+        Pin.objects.create(user=self.user, channel=self.dm)
+        self.call(self.user, "post", self.hide_url)
+        res = self.call(self.user, "post", self.hide_url)
+        self.assertEqual(res.status_code, 204)
+
+    def test_unhide_does_not_restore_the_pin(self):
+        Pin.objects.create(user=self.user, channel=self.dm)
+        self.call(self.user, "post", self.hide_url)
+        self.call(self.user, "delete", self.hide_url)
+        self.assertFalse(Pin.objects.filter(user=self.user, channel=self.dm).exists())
 
 
 class UnhideOnNewMessageTests(_Base):

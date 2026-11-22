@@ -95,6 +95,34 @@ def _clear_activities_up_to(*, user, channel, target, thread_root_id):
     return cleared_ids
 
 
+def mark_main_timeline_read(*, user, channel) -> None:
+    """Move `user`'s main-timeline cursor to the channel's newest top-level message and clear the
+    activities that covers (MIP-1991: hiding a chat reads it). Forward-only, like the endpoint; a
+    chat with no message makes no cursor row."""
+    latest = (
+        Message.objects.filter(channel=channel, is_thread_reply=False)
+        .order_by("-seq")
+        .only("id", "seq")
+        .first()
+    )
+    if latest is None:
+        return
+    cursor, created = ReadCursor.objects.get_or_create(
+        user=user,
+        channel=channel,
+        thread_root_id=None,
+        defaults={"last_read_message": latest},
+    )
+    if not created:
+        existing_seq = cursor.last_read_message.seq if cursor.last_read_message_id else -1
+        if latest.seq > existing_seq:
+            cursor.last_read_message = latest
+            cursor.save(update_fields=["last_read_message", "last_read_at", "ts_updated_at"])
+    _clear_activities_up_to(
+        user=user, channel=channel, target=cursor.last_read_message, thread_root_id=None
+    )
+
+
 class ReadCursorView(AuthenticatedAPIView):
     """PUT /api/v3/channels/{channel_id}/read_cursor/
 
