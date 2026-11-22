@@ -16,6 +16,7 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
@@ -182,9 +183,7 @@ class CollectTests(_Fixture):
         effort' and 'is the prefix cache firing' without an ssh."""
         req = "77777777-7777-4777-8777-777777777777"
         self._event(req, purpose="loop", jpy=1200, usd=8000, prompt=200, out=40)
-        AiSpendEvent.objects.filter(request_id=req).update(
-            effort="medium", cached_tokens=800
-        )
+        AiSpendEvent.objects.filter(request_id=req).update(effort="medium", cached_tokens=800)
         AiRequestCost.objects.filter(request_id=self.ok_request).update(effort="")
         data = cost_dashboard.collect(days=1)
         medium = [e for e in data["efforts"] if e["effort"] == "medium"]
@@ -222,9 +221,7 @@ class AgreesWithTheTextReportTests(_Fixture):
 
         self.assertIn(cost_dashboard.yen(d["totals"]["jpy_milli"]), report)
         self.assertIn(f"paid calls: {d['totals']['calls']}", report)
-        self.assertIn(
-            f"UNATTRIBUTED: {d['coverage']['unattributed_calls']} call(s)", report
-        )
+        self.assertIn(f"UNATTRIBUTED: {d['coverage']['unattributed_calls']} call(s)", report)
 
 
 class RenderTests(_Fixture):
@@ -274,9 +271,7 @@ class RenderTests(_Fixture):
         request that failed cost us real money and the customer sees
         none of it."""
         html = self._html()
-        row = next(
-            tr for tr in re.findall(r"<tr>.*?</tr>", html) if self.bad_request[:8] in tr
-        )
+        row = next(tr for tr in re.findall(r"<tr>.*?</tr>", html) if self.bad_request[:8] in tr)
         self.assertIn("provider_failure", row)
         self.assertIn("¥0.90", row, "we still spent it")
         self.assertIn("¥0.00", row, "and still charged nothing for it")
@@ -403,9 +398,9 @@ class ArchiveDirTests(_Fixture):
         with tempfile.TemporaryDirectory() as tmp:
             names = self._archive(tmp, "--last-month")
             dated = next(n for n in names if n != "latest.html")
-            last_day_of_last_month = (
-                timezone.now().replace(day=1) - timedelta(days=1)
-            ).strftime("%Y-%m-%d")
+            last_day_of_last_month = (timezone.now().replace(day=1) - timedelta(days=1)).strftime(
+                "%Y-%m-%d"
+            )
             self.assertEqual(dated, f"ai-cost-{last_day_of_last_month}.html")
 
     def test_creates_the_directory_when_it_does_not_exist(self):
@@ -469,12 +464,12 @@ class GcsArchiveTests(_Fixture):
                 posted.append({"url": url, **kw})
                 return _Resp()
 
-        with mock.patch(
-            "google.auth.transport.requests.AuthorizedSession", _Session
-        ), mock.patch(
-            "origin.search_engine.management.commands.ai_cost_dashboard."
-            "_gcs_credentials",
-            return_value=mock.sentinel.creds,
+        with (
+            mock.patch("google.auth.transport.requests.AuthorizedSession", _Session),
+            mock.patch(
+                "origin.search_engine.management.commands.ai_cost_dashboard._gcs_credentials",
+                return_value=mock.sentinel.creds,
+            ),
         ):
             call_command(
                 "ai_cost_dashboard",
@@ -514,6 +509,31 @@ class GcsArchiveTests(_Fixture):
         with self.assertRaises(CommandError):
             self._run("gs://my-bucket/daily", status=403)
 
+    def test_the_archive_refuses_per_user_pages(self):
+        """MIP-1791: no user ids in a bucket that outlives account deletion."""
+        with self.assertRaises(CommandError) as ctx:
+            self._run("gs://my-bucket/daily", "--days", "1", "--by-user")
+        self.assertIn("--by-user", str(ctx.exception))
+
+    def test_the_archive_refuses_per_user_pages_on_a_path_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(CommandError):
+                call_command(
+                    "ai_cost_dashboard",
+                    "--days",
+                    "1",
+                    "--by-user",
+                    "--archive-dir",
+                    tmp,
+                    stderr=StringIO(),
+                )
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_the_railway_entrypoint_does_not_ask_for_per_user_pages(self):
+        script = (Path(settings.BASE_DIR) / "railway-ai-cost-dashboard-entrypoint.sh").read_text()
+        command = script[script.index("exec python") :]
+        self.assertNotIn("--by-user", command)
+
     def test_a_uri_with_no_bucket_is_rejected(self):
         with self.assertRaises(CommandError):
             call_command(
@@ -526,9 +546,7 @@ class GcsArchiveTests(_Fixture):
         from origin.search_engine.management.commands import ai_cost_dashboard as cmd
 
         with mock.patch("google.oauth2.service_account.Credentials") as creds:
-            with override_settings(
-                SEARCH_ENGINE={"GEMINI_SERVICE_ACCOUNT_FILE": "/tmp/sa.json"}
-            ):
+            with override_settings(SEARCH_ENGINE={"GEMINI_SERVICE_ACCOUNT_FILE": "/tmp/sa.json"}):
                 cmd._gcs_credentials()
         _args, kwargs = creds.from_service_account_file.call_args
         self.assertEqual(

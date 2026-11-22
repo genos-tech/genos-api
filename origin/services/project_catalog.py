@@ -34,6 +34,7 @@ from origin.models.project.prj_models import (
     ProjectTags,
 )
 from origin.services import change_feed
+from origin.services.archive import ensure_project_writable
 from origin.services.project_list_cache import project_list_keys
 from origin.services.workspace_changes import record as record_workspace_change
 
@@ -110,6 +111,7 @@ def clean_label_color(raw, *, field: str, current: str | None = None) -> str | N
 
 
 def add_project_tag(project: ProjectMaster, raw_name, raw_color=None) -> ProjectTags:
+    ensure_project_writable(project.project_id, CatalogRefused)
     name = raw_name.strip() if isinstance(raw_name, str) else ""
     if not name:
         raise CatalogRefused("tag_name is required.", 400)
@@ -122,31 +124,34 @@ def add_project_tag(project: ProjectMaster, raw_name, raw_color=None) -> Project
         raise CatalogRefused(
             f'A tag named "{existing.tag_name}" already exists in this project.', 409
         )
-    try:
-        with transaction.atomic():
-            # The page numbers a new tag by how many there are, which repeats an id once any
-            # tag has been deleted. The highest id plus one never does.
-            highest = ProjectTags.objects.filter(project=project).aggregate(m=Max("tag_id"))["m"]
-            tag = ProjectTags.objects.create(
-                team=project.team,
-                project=project,
-                tag_id=(highest or 0) + 1,
-                tag_name=name,
-                tag_color=color,
-                tag_text_color=text_color_for(color),
-            )
-            # Inside the same transaction as the tag, but outside this IntegrityError handler:
-            # an audit-row failure must not be reported as a duplicate tag name.
-            record_workspace_change(
-                team_id=project.team_id,
-                project_id=project.project_id,
-                entity_kind="tag",
-                entity_id=tag.tag_id,
-                action="create",
-            )
-    except IntegrityError:
-        # Two adds of the same name at once: the database constraint decided.
-        raise CatalogRefused(f'A tag named "{name}" already exists in this project.', 409)
+    with transaction.atomic():
+        # The page numbers a new tag by how many there are, which repeats an id once any
+        # tag has been deleted. The highest id plus one never does.
+        highest = ProjectTags.objects.filter(project=project).aggregate(m=Max("tag_id"))["m"]
+        try:
+            # A savepoint of its own, so a duplicate-name IntegrityError rolls back only
+            # the insert. Only the insert is inside this handler (MIP-1889).
+            with transaction.atomic():
+                tag = ProjectTags.objects.create(
+                    team=project.team,
+                    project=project,
+                    tag_id=(highest or 0) + 1,
+                    tag_name=name,
+                    tag_color=color,
+                    tag_text_color=text_color_for(color),
+                )
+        except IntegrityError:
+            # Two adds of the same name at once: the database constraint decided.
+            raise CatalogRefused(f'A tag named "{name}" already exists in this project.', 409)
+        # Same transaction as the tag, outside the handler above: an audit-row failure
+        # propagates and is never reported as a duplicate tag name.
+        record_workspace_change(
+            team_id=project.team_id,
+            project_id=project.project_id,
+            entity_kind="tag",
+            entity_id=tag.tag_id,
+            action="create",
+        )
     return tag
 
 
@@ -221,6 +226,7 @@ def replace_project_labels(project: ProjectMaster, raw_ids: list):
     Ids that are not labels of the project's own team are dropped, so a caller can't
     attach another team's label by guessing an id. Returns the labels now on the project.
     """
+    ensure_project_writable(project.project_id, CatalogRefused)
     valid_labels = ProjectLabel.objects.filter(team=project.team_id, label_id__in=raw_ids)
     valid_ids = set(valid_labels.values_list("label_id", flat=True))
 
@@ -258,6 +264,7 @@ def _own_team_label_ids(project: ProjectMaster, label_ids: list[int]) -> tuple[s
 def assign_labels(project: ProjectMaster, label_ids: list[int]) -> tuple[list[int], list[int]]:
     """Put `label_ids` on the project, keeping the ones it has. Returns
     `(newly added ids, ids that are not this team's labels)`."""
+    ensure_project_writable(project.project_id, CatalogRefused)
     found, unknown = _own_team_label_ids(project, label_ids)
     if unknown:
         return [], unknown
@@ -279,6 +286,7 @@ def assign_labels(project: ProjectMaster, label_ids: list[int]) -> tuple[list[in
 def unassign_labels(project: ProjectMaster, label_ids: list[int]) -> tuple[list[int], list[int]]:
     """Take `label_ids` off the project. Returns `(ids actually removed, ids that are not
     this team's labels)`. A label the project doesn't carry is not an error."""
+    ensure_project_writable(project.project_id, CatalogRefused)
     found, unknown = _own_team_label_ids(project, label_ids)
     if unknown:
         return [], unknown
