@@ -353,9 +353,7 @@ def assert_content_parity() -> None:
         all_keys.update(t["key"] for t in bp["tasks"])
         for extra in bp.get("extra_milestones") or []:
             all_keys.update(t["key"] for t in extra["tasks"])
-    unknown = sorted(
-        {k for edge in _DEPENDENCY_EDGES for k in edge if k not in all_keys}
-    )
+    unknown = sorted({k for edge in _DEPENDENCY_EDGES for k in edge if k not in all_keys})
     assert not unknown, f"_DEPENDENCY_EDGES names unknown task keys: {unknown}"
 
     same("DM_BLUEPRINTS length", len(en.DM_BLUEPRINTS), len(ja.DM_BLUEPRINTS))
@@ -1037,6 +1035,190 @@ def _assert_seq_monotonic(team) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _seed_people(
+    demo_user: CustomUser, short: str, lang: str, is_v2: bool
+) -> tuple[TeamMaster, List[CustomUser]]:
+    """The fast part of the seed (MIP-1879): the user's language, the bot peers, the team, the
+    members and their notification preferences. A handful of rows, the part the sign-in needs
+    (it returns the team id). Runs inside the caller's transaction."""
+    # Set on the user so the agent's locale fallback resolves even
+    # when the client sends no explicit locale: `agent_views` reads
+    # `normalize_locale(data.get("locale")) or
+    # normalize_locale(request.user.language)`. With it, Spotlight
+    # answers in the visitor's language — and `language_directive`
+    # is written to hold that line even over mixed-language
+    # retrieved content, so an EN query against the JA workspace
+    # still answers in English rather than breaking.
+    if demo_user.language != lang:
+        demo_user.language = lang
+        demo_user.save(update_fields=["language"])
+
+    # 1. Bot peer users
+    bots = _create_bot_users(short, lang)
+
+    # 2. Team
+    # `plan="pro"` is load-bearing for the demo in three separate
+    # ways, not just a generosity setting:
+    #   1. `agent_tool_level` becomes "organize", which is what
+    #      DECLARES the approval-gated write tools to the model. At
+    #      "read" (free) `disabled_tools_for_level` hides every
+    #      write tool, so the visitor cannot even see that Genos can
+    #      act — the demo's whole payoff is unreachable.
+    #   2. `message_retention_days` becomes None (unlimited). On
+    #      free it is 180 days, and BOTH the search filter and the
+    #      REST read path drop chat older than that — which would
+    #      silently swallow the backdated history below.
+    #   3. `agent_memory` becomes "team", which un-hides the
+    #      conversation / spotlight_answer recall lanes.
+    # `resolve_effective_tier` takes the max over the user's own
+    # tier and their teams' plans, so the team plan alone suffices.
+    # `plan_set_by=operator` because a hand-set plan is not Stripe's
+    # to take away (see the field comment in team_models.py) — and
+    # this team self-destructs on logout anyway.
+    if is_v2:
+        team = _create_v2_team(demo_user, short, lang)
+    else:
+        team = TeamMaster.objects.create(
+            team_name=f"Demo Team {short}",
+            team_email=f"demo-team-{short}@genos.app",
+            owner=demo_user,
+            is_demo=True,
+            plan="pro",
+            plan_set_by=TIER_SET_BY_OPERATOR,
+        )
+
+    # 3. Team members (demo user + bots)
+    all_members = [demo_user] + bots
+    TeamMembers.objects.bulk_create([TeamMembers(team=team, attendee=u) for u in all_members])
+
+    # 4. Notification preferences (one per user)
+    NotificationPreference.objects.bulk_create(
+        [NotificationPreference(user=u) for u in all_members]
+    )
+
+    return team, bots
+
+
+def _seed_content(
+    team: TeamMaster,
+    demo_user: CustomUser,
+    bots: List[CustomUser],
+    short: str,
+    lang: str,
+    is_v2: bool,
+) -> None:
+    """The slow part of the seed (MIP-1879): projects, sprints, milestones, tasks, chats, notes,
+    todos, the v2 company layer and launch plan, and the backdating. Runs inside the caller's
+    transaction, after `_seed_people`, in the same order as before the split (so the v1 corpus is
+    byte for byte what it was)."""
+    all_members = [demo_user] + bots
+    # 5-10. Projects + sprints + milestones + tasks (per blueprint)
+    content = _content(lang)
+    if is_v2:
+        content = demo_v2.adapt_content(content)
+    seeded_projects = []
+    for blueprint in content.PROJECT_BLUEPRINTS:
+        seeded = _create_project_from_blueprint(
+            team,
+            demo_user,
+            all_members,
+            bots,
+            short,
+            blueprint,
+            content,
+            slug_suffix=not is_v2,
+        )
+        seeded_projects.append(seeded)
+
+    # `_TASK_HISTORY` names tasks by blueprint key, and a key matching
+    # no task in THIS project is skipped rather than raising — that skip
+    # is what lets one shared list serve every project (same contract as
+    # `_DEPENDENCY_EDGES`). The cost is that a mistyped key degrades
+    # silently to a quieter activity feed, which no row count would
+    # flag. So check the thing that actually goes wrong: a key that
+    # resolved in *no* project at all.
+    #
+    # Checked here rather than by counting applied steps, because the
+    # step count is a property of the data (a step whose value already
+    # holds is a no-op, and the rewind below makes each column's first
+    # step silent) — a count floor would need re-tuning on every
+    # mechanism change and would say nothing about which key broke.
+    seeded_keys: set = set()
+    for seeded in seeded_projects:
+        seeded_keys |= seeded["history_keys"]
+    orphans = sorted({step[0] for step in _TASK_HISTORY} - seeded_keys)
+    if orphans:
+        raise RuntimeError(
+            f"_TASK_HISTORY names task keys that exist in no blueprint: {orphans} "
+            "— they were silently skipped, leaving those tasks with an empty "
+            "activity feed. Fix the key or drop the steps."
+        )
+
+    # 11. DMs + thread messages
+    _create_dms(team, demo_user, bots, content)
+
+    # 12. Group chat + thread messages
+    _create_group_chat(team, demo_user, all_members, content)
+
+    # 13. Project (PM) channel: one task-card header per task + each
+    #     task's comment thread mirrored as v3 thread replies.
+    for seeded in seeded_projects:
+        _create_pm_messages(
+            seeded["project"],
+            all_members,
+            seeded["blueprint"],
+            seeded["tasks"],
+            seeded["backing_task"],
+            seeded.get("extra_milestones"),
+            card_labels=content.CARD_LABELS,
+        )
+
+    # 14. (legacy UserChatMaster seeding removed — the legacy chat
+    #     tables are dropped; chat is seeded on the v3 Channel/Message
+    #     schema above.)
+
+    # 15. Notes (personal + task + chat note with permissions)
+    _create_notes(team, demo_user, bots, seeded_projects, content)
+
+    # 16. Todos (demo user only — todos are personal-scoped)
+    _create_todos(team, demo_user, content)
+
+    # 16b. v2 only: the company layer (MIP-1692), departments with their tags, groups,
+    #      folders and chats, more projects than the visitor joins, and a few private
+    #      things. Never for v1: that is the eval corpus.
+    if is_v2:
+        from origin.services.demo_company import PRODUCT, create_company_layer
+        from origin.services.demo_launch_plan import create_launch_plan
+
+        labels = create_company_layer(
+            team, demo_user, bots, lang, seeded_projects, content.SPRINT_NAME
+        )
+        # 16c. v2 only: a launch plan, part of it written through a connected Claude app, so
+        #      the landing page's screenshot shows real "by the agent" labels (MIP-1740).
+        create_launch_plan(
+            team,
+            demo_user,
+            bots,
+            lang,
+            label=labels[PRODUCT],
+            sprint_name=content.SPRINT_NAME,
+        )
+
+    # 17. Push DISPLAY timestamps into the past so the workspace reads
+    #     as three months of real use instead of "created 8 seconds
+    #     ago". Runs last, inside the same transaction, because it
+    #     reads back every row it rewrites — that keeps the blueprint
+    #     tables pure content with no timeline bookkeeping in them.
+    #     NEVER touches `ts_updated_at`; see the module comment above
+    #     `_backdate`.
+    now = timezone.now()
+    _backdate_history(team, demo_user, bots, seeded_projects, now)
+    # Cheap (one query per channel) and catches the one class of bug
+    # backdating can introduce silently — display order disagreeing
+    # with `seq`, which four consumers depend on.
+    _assert_seq_monotonic(team)
+
+
 def create_demo_environment(
     demo_user: CustomUser,
     *,
@@ -1083,171 +1265,154 @@ def create_demo_environment(
     is_v2 = version == "v2"
 
     with transaction.atomic():
-        # Set on the user so the agent's locale fallback resolves even
-        # when the client sends no explicit locale: `agent_views` reads
-        # `normalize_locale(data.get("locale")) or
-        # normalize_locale(request.user.language)`. With it, Spotlight
-        # answers in the visitor's language — and `language_directive`
-        # is written to hold that line even over mixed-language
-        # retrieved content, so an EN query against the JA workspace
-        # still answers in English rather than breaking.
-        if demo_user.language != lang:
-            demo_user.language = lang
-            demo_user.save(update_fields=["language"])
-
-        # 1. Bot peer users
-        bots = _create_bot_users(short, lang)
-
-        # 2. Team
-        # `plan="pro"` is load-bearing for the demo in three separate
-        # ways, not just a generosity setting:
-        #   1. `agent_tool_level` becomes "organize", which is what
-        #      DECLARES the approval-gated write tools to the model. At
-        #      "read" (free) `disabled_tools_for_level` hides every
-        #      write tool, so the visitor cannot even see that Genos can
-        #      act — the demo's whole payoff is unreachable.
-        #   2. `message_retention_days` becomes None (unlimited). On
-        #      free it is 180 days, and BOTH the search filter and the
-        #      REST read path drop chat older than that — which would
-        #      silently swallow the backdated history below.
-        #   3. `agent_memory` becomes "team", which un-hides the
-        #      conversation / spotlight_answer recall lanes.
-        # `resolve_effective_tier` takes the max over the user's own
-        # tier and their teams' plans, so the team plan alone suffices.
-        # `plan_set_by=operator` because a hand-set plan is not Stripe's
-        # to take away (see the field comment in team_models.py) — and
-        # this team self-destructs on logout anyway.
-        if is_v2:
-            team = _create_v2_team(demo_user, short, lang)
-        else:
-            team = TeamMaster.objects.create(
-                team_name=f"Demo Team {short}",
-                team_email=f"demo-team-{short}@genos.app",
-                owner=demo_user,
-                is_demo=True,
-                plan="pro",
-                plan_set_by=TIER_SET_BY_OPERATOR,
-            )
-
-        # 3. Team members (demo user + bots)
-        all_members = [demo_user] + bots
-        TeamMembers.objects.bulk_create([TeamMembers(team=team, attendee=u) for u in all_members])
-
-        # 4. Notification preferences (one per user)
-        NotificationPreference.objects.bulk_create(
-            [NotificationPreference(user=u) for u in all_members]
-        )
-
-        # 5-10. Projects + sprints + milestones + tasks (per blueprint)
-        content = _content(lang)
-        if is_v2:
-            content = demo_v2.adapt_content(content)
-        seeded_projects = []
-        for blueprint in content.PROJECT_BLUEPRINTS:
-            seeded = _create_project_from_blueprint(
-                team,
-                demo_user,
-                all_members,
-                bots,
-                short,
-                blueprint,
-                content,
-                slug_suffix=not is_v2,
-            )
-            seeded_projects.append(seeded)
-
-        # `_TASK_HISTORY` names tasks by blueprint key, and a key matching
-        # no task in THIS project is skipped rather than raising — that skip
-        # is what lets one shared list serve every project (same contract as
-        # `_DEPENDENCY_EDGES`). The cost is that a mistyped key degrades
-        # silently to a quieter activity feed, which no row count would
-        # flag. So check the thing that actually goes wrong: a key that
-        # resolved in *no* project at all.
-        #
-        # Checked here rather than by counting applied steps, because the
-        # step count is a property of the data (a step whose value already
-        # holds is a no-op, and the rewind below makes each column's first
-        # step silent) — a count floor would need re-tuning on every
-        # mechanism change and would say nothing about which key broke.
-        seeded_keys: set = set()
-        for seeded in seeded_projects:
-            seeded_keys |= seeded["history_keys"]
-        orphans = sorted({step[0] for step in _TASK_HISTORY} - seeded_keys)
-        if orphans:
-            raise RuntimeError(
-                f"_TASK_HISTORY names task keys that exist in no blueprint: {orphans} "
-                "— they were silently skipped, leaving those tasks with an empty "
-                "activity feed. Fix the key or drop the steps."
-            )
-
-        # 11. DMs + thread messages
-        _create_dms(team, demo_user, bots, content)
-
-        # 12. Group chat + thread messages
-        _create_group_chat(team, demo_user, all_members, content)
-
-        # 13. Project (PM) channel: one task-card header per task + each
-        #     task's comment thread mirrored as v3 thread replies.
-        for seeded in seeded_projects:
-            _create_pm_messages(
-                seeded["project"],
-                all_members,
-                seeded["blueprint"],
-                seeded["tasks"],
-                seeded["backing_task"],
-                seeded.get("extra_milestones"),
-                card_labels=content.CARD_LABELS,
-            )
-
-        # 14. (legacy UserChatMaster seeding removed — the legacy chat
-        #     tables are dropped; chat is seeded on the v3 Channel/Message
-        #     schema above.)
-
-        # 15. Notes (personal + task + chat note with permissions)
-        _create_notes(team, demo_user, bots, seeded_projects, content)
-
-        # 16. Todos (demo user only — todos are personal-scoped)
-        _create_todos(team, demo_user, content)
-
-        # 16b. v2 only: the company layer (MIP-1692), departments with their tags, groups,
-        #      folders and chats, more projects than the visitor joins, and a few private
-        #      things. Never for v1: that is the eval corpus.
-        if is_v2:
-            from origin.services.demo_company import PRODUCT, create_company_layer
-            from origin.services.demo_launch_plan import create_launch_plan
-
-            labels = create_company_layer(
-                team, demo_user, bots, lang, seeded_projects, content.SPRINT_NAME
-            )
-            # 16c. v2 only: a launch plan, part of it written through a connected Claude app, so
-            #      the landing page's screenshot shows real "by the agent" labels (MIP-1740).
-            create_launch_plan(
-                team,
-                demo_user,
-                bots,
-                lang,
-                label=labels[PRODUCT],
-                sprint_name=content.SPRINT_NAME,
-            )
-
-        # 17. Push DISPLAY timestamps into the past so the workspace reads
-        #     as three months of real use instead of "created 8 seconds
-        #     ago". Runs last, inside the same transaction, because it
-        #     reads back every row it rewrites — that keeps the blueprint
-        #     tables pure content with no timeline bookkeeping in them.
-        #     NEVER touches `ts_updated_at`; see the module comment above
-        #     `_backdate`.
-        now = timezone.now()
-        _backdate_history(team, demo_user, bots, seeded_projects, now)
-        # Cheap (one query per channel) and catches the one class of bug
-        # backdating can introduce silently — display order disagreeing
-        # with `seq`, which four consumers depend on.
-        _assert_seq_monotonic(team)
+        team, bots = _seed_people(demo_user, short, lang, is_v2)
+        _seed_content(team, demo_user, bots, short, lang, is_v2)
 
     return {
         "team_id": str(team.team_id),
         "team_name": team.team_name,
     }
+
+
+# ---------------------------------------------------------------------------
+# Background provisioning (MIP-1879)
+# ---------------------------------------------------------------------------
+#
+# The visitor's sign-in used to run the whole seed inside the request (about 3 s). Now the request
+# creates the user, the team and the members (`create_demo_people`), returns, and the content
+# (`_seed_content`) is built on a daemon thread. The app shows a light "setting up your sample
+# workspace" state and polls `DemoWorkspaceView` until it says ready.
+#
+# No column says "provisioned": the seed writes messages as the bot peers and nothing else does
+# (bots have unusable passwords), and the content is ONE transaction, so a bot message means the
+# whole workspace exists. The build is idempotent: a Postgres advisory lock keeps two runs from
+# overlapping (a poll that finds no thread running starts one; a gunicorn worker recycle kills its
+# daemon threads, the next poll restarts it), and the provisioned check makes a repeat a no-op.
+
+DEMO_PROVISION_MAX_FAILURES = 3
+_DEMO_FAIL_KEY = "demo:provision:fail:{team_id}"
+_RUNNING: set[str] = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def create_demo_people(demo_user: CustomUser, *, lang: str, version: str) -> dict:
+    """The fast part of `create_demo_environment`: the team, the bots and the members, no content.
+    Returns the same `{"team_id", "team_name"}`. The caller wraps this and `create_user` in one
+    transaction and then calls `start_demo_provisioning`."""
+    lang = _demo_lang(lang)
+    is_v2 = demo_v2.normalize_version(version) == "v2"
+    short = uuid.uuid4().hex[:8]
+    with transaction.atomic():
+        team, _bots = _seed_people(demo_user, short, lang, is_v2)
+    return {"team_id": str(team.team_id), "team_name": team.team_name}
+
+
+def is_demo_workspace_provisioned(team: TeamMaster) -> bool:
+    """True once the content seed has committed: some bot (not the visitor) has sent a message in
+    this team. The visitor's own writes never count, so a project they make while the build is
+    pending does not make the workspace look done."""
+    return (
+        Message.objects.filter(channel__team_id=team.team_id, sender__is_demo=True)
+        .exclude(sender_id=team.owner_id)
+        .exists()
+    )
+
+
+def _short_of(team: TeamMaster) -> str:
+    """The per-tenant slug the team was seeded with (`demo-team-{short}@genos.app`)."""
+    email = team.team_email or ""
+    if email.startswith("demo-team-") and email.endswith("@genos.app"):
+        return email[len("demo-team-") : -len("@genos.app")]
+    return uuid.uuid4().hex[:8]
+
+
+def provision_demo_workspace(team_id) -> bool:
+    """Build the content of a demo team made by `create_demo_people`. Idempotent and safe to call
+    twice at once. True when the workspace is built (now or before), False when another run holds
+    it. Raises when the build fails; the transaction rolls back, so no partial workspace is left."""
+    if not isinstance(team_id, uuid.UUID):
+        team_id = uuid.UUID(str(team_id))
+    team = TeamMaster.objects.select_related("owner").filter(team_id=team_id, is_demo=True).first()
+    if team is None or team.is_deleted:
+        return False
+    demo_user = team.owner
+    lang = _demo_lang(demo_user.language)
+    names = [f"{b['first']} {b['last']}" for b in BOT_PROFILES]
+    by_name = {
+        m.attendee.username: m.attendee
+        for m in TeamMembers.objects.filter(team=team, attendee__is_demo=True)
+        .exclude(attendee_id=demo_user.id)
+        .select_related("attendee")
+    }
+    bots = [by_name[n] for n in names if n in by_name]
+    if len(bots) != len(BOT_PROFILES):
+        raise RuntimeError("demo team is missing its bot peers; not provisioning")
+    with transaction.atomic():
+        lock_key = int.from_bytes(team_id.bytes[:8], "big", signed=True)
+        with connection.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_xact_lock(%s)", [lock_key])
+            if not cur.fetchone()[0]:
+                return False
+        if is_demo_workspace_provisioned(team):
+            return True
+        _seed_content(team, demo_user, bots, _short_of(team), lang, True)
+        # The visitor may have loaded an empty project list while this ran: drop it and move the
+        # change tokens so the app refetches.
+        from origin.services import change_feed
+
+        change_feed.bump_team(team.team_id)
+    # After the commit: the seeded rows must be visible to the reindexer.
+    kick_off_demo_reindex()
+    return True
+
+
+def _spawn(fn) -> None:
+    """Start `fn` on a daemon thread. A function of its own so a test can capture it."""
+
+    def _target() -> None:
+        try:
+            fn()
+        finally:
+            # The thread's own ORM connection: release it so the pool does not collect idle ones.
+            connection.close()
+
+    threading.Thread(target=_target, name="demo-provision", daemon=True).start()
+
+
+def demo_provision_failures(team_id) -> int:
+    from django.core.cache import cache
+
+    return int(cache.get(_DEMO_FAIL_KEY.format(team_id=team_id)) or 0)
+
+
+def start_demo_provisioning(team_id) -> None:
+    """Build the workspace now (settings.DEMO_PROVISION_IN_BACKGROUND false: tests, the eval
+    fixture) or on a daemon thread, at most one per team per process."""
+    from django.conf import settings
+
+    team_id = str(team_id)
+    if not getattr(settings, "DEMO_PROVISION_IN_BACKGROUND", True):
+        provision_demo_workspace(team_id)
+        return
+    with _RUNNING_LOCK:
+        if team_id in _RUNNING:
+            return
+        _RUNNING.add(team_id)
+
+    def _run() -> None:
+        from django.core.cache import cache
+
+        try:
+            provision_demo_workspace(team_id)
+        except Exception as exc:
+            logger.exception("Demo workspace provisioning failed: %s", exc)
+            key = _DEMO_FAIL_KEY.format(team_id=team_id)
+            cache.set(key, int(cache.get(key) or 0) + 1, 3600)
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING.discard(team_id)
+
+    _spawn(_run)
 
 
 def _delete_demo_team_search_chunks(team_id: uuid.UUID) -> None:
@@ -1288,8 +1453,7 @@ def _delete_demo_team_search_chunks(team_id: uuid.UUID) -> None:
             )
 
             actions = [
-                {"_op_type": "delete", "_index": get_index_alias(), "_id": cid}
-                for cid in chunk_ids
+                {"_op_type": "delete", "_index": get_index_alias(), "_id": cid} for cid in chunk_ids
             ]
             client = get_client()
             _, errors = os_helpers.bulk(
@@ -1474,9 +1638,7 @@ def _create_project_from_blueprint(
     # every sprint window, including all three CLOSED ones, so the work
     # that visibly shipped had no sprint it could have shipped in.
     # `_assign_tasks_to_sprints` then re-homes each task by date.
-    sprint = _create_sprint(
-        team, project, prior_sprints=5, name_template=content.SPRINT_NAME
-    )
+    sprint = _create_sprint(team, project, prior_sprints=5, name_template=content.SPRINT_NAME)
     # Everything below writes `TaskActivity` rows through the post_save
     # signals, and the audit row's actor comes from the thread-local, NOT
     # from the `reporter` column each task is given. Without this every
@@ -1783,7 +1945,6 @@ _HISTORY_FIELDS = {
 
 # Tasks whose final status is derived, not declared — see rule 2 above.
 _DERIVED_STATUS_KEYS = frozenset(blocked for _, blocked in _DEPENDENCY_EDGES)
-
 
 
 def _replay_task_history(tasks_by_key: dict, demo_user, bots, history) -> set:
@@ -2688,9 +2849,7 @@ def _create_todos(team, demo_user, content):
     cat_web = ToDoCategory.objects.create(
         team=team, user=demo_user, name=t["cat_web"], sort_order=0
     )
-    cat_q2 = ToDoCategory.objects.create(
-        team=team, user=demo_user, name=t["cat_q2"], sort_order=1
-    )
+    cat_q2 = ToDoCategory.objects.create(team=team, user=demo_user, name=t["cat_q2"], sort_order=1)
     cat_personal = ToDoCategory.objects.create(
         team=team, user=demo_user, name=t["cat_personal"], sort_order=2
     )

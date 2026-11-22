@@ -27,6 +27,7 @@ from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
+from origin.services.archive import ensure_project_writable
 from origin.services.sprint_status import (
     SPRINT_STATUS_ACTIVE,
     SPRINT_STATUS_ARCHIVED,
@@ -65,6 +66,7 @@ def _overlapping(project_id, start: date, end: date, *, exclude: int | None = No
 def create_sprint(*, project: ProjectMaster, name: str, start: date, end: date) -> Sprint:
     """An ad-hoc sprint, numbered after every sprint the project has ever had
     (deleted ones included: the unique constraint counts them)."""
+    ensure_project_writable(project.project_id, SprintRefused)
     if end < start:
         raise SprintRefused("start_date / end_date must be valid ISO dates with end >= start.", 400)
     if _overlapping(project.project_id, start, end).exists():
@@ -106,6 +108,7 @@ def update_sprint(
     status: str | None = None,
 ) -> Sprint:
     """Change the fields that are given; `None` leaves one alone."""
+    ensure_project_writable(sprint.project_id, SprintRefused)
     changed: list[str] = []
     if name is not None and name != sprint.name:
         sprint.name = name
@@ -144,6 +147,7 @@ def delete_sprint(sprint: Sprint) -> int:
 
     Idempotent: deleting a deleted sprint finds nothing left to detach.
     """
+    ensure_project_writable(sprint.project_id, SprintRefused)
     was_deleted = sprint.is_deleted
     with transaction.atomic():
         sprint.is_deleted = True

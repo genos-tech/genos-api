@@ -401,7 +401,9 @@ class Scored:
         days: int,
         counts: Counter,
         trend: str,
+        codes: list[dict[str, Any]] | None = None,
     ):
+        self.codes = codes or []
         self.task = task
         self.counts = counts
         self.score = score
@@ -428,22 +430,25 @@ def _activity_reason(counts: Counter, prefs: Prefs, days: int, trend: str) -> st
     return text
 
 
-def _hints(task: TaskMaster, today: date) -> tuple[float, list[str]]:
+def _hints(task: TaskMaster, today: date) -> tuple[float, list[str], list[dict[str, Any]]]:
     """Due date and Blocked, in points and words (priority is added by the caller, only when
     something else scored)."""
-    points, reasons = 0.0, []
+    points, reasons, codes = 0.0, [], []
     if task.due_date is not None:
         days = (task.due_date - today).days
         if days < 0:
             points += min(6 - days, 12)
             reasons.append(f"overdue by {_plural(-days, 'day')}")
+            codes.append({"code": "overdue", "days": -days})
         elif days == 0:
             points += 6
             reasons.append("due today")
+            codes.append({"code": "due_today"})
         elif days == 1:
             points += 3
             reasons.append("due tomorrow")
-    return points, reasons
+            codes.append({"code": "due_tomorrow"})
+    return points, reasons, codes
 
 
 def effective_series(daily: list[dict[str, int]] | None, prefs: Prefs) -> list[int] | None:
@@ -479,13 +484,15 @@ def score_task(
     activity = sum(kind_points.values())
     trend = item_activity.trend(series) if any(series) else "quiet"
     reasons: list[str] = []
+    codes: list[dict[str, Any]] = []
 
     hint_factor = prefs.factor("hints")
-    hint_points, hint_reasons = _hints(task, today)
+    hint_points, hint_reasons, hint_codes = _hints(task, today)
     hint_points *= hint_factor
     score = hint_points
     if hint_points:
         reasons += hint_reasons
+        codes += hint_codes
 
     if activity > 0:
         spread = SPREAD_POINTS * days * prefs.factor("spread")
@@ -495,14 +502,26 @@ def score_task(
         activity += spread + trend_points
         score += activity
         reasons.append(_activity_reason(counts, prefs, days, trend))
+        codes.append(
+            {
+                "code": "importance",
+                **{k: counts[k] for k in KIND_POINTS if counts[k] and prefs.factor(k)},
+                "days": days,
+                "trend": trend
+                if trend in ("rising", "cooling") and prefs.factor("trend")
+                else None,
+            }
+        )
     if task.status == "Blocked" and hint_factor:
         score -= 5 * hint_factor
         reasons.append("currently Blocked: clear what blocks it first")
+        codes.append({"code": "blocked"})
     priority = _PRIORITY_HINT.get(task.priority or "", 0) * hint_factor
     if priority and score > 0:
         score += priority
         reasons.append(f"priority {task.priority}")
-    return Scored(task, score, reasons, activity, days, counts, trend)
+        codes.append({"code": "priority", "priority": task.priority})
+    return Scored(task, score, reasons, activity, days, counts, trend, codes)
 
 
 # --------------------------------------------------------------------------- #
@@ -677,11 +696,14 @@ def shaped(
     `structured` (the settings page) adds `why`: the same reasons as numbers, so a page can say
     them in the member's language; the sentences in `reasons` are English only."""
     reasons = list(s.reasons)
+    codes = list(s.codes)
     n = (people or {}).get(s.task.task_id, 0)
     if n and sum(s.counts.values()):
         reasons.append(f"{_plural(n, 'other person')} involved")
+        codes.append({"code": "people", "count": n})
     out = {**row, "score": s.shown_score, "reasons": reasons}
     if structured:
+        out["reason_codes"] = codes
         out["why"] = {
             **{kind: s.counts[kind] for kind in KIND_POINTS},
             "days": s.days,

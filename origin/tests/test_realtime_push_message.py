@@ -235,3 +235,69 @@ class CardPushTests(BaseAPITestCase):
             task = self._create(assignee_id=str(self.user2.id))
 
         self.assertTrue(Message.objects.filter(task_id=task.task_id).exists())
+
+
+@override_settings(SOCKETS_INTERNAL_URL=SOCKETS, SOCKETS_INTERNAL_SECRET=SECRET)
+class MessagesDeletedPushTests(MessagePushTests):
+    """MIP-1951: one bulk `messages-deleted` post per force-deleted batch, ids only."""
+
+    DELETED_URL = f"{SOCKETS}/internal/broadcast/messages-deleted"
+
+    def _ids(self, n):
+        return [
+            Message.objects.create(
+                channel=self.channel, seq=10 + i, sender=self.user, body=[], body_text=""
+            )
+            for i in range(n)
+        ]
+
+    def test_one_post_per_batch_with_ids_only(self):
+        rows = self._ids(3)
+        with self.captureOnCommitCallbacks(execute=True):
+            realtime_push.push_messages_deleted(self.channel, rows)
+        sent = self._sent(self.DELETED_URL)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(
+            sent[0],
+            {
+                "channelId": str(self.channel.id),
+                "channelKind": int(self.channel.kind),
+                "messageIds": [str(m.id) for m in rows],
+            },
+        )
+
+    def test_nothing_is_sent_until_the_write_commits(self):
+        rows = self._ids(1)
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            realtime_push.push_messages_deleted(self.channel, rows)
+        self.assertEqual(self.post.call_count, 0)
+        self.assertEqual(len(callbacks), 1)
+
+    def test_an_empty_batch_sends_nothing(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            realtime_push.push_messages_deleted(self.channel, [])
+        self.assertEqual(self.post.call_count, 0)
+
+    def test_it_is_signed(self):
+        rows = self._ids(1)
+        with self.captureOnCommitCallbacks(execute=True):
+            realtime_push.push_messages_deleted(self.channel, rows)
+        self.assertTrue(self.post.call_args.kwargs["headers"]["X-Genos-Signature"])
+
+    @override_settings(SOCKETS_INTERNAL_URL="")
+    def test_with_no_sockets_url_it_does_nothing(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            realtime_push.push_messages_deleted(self.channel, self._ids(1))
+        self.assertEqual(self.post.call_count, 0)
+
+    def test_an_unreachable_sockets_is_logged_with_a_count_and_never_raised(self):
+        import requests as _requests
+
+        self.post.side_effect = _requests.ConnectionError("boom")
+        rows = self._ids(2)
+        with self.assertLogs("origin.services.realtime_push", level="WARNING") as logs:
+            with self.captureOnCommitCallbacks(execute=True):
+                realtime_push.push_messages_deleted(self.channel, rows)
+        text = "\n".join(logs.output)
+        self.assertIn("messages=2", text)
+        self.assertNotIn(str(rows[0].id), text)

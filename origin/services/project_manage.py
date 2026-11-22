@@ -27,6 +27,7 @@ from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.acl_dirty import mark_projects_dirty
+from origin.services.archive import ensure_project_writable
 from origin.services.hidden_scope import (
     project_code_visibly_taken,
     project_name_taken_for,
@@ -153,6 +154,7 @@ def create_project(
 
 
 def set_project_code(project: ProjectMaster, raw, actor_id) -> ProjectMaster:
+    ensure_project_writable(project.project_id, ProjectRefused)
     code = (raw or "").strip().upper()
     if not code:
         raise ProjectRefused("Code cannot be empty.", 400)
@@ -187,6 +189,7 @@ def set_project_code(project: ProjectMaster, raw, actor_id) -> ProjectMaster:
 
 
 def set_project_name(project: ProjectMaster, raw, actor_id) -> ProjectMaster:
+    ensure_project_writable(project.project_id, ProjectRefused)
     name = _clean_name(raw)
     if project_name_taken_for(project.team_id, name, actor_id, project.project_id):
         raise ProjectRefused("Another project in this team already uses that name.", 409)
