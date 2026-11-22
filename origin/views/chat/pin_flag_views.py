@@ -52,6 +52,7 @@ from origin.services.channel_scope import chat_member_q
 from origin.services.realtime_push import push_channel_appeared
 from origin.views.chat.message_views import _verify_member_or_404
 from origin.views.chat.reaction_views_v3 import _verify_message_member
+from origin.views.chat.read_cursor_views import mark_main_timeline_read
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import body_object
 
@@ -110,6 +111,12 @@ class ChannelHideView(AuthenticatedAPIView):
             hidden_at__isnull=hide,
         )
         changed = rows.update(hidden_at=timezone.now() if hide else None)
+        if hide:
+            # MIP-1991: a hidden chat is read for me (its old unread count no longer counts in the
+            # Inbox / badge totals) and cannot stay pinned. Idempotent, so a repeat hide re-does
+            # nothing harmful; showing it again restores neither.
+            mark_main_timeline_read(user=request.user, channel=channel)
+            Pin.objects.filter(user=request.user, channel=channel).delete()
         if changed:
             push_channel_appeared(
                 user_ids=[request.user.id],
