@@ -16,7 +16,12 @@ from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
-from origin.services.hidden_scope import visible_projects_q
+from origin.services.hidden_scope import (
+    project_code_visibly_taken,
+    project_name_taken_for,
+    taken_project_codes,
+    visible_projects_q,
+)
 from origin.services.member_removal import count_open_work
 from origin.services.member_roles import (
     OWNER,
@@ -170,9 +175,9 @@ class ProjectMasterView(AuthenticatedAPIView):
 
         try:
             if new_code is not None:
-                set_project_code(project, new_code)
+                set_project_code(project, new_code, request.user.id)
             if new_name is not None:
-                set_project_name(project, new_name)
+                set_project_name(project, new_name, request.user.id)
         except ProjectRefused as refused:
             return Response({"error": refused.message}, status=refused.status)
 
@@ -276,14 +281,31 @@ class ProjectMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             data["code"] = code
+        team_id = data.get("team")
+        taken = taken_project_codes(team_id)
+        if data.get("code") and data["code"] in taken:
+            # A code only a hidden project uses is replaced by a free one, never refused (a
+            # refusal would confirm that hidden project, MIP-1935); a code a visible project
+            # uses stays refused by the serializer below.
+            if not project_code_visibly_taken(team_id, data["code"], request.user.id):
+                data["code"] = derive_project_code(data["code"], taken)
         if not data.get("code"):
-            team_id = data.get("team")
-            taken = set(
-                ProjectMaster.objects.filter(team=team_id, code__isnull=False).values_list(
-                    "code", flat=True
-                )
-            )
             data["code"] = derive_project_code(data.get("project_name", "") or "", taken)
+        # Names are not unique in the database (MIP-1935): only a project the caller can see
+        # counts as a duplicate.
+        if isinstance(data.get("project_name"), str):
+            # The serializer trims it on save, so the check must see the trimmed name.
+            data["project_name"] = data["project_name"].strip()
+        if isinstance(data.get("project_name"), str) and project_name_taken_for(
+            team_id, data["project_name"], request.user.id
+        ):
+            return Response(
+                {
+                    "project_name": ["Another project in this team already uses that name."],
+                    "hint": "Try with different project_name",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         serializer = ProjectMasterSerializer(data=data)
         if serializer.is_valid():
@@ -505,7 +527,9 @@ class CheckProjectExistsView(AuthenticatedAPIView):
         if res := require_team_member_or_response(request.user, team_id):
             return res
 
-        exists = ProjectMaster.objects.filter(Q(team=team_id, project_name=project_name)).exists()
+        # Only a project the caller can see: a hidden one answers false, or this is a yes/no
+        # oracle on its name (MIP-1935).
+        exists = project_name_taken_for(team_id, project_name.strip(), request.user.id)
 
         return Response({"project_exists": exists}, status=status.HTTP_200_OK)
 

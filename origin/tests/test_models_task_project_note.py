@@ -69,13 +69,13 @@ class ProjectModelTests(BaseAPITestCase):
             code=code,
         )
 
-    def test_project_name_is_unique_per_team(self):
+    def test_project_name_is_not_unique_in_the_database(self):
         from origin.models.common.team_models import TeamMaster
 
+        # Not unique (MIP-1935): a refusal would confirm a Hidden project's name. The views
+        # refuse a duplicate among projects the caller can see.
         self._project(name="Unique Name")
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                self._project(name="Unique Name")
+        self._project(name="Unique Name")
         # Another team may use the same name (MIP-942).
         team2 = TeamMaster.objects.create(
             team_name="Name Team", team_email="name-team@example.com", owner=self.user
@@ -130,9 +130,7 @@ class ProjectModelTests(BaseAPITestCase):
         ProjectMembers.objects.create(team=self.team, project=p, attendee=self.user)
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
-                ProjectMembers.objects.create(
-                    team=self.team, project=p, attendee=self.user
-                )
+                ProjectMembers.objects.create(team=self.team, project=p, attendee=self.user)
 
     def test_project_tag_unique_per_project_name(self):
         p = self._project(name="Tag Proj")
@@ -224,9 +222,7 @@ class TaskNumberingSignalTests(BaseAPITestCase):
         t1 = TaskMaster.objects.create(
             team=self.team, project=self.project, title="a", status="Open"
         )
-        t2 = TaskMaster.objects.create(
-            team=self.team, project=proj2, title="b", status="Open"
-        )
+        t2 = TaskMaster.objects.create(team=self.team, project=proj2, title="b", status="Open")
         t1.refresh_from_db()
         t2.refresh_from_db()
         # Each project restarts numbering at 1.
@@ -234,9 +230,7 @@ class TaskNumberingSignalTests(BaseAPITestCase):
         self.assertEqual(t2.project_task_number, 1)
 
     def test_orphan_task_gets_no_number(self):
-        t = TaskMaster.objects.create(
-            team=self.team, project=None, title="orphan", status="Open"
-        )
+        t = TaskMaster.objects.create(team=self.team, project=None, title="orphan", status="Open")
         t.refresh_from_db()
         self.assertIsNone(t.project_task_number)
 
@@ -638,9 +632,7 @@ class MilestoneModelTests(BaseAPITestCase):
         MilestoneAssignees.objects.create(team=self.team, milestone=m, user=self.user)
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
-                MilestoneAssignees.objects.create(
-                    team=self.team, milestone=m, user=self.user
-                )
+                MilestoneAssignees.objects.create(team=self.team, milestone=m, user=self.user)
 
     def test_milestone_assignee_cascade_on_milestone_delete(self):
         m = self._milestone()
@@ -769,9 +761,7 @@ class NoteTreeTests(BaseAPITestCase):
         )
 
     def test_personal_note_parent_is_plain_int_no_fk(self):
-        parent = PersonalNoteMaster.objects.create(
-            team=self.team, owner=self.user, title="parent"
-        )
+        parent = PersonalNoteMaster.objects.create(team=self.team, owner=self.user, title="parent")
         child = PersonalNoteMaster.objects.create(
             team=self.team,
             owner=self.user,
@@ -785,9 +775,7 @@ class NoteTreeTests(BaseAPITestCase):
     def test_parent_note_id_dangling_after_parent_delete(self):
         # Because parent_note_id is NOT an FK, deleting the parent leaves
         # the child's pointer dangling (no cascade, no SET_NULL).
-        parent = PersonalNoteMaster.objects.create(
-            team=self.team, owner=self.user, title="parent"
-        )
+        parent = PersonalNoteMaster.objects.create(team=self.team, owner=self.user, title="parent")
         parent_id = parent.note_id
         child = PersonalNoteMaster.objects.create(
             team=self.team, owner=self.user, title="child", parent_note_id=parent_id
@@ -796,9 +784,7 @@ class NoteTreeTests(BaseAPITestCase):
         child.refresh_from_db()
         # Still points at the now-gone parent id.
         self.assertEqual(child.parent_note_id, parent_id)
-        self.assertFalse(
-            PersonalNoteMaster.objects.filter(note_id=parent_id).exists()
-        )
+        self.assertFalse(PersonalNoteMaster.objects.filter(note_id=parent_id).exists())
 
     def test_parent_note_id_accepts_arbitrary_int(self):
         # No referential integrity — any int is accepted.
@@ -809,9 +795,7 @@ class NoteTreeTests(BaseAPITestCase):
         self.assertEqual(note.parent_note_id, 123456789)
 
     def test_mentioned_user_ids_defaults_to_empty_list(self):
-        note = PersonalNoteMaster.objects.create(
-            team=self.team, owner=self.user, title="n"
-        )
+        note = PersonalNoteMaster.objects.create(team=self.team, owner=self.user, title="n")
         note.refresh_from_db()
         self.assertEqual(note.mentioned_user_ids, [])
 
@@ -865,9 +849,7 @@ class NoteAuxModelTests(BaseAPITestCase):
         fav = NoteFavoriteMaster.objects.create(
             team=self.team, user=self.user, note_id=10, note_type=1
         )
-        self.assertEqual(
-            str(fav), f"User {self.user.id} - Note 10 (Type: 1)"
-        )
+        self.assertEqual(str(fav), f"User {self.user.id} - Note 10 (Type: 1)")
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 NoteFavoriteMaster.objects.create(
@@ -875,9 +857,7 @@ class NoteAuxModelTests(BaseAPITestCase):
                 )
 
     def test_favorite_same_note_id_different_type_allowed(self):
-        NoteFavoriteMaster.objects.create(
-            team=self.team, user=self.user, note_id=10, note_type=1
-        )
+        NoteFavoriteMaster.objects.create(team=self.team, user=self.user, note_id=10, note_type=1)
         # Same note_id but a different note_type is a distinct favorite.
         f2 = NoteFavoriteMaster.objects.create(
             team=self.team, user=self.user, note_id=10, note_type=2
@@ -900,9 +880,7 @@ class NoteAuxModelTests(BaseAPITestCase):
         rec = NoteRecentMaster.objects.create(
             team=self.team, user=self.user, note_id=42, note_type=3
         )
-        self.assertEqual(
-            str(rec), f"User {self.user.id} - Note 42 (Type: 3)"
-        )
+        self.assertEqual(str(rec), f"User {self.user.id} - Note 42 (Type: 3)")
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 NoteRecentMaster.objects.create(
@@ -937,9 +915,7 @@ class NoteAuxModelTests(BaseAPITestCase):
             team=self.team, note_type=1, note_id=5, version_no=2, editor=self.user
         )
         self.assertIsNone(v1.restored_from_version_no)
-        self.assertEqual(
-            NoteVersionMaster.objects.filter(note_type=1, note_id=5).count(), 2
-        )
+        self.assertEqual(NoteVersionMaster.objects.filter(note_type=1, note_id=5).count(), 2)
         # Same version_no allowed when (note_type, note_id) differs.
         other = NoteVersionMaster.objects.create(
             team=self.team, note_type=2, note_id=5, version_no=1, editor=self.user

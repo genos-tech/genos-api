@@ -16,7 +16,6 @@ caller's own team. The visible damage:
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError, transaction
 from rest_framework import status
 
 from origin.models.chat.todo_models import ToDoItem
@@ -99,18 +98,16 @@ class ProjectNamePerTeamTests(BaseAPITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
 
-    def test_the_database_itself_keeps_a_team_to_one_project_per_name(self):
-        """The views check first, but two requests can pass that check
-        together; the constraint is what stops the second."""
+    def test_the_database_allows_a_second_project_of_the_same_name(self):
+        """Dropped on purpose (MIP-1935): the check lives in the views, among visible projects."""
         self._project(self.team, "Website")
-
-        with self.assertRaises(IntegrityError), transaction.atomic():
-            ProjectMaster.objects.create(
-                team=self.team,
-                project_name="Website",
-                owner=self.user,
-                project_system_user=self.user,
-            )
+        ProjectMaster.objects.create(
+            team=self.team,
+            project_name="Website",
+            owner=self.user,
+            project_system_user=self.user,
+        )
+        self.assertEqual(ProjectMaster.objects.filter(project_name="Website").count(), 2)
 
     def test_every_team_that_asks_gets_the_starter_workspace(self):
         """The second team used to get nothing: 0 projects, no guide notes, no to-dos."""

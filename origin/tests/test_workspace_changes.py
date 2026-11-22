@@ -206,8 +206,8 @@ class ServicePathTests(ChangeBase):
         self.assertTrue(all(r.project_id == self.project.project_id for r in rows))
 
     def test_project_rename_and_code_through_the_service(self):
-        set_project_name(self.project, "Other")
-        set_project_code(self.project, "OTH")
+        set_project_name(self.project, "Other", self.user.id)
+        set_project_code(self.project, "OTH", self.user.id)
         self.assertEqual(
             [(r.action, r.fields) for r in _rows(entity_kind="project")],
             [("update", ["project_name"]), ("update", ["code"])],
@@ -244,7 +244,7 @@ class ServicePathTests(ChangeBase):
             },
         )
         try:
-            set_project_name(self.project, "Via app")
+            set_project_name(self.project, "Via app", self.user.id)
         finally:
             clear_current_user()
         row = self.only_row()
@@ -256,14 +256,14 @@ class ServicePathTests(ChangeBase):
     def test_an_unknown_app_or_kind_is_stored_as_nothing(self):
         set_current_user(self.user, via={"kind": "oauth", "app": "someone-else"})
         try:
-            set_project_name(self.project, "Unknown app")
+            set_project_name(self.project, "Unknown app", self.user.id)
         finally:
             clear_current_user()
         row = self.only_row()
         self.assertEqual((row.source_kind, row.source_app), ("oauth", ""))
 
     def test_no_request_means_no_actor_and_no_source(self):
-        set_project_name(self.project, "Command")
+        set_project_name(self.project, "Command", self.user.id)
         row = self.only_row()
         self.assertIsNone(row.actor_id)
         self.assertEqual((row.source_kind, row.source_app), ("", ""))
@@ -306,7 +306,7 @@ class DeletedActorTests(ChangeBase):
     def test_a_hard_deleted_actor_leaves_the_row_with_no_actor(self):
         set_current_user(self.user)
         try:
-            set_project_name(self.project, "Before delete")
+            set_project_name(self.project, "Before delete", self.user.id)
         finally:
             clear_current_user()
         row_id = self.only_row().change_id
@@ -322,7 +322,7 @@ class DeletedActorTests(ChangeBase):
         # user2 owns no team, so the soft delete goes through; the row must stay, actor kept.
         set_current_user(self.user2)
         try:
-            set_project_name(self.project, "Kept")
+            set_project_name(self.project, "Kept", self.user.id)
         finally:
             clear_current_user()
         row_id = self.only_row().change_id
@@ -336,12 +336,12 @@ class ExportTests(ChangeBase):
     def test_export_lists_only_the_rows_the_person_made(self):
         set_current_user(self.user)
         try:
-            set_project_name(self.project, "Mine")
+            set_project_name(self.project, "Mine", self.user.id)
         finally:
             clear_current_user()
         set_current_user(self.user2)
         try:
-            set_project_code(self.project, "THEM")
+            set_project_code(self.project, "THEM", self.user.id)
         finally:
             clear_current_user()
         export = build_export(self.user)
@@ -370,7 +370,7 @@ class ReadEndpointTests(ChangeBase):
     def test_a_member_reads_changes_and_a_stranger_gets_404(self):
         set_current_user(self.user)
         try:
-            set_project_name(self.project, "Seen")
+            set_project_name(self.project, "Seen", self.user.id)
         finally:
             clear_current_user()
         self.authenticate()
@@ -426,7 +426,7 @@ class MoreChangePathTests(ChangeBase):
             side_effect=DatabaseError("boom"),
         ):
             with self.assertRaises(DatabaseError):
-                set_project_name(self.project, "Never")
+                set_project_name(self.project, "Never", self.user.id)
         self.project.refresh_from_db()
         self.assertEqual(self.project.project_name, "Website")
 

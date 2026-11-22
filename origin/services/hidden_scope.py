@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from django.db.models import Q
 
-from origin.models import ChannelMember, ProjectMembers
+from origin.models import ChannelMember, ProjectMaster, ProjectMembers
 
 
 def visible_projects_q(user_id) -> Q:
@@ -52,3 +52,38 @@ def channel_hidden_from(channel, user_id) -> bool:
     return not ChannelMember.objects.filter(
         channel_id=channel.id, user_id=user_id, is_deleted=False
     ).exists()
+
+
+def project_name_taken_for(team_id, name, user_id, exclude_project_id=None) -> bool:
+    """True when a project `user_id` can SEE already uses `name` in the team.
+
+    A hidden project the caller cannot see never counts: refusing its name would confirm that
+    it exists (MIP-1935). Project names are therefore not unique in the database.
+    """
+    qs = ProjectMaster.objects.filter(team=team_id, project_name=name).filter(
+        visible_projects_q(user_id)
+    )
+    if exclude_project_id is not None:
+        qs = qs.exclude(project_id=exclude_project_id)
+    return qs.exists()
+
+
+def taken_project_codes(team_id) -> set[str]:
+    """Every code in use in the team, hidden projects included.
+
+    Codes prefix task display ids (MIP-123) so they must stay unique; the caller derives a free
+    one silently instead of refusing, so a refusal never confirms a hidden project's code.
+    """
+    return set(
+        ProjectMaster.objects.filter(team=team_id, code__isnull=False).values_list(
+            "code", flat=True
+        )
+    )
+
+
+def project_code_visibly_taken(team_id, code, user_id, exclude_project_id=None) -> bool:
+    """True when a project `user_id` can see already uses `code` in the team."""
+    qs = ProjectMaster.objects.filter(team=team_id, code=code).filter(visible_projects_q(user_id))
+    if exclude_project_id is not None:
+        qs = qs.exclude(project_id=exclude_project_id)
+    return qs.exists()

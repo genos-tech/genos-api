@@ -83,9 +83,9 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     require_manager(project, ctx, "rename a project or change its code")
     try:
         if "code" in given:
-            set_project_code(project, args["code"])
+            set_project_code(project, args["code"], ctx.user_id)
         if "name" in given:
-            set_project_name(project, args["name"])
+            set_project_name(project, args["name"], ctx.user_id)
     except ProjectRefused as refused:
         raise ToolError(refused.message)
     except Exception as e:  # noqa: BLE001
