@@ -324,8 +324,9 @@ def force_delete_my_messages(
         for message in batch:
             _erase_message(message, report, files)
         report.remaining = todo.count()
-        # The open chats (the caller's other tabs, the partner's app) show the blank rows now.
-        realtime_push.push_messages(batch, realtime_push.UPDATED)
+        # The open chats (the caller's other tabs, the partner's app) blank the rows now: one bulk
+        # event for the batch (MIP-1951).
+        realtime_push.push_messages_deleted(channel, batch)
         _event(
             request=request,
             team_id=channel.team_id,

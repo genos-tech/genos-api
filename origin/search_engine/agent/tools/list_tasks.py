@@ -367,6 +367,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "parent_task_id": t.parent_task_id,
                 "milestone_id": t.milestone_id,
                 "is_milestone": bool(t.is_milestone),
+                # MIP-1852: only when true, so a live project's row is what it was.
+                **({"archived": True} if t.project and t.project.archived_at else {}),
             }
         )
 

@@ -30,6 +30,7 @@ from origin.search_engine.agent.tools.field_limits import (
 from origin.search_engine.agent.tools.project_gone import drop_deleted_projects
 from origin.search_engine.agent.tools.search_window import SearchWindow, skip_rewrite
 from origin.search_engine.search import search
+from origin.services.archive import mark_archived_hits
 
 _MAX_LIMIT = 20
 
@@ -249,6 +250,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # soft-deleted project, and a hit would name them (and the project). They read as never indexed.
     matches = drop_deleted_projects(matches)
     matches = window.apply(matches)
+    # MIP-1852: archived items stay found and ranked as before; the hit says it is archived.
+    mark_archived_hits(matches)
 
     return {
         "matches": matches,

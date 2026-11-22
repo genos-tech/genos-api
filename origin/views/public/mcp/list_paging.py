@@ -301,6 +301,7 @@ def run_list_projects(args: dict[str, Any], ctx) -> dict[str, Any]:
             "code": p.code,
             "is_private": p.is_private,
             "member_count": p.member_count,
+            **({"archived": True} if p.archived_at else {}),  # MIP-1852: only when true
         }
         for p in qs.annotate(member_count=Count("project_members")).order_by(
             "project_name", "project_id"

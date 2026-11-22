@@ -12,7 +12,10 @@ Each change writes one security-log row and one workspace-change row, with count
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -239,3 +242,60 @@ def archive_group_chat(channel: Channel, *, request=None, actor=None) -> None:
 
 def restore_group_chat(channel: Channel, *, request=None, actor=None) -> None:
     _set_channel_archived(channel, archived=False, request=request, actor=actor)
+
+
+def archived_refusal(project) -> str | None:
+    """The words that refuse new work in an archived project (a loaded `ProjectMaster`), else None.
+    For the agent and MCP create tools, which run after the membership check so a stranger learns
+    nothing about a project's state."""
+    if getattr(project, "archived_at", None) is not None:
+        return ARCHIVED_MESSAGE
+    return None
+
+
+def mark_archived_hits(hits: list[dict]) -> None:
+    """Set `archived: True` on each search hit that lives in an archived project or group chat
+    (MIP-1852). Search still finds archived items and ranks them as before; this only labels them.
+    The key is added only when true, so a live hit is byte for byte what it was. At most two
+    queries, none when no hit names a project or a chat."""
+    project_ids: set[int] = set()
+    chat_ids: set[UUID] = set()
+    for h in hits:
+        try:
+            if h.get("project_id") not in (None, ""):
+                project_ids.add(int(h["project_id"]))
+        except (TypeError, ValueError):
+            pass
+        try:
+            if h.get("chat_id"):
+                chat_ids.add(UUID(str(h["chat_id"])))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    archived_projects = (
+        set(
+            ProjectMaster.objects.filter(
+                project_id__in=project_ids, archived_at__isnull=False
+            ).values_list("project_id", flat=True)
+        )
+        if project_ids
+        else set()
+    )
+    archived_chats = (
+        {
+            str(c)
+            for c in Channel.objects.filter(id__in=chat_ids)
+            .filter(Q(archived_at__isnull=False) | Q(project__archived_at__isnull=False))
+            .values_list("id", flat=True)
+        }
+        if chat_ids
+        else set()
+    )
+    for h in hits:
+        try:
+            in_project = h.get("project_id") not in (None, "") and (
+                int(h["project_id"]) in archived_projects
+            )
+        except (TypeError, ValueError):
+            in_project = False
+        if in_project or (h.get("chat_id") and str(h["chat_id"]).lower() in archived_chats):
+            h["archived"] = True

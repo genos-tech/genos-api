@@ -14,6 +14,7 @@ from typing import Any
 from origin.middleware.current_user import get_current_source
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.note_access import NoteRef
+from origin.services.archive import archived_note_refusal
 from origin.services.collab_push import ThreadWriteError
 from origin.views.public.mcp.via_privacy import via_for_viewer
 from origin.views.utils.note_role import (
@@ -41,6 +42,13 @@ def clean_thread_id(raw: Any) -> str:
             "`note_id`."
         )
     return text
+
+
+def refuse_if_archived(ref: NoteRef) -> None:
+    """A comment is a write: refuse it on a note of an archived project or chat, before anything is
+    sent to collab (MIP-1693, Ken 2026-11-22). Sharing stays allowed: it is access management."""
+    if why := archived_note_refusal(ref.family, ref.note_id):
+        raise ToolError(f"{why} Nothing was changed.")
 
 
 def actor_id(ctx: ToolContext) -> str:
