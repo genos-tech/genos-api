@@ -36,6 +36,7 @@ from origin.search_engine.agent.tools.list_milestones import LIST_MILESTONES
 from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.quota import TASK_CREATE_KEY
 
+from .status_reason_support import with_reason
 from .test_agent_tool_task_milestone_move import MilestoneMoveTestBase
 
 User = get_user_model()
@@ -101,7 +102,8 @@ def _state(milestone):
         },
         "history": sorted(
             (a.action_type, str(a.old_value), str(a.new_value))
-            for a in TaskActivity.objects.filter(task=b)
+            # The tool path posts the reason as a comment (MIP-1997); the UI path has none.
+            for a in TaskActivity.objects.filter(task=b).exclude(action_type="comment_added")
         ),
         "kids": [
             (
@@ -150,7 +152,7 @@ class MilestoneToolBase(MilestoneMoveTestBase):
     # -- driving --
 
     def _tool(self, **args):
-        return MANAGE_MILESTONE.run(args, self.ctx)
+        return MANAGE_MILESTONE.run({**with_reason(args), **args}, self.ctx)
 
     def _post(self, **body):
         res = self.client.post(MILESTONE_URL, body, format="json")

@@ -17,8 +17,10 @@ the field diffs (`update_task`'s skip-no-op semantics) inside one
 transaction. State can drift between the pause and the approval —
 that's why validation runs at approve time, not proposal time.
 
-`rationale` is never persisted onto task rows — it lives in the run's
-`arguments_json` (audit trail) and the approval preview only.
+`rationale` is not stored on the task row. It lives in the run's `arguments_json` (audit trail)
+and the approval preview, and (MIP-1997) for each task whose STATUS changes it is also posted as
+a comment on that task, "Status: <old> → <new>: <rationale>", in the caller's name, in the batch's
+transaction (`task_status_reason`). A row that changes no status posts nothing.
 """
 
 from __future__ import annotations
@@ -50,6 +52,11 @@ from origin.services.milestone_service import sync_backing_task
 from origin.services.task_assignment_notice import notify_task_assigned
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_milestone_move import milestone_move_error, move_task_to_milestone
+from origin.services.task_status_reason import (
+    locked_status_change,
+    post_status_change_comment,
+    status_reason_error,
+)
 from origin.views.utils.scope_guards import is_team_member
 
 _MAX_BULK_UPDATES = 30
@@ -277,6 +284,13 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         rationale = (row.get("rationale") or "").strip()
         if not rationale:
             errors.append(f"{where}: `rationale` is required — say WHY in one sentence.")
+        elif "status" in changes and (
+            message := status_reason_error(
+                task.status, changes["status"], row.get("rationale"), arg="rationale"
+            )
+        ):
+            # MIP-1997: for a status change the rationale is posted on the task as a comment.
+            errors.append(f"{where}: {message}")
         if not changes:
             errors.append(
                 f"{where}: no changes given for task {tid} — provide at least one of "
@@ -312,9 +326,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     reassigned: list[tuple[TaskMaster, Any]] = []
     try:
         with transaction.atomic():
-            for task, changes, _rationale in planned:
+            for task, changes, rationale in planned:
                 update_fields: list[str] = []
                 changed: list[str] = []
+                # MIP-1997: the status this row replaces, read under the row's lock (a concurrent
+                # identical change posts once); None when the row sets no status or it is set already.
+                status_event = (
+                    locked_status_change(task.task_id, changes["status"])
+                    if "status" in changes
+                    else None
+                )
                 move = _MILESTONE_KEY in changes
                 target_milestone_id = changes.pop(_MILESTONE_KEY, None)
                 for field, new_value in changes.items():
@@ -364,6 +385,16 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     # the backing row wholesale, bumping every auto_now
                     # field, so the milestone branch needs no explicit list.)
                     task.save(update_fields=[*update_fields, "ts_updated_at"])
+                if status_event is not None and "status" in update_fields:
+                    # The rationale is the comment, one per task whose status changed (a row that
+                    # only moves priority posts nothing), in the batch's transaction.
+                    post_status_change_comment(
+                        task_id=task.task_id,
+                        actor_id=ctx.user_id,
+                        old=status_event[0],
+                        new=status_event[1],
+                        reason=rationale,
+                    )
                 if move and move_task_to_milestone(task, target_milestone_id):
                     changed.append(
                         "milestone" if target_milestone_id is not None else "milestone(cleared)"
@@ -509,7 +540,8 @@ UPDATE_TASKS_BULK = Tool(
                             "type": "STRING",
                             "description": (
                                 "One sentence: WHY this change (the user reads "
-                                "this in the approval card)."
+                                "this in the approval card). Posted as a comment "
+                                "if `status` changes."
                             ),
                         },
                     },

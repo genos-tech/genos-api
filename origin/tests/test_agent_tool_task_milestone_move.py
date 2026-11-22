@@ -21,6 +21,7 @@ from origin.search_engine.agent.tools import ToolContext, ToolError, update_task
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.search_engine.agent.tools.update_tasks_bulk import UPDATE_TASKS_BULK
 from origin.services.milestone_service import ensure_backing_task
+from origin.tests.status_reason_support import with_reason
 
 from .test_base import BaseAPITestCase
 
@@ -90,7 +91,8 @@ class MilestoneMoveTestBase(BaseAPITestCase):
 
     def _move(self, task, milestone_id, **extra):
         return UPDATE_TASK.run(
-            {"task_id": task.task_id, "milestone_id": milestone_id, **extra}, self.ctx
+            {"task_id": task.task_id, "milestone_id": milestone_id, **with_reason(extra), **extra},
+            self.ctx,
         )
 
 

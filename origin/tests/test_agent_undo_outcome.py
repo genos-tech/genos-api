@@ -7,12 +7,15 @@ later, which fields were put back and which were skipped. Field names and reason
 
 from __future__ import annotations
 
+from origin.tests.status_reason_support import with_reason
 from origin.tests.test_agent_undo_endpoint import UndoBase
 
 
 class UndoOutcomeTests(UndoBase):
     def write(self, **fields):
-        return self.go("update_task", {"task_id": self.task.task_id, **fields})
+        return self.go(
+            "update_task", {"task_id": self.task.task_id, **with_reason(fields), **fields}
+        )
 
     def test_what_was_restored_and_skipped_is_kept(self):
         run, step = self.write(title="Renamed", priority="High", status="WIP")

@@ -397,7 +397,10 @@ OPENAPI = {
                     "Requires `write` scope. Only `title`, `status` and "
                     "`priority` are writable: the field list is an allowlist, "
                     "not a passthrough, so a new model column never silently "
-                    "joins the public API."
+                    "joins the public API. Changing `status` needs a `reason` "
+                    "(not stored on the task): Genos posts it on the task as a "
+                    "comment in the key owner's name, \"Status: Open → Closed: "
+                    '...", marked as made through the connected app.'
                 ),
                 "requestBody": {
                     "required": True,
@@ -407,7 +410,25 @@ OPENAPI = {
                             "minProperties": 1,
                             "properties": {
                                 "title": {"type": "string", "maxLength": 255},
-                                "status": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "Open",
+                                        "WIP",
+                                        "Blocked",
+                                        "Pending",
+                                        "Closed",
+                                        "Deleted",
+                                    ],
+                                },
+                                "reason": {
+                                    "type": "string",
+                                    "maxLength": 1000,
+                                    "description": (
+                                        "Why the status changes. Required when `status` "
+                                        "differs from the task's current status."
+                                    ),
+                                },
                                 "priority": {"type": "string"},
                             },
                         }
@@ -418,7 +439,10 @@ OPENAPI = {
                         "description": "The updated task.",
                         **_json({"$ref": "#/components/schemas/Task"}),
                     },
-                    "400": _error("Empty title, or no writable field supplied."),
+                    "400": _error(
+                        "Empty title, no writable field supplied, an unknown status, or a "
+                        "status change without a `reason` (`field: reason`)."
+                    ),
                     "401": _error("Missing or invalid key."),
                     "403": _error("This key is read-only."),
                     "404": _error("No such task, or not one you can see."),

@@ -72,11 +72,12 @@ WORKING_RULES = (
     "asking. Link every item you "
     "mention (tasks, notes, pull requests, web addresses) so the reader can open it. A "
     "status must be true: in progress only while someone is working on it now; after a "
-    "change ships, re-read the task and update its status the same day."
+    "change ships, re-read the task and update its status the same day. Every status "
+    "change gets a comment saying why."
 )
 
 #: sha256 of `canonical(WORKING_RULES)`. The genos-docs check reads this line from `main`.
-WORKING_RULES_SHA256 = "1672e353d7165b81ac27f9a0ddcfdabd9fb6b216af7d436e5fbf31e9c976234d"
+WORKING_RULES_SHA256 = "035a92a9be4f4161d7f30dfb52806fb8c50b4f72e5a7b437c8bb9365cee5c1a6"
 
 READING = (
     "Reading. Read a task's description from `content_markdown` when it is present, and "

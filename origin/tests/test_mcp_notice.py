@@ -30,6 +30,7 @@ from origin.services import mcp_notice
 from origin.services.email_enqueue import _email_spec
 from origin.services.webpush_dispatch import _push_spec
 from origin.services.webpush_gating import should_push
+from origin.tests.status_reason_support import with_reason
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.views.public.mcp import tools as mcp_tools
 
@@ -48,6 +49,8 @@ class NoticeBase(McpBase):
         self._key(scope=SCOPE_WRITE, allow_destructive=True)
 
     def call(self, name, **args):
+        if name in ("update_task", "manage_milestone"):
+            args = {**with_reason(args), **args}
         text, is_error = self._tool_text(self._call(name, args))
         self.assertFalse(is_error, text)
         return text
