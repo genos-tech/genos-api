@@ -22,6 +22,7 @@ from origin.search_engine.agent.tools.base import (
     ToolError,
     wrap_workspace_content,
 )
+from origin.services import pr_merge_readiness as readiness
 from origin.services.github_webhooks import parse_pr_url_full
 from origin.views.common.github_views import _connected_account, _github_get
 
@@ -67,7 +68,19 @@ def _run_unguarded(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     state = "merged" if pr.get("merged") else "draft" if pr.get("draft") else pr.get("state")
 
+    extra: dict[str, Any] = {}
+    if readiness.enabled() and not (pr.get("merged") or pr.get("state") == "closed"):
+        # MIP-2056: review, CI and conflicts read together, so an agent need not call three tools
+        # to know whether this PR can be merged. Absent when GitHub did not answer all three.
+        found = readiness.fetch_readiness(pr, lambda path: _github_get(account, path))
+        if found is not None:
+            extra["merge_readiness"] = {
+                k: found[k]
+                for k in ("state", "review", "ci", "mergeable_state", "idle_days", "stale")
+            }
+
     return {
+        **extra,
         "owner": owner,
         "repo": repo,
         "number": number,
@@ -108,9 +121,7 @@ FETCH_PR = Tool(
         "properties": {
             "pr_url": {
                 "type": "STRING",
-                "description": (
-                    "Full GitHub PR URL " "(e.g. https://github.com/owner/repo/pull/42)."
-                ),
+                "description": ("Full GitHub PR URL (e.g. https://github.com/owner/repo/pull/42)."),
             },
         },
         "required": ["pr_url"],

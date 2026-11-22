@@ -2760,6 +2760,14 @@ GITHUB_OAUTH_CLIENT_SECRET = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
 # adopting it gives it its own secret too.
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
+# Merge-readiness + stale-PR nudges (MIP-2056, `origin/services/pr_merge_readiness.py`). Off by
+# default: off means no extra GitHub calls, no task comment and no `merge_readiness` field.
+PR_NUDGES_ENABLED = os.environ.get("PR_NUDGES_ENABLED", "false").lower() == "true"
+# Days an approved, green, unmerged PR waits before its "ready to merge" comment.
+PR_READY_NUDGE_DAYS = int(os.environ.get("PR_READY_NUDGE_DAYS", "1"))
+# Days an open PR has no activity before its "no activity" comment.
+PR_STALE_NUDGE_DAYS = int(os.environ.get("PR_STALE_NUDGE_DAYS", "7"))
+
 # Public-facing URL of THIS backend, used to build OAuth callback URLs
 # that match what's registered in the Google / GitHub OAuth app config.
 # Defaults to the dockerised dev Django port (see docker/docker-compose.yml;
