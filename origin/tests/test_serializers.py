@@ -745,6 +745,7 @@ class ChannelSerializerTests(BaseAPITestCase):
             "ownerId",
             "isPrivate",
             "isHidden",
+            "description",
             "isExternal",
             "teamId",
             "hostTeamName",
@@ -755,8 +756,12 @@ class ChannelSerializerTests(BaseAPITestCase):
             "dmPartner",
             "tsCreated",
             "tsUpdated",
+            "archived",
+            "archivedAt",
         }
         self.assertEqual(set(data.keys()), expected)
+        self.assertIs(data["archived"], False)
+        self.assertIsNone(data["archivedAt"])
         self.assertEqual(data["title"], "Engineering")
         self.assertEqual(data["kind"], ChannelKind.GM)
         self.assertEqual(data["profileImageUrl"], "channels/eng.png")

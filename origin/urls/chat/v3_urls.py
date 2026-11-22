@@ -67,6 +67,7 @@ from origin.views.chat.activity_views_v3 import (
 from origin.views.chat.channel_restore_views import ChannelRestoreView, DeletedChannelListView
 from origin.views.chat.channel_views import (
     ChannelDetailView,
+    ChannelDirectoryView,
     ChannelInlineUploadView,
     ChannelJoinView,
     ChannelListView,
@@ -98,6 +99,13 @@ from origin.views.chat.pin_flag_views import (
 from origin.views.chat.reaction_views_v3 import MessageReactionsView
 from origin.views.chat.read_cursor_views import ReadCursorView
 from origin.views.chat.search_views_v3 import SearchTeamMembersAndGroupsView
+from origin.views.force_delete_views import (
+    MessageForceDeleteView,
+    MyMessagesForceDeleteView,
+    NoteForceDeleteView,
+    TaskCommentForceDeleteView,
+    TaskForceDeleteView,
+)
 from origin.views.project.archive_views import GroupChatArchiveView, GroupChatRestoreView
 
 urlpatterns = [
@@ -106,6 +114,11 @@ urlpatterns = [
         "api/v3/channels/",
         ChannelListView.as_view(),
         name="v3_channel_list",
+    ),
+    path(
+        "api/v3/channels/directory/",
+        ChannelDirectoryView.as_view(),
+        name="v3_channel_directory",
     ),
     path(
         "api/v3/channels/deleted/",
@@ -291,5 +304,31 @@ urlpatterns = [
         "api/v3/search/teamMembersAndGroups/",
         SearchTeamMembersAndGroupsView.as_view(),
         name="v3_search_team_members_and_groups",
+    ),
+    # Force delete (MIP-1584): immediate and irreversible, typed confirmation in the body.
+    path(
+        "api/v3/messages/<uuid:message_id>/force-delete/",
+        MessageForceDeleteView.as_view(),
+        name="v3_message_force_delete",
+    ),
+    path(
+        "api/v3/channels/<uuid:channel_id>/my-messages/force-delete/",
+        MyMessagesForceDeleteView.as_view(),
+        name="v3_my_messages_force_delete",
+    ),
+    path(
+        "api/v3/tasks/<int:task_id>/force-delete/",
+        TaskForceDeleteView.as_view(),
+        name="v3_task_force_delete",
+    ),
+    path(
+        "api/v3/tasks/<int:task_id>/comments/<int:comment_id>/force-delete/",
+        TaskCommentForceDeleteView.as_view(),
+        name="v3_task_comment_force_delete",
+    ),
+    path(
+        "api/v3/notes/<str:family>/<int:note_id>/force-delete/",
+        NoteForceDeleteView.as_view(),
+        name="v3_note_force_delete",
     ),
 ]

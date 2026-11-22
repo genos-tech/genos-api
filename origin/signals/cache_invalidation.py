@@ -20,6 +20,7 @@ from django.dispatch import receiver
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.services.project_list_cache import project_list_keys
 
 # NOTE: the legacy DM/GM/MDM-member cache-invalidation receivers were
 # removed with the v3 cutover. They invalidated `dm:ids` / `gm:ids` /
@@ -109,12 +110,7 @@ def _invalidate_project_members(sender, instance, **kwargs):
     team_id = getattr(instance, "team_id", None)
     attendee_id = getattr(instance, "attendee_id", None)
     if team_id is not None and attendee_id is not None:
-        cache.delete_many(
-            [
-                f"project:list:{team_id}:{attendee_id}",
-                f"project:list:{team_id}:{attendee_id}:archived",
-            ]
-        )
+        cache.delete_many(project_list_keys(team_id, attendee_id))
 
 
 @receiver(post_save, sender=ProjectMaster)
@@ -143,10 +139,10 @@ def _invalidate_project_list(sender, instance, **kwargs):
         return
     attendee_ids = TeamMembers.objects.filter(team_id=team_id).values_list("attendee_id", flat=True)
     keys = [
-        f"project:list:{team_id}:{attendee_id}{suffix}"
+        key
         for attendee_id in attendee_ids
         if attendee_id
-        for suffix in ("", ":archived")
+        for key in project_list_keys(team_id, attendee_id)
     ]
     if keys:
         cache.delete_many(keys)

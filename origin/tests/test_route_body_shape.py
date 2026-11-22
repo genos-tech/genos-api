@@ -99,6 +99,8 @@ MULTIPART_ONLY = {
     "origin.views.common.team_views.TeamProfileImageView",
     "origin.views.common.user_views.UserProfileImageView",
     "origin.views.project.prj_views.ProjectProfileImageView",
+    "origin.views.task.task_import_views.TaskImportPreviewView",
+    "origin.views.task.task_import_views.TaskImportView",
     "origin.views.task.task_views.TaskAttachmentsView",
 }
 

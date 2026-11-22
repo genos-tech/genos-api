@@ -19,7 +19,7 @@ from origin.models.common.inbox_models import InboxItems
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.team_models import TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
-from origin.services.hidden_scope import visible_channels_q, visible_projects_q
+from origin.services.hidden_scope import visible_projects_q
 from origin.tests.test_base import BaseAPITestCase
 
 PROJECTS = "/api/v2/project/projects/"
@@ -172,18 +172,46 @@ class ListingPathTests(HiddenBase):
         res = self.client.get("/api/v2/team/invites/", {"team_id": str(self.team.team_id)})
         self.assertEqual(res.json()["invites"][0]["projectName"], "Codename Falcon")
 
-    def test_the_directory_never_lists_a_hidden_chat(self):
-        # The directory (MIP-1694) lists public chats only; this pins that a hidden chat, which is
-        # always private, can never satisfy its filter.
-        self.assertFalse(Channel.objects.filter(is_private=False, is_hidden=True).exists())
-        self.assertEqual(
-            set(
-                Channel.objects.filter(team=self.team, kind=ChannelKind.GM)
-                .filter(visible_channels_q(self.user2.id))
-                .values_list("title", flat=True)
-            ),
-            {"Locked Chat"},
+    def test_self_join_of_an_archived_or_external_hidden_chat_is_a_404_not_a_403(self):
+        # MIP-1948: the archived/external 403 of the directory work must not answer first,
+        # or it confirms that a hidden group exists.
+        archived = Channel.objects.create(
+            team=self.team,
+            kind=ChannelKind.GM,
+            title="Old Secret",
+            owner=self.user,
+            is_private=True,
+            is_hidden=True,
+            archived_at=timezone.now(),
         )
+        external = Channel.objects.create(
+            team=self.team,
+            kind=ChannelKind.GM,
+            title="Partner Secret",
+            owner=self.user,
+            is_private=True,
+            is_hidden=True,
+            is_external=True,
+        )
+        self.authenticate(self.user2)
+        for ch in (archived, external):
+            res = self.client.post(f"/api/v3/channels/{ch.id}/join/")
+            self.assertEqual(res.status_code, 404, ch.title)
+
+    def test_the_directory_never_lists_a_hidden_chat(self):
+        # The real directory endpoint (MIP-1694) lists public chats only; a hidden chat is always
+        # private, so it can never satisfy that filter.
+        self.assertFalse(Channel.objects.filter(is_private=False, is_hidden=True).exists())
+        Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title="Open Chat", owner=self.user
+        )
+        self.authenticate(self.user2)
+        res = self.client.get("/api/v3/channels/directory/", {"team_id": str(self.team.team_id)})
+        self.assertEqual(res.status_code, 200, res.content)
+        text = res.content.decode()
+        self.assertIn("Open Chat", text)
+        self.assertNotIn("Secret Chat", text)
+        self.assertNotIn("Locked Chat", text)
         self.assertEqual(
             set(
                 ProjectMaster.objects.filter(team=self.team)

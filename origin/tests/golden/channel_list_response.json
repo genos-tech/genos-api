@@ -8,6 +8,7 @@
   "ownerId": "<uuid:2>",
   "isPrivate": false,
   "isHidden": false,
+  "description": "",
   "isExternal": false,
   "teamId": "<uuid:3>",
   "hostTeamName": null,
@@ -146,7 +147,9 @@
    "avatarImgPath": ""
   },
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  },
  {
   "id": "<uuid:13>",
@@ -157,6 +160,7 @@
   "ownerId": "<uuid:14>",
   "isPrivate": true,
   "isHidden": false,
+  "description": "",
   "isExternal": true,
   "teamId": "<uuid:15>",
   "hostTeamName": "Test Team",
@@ -261,7 +265,9 @@
   "members": [],
   "dmPartner": null,
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  },
  {
   "id": "<uuid:22>",
@@ -272,6 +278,7 @@
   "ownerId": "<uuid:2>",
   "isPrivate": false,
   "isHidden": false,
+  "description": "",
   "isExternal": false,
   "teamId": "<uuid:3>",
   "hostTeamName": null,
@@ -376,7 +383,9 @@
   "members": [],
   "dmPartner": null,
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  },
  {
   "id": "<uuid:29>",
@@ -387,6 +396,7 @@
   "ownerId": "<uuid:14>",
   "isPrivate": false,
   "isHidden": false,
+  "description": "",
   "isExternal": false,
   "teamId": "<uuid:15>",
   "hostTeamName": "Test Team",
@@ -491,6 +501,8 @@
   "members": [],
   "dmPartner": null,
   "tsCreated": "<time>",
-  "tsUpdated": "<time>"
+  "tsUpdated": "<time>",
+  "archived": false,
+  "archivedAt": null
  }
 ]

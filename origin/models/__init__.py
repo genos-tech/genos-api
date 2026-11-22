@@ -23,6 +23,7 @@ from .common.user_models import *
 from .note.chat_note_models import *
 from .note.common_note_models import *
 from .note.favorite_note_models import *
+from .note.note_template_models import *
 from .note.personal_note_models import *
 from .note.recent_note_models import *
 from .note.task_note_models import *
@@ -37,6 +38,7 @@ from .task.milestone_models import *
 from .task.sprint_models import *
 from .task.task_activity_models import *
 from .task.task_delivery_models import *
+from .task.task_import_models import *
 from .task.task_models import *
 from .task.task_progress_models import *
 from .task.task_recent_models import *

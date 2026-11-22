@@ -84,7 +84,13 @@ def _failure_label(exc: BaseException) -> str:
 
 class HeartbeatCommand(BaseCommand):
     """`BaseCommand` with the `--heartbeat <service>` flag: records each run
-    in `CronHeartbeat` when given it, and nothing otherwise."""
+    in `CronHeartbeat` when given it, and nothing otherwise.
+
+    `success_marks_start`: a command whose next window starts from the last success (a catch-up
+    window) sets this, so `last_succeeded_at` is when the run STARTED, since it read its source
+    then. The default is the finish time, which the stale-cron alert measures from."""
+
+    success_marks_start = False
 
     def create_parser(self, prog_name, subcommand, **kwargs):
         parser = super().create_parser(prog_name, subcommand, **kwargs)
@@ -107,13 +113,13 @@ class HeartbeatCommand(BaseCommand):
         # is ready to import models at module level.
         from origin.services import ops_alerts  # noqa: PLC0415
 
-        ops_alerts.cron_started(name)
+        started_at = ops_alerts.cron_started(name)
         try:
             result = self._execute(*args, **options)
         except BaseException as exc:
             ops_alerts.cron_failed(name, _failure_label(exc))
             raise
-        ops_alerts.cron_succeeded(name)
+        ops_alerts.cron_succeeded(name, mark_at=started_at if self.success_marks_start else None)
         return result
 
     def _execute(self, *args, **options):

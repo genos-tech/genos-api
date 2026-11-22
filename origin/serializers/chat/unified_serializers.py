@@ -339,6 +339,7 @@ class ChannelSerializer(serializers.ModelSerializer):
     # Hidden (MIP-1699): a private chat only its members can see. Changed through PATCH
     # (`is_hidden`), which checks it needs Private; read-only here.
     isHidden = serializers.BooleanField(source="is_hidden", read_only=True)
+    description = serializers.CharField(read_only=True)
     # A cross-team chat. Read-only on purpose: it is decided at creation
     # (`ChannelListView._create_group`) and there is no meaningful
     # conversion afterwards — an internal chat cannot become external
@@ -366,6 +367,10 @@ class ChannelSerializer(serializers.ModelSerializer):
     )
     tsCreated = serializers.DateTimeField(source="ts_created_at", read_only=True)
     tsUpdated = serializers.DateTimeField(source="ts_updated_at", read_only=True)
+    # The owner archived THIS group chat (MIP-1693, MIP-1853). A chat whose project is archived reads
+    # `archived: false` here; the project's own row carries that flag, and the client combines the two.
+    archived = serializers.SerializerMethodField()
+    archivedAt = serializers.DateTimeField(source="archived_at", read_only=True, allow_null=True)
 
     # Populated by the view's annotated queryset; see ChannelListView.
     latestMessage = serializers.SerializerMethodField()
@@ -401,6 +406,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "ownerId",
             "isPrivate",
             "isHidden",
+            "description",
             "isExternal",
             "teamId",
             "hostTeamName",
@@ -411,7 +417,12 @@ class ChannelSerializer(serializers.ModelSerializer):
             "dmPartner",
             "tsCreated",
             "tsUpdated",
+            "archived",
+            "archivedAt",
         ]
+
+    def get_archived(self, obj) -> bool:
+        return obj.archived_at is not None
 
     def get_hostTeamName(self, obj):
         """The owning team's name when the chat is somebody else's.

@@ -1,0 +1,4 @@
+title,description,status,priority,assignee,due date,tags
+Alpha,First task,open,high,dev1@example.com,2026-12-01,bug
+Beta,,wip,low,,2026/12/02,
+Gamma,Third,closed,normal,,03/12/2026,

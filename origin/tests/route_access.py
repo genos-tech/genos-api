@@ -84,6 +84,13 @@ _INBOX = "acts on an inbox item addressed to the caller (receiver=request.user)"
 
 REGISTRY = {
     # search_engine.agent_views
+    # Force delete (MIP-1584): the caller must see the object (404 otherwise), then the service
+    # applies the who-may rule (sender / creator / owner role) and answers 403.
+    "origin.views.force_delete_views.MessageForceDeleteView": checked("is_chat_member"),
+    "origin.views.force_delete_views.MyMessagesForceDeleteView": checked("is_chat_member"),
+    "origin.views.force_delete_views.TaskForceDeleteView": checked("can_access_task"),
+    "origin.views.force_delete_views.TaskCommentForceDeleteView": checked("can_access_task"),
+    "origin.views.force_delete_views.NoteForceDeleteView": checked("get_effective_role"),
     "origin.search_engine.agent_views.AgentAskView": checked("participates_in_team"),
     "origin.search_engine.agent_views.AgentDecideView": self_only(
         "approves a paused run; the run's user_id must equal request.user.id"
@@ -133,6 +140,7 @@ REGISTRY = {
         "restorable_channels_qs"
     ),
     "origin.views.chat.channel_views.ChannelDetailView": checked("_get_channel_for_user"),
+    "origin.views.chat.channel_views.ChannelDirectoryView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelInlineUploadView": checked("_get_channel_for_user"),
     "origin.views.chat.channel_views.ChannelJoinView": checked("_verify_team_member"),
     "origin.views.chat.channel_views.ChannelListView": checked(
@@ -529,6 +537,10 @@ REGISTRY = {
     "origin.views.note.note_folder_tag_views.NoteFolderTagView": checked(
         "_can_edit_vocabulary", "is_team_member"
     ),
+    # views.note.note_template_views
+    "origin.views.note.note_template_views.NoteTemplateView": checked(
+        "is_team_member", "_can_modify", "get_folder_role"
+    ),
     # views.note.note_role_views
     "origin.views.note.note_role_views.NoteRoleCheckView": checked("get_effective_role"),
     "origin.views.note.note_role_views.NoteRoleListView": checked("get_effective_role"),
@@ -673,6 +685,10 @@ REGISTRY = {
     # views.task.task_delivery_views
     "origin.views.task.task_delivery_views.TaskDeliveryListView": checked("can_access_task"),
     # views.task.task_progress_views (MIP-1365): project membership, not can_access_task
+    "origin.views.task.task_import_views.TaskImportPreviewView": checked("is_project_member"),
+    "origin.views.task.task_import_views.TaskImportRunsView": checked("is_project_member"),
+    "origin.views.task.task_import_views.TaskImportUndoView": checked("is_project_member"),
+    "origin.views.task.task_import_views.TaskImportView": checked("is_project_member"),
     "origin.views.task.task_progress_views.TaskProgressListView": checked("is_project_member"),
     "origin.views.task.task_recent_views.RecentTasksView": checked("visible_recents"),
     "origin.views.task.task_recent_views.RecordTaskOpenView": checked("can_open"),
