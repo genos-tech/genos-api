@@ -102,10 +102,10 @@ class CompanyNotesContentTests(BaseAPITestCase):
         self.assertNotIn("project label", text.lower())
 
     def test_they_do_not_promise_what_is_not_built(self):
-        """Hiding a private project's name, archiving, a chat directory: not built. The notes say
+        """Hiding a private project's name, a chat directory: not built. The notes say
         so under 'What is not there yet' instead of teaching them."""
         english = _text(COMPANY_NOTES["en"][0][1]) + _text(COMPANY_NOTES["en"][1][1])
-        for promise in ("hidden mode", "Hidden mode", "archive a project", "chat directory"):
+        for promise in ("hidden mode", "Hidden mode", "chat directory"):
             self.assertNotIn(promise, english)
         self.assertIn("What is not there yet", english)
         self.assertIn("the NAME of a private project still shows", english)
@@ -118,6 +118,15 @@ class CompanyNotesContentTests(BaseAPITestCase):
         self.assertNotIn("削除はできず", japanese)
         self.assertIn("Remove sample data", english)
         self.assertIn("サンプルデータを削除", japanese)
+
+    def test_projects_are_not_said_to_be_unarchivable(self):
+        """MIP-1880: archiving a project and a group chat shipped (MIP-1693)."""
+        english = _text(COMPANY_NOTES["en"][0][1]) + _text(COMPANY_NOTES["en"][1][1])
+        japanese = _text(COMPANY_NOTES["ja"][0][1]) + _text(COMPANY_NOTES["ja"][1][1])
+        self.assertNotIn("cannot be archived", english)
+        self.assertNotIn("アーカイブできず", japanese)
+        self.assertIn("archived instead of deleted", english)
+        self.assertIn("削除せずにアーカイブできます", japanese)
 
     def test_japanese_has_no_broken_characters(self):
         for _, body in COMPANY_NOTES["ja"]:
