@@ -298,7 +298,7 @@ class TestCollapsedReads(LogBase):
 
     def test_the_same_object_read_again_within_ten_minutes_is_one_row_with_a_count(self):
         self.read()
-        self.read("7")
+        self.read("wrd-7")
         self.read(str(self.task.task_id))
         row = self.only()
         self.assertEqual(row.count, 3)
