@@ -92,3 +92,15 @@ class PublicApiThrottle(RecordedThrottleMixin, throttling.SimpleRateThrottle):
         # An API key's bucket is its id, as it always was; another kind brings its own,
         # so two kinds can never share one.
         return self.cache_format % {"scope": self.scope, "ident": credential.throttle_ident()}
+
+
+class McpApiThrottle(PublicApiThrottle):
+    """The MCP endpoint's per-credential backstop (MIP-1614).
+
+    The same bucket rule as `PublicApiThrottle`, under its own scope and rate (`public_api_mcp`,
+    400/min) so the REST API keeps its 120/min while Max's 240 calls a minute
+    (`origin/services/mcp_tier_limits.py`) can be reached. The per-plan number is the plan limit;
+    this only caps a runaway client, with room for requests that are not counted as calls.
+    """
+
+    scope = "public_api_mcp"

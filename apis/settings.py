@@ -439,6 +439,11 @@ REST_FRAMEWORK = {
     #   user_*: the defaults above. The rest: views that name them.
     "DEFAULT_THROTTLE_RATES": {
         "public_api": os.environ.get("PUBLIC_API_RATE", "120/min"),
+        # The MCP endpoint's own per-credential ceiling (MIP-1614). The plan limits
+        # (origin/services/mcp_tier_limits.py: 60 / 120 / 240 calls a minute) are the real
+        # per-plan number; this one is only the transport backstop above Max's 240, with room for
+        # the handshake and tools/list requests that are not counted as calls.
+        "public_api_mcp": os.environ.get("PUBLIC_API_MCP_RATE", "400/min"),
         "user_burst": os.environ.get("THROTTLE_USER_BURST", "1500/min"),
         "user_sustained": os.environ.get("THROTTLE_USER_SUSTAINED", "20000/hour"),
         "search": os.environ.get("THROTTLE_SEARCH", "120/min"),
@@ -1595,10 +1600,10 @@ SEARCH_ENGINE = {
             # PERSON. New ones over the cap are refused; existing ones are kept. None = unlimited.
             "webhooks_max": 0,
             "schedules_max": 0,
-            # MCP volume and reach limits (MIP-1367 phase 3), in every tier below. DARK: None =
-            # unlimited, so nothing is enforced. The proposed numbers and the switch
-            # (MCP_TIER_LIMITS_MODE: off / shadow / enforce) are in
-            # origin/services/mcp_tier_limits.py; flipping one limit = copying its proposed value here.
+            # MCP volume and reach limits (MIP-1367 phase 3), in every tier below. LIVE values
+            # since MIP-1614 (Ken, 2026-11-22; Free has no MCP and Enterprise is unlimited, so both
+            # stay None). They apply only when MCP_TIER_LIMITS_MODE=enforce
+            # (origin/services/mcp_tier_limits.py; off / shadow / enforce).
             "mcp_calls_per_min": None,
             "mcp_calls_per_day": None,
             "mcp_max_api_keys": None,
@@ -1678,14 +1683,14 @@ SEARCH_ENGINE = {
             "schedules_enabled": True,
             "webhooks_max": 3,
             "schedules_max": 5,
-            "mcp_calls_per_min": None,
-            "mcp_calls_per_day": None,
-            "mcp_max_api_keys": None,
-            "mcp_max_connections": None,
-            "mcp_bulk_max_tasks": None,
-            "mcp_bulk_max_plan_tasks": None,
-            "mcp_list_page_max": None,
-            "mcp_apply_message_retention": None,
+            "mcp_calls_per_min": 60,
+            "mcp_calls_per_day": 3_000,
+            "mcp_max_api_keys": 3,
+            "mcp_max_connections": 3,
+            "mcp_bulk_max_tasks": 10,
+            "mcp_bulk_max_plan_tasks": 10,
+            "mcp_list_page_max": 50,
+            "mcp_apply_message_retention": True,
         },
         # Pro reads as: Genos ORGANIZES (composite writes — a milestone
         # + task tree in one approval), deep reasoning + adaptive
@@ -1708,14 +1713,14 @@ SEARCH_ENGINE = {
             "schedules_enabled": True,
             "webhooks_max": 10,
             "schedules_max": 20,
-            "mcp_calls_per_min": None,
-            "mcp_calls_per_day": None,
-            "mcp_max_api_keys": None,
-            "mcp_max_connections": None,
-            "mcp_bulk_max_tasks": None,
-            "mcp_bulk_max_plan_tasks": None,
-            "mcp_list_page_max": None,
-            "mcp_apply_message_retention": None,
+            "mcp_calls_per_min": 120,
+            "mcp_calls_per_day": 10_000,
+            "mcp_max_api_keys": 10,
+            "mcp_max_connections": 10,
+            "mcp_bulk_max_tasks": 30,
+            "mcp_bulk_max_plan_tasks": 20,
+            "mcp_list_page_max": 100,
+            "mcp_apply_message_retention": True,
         },
         # max = 2x pro on the headline totals for ~1.96x the price, and
         # 2.5x on the premium caps — the deliberate value > price gap is
@@ -1739,14 +1744,14 @@ SEARCH_ENGINE = {
             "schedules_enabled": True,
             "webhooks_max": 25,
             "schedules_max": 20,
-            "mcp_calls_per_min": None,
-            "mcp_calls_per_day": None,
-            "mcp_max_api_keys": None,
-            "mcp_max_connections": None,
-            "mcp_bulk_max_tasks": None,
-            "mcp_bulk_max_plan_tasks": None,
-            "mcp_list_page_max": None,
-            "mcp_apply_message_retention": None,
+            "mcp_calls_per_min": 240,
+            "mcp_calls_per_day": 30_000,
+            "mcp_max_api_keys": 25,
+            "mcp_max_connections": 25,
+            "mcp_bulk_max_tasks": 30,
+            "mcp_bulk_max_plan_tasks": 20,
+            "mcp_list_page_max": 100,
+            "mcp_apply_message_retention": True,
         },
         # Contact-sales tier: everything unlimited except an absolute
         # per-file ceiling. Set manually via `feature_access set-tier`

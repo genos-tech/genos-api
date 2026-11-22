@@ -40,7 +40,7 @@ from origin.views.public.mcp import (
 )
 from origin.views.public.mcp.protocol import JsonRpcError
 from origin.views.public.mcp.result_log import note_result
-from origin.views.public.permissions import HasCredential, PublicApiThrottle
+from origin.views.public.permissions import HasCredential, McpApiThrottle
 from origin.views.public.v1_views import PublicApiView
 from origin.views.utils.scope_guards import participates_in_team
 
@@ -74,7 +74,7 @@ class McpView(PublicApiView):
     # passes on any other, so a session JWT still reaches the permission's own refusal.
     authentication_classes = [McpOAuthAuthentication, JWTAuthentication, ApiKeyAuthentication]
     permission_classes = [HasCredential]
-    throttle_classes = [PublicApiThrottle]
+    throttle_classes = [McpApiThrottle]
     # POST only. Earlier MCP revisions opened a standalone SSE stream with
     # GET and ended sessions with DELETE; this revision has neither, and
     # the spec says to answer both with 405. Claude Code still tries the
