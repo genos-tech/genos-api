@@ -699,6 +699,10 @@ REGISTRY = {
     # views.task.task_delivery_views
     "origin.views.task.task_delivery_views.TaskDeliveryListView": checked("can_access_task"),
     # views.task.task_progress_views (MIP-1365): project membership, not can_access_task
+    "origin.views.task.task_import_views.TaskImportPreviewView": checked("is_project_member"),
+    "origin.views.task.task_import_views.TaskImportRunsView": checked("is_project_member"),
+    "origin.views.task.task_import_views.TaskImportUndoView": checked("is_project_member"),
+    "origin.views.task.task_import_views.TaskImportView": checked("is_project_member"),
     "origin.views.task.task_progress_views.TaskProgressListView": checked("is_project_member"),
     "origin.views.task.task_recent_views.RecentTasksView": checked("visible_recents"),
     "origin.views.task.task_recent_views.RecordTaskOpenView": checked("can_open"),

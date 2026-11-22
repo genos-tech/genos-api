@@ -1,0 +1,4 @@
+Name,Status,Assignee,Due,Tags,Created time,Priority,Parent item
+Plan the launch,Not started,Rita Example,"November 30, 2026","launch, marketing","November 21, 2026 9:00 AM",High,
+Draft the press note,In progress,dev1@example.com,"December 2, 2026",marketing,"November 21, 2026 9:30 AM",Medium,Plan the launch (https://www.notion.so/Plan-the-launch-abc123)
+Book the venue,Done,,,,"November 22, 2026 8:00 AM",Low,
