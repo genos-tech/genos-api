@@ -300,10 +300,11 @@ class WebhookListCreateView(AuthenticatedAPIView):
         # locked so two creates at once cannot both slip under the cap.
         with transaction.atomic():
             locked = TeamMaster.objects.select_for_update().get(pk=team.pk)
-            tier = quota.better_tier(
-                locked.plan or "free",
-                quota.resolve_effective_tier(str(locked.owner_id))["tier"],
-            )
+            tier = locked.plan or "free"
+            if locked.owner_id:  # SET_NULL: an ownerless team has only its own plan
+                tier = quota.better_tier(
+                    tier, quota.resolve_effective_tier(str(locked.owner_id))["tier"]
+                )
             cap = quota.get_webhooks_max(tier)
             used = WebhookEndpoint.objects.filter(team=locked).count()
             if cap is not None and used >= cap:
