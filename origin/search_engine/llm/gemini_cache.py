@@ -208,9 +208,15 @@ def forget(name: str) -> None:
 def _record_create(created: Any, model: str) -> None:
     """Ledger row for the create call.
 
-    The cached tokens are billed once at creation (plus per-hour
-    storage the meter deliberately does not model — a ~15K-token cache
-    held for an hour is fractions of a cent). `cache_write_tokens` is
+    The cached tokens are billed once at creation at the model's input
+    rate (`cache_write` in llm_models.yaml equals `input` for Gemini since
+    MIP-952; it was 0, so the ledger priced every creation at nothing).
+    Storage is billed on top and is NOT in the ledger: $1.00 per million
+    token-hours (the bill confirms it), so a 30K-token cache held for the
+    default hour is 3 cents, not "fractions of a cent": about as much as
+    the creation itself on gemini-3.6-flash (4.5 cents). Take that into
+    account when reading the ledger, and shorten
+    `GEMINI_EXPLICIT_CACHE_TTL_S` for eval runs. `cache_write_tokens` is
     the bucket that already exists for exactly this concept.
     """
     try:

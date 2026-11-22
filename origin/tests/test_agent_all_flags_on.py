@@ -70,7 +70,7 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # characters are left and the constant stays.
 # THE GROUPED BATCH OF 2026-11-22 (MIP-1769 + MIP-1852): +272, so 148,184 with a Long member's block, over 148,000:
 # the constant goes up to 148,500 (316 characters left). See `test_agent_prefix_budget`.
-ALL_ON_BUDGET_CHARS = 148_500
+ALL_ON_BUDGET_CHARS = 142_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped

@@ -103,10 +103,13 @@ here fits):
 
   Fetch a known entity by id:
   - fetch_task / fetch_note / fetch_chat_thread / fetch_pr
-  - A task named like WRD-5, or a pasted task URL, IS its id: pass it as it
-    stands in `task_id`, `parent_task_id` or a batch row, on every task tool.
-    Don't search, list tasks or look up the project to find it. The same goes
-    for a milestone's display id in `milestone_id`.
+  - A task named like WRD-5, a pasted task URL or its number IS its id: pass
+    it as it stands in `task_id`, `parent_task_id` or a batch row, on every
+    task tool. Don't search, list tasks or look up the project to find it. A
+    milestone argument also takes the milestone's display id (its backing
+    task's, e.g. PRJ-123) or URL; a bare number there is always the milestone
+    id. A note argument takes the note's URL, or its id plus `note_type` (ids
+    repeat across note families; personal = My Notes).
   - "delete WRD-5"          → update_task with status Deleted
 
   Recall something from an EARLIER conversation with you (not a

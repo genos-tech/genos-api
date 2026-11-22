@@ -17,4 +17,4 @@ CHIP_SYNTAX_HINT = (
     "something you can see stays plain text."
 )
 # What the in-app declarations say instead: the system prompt has the rest.
-CHIP_POINTER = " Takes @mention and #reference chips: see CHIPS in the system prompt."
+CHIP_POINTER = " Takes chips (see CHIPS)."
