@@ -21,6 +21,7 @@ from origin.search_engine.agent.tools.manage_milestone import MANAGE_MILESTONE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import task_card, task_card_post
 
+from .status_reason_support import with_reason
 from .test_task_card_post import CardPostBase, _text
 
 
@@ -160,7 +161,7 @@ class RefreshKeepsTheCardsLanguageTests(CardPostBase):
     def _edit_as(self, user, **args):
         ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(user.id))
         with self.captureOnCommitCallbacks(execute=True):
-            UPDATE_TASK.run({"task_id": self.task.task_id, **args}, ctx)
+            UPDATE_TASK.run({"task_id": self.task.task_id, **with_reason(args), **args}, ctx)
 
     def test_an_edit_over_mcp_rewrites_the_card_in_japanese(self):
         self._edit_as(self.user, status="WIP")

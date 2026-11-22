@@ -940,6 +940,7 @@ class RealToolTests(DecideEditBase):
                 "task_id": self.task.task_id,
                 "title": "Proposed",
                 "status": "WIP",
+                "reason": "Proposed by the test.",
                 "priority": "Low",
                 "effort_level": "Low",
                 "due_date": "2026-12-01",

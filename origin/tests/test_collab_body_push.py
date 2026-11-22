@@ -28,6 +28,7 @@ from origin.search_engine.agent.tools.update_note import UPDATE_NOTE
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import collab_push
 from origin.services.milestone_service import ensure_backing_task
+from origin.tests.status_reason_support import with_reason
 
 from .test_base import BaseAPITestCase
 
@@ -67,7 +68,9 @@ class UpdateTaskCollabPushTests(BaseAPITestCase):
         # The test case wraps each test in a transaction that never commits,
         # so run on_commit callbacks explicitly, as a real commit would.
         with self.captureOnCommitCallbacks(execute=True):
-            return UPDATE_TASK.run({"task_id": self.task.task_id, **args}, self.ctx)
+            return UPDATE_TASK.run(
+                {"task_id": self.task.task_id, **with_reason(args), **args}, self.ctx
+            )
 
     def test_body_rewrite_pushes_the_stored_blocks(self):
         self._update(

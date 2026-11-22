@@ -62,6 +62,7 @@ from origin.services import throttles
 from origin.services.collab_push import PushOutcome
 from origin.services.throttles import AgentUndoThrottle
 from origin.tests.security_clock import MidMinute
+from origin.tests.status_reason_support import with_reason
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_VIEWER
 from origin.views.utils.note_version import snapshot_note_version
 
@@ -515,7 +516,9 @@ class UndoingCreateTask(UndoBase):
 
 class UndoingUpdateTask(UndoBase):
     def write(self, **fields):
-        return self.go("update_task", {"task_id": self.task.task_id, **fields})
+        return self.go(
+            "update_task", {"task_id": self.task.task_id, **with_reason(fields), **fields}
+        )
 
     def fresh(self):
         return TaskMaster.objects.get(pk=self.task.pk)

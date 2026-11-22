@@ -427,7 +427,9 @@ class TestAuthorization(McpBase):
         cached list."""
         self._key(scope=SCOPE_READ)
         text, is_error = self._tool_text(
-            self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+            self._call(
+                "update_task", {"task_id": self.task.task_id, "status": "WIP", "reason": "Test."}
+            )
         )
         self.assertTrue(is_error)
         self.assertIn("read-only", text)
@@ -438,7 +440,9 @@ class TestAuthorization(McpBase):
     def test_a_write_key_may_write(self):
         self._key(scope=SCOPE_WRITE)
         _, is_error = self._tool_text(
-            self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+            self._call(
+                "update_task", {"task_id": self.task.task_id, "status": "WIP", "reason": "Test."}
+            )
         )
         self.assertFalse(is_error)
         self.task.refresh_from_db()
@@ -454,7 +458,9 @@ class TestAuthorization(McpBase):
         no author. It is also the reason tools run inline rather than on
         a worker thread — a different thread has a different local."""
         self._key(scope=SCOPE_WRITE)
-        self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+        self._call(
+            "update_task", {"task_id": self.task.task_id, "status": "WIP", "reason": "Test."}
+        )
 
         activity = TaskActivity.objects.filter(task=self.task).order_by("-activity_id").first()
         self.assertIsNotNone(activity, "the write raised no activity row at all")
@@ -471,7 +477,9 @@ class TestAuthorization(McpBase):
         Request and mirrors it onto the Django one the middleware holds,
         which is the assumption this pins."""
         raw = self._key(scope=SCOPE_WRITE)
-        self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+        self._call(
+            "update_task", {"task_id": self.task.task_id, "status": "WIP", "reason": "Test."}
+        )
 
         key = ApiKey.objects.get(prefix=raw[:11])
         activity = TaskActivity.objects.filter(task=self.task).order_by("-activity_id").first()
@@ -487,12 +495,15 @@ class TestAuthorization(McpBase):
 
     def test_a_read_key_may_read_task_history_and_sees_its_own_write(self):
         self._key(scope=SCOPE_WRITE)
-        self._call("update_task", {"task_id": self.task.task_id, "status": "WIP"})
+        self._call(
+            "update_task", {"task_id": self.task.task_id, "status": "WIP", "reason": "Test."}
+        )
 
         self._key(scope=SCOPE_READ)
         result = self._result(self._call("get_task_history", {"task_id": self.task.display_id}))
         self.assertFalse(result.get("isError"), result["content"][0]["text"])
-        latest = result["structuredContent"]["history"][0]
+        history = result["structuredContent"]["history"]
+        latest = next(h for h in history if h["new_value"] == "WIP")
         self.assertEqual(latest["new_value"], "WIP")
         self.assertEqual(latest["via"]["kind"], "api_key")
         self.assertEqual(latest["actor"]["username"], self.user.username)

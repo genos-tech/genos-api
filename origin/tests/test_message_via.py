@@ -221,7 +221,7 @@ class TheCardIsStamped(_Base):
             metadata={**self.card_of(task).metadata, "fromBrowser": True}
         )
         with self.captureOnCommitCallbacks(execute=True):
-            UPDATE_TASK.run({"task_id": task.task_id, "status": "WIP"}, self.ctx)
+            UPDATE_TASK.run({"task_id": task.task_id, "status": "WIP", "reason": "Test."}, self.ctx)
         card = self.card_of(task)
         self.assertEqual(card.metadata["via"], REDUCED_CLAUDE)
         self.assertTrue(card.metadata["fromBrowser"])

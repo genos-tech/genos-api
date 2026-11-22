@@ -95,6 +95,10 @@ from origin.services.task_project_move import (
     move_report_clauses,
     move_report_said,
 )
+from origin.services.task_status_reason import (
+    post_status_change_comment,
+    status_reason_error,
+)
 from origin.views.utils.scope_guards import can_access_task, is_project_member
 
 _TITLE_MAX = MilestoneMaster._meta.get_field("title").max_length
@@ -124,7 +128,8 @@ _MILESTONE_FIELDS = frozenset(
 # that would be ignored (a `title` on `delete_folder`) can't read as success.
 _ALLOWED = {
     "create": {"project_id"} | _MILESTONE_FIELDS,
-    "update": {"milestone_id"} | _MILESTONE_FIELDS,
+    # `reason`: why the status changes (MIP-1997), posted as a comment on the backing task.
+    "update": {"milestone_id", "reason"} | _MILESTONE_FIELDS,
     "create_folder": {"project_id", "folder_name"},
     "rename_folder": {"milestone_folder_id", "folder_name"},
     "delete_folder": {"milestone_folder_id"},
@@ -484,6 +489,13 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         fields["tags"] = parsed["tags"] or None
         changed.append("tags" if parsed["tags"] else "tags(cleared)")
 
+    # MIP-1997: a status change says why; the reason is posted as a comment below.
+    status_change: tuple[str, str] | None = None
+    if "status" in fields:
+        status_change = (milestone.status, fields["status"])
+        if message := status_reason_error(*status_change, args.get("reason")):
+            raise ToolError(message)
+
     dates: dict[str, Any] = {}
     for key in ("start_date", "due_date"):
         if key in parsed and parsed[key] != getattr(milestone, key):
@@ -545,6 +557,13 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     f"Milestone {milestone.milestone_id} was changed while this was being applied "
                     "(converted, deleted or moved by someone else). Nothing was changed."
                 )
+            if status_change is not None:
+                # `milestone` was just re-read under its lock: a concurrent identical change posts once.
+                status_change = (
+                    (milestone.status, status_change[1])
+                    if milestone.status != status_change[1]
+                    else None
+                )
             added_assignees = update_milestone(
                 milestone,
                 fields=fields,
@@ -556,6 +575,15 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 project_move=destination,
                 report=report,
             )
+            if status_change is not None and milestone.task_id:
+                # The milestone's comments live on its backing task, in the same transaction.
+                post_status_change_comment(
+                    task_id=milestone.task_id,
+                    actor_id=ctx.user_id,
+                    old=status_change[0],
+                    new=status_change[1],
+                    reason=args.get("reason"),
+                )
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
@@ -906,6 +934,12 @@ MANAGE_MILESTONE = Tool(
                 "type": "STRING",
                 "enum": STATUS_ENUM,
                 "description": "Status. Default Open on create. Not 'Deleted': use delete_milestone.",
+            },
+            "reason": {
+                "type": "STRING",
+                "description": (
+                    "'update': why `status` changes. Required with `status`; posted as a comment."
+                ),
             },
             "tags": {
                 "type": "ARRAY",

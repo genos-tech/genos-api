@@ -76,7 +76,7 @@ class MilestoneWriteToolsTests(BaseAPITestCase):
         milestone = self._milestone(status="Open")
         backing = milestone.task
 
-        UPDATE_TASK.run({"task_id": backing.task_id, "status": "WIP"}, self.ctx)
+        UPDATE_TASK.run({"task_id": backing.task_id, "status": "WIP", "reason": "Test."}, self.ctx)
 
         milestone.refresh_from_db()
         backing.refresh_from_db()
@@ -90,7 +90,7 @@ class MilestoneWriteToolsTests(BaseAPITestCase):
         milestone = self._milestone(status="Open")
         backing = milestone.task
 
-        UPDATE_TASK.run({"task_id": backing.task_id, "status": "WIP"}, self.ctx)
+        UPDATE_TASK.run({"task_id": backing.task_id, "status": "WIP", "reason": "Test."}, self.ctx)
 
         # A later, unrelated milestone edit re-runs the mirror pass.
         milestone.refresh_from_db()
@@ -143,16 +143,16 @@ class MilestoneWriteToolsTests(BaseAPITestCase):
         milestone = self._milestone(status="Open")
         backing = milestone.task
 
-        UPDATE_TASK.run({"task_id": backing.task_id, "status": "Blocked"}, self.ctx)
+        UPDATE_TASK.run(
+            {"task_id": backing.task_id, "status": "Blocked", "reason": "Test."}, self.ctx
+        )
 
         milestone.refresh_from_db()
         self.assertEqual(milestone.status, "Blocked")
 
     def test_update_task_noop_leaves_milestone_untouched(self):
         milestone = self._milestone(status="Open")
-        result = UPDATE_TASK.run(
-            {"task_id": milestone.task.task_id, "status": "Open"}, self.ctx
-        )
+        result = UPDATE_TASK.run({"task_id": milestone.task.task_id, "status": "Open"}, self.ctx)
         self.assertEqual(result["changed_fields"], [])
         milestone.refresh_from_db()
         self.assertEqual(milestone.status, "Open")
@@ -160,7 +160,7 @@ class MilestoneWriteToolsTests(BaseAPITestCase):
     def test_update_task_plain_task_unaffected(self):
         """Non-milestone tasks keep the original single-row behaviour."""
         task = self._plain_task(status="Open")
-        UPDATE_TASK.run({"task_id": task.task_id, "status": "WIP"}, self.ctx)
+        UPDATE_TASK.run({"task_id": task.task_id, "status": "WIP", "reason": "Test."}, self.ctx)
         task.refresh_from_db()
         self.assertEqual(task.status, "WIP")
         # No milestone got conjured for a plain task.
@@ -197,11 +197,7 @@ class MilestoneWriteToolsTests(BaseAPITestCase):
         backing = milestone.task
 
         UPDATE_TASKS_BULK.run(
-            {
-                "updates": [
-                    {"task_id": backing.task_id, "status": "WIP", "rationale": "started"}
-                ]
-            },
+            {"updates": [{"task_id": backing.task_id, "status": "WIP", "rationale": "started"}]},
             self.ctx,
         )
         milestone.refresh_from_db()

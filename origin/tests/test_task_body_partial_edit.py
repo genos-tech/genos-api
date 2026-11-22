@@ -21,6 +21,7 @@ from origin.search_engine.agent.tools.task_body_edit import body_hash
 from origin.search_engine.agent.tools.template_prompts import PROMPTS
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services.milestone_service import ensure_backing_task
+from origin.tests.status_reason_support import with_reason
 
 from .test_base import BaseAPITestCase
 from .test_mcp_endpoint import McpBase
@@ -74,7 +75,7 @@ class Base(BaseAPITestCase):
     def _update(self, task=None, **args):
         task = task or self.task
         with self.captureOnCommitCallbacks(execute=True):
-            return UPDATE_TASK.run({"task_id": task.task_id, **args}, self.ctx)
+            return UPDATE_TASK.run({"task_id": task.task_id, **with_reason(args), **args}, self.ctx)
 
     def _fetch(self, task=None):
         return FETCH_TASK.run({"task_id": (task or self.task).task_id}, self.ctx)

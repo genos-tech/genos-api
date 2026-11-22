@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 
+from origin.tests.status_reason_support import with_reason
 from origin.tests.test_mcp_endpoint import SCOPE_READ, SCOPE_WRITE, McpBase
 from origin.tests.test_mcp_oauth_flow import FlowBase
 from origin.views.public.mcp import tools
@@ -111,7 +112,9 @@ class TestEveryToolSaysAllThree(McpBase):
 
 class TestADeleteInsideAnArgument(McpBase):
     def update(self, **args):
-        return self._tool_text(self._call("update_task", {"task_id": "WRD-7", **args}))
+        return self._tool_text(
+            self._call("update_task", {"task_id": "WRD-7", **with_reason(args), **args})
+        )
 
     def test_a_write_key_cannot_delete_a_task_through_its_status(self):
         self._key(scope=SCOPE_WRITE)

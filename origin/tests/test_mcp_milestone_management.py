@@ -145,6 +145,7 @@ class ManageOverMcpTests(McpMilestoneBase):
                 "action": "update",
                 "milestone_id": self.display,
                 "status": "WIP",
+                "reason": "Test.",
                 "due_date": "2026-12-01",
                 "milestone_folder_id": str(self.folder.folder_id),
                 "assignee_ids": [str(self.user2.id)],

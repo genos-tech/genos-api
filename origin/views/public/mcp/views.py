@@ -36,6 +36,7 @@ from origin.views.public.mcp import (
     prompts,
     protocol,
     request_guard,
+    session_probe,
     surfaces,
     tools,
 )
@@ -228,6 +229,7 @@ class McpView(PublicApiView):
     def post(self, request):
         # The agent call log's facts for a `tools/call` (MIP-2006), set by `_dispatch`.
         self._agent_trace: agent_calls.CallTrace | None = None
+        body = None
         try:
             self._check_origin(request)
             body = self._parse(request)
@@ -247,10 +249,20 @@ class McpView(PublicApiView):
                 agent_calls.schedule(object(), self._agent_trace)
                 self._agent_trace = None
             raise
+        if body is not None:
+            # MIP-2010 spike, off unless `MCP_SESSION_ID_PROBE`: adds `Mcp-Session-Id` to a
+            # successful `initialize` and logs whether later calls send it back. Never raises.
+            session_probe.observe(request, body, response)
         if self._agent_trace is not None:
             # After the response has gone out; never blocks or fails the call.
             agent_calls.schedule(response, self._agent_trace)
         return response
+
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        # GET and DELETE stay 405. With the session probe on, they are logged first: a DELETE is
+        # a client ending its session, which is what the probe wants to see (MIP-2010).
+        session_probe.observe_other_method(request)
+        return super().http_method_not_allowed(request, *args, **kwargs)
 
     # -- transport concerns ------------------------------------------------
 

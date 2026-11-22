@@ -123,12 +123,16 @@ def _participant_ids(task_id: int, mentioned: set[str]) -> set[str]:
     return task_readers_among(task_id, candidates) - mentioned
 
 
-def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
+def fan_out_task_comment(
+    comment: TaskComments, *, notify_participants: bool = True
+) -> CommentFanout:
     """Mirror a saved comment into v3 and notify everyone who cares.
 
     `comment` must already be persisted — this reads its `task_id`,
     `comment_id`, `sender_id` and `comment_body` and never writes to it.
-    Never raises.
+    `notify_participants=False` skips the plain "someone commented" ping to the assignee,
+    collaborators and earlier commenters (an @mention still notifies): the status-change
+    comment (MIP-1997) uses it. Never raises.
     """
     result = CommentFanout()
     task_id = int(comment.task_id)
@@ -189,10 +193,14 @@ def fan_out_task_comment(comment: TaskComments) -> CommentFanout:
             actor=mirror.sender,
             skip_actor=False,
         )
-        participant_acts = v3_activity.create_comment_participant_activities(
-            message=mirror,
-            recipient_ids=_participant_ids(task_id, {str(u) for u in mentioned if u}),
-            actor=mirror.sender,
+        participant_acts = (
+            v3_activity.create_comment_participant_activities(
+                message=mirror,
+                recipient_ids=_participant_ids(task_id, {str(u) for u in mentioned if u}),
+                actor=mirror.sender,
+            )
+            if notify_participants
+            else []
         )
         result.activities = list(mention_acts) + list(participant_acts)
 

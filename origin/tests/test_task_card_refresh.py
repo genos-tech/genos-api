@@ -19,6 +19,7 @@ from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services import realtime_push, task_card_post
 from origin.services.activity_suppression import suppress_task_activity
 
+from .status_reason_support import with_reason
 from .test_task_card_post import CardPostBase, _mention_ids, _text
 
 
@@ -32,11 +33,14 @@ class RefreshBase(CardPostBase):
         self.addCleanup(patcher.stop)
 
     def _card(self):
-        return Message.objects.get(channel=self.channel, task_id=self.task.task_id)
+        # The card is the thread root; a comment on the task is a reply carrying the same task id.
+        return Message.objects.get(
+            channel=self.channel, task_id=self.task.task_id, parent_id__isnull=True
+        )
 
     def _tool(self, tool, **args):
         with self.captureOnCommitCallbacks(execute=True):
-            return tool.run({"task_id": self.task.task_id, **args}, self.ctx)
+            return tool.run({"task_id": self.task.task_id, **with_reason(args), **args}, self.ctx)
 
 
 class TaskCardRefreshTests(RefreshBase):
@@ -123,9 +127,11 @@ class TaskCardRefreshTests(RefreshBase):
     def test_a_task_with_no_card_gets_none_made(self):
         Message.objects.filter(pk=self.card.pk).delete()
 
-        self._tool(UPDATE_TASK, status="WIP")
+        self._tool(UPDATE_TASK, title="Renamed")
 
-        self.assertFalse(Message.objects.filter(task_id=self.task.task_id).exists())
+        self.assertFalse(
+            Message.objects.filter(task_id=self.task.task_id, parent_id__isnull=True).exists()
+        )
 
     def test_a_failing_refresh_never_fails_the_edit(self):
         with mock.patch.object(task_card_post, "_refresh", side_effect=RuntimeError("boom")):
@@ -206,7 +212,9 @@ class MilestoneCardRefreshTests(CardPostBase):
             self.ctx,
         )
         self.milestone = MilestoneMaster.objects.get(milestone_id=out["milestone_id"])
-        self.card = Message.objects.get(channel=self.channel, task_id=self.milestone.task_id)
+        self.card = Message.objects.get(
+            channel=self.channel, task_id=self.milestone.task_id, parent_id__isnull=True
+        )
         patcher = mock.patch.object(realtime_push, "push_message")
         self.pushed = patcher.start()
         self.addCleanup(patcher.stop)
@@ -214,7 +222,12 @@ class MilestoneCardRefreshTests(CardPostBase):
     def _update(self, **args):
         with self.captureOnCommitCallbacks(execute=True):
             return MANAGE_MILESTONE.run(
-                {"action": "update", "milestone_id": self.milestone.milestone_id, **args},
+                {
+                    "action": "update",
+                    "milestone_id": self.milestone.milestone_id,
+                    **with_reason(args),
+                    **args,
+                },
                 self.ctx,
             )
 
@@ -290,7 +303,9 @@ class DeletedPersonCardTests(RefreshBase):
         return milestone
 
     def _milestone_card(self, milestone):
-        return Message.objects.get(channel=self.channel, task_id=milestone.task_id)
+        return Message.objects.get(
+            channel=self.channel, task_id=milestone.task_id, parent_id__isnull=True
+        )
 
     def test_deleting_the_milestones_reporter_refreshes_its_card_quietly(self):
         """The measured path: the assignee row cascades away, its signal schedules the refresh,
@@ -317,6 +332,7 @@ class DeletedPersonCardTests(RefreshBase):
                         "action": "update",
                         "milestone_id": milestone.milestone_id,
                         "status": "WIP",
+                        "reason": "Test.",
                     },
                     self.ctx,
                 )
