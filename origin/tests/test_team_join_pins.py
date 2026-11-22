@@ -103,6 +103,13 @@ class JoinPinBase(BaseAPITestCase):
         patcher = mock.patch("origin.services.stripe_billing.sync_team_subscription_quantity")
         self.seat_sync = patcher.start()
         self.addCleanup(patcher.stop)
+        # The seat sync now runs on commit (MIP-1840); these pins are about WHICH
+        # writes fire it, so run the callback at once (TestCase never commits).
+        patcher = mock.patch(
+            "origin.signals.billing_signals.transaction.on_commit", side_effect=lambda fn: fn()
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         patcher = mock.patch("origin.services.change_feed.bump_team")
         self.bump_team = patcher.start()
         self.addCleanup(patcher.stop)
