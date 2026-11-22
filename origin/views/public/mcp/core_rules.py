@@ -40,8 +40,8 @@ import hashlib
 #: change to that file starts the billed `agent-evals` workflow.
 FLAG_ENV = "MCP_CORE_RULES"
 
-#: Hard budget for the whole text, in characters (the draft is about 2,000; Claude Code cuts at 4,096).
-MAX_CHARS = 2_400
+#: Hard budget for the whole text, in characters (about 2,600 now; Claude Code cuts at 4,096).
+MAX_CHARS = 2_800
 #: The safety paragraph must end inside this many characters.
 SAFETY_WITHIN = 512
 
@@ -64,14 +64,19 @@ WORKING_RULES = (
     "instead of writing a second. When you finish work, leave one comment: ready or not, "
     "what was done, what is left. Editing a description or a note replaces the whole body "
     "unless you append or replace one passage, so read it first. When a task changes, "
-    "check its parent, its milestone and the tasks waiting on it. Link every item you "
+    "check its parent, its milestone and the tasks waiting on it. When you create a task, "
+    "decide its parent (a task or milestone that will outlive it), what blocks it and what "
+    "it blocks, and wire them. Keep what you create organized so the user can recap it "
+    "later: put each task, note and comment where a person would look for it, suggest a "
+    "new milestone when new work is its own outcome, and never create a project without "
+    "asking. Link every item you "
     "mention (tasks, notes, pull requests, web addresses) so the reader can open it. A "
     "status must be true: in progress only while someone is working on it now; after a "
     "change ships, re-read the task and update its status the same day."
 )
 
 #: sha256 of `canonical(WORKING_RULES)`. The genos-docs check reads this line from `main`.
-WORKING_RULES_SHA256 = "76774656a4a3cb541a83cb6591acf7fbce9c3652c7d98bfb93428a20b24c4428"
+WORKING_RULES_SHA256 = "1672e353d7165b81ac27f9a0ddcfdabd9fb6b216af7d436e5fbf31e9c976234d"
 
 READING = (
     "Reading. Read a task's description from `content_markdown` when it is present, and "
