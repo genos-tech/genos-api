@@ -101,6 +101,12 @@ from origin.views.common.security_event_views import (
     MySecurityEventListView,
     TeamSecurityEventListView,
 )
+from origin.views.common.slack_import_views import (
+    SlackImportPreviewView,
+    SlackImportRunsView,
+    SlackImportUndoView,
+    SlackImportView,
+)
 from origin.views.common.team_connection_views import (
     CrossTeamNoticeView,
     ExternalShareObjectView,
@@ -567,6 +573,27 @@ urlpatterns = [
     ),
     # The sample data made with the team, previewed (GET) and removed (POST): owner only.
     path("api/v2/team/sample-data/", SampleDataView.as_view(), name="team_sample_data"),
+    # Slack export import (MIP-1836): owner only; preview, commit, runs, undo.
+    path(
+        "api/v2/team/import/slack/preview/",
+        SlackImportPreviewView.as_view(http_method_names=["post", "options"]),
+        name="slack_import_preview",
+    ),
+    path(
+        "api/v2/team/import/slack/",
+        SlackImportView.as_view(http_method_names=["post", "options"]),
+        name="slack_import",
+    ),
+    path(
+        "api/v2/team/import/slack/runs/",
+        SlackImportRunsView.as_view(http_method_names=["get", "options"]),
+        name="slack_import_runs",
+    ),
+    path(
+        "api/v2/team/import/slack/runs/<uuid:run_id>/undo/",
+        SlackImportUndoView.as_view(http_method_names=["get", "post", "options"]),
+        name="slack_import_undo",
+    ),
     path(
         "api/v2/team/member/remove/",
         RemoveTeamMemberView.as_view(),
