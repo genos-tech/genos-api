@@ -1180,6 +1180,7 @@ class TaskMasterView(AuthenticatedAPIView):
             # Its notes cascade with it: so do the traces of them other people hold (MIP-1514).
 
             from origin.models.note.task_note_models import TaskNoteMaster
+            from origin.services import collab_push
             from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
             from origin.services.task_files import remove_after_commit, stored_files_of_tasks
             from origin.views.utils.note_role import NOTE_TYPE_TASK
@@ -1192,8 +1193,10 @@ class TaskMasterView(AuthenticatedAPIView):
                 # The task's own attachment and body-image files (MIP-1824): named by its rows
                 # only until the delete, so read now, removed from storage after the commit.
                 task_files, _kept = stored_files_of_tasks([task.task_id])
+                deleted_task_id = task.task_id  # `.delete()` clears it on the instance
                 task.delete()
                 forget_deleted_notes(NOTE_TYPE_TASK, note_ids)
+                collab_push.forget_task_bodies_after_commit([deleted_task_id])  # MIP-1937
                 remove_after_commit(task_files, family="task")
             invalidate_project_tasks_cache(cache_team_id, cache_project_id)
             # Best-effort: drop the task's chunks from OpenSearch now

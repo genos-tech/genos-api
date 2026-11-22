@@ -26,7 +26,7 @@ from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.milestone_models import MilestoneMaster
 from origin.models.task.sprint_models import Sprint
 from origin.models.task.task_models import TaskMaster
-from origin.services import thread_summary_cleanup
+from origin.services import collab_push, thread_summary_cleanup
 from origin.services.activity_suppression import suppress_task_activity
 from origin.services.chat_note_access import revoke_membership_roles
 from origin.services.note_delete import forget_deleted_notes, forget_note_attachments
@@ -121,6 +121,7 @@ def delete_project(project: ProjectMaster) -> None:
         with batched_note_cleanup(), suppress_task_activity():
             project.delete()
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)
+        collab_push.forget_task_bodies_after_commit(task_ids)  # MIP-1937
         remove_after_commit(task_files, family="task")
         # After the commit, so a delete that rolls back never touches the index.
         transaction.on_commit(

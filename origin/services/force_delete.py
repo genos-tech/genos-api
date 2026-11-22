@@ -420,12 +420,8 @@ def force_delete_note(family: str, note, *, actor, request=None) -> ForceDeleteR
             report=report,
             family=family,
         )
-        _forget_doc_after_commit(collab_push.note_document_name(family, note_id))
+        # The note's collab document is forgotten by `delete_note` (`forget_deleted_notes`).
     return report
-
-
-def _forget_doc_after_commit(name: str) -> None:
-    transaction.on_commit(lambda: collab_push.forget_document(name), robust=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -578,6 +574,5 @@ def _after_commit(task_id: int, note_ids: list[int], files: list[str]) -> None:
     from origin.services.project_delete import _forget_search
 
     _forget_search([task_id], [], note_ids, [])
+    # The task's notes are forgotten by `forget_deleted_notes` in the delete transaction.
     collab_push.forget_document(f"task-body:{task_id}")
-    for note_id in note_ids:
-        collab_push.forget_document(collab_push.note_document_name("task", note_id))
