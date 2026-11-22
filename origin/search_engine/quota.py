@@ -510,6 +510,11 @@ def _tier_count_cap(tier: str, key: str, defaults: dict[str, int | None]) -> int
     return v
 
 
+def better_tier(a: str, b: str) -> str:
+    """The higher of two tier names (an unknown name reads as free)."""
+    return a if _TIER_RANK.get(a, 0) >= _TIER_RANK.get(b, 0) else b
+
+
 def get_webhooks_max(tier: str) -> int | None:
     """Webhook endpoints a team on `tier` may have (Free 0, Core 3, Pro 10, Max 25, Enterprise
     unlimited); None = unlimited."""
