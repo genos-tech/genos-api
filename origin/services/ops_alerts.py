@@ -267,14 +267,19 @@ def _beat(name: str, now, **fields) -> None:
         logger.warning("cron.heartbeat write failed name=%s: %s", name, describe_exception(exc))
 
 
-def cron_started(name: str) -> None:
+def cron_started(name: str):
+    """Record the start and return it, so a run can later mark its success at its start."""
     now = timezone.now()
     _beat(name, now, last_started_at=now)
+    return now
 
 
-def cron_succeeded(name: str) -> None:
+def cron_succeeded(name: str, *, mark_at=None) -> None:
+    """Record a success. `last_succeeded_at` is when the run finished unless `mark_at` is given
+    (a run's start, MIP-1913): a catch-up window must start from when the run READ its source,
+    not from when it finished."""
     now = timezone.now()
-    _beat(name, now, last_succeeded_at=now)
+    _beat(name, now, last_succeeded_at=mark_at or now)
     resolve_alert(f"cron:{name}", now=now)
 
 

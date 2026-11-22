@@ -783,6 +783,8 @@ class MessageDetailView(AuthenticatedAPIView):
         Other fields are ignored. Sets `edited_at` to now.
         """
         message = self._fetch_for_user(message_id, request.user, with_prefetch=False)
+        if res := archived_channel_response(message.channel):
+            return res
         if message.sender_id != request.user.id:
             return Response(
                 {"error": "Only the sender can edit a message."},
@@ -861,6 +863,8 @@ class MessageDetailView(AuthenticatedAPIView):
         Decrements the parent's reply_count if this is a thread reply.
         """
         message = self._fetch_for_user(message_id, request.user, with_prefetch=False)
+        if res := archived_channel_response(message.channel):
+            return res
         is_sender = message.sender_id == request.user.id
         # A group with no live owner is moderated by any host-side member (MIP-1550).
         is_channel_owner = acts_as_owner(message.channel, request.user.id)

@@ -204,6 +204,10 @@ class TestEveryCronReports(TestCase):
         self.assertIn('restartPolicyType: "NEVER"', block)
         self.assertNotIn("--heartbeat", block)
         self.assertNotIn('COLLAB_SWEEP_DELETE: "', block)
+        # MIP-1891: the variables it beats with are set live; omit means delete in Railway IaC.
+        for var in ("EXTERNAL_CRON_HEARTBEAT_TOKEN", "DJANGO_BASE_URL"):
+            self.assertIn(f"{var}: preserve()", block)
+        self.assertNotIn('EXTERNAL_CRON_HEARTBEAT_TOKEN: "', block)
         self.assertNotIn("collab-orphan-sweep", _ts_crons())
         self.assertNotIn("collab-orphan-sweep", _heartbeat_names(s for _l, s in _crons()))
         self.assertEqual(ops_alerts.CRON_SCHEDULES["collab-orphan-sweep"], timedelta(hours=26))

@@ -22,7 +22,7 @@ from typing import Any
 from origin.search_engine.agent.label_acl import LabelAccess
 from origin.search_engine.agent.tools.base import ToolContext, wrap_workspace_content
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
-from origin.services.collab_push import read_note_threads
+from origin.services.collab_push import read_note_threads, read_task_body_threads
 from origin.views.public.mcp.via_privacy import via_for_viewer
 
 logger = logging.getLogger(__name__)
@@ -166,14 +166,61 @@ def note_comment_fields(
         raw_threads = read_note_threads(note_type, note_id)
     else:
         raw_threads = read_note_threads(note_type, note_id, timeout=read_timeout)
+    return _thread_fields(
+        raw_threads,
+        ctx,
+        key="comment_threads",
+        unreadable=(
+            "This note's comments could not be read right now. The body above is "
+            "complete; try again in a moment if the comments matter."
+        ),
+        include_resolved=include_resolved,
+        can_include_resolved=can_include_resolved,
+        include_via=include_via,
+    )
+
+
+def task_body_comment_fields(
+    task_id: int,
+    ctx: ToolContext,
+    *,
+    include_resolved: bool = False,
+    include_via: bool = False,
+) -> dict[str, Any]:
+    """The keys `get_task` adds on MCP for the comments left ON THE TASK BODY (MIP-1863):
+    `body_comment_threads` and, when there is something to say, `body_comment_threads_note`.
+
+    The same shape and rules as `note_comment_fields` (open first, resolved left out unless asked,
+    `null` when collab could not answer). A task's own comment list (`comments`) is a different
+    thing: those are the task's discussion, not comments anchored in its body.
+    """
+    raw_threads = read_task_body_threads(task_id)
+    return _thread_fields(
+        raw_threads,
+        ctx,
+        key="body_comment_threads",
+        unreadable=(
+            "The comments on this task's body could not be read right now. The body above is "
+            "complete; try again in a moment if the comments matter."
+        ),
+        include_resolved=include_resolved,
+        can_include_resolved=True,
+        include_via=include_via,
+    )
+
+
+def _thread_fields(
+    raw_threads: list[dict[str, Any]] | None,
+    ctx: ToolContext,
+    *,
+    key: str,
+    unreadable: str,
+    include_resolved: bool,
+    can_include_resolved: bool,
+    include_via: bool,
+) -> dict[str, Any]:
     if raw_threads is None:
-        return {
-            "comment_threads": None,
-            "comment_threads_note": (
-                "This note's comments could not be read right now. The body above is "
-                "complete; try again in a moment if the comments matter."
-            ),
-        }
+        return {key: None, f"{key}_note": unreadable}
 
     threads = [t for t in raw_threads if isinstance(t, dict) and t.get("id")]
     open_threads = [t for t in threads if not t.get("resolved")]
@@ -195,9 +242,7 @@ def note_comment_fields(
     user_ids = {clean for uid in user_ids if (clean := _user_id_or_none(uid))}
     names = LabelAccess(ctx).usernames(user_ids) if user_ids else {}
 
-    fields: dict[str, Any] = {
-        "comment_threads": [_thread(t, names, include_via=include_via) for t in shown]
-    }
+    fields: dict[str, Any] = {key: [_thread(t, names, include_via=include_via) for t in shown]}
     notes = []
     if resolved and not include_resolved:
         s = "s" if len(resolved) != 1 else ""
@@ -208,5 +253,5 @@ def note_comment_fields(
     if truncated:
         notes.append(f"Only the first {MAX_THREADS} threads are shown.")
     if notes:
-        fields["comment_threads_note"] = " ".join(notes)
+        fields[f"{key}_note"] = " ".join(notes)
     return fields

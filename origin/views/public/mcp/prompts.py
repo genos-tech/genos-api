@@ -245,14 +245,18 @@ def _read_arguments(prompt: McpPrompt, raw: Any) -> dict[str, str]:
     return out
 
 
+def unknown_prompt(name: Any, available: tuple[str, ...]) -> JsonRpcError:
+    return JsonRpcError(
+        protocol.INVALID_PARAMS,
+        f"Unknown prompt: {name}. Available: {', '.join(available) or 'none'}.",
+    )
+
+
 def get_prompt(name: Any, arguments: Any, visible_tools: frozenset[str]) -> dict[str, Any]:
     """The prompt `name`, built for a key that can see `visible_tools`."""
     prompt = BY_NAME.get(name) if isinstance(name, str) else None
     if prompt is None:
-        raise JsonRpcError(
-            protocol.INVALID_PARAMS,
-            f"Unknown prompt: {name}. Available: {', '.join(BY_NAME)}.",
-        )
+        raise unknown_prompt(name, tuple(BY_NAME))
     text = prompt.build(_read_arguments(prompt, arguments), visible_tools)
     return {
         "description": prompt.description,

@@ -64,6 +64,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from django.db import transaction
 from django.db.models import Exists, OuterRef, Q, QuerySet, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -452,7 +453,10 @@ def delete_for_user(user_id, name: str | None = None) -> dict[str, int]:
     counts["scrubbed_notices"] = _scrub_notices(names, apply=True)
     counts["scrubbed_outbox_rows"] = _scrub_outbox(names, apply=True)
     if name:
-        _scrub_index_best_effort(uid)
+        # On commit (MIP-1893): the index is rewritten only once the deletion is real, and
+        # not while the deletion still holds its row locks. A rolled-back deletion leaves
+        # the live account's chunks untouched.
+        transaction.on_commit(lambda: _scrub_index_best_effort(uid), robust=True)
     return {k: v for k, v in counts.items() if v}
 
 

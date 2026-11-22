@@ -24,6 +24,7 @@ from typing import Any
 from apis.request_id import log_failure
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.note_access import load_readable_note
+from origin.services.archive import archived_note_refusal
 from origin.services.note_delete import DeleteRefused, child_note_count, delete_note
 from origin.views.utils.note_role import ROLE_EDITOR, ROLE_OWNER, get_effective_role
 
@@ -40,6 +41,8 @@ def _may_delete(ref, ctx: ToolContext) -> bool:
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ref = load_readable_note(args, ctx)
     title = getattr(ref.note, "title", "") or "Untitled"
+    if why := archived_note_refusal(ref.family, ref.note_id):
+        raise ToolError(f"{why} Nothing was deleted.")
 
     if not _may_delete(ref, ctx):
         raise ToolForbidden(

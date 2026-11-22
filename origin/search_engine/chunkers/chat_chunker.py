@@ -131,16 +131,6 @@ def _iter_kind_chunks(
         return
     channel_ids = [c.id for c in channel_list]
 
-    # Messages per channel (non-deleted), ordered by the monotonic seq so
-    # the context window and thread window read chronologically.
-    msgs_by_channel: dict[object, list[Message]] = defaultdict(list)
-    for m in (
-        Message.objects.filter(channel_id__in=channel_ids, deleted_at__isnull=True)
-        .select_related("sender", "task")
-        .order_by("channel_id", "seq")
-    ):
-        msgs_by_channel[m.channel_id].append(m)
-
     # ACL preload.
     is_pm = kind_code == CHAT_TYPE_PM
     members_by_channel: dict[object, list[str]] = defaultdict(list)
@@ -159,19 +149,14 @@ def _iter_kind_chunks(
             if row["user_id"] is not None:
                 members_by_channel[row["channel_id"]].append(str(row["user_id"]))
 
-    # Pre-resolve sender names + summarized threads in one pass.
-    sender_ids: set = set()
-    for msgs in msgs_by_channel.values():
-        for m in msgs:
-            if m.sender_id:
-                sender_ids.add(m.sender_id)
-    sender_names = _load_sender_names(sender_ids)
     summarized = _load_summarized_threads()
 
     for channel in channel_list:
         if not channel.team_id:
             continue
-        msgs = msgs_by_channel.get(channel.id, [])
+        # One channel's messages at a time (MIP-1868): loading every dirty
+        # channel up front held all of them in memory at once.
+        msgs = _load_channel_messages(channel.id)
         if not msgs:
             # No live messages left (all soft-deleted): tombstone the main
             # entity so ingestion purges its chunks. Thread entities can't
@@ -208,9 +193,34 @@ def _iter_kind_chunks(
             acl_user_ids=acl_user_ids,
             messages=msgs,
             project_id=project_id,
-            sender_names=sender_names,
+            sender_names=_load_sender_names({m.sender_id for m in msgs if m.sender_id}),
             summarized=summarized,
         )
+
+
+def _load_channel_messages(channel_id) -> list[Message]:
+    """A channel's live messages, oldest first by the monotonic seq so the
+    context window and thread window read chronologically. Streamed from the
+    database in pages instead of one result set; no join, because the chunker
+    reads only `sender_id` and `task_id`."""
+    return list(
+        Message.objects.filter(channel_id=channel_id, deleted_at__isnull=True)
+        .only(
+            "id",
+            "channel_id",
+            "seq",
+            "body",
+            "metadata",
+            "sender_id",
+            "task_id",
+            "thread_root_id",
+            "is_thread_reply",
+            "ts_sent_at",
+            "ts_updated_at",
+        )
+        .order_by("seq")
+        .iterator(chunk_size=500)
+    )
 
 
 def _tombstone_channel(label: str, channel: Channel, msgs: list[Message]) -> Iterator[EntityChunks]:
