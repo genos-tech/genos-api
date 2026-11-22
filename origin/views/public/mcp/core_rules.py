@@ -64,11 +64,14 @@ WORKING_RULES = (
     "instead of writing a second. When you finish work, leave one comment: ready or not, "
     "what was done, what is left. Editing a description or a note replaces the whole body "
     "unless you append or replace one passage, so read it first. When a task changes, "
-    "check its parent, its milestone and the tasks waiting on it."
+    "check its parent, its milestone and the tasks waiting on it. Link every item you "
+    "mention (tasks, notes, pull requests, web addresses) so the reader can open it. A "
+    "status must be true: in progress only while someone is working on it now; after a "
+    "change ships, re-read the task and update its status the same day."
 )
 
 #: sha256 of `canonical(WORKING_RULES)`. The genos-docs check reads this line from `main`.
-WORKING_RULES_SHA256 = "9c0461098833ffbb7d9d703a5c70de09eb6f92e2f975b679856c9dc9c377aa6b"
+WORKING_RULES_SHA256 = "76774656a4a3cb541a83cb6591acf7fbce9c3652c7d98bfb93428a20b24c4428"
 
 READING = (
     "Reading. Read a task's description from `content_markdown` when it is present, and "
