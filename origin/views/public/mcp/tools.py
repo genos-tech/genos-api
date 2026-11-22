@@ -449,7 +449,7 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone counts as Closed or Deleted even when its own `status` is still "
             "open, and then `closed_by_ancestor` names that ancestor. Its own `status` is "
             "never changed by this, so do not 'fix' it. This is the first call when the "
-            "user names a task to work on. Also returns the comments left ON THE TASK BODY as "
+            "user names a task to work on: read its comments before you start. Also returns the comments left ON THE TASK BODY as "
             "`body_comment_threads`: each with the `anchor_text` it sits on, its replies (`author`, `ts`, "
             "`markdown`, and `via` on a comment an AI app wrote) and whether it is `resolved`. Open "
             "threads come first; resolved ones are left out unless `include_resolved` is true. Answer one "
@@ -1310,7 +1310,9 @@ CATALOG: tuple[McpTool, ...] = (
         registry_name="add_comment",
         description=(
             "Post a comment on a task. This is how you report back — the PR "
-            "link, what you changed, anything you had to decide. The comment "
+            "link, what you changed, anything you had to decide. When you finish "
+            "work on a task, leave one: ready or not, what was done, what is "
+            "left. The comment "
             "appears in the task's thread and notifies the assignee. "
             "Requires a write-scoped API key."
         ),
@@ -1603,7 +1605,10 @@ CATALOG: tuple[McpTool, ...] = (
             "`chat_id` — its id (from `list_my_chats`) or Genos URL — optionally `thread_id`). Folder "
             "ids come from `list_note_folders`. `content_text` is markdown — "
             "headings, lists and code fences are preserved. When the work "
-            "wants TASKS rather than a document, use `create_task_plan`. "
+            "wants TASKS rather than a document, use `create_task_plan`. When you or "
+            "the user decide something, write it down as a note titled "
+            "'Decision: ...' with the reason, who decided and the date (search "
+            "first: update an existing one rather than writing a second). "
             "Requires a write-scoped API key."
         ),
         write=True,
@@ -2158,7 +2163,8 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Catch the member up and help them plan, in one call. Use it first when they "
             "say 'catch me up', 'what's going on', 'what should I do today' or 'wrap up my "
-            "day'. It returns: `changed_for_me`, what OTHER people did on the member's own "
+            "day', and at the start of a work session when they name no task ('let's get "
+            "to work', 'what's next'). It returns: `changed_for_me`, what OTHER people did on the member's own "
             "things (tasks, threads they are in, notes they own), grouped by item with each "
             "item's events in time order and the busiest first, so read an item as a story, "
             "not a list of events, and `chat_answers` in it, the top-level messages other people "

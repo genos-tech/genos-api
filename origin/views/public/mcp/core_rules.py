@@ -88,7 +88,8 @@ READING = (
 
 CATCHING_UP = (
     "Catching up. When the user asks to be caught up, what to do today, what changed or "
-    "to wrap up their day, start with `get_my_briefing`. Do not ask them to report what "
+    "to wrap up their day, or starts a work session without naming a task, start with "
+    "`get_my_briefing`. Do not ask them to report what "
     "they did or will do: Genos reads what is written in tasks, notes and comments, and "
     "what is not written is not known, which is fine. Keep answers short and end on a "
     "next step they can answer in a word. Change the user's work only once they agree "
