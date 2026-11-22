@@ -1,6 +1,6 @@
 """REST endpoints for the CSV task import (MIP-1835). The logic is `services/task_import.py`.
 
-POST /api/v2/task/import/preview/        multipart: file, project_id, [mapping, status_map, priority_map]
+POST /api/v2/task/import/preview/        multipart: file (CSV, or a Jira JSON export: MIP-1837), project_id, [mapping, status_map, priority_map]
 POST /api/v2/task/import/                the same + create_tags: creates the tasks
 GET  /api/v2/task/import/runs/?project_id=   the project's import runs
 GET  /api/v2/task/import/runs/<run_id>/undo/ what an undo would remove and keep
@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_import_models import TaskImportRun
 from origin.search_engine.quota import TASK_CREATE_KEY
-from origin.services import task_import
+from origin.services import task_import, task_import_jira
 from origin.services.archive import archived_project_response
 from origin.services.member_roles import EDITOR, OWNER, resolve_project_role
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -68,6 +68,12 @@ def _lower_keys(value):
     return {str(k).strip().lower(): v for k, v in value.items()}
 
 
+def _looks_like_json(name: str, data: bytes) -> bool:
+    if name.lower().endswith(".json"):
+        return True
+    return data.lstrip(b"\xef\xbb\xbf \t\r\n")[:1] in (b"{", b"[")
+
+
 def _prepare(request, project):
     """The parsed, resolved file, or a Response that refuses it."""
     upload = request.FILES.get("file")
@@ -82,8 +88,13 @@ def _prepare(request, project):
     if res := check_upload_size(request.user, upload, fallback_bytes=task_import.MAX_BYTES):
         return None, res
     data = upload.read()
+    jira_json = _looks_like_json(getattr(upload, "name", "") or "", data)
+    extras = None
     try:
-        headers, rows = task_import.parse(task_import.decode(data))
+        if jira_json:
+            headers, rows, extras = task_import_jira.parse_jira_json(data)
+        else:
+            headers, rows = task_import.parse(task_import.decode(data))
     except task_import.ImportError_ as exc:
         extra = {"limit": task_import.MAX_ROWS} if exc.code == "too_many_rows" else {}
         return None, _refuse(exc.code, exc.status, **extra)
@@ -104,6 +115,11 @@ def _prepare(request, project):
         status_map=_lower_keys(_json_field(request, "status_map")),
         priority_map=_lower_keys(_json_field(request, "priority_map")),
     )
+    if extras is not None:
+        for r, extra in zip(resolved["rows"], extras, strict=True):
+            r["_comments"] = extra["comments"]
+            r["comment_count"] = len(extra["comments"])
+        profile = "jira_json"
     return {
         "upload": upload,
         "sha": hashlib.sha256(data).hexdigest(),
