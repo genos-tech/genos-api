@@ -212,7 +212,6 @@ class BriefingTodayStructuredTests(BriefingBase):
         self.assertEqual(codes["priority"]["priority"], "High")
         self.assertEqual(len(row["reasonCodes"]), len(row["reasons"]))
 
-
     def test_rows_carry_what_the_page_draws(self):
         today = timezone.now().date()
         task = self.make_task(
