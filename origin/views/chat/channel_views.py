@@ -46,6 +46,7 @@ from origin.serializers.chat.unified_serializers import (
     ChannelSerializer,
     MessageSerializer,
 )
+from origin.services.archive import archived_channel_response
 from origin.services.channel_delete import MODES, SOFT, ChannelDeleteError, delete_group_chat
 from origin.services.channel_scope import (
     chat_member_rows,
@@ -886,6 +887,8 @@ class ChannelDetailView(AuthenticatedAPIView):
         patch rolls back.
         """
         channel = _get_channel_for_user(channel_id, request.user)
+        if res := archived_channel_response(channel):
+            return res
         if channel.kind == ChannelKind.DM:
             return Response(
                 {"error": "DM channels cannot be renamed."},

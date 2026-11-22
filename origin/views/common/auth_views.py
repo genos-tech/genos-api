@@ -28,16 +28,20 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
+from origin.models.common.team_models import TeamMaster
 from origin.services import demo_v2
 from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
-    create_demo_environment,
+    DEMO_PROVISION_MAX_FAILURES,
+    create_demo_people,
     delete_demo_environment,
-    kick_off_demo_reindex,
+    demo_provision_failures,
+    is_demo_workspace_provisioned,
+    start_demo_provisioning,
 )
 from origin.services.security_events import record_security_event, typed_address_label
-from origin.services.throttles import AuthThrottle
+from origin.services.throttles import AuthThrottle, WindowRateThrottle
 from origin.views.utils.request_validators import body_object
 
 from .base_auth_api_view import AuthenticatedAPIView
@@ -438,6 +442,18 @@ def _demo_language(request: Request) -> str:
     return "en"
 
 
+class DemoWorkspaceThrottle(WindowRateThrottle):
+    """The app polls this about once a second while the sample workspace is built."""
+
+    rate = "600/hour"
+    scope = "demo_workspace"
+
+
+def _demo_workspace_status(team_id) -> str:
+    team = TeamMaster.objects.filter(team_id=team_id).first()
+    return "ready" if team is not None and is_demo_workspace_provisioned(team) else "pending"
+
+
 class DemoSignInView(APIView):
     """Provision a one-click demo user, team, and seeded sample data.
 
@@ -472,9 +488,9 @@ class DemoSignInView(APIView):
                     is_demo=True,
                     is_email_verified=True,
                 )
-                team_info = create_demo_environment(
-                    user, lang=lang, version=demo_v2.VISITOR_VERSION
-                )
+                # The team and its people only; the content is built in the background
+                # (MIP-1879), the app shows a "setting up" state until it is there.
+                team_info = create_demo_people(user, lang=lang, version=demo_v2.VISITOR_VERSION)
         except Exception as exc:
             logger.exception("Demo signin failed: %s", exc)
             return Response(
@@ -482,12 +498,13 @@ class DemoSignInView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # The seeded chats/tasks/notes need to land in OpenSearch before
-        # the demo user can use Spotlight (Cmd-K AI). The scheduled cron
-        # only runs every 10 min — too slow for a first-impression demo.
-        # Fire an incremental reindex on a background thread so the
-        # signin response stays fast; failures are logged but non-fatal.
-        kick_off_demo_reindex()
+        # Build the workspace content now (tests: inline) or on a daemon thread; the reindex that
+        # makes it searchable runs right after it, inside `provision_demo_workspace`. A failure
+        # is logged, never raised: the visitor is signed in and the status endpoint retries.
+        try:
+            start_demo_provisioning(team_info["team_id"])
+        except Exception as exc:
+            logger.exception("Demo workspace provisioning could not start: %s", exc)
 
         refresh = RefreshToken.for_user(user)
         record_security_event(
@@ -518,10 +535,42 @@ class DemoSignInView(APIView):
             # code degrades to "en"), and the UI should follow the
             # workspace rather than its own toggle if they disagree.
             "lang": lang,
+            # "ready" when the content is already built (inline mode), else "pending": the app
+            # polls `POST /api/v2/user/demo/workspace/` until it reads "ready".
+            "workspace_status": _demo_workspace_status(team_info["team_id"]),
         }
         response = JsonResponse(response_data, status=201)
         _set_refresh_cookie(response, str(refresh))
         return response
+
+
+class DemoWorkspaceView(APIView):
+    """Is the demo visitor's sample workspace built yet (MIP-1879)?
+
+    `{"status": "ready" | "pending" | "failed"}`. A POST because a pending answer also (re)starts
+    the build when no thread is running: a gunicorn worker recycle kills its daemon threads, and
+    this is the self-heal. Only the caller's OWN demo team is ever looked at.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [DemoWorkspaceThrottle]
+
+    def post(self, request: Request):
+        user = request.user
+        team = (
+            TeamMaster.objects.filter(owner=user, is_demo=True, is_deleted=False).first()
+            if getattr(user, "is_demo", False)
+            else None
+        )
+        if team is None:
+            return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if is_demo_workspace_provisioned(team):
+            return Response({"status": "ready"})
+        if demo_provision_failures(team.team_id) >= DEMO_PROVISION_MAX_FAILURES:
+            return Response({"status": "failed"})
+        start_demo_provisioning(team.team_id)
+        # Inline mode (tests) has just built it.
+        return Response({"status": "ready" if is_demo_workspace_provisioned(team) else "pending"})
 
 
 def _refresh_token_password_is_current(refresh_value: str) -> bool:

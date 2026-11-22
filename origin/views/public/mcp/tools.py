@@ -131,6 +131,7 @@ from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
 from origin.search_engine.agent.tools import get_mcp_tool, search_window
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.services.archive import archived_refusal_for_args
 from origin.services.note_comments import note_comment_fields
 from origin.services.security_events import (
     DESTRUCTIVE_DONE,
@@ -147,6 +148,7 @@ from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only too
     result_limits,
     secretary,
     surfaces,
+    task_body_threads,
     via_privacy,
 )
 from origin.views.public.mcp.history_window import hide_old_messages  # noqa: E402
@@ -248,6 +250,35 @@ _BLOCK_ID_SCHEMA = {
         "needed when `note_id` is a block link. If both are given they must name the same block."
     ),
 }
+
+
+# The write tools that change a project's own data (not notes, todos, calendar, schedules, memory,
+# importance, or join requests): refused while the project is archived (MIP-1887).
+ARCHIVE_GUARDED_TOOLS = frozenset(
+    {
+        "update_task",
+        "add_comment",
+        "update_comment",
+        "delete_comment",
+        "delete_task_attachment",
+        "restore_task_body",
+        "add_task_delivery",
+        "remove_task_delivery",
+        "update_task_dependencies",
+        "create_task",
+        "assign_task",
+        "update_tasks_bulk",
+        "create_task_plan",
+        "manage_milestone",
+        "delete_milestone",
+        "manage_sprint",
+        "delete_sprint",
+        "manage_project",
+        "manage_project_members",
+        "add_project_tag",
+        "manage_project_labels",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -418,11 +449,69 @@ CATALOG: tuple[McpTool, ...] = (
             "milestone counts as Closed or Deleted even when its own `status` is still "
             "open, and then `closed_by_ancestor` names that ancestor. Its own `status` is "
             "never changed by this, so do not 'fix' it. This is the first call when the "
-            "user names a task to work on."
+            "user names a task to work on. Also returns the comments left ON THE TASK BODY as "
+            "`body_comment_threads`: each with the `anchor_text` it sits on, its replies (`author`, `ts`, "
+            "`markdown`, and `via` on a comment an AI app wrote) and whether it is `resolved`. Open "
+            "threads come first; resolved ones are left out unless `include_resolved` is true. Answer one "
+            "with `reply_to_task_body_comment`, settle it with `resolve_task_body_comment`, start a new one "
+            "on a passage with `comment_on_task_body`; all three take the task and the `thread_id`."
         ),
         task_ref_args=("task_id",),
         schema_overrides={"task_id": _TASK_REF_SCHEMA},
-        augment=_chain(progress.with_task_progress, ancestry.with_task_ancestry),
+        mcp_only_args={
+            "include_resolved": {
+                "type": "boolean",
+                "description": "Also return the resolved comment threads on the task body. Default false.",
+            },
+        },
+        augment=_chain(
+            progress.with_task_progress,
+            ancestry.with_task_ancestry,
+            task_body_threads.read.with_body_threads,
+        ),
+    ),
+    # ---- comments on a task body (MIP-1863): MCP-only; the read is get_task's augment above ----
+    McpTool(
+        name="comment_on_task_body",
+        registry_name="comment_on_task_body",
+        description=(
+            "Start a new comment thread on a passage of a task's body, as the caller. Pass the task "
+            "(its display id, URL or numeric id), `anchor_text` (the passage, copied exactly from the "
+            "body's plain text: `content_text` in `get_task`) and `text` (plain text). Use `block_id` or "
+            "`occurrence` when the passage appears more than once. A task nobody has opened in Genos "
+            "cannot take one yet. Requires a write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA},
+    ),
+    McpTool(
+        name="reply_to_task_body_comment",
+        registry_name="reply_to_task_body_comment",
+        description=(
+            "Reply to a comment thread on a task's body, as the caller: it shows in the task's editor next "
+            "to the other replies, marked as written through a connected app. Take `thread_id` from "
+            "`body_comment_threads` in `get_task`. `text` is plain text, one paragraph per line; no "
+            "formatting or @-mentions; to start a thread use `comment_on_task_body`. Anyone who can read "
+            "the task may reply. Requires a write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA, "thread_id": _THREAD_ID_SCHEMA},
+    ),
+    McpTool(
+        name="resolve_task_body_comment",
+        registry_name="resolve_task_body_comment",
+        description=(
+            "Mark a comment thread on a task's body resolved. Stricter than the editor: only the thread's "
+            "author or the task's assignee or reporter can; anyone else is refused (use "
+            "`reply_to_task_body_comment`). Resolving a resolved thread changes nothing. Take `thread_id` "
+            "from `body_comment_threads` in `get_task`. Reopening a thread is done in the editor. Requires "
+            "a write-scoped API key."
+        ),
+        write=True,
+        task_ref_args=("task_id",),
+        schema_overrides={"task_id": _TASK_REF_SCHEMA, "thread_id": _THREAD_ID_SCHEMA},
     ),
     McpTool(
         name="list_my_tasks",
@@ -476,7 +565,7 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Every project the caller can see, with the numeric ids and "
             "short codes other tools take. Call this to turn a project name "
-            "into an id."
+            "into an id. A result marked `archived: true` (a project, or a task, chat or hit in one) is read-only: show it, but never propose new work in it."
         ),
     ),
     McpTool(
@@ -2706,6 +2795,7 @@ OVERWRITE_TOOLS = frozenset(
         "update_todo_item",
         "update_my_schedule",
         "resolve_note_comment",  # settles a thread; the editor can reopen it
+        "resolve_task_body_comment",  # settles a thread on a task body; the editor can reopen it
         "set_item_importance",  # replaces the member's mark on one task
         "tune_my_importance",  # replaces how a signal counts
     }
@@ -2727,6 +2817,8 @@ ADDITIVE_WRITE_TOOLS = frozenset(
         "manage_project_labels",
         "comment_on_note",  # adds a thread and marks the words it is about; no text changes
         "reply_to_note_comment",  # adds one comment to a thread; nothing existing changes
+        "comment_on_task_body",  # adds a thread on a task body and marks its words; no text changes
+        "reply_to_task_body_comment",  # adds one comment to a task body thread; nothing existing changes
         "run_my_schedule",  # adds a report to the member's own Inbox
     }
 )
@@ -3156,6 +3248,11 @@ def call(
     try:
         _require_task_refs(tool, args)
         args = resolve_references(tool, args, ctx.team_id)
+        if tool.write and tool.name in ARCHIVE_GUARDED_TOOLS:
+            # MIP-1887: an archived project is read-only on this surface too. The tools write
+            # through the registry, not the REST views, so the guard has to sit here.
+            if why := archived_refusal_for_args(args):
+                raise ToolError(why)
         if (
             limits
             and tool.write

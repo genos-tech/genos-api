@@ -89,6 +89,7 @@ from origin.search_engine.quota import (
     check_remaining_monthly,
     increment_usage,
 )
+from origin.services.archive import archived_refusal
 from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_service import ensure_backing_task
 from origin.services.task_card_post import post_task_created_card
@@ -222,6 +223,11 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
     if ctx.user_id not in allowed:
         raise ToolForbidden(f"Not authorized to create tasks in project {project_id}.")
+
+    # MIP-1852: no new work in an archived project (the app's create refuses it with 409). After the
+    # membership check, so a stranger learns nothing about the project's state.
+    if why := archived_refusal(project):
+        raise ToolError(f"{why} Nothing was created.")
 
     # MIP-1589 (flag `AGENT_PARITY_FOLLOWUPS`): a task the app's own form would refuse because a field the
     # project requires is missing is refused here too (`project_field_rules`).
@@ -483,7 +489,9 @@ CREATE_TASK = Tool(
         "Create a new task in a project. REQUIRES USER APPROVAL — the "
         "user will see your proposed arguments and decide whether to "
         "execute. Use this when the user explicitly asks you to create / "
-        "add / file a task. Required: title, project_id. Optional: "
+        "add / file a task. Search first (`search_knowledge_base`): a "
+        "duplicate is worse than a missing task, so add to an existing task "
+        "instead of creating a second. Required: title, project_id. Optional: "
         "content_text (markdown body), milestone_id (file it under an "
         "existing milestone), parent_task_id (file it under an existing "
         "task in the same project; not together with milestone_id), assignee_id, tags, priority, effort_level, due_date "

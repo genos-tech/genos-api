@@ -14,7 +14,7 @@ that the same ACL filter is on every request, whatever type is asked for.
 from unittest import mock
 
 from django.conf import settings
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from origin.search_engine import search as S
 from origin.search_engine.agent.tools import search_kb
@@ -83,7 +83,7 @@ class ToolPassThroughTests(SimpleTestCase):
         self.assertIsNone(self._run()["entity_types"])
 
 
-class HitShapeTests(SimpleTestCase):
+class HitShapeTests(TestCase):
     def _matches(self, *hits):
         with mock.patch.object(search_kb, "search", return_value={"results": list(hits)}):
             return search_kb._run({"query": "x"}, CTX)["matches"]

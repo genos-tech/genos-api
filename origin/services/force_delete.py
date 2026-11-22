@@ -229,9 +229,31 @@ def may_force_delete_note(family: str, note_id, user) -> bool:
 # ---------------------------------------------------------------------------------------------
 
 
+def _erase_chat_email_rows(message: Message) -> int:
+    """MIP-1950: the PENDING `chats` outbox row of a plain message has the text and the chat url but
+    no link to the message or an inbox row (`email_enqueue.enqueue_email_for_message`), so
+    `erase_notification_traces` cannot find it. Match it the way it was written, BEFORE the text
+    is blanked. Rows already SENT stay (they left the building). An edited message's row quotes the
+    text before the edit and does not match: the outbox retention is the backstop."""
+    from origin.models.common.notification_models import EmailNotificationEvent
+    from origin.services.webpush_dispatch import _chat_url, _truncate
+
+    body = _truncate(message.body_text)
+    if not body or message.channel_id is None:
+        return 0
+    return EmailNotificationEvent.objects.filter(
+        status=EmailNotificationEvent.STATUS_PENDING,
+        category="chats",
+        url=_chat_url(message.channel),
+        body=body,
+        ts_created_at__gte=message.ts_sent_at,
+    ).delete()[0]
+
+
 def _erase_message(message: Message, report: ForceDeleteReport, files: list[str]) -> None:
     """Everything a message says or hangs off it, except its (now empty) row. In the caller's
     transaction."""
+    report.removed["email rows and reminder cards"] += _erase_chat_email_rows(message)
     newly = message_tombstone.tombstone_message(message)
     if newly and message.parent_id is not None:
         Message.objects.filter(pk=message.parent_id, reply_count__gt=0).update(
@@ -302,8 +324,9 @@ def force_delete_my_messages(
         for message in batch:
             _erase_message(message, report, files)
         report.remaining = todo.count()
-        # The open chats (the caller's other tabs, the partner's app) show the blank rows now.
-        realtime_push.push_messages(batch, realtime_push.UPDATED)
+        # The open chats (the caller's other tabs, the partner's app) blank the rows now: one bulk
+        # event for the batch (MIP-1951).
+        realtime_push.push_messages_deleted(channel, batch)
         _event(
             request=request,
             team_id=channel.team_id,

@@ -22,6 +22,7 @@ from origin.views.common.billing_views import (
     TeamBillingConfigView,
     TeamBillingPortalView,
 )
+from origin.views.common.briefing_today_views import BriefingTodayView
 from origin.views.common.calendar_views import (
     CalendarEventDetailView,
     CalendarEventsAggregateView,
@@ -100,6 +101,12 @@ from origin.views.common.security_event_views import (
     MySecurityEventListView,
     TeamSecurityEventListView,
 )
+from origin.views.common.slack_import_views import (
+    SlackImportPreviewView,
+    SlackImportRunsView,
+    SlackImportUndoView,
+    SlackImportView,
+)
 from origin.views.common.team_connection_views import (
     CrossTeamNoticeView,
     ExternalShareObjectView,
@@ -135,6 +142,7 @@ urlpatterns = [
     path("api/v2/user/signin/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/v2/user/signin/refresh/", CookieTokenRefreshView.as_view(), name="token_refresh"),
     path("api/v2/user/demo/", DemoSignInView.as_view(), name="demo_signin"),
+    path("api/v2/user/demo/workspace/", DemoWorkspaceView.as_view(), name="demo_workspace"),
     path("api/v2/user/signout/", LogoutView.as_view(), name="signout"),
     path(
         "api/v2/user/password-reset/request/",
@@ -435,6 +443,8 @@ urlpatterns = [
         MemberEventsPreferenceView.as_view(),
         name="member_events_preference",
     ),
+    # The "today" briefing for the Tasks dashboard and the Genos page (MIP-1005, MIP-1696).
+    path("api/v2/briefing/today/", BriefingTodayView.as_view(), name="briefing_today"),
     # What Genos remembers: see, correct, delete (MIP-1088). The delete route is last so the
     # fixed words above it are never read as a `what`.
     path("api/v2/user/memory/", MemoryOverviewView.as_view(), name="memory_overview"),
@@ -564,6 +574,27 @@ urlpatterns = [
     ),
     # The sample data made with the team, previewed (GET) and removed (POST): owner only.
     path("api/v2/team/sample-data/", SampleDataView.as_view(), name="team_sample_data"),
+    # Slack export import (MIP-1836): owner only; preview, commit, runs, undo.
+    path(
+        "api/v2/team/import/slack/preview/",
+        SlackImportPreviewView.as_view(http_method_names=["post", "options"]),
+        name="slack_import_preview",
+    ),
+    path(
+        "api/v2/team/import/slack/",
+        SlackImportView.as_view(http_method_names=["post", "options"]),
+        name="slack_import",
+    ),
+    path(
+        "api/v2/team/import/slack/runs/",
+        SlackImportRunsView.as_view(http_method_names=["get", "options"]),
+        name="slack_import_runs",
+    ),
+    path(
+        "api/v2/team/import/slack/runs/<uuid:run_id>/undo/",
+        SlackImportUndoView.as_view(http_method_names=["get", "post", "options"]),
+        name="slack_import_undo",
+    ),
     path(
         "api/v2/team/member/remove/",
         RemoveTeamMemberView.as_view(),
