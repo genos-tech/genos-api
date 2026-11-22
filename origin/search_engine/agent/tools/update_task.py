@@ -94,6 +94,7 @@ from origin.services.task_status_reason import (
     locked_status_change,
     post_status_change_comment,
     status_reason_error,
+    status_reason_suggestions,
 )
 from origin.views.utils.scope_guards import is_team_member
 
@@ -229,6 +230,9 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     update_fields: list[str] = []
     changed: list[str] = []
     status_change: tuple[str, str] | None = None
+    # MIP-1997: what the reply suggests when a status changed with no reason (Ken, 2026-11-22:
+    # guide with suggestions, never refuse). Same `suggestions` key as MIP-2015.
+    suggestions: list[dict[str, Any]] = []
 
     # --- title ---
     if "title" in args and args["title"] is not None:
@@ -277,7 +281,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 f"`status` must be one of {sorted(_VALID_STATUSES)} (got {new_status!r})."
             )
         if new_status != task.status:
-            # MIP-1997: a status change says why; the reason is posted as a comment below.
+            # MIP-1997: a status change should say why; a given reason is posted as a comment
+            # below, a missing one is only suggested in the reply. Too long is refused.
             if message := status_reason_error(task.status, new_status, args.get("reason")):
                 raise ToolError(message)
             status_change = (task.status, new_status)
@@ -597,6 +602,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             # MIP-1997: the reason, as a comment in the caller's name, in the same transaction as
             # the status. For a milestone `task` is its backing row, where its comments live.
             if status_change is not None:
+                suggestions = status_reason_suggestions(*status_change, args.get("reason"))
                 post_status_change_comment(
                     task_id=task.task_id,
                     actor_id=ctx.user_id,
@@ -675,6 +681,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             + (f" (was {display_id_before})" if task.display_id != display_id_before else "")
         ),
     }
+    if suggestions:
+        result["suggestions"] = suggestions
     if move_report and (said := move_report_said(move_report)):
         # Task notes whose author is not on the destination lost their Owner role (a move back
         # writes it again), and who filed a moved task without being on the destination keeps
@@ -818,7 +826,8 @@ UPDATE_TASK = Tool(
             "reason": {
                 "type": "STRING",
                 "description": (
-                    "Why `status` changes. Required with `status`; posted as a comment."
+                    "Why `status` changes, posted as a comment. Optional, but without it the "
+                    "reply suggests adding one."
                 ),
             },
             "priority": {

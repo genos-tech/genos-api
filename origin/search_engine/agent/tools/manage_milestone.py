@@ -98,6 +98,7 @@ from origin.services.task_project_move import (
 from origin.services.task_status_reason import (
     post_status_change_comment,
     status_reason_error,
+    status_reason_suggestions,
 )
 from origin.views.utils.scope_guards import can_access_task, is_project_member
 
@@ -489,7 +490,8 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         fields["tags"] = parsed["tags"] or None
         changed.append("tags" if parsed["tags"] else "tags(cleared)")
 
-    # MIP-1997: a status change says why; the reason is posted as a comment below.
+    # MIP-1997: a status change should say why; a given reason is posted as a comment below, a
+    # missing one is suggested in the reply. Only a reason too long for one comment is refused.
     status_change: tuple[str, str] | None = None
     if "status" in fields:
         status_change = (milestone.status, fields["status"])
@@ -615,6 +617,11 @@ def _update(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "changed_fields": changed,
         "__summary__": f"Updated {_label(payload)}: {', '.join(changed)}",
     }
+    if status_change is not None and (
+        suggestions := status_reason_suggestions(*status_change, args.get("reason"))
+    ):
+        # MIP-1997: no reason given: the status changed anyway, the reply suggests one.
+        result["suggestions"] = suggestions
     if destination is not None:
         # What the move did, for the model to report and not to guess: the display ids are new, and
         # what belonged to the old project is gone.
@@ -938,7 +945,8 @@ MANAGE_MILESTONE = Tool(
             "reason": {
                 "type": "STRING",
                 "description": (
-                    "'update': why `status` changes. Required with `status`; posted as a comment."
+                    "'update': why `status` changes, posted as a comment. Optional, but "
+                    "without it the reply suggests adding one."
                 ),
             },
             "tags": {

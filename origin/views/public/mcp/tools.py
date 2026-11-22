@@ -1252,11 +1252,12 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Change a task: status, title, description, priority, effort, "
             "due date or milestone. Set status to 'WIP' when you start and "
-            "'Closed' when the work is merged. Changing `status` needs a "
-            "`reason` (one short sentence: why it is Pending or Blocked and "
+            "'Closed' when the work is merged. When you change `status`, "
+            "give a `reason` (one short sentence: why it is Pending or Blocked and "
             "when it comes back, what shipped, why it is reopened): Genos posts "
-            "it on the task as a comment in your name, and refuses the call "
-            "without it. `content_text` replaces the "
+            "it on the task as a comment in your name. Without one the change "
+            "still goes through and the reply carries a `suggestions` entry "
+            "asking for it. `content_text` replaces the "
             "whole description, so read the task first and send the full new "
             "body rather than a fragment. To change part of it, send one of "
             "`body_append` / `body_prepend` (markdown added at the end / "
@@ -1770,9 +1771,9 @@ CATALOG: tuple[McpTool, ...] = (
             "deletes no milestone, they become unfiled, and are not put back if "
             "the folder is recreated. A milestone can't be moved to another "
             "project, and its status can't be 'Deleted': use `delete_milestone`. "
-            "An 'update' that changes `status` needs a `reason` (one short "
+            "An 'update' that changes `status` should give a `reason` (one short "
             "sentence), which Genos posts on the milestone as a comment in your "
-            "name. Everything is checked before anything is written, so a refused call "
+            "name; without one the reply carries a `suggestions` entry. Everything is checked before anything is written, so a refused call "
             "changes nothing. Requires a write-scoped API key."
         ),
         write=True,
