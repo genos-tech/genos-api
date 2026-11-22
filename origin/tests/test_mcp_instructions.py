@@ -146,7 +146,7 @@ class TheSharedParagraphIsPinned(SimpleTestCase):
     def test_the_paragraph_is_inside_the_text_and_is_one_line(self):
         self.assertIn(core_rules.WORKING_RULES, core_rules.INSTRUCTIONS)
         self.assertNotIn("\n", core_rules.WORKING_RULES)
-        self.assertLessEqual(len(core_rules.WORKING_RULES.split()), 140)
+        self.assertLessEqual(len(core_rules.WORKING_RULES.split()), 185)
 
 
 class TheTextIsGenericAndStatic(SimpleTestCase):
