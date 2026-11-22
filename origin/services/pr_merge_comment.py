@@ -131,6 +131,19 @@ def _other_open_prs(task: TaskMaster, pr_url: str) -> list[TaskDelivery]:
     )
 
 
+def rule_line(why: Iterable[str]) -> str:
+    """Which rule linked the PR to the task (MIP-2055): `why` holds "branch", "closes", "part_of"."""
+    why = set(why)
+    parts = []
+    if "branch" in why:
+        parts.append("its branch name carries the task id")
+    if "closes" in why:
+        parts.append('its description says "Closes" this task')
+    if "part_of" in why:
+        parts.append('its description says "Part of" this task, so it does not close it')
+    return "Linked because " + "; ".join(parts) + "." if parts else ""
+
+
 def build_markdown(
     *,
     task: TaskMaster,
@@ -141,10 +154,13 @@ def build_markdown(
     subtasks: list[TaskMaster],
     subtask_total: int,
     other_prs: list[TaskDelivery],
+    why: frozenset[str] | set[str] = frozenset(),
 ) -> str:
     """The comment as markdown. `[#ID](task:<id>)` links become chips through `markdown_to_blocks`."""
     shown = f' "{_plain(title)}"' if _plain(title) else ""
     paras = [f"**Genos** (automatic note): [{label}]({pr_url}){shown} merged."]
+    if why:
+        paras.append(rule_line(why))
 
     def prs_line() -> str:
         links = ", ".join(
@@ -204,7 +220,14 @@ def _chip_resolver(tasks: Iterable[TaskMaster]):
 
 
 def post_merge_comment(
-    task: TaskMaster, *, owner: str, repo: str, number: int, title: str, pr_url: str
+    task: TaskMaster,
+    *,
+    owner: str,
+    repo: str,
+    number: int,
+    title: str,
+    pr_url: str,
+    why: Iterable[str] = (),
 ) -> bool:
     """Post the one comment for `task` and this merged PR. True when it was posted, False when it was
     already there (or the task is gone). `pr_url` is the canonical lowercase URL."""
@@ -226,6 +249,7 @@ def post_merge_comment(
         subtasks=subtasks,
         subtask_total=subtask_total,
         other_prs=other_prs,
+        why=set(why),
     )
     blocks = markdown_to_blocks(markdown, entity_chip_resolver=_chip_resolver(subtasks))
     blocks[0]["id"] = marker(pr_url)  # the once-per-PR key (`already_posted`)
@@ -251,7 +275,14 @@ def post_merge_comment(
 
 
 def post_merge_comments(
-    tasks: Iterable[TaskMaster], *, owner: str, repo: str, number: int, title: str, pr_url: str
+    tasks: Iterable[TaskMaster],
+    *,
+    owner: str,
+    repo: str,
+    number: int,
+    title: str,
+    pr_url: str,
+    why: dict[int, set[str]] | None = None,
 ) -> int:
     """`post_merge_comment` for each task, each in its own failure boundary: a webhook must answer
     200 whatever happens here (a 5xx is not retried by GitHub, MIP-861). Returns how many were posted."""
@@ -259,7 +290,13 @@ def post_merge_comments(
     for task in tasks:
         try:
             if post_merge_comment(
-                task, owner=owner, repo=repo, number=number, title=title, pr_url=pr_url
+                task,
+                owner=owner,
+                repo=repo,
+                number=number,
+                title=title,
+                pr_url=pr_url,
+                why=(why or {}).get(task.task_id, ()),
             ):
                 posted += 1
         except Exception:  # noqa: BLE001 — the merge already did what it does; this is a note
