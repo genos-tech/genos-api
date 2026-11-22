@@ -151,6 +151,19 @@ class TestListAndCreate(ScheduleViewBase):
         self.assertIs(available(meter=False), False, "a call that would not be recorded")
         self.assertIs(available(configured=False), False, "no model credentials here")
 
+    def test_the_list_says_when_the_member_is_out_of_ai_credits(self):
+        # MIP-1967: the form shows the AI switch disabled, with the reason, instead of offering it.
+        from origin.services.report_ai import llm  # noqa: PLC0415
+
+        def out_of_credits(block):
+            with mock.patch.object(llm, "credit_block", return_value=block):
+                res = self.client.get(LIST + self.q)
+            self.assertEqual(res.status_code, 200)
+            return res.data["aiCreditsOut"]
+
+        self.assertIs(out_of_credits(llm.SKIP_NO_CREDITS), True)
+        self.assertIs(out_of_credits(""), False)
+
     def test_a_failing_lookup_reads_as_not_available_and_does_not_fail_the_list(self):
         with mock.patch(
             "origin.services.report_ai.llm.preflight", side_effect=RuntimeError("catalog")

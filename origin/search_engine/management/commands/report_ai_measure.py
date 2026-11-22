@@ -42,6 +42,9 @@ from origin.services.report_ai import effort as effort_mod
 from origin.services.report_ai import llm, prompt, sentences, validate
 from origin.services.report_ai.context import TaskContext
 
+# The surface an operator measurement is logged under: not in `billable_surfaces`, so no charge.
+OPS_SURFACE = "ops_measure"
+
 LEVELS = ("low", "medium", "high")
 #: USD per run (10 tasks), from MIP-1210.
 ESTIMATE_USD = {"low": (0.0015, 0.0023), "medium": (0.0062, 0.0093), "high": (0.0089, 0.0193)}
@@ -374,6 +377,12 @@ class Command(BaseCommand):
         with (
             mock.patch.object(sentences, "_cache_get_many", lambda keys: {}),
             mock.patch.object(sentences, "_cache_set_many", lambda items: None),
+            # MIP-1967: an operator measurement is OUR cost, never the member's credits. It is
+            # logged in the cost ledger on a surface that is not billable (an unlisted surface is
+            # not billable by construction), and the member's balance does not gate it, so it also
+            # measures a member who has none left.
+            mock.patch.object(llm, "SURFACE", OPS_SURFACE),
+            mock.patch.object(llm, "credit_block", lambda user_id: ""),
         ):
             out = sentences.sentences_for(
                 ctx,
