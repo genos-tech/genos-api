@@ -202,7 +202,12 @@ class ThroughTheRealConnector(FlowBase):
         )
         self.assertEqual(res.status_code, 200, res.content)
         self.assertFalse(res.json()["result"].get("isError"), res.content)
-        return notices(self.user)
+        # Connecting made its own "new app connected" notice (MIP-2063); these tests are about the
+        # one the app's write made.
+        return [r for r in notices(self.user) if r.meta["tool"] == "create_task"]
+
+    def connected(self):
+        return [r for r in notices(self.user) if r.meta["tool"] == "app_connected"]
 
     def test_claude_is_stamped_and_only_its_owner_is_told(self):
         (row,) = self.create_task_as("Alices private Claude", CLAUDE_CB)
@@ -210,7 +215,11 @@ class ThroughTheRealConnector(FlowBase):
         self.assertEqual(row.meta["app"], "Alices private Claude")
         self.assertEqual(row.meta["credentialKind"], "oauth")
         self.assertEqual(notices(self.user2), [])
-        self.assertEqual(Activity.objects.filter(activity_type=ActivityType.AI_APP).count(), 1)
+        # The write's notice and the connection's, both the owner's.
+        self.assertEqual(Activity.objects.filter(activity_type=ActivityType.AI_APP).count(), 2)
+        (connected,) = self.connected()
+        self.assertEqual(connected.meta["appFamily"], "claude")
+        self.assertEqual((connected.meta["verb"], connected.meta["kind"]), ("connected", "app"))
 
     def test_chatgpt_is_stamped(self):
         (row,) = self.create_task_as("ChatGPT", CHATGPT_CB)
@@ -220,6 +229,8 @@ class ThroughTheRealConnector(FlowBase):
         (row,) = self.create_task_as("Claude", "https://evil.example/callback")
         self.assertNotIn("appFamily", row.meta)
         self.assertEqual(row.meta["credentialKind"], "oauth")
+        (connected,) = self.connected()
+        self.assertNotIn("appFamily", connected.meta)
 
 
 class ThroughAnApiKey(McpBase):

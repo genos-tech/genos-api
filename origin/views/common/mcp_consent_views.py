@@ -34,7 +34,8 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import mcp_connections, mcp_oauth, mcp_tier_limits
+from origin.services import mcp_connections, mcp_notice, mcp_oauth, mcp_tier_limits
+from origin.services.mcp_credential import McpOAuthCredential
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -175,9 +176,10 @@ class McpConsentDecisionView(_ConsentBase):
         with transaction.atomic():
             # Consenting again after a disconnect starts clean: whatever tokens the old
             # connection left are not woken up by the new one.
-            if McpConnection.objects.filter(
+            was_revoked = McpConnection.objects.filter(
                 user=request.user, application=application, revoked_at__isnull=False
-            ).exists():
+            ).exists()
+            if was_revoked:
                 mcp_connections.end_tokens(request.user, application)
             connection, created = McpConnection.objects.update_or_create(
                 user=request.user,
@@ -191,7 +193,12 @@ class McpConsentDecisionView(_ConsentBase):
                 },
             )
             response = self._outcome(
-                library, fake, credentials, scopes, allow=True, record=(connection, created)
+                library,
+                fake,
+                credentials,
+                scopes,
+                allow=True,
+                record=(connection, created, created or was_revoked),
             )
             if response.status_code != 200:
                 transaction.set_rollback(True)
@@ -242,7 +249,7 @@ class McpConsentDecisionView(_ConsentBase):
                 return Response({"redirect_to": url}, status=status.HTTP_200_OK)
             return _problem(code, description, redirect_to=url)
         if record:
-            connection, created = record
+            connection, created, is_new_app = record
             record_security_event(
                 SecurityAction.MCP_CONNECTED,
                 request=None,
@@ -258,4 +265,14 @@ class McpConsentDecisionView(_ConsentBase):
                     "reconsent": not created,
                 },
             )
+            if is_new_app:
+                # A new app on the account is a risky kind (MIP-2063): tell its owner, who can
+                # disconnect it if it was not them. Consenting again to an ACTIVE app is not new;
+                # one brought back after a disconnect is (the plan limit treats it the same).
+                credential = McpOAuthCredential(connection)
+                mcp_notice.notify_credential_event(
+                    credential=credential,
+                    notice=mcp_notice.connected_notice(credential, action="oauth"),
+                    tool_name="app_connected",
+                )
         return Response({"redirect_to": uri}, status=status.HTTP_200_OK)
