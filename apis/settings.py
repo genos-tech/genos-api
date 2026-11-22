@@ -2760,6 +2760,87 @@ GITHUB_OAUTH_CLIENT_SECRET = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
 # adopting it gives it its own secret too.
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
+# --- GitHub App (MIP-2057 design, MIP-2086 PR 1) ---
+# Repository access through a GitHub App (read-only, per-repository installs) replaces the
+# `repo` OAuth scope; the OAuth App above stays for sign-in. Ships DARK: off by default, and
+# the six values below are required at boot ONLY when it is on (`_validate_github_app`), so a
+# deploy without the App registered behaves exactly as before.
+GITHUB_APP_ENABLED = os.environ.get("GITHUB_APP_ENABLED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+GITHUB_APP_ID = os.environ.get("GITHUB_APP_ID", "").strip()
+GITHUB_APP_CLIENT_ID = os.environ.get("GITHUB_APP_CLIENT_ID", "").strip()
+GITHUB_APP_CLIENT_SECRET = os.environ.get("GITHUB_APP_CLIENT_SECRET", "").strip()
+# The App's RSA private key (PEM). A Railway variable holds a PEM on one line with literal `\n`
+# (or real newlines); both parse. Never logged, never defaulted. GitHub allows two keys at once,
+# so rotating it is: add a new key, deploy, delete the old one.
+GITHUB_APP_PRIVATE_KEY = os.environ.get("GITHUB_APP_PRIVATE_KEY", "").replace("\\n", "\n").strip()
+# Signs the App webhook (`X-Hub-Signature-256`); used by the App webhook endpoint (a later PR).
+GITHUB_APP_WEBHOOK_SECRET = os.environ.get("GITHUB_APP_WEBHOOK_SECRET", "").strip()
+# The App's URL slug: https://github.com/apps/<slug>/installations/new
+GITHUB_APP_SLUG = os.environ.get("GITHUB_APP_SLUG", "").strip()
+
+
+def _validate_github_app(
+    *,
+    enabled: bool,
+    app_id: str,
+    client_id: str,
+    client_secret: str,
+    private_key: str,
+    webhook_secret: str,
+    slug: str,
+) -> None:
+    """Refuse to boot with `GITHUB_APP_ENABLED` on and the App's secrets missing (MIP-2086).
+
+    Every process (web and crons: the reconcile cron will mint installation tokens). Off, it
+    checks nothing, so a deploy that has not registered the App yet is unaffected. On, a missing
+    value or a key that is not an RSA private key fails the deploy instead of failing each
+    GitHub call. Names only in the message, never a value.
+    """
+    if not enabled:
+        return
+    from django.core.exceptions import ImproperlyConfigured
+
+    named = {
+        "GITHUB_APP_ID": app_id,
+        "GITHUB_APP_CLIENT_ID": client_id,
+        "GITHUB_APP_CLIENT_SECRET": client_secret,
+        "GITHUB_APP_PRIVATE_KEY": private_key,
+        "GITHUB_APP_WEBHOOK_SECRET": webhook_secret,
+        "GITHUB_APP_SLUG": slug,
+    }
+    missing = [name for name, value in named.items() if not value]
+    if missing:
+        raise ImproperlyConfigured(
+            "GITHUB_APP_ENABLED is true but these are unset: " + ", ".join(missing) + "."
+        )
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    try:
+        key = load_pem_private_key(private_key.encode(), password=None)
+    except (ValueError, TypeError):
+        raise ImproperlyConfigured(
+            "GITHUB_APP_PRIVATE_KEY is not a valid unencrypted PEM private key."
+        ) from None
+    if not isinstance(key, RSAPrivateKey):
+        raise ImproperlyConfigured("GITHUB_APP_PRIVATE_KEY is not an RSA private key.")
+
+
+_validate_github_app(
+    enabled=GITHUB_APP_ENABLED,
+    app_id=GITHUB_APP_ID,
+    client_id=GITHUB_APP_CLIENT_ID,
+    client_secret=GITHUB_APP_CLIENT_SECRET,
+    private_key=GITHUB_APP_PRIVATE_KEY,
+    webhook_secret=GITHUB_APP_WEBHOOK_SECRET,
+    slug=GITHUB_APP_SLUG,
+)
+
 # Merge-readiness + stale-PR nudges (MIP-2056, `origin/services/pr_merge_readiness.py`). Off by
 # default: off means no extra GitHub calls, no task comment and no `merge_readiness` field.
 PR_NUDGES_ENABLED = os.environ.get("PR_NUDGES_ENABLED", "false").lower() == "true"
