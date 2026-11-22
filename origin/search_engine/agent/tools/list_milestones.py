@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Prefetch, Q
 
 from origin.models.project.prj_models import ProjectMembers
 from origin.models.task.milestone_models import MilestoneAssignees, MilestoneFolder, MilestoneMaster
@@ -25,7 +25,6 @@ from origin.search_engine.agent.tools import ancestor_rule
 from origin.search_engine.agent.tools.base import Tool, ToolContext, ToolError, ToolForbidden
 from origin.search_engine.agent.tools.task_enums import blank_to_none
 from origin.search_engine.agent.tools.template_prompts import has_written_body
-from origin.services.milestone_rollup import milestone_work_q
 from origin.services.user_time import today_for_user_id
 
 _MAX_LIMIT = 100
@@ -48,6 +47,54 @@ def _as_status_list(value: Any) -> list[Any]:
     if isinstance(value, str):
         return [value]
     return list(value) if isinstance(value, (list, tuple, set)) else [value]
+
+
+def _rollups(milestones: list[MilestoneMaster], rule: Any, today: Any) -> dict[int, dict[str, int]]:
+    """`{milestone_id: {tasks_total, tasks_closed, overdue}}` for all rows in ONE query.
+
+    Same predicate as `milestone_work_q` (FK branch, or the children of the backing row that are
+    not milestones themselves; never the backing row, never a Deleted status or a Deleted
+    effective status), applied in Python over the candidate rows so the query count does not grow
+    with the number of milestones (it used to be one aggregate per milestone).
+    """
+    out = {m.milestone_id: {"tasks_total": 0, "tasks_closed": 0, "overdue": 0} for m in milestones}
+    if not out:
+        return out
+    backing_of = {m.milestone_id: m.task_id for m in milestones}
+    by_backing: dict[int, list[MilestoneMaster]] = {}
+    for m in milestones:
+        if m.task_id is not None:
+            by_backing.setdefault(m.task_id, []).append(m)
+    match = Q(milestone_id__in=list(out))
+    if by_backing:
+        match |= Q(parent_task_id__in=list(by_backing))
+    rows = (
+        TaskMaster.objects.filter(match, is_deleted=False, is_init_task=False)
+        .exclude(status="Deleted")
+        .values_list(
+            "task_id", "milestone_id", "parent_task_id", "is_milestone", "status", "due_date"
+        )
+    )
+    for task_id, milestone_id, parent_id, is_milestone, status, due_date in rows:
+        eff = status
+        if rule is not None:
+            if task_id in rule.deleted:
+                continue
+            if task_id in rule.closed:
+                eff = "Closed"
+        owners = {milestone_id} if milestone_id in out else set()
+        if parent_id is not None and not is_milestone:
+            owners.update(m.milestone_id for m in by_backing.get(parent_id, ()))
+        for owner in owners:
+            if task_id == backing_of[owner]:
+                continue  # the milestone's own backing row is not its work
+            agg = out[owner]
+            agg["tasks_total"] += 1
+            if eff == "Closed":
+                agg["tasks_closed"] += 1
+            if due_date is not None and due_date < today and eff not in _CLOSED_STATUSES:
+                agg["overdue"] += 1
+    return out
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -121,7 +168,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     limit = max(1, min(limit, _MAX_LIMIT))
 
     qs = (
-        MilestoneMaster.objects.select_related("project", "task", "folder")
+        MilestoneMaster.objects.select_related("project", "task", "task__project", "folder")
         .prefetch_related(
             Prefetch(
                 "milestone_assignees",
@@ -148,25 +195,14 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     qs = qs.order_by("status", "due_date", "-ts_updated_at")[:limit]
 
     rule = None
+    qs = list(qs)
     if ancestor_rule.enabled():  # MIP-1413: read the tasks by their effective status
-        qs = list(qs)
         rule = ancestor_rule.rule_for_projects({m.project_id for m in qs}, ctx.team_id)
     today = today_for_user_id(ctx.user_id)
+    rollups = _rollups(qs, rule, today)
     milestones: list[dict[str, Any]] = []
     for m in qs:
-        task_qs, sf = ancestor_rule.read_by_rule(
-            TaskMaster.objects.filter(milestone_work_q(m)).distinct(), rule
-        )
-        agg = task_qs.aggregate(
-            tasks_total=Count("task_id", distinct=True),
-            tasks_closed=Count("task_id", distinct=True, filter=Q(**{sf: "Closed"})),
-            overdue=Count(
-                "task_id",
-                distinct=True,
-                filter=Q(due_date__isnull=False, due_date__lt=today)
-                & ~Q(**{f"{sf}__in": _CLOSED_STATUSES}),
-            ),
-        )
+        agg = rollups[m.milestone_id]
         if rule is not None and m.status == "Closed":
             agg["tasks_closed"] = agg[
                 "tasks_total"
