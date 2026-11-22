@@ -15,11 +15,11 @@ the safety rules come first and "Catching up" last.
   3. Reading, 4. Catching up: server-specific, not in the skill.
 
 Single source. Only `WORKING_RULES` is shared. Its source is the marked block in genos-docs
-`skills/genos-workflow/SKILL.md` (`genos-core-rules:begin` .. `genos-core-rules:end`); this is a copy.
+`skills/rules/genos.md` (`genos-core-rules:begin` .. `genos-core-rules:end`; it was in `genos-workflow` until MIP-2050); this is a copy.
 The two repos cannot read each other at test time, so the copy is pinned: `WORKING_RULES_SHA256` is the
 sha256 of the paragraph with its whitespace collapsed to single spaces (`canonical`), a test fails when
-the paragraph and the pin disagree, and a warn-only check in the genos-docs CI compares the skill's
-block with the pin on this repo's `main`. To change the rules: edit the skill block, copy the text
+the paragraph and the pin disagree, and a warn-only check in the genos-docs CI compares the rules file's
+block with the pin on this repo's `main`. To change the rules: edit the block in skills/rules/genos.md, copy the text
 here, update the pin, in two PRs (docs first).
 
 The text is a constant. Nothing from the workspace is ever put into it, and it names no person or

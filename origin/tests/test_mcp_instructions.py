@@ -7,7 +7,7 @@ What is pinned, and why each:
   * ON is the new text: inside a size budget (Claude Code cuts at 4,096 characters, 2,048 before
     v2.1.296; ChatGPT asks for the important part in the first 512), with the four safety rules inside
     the first 512 characters, so a client that cuts the tail still keeps them.
-  * The working-rules paragraph is a COPY of a marked block in the genos-docs skill `genos-workflow`:
+  * The working-rules paragraph is a COPY of a marked block in genos-docs `skills/rules/genos.md`:
     its pin (`WORKING_RULES_SHA256`) must match the text, so the paragraph cannot change without the
     pin (which the docs CI check reads from `main`) changing in the same PR.
   * The text is a constant with no names or ids, and the in-app Genos agent never reads it: nothing
