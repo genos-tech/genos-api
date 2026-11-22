@@ -14,6 +14,7 @@ from origin.models.common.team_models import ExternalGrant, TeamMaster, TeamMemb
 from origin.models.project.prj_models import *
 from origin.search_engine.acl_dirty import mark_projects_dirty
 from origin.serializers.project.prj_serializers import *
+from origin.services.archive import archived_project_response
 from origin.services.custom_fields import CUSTOM_FIELD_TYPES, validate_field_options
 from origin.services.external_grants import external_objects_for_member
 from origin.services.member_removal import count_open_work
@@ -422,6 +423,10 @@ class ProjectMasterView(AuthenticatedAPIView):
             if not is_project_member(target_project.project_id, request_user_id):
                 raise ProjectMaster.DoesNotExist
             if target_project.owner and str(request_user_id) == str(target_project.owner.id):
+                # An archive is read-only and deleting is a content change: unarchive first
+                # (MIP-1693). Members leaving or being removed stay allowed elsewhere.
+                if target_project.archived_at is not None:
+                    return archived_project_response(target_project.project_id)
                 # Why the PM channel is soft-deleted and released first is in the service.
                 delete_project(target_project)
                 return Response(

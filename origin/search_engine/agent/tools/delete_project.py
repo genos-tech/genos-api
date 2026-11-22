@@ -29,6 +29,7 @@ from origin.search_engine.agent.tools.base import (
     wrap_workspace_content,
 )
 from origin.search_engine.agent.tools.project_access import load_project, require_member
+from origin.services.archive import ARCHIVED_MESSAGE
 from origin.services.project_delete import delete_project, project_contents
 
 
@@ -37,6 +38,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     require_member(project, ctx)
     if str(project.owner_id or "") != ctx.user_id:
         raise ToolForbidden("Only the project owner can delete the project.")
+    if project.archived_at is not None:
+        raise ToolError(f"{ARCHIVED_MESSAGE} Nothing was deleted. Unarchive it first.")
     given = args.get("project_name")
     if not isinstance(given, str) or given != project.project_name:
         # The real name is user text, so it comes back fenced.
