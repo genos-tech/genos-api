@@ -206,7 +206,16 @@ class TestOverRest(Base):
             )
         self.assertEqual(
             set(ai),
-            {"job", "title", "description", "params", "usesAi", "effortDefault", "effortCost"},
+            {
+                "job",
+                "title",
+                "description",
+                "params",
+                "usesAi",
+                "shareable",  # MIP-1420: may be posted in a chat of a project's people
+                "effortDefault",
+                "effortCost",
+            },
         )
 
 

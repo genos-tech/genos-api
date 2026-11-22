@@ -23,7 +23,8 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.services import schedule_defaults, schedule_text, schedules
+from origin.services import schedule_audience, schedule_defaults, schedule_text, schedules
+from origin.services.schedule_jobs import JOBS
 from origin.services.throttles import WindowRateThrottle
 from origin.services.user_time import user_zone
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
@@ -52,6 +53,7 @@ _FIELDS = {
     "runDate": "run_date",
     "deliverPush": "deliver_push",
     "aiEffort": "ai_effort",
+    "deliverChannelId": "deliver_channel_id",
 }
 
 
@@ -81,7 +83,7 @@ def _ai_credits_out(user_id: Any) -> bool:
     return llm.credit_block(str(user_id)) == llm.SKIP_NO_CREDITS
 
 
-def _row(sched, zone) -> dict[str, Any]:
+def _row(sched, zone, readable_chats: set[Any] | None = None) -> dict[str, Any]:
     """The service's words, with the camelCase keys the rest of Settings uses."""
     p = schedule_text.present(sched, zone)
     out: dict[str, Any] = {
@@ -112,6 +114,19 @@ def _row(sched, zone) -> dict[str, Any]:
     ):
         if key in p:
             out[wire] = p[key]
+    # Where the report goes (MIP-1420): absent = the Inbox. REST only; the connected-AI-app tools
+    # keep their shape.
+    if sched.deliver_channel_id:
+        channel = sched.deliver_channel
+        title = channel.title or (channel.project.project_name if channel.project_id else "")
+        if readable_chats is not None and sched.deliver_channel_id not in readable_chats:
+            title = ""  # the member is no longer in that chat: its name is not theirs to read
+        out["deliverChannelId"] = str(sched.deliver_channel_id)
+        out["deliverChannel"] = {
+            "id": str(sched.deliver_channel_id),
+            "title": title,
+            "kind": "project" if channel.project_id else "group",
+        }
     # The stable code beside the English label above (MIP-1231): `manual`, `failures`,
     # `left_team`, `inactive` or `plan`. REST only; the connected-AI-app tools keep their shape.
     if not sched.enabled and sched.paused_reason:
@@ -128,6 +143,11 @@ def _job(entry: dict[str, Any]) -> dict[str, Any]:
         "description": entry["description"],
         "params": entry["params"],
         "usesAi": entry["uses_ai"],
+        # Whether its report may be posted in a chat other people read (MIP-1420): it is about
+        # one project. Any job may go to a chat the member is alone in.
+        "shareable": JOBS[entry["job"]].share_project is not None
+        if entry["job"] in JOBS
+        else False,
         "effortDefault": entry["effort_default"],
         "effortCost": _camel_cost(entry["effort_cost"]),
     }
@@ -206,6 +226,9 @@ class ScheduleListView(_Base):
         if problem:
             return problem
         zone = user_zone(request.user)
+        readable = schedule_audience.readable_ids(
+            request.user.pk, (s.deliver_channel_id for s in rows)
+        )
         return Response(
             {
                 # Core and up (MIP-1213): False shows the upgrade call instead of the form.
@@ -221,7 +244,10 @@ class ScheduleListView(_Base):
                 "timeZone": zone.key,
                 "limit": schedules.schedule_limit(request.user.pk),
                 "jobs": [_job(j) for j in schedule_text.job_catalog()],
-                "schedules": [_row(s, zone) for s in rows],
+                "schedules": [_row(s, zone, readable) for s in rows],
+                # The chats a report can be pointed at (MIP-1420), for the form's picker. Whether
+                # a given report may go to one is decided when the schedule is saved.
+                "chatTargets": schedule_audience.chat_targets(request.user.pk, ctx.team_id),
                 # What the member does not have of the two defaults: one step to (re-)add.
                 "suggestions": [
                     {
@@ -256,6 +282,7 @@ class ScheduleListView(_Base):
                 run_date=fields.get("run_date"),
                 deliver_push=bool(fields.get("deliver_push", True)),
                 ai_effort=fields.get("ai_effort"),
+                deliver_channel_id=fields.get("deliver_channel_id"),
             )
         )
         if problem:

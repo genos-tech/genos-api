@@ -1,5 +1,8 @@
 """Where a schedule run's report goes: the member's own Inbox (MIP-1149).
 
+(A schedule can also point at a chat, MIP-1420: `deliver_to_chat` posts the report there as one
+message instead. Everything below describes the Inbox path.)
+
 `deliver` is the one function the runner calls. It files ONE Inbox item (`item_type`
 `ITEM_TYPE_GENOS_REPORT`, 10, in `inbox_models.py`) for the schedule's owner, in the schedule's team, and keeps the
 one-line summary on the schedule (`last_result`). A web push goes out only when the schedule
@@ -71,11 +74,13 @@ from datetime import timezone as dt_timezone
 from typing import Any
 from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.db import transaction
 
+from origin.models.chat.unified_models import Message
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
-from origin.services import inbox_ai, report_memory
+from origin.services import inbox_ai, realtime_push, report_memory, schedule_audience
 from origin.services.mcp_oauth import clean_name
 from origin.services.report_ai import llm
 from origin.services.report_memory import WHY_VALUES
@@ -297,15 +302,125 @@ def _run_key(run_at: datetime) -> str:
     return run_at.astimezone(dt_timezone.utc).isoformat()
 
 
+CHAT_MARKER = "scheduleReport"
+
+
+def chat_blocks(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """The report as the BlockNote blocks of a chat message: a heading, the summary, the
+    headline counts, then each section as a bold line and its items as a bullet list (an item
+    with a link is a link). Built from `clean_report`'s output only, so every string has passed
+    its checks, and the blocks hold no markup, mention or file."""
+    from origin.services.task_card import CARD_HEADING_PROPS, PARA_PROPS  # noqa: PLC0415
+
+    def text(value: str, **styles: Any) -> dict[str, Any]:
+        return {"type": "text", "text": value, "styles": styles}
+
+    def block(kind: str, content: list[dict[str, Any]]) -> dict[str, Any]:
+        props = CARD_HEADING_PROPS if kind == "heading" else PARA_PROPS
+        return {"type": kind, "props": dict(props), "content": content, "children": []}
+
+    def href(link: str) -> str:
+        base = str(getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+        return f"{base}{link}" if link.startswith("/") and base else link
+
+    blocks = [block("heading", [text(body["title"])]), block("paragraph", [text(body["text"])])]
+    if stats := body.get("stats"):
+        line = " · ".join(f"{s['emoji']} {s['key'].replace('_', ' ')} {s['count']}" for s in stats)
+        blocks.append(block("paragraph", [text(line, italic=True)]))
+    for section in body["sections"]:
+        label = f"{section.get('emoji', '')} {section['heading']}".strip()
+        if label:
+            blocks.append(block("paragraph", [text(label, bold=True)]))
+        for entry in section["items"]:
+            inner = [text(entry["text"])]
+            if entry.get("link"):
+                inner = [{"type": "link", "href": href(entry["link"]), "content": inner}]
+            blocks.append(block("bulletListItem", inner))
+    return blocks
+
+
+def _chat_key(schedule: MemberSchedule, run_at: datetime) -> str:
+    """The message's idempotency key (`Message.correlation_id`, 64 characters at most): the same
+    schedule and scheduled moment always give the same one."""
+    return f"sched-{schedule.id.hex}-{int(run_at.timestamp())}"
+
+
+def deliver_to_chat(
+    schedule: MemberSchedule, report: Report, *, run_at: datetime | None = None
+) -> Message | None:
+    """Post the run's report into the chat the schedule points at (MIP-1420) and note it on the
+    schedule. No model, no cost.
+
+    The message has no author (`sender` is null, as for the closing line of a task) and
+    `metadata.scheduleReport = {scheduleId, job}`: the owner is not made to say it, and nobody is
+    invented. It goes through the chat funnel (per-channel `seq` under the channel lock, the
+    idempotency key), is announced to the open chat, and rings nobody: no activity, no push.
+
+    Refused, in words and before anything is written, when the report may not be read by
+    everyone who reads the chat NOW (`schedule_audience.problem`): the rule is checked at every
+    run, not only when the schedule was saved. `run_at` works as for the Inbox: a repeat of a
+    tick's run posts once; "Run now" passes none and posts every time.
+    """
+    from origin.services.schedules import ScheduleRunError  # noqa: PLC0415 (import cycle)
+    from origin.views.chat.message_views import _allocate_seq_and_create_message  # noqa: PLC0415
+
+    channel = schedule_audience.load_target(
+        schedule.user_id, schedule.team_id, schedule.deliver_channel_id
+    )
+    if channel is None:
+        raise ScheduleRunError("The chat this report is posted in is no longer available to you.")
+    why = schedule_audience.problem(
+        schedule.user_id, schedule.team_id, channel, schedule.job, dict(schedule.params or {})
+    )
+    if why:
+        raise ScheduleRunError(why)
+
+    body = clean_report(report, schedule.name)
+    delivered = sum(len(section["items"]) for section in body["sections"])
+    result = {"title": body["title"], "items": delivered}
+    key = _chat_key(schedule, run_at) if run_at is not None else None
+    with transaction.atomic():
+        row = MemberSchedule.objects.select_for_update().filter(pk=schedule.pk).first()
+        if row is None:
+            log.info("schedule_delivery_skipped schedule=%s reason=deleted", schedule.id)
+            return None
+        if key and Message.objects.filter(channel=channel, correlation_id=key).exists():
+            log.info("schedule_delivery_repeat schedule=%s", schedule.id)
+            return None
+        message = _allocate_seq_and_create_message(
+            channel=channel,
+            sender=None,
+            body=chat_blocks(body),
+            body_text=body["title"],
+            parent_id=None,
+            metadata={CHAT_MARKER: {"scheduleId": str(schedule.id), "job": schedule.job}},
+            correlation_id=key,
+        )
+        MemberSchedule.objects.filter(pk=schedule.pk).update(last_result=result)
+    schedule.last_result = result
+    realtime_push.push_message(message, realtime_push.CREATED)
+    log.info(
+        "schedule_delivered_chat schedule=%s user=%s channel=%s items=%d",
+        schedule.id,
+        schedule.user_id,
+        channel.id,
+        delivered,
+    )
+    return message
+
+
 def deliver(
     schedule: MemberSchedule, report: Report, *, run_at: datetime | None = None
-) -> InboxItems | None:
-    """File the run's report in the owner's Inbox and note it on the schedule.
+) -> InboxItems | Message | None:
+    """File the run's report in the owner's Inbox (or, for a schedule that points at a chat,
+    post it there: `deliver_to_chat`) and note it on the schedule.
 
     `run_at` is the scheduled time of a tick's run (never given for "Run now"); an item for
     the same (schedule, run_at) is filed once. Returns the new item, or None when there was
     nothing to file (a repeat of a run already delivered, or a schedule deleted mid-run).
     """
+    if schedule.deliver_channel_id:
+        return deliver_to_chat(schedule, report, run_at=run_at)
     body = clean_report(report, schedule.name)
     delivered = sum(len(section["items"]) for section in body["sections"])
     result = {"title": body["title"], "items": delivered}

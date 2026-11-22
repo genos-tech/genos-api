@@ -53,6 +53,9 @@ from origin.services.github_webhooks import (
 from origin.services.oauth.tokens import get_valid_access_token
 from origin.services.pr_merge_comment import post_merge_comments
 from origin.services.pr_needs_you import notify_review_requested_tasks
+from origin.services.pr_references import CLOSES as PR_CLOSES
+from origin.services.pr_references import PART_OF as PR_PART_OF
+from origin.services.pr_references import parse_pr_references
 from origin.services.task_delivery import canonical_pr_url, sync_pull_request
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.utils.scope_guards import can_access_task, team_ids_for_user
@@ -600,7 +603,14 @@ def _branch_candidate_tasks(head_ref: str, team_ids: list, *select_related: str,
     )
 
 
-def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") -> int:
+def _close_tasks_for_merged_pr(
+    head_ref: str,
+    team_ids: list,
+    pr_url: str = "",
+    *,
+    closes_ids=(),
+    part_of_ids=(),
+) -> int:
     """Auto-close tasks referenced by a merged PR's head branch name.
 
     Resolution path: walk every task that has a project-scoped display
@@ -620,6 +630,11 @@ def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") 
     activity as a PR-merge auto-close (the webhook is unauthenticated,
     so the row's `actor` is null and would otherwise render as an
     anonymous "Someone changed status" edit). See `task_signals.py`.
+
+    `closes_ids` are tasks the PR's title or description names with "Closes MIP-n" (MIP-2055,
+    `pr_references`): they close like a branch id, with the same assignee opt-in and the same
+    wait for other open PRs. `part_of_ids` ("Part of MIP-n") are never closed by this PR, even
+    when a delivery row or the branch names them: the author said more work remains.
 
     Returns the count of tasks actually closed.
 
@@ -646,11 +661,15 @@ def _close_tasks_for_merged_pr(head_ref: str, team_ids: list, pr_url: str = "") 
     # below stays the judge of the first group. `team_id__in` inside it is the
     # tenant boundary: without it this loop closes tasks in any customer's
     # install that happens to share a project code.
+    part_of_ids = set(part_of_ids)
+    linked_ids = (linked_ids | set(closes_ids)) - part_of_ids
     candidates = _branch_candidate_tasks(
         head_ref, team_ids, "project", "assignee", also_task_ids=linked_ids
     ).exclude(status__in=DONE_STATUSES)
     updated = 0
     for task in candidates:
+        if task.task_id in part_of_ids:
+            continue
         if task.task_id not in linked_ids:
             display_id = task.display_id
             if not display_id or display_id.startswith("#"):
@@ -869,18 +888,64 @@ def _tasks_for_branch(head_ref: str, team_ids: list) -> list:
     ]
 
 
+def _tasks_named_in_pr_text(pr: dict, team_ids: list) -> list[tuple]:
+    """`[(task, rule)]` for the tasks a PR's title or description names with "Closes MIP-n" or
+    "Part of MIP-n" (MIP-2055), `rule` being `pr_references.CLOSES` or `PART_OF`.
+
+    The text is attacker-controlled. The id is only looked up inside `team_ids` (the registrar's
+    teams, the tenant boundary), so an id the repo's teams cannot see matches nothing, exactly as
+    for a branch name.
+    """
+    refs = parse_pr_references(pr.get("title"), pr.get("body"))
+    if not refs or not team_ids:
+        return []
+    numbers = set()
+    for display_id in refs:
+        number = int(display_id.rsplit("-", 1)[1])
+        if 0 < number <= _MAX_TASK_NUMBER:
+            numbers.add(number)
+    if not numbers:
+        return []
+    candidates = TaskMaster.objects.select_related("project").filter(
+        project_task_number__in=numbers,
+        team_id__in=team_ids,
+        is_deleted=False,
+        project__code__isnull=False,
+        project__is_deleted=False,
+    )
+    return [
+        (task, refs[task.display_id.upper()])
+        for task in candidates
+        if task.display_id.upper() in refs
+    ]
+
+
+def _tasks_for_pr(pr: dict, team_ids: list) -> tuple[list, dict]:
+    """Every task a PR is linked to, and why: `(tasks, why)` with `why` = `{task_id: set of
+    "branch" | "closes" | "part_of"}`. The branch rule is the older one (`_tasks_for_branch`)."""
+    head_ref = ((pr.get("head") or {}).get("ref")) or ""
+    tasks: dict = {}
+    why: dict = {}
+    for task in _tasks_for_branch(head_ref, team_ids):
+        tasks[task.task_id] = task
+        why.setdefault(task.task_id, set()).add("branch")
+    for task, rule in _tasks_named_in_pr_text(pr, team_ids):
+        tasks.setdefault(task.task_id, task)
+        why.setdefault(task.task_id, set()).add(rule)
+    return list(tasks.values()), why
+
+
 def _sync_task_deliveries(owner: str, repo: str, pr: dict, team_ids: list) -> dict | None:
     """Record / update `TaskDelivery` rows for one `pull_request` event
     (MIP-687). Never lets a failure here cost the auto-close or the link
     activity that follow it: those are the older contract. (A 500 would
     NOT make GitHub retry the delivery; it would be lost, MIP-861.)"""
     try:
-        head_ref = ((pr.get("head") or {}).get("ref")) or ""
         return sync_pull_request(
             owner=owner,
             repo=repo,
             pr=pr,
-            matched_tasks=_tasks_for_branch(head_ref, team_ids),
+            matched_tasks=_tasks_for_pr(pr, team_ids)[0],
             team_ids=team_ids,
         )
     except Exception:  # noqa: BLE001
@@ -909,7 +974,14 @@ def apply_pull_request(owner: str, repo: str, pr: dict, action: str | None, team
     updated = None
     head_ref = ((pr.get("head") or {}).get("ref")) or ""
     if action == "closed" and pr.get("merged") and head_ref:
-        updated = _close_tasks_for_merged_pr(head_ref, team_ids, pr.get("html_url") or "")
+        _tasks, why = _tasks_for_pr(pr, team_ids)
+        updated = _close_tasks_for_merged_pr(
+            head_ref,
+            team_ids,
+            pr.get("html_url") or "",
+            closes_ids={t for t, w in why.items() if PR_CLOSES in w},
+            part_of_ids={t for t, w in why.items() if PR_PART_OF in w},
+        )
         # After the close, so the comment reads the status the task ended up in (MIP-2016).
         _comment_on_merged_pr(owner, repo, pr, head_ref, team_ids)
     return {"deliveries": deliveries, "updated": updated}
@@ -933,7 +1005,8 @@ def _comment_on_merged_pr(owner: str, repo: str, pr: dict, head_ref: str, team_i
                 "task_id", flat=True
             )
         )
-        task_ids |= {task.task_id for task in _tasks_for_branch(head_ref, team_ids)}
+        text_tasks, why = _tasks_for_pr(pr, team_ids)
+        task_ids |= {task.task_id for task in text_tasks}
         if not task_ids:
             return 0
         tasks = TaskMaster.objects.filter(
@@ -946,6 +1019,7 @@ def _comment_on_merged_pr(owner: str, repo: str, pr: dict, head_ref: str, team_i
             number=int(number),
             title=pr.get("title") or "",
             pr_url=pr_url,
+            why=why,
         )
     except Exception:  # noqa: BLE001
         logger.exception("GitHub webhook: merge comment failed for %s/%s", owner, repo)

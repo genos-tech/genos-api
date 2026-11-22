@@ -429,7 +429,7 @@ class McpView(PublicApiView):
                 return None
             name = params.get("name") if isinstance(params, dict) else None
             args = params.get("arguments") if isinstance(params, dict) else None
-            return agent_calls.CallTrace(
+            trace = agent_calls.CallTrace(
                 user=getattr(request, "user", None),
                 team_id=ctx.team_id,
                 credential=credential,
@@ -438,6 +438,8 @@ class McpView(PublicApiView):
                 raw_args=args if isinstance(args, dict) else None,
                 run_keys=agent_calls.identify(request, params),
             )
+            agent_calls.start_run(trace)
+            return trace
         except Exception:  # noqa: BLE001 - the log never fails a call
             log.warning("agent call log trace failed", exc_info=True)
             return None
