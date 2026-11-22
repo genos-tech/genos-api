@@ -225,6 +225,39 @@ class TheRulesAreScopedAndSafe(SimpleTestCase):
         self.assertNotIn("body_replace", core_rules.INSTRUCTIONS)
 
 
+class WhenToCallIsInTheTools(SimpleTestCase):
+    """MIP-2021: on claude.ai and ChatGPT there are no hooks and no skill, so the tool descriptions
+    themselves say when to call: the briefing at the start of work, a Decision note when something is
+    decided, a completion comment when the work is done."""
+
+    def description(self, name: str) -> str:
+        return next(t.description for t in mcp_tools.CATALOG if t.name == name)
+
+    def test_the_briefing_is_also_the_start_of_a_work_session(self):
+        text = self.description("get_my_briefing")
+        self.assertIn("start of a work session", text)
+        self.assertIn("name no task", text)
+
+    def test_a_task_is_read_with_its_comments_before_work_starts(self):
+        self.assertIn("read its comments before you start", self.description("get_task"))
+
+    def test_add_comment_is_the_completion_report(self):
+        text = self.description("add_comment")
+        self.assertIn("When you finish work on a task, leave one", text)
+        self.assertIn("what is left", text)
+
+    def test_create_note_is_where_a_decision_is_written(self):
+        text = self.description("create_note")
+        self.assertIn("'Decision: ...'", text)
+        self.assertIn("who decided and the date", text)
+        self.assertIn("update an existing one", text)
+
+    def test_the_server_text_names_the_start_of_a_session(self):
+        text = core_rules.CATCHING_UP
+        self.assertIn("starts a work session without naming a task", text)
+        self.assertLessEqual(len(core_rules.INSTRUCTIONS), core_rules.MAX_CHARS)
+
+
 class OnTheWire(McpBase):
     """Both handshakes answer with the switch's text, in both protocol eras."""
 
