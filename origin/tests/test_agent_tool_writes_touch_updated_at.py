@@ -71,7 +71,7 @@ class WriteToolsTouchUpdatedAtTests(BaseAPITestCase):
     def test_update_task_status_bumps_updated_at(self):
         """The exact case the MCP loop hits: an agent moves a task to WIP."""
         task = self._task()
-        UPDATE_TASK.run({"task_id": task.task_id, "status": "WIP"}, self.ctx)
+        UPDATE_TASK.run({"task_id": task.task_id, "status": "WIP", "reason": "Test."}, self.ctx)
         self._assert_advanced(task)
 
     def test_update_task_due_date_bumps_updated_at(self):

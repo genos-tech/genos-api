@@ -291,6 +291,8 @@ UPDATE_TASK_RESTORABLE_ARGS = frozenset(
         "body_replace",
         "base_body_hash",
         "status",
+        # Why the status changed (MIP-1997): posted as a comment, which an undo leaves as history.
+        "reason",
         "priority",
         "effort_level",
         "due_date",

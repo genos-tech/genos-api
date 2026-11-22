@@ -1252,7 +1252,11 @@ CATALOG: tuple[McpTool, ...] = (
         description=(
             "Change a task: status, title, description, priority, effort, "
             "due date or milestone. Set status to 'WIP' when you start and "
-            "'Closed' when the work is merged. `content_text` replaces the "
+            "'Closed' when the work is merged. Changing `status` needs a "
+            "`reason` (one short sentence: why it is Pending or Blocked and "
+            "when it comes back, what shipped, why it is reopened): Genos posts "
+            "it on the task as a comment in your name, and refuses the call "
+            "without it. `content_text` replaces the "
             "whole description, so read the task first and send the full new "
             "body rather than a fragment. To change part of it, send one of "
             "`body_append` / `body_prepend` (markdown added at the end / "
@@ -1519,7 +1523,8 @@ CATALOG: tuple[McpTool, ...] = (
             "from `list_project_tags` ([] clears). Read the "
             "current state first (`list_tasks`, and `list_task_dependencies` "
             "so blockers land before what they block), since each entry needs "
-            "a one-sentence `rationale` recorded with the change. "
+            "a one-sentence `rationale`; when an entry changes `status` it is "
+            "posted on that task as a comment in your name. "
             "All-or-nothing: one invalid entry rejects the whole batch. Use "
             "`update_task` for a single task. Requires a write-scoped API key."
         ),
@@ -1535,8 +1540,10 @@ CATALOG: tuple[McpTool, ...] = (
             ("updates", "rationale"): {
                 "type": "string",
                 "description": (
-                    "One sentence: WHY this task is changing. Recorded with "
-                    "the change, so it is what the task's history shows."
+                    "One sentence: WHY this task is changing. When `status` "
+                    "changes it is posted on the task as a comment in your "
+                    "name (Pending or Blocked: what it waits for and when it "
+                    "comes back; Closed: what shipped)."
                 ),
             },
         },
@@ -1763,7 +1770,9 @@ CATALOG: tuple[McpTool, ...] = (
             "deletes no milestone, they become unfiled, and are not put back if "
             "the folder is recreated. A milestone can't be moved to another "
             "project, and its status can't be 'Deleted': use `delete_milestone`. "
-            "Everything is checked before anything is written, so a refused call "
+            "An 'update' that changes `status` needs a `reason` (one short "
+            "sentence), which Genos posts on the milestone as a comment in your "
+            "name. Everything is checked before anything is written, so a refused call "
             "changes nothing. Requires a write-scoped API key."
         ),
         write=True,

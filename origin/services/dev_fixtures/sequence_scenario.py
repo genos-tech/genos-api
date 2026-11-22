@@ -224,6 +224,16 @@ class SequenceStory:
         with mock.patch("django.utils.timezone.now", return_value=at):
             yield
 
+    @contextmanager
+    def _story_status_without_the_comment(self):
+        """A status change through MCP needs a `reason` and posts it as a task comment (MIP-1997).
+        The story's comments are exactly the ones it scripts (the readers' pins, the agent eval's
+        ground truth and `ground_truth` itself count them), so its two status steps keep the reason
+        (the validation stays real) but not the extra comment. What the product does is pinned by
+        `test_status_change_reason`."""
+        with mock.patch("origin.search_engine.agent.tools.update_task.post_status_change_comment"):
+            yield
+
     def _rest(self, user):
         self.authenticate(user)
 
@@ -345,8 +355,14 @@ class SequenceStory:
                     self.b, "assign_task", task_id=seq.task.task_id, assignee_id=str(self.c.id)
                 )
         if due(6):
-            with self.frozen(seq.step_at[6]):
-                self.mcp_tool(self.c, "update_task", task_id=seq.task.task_id, status="WIP")
+            with self.frozen(seq.step_at[6]), self._story_status_without_the_comment():
+                self.mcp_tool(
+                    self.c,
+                    "update_task",
+                    task_id=seq.task.task_id,
+                    status="WIP",
+                    reason="Started on it.",
+                )
         # 7: C comments in the app (`POST /api/v2/task/comment/`).
         if due(7):
             seq.comments[7] = self._comment_rest(seq, self.c, 7)
@@ -392,8 +408,14 @@ class SequenceStory:
                 )
             seq.comments[10] = self._last_comment(seq)
             seq.close_at = seq.minutes(SCHEDULE[10], 30)
-            with self.frozen(seq.close_at):
-                self.mcp_tool(self.c, "update_task", task_id=seq.task.task_id, status="Closed")
+            with self.frozen(seq.close_at), self._story_status_without_the_comment():
+                self.mcp_tool(
+                    self.c,
+                    "update_task",
+                    task_id=seq.task.task_id,
+                    status="Closed",
+                    reason="Done: the summary note is written.",
+                )
         # 11: B notices: opens the task in an AI app (a seen marker is all that leaves).
         if due(11):
             with self.frozen(seq.step_at[11]):

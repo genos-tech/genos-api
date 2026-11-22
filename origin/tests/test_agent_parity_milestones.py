@@ -38,6 +38,7 @@ from origin.search_engine.agent.tools.manage_milestone import (
 )
 from origin.search_engine.agent.tools.update_task import UPDATE_TASK
 from origin.services.milestone_service import create_milestone
+from origin.tests.status_reason_support import with_reason
 from origin.views.public.mcp import tools as mcp
 
 from .test_convert_task_milestone import ConversionBase
@@ -77,7 +78,7 @@ class ToolBase(ConversionBase):
         )
 
     def call(self, args, user=None, team=None):
-        return MANAGE_MILESTONE.run(args, self.ctx(user, team))
+        return MANAGE_MILESTONE.run({**with_reason(args), **args}, self.ctx(user, team))
 
     def to_milestone_tool(self, task, **kw):
         return self.call({"action": "convert", "task_id": task.task_id}, **kw)
@@ -538,7 +539,7 @@ FLAG_OFF_MOVE_REFUSAL = (
 )
 FLAG_OFF_TASK_ID_REFUSAL = (
     "`task_id` does not apply to `update`; it takes `assignee_ids`, `description_markdown`, "
-    "`due_date`, `effort_level`, `milestone_folder_id`, `milestone_id`, `priority`, `sprint_id`, "
+    "`due_date`, `effort_level`, `milestone_folder_id`, `milestone_id`, `priority`, `reason`, `sprint_id`, "
     "`start_date`, `status`, `tags`, `title`. Nothing was changed."
 )
 

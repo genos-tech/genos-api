@@ -180,7 +180,9 @@ class Cases:
 
     def test_a_task_deleted_through_its_status_is_recorded(self):
         self.connect(destructive=True)
-        text, is_error = self.act("update_task", {"task_id": "WRD-7", "status": "Deleted"})
+        text, is_error = self.act(
+            "update_task", {"task_id": "WRD-7", "status": "Deleted", "reason": "Test."}
+        )
         self.assertFalse(is_error, text)
         self.task.refresh_from_db()
         self.assertEqual(self.task.status, "Deleted")
@@ -206,7 +208,9 @@ class Cases:
 
     def test_any_other_status_is_not_a_destructive_call(self):
         self.connect(destructive=True)
-        text, is_error = self.act("update_task", {"task_id": "WRD-7", "status": "Closed"})
+        text, is_error = self.act(
+            "update_task", {"task_id": "WRD-7", "status": "Closed", "reason": "Test."}
+        )
         self.assertFalse(is_error, text)
         self.assertEqual(events().count(), 0)
 
@@ -297,6 +301,7 @@ class Cases:
             {
                 "task_id": "WRD-7",
                 "status": "Deleted",
+                "reason": "Test.",
                 "title": "TITLE-SECRET",
                 "content_text": "BODY-SECRET",
             },

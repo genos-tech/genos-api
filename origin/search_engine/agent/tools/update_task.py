@@ -90,6 +90,7 @@ from origin.services.task_reparent import (
     parent_move_error,
     project_move_error,
 )
+from origin.services.task_status_reason import post_status_change_comment, status_reason_error
 from origin.views.utils.scope_guards import is_team_member
 
 # Backing-task columns whose milestone twin has a different name. Every
@@ -223,6 +224,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     update_fields: list[str] = []
     changed: list[str] = []
+    status_change: tuple[str, str] | None = None
 
     # --- title ---
     if "title" in args and args["title"] is not None:
@@ -271,6 +273,10 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 f"`status` must be one of {sorted(_VALID_STATUSES)} (got {new_status!r})."
             )
         if new_status != task.status:
+            # MIP-1997: a status change says why; the reason is posted as a comment below.
+            if message := status_reason_error(task.status, new_status, args.get("reason")):
+                raise ToolError(message)
+            status_change = (task.status, new_status)
             task.status = new_status
             update_fields.append("status")
             changed.append("status")
@@ -534,52 +540,63 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if task.is_milestone
             else None
         )
-        if not update_fields:
-            pass  # milestone move or collaborators only — applied below
-        elif milestone is not None:
-            # A milestone is a task with `is_milestone=True`, but its
-            # AUTHORITATIVE values live on the MilestoneMaster side table;
-            # the backing TaskMaster row is a mirror `sync_backing_task`
-            # overwrites on the next milestone PATCH. Writing only the
-            # backing row (the plain `task.save` below) made the table
-            # show the new status while the preview kept the old one, and
-            # the next milestone edit silently reverted the backing row —
-            # data loss. So mirror the same changed fields onto the
-            # milestone and let `sync_backing_task` push them back down.
-            #
-            # The values are already assigned to `task`; copy them across
-            # by field name (aliasing the two columns that differ) rather
-            # than re-parsing the args.
-            #
-            # Custom values are the exception: they live on the backing row
-            # only (`MilestoneView.patch` writes them there, after the sync, and
-            # the sync never touches the column), so they are saved to it below.
-            for field in update_fields:
-                if field == "custom_field_values":
-                    continue
-                milestone_field = _MILESTONE_FIELD_ALIASES.get(field, field)
-                setattr(milestone, milestone_field, getattr(task, field))
-            if update_fields != ["custom_field_values"]:
-                milestone.save()
-                sync_backing_task(milestone)
-                # `sync_backing_task` re-derived and saved the backing row from
-                # the milestone, so the `task` instance mutated above is stale
-                # — re-read it for the response payload.
-                task.refresh_from_db()
-            if new_custom_values is not None:
-                task.custom_field_values = new_custom_values
-                task.save(update_fields=["custom_field_values", "ts_updated_at"])
-        else:
-            # `ts_updated_at` is auto_now, but Django only runs pre_save()
-            # on the fields named in update_fields — omit it and the
-            # timestamp silently stays put. It's the incremental
-            # reindexer's watermark (task_chunker filters
-            # ts_updated_at__gte) and list_tasks' sort key, so a status
-            # change that doesn't move it never reaches search. The REST
-            # path lists it explicitly for the same reason. (The milestone
-            # branch above saves the backing row wholesale, which bumps
-            # every auto_now field, so it needs no explicit list.)
-            task.save(update_fields=[*update_fields, "ts_updated_at"])
+        with transaction.atomic():
+            if not update_fields:
+                pass  # milestone move or collaborators only — applied below
+            elif milestone is not None:
+                # A milestone is a task with `is_milestone=True`, but its
+                # AUTHORITATIVE values live on the MilestoneMaster side table;
+                # the backing TaskMaster row is a mirror `sync_backing_task`
+                # overwrites on the next milestone PATCH. Writing only the
+                # backing row (the plain `task.save` below) made the table
+                # show the new status while the preview kept the old one, and
+                # the next milestone edit silently reverted the backing row —
+                # data loss. So mirror the same changed fields onto the
+                # milestone and let `sync_backing_task` push them back down.
+                #
+                # The values are already assigned to `task`; copy them across
+                # by field name (aliasing the two columns that differ) rather
+                # than re-parsing the args.
+                #
+                # Custom values are the exception: they live on the backing row
+                # only (`MilestoneView.patch` writes them there, after the sync, and
+                # the sync never touches the column), so they are saved to it below.
+                for field in update_fields:
+                    if field == "custom_field_values":
+                        continue
+                    milestone_field = _MILESTONE_FIELD_ALIASES.get(field, field)
+                    setattr(milestone, milestone_field, getattr(task, field))
+                if update_fields != ["custom_field_values"]:
+                    milestone.save()
+                    sync_backing_task(milestone)
+                    # `sync_backing_task` re-derived and saved the backing row from
+                    # the milestone, so the `task` instance mutated above is stale
+                    # — re-read it for the response payload.
+                    task.refresh_from_db()
+                if new_custom_values is not None:
+                    task.custom_field_values = new_custom_values
+                    task.save(update_fields=["custom_field_values", "ts_updated_at"])
+            else:
+                # `ts_updated_at` is auto_now, but Django only runs pre_save()
+                # on the fields named in update_fields — omit it and the
+                # timestamp silently stays put. It's the incremental
+                # reindexer's watermark (task_chunker filters
+                # ts_updated_at__gte) and list_tasks' sort key, so a status
+                # change that doesn't move it never reaches search. The REST
+                # path lists it explicitly for the same reason. (The milestone
+                # branch above saves the backing row wholesale, which bumps
+                # every auto_now field, so it needs no explicit list.)
+                task.save(update_fields=[*update_fields, "ts_updated_at"])
+            # MIP-1997: the reason, as a comment in the caller's name, in the same transaction as
+            # the status. For a milestone `task` is its backing row, where its comments live.
+            if status_change is not None:
+                post_status_change_comment(
+                    task_id=task.task_id,
+                    actor_id=ctx.user_id,
+                    old=status_change[0],
+                    new=status_change[1],
+                    reason=args.get("reason"),
+                )
         # The M2M is replaced wholesale, as the PUT does. It touches no column,
         # so `ts_updated_at` (the incremental reindexer's and the client sync's
         # watermark, and `list_tasks`' sort key) is bumped by hand; the PUT's
@@ -790,6 +807,12 @@ UPDATE_TASK = Tool(
                 "type": "STRING",
                 "enum": ["Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"],
                 "description": "New status. Omit to leave unchanged.",
+            },
+            "reason": {
+                "type": "STRING",
+                "description": (
+                    "Why `status` changes. Required with `status`; posted as a comment."
+                ),
             },
             "priority": {
                 "type": "STRING",

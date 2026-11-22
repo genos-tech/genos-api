@@ -43,6 +43,7 @@ from __future__ import annotations
 import uuid
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import APIException
@@ -53,6 +54,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_models import TaskMaster
 from origin.services.task_card_post import post_task_created_card
+from origin.services.task_status_reason import post_status_change_comment, status_reason_error
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.object_body import ObjectBodyMixin
 from origin.views.public.credentials import credential_of, reaches_team, team_for
@@ -65,6 +67,8 @@ from origin.views.utils.scope_guards import (
 
 MAX_OFFSET = 1_000_000
 MAX_PAGE = 100
+# What `PATCH /tasks/<id>` accepts as a status (MIP-1997); the same six values the app's tools take.
+_STATUSES = frozenset({"Open", "WIP", "Blocked", "Pending", "Closed", "Deleted"})
 
 
 class PublicApiDisabled(APIException):
@@ -376,9 +380,25 @@ class TaskDetailView(PublicApiView):
         # keys would let an integrator write columns nobody meant to
         # expose, and every new model field would silently join the API.
         fields = []
+        status_before = task.status
         for field, cap in (("title", 255), ("status", None), ("priority", None)):
             if field in request.data:
                 value = request.data.get(field)
+                if field == "status":
+                    # MIP-1997: the new status must be a real one (the change is posted as a
+                    # comment, "Open → banana" would read as a bug), and a change says why.
+                    if not isinstance(value, str) or value not in _STATUSES:
+                        return Response(
+                            {"error": f"status must be one of {sorted(_STATUSES)}."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if message := status_reason_error(
+                        status_before, value, request.data.get("reason")
+                    ):
+                        return Response(
+                            {"error": message, "field": "reason"},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                 if field == "title":
                     # `(value or "").strip()` assumed a string: `{"title":
                     # 123}` raised `AttributeError: 'int' object has no
@@ -405,5 +425,14 @@ class TaskDetailView(PublicApiView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         task.ts_updated_at = timezone.now()
-        task.save(update_fields=[*fields, "ts_updated_at"])
+        with transaction.atomic():
+            task.save(update_fields=[*fields, "ts_updated_at"])
+            if "status" in fields:
+                post_status_change_comment(
+                    task_id=task.task_id,
+                    actor_id=request.user.id,
+                    old=status_before,
+                    new=task.status,
+                    reason=request.data.get("reason"),
+                )
         return Response(_serialize_task(task), status=status.HTTP_200_OK)

@@ -21,7 +21,9 @@ from .test_agent_tool_task_milestone_move import MilestoneMoveTestBase
 
 class UpdateTaskMilestoneDeleteTests(MilestoneMoveTestBase):
     def _delete(self, task_id, **extra):
-        return UPDATE_TASK.run({"task_id": task_id, "status": "Deleted", **extra}, self.ctx)
+        return UPDATE_TASK.run(
+            {"task_id": task_id, "status": "Deleted", "reason": "Test.", **extra}, self.ctx
+        )
 
     def test_deleting_a_milestone_is_refused_and_nothing_changes(self):
         child = self._task("child", milestone=self.ms_b, parent_task_id=self.ms_b.task_id)
@@ -50,7 +52,9 @@ class UpdateTaskMilestoneDeleteTests(MilestoneMoveTestBase):
         self.assertNotEqual(self.ms_b.priority, "Critical")
 
     def test_the_other_statuses_still_work_on_a_milestone(self):
-        UPDATE_TASK.run({"task_id": self.ms_b.task_id, "status": "Closed"}, self.ctx)
+        UPDATE_TASK.run(
+            {"task_id": self.ms_b.task_id, "status": "Closed", "reason": "Test."}, self.ctx
+        )
 
         self.ms_b.refresh_from_db()
         self.assertEqual(self.ms_b.status, "Closed")

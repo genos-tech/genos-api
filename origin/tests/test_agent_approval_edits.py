@@ -960,7 +960,7 @@ class TaskToolParityTests(ParityBase):
                 )
         self.table(
             "update_task",
-            {"task_id": self.task.task_id, "status": "WIP"},
+            {"task_id": self.task.task_id, "status": "WIP", "reason": "Test."},
             "status",
             [(v, OK) for v in ("Open", "WIP", "Blocked", "Pending", "Closed")]
             + [(v, BAD) for v in ("Done", "closed", "")]
