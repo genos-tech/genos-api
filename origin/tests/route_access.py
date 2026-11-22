@@ -213,6 +213,9 @@ REGISTRY = {
     "origin.views.common.mcp_connection_views.McpConnectionListView": self_only(
         "the caller's own connected apps (user=request.user on every query)"
     ),
+    "origin.views.common.mcp_connection_views.McpConnectionQuietView": self_only(
+        "the caller's own connections and own agent writes (actor/editor/user = request.user)"
+    ),
     "origin.views.common.mcp_connection_views.TeamMcpConnectionDetailView": checked(
         "_managed_team"
     ),
