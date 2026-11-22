@@ -32,6 +32,7 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
+from origin.models.common.schedule_models import MemberSchedule
 from origin.models.project.prj_models import ProjectMaster
 from origin.models.task.task_activity_models import TaskActivity
 from origin.search_engine.agent.tools.list_my_inbox import _model_body
@@ -108,6 +109,21 @@ class AiBase(JobBase):
         switch.start()
         self.addCleanup(switch.stop)
         self.model = FakeModel()
+        # AI sentences are an OPT-IN per schedule since MIP-1969 (`TestAiSentencesAreOptIn`
+        # below pins that). These tests are about what the AI part does once it is on, so the
+        # helpers opt in unless a test says `ai_sentences=False`.
+        real_create = schedules.create
+
+        def create_opted_in(ctx, *args, **kw):
+            if kw.get("job") == "what_to_do_today":
+                params = dict(kw.get("params") or {})
+                params.setdefault("ai_sentences", True)
+                kw["params"] = params
+            return real_create(ctx, *args, **kw)
+
+        create_patch = mock.patch.object(schedules, "create", create_opted_in)
+        create_patch.start()
+        self.addCleanup(create_patch.stop)
         patcher = mock.patch.object(llm, "_client", self.model)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -115,6 +131,11 @@ class AiBase(JobBase):
         ceiling = mock.patch.object(effort_mod, "_ceiling", return_value="high")
         ceiling.start()
         self.addCleanup(ceiling.stop)
+
+    def run_job(self, key, **params):
+        if key == "what_to_do_today":
+            params.setdefault("ai_sentences", True)
+        return super().run_job(key, **params)
 
     def overdue(self, title="Export the report", comment=None, project=None, days=2, **kw):
         task = self.make_task(
@@ -996,3 +1017,55 @@ class TestTheEstimate(SimpleTestCase):
         price = settings.LLM_CATALOG.price_for(row["model"])
         in_high = row["input_tokens"][1]
         self.assertGreaterEqual(row["usd_micro"][1], round(in_high * price.input))
+
+
+class TestAiSentencesAreOptIn(AiBase):
+    """MIP-1969: the AI part of a report is off unless the schedule turns it on."""
+
+    def test_a_new_schedule_without_the_key_is_off_and_asks_no_model(self):
+        from origin.services.schedule_jobs import what_to_do_today as job
+
+        self.assertFalse(job.ai_sentences_on({}))
+        self.assertFalse(job.ai_sentences_on({"ai_sentences": False}))
+        self.assertFalse(job.ai_sentences_on({"ai_sentences": "yes"}))
+        self.assertTrue(job.ai_sentences_on({"ai_sentences": True}))
+        self.overdue(comment="Blocked: waiting for the vendor.")
+        self.model.reply = answer(t1="One.")
+        # `JobBase.run_job` is the raw one: no default injected.
+        report = JobBase.run_job(self, "what_to_do_today")
+        self.assertEqual(self.model.calls, [])
+        self.assertNotIn("One.", json.dumps(report))
+
+    def test_the_toggle_turns_it_on(self):
+        self.overdue(comment="Blocked: waiting for the vendor.")
+        self.model.reply = answer(t1="Waiting for the vendor.")
+        report = JobBase.run_job(self, "what_to_do_today", ai_sentences=True)
+        self.assertIn("Waiting for the vendor.", json.dumps(report))
+
+    def test_the_migration_pins_the_old_default_on_existing_schedules_only(self):
+        import importlib
+
+        from django.apps import apps as django_apps
+
+        mig = importlib.import_module("origin.migrations.0267_schedule_ai_sentences_explicit")
+        unset = schedules.create(
+            self.ctx, name="Old", job="what_to_do_today", frequency="daily", time_of_day="09:00"
+        )
+        off = schedules.create(
+            self.ctx,
+            name="Off",
+            job="what_to_do_today",
+            params={"ai_sentences": False},
+            frequency="daily",
+            time_of_day="10:00",
+        )
+        other = schedules.create(
+            self.ctx, name="Done", job="what_you_did", frequency="daily", time_of_day="11:00"
+        )
+        MemberSchedule.objects.filter(pk__in=[unset.pk, other.pk]).update(params={})
+        mig.pin_current_behaviour(django_apps, None)
+        for s in (unset, off, other):
+            s.refresh_from_db()
+        self.assertIs(unset.params["ai_sentences"], True)
+        self.assertIs(off.params["ai_sentences"], False)
+        self.assertNotIn("ai_sentences", other.params)
