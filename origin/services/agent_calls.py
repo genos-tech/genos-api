@@ -210,6 +210,7 @@ class CallTrace:
     credit_request_id: str | None = None
     duration_ms: int = 0
     run_keys: RunKeys = field(default_factory=RunKeys)
+    run_id: str | None = None  # fixed at the start so the writes of the call can carry it
 
     def finish(self) -> None:
         self.duration_ms = max(0, int((time.perf_counter() - self.started) * 1000))
@@ -416,7 +417,7 @@ def record(trace: CallTrace, *, now: datetime | None = None) -> AgentCall | None
     # Everything that can fail on its own is read BEFORE the transaction, so a failed lookup can
     # never abort the one the insert is in.
     credits = _credits_for(trace.credit_request_id)
-    run_id = _run_id(kind, credential_id, trace.run_keys)
+    run_id = trace.run_id or _run_id(kind, credential_id, trace.run_keys)
     fields = {
         "user_id": user_id,
         "team_id": trace.team_id or None,
@@ -558,3 +559,16 @@ def export_row(c: AgentCall) -> dict[str, Any]:
 def purge_user(user_id: Any) -> int:
     """Delete every row of one person (account deletion). Returns the number removed."""
     return AgentCall.objects.filter(user_id=user_id).delete()[0]
+
+
+def start_run(trace: CallTrace) -> None:
+    """Fix the call's run id now and pin it for the writes the call makes (MIP-2053), so the
+    activity rows carry the same id as the `AgentCall` row. Never raises."""
+    try:
+        from origin.middleware.current_user import set_current_run_id  # noqa: PLC0415
+
+        kind, credential_id, _family = _credential_facts(trace.credential)
+        trace.run_id = _run_id(kind, credential_id, trace.run_keys)
+        set_current_run_id(trace.run_id)
+    except Exception:  # noqa: BLE001 - the log never fails a call
+        log.warning("agent call run id failed", exc_info=True)
