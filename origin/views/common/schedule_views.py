@@ -166,6 +166,20 @@ class _Base(AuthenticatedAPIView):
             return None, Response(
                 {"error": str(exc), "code": "plan_required"}, status=status.HTTP_403_FORBIDDEN
             )
+        except schedules.ScheduleLimitReached as exc:
+            # The plan's count (MIP-1960): 429 like the other plan limits, with the numbers; the
+            # sentence is English, the page words it in the member's language from the code.
+            return None, Response(
+                {
+                    "error": str(exc),
+                    "code": "plan_limit",
+                    "limit_reached": True,
+                    "used": exc.used,
+                    "limit": exc.limit,
+                    "category": "schedules",
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         except schedules.ScheduleError as exc:
             return None, _error(str(exc))
 
@@ -193,7 +207,7 @@ class ScheduleListView(_Base):
                 # before it calls a model. False hides the AI switch, the effort and the cost.
                 "aiAvailable": _ai_available(request.user.pk),
                 "timeZone": zone.key,
-                "limit": schedules.MAX_SCHEDULES_PER_MEMBER,
+                "limit": schedules.schedule_limit(request.user.pk),
                 "jobs": [_job(j) for j in schedule_text.job_catalog()],
                 "schedules": [_row(s, zone) for s in rows],
                 # What the member does not have of the two defaults: one step to (re-)add.

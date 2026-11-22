@@ -139,8 +139,11 @@ def _run(ctx, task_ids, effort, default_effort, now, today_iso, out: Sentences) 
         else:
             misses.append(t)
 
+    if misses and not reason:
+        # Out of AI credits (MIP-1960): no call, so no charge; what is cached still shows.
+        reason = llm.credit_block(ctx.user_id)
     if misses and reason:
-        # Cannot ask (switch off, no meter, no credentials): what is cached still shows.
+        # Cannot ask (switch off, no meter, no credentials, no credits): what is cached still shows.
         out.skipped = reason
     elif misses:
         refs = {f"t{i}": t for i, t in enumerate(misses, 1)}

@@ -96,8 +96,9 @@ from origin.services.user_time import user_zone
 
 log = logging.getLogger("origin.schedules")
 
-# A member may keep this many schedules (across their teams). A module constant on
-# purpose: `apis/settings.py` is not touched for a limit this small.
+# The fallback count of schedules a member may keep (across their teams) when the plan's own value
+# cannot be read. The live cap is per tier (`schedules_max` in `TIER_QUOTAS`, MIP-1960: Core 5,
+# Pro 20, Max 20, Enterprise 20): use `schedule_limit(user_id)`.
 MAX_SCHEDULES_PER_MEMBER = 20
 MAX_NAME_CHARS = 100
 MAX_PARAMS_BYTES = 2000
@@ -127,6 +128,17 @@ class ScheduleError(Exception):
 class SchedulePlanRequired(ScheduleError):
     """The member's plan does not include scheduled reports (Free). The message is the upgrade
     sentence, written to be shown as it is; the REST layer adds `code: plan_required`."""
+
+
+class ScheduleLimitReached(ScheduleError):
+    """The member already has as many schedules as their plan allows (MIP-1960). Only a NEW
+    schedule is refused; the ones that exist keep running. The message is a sentence to show;
+    the REST layer adds `code: plan_limit` and the two numbers."""
+
+    def __init__(self, message: str, *, limit: int, used: int) -> None:
+        super().__init__(message)
+        self.limit = limit
+        self.used = used
 
 
 class ScheduleNotFound(ScheduleError):
@@ -422,6 +434,15 @@ def tiers_without_schedules() -> set[str]:
     return off
 
 
+def schedule_limit(user_id: Any) -> int:
+    """How many schedules this member may keep: their plan's `schedules_max` (MIP-1960). An
+    unlimited plan reads as the old ceiling, so a count is always a number."""
+    from origin.search_engine import quota  # noqa: PLC0415 - search_engine is heavy
+
+    cap = quota.get_schedules_max(str(user_id))
+    return MAX_SCHEDULES_PER_MEMBER if cap is None else cap
+
+
 def _require_plan(user: CustomUser) -> None:
     if not plan_allows(user.pk):
         raise SchedulePlanRequired(PLAN_SENTENCE)
@@ -574,10 +595,14 @@ def create(
     with transaction.atomic():
         # Two creates at once must not both slip under the cap: take the member's row.
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
-        if MemberSchedule.objects.filter(user_id=user.pk).count() >= MAX_SCHEDULES_PER_MEMBER:
-            raise ScheduleError(
-                f"You can keep at most {MAX_SCHEDULES_PER_MEMBER} schedules. "
-                "Delete one you no longer need first."
+        cap = schedule_limit(user.pk)
+        used = MemberSchedule.objects.filter(user_id=user.pk).count()
+        if used >= cap:
+            raise ScheduleLimitReached(
+                f"Your plan allows {cap} schedules, and you have {used}. Delete one you no "
+                "longer need, or upgrade your plan. Your existing schedules keep running.",
+                limit=cap,
+                used=used,
             )
         _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec)
         return MemberSchedule.objects.create(

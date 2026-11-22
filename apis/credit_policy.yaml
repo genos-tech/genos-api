@@ -75,6 +75,9 @@ policy:
         - ask
         - thread_summary
         - note_summary
+        # A scheduled report's AI sentences (MIP-1960, decided 2026-11-22): one charge per run
+        # that made the model call, like any other AI use. The digest is a plan feature and not here.
+        - schedule
 
     # The request outcomes that can carry a charge. The discriminator is
     # NOT "did the user get what they wanted" — it is "did the provider
