@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('origin', '0270_schedule_deliver_channel'),
+        ('origin', '0271_github_app_installations'),
     ]
 
     operations = [
