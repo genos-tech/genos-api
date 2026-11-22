@@ -36,6 +36,7 @@ from origin.views.task.task_import_views import (
     TaskImportView,
 )
 from origin.views.task.task_progress_views import TaskProgressListView
+from origin.views.task.task_query_search_views import SearchTasksView
 from origin.views.task.task_recent_views import RecentTasksView, RecordTaskOpenView
 from origin.views.task.task_views import *
 
@@ -160,6 +161,11 @@ urlpatterns = [
         "api/v2/search/teamTasks/",
         GetSearchTeamTasksView.as_view(),
         name="search_team_tasks",
+    ),
+    path(
+        "api/v2/search/tasks/",
+        SearchTasksView.as_view(http_method_names=["get", "head", "options"]),
+        name="search_tasks",
     ),
     path(
         "api/v2/search/taskByDisplayId/",
