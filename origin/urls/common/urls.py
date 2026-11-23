@@ -115,7 +115,9 @@ from origin.views.common.skill_views import (
     SkillInstallView,
     SkillListView,
     SkillPublishView,
+    SkillReportView,
     SkillStarView,
+    SkillTakedownView,
     SkillVersionDetailView,
     SkillVersionListView,
 )
@@ -537,6 +539,12 @@ urlpatterns = [
     ),
     path("api/v2/skills/<uuid:skill_id>/star/", SkillStarView.as_view(), name="skill_star"),
     path("api/v2/skills/<uuid:skill_id>/export/", SkillExportView.as_view(), name="skill_export"),
+    path("api/v2/skills/<uuid:skill_id>/report/", SkillReportView.as_view(), name="skill_report"),
+    path(
+        "api/v2/skills/<uuid:skill_id>/takedown/",
+        SkillTakedownView.as_view(),
+        name="skill_takedown",
+    ),
     path(
         "api/v2/skills/<uuid:skill_id>/editors/",
         SkillEditorsView.as_view(),

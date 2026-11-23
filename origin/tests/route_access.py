@@ -283,6 +283,10 @@ REGISTRY = {
     "origin.views.common.skill_views.SkillInstallView": checked("get_readable"),
     "origin.views.common.skill_views.SkillStarView": checked("get_readable"),
     "origin.views.common.skill_views.SkillExportView": checked("get_readable"),
+    # MIP-2044: a report is filed on a skill the caller can READ (and not their own); the takedown
+    # is the operator's (`is_staff`), and anyone else gets the same 404 as an unknown skill.
+    "origin.views.common.skill_views.SkillReportView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillTakedownView": checked("require_operator"),
     # views.common.inbox_ai_views (MIP-1209): the item is looked up by id AND receiver=request.user
     # and not deleted; anything else (someone else's, deleted, not an AI item) is the same 404
     "origin.views.common.inbox_ai_views.InboxAiSourceView": self_only(
