@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -228,8 +228,12 @@ def _scan_codes(spec: Spec) -> list[str]:
     return list(guard.scan(text_only, extra=(spec.title, spec.description)).codes)
 
 
-def _classify(spec: Spec, existing: Skill | None) -> Action:
+def _classify(spec: Spec, existing: Skill | None, taken: frozenset[str] = frozenset()) -> Action:
     codes = _scan_codes(spec)
+    if existing is None and spec.slug in taken:
+        # MIP-2210: a public name is unique across all public skills. A member published it first, so
+        # the official skill waits for that name; the member's skill is never touched.
+        return Action(spec.slug, SKIPPED, "a member's public skill already uses this name", codes)
     if existing is None:
         return Action(spec.slug, CREATE, f"new, {spec.release}", codes)
     if existing.status in service.MODERATED_STATUSES:
@@ -298,12 +302,26 @@ def sync(*, apply: bool = False, only: set[str] | None = None) -> Report:
     existing: dict[str, Skill] = {}
     if user is not None and team is not None:
         existing = {s.slug: s for s in Skill.objects.filter(owner=user, team=team)}
+    # Public names held by anyone else: a second public skill with the same name is refused by the
+    # database (`skill_slug_unique_public`), so the sync skips such a name and says so.
+    taken = frozenset(
+        Skill.objects.filter(visibility=VISIBILITY_PUBLIC, slug__in=[s.slug for s in specs])
+        .exclude(pk__in=[s.pk for s in existing.values()])
+        .values_list("slug", flat=True)
+    )
     for spec in specs:
-        action = _classify(spec, existing.get(spec.slug))
-        report.actions.append(action)
+        action = _classify(spec, existing.get(spec.slug), taken)
         if apply and action.kind in (CREATE, UPDATE):
             assert user is not None and team is not None
-            _write(spec, user, team, existing.get(spec.slug))
+            try:
+                _write(spec, user, team, existing.get(spec.slug))
+            except IntegrityError:
+                # A member published the same name between the check and the write.
+                if existing.get(spec.slug) is not None:
+                    raise
+                detail = "a public skill took this name just now"
+                action = Action(spec.slug, SKIPPED, detail, action.scan_codes)
+        report.actions.append(action)
     if not only:
         wanted = {s.slug for s in specs}
         report.orphans = sorted(set(existing) - wanted)
