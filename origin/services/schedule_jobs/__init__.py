@@ -172,6 +172,24 @@ class Job:
     # member picks a project or a milestone by NAME there, so an id instruction does not belong
     # in it. The catalog carries this beside it for `list_my_schedules`; the REST page leaves it out.
     agent_note: str = ""
+    # A job behind a feature switch (MIP-2045, `GENOS_SKILLS`): `available()` says whether it may be
+    # offered now. None = always. Switched off, the catalog leaves it out and a schedule cannot be
+    # made or edited to run it; a row that already has it is shown as it is and its run fails in
+    # words, so the switch never deletes a member's schedule.
+    available: Callable[[], bool] | None = None
+    # A check of the parameters against what the schedule's OWNER may use (MIP-2045: a skill the
+    # owner may run, a version that exists), run inside the transaction that saves the schedule.
+    # `check_params(ctx, params, schedule_id)` returns the params to store (it may fill a value in,
+    # such as the version pinned) or raises `ScheduleError`. `schedule_id` is the row being edited
+    # (None for a new one), so a count of the owner's schedules leaves it out.
+    check_params: Callable[[ToolContext, dict[str, Any], Any], dict[str, Any]] | None = None
+    # False for a job whose cost the report-sentence estimate (`report_ai.estimate`) does not describe:
+    # the catalog then carries no per-level estimate for it.
+    cost_estimated: bool = True
+    # True for a job that runs a long model loop (MIP-2045): the runner does not wrap it in a
+    # savepoint (`schedules._execute`), so the spend it records survives a crash. Such a job never
+    # writes to the workspace and never raises after its first model call.
+    unwrapped: bool = False
     # For a job that may be posted into a chat other people read (MIP-1420): `share_project(params,
     # team_id)` is the id of the ONE project the report is about, or None when it has none. A job
     # without it (None) is about its owner (their tasks, to-dos, calendar) and goes only to the
@@ -234,6 +252,7 @@ from origin.services.schedule_jobs import (  # noqa: E402, F401
     chat_catch_up,
     milestone_updates,
     project_updates,
+    run_skill,
     team_activity,
     what_is_left,
     what_to_do_today,

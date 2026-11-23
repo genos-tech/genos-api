@@ -62,6 +62,7 @@ from origin.models.skills.skill_models import (
     SkillInstall,
     SkillVersion,
 )
+from origin.services.skills import effort as skill_effort
 from origin.services.skills import guard, service
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,11 @@ class ResolvedSkill:
     author: str  # AUTHOR_*
     tool_level: str  # as the skill declares it; the caller's own level caps it at the ask
     body_markdown: str
+    title: str = ""  # the version's title (a schedule's report is named by it, never the prompt)
     note: str = ""  # a sentence for the answer, set when a retry could not get the same version
+    #: The skill's effort level ("" = the caller's own setting). After the ask view has stepped a
+    #: run down for low credits it holds the level the run STARTED at (MIP-2198).
+    effort: str = ""
 
 
 # -- the caller's side -------------------------------------------------------------------------
@@ -139,11 +144,18 @@ def typed_slug(query: str) -> str | None:
 
 
 def resolve(
-    user: Any, team_id: Any, raw: Any, *, pinned_version: int | None = None
+    user: Any,
+    team_id: Any,
+    raw: Any,
+    *,
+    pinned_version: int | None = None,
+    published_only: bool = False,
 ) -> ResolvedSkill:
     """The skill this ask runs, or the refusal (`SkillError`: a status and a sentence). Checks every
-    rule, so a refusal comes before anything is spent. `pinned_version` (a paused run being resumed)
-    asks for that version of a reader's skill instead of the current one."""
+    rule, so a refusal comes before anything is spent. `pinned_version` (a paused run being resumed,
+    or a schedule's pin) asks for that version instead of the current one. `published_only` (a
+    schedule, MIP-2045) makes the OWNER's own run read a published version too, never their live
+    draft: nobody is there to watch an unattended run, so it must not run a half-written text."""
     service.require_enabled()
     kind, value = parse_ref(raw)
     team_id = str(team_id)
@@ -155,7 +167,13 @@ def resolve(
     # run's pin it is a wish: a version that is gone falls back to the current one, with a note.
     retry_version = _retry_version(raw) if pinned_version is None else None
     return _load(
-        user, skill, install, team_id, pinned_version=pinned_version, retry_version=retry_version
+        user,
+        skill,
+        install,
+        team_id,
+        pinned_version=pinned_version,
+        retry_version=retry_version,
+        published_only=published_only,
     )
 
 
@@ -268,6 +286,7 @@ def _load(
     *,
     pinned_version: int | None = None,
     retry_version: int | None = None,
+    published_only: bool = False,
 ) -> ResolvedSkill:
     author = _author_of(user, skill)
     if author != AUTHOR_YOU and skill.status != STATUS_ACTIVE:
@@ -275,7 +294,12 @@ def _load(
         # taken-down skill cannot run through a path that forgot to (a takedown is immediate).
         raise service.SkillNotFound
     note = ""
-    if author == AUTHOR_YOU:
+    if published_only and skill.status != STATUS_ACTIVE:
+        # An unattended run never carries a skill that was hidden or taken down, the OWNER's own
+        # included (`service.can_read` lets an owner read theirs, so the check is here). A team or
+        # public skill that is hidden or taken down is already refused in `_by_id` / `_by_name`.
+        raise service.SkillNotFound
+    if author == AUTHOR_YOU and not published_only:
         markdown = service.live_markdown(skill)
         meta: Any = skill
         version_no, draft = 0, True
@@ -283,6 +307,11 @@ def _load(
         wanted = pinned_version or (
             install.version_no if install is not None else skill.published_version_no
         )
+        if wanted <= 0:  # the owner's skill that was never published has no version to run
+            raise service.SkillError(
+                "This skill has no published version yet. Share it with your team to publish "
+                "one, then schedule it."
+            )
         readable = service._readable_versions(skill, user.pk)
         version = None
         if retry_version is not None:
@@ -321,7 +350,9 @@ def _load(
         author=author,
         tool_level=level,
         body_markdown=markdown,
+        title=meta.title or "",
         note=note,
+        effort=skill_effort.clean(getattr(meta, "effort", "")),
     )
 
 
@@ -451,13 +482,16 @@ _KEPT = "skill"
 
 
 def resume_ref(run: ResolvedSkill) -> dict[str, Any]:
-    return {
+    ref: dict[str, Any] = {
         "id": run.skill_id,
         "team_id": run.team_id,
         "version_no": run.version_no,
         "tool_level": run.tool_level,
         "outside": run.author == AUTHOR_OUTSIDE,
     }
+    if run.effort:  # the level the first leg ran at: `/decide/` binds the same one (MIP-2198)
+        ref["effort"] = run.effort
+    return ref
 
 
 def kept_ref(resume_context: Any) -> dict[str, Any] | None:
@@ -468,6 +502,11 @@ def kept_ref(resume_context: Any) -> dict[str, Any] | None:
     if not isinstance(kept, dict) or not isinstance(kept.get("id"), str):
         return None
     return kept
+
+
+def effort_for_kept(kept: dict[str, Any]) -> str:
+    """The effort level a paused run started at, or "" (none kept, or a value that cannot be read)."""
+    return skill_effort.clean(kept.get("effort"))
 
 
 def disabled_tools_for_kept(kept: dict[str, Any]) -> set[str]:
@@ -579,6 +618,11 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
             "icon": src.icon,
             "argumentHint": src.argument_hint,
             "toolLevel": src.tool_level,
+            # The version a schedule would run (0 = none: a skill never published cannot be
+            # scheduled, MIP-2045). A reader's row is already the published or pinned one.
+            "publishedVersionNo": (
+                skill.published_version_no if group == GROUP_MINE else src.version_no
+            ),
             "visibility": skill.visibility,
             "isOfficial": skill.is_official,
             "mine": group == GROUP_MINE,
