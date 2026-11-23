@@ -235,6 +235,10 @@ class TestCommand(TestCase):
         out = self._run({"events": GOOD_EVENTS, "permissions": GOOD_PERMISSIONS})
         self.assertNotIn("no pull_request event did", out)
 
+    def test_a_huge_days_value_is_clamped_not_a_traceback(self):
+        out = self._run({"events": GOOD_EVENTS, "permissions": GOOD_PERMISSIONS}, days=99999999)
+        self.assertIn("last 30 day(s)", out)
+
     def test_the_command_writes_nothing(self):
         before = GithubAppWebhookDelivery.objects.count()
         self._run({"events": GOOD_EVENTS, "permissions": GOOD_PERMISSIONS})

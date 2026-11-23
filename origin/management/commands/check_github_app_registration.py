@@ -43,7 +43,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        days = max(1, int(options["days"]))
+        # Clamped to the delivery retention (30 days): older rows are pruned, and a huge value
+        # would overflow `timedelta`.
+        days = min(max(1, int(options["days"])), 30)
         try:
             registration = github_app.fetch_app_registration()
         except github_app.GithubAppError as exc:
