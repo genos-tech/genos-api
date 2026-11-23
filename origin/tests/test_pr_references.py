@@ -64,6 +64,22 @@ class ParsePrReferencesTests(SimpleTestCase):
         )
         self.assertEqual(parse_pr_references("", body), {"HK-5": CLOSES})
 
+    def test_adversarial_html_comment_openers_finish_fast(self):
+        import time
+
+        start = time.monotonic()
+        body = "<!--" * 16_000 + " Closes HK-9"
+        self.assertEqual(parse_pr_references("", body), {"HK-9": CLOSES})
+        self.assertEqual(
+            parse_pr_references("", "<!-- a " * 9_000 + "Closes HK-8"), {"HK-8": CLOSES}
+        )
+        self.assertLess(time.monotonic() - start, 1.0)
+        # terminated comments still hide ids, several in a row
+        self.assertEqual(
+            parse_pr_references("", "<!-- Closes HK-1 --> x <!--\nPart of HK-2\n--> Closes HK-3"),
+            {"HK-3": CLOSES},
+        )
+
     def test_bounded(self):
         body = "Closes " + ", ".join(f"HK-{n}" for n in range(1, 60))
         self.assertEqual(len(parse_pr_references("", body)), 20)
