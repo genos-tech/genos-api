@@ -35,6 +35,7 @@ from rest_framework.views import APIView
 
 from origin.services import github_app
 from origin.services import github_app_webhook as hook
+from origin.services.pr_signal_reader import InstallationReader
 from origin.views.common.github_views import (
     _PR_HEAD_REF_CACHE_TTL,
     _payload_repo,
@@ -181,4 +182,5 @@ class GithubAppWebhookView(APIView):
             repo_ref,
             lambda _owner, _repo: team_ids,
             head_ref_fetcher=_installation_head_ref_fetcher(installation),
+            pr_reader=InstallationReader(installation.installation_id),
         )

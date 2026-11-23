@@ -1,8 +1,8 @@
 """MIP-2054: a `pull_request` delivery with `review_requested` reaches the reviewer through
 existing surfaces only: an Inbox item of kind 0, one comment on the linked task, and the
-briefing's `waiting_on_me.pr_reviews`. Events GitHub does not send us today (reviews, CI) are not
-handled; `test_hook_events_do_not_include_reviews_or_checks` pins that so a later change is a
-conscious one."""
+briefing's `waiting_on_me.pr_reviews`. Reviews and CI reach the PR's author only through the GitHub
+App webhook (MIP-2062, `test_pr_signals`); `test_hook_events_do_not_include_reviews_or_checks` pins
+that the legacy per-repo hook still does not subscribe to them."""
 
 import hashlib
 import hmac
@@ -195,8 +195,8 @@ class TestReviewRequestedSignal(TestCase):
         self.assertEqual(pr_needs_you.pending_review_rows(self.reviewer.id, self.team.team_id), [])
 
     def test_hook_events_do_not_include_reviews_or_checks(self):
-        # Findings for MIP-2054: changes requested / approved (`pull_request_review`) and CI
-        # (`check_suite`, `status`) are not delivered to Genos today.
+        # Changes requested / approved (`pull_request_review`) and CI (`check_suite`, `status`) are
+        # not delivered by the legacy hook; the App webhook delivers them (MIP-2062).
         for event in ("pull_request_review", "check_suite", "status"):
             self.assertNotIn(event, github_webhooks._HOOK_EVENTS)
         self.assertIn("pull_request", github_webhooks._HOOK_EVENTS)
