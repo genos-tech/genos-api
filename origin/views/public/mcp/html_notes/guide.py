@@ -22,7 +22,7 @@ GENERATION_RULES: tuple[str, ...] = (
     "Support light and dark themes (prefers-color-scheme), work down to 360 px wide, and give "
     "charts ARIA labels.",
     "Respect prefers-reduced-motion.",
-    "Stay under 512 KB; 200 KB is a better target.",
+    "Stay well under the plan's page limit (512 KB on Core); 200 KB is a better target.",
     "Pass a 1 to 3 sentence `summary`: it is what a search for the page finds.",
 )
 
