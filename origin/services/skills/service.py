@@ -869,7 +869,9 @@ def editors_of(skill: Skill) -> list[CustomUser]:
         )
     }
     return [
-        u for u in CustomUser.objects.filter(pk__in=ids).order_by("username") if str(u.pk) in on_team
+        u
+        for u in CustomUser.objects.filter(pk__in=ids).order_by("username")
+        if str(u.pk) in on_team
     ]
 
 
