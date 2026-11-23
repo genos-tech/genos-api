@@ -1,6 +1,7 @@
 """Genos Skills over REST (MIP-2040).
 
     GET    /api/v2/skills/?team_id=&tab=             a tab of the list: mine | team | installed | starred
+    GET    /api/v2/skills/?team_id=&tab=runnable     the `/` picker: what the caller may run here (MIP-2042)
     POST   /api/v2/skills/                           create one (`team_id` in the body)
     POST   /api/v2/skills/import/                    a new skill from a SKILL.md file
     GET    /api/v2/skills/<id>/                      one skill with its text
@@ -30,7 +31,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from origin.models.skills.skill_models import Skill, SkillStar, SkillVersion
-from origin.services.skills import service, text
+from origin.services.skills import run, service, text
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.request_validators import as_uuid
@@ -181,8 +182,15 @@ class SkillListView(_Base):
         user = request.user
         tab = request.query_params.get("tab") or "mine"
         team = self._team(request.query_params.get("team_id"))
-        if tab in ("mine", "team") and team is None:
+        if tab in ("mine", "team", "runnable") and team is None:
             return _error("`team_id` is required.")
+        if tab == "runnable":
+            # The `/` picker (MIP-2042): what this caller may run in this team, grouped in the order
+            # a typed name resolves. Metadata only, never the text.
+            entries, problem = self._run(lambda: run.runnable(user, team))
+            if problem:
+                return problem
+            return Response({"skills": entries})
         rows, problem = self._run(lambda: list(service.list_for(user, team, tab)))
         if problem:
             return problem
