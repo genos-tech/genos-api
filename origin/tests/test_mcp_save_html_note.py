@@ -35,6 +35,7 @@ from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
 from origin.services import collab_push, html_notes, mcp_notice
+from origin.services.collab_push import PushOutcome
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.views.public.mcp import prompts, surfaces, tools
 
@@ -771,6 +772,156 @@ class PromptTests(HtmlBase):
         self.assertEqual(
             [p["name"] for p in prompts.list_prompts()], ["catch_me_up", "plan_my_day"]
         )
+
+
+class CheapChecksComeBeforeTheScan(HtmlBase):
+    """A hostile 512 KB page costs the server nothing until the caller has passed size, access and
+    the hourly limit: the scan runs last."""
+
+    SCAN = "origin.services.html_notes.scan_html"
+
+    def test_a_stranger_replacing_a_page_never_reaches_the_scan(self):
+        note = self.html_note()
+        self._key(scope=SCOPE_WRITE, user=self.user2)
+        with mock.patch(self.SCAN) as scan:
+            self.refused(SAVE, html=GOOD, note_id=note.note_id, note_type="personal", summary="s")
+        scan.assert_not_called()
+
+    def test_a_viewer_never_reaches_the_scan(self):
+        note = self.html_note()
+        NotePermissionMaster.objects.create(
+            team=self.team, user=self.user2, note_id=note.note_id, note_type=1, role_id=VIEWER
+        )
+        self._key(scope=SCOPE_WRITE, user=self.user2)
+        with mock.patch(self.SCAN) as scan:
+            self.refused(SAVE, html=GOOD, note_id=note.note_id, note_type="personal", summary="s")
+        scan.assert_not_called()
+
+    def test_a_caller_past_the_hourly_limit_never_reaches_the_scan(self):
+        for _ in range(html_notes.SAVES_PER_HOUR):
+            self.save()
+        with mock.patch(self.SCAN) as scan:
+            self.refused(SAVE, html=GOOD, note_type="personal", title="t")
+        scan.assert_not_called()
+
+    def test_an_oversize_page_never_reaches_the_scan(self):
+        with mock.patch(self.SCAN) as scan:
+            self.refused(
+                SAVE,
+                html="x" * (html_notes.MAX_HTML_BYTES + 1),
+                note_type="personal",
+                title="t",
+            )
+        scan.assert_not_called()
+
+    def test_a_bad_target_never_reaches_the_scan(self):
+        with mock.patch(self.SCAN) as scan:
+            self.refused(SAVE, html=GOOD, note_type="team", summary="s")  # no folder
+            self.refused(SAVE, html=GOOD, note_type="shared", title="t")
+        scan.assert_not_called()
+
+    def test_a_good_save_scans_exactly_once(self):
+        with mock.patch(self.SCAN, wraps=html_notes.scan_html) as scan:
+            self.save()
+        self.assertEqual(scan.call_count, 1)
+
+    def test_a_blank_page_is_refused_before_anything_else(self):
+        with mock.patch(self.SCAN) as scan:
+            text = self.refused(SAVE, html="  ", note_type="personal", title="t")
+        self.assertIn("`html` is required", text)
+        scan.assert_not_called()
+
+
+class LiveEditorTests(HtmlBase):
+    """A replaced page's placeholder reaches an open editor, as `update_note` does for its body."""
+
+    PUSH = "origin.views.public.mcp.html_notes.save_html_note.push_note_body_now"
+
+    def test_a_replace_pushes_the_new_placeholder_to_the_live_document(self):
+        note = self.html_note()
+        newer = GOOD.replace("Velocity dropped", "Velocity recovered")
+        with mock.patch(self.PUSH, return_value=PushOutcome.SENT) as push:
+            made = self.ok(
+                SAVE, html=newer, note_id=note.note_id, note_type="personal", summary="s"
+            )
+        family, note_id, blocks = push.call_args.args
+        self.assertEqual((family, note_id), ("personal", note.note_id))
+        texts = ["".join(p["text"] for p in b["content"]) for b in blocks]
+        self.assertIn("Velocity recovered in week three.", texts)
+        self.assertEqual(made["live_editor"], "sent")
+
+    def test_a_failed_push_is_said_not_hidden(self):
+        note = self.html_note()
+        with mock.patch(self.PUSH, return_value=PushOutcome.FAILED):
+            res = self._call(
+                SAVE,
+                {
+                    "html": GOOD + "<!-- 2 -->",
+                    "note_id": note.note_id,
+                    "note_type": "personal",
+                    "summary": "s",
+                },
+            )
+        text, is_error = self._tool_text(res)
+        self.assertFalse(is_error)
+        self.assertIn("live editor could not be updated", text)
+        self.assertEqual(self.page_count(note.note_id), 2)
+
+    def test_a_new_note_has_no_live_document_to_push_to(self):
+        with mock.patch(self.PUSH) as push:
+            self.save()
+        push.assert_not_called()
+
+
+class RestoreGuardTests(HtmlBase):
+    """Restoring an old TEXT version would leave the page as it is and make the note say something
+    else: refused on both paths, nothing written."""
+
+    def history(self, note):
+        return list(
+            NoteVersionMaster.objects.filter(note_type=1, note_id=note.note_id).order_by(
+                "version_no"
+            )
+        )
+
+    def test_the_mcp_tool_refuses_and_writes_nothing(self):
+        note = self.html_note()
+        self.ok(
+            SAVE, html=GOOD + "<!-- 2 -->", note_id=note.note_id, note_type="personal", summary="s"
+        )
+        before = (len(self.history(note)), self.page_count(note.note_id))
+        text = self.refused(
+            "restore_note_version", note_type="personal", note_id=note.note_id, version_no=1
+        )
+        self.assertIn("HTML note", text)
+        self.assertIn("save_html_note", text)
+        self.assertEqual((len(self.history(note)), self.page_count(note.note_id)), before)
+
+    def test_the_rest_restore_answers_409_with_the_way(self):
+        note = self.html_note()
+        self.client.credentials()
+        self.authenticate(self.user)
+        res = self.client.post(
+            "/api/v2/note/version/restore/",
+            {
+                "team_id": str(self.team.team_id),
+                "note_type": 1,
+                "note_id": note.note_id,
+                "version_no": 1,
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 409, res.content)
+        self.assertIn("save_html_note", res.json()["error"])
+        self.assertEqual(len(self.history(note)), 1)
+
+    def test_an_ordinary_note_is_restored_as_before(self):
+        note = self.ordinary_note()
+        self.ok("update_note", note_type="personal", note_id=note.note_id, content_text="second")
+        out = self.ok(
+            "restore_note_version", note_type="personal", note_id=note.note_id, version_no=1
+        )
+        self.assertEqual(out["note_id"], note.note_id)
 
 
 class NoticeTests(HtmlBase):

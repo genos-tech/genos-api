@@ -437,6 +437,17 @@ def check_size(html: str) -> int:
     return size
 
 
+def check_input(html: Any) -> int:
+    """The cheap checks on the page argument, done BEFORE access and the rate limit and long before
+    the scan: it is a non-blank string within the size cap. Returns the size in bytes."""
+    if not isinstance(html, str) or not html.strip():
+        raise HtmlNoteRefused(
+            "`html` is required: the whole page as one string, starting with <!doctype html>. "
+            "Nothing was saved."
+        )
+    return check_size(html)
+
+
 def _rate_key(user_id: str) -> str:
     return f"html_notes:saves:{user_id}:{timezone.now().strftime('%Y%m%d%H')}"
 
@@ -513,12 +524,7 @@ def prepare(html: Any, *, title: str | None = None, summary: str | None = None) 
 
     `title` wins over the page's `<title>`; with neither, the save is refused with the fix.
     """
-    if not isinstance(html, str) or not html.strip():
-        raise HtmlNoteRefused(
-            "`html` is required: the whole page as one string, starting with <!doctype html>. "
-            "Nothing was saved."
-        )
-    size = check_size(html)
+    size = check_input(html)
     scan = scan_html(html)
     chosen = (title or "").strip() or scan.title
     if not chosen:

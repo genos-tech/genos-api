@@ -37,6 +37,7 @@ from origin.search_engine.quota import (
 )
 from origin.services import html_notes
 from origin.services.archive import archived_note_refusal
+from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.views.public.mcp.html_notes.guide import rules_text
 
 log = logging.getLogger(__name__)
@@ -123,16 +124,20 @@ def _answer(
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Cheap checks first, the scan last: the size, then access and the rate limit, and only then
+    the (linear but not free) scan of up to 512 KB, so a caller with no access, or past the hourly
+    limit, makes the server do no work on the page."""
     _feature_on()
-    prepared = _prepare(args)
+    try:
+        html_notes.check_input(args.get("html"))
+    except html_notes.HtmlNoteRefused as refused:
+        raise ToolError(str(refused)) from None
     if args.get("note_id") not in (None, ""):
-        return _replace(args, ctx, prepared)
-    return _create(args, ctx, prepared)
+        return _replace(args, ctx)
+    return _create(args, ctx)
 
 
-def _replace(
-    args: dict[str, Any], ctx: ToolContext, prepared: html_notes.PreparedHtml
-) -> dict[str, Any]:
+def _replace(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ref = load_readable_note(args, ctx)
     note = ref.note
     if (
@@ -159,6 +164,7 @@ def _replace(
     if why := archived_note_refusal(ref.family, ref.note_id):
         raise ToolError(f"{why} Nothing was changed.")
     _count_save(ctx)
+    prepared = _prepare(args)
 
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
 
@@ -174,14 +180,22 @@ def _replace(
     except Exception as exc:  # noqa: BLE001
         reference = log_failure("save_html_note failed", exc)
         raise ToolError(f"Failed to save the page (ref {reference}). Nothing was changed.")
-    return _answer(
+    result = _answer(
         prepared=prepared, revision=revision, family=ref.family, note=note, created=False
     )
+    # A note that was ever opened has a live editor document: without this push an open editor keeps
+    # the old placeholder and its next autosave writes it back over the new one (as `update_note`).
+    live = push_note_body_now(ref.family, ref.note_id, note.body or [])
+    result["live_editor"] = live.value
+    if live == PushOutcome.FAILED:
+        result["__summary__"] += (
+            ". The page is saved, but the live editor could not be updated, so an open editor "
+            "may still show the old text"
+        )
+    return result
 
 
-def _create(
-    args: dict[str, Any], ctx: ToolContext, prepared: html_notes.PreparedHtml
-) -> dict[str, Any]:
+def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     note_type = normalize_note_type(args.get("note_type"))
     if note_type == "shared":
         raise ToolError(
@@ -196,6 +210,7 @@ def _create(
             f"You've created all {note_limit} notes for this month. Upgrade your plan to keep going."
         )
     _count_save(ctx)
+    prepared = _prepare(args)
 
     # The note, its owner row and first version come from `create_note`'s helpers; the page is
     # added in the same transaction, so a failure leaves no note without a page.
