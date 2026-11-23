@@ -58,6 +58,8 @@ from origin.models.skills.skill_models import (
     SOURCE_CHOICES,
     STATUS_ACTIVE,
     STATUS_HIDDEN_BY_TEAM,
+    STATUS_IN_REVIEW,
+    STATUS_REPORTED_HIDDEN,
     STATUS_TAKEN_DOWN,
     TOOL_LEVEL_ACT,
     TOOL_LEVEL_READ,
@@ -73,7 +75,7 @@ from origin.search_engine.agent.tools.blocknote_md import markdown_to_blocks
 from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.services import collab_push
 from origin.services.note_delete import DeleteRefused, delete_note
-from origin.services.skills import text
+from origin.services.skills import guard, text
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR, ROLE_OWNER
 from origin.views.utils.scope_guards import is_team_member
 
@@ -94,6 +96,11 @@ SKILLS_MAX_BY_TIER: dict[str, int | None] = {
     "max": None,
     "enterprise": None,
 }
+
+# The states an operator (or the publish-time scan) has put a skill in. Readers and runs stop at
+# once (`can_read` wants `active`); the owner cannot move the skill out of one by editing, and
+# cannot share it again, until an operator restores it (MIP-2044, `moderation.py`).
+MODERATED_STATUSES = frozenset({STATUS_IN_REVIEW, STATUS_REPORTED_HIDDEN, STATUS_TAKEN_DOWN})
 
 _VISIBILITIES = (VISIBILITY_PRIVATE, VISIBILITY_TEAM, VISIBILITY_PUBLIC)
 _TOOL_LEVELS = (TOOL_LEVEL_READ, TOOL_LEVEL_ACT)
@@ -172,6 +179,15 @@ def public_enabled() -> bool:
 def require_enabled() -> None:
     if not enabled():
         raise SkillDisabled
+
+
+def refuse_if_moderated(skill: Skill) -> None:
+    """The owner of a held, hidden or taken-down skill may not share it again themselves."""
+    if skill.status in MODERATED_STATUSES:
+        raise SkillForbidden(
+            "This skill is waiting for a Genos operator, so it cannot be shared right now."
+            + (f" Reason: {skill.moderation_reason}" if skill.moderation_reason else "")
+        )
 
 
 # -- access ---------------------------------------------------------------------------------------
@@ -492,6 +508,9 @@ def cut_version(skill: Skill, user: CustomUser, *, changelog: str = "") -> Skill
     newest = skill.versions.order_by("-version_no").first()
     if newest is not None and newest.content_hash == digest:
         return None
+    # What a scan of the text finds is kept on the version (MIP-2044): it is what an operator reads
+    # when a PUBLIC version is held, and what a later reader of the version can be told.
+    scan = guard.scan(markdown, extra=(meta["title"], meta["description"]))
     version = SkillVersion.objects.create(
         skill=skill,
         version_no=(newest.version_no if newest else 0) + 1,
@@ -500,6 +519,7 @@ def cut_version(skill: Skill, user: CustomUser, *, changelog: str = "") -> Skill
         content_hash=digest,
         changelog=" ".join(str(changelog or "").split())[: text.DESCRIPTION_MAX],
         created_by=user,
+        scan_result=scan.as_json(),
         **meta,
     )
     skill.current_version_no = version.version_no
@@ -508,6 +528,39 @@ def cut_version(skill: Skill, user: CustomUser, *, changelog: str = "") -> Skill
         skill.published_at = timezone.now()
     skill.save(update_fields=["current_version_no", "published_version_no", "published_at"])
     return version
+
+
+def hold_if_flagged(skill: Skill) -> bool:
+    """A PUBLIC skill whose newest version the scan flagged goes `in_review`: nobody but the owner
+    reads or runs it until an operator decides (`moderation.restore` lets it out). Team and private
+    skills are only recorded: their readers are people the author works with, and the fence and the
+    caller's own permissions still apply. True when the skill was held. Inside a transaction."""
+    if skill.visibility != VISIBILITY_PUBLIC or skill.status != STATUS_ACTIVE:
+        return False
+    newest = skill.versions.order_by("-version_no").first()
+    if newest is None:
+        return False
+    result = newest.scan_result or {}
+    if not result:
+        # A version cut before the scan existed (migration 0272 shipped first): scan it now, and keep
+        # the result on the row (a queryset update: the instance itself is immutable).
+        result = guard.scan(
+            newest.body_markdown, extra=(newest.title, newest.description)
+        ).as_json()
+        SkillVersion.objects.filter(pk=newest.pk).update(scan_result=result)
+    if not result.get("held"):
+        return False
+    codes = ", ".join(result.get("codes") or [])
+    skill.status = STATUS_IN_REVIEW
+    skill.moderation_reason = (
+        f"The automatic check flagged version {newest.version_no} ({codes}). "
+        "An operator will look at it before it is shared."
+    )[:500]
+    skill.moderated_at = timezone.now()
+    skill.moderated_by = None
+    skill.save(update_fields=["status", "moderation_reason", "moderated_at", "moderated_by"])
+    logger.warning("skills: %s held for review (%s)", skill.pk, codes)
+    return True
 
 
 def public_problems(skill: Skill, blocks: list[dict]) -> list[str]:
@@ -694,6 +747,11 @@ def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
     private keeps the versions and stops everyone else's access at once. Inside a transaction."""
     if visibility == skill.visibility:
         return
+    if visibility != VISIBILITY_PRIVATE:
+        refuse_if_moderated(skill)
+        if skill.forked_from_id and skill.forked_from.status in MODERATED_STATUSES:
+            # A copy of a stopped skill is the same text: it does not get shared around the stop.
+            raise SkillForbidden("The skill this one was copied from is waiting for an operator.")
     if visibility == VISIBILITY_PUBLIC:
         if not public_enabled():
             raise SkillForbidden("Public skills are not available yet.")
@@ -712,6 +770,7 @@ def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
         # it never passed the public checklist.
         skill.public_from_version_no = skill.published_version_no
         skill.save(update_fields=["public_from_version_no"])
+        hold_if_flagged(skill)
 
 
 def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
@@ -790,6 +849,7 @@ def publish(user: CustomUser, skill_id: Any, *, changelog: str = "") -> SkillVer
         skill = get_editable(user.pk, skill_id, lock=True)
         if skill.visibility == VISIBILITY_PRIVATE:
             raise SkillError("A private skill has no readers: share it with your team first.")
+        refuse_if_moderated(skill)
         if skill.visibility == VISIBILITY_PUBLIC:
             problems = public_problems(skill, _live_blocks(skill))
             if problems:
@@ -799,6 +859,7 @@ def publish(user: CustomUser, skill_id: Any, *, changelog: str = "") -> SkillVer
         version = cut_version(skill, user, changelog=changelog)
         if version is None:
             raise SkillConflict("Nothing changed since the last version.")
+        hold_if_flagged(skill)
     return version
 
 
@@ -1163,6 +1224,9 @@ def copy(user: CustomUser, skill_id: Any, team_id: Any) -> Skill:
     who can read a skill can copy it (the owner included: a fork of one's own)."""
     require_enabled()
     source = get_readable(user.pk, skill_id)
+    refuse_if_moderated(
+        source
+    )  # the owner reads a stopped skill, but cannot copy it around the stop
     if not is_owner(source, user.pk):
         if source.visibility == VISIBILITY_PRIVATE:
             # A co-editor was invited to work on it, not to take it elsewhere (design section 6).
