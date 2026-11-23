@@ -108,6 +108,7 @@ from origin.views.common.skill_views import (
     SkillDetailView,
     SkillEditorDetailView,
     SkillEditorsView,
+    SkillEffortLevelsView,
     SkillExportView,
     SkillHideView,
     SkillHubTagsView,
@@ -520,6 +521,11 @@ urlpatterns = [
     path("api/v2/skills/hub/", SkillHubView.as_view(), name="skill_hub"),
     path("api/v2/skills/hub/tags/", SkillHubTagsView.as_view(), name="skill_hub_tags"),
     path("api/v2/skills/profile/", SkillProfileView.as_view(), name="skill_profile"),
+    path(
+        "api/v2/skills/effort-levels/",
+        SkillEffortLevelsView.as_view(),
+        name="skill_effort_levels",
+    ),
     path("api/v2/skills/<uuid:skill_id>/", SkillDetailView.as_view(), name="skill_detail"),
     path(
         "api/v2/skills/<uuid:skill_id>/versions/",

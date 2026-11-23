@@ -8,11 +8,16 @@ only the model and the write tool faked) and compare what the two legs were give
 
 from __future__ import annotations
 
+from unittest import mock
+
+from django.conf import settings
 from django.test import override_settings
 
 from origin.models.skills.skill_models import Skill
 from origin.search_engine import agent_views
+from origin.search_engine.agent import controller
 from origin.search_engine.agent.tool_tiers import SINGLE_WRITE_TOOLS, disabled_tools_for_level
+from origin.search_engine.llm.choice import get_llm_choice
 from origin.services.skills import service
 from origin.tests import test_agent_resume_system_extra as base
 
@@ -161,3 +166,53 @@ class PlainRunsAreUnchangedTests(base.ResumeBase):
         self.assertIsNone(self.row(run_id).resume_context)
         self.decide_to_the_end(run_id, token)
         self.assertEqual(self.legs, [None, None])
+
+
+class SkillResumeKeepsTheEffortLevelTests(SkillResumeBase):
+    """MIP-2198 through the real ask -> pause -> `/decide/` round trip: the resumed leg is bound to the
+    level the first leg started at, not to the caller's own setting at the time of the decision."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(
+            override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, "AGENT_EFFORT_LEVELS": True})
+        )
+        Skill.objects.filter(pk=self.skill.pk).update(effort="high")
+        self.user.preferred_llm_effort = "low"
+        self.user.save(update_fields=["preferred_llm_effort"])
+
+    def bound_choices(self):
+        seen = []
+        inner = controller._drive_loop
+
+        def capture(**kwargs):
+            seen.append(get_llm_choice())
+            return inner(**kwargs)
+
+        with mock.patch.object(controller, "_drive_loop", side_effect=capture):
+            run_id, token = self.run_skill()
+            self.kept = self.row(run_id).resume_context  # cleared once the run finishes
+            self.decide_to_the_end(run_id, token)
+        return run_id, seen
+
+    def test_both_legs_run_at_the_skills_level_not_the_callers(self):
+        run_id, seen = self.bound_choices()
+        self.assertEqual([c.effort for c in seen], ["high", "high"])
+        self.assertEqual(seen[0].model, seen[1].model)
+        self.assertEqual(self.kept["skill"]["effort"], "high")
+
+    def test_a_row_without_a_level_leaves_the_resumed_leg_on_the_callers_setting(self):
+        run_id, token = self.run_skill()
+        context = self.row(run_id).resume_context
+        context["skill"].pop("effort")
+        type(self.row(run_id)).objects.filter(run_id=run_id).update(resume_context=context)
+        seen = []
+        inner = controller._drive_loop
+
+        def capture(**kwargs):
+            seen.append(get_llm_choice())
+            return inner(**kwargs)
+
+        with mock.patch.object(controller, "_drive_loop", side_effect=capture):
+            self.decide_to_the_end(run_id, token)
+        self.assertEqual([c.effort for c in seen], ["low"])
