@@ -61,6 +61,8 @@ ROW_LIMITS = {
     "agent_calls": 50000,
     # Their Genos Skills (MIP-2040); a plan keeps at most 100 and the top plans are unlimited.
     "skills": 1000,
+    # Their skill tag catalog (MIP-2211): a skill takes at most 5, a member may keep a few dozen.
+    "skill_tags": 1000,
 }
 
 # Task-history fields whose old/new values are the person's own plain words or enum values. Any other
@@ -303,6 +305,21 @@ def _more_data(user) -> dict:
         },
     )
 
+    from origin.models.skills.skill_models import SkillTag  # noqa: PLC0415
+
+    skill_tags = _capped(
+        "skill_tags",
+        SkillTag.objects.filter(owner=user).order_by("sort_order", "tag_id"),
+        limits,
+        lambda t: {
+            "team_id": str(t.team_id),
+            "name": t.name,
+            "color": t.color,
+            "text_color": t.text_color,
+            "created_at": _iso(t.ts_created_at),
+        },
+    )
+
     data = {
         "ai_questions": ai_questions,
         "ai_feedback": ai_feedback,
@@ -317,6 +334,7 @@ def _more_data(user) -> dict:
         "connected_accounts": connected_accounts,
         "agent_calls": agent_call_rows,
         "skills": skills,
+        "skill_tags": skill_tags,
     }
     data["more_counts"] = {k: len(v) for k, v in data.items()}
     data["export_limits"] = limits
