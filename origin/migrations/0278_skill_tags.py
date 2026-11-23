@@ -70,7 +70,7 @@ def backfill_catalog(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0276_skill_unique_names"),
+        ("origin", "0277_html_notes"),
     ]
 
     operations = [

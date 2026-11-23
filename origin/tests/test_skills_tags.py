@@ -447,7 +447,7 @@ class NonEditorPathTests(TagBase):
 
 class BackfillMigrationTests(TagBase):
     def migration(self):
-        return importlib.import_module("origin.migrations.0277_skill_tags")
+        return importlib.import_module("origin.migrations.0278_skill_tags")
 
     def test_every_free_text_tag_of_a_skill_becomes_a_catalog_row_once(self):
         a = self.make_ok(tags=[], slug="a-skill")
