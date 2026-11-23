@@ -91,7 +91,7 @@ from origin.models.common.user_models import CustomUser
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import schedule_audience, schedule_delivery, schedule_text
 from origin.services.mcp_oauth import clean_name
-from origin.services.schedule_jobs import AI_EFFORT_KEY, JOBS, SHARED_KEY, Report
+from origin.services.schedule_jobs import AI_EFFORT_KEY, AUDIENCE_KEY, JOBS, SHARED_KEY, Report
 from origin.services.user_time import user_zone
 
 log = logging.getLogger("origin.schedules")
@@ -827,6 +827,13 @@ def _run_params(sched: MemberSchedule, job) -> dict[str, Any]:
     if sched.deliver_channel_id:
         # Posted in a chat: the job writes for everyone who reads it, not for its owner.
         params[SHARED_KEY] = True
+        if job.share_team or job.share_chats:
+            # Who reads that chat NOW: the job names only what each of them may read.
+            channel = schedule_audience.load_target(
+                sched.user_id, sched.team_id, sched.deliver_channel_id
+            )
+            if channel is not None:
+                params[AUDIENCE_KEY] = sorted(schedule_audience.readers(channel))
     if job.uses_ai:
         params[AI_EFFORT_KEY] = sched.ai_effort or ""
     return params

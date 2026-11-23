@@ -8,6 +8,13 @@ report is allowed in a chat only when each of those people could open everything
 * **A report about one project** (`project_updates`, `milestone_updates`: a job that names its
   project, `Job.share_project`): a chat whose every reader is on that project. A project's own
   chat is that by construction.
+* **A report about the team** (`team_activity`, `Job.share_team`): a chat whose every reader is
+  on the team, never a guest or an external member. At run it names only projects every reader is
+  on.
+* **A report about group chats** (`chat_catch_up`, `Job.share_chats`): any private chat; at run it
+  names only group chats every reader is in.
+* A public chat is refused for both: anyone on the team can join it later and read the history,
+  and the report would name projects or chats they are not in.
 * **A report about the owner** (what to do today, what you did, what is left: their tasks,
   to-dos and calendar): never a chat other people read.
 * **A report with an AI part** goes to the Inbox only: its cost is filed on an Inbox item.
@@ -28,6 +35,7 @@ from typing import Any
 from django.db.models import Q
 
 from origin.models.chat.unified_models import Channel, ChannelKind
+from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.search_engine.agent.acl import active_project_owners
 from origin.services.channel_scope import can_read_chat, chat_member_q, chat_member_rows
@@ -56,13 +64,17 @@ ABOUT_YOU = (
     "project's people."
 )
 NO_PROJECT = "This report needs a project or a milestone of this team."
+NOT_TEAM = (
+    "Not everyone in that chat is on the team, so not everyone could read a team report. Post it "
+    "in a chat of team members only."
+)
 NOT_EVERYONE = (
     "Not everyone in that chat is on the project, so not everyone could read its report. Post "
     "it in the project's own chat, or in a chat of project members only."
 )
 
 
-def _readers(channel: Channel) -> set[str]:
+def readers(channel: Channel) -> set[str]:
     """Everyone who can read the chat, by the product's one rule (`chat_member_q`): a project
     chat is read by the project's people, any other by its live members."""
     if channel.kind == ChannelKind.PM:
@@ -72,6 +84,20 @@ def _readers(channel: Channel) -> set[str]:
     else:
         ids = chat_member_rows(channel).values_list("user_id", flat=True)
     return {str(i) for i in ids}
+
+
+def team_member_ids(team_id: Any) -> set[str]:
+    """The live members of the team and its owner: not a guest, not an external member."""
+    ids = {
+        str(i)
+        for i in TeamMembers.objects.filter(
+            team_id=team_id, is_deleted=False, attendee_id__isnull=False
+        ).values_list("attendee_id", flat=True)
+    }
+    owner = TeamMaster.objects.filter(team_id=team_id).values_list("owner_id", flat=True).first()
+    if owner:
+        ids.add(str(owner))
+    return ids
 
 
 def load_target(user_id: Any, team_id: Any, channel_id: Any) -> Channel | None:
@@ -109,9 +135,13 @@ def problem(
     job = JOBS.get(job_key)
     if job is not None and job.ai_applies(params):
         return HAS_AI
-    readers = _readers(channel)
-    if readers <= {str(user_id)}:
+    reader_ids = readers(channel)
+    if reader_ids <= {str(user_id)}:
         return None  # nobody else reads it: it is as private as the Inbox
+    if job is not None and job.share_chats:
+        return None  # names only chats every reader is in (decided at run, from the readers)
+    if job is not None and job.share_team:
+        return None if reader_ids <= team_member_ids(team_id) else NOT_TEAM
     if job is None or job.share_project is None:
         return ABOUT_YOU
     project_id = job.share_project(params, str(team_id))
@@ -127,14 +157,14 @@ def problem(
     allowed = {
         str(i)
         for i in ProjectMembers.objects.filter(
-            project_id=project_id, attendee_id__in=readers
+            project_id=project_id, attendee_id__in=reader_ids
         ).values_list("attendee_id", flat=True)
     }
     # The project's owner reads it while still on the team (`agent.acl.active_project_owners`).
     owner = active_project_owners([project_id]).get(project_id)
     if owner:
         allowed.add(str(owner))
-    return None if readers <= allowed else NOT_EVERYONE
+    return None if reader_ids <= allowed else NOT_EVERYONE
 
 
 def readable_ids(user_id: Any, channel_ids: Any) -> set[Any]:
