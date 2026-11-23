@@ -179,9 +179,18 @@ def _forget_batch(code: int, ids: list[int]) -> None:
     ).delete()
 
 
-def delete_note(*, team_id, family: str, note_id) -> None:
-    """Hard-delete one note of `family` ("personal", "task" or "chat")."""
+def delete_note(*, team_id, family: str, note_id, skill_body: bool = False) -> None:
+    """Hard-delete one note of `family` ("personal", "task" or "chat").
+
+    The body of a Genos Skill is not deletable as a note (MIP-2043): the skill row points at it, and
+    a co-editor holds an Editor role on it. Only the skills service, deleting the skill with it,
+    passes `skill_body=True`."""
     model, code = FAMILIES[family]
+    if family == "personal" and not skill_body:
+        from origin.models.skills.skill_models import Skill  # noqa: PLC0415
+
+        if Skill.objects.filter(note_id=note_id).exists():
+            raise DeleteRefused("This note is the text of a skill: delete the skill instead.", 409)
     with transaction.atomic():
         try:
             note = model.objects.get(team=team_id, note_id=note_id)
