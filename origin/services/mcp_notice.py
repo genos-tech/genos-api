@@ -533,6 +533,25 @@ def refusal_burst_notice(refused: int, window_seconds: int) -> Notice:
     )
 
 
+def notify_key_leaked(key) -> list[Activity]:
+    """An API key was found in public and revoked (MIP-2271). Unlike the other credential notices
+    this ignores the member's switches: it is the one notice that says a secret of theirs leaked,
+    and it fires once per key. The client words an unknown verb with its generic line; `extra`
+    carries the facts. Never raises."""
+    try:
+        user = key.user
+        team_id = key.pinned_team_id or _owner_team_id(user.id)
+        if team_id is None:
+            return []
+        item = {"kind": "app", "id": str(key.id), "title": _app_name(key), "url": ""}
+        notice = Notice("revoked", "app", 1, [item], action="leaked_key")
+        with transaction.atomic():
+            return [_emit(user, team_id, key, "github_secret_scanning", notice)]
+    except Exception:  # noqa: BLE001 - a notice never fails what it follows
+        log.warning("Leaked-key notice failed", exc_info=True)
+        return []
+
+
 def notify_credential_event(*, credential, notice: Notice, tool_name: str) -> list[Activity]:
     """A notice about the credential itself, not a tool call (MIP-2063): a new app or API key
     connected, or a burst of refused calls. Goes to the credential's owner under the same

@@ -718,6 +718,11 @@ REGISTRY = {
     "origin.views.project.prj_views.ProjectsView": checked("is_team_member"),
     # views.public.mcp.views
     "origin.views.public.mcp.views.McpView": checked("is_team_member"),
+    # views.public.secret_scanning_views
+    "origin.views.public.secret_scanning_views.SecretScanningView": public(
+        "GitHub's ECDSA signature over the raw body, verified against its published keys before "
+        "anything is parsed; per-address throttle"
+    ),
     # views.public.openapi
     "origin.views.public.openapi.OpenApiSchemaView": public(
         "the public API's schema document; no data"
