@@ -351,13 +351,16 @@ class GithubAccessibleReposView(APIView):
             if client_id
             else None
         )
-        if account.provider == "github_app" and settings.GITHUB_APP_SLUG:
+        if account.provider == "github_app":
             # An App connection is managed on the App's own page (MIP-2090): GitHub lists the
             # accounts where it is installed and opens each one's repository picker. The OAuth
-            # App's page above would show the wrong application.
+            # App's page above would show the wrong application, so with no App slug configured
+            # there is no link at all (the card then shows none).
             manage_url = (
                 f"https://github.com/apps/{quote(settings.GITHUB_APP_SLUG, safe='')}"
                 "/installations/new"
+                if settings.GITHUB_APP_SLUG
+                else None
             )
         return Response(
             {

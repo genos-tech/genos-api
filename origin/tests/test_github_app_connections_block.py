@@ -179,6 +179,15 @@ class AccessibleReposManageUrlTests(TestCase):
             "https://github.com/settings/connections/applications/legacy-client",
         )
 
+    @override_settings(GITHUB_OAUTH_CLIENT_ID="legacy-client", GITHUB_APP_ENABLED=True)
+    @mock.patch("origin.views.common.github_views.get_valid_access_token", return_value="tok")
+    @mock.patch("origin.views.common.github_views.requests.get")
+    def test_an_app_connection_with_no_slug_gets_no_link_not_the_oauth_apps(self, mock_get, _tok):
+        self._connect("github_app")
+        mock_get.return_value = _ok([])
+        with override_settings(GITHUB_APP_SLUG=""):
+            self.assertIsNone(self.client.get(REPOS).data["manage_url"])
+
     @override_settings(GITHUB_OAUTH_CLIENT_ID="legacy-client", **ON)
     @mock.patch("origin.views.common.github_views.get_valid_access_token", return_value="tok")
     @mock.patch("origin.views.common.github_views.requests.get")
