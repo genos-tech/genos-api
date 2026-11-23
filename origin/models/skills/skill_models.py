@@ -163,7 +163,21 @@ class Skill(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["team", "owner", "slug"], name="skill_slug_per_owner")
+            # A name is unique among one owner's skills in a team (any visibility); a TEAM skill's
+            # name is also unique in its team, and a PUBLIC skill's among all public skills
+            # (MIP-2210). A private skill is compared with nobody else's. The rules and their
+            # sentences are `service.name_conflict`; these are the net for two saves at once.
+            models.UniqueConstraint(fields=["team", "owner", "slug"], name="skill_slug_per_owner"),
+            models.UniqueConstraint(
+                fields=["team", "slug"],
+                condition=models.Q(visibility="team"),
+                name="skill_slug_unique_in_team",
+            ),
+            models.UniqueConstraint(
+                fields=["slug"],
+                condition=models.Q(visibility="public"),
+                name="skill_slug_unique_public",
+            ),
         ]
         indexes = [
             models.Index(fields=["team", "visibility"], name="skill_team_visibility_idx"),

@@ -605,8 +605,9 @@ class NameTests(SkillBase):
     def test_a_name_is_unique_per_owner(self):
         self.make_ok()
         res = self.make()
-        self.assertEqual(res.status_code, 409, res.content)
+        self.assertEqual(res.status_code, 400, res.content)  # MIP-2210: was a 409
         self.assertIn("weekly-update", res.json()["error"])
+        self.assertEqual(res.json()["fieldErrors"]["slug"], [res.json()["error"]])
         self.assertEqual(Skill.objects.filter(owner=self.user).count(), 1)
         # The refused create left no orphan body note behind.
         self.assertEqual(PersonalNoteMaster.objects.count(), 1)
@@ -630,9 +631,9 @@ class NameTests(SkillBase):
         )
         self.assertEqual(res.status_code, 201, res.content)
 
-    def test_two_teammates_with_one_name_both_stay_visible_to_the_team(self):
+    def test_two_teammates_with_one_private_name_both_stay_visible_to_the_team_once_shared(self):
         a = self.make_ok(visibility="team")
-        b = self.make_ok(user=self.user2, visibility="team")
+        b = self.make_ok(user=self.user2, visibility="team", slug="weekly-update-b")
         self.as_user(self.outsider)
         TeamMembers.objects.create(team=self.team, attendee=self.outsider)
         listed = self.client.get(f"{LIST}?team_id={self.team_id}&tab=team").json()["skills"]
@@ -642,7 +643,7 @@ class NameTests(SkillBase):
         self.make_ok()
         other = self.make_ok(slug="second", title="Second")
         res = self.client.patch(detail(other["id"]), {"slug": "weekly-update"}, format="json")
-        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.status_code, 400)
         res = self.client.patch(detail(other["id"]), {"slug": "third"}, format="json")
         self.assertEqual(res.json()["skill"]["slug"], "third")
         # Keeping its own name is not a clash.
@@ -1150,13 +1151,14 @@ class ReviewFindingsTests(SkillBase):
         self.client.post(detail(skill["id"], "copy/"), {"team_id": self.team_id}, format="json")
         self.assertEqual(Skill.objects.get(pk=skill["id"]).copy_count, 0)
 
-    def test_a_rename_race_is_a_409_not_a_500(self):
+    def test_a_rename_race_is_a_400_not_a_500(self):
         from django.db import IntegrityError
 
         skill = self.make_ok()
         with mock.patch.object(Skill, "save", side_effect=IntegrityError("duplicate")):
             res = self.client.patch(detail(skill["id"]), {"description": "x"}, format="json")
-        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], "name_taken")
 
     def test_a_body_that_is_not_an_object_is_a_400(self):
         self.as_user(self.user)
