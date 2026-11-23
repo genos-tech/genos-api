@@ -269,6 +269,13 @@ REGISTRY = {
     # MIP-2210: the live name check; team members only, and it consults only the caller's own
     # skills, the team's shared names and the public names (never someone's private skill).
     "origin.views.common.skill_views.SkillNameCheckView": checked("is_team_member"),
+    # MIP-2211: the skill tag catalog. A list by team checks membership and shows only the caller's
+    # own tags; a list by skill needs edit rights on that skill and shows its OWNER's catalog, read
+    # only for a co-editor.
+    "origin.views.common.skill_views.SkillTagListView": checked("is_team_member", "get_editable"),
+    "origin.views.common.skill_views.SkillTagDetailView": self_only(
+        "the caller's own tag (owner = request.user) in a team they still belong to; anything else is a 404"
+    ),
     # MIP-2198: the effort levels for the caller's own provider and plan ceiling; no skill or team data.
     "origin.views.common.skill_views.SkillEffortLevelsView": self_only(
         "the caller's own plan ceiling and model provider (request.user); no skill or team data"

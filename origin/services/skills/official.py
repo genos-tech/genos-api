@@ -256,6 +256,7 @@ def _write(spec: Spec, user: CustomUser, team: TeamMaster, existing: Skill | Non
     blocks = markdown_to_blocks(spec.body_markdown)
     fields = _fields(spec)
     with transaction.atomic():
+        service._check_tags("ensure", team.team_id, user.pk, list(spec.tags))
         if existing is None:
             note = service._create_note(user, team.team_id, spec.title, blocks)
             skill = Skill.objects.create(

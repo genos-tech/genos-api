@@ -124,6 +124,8 @@ from origin.views.common.skill_views import (
     SkillReportView,
     SkillRunCardView,
     SkillStarView,
+    SkillTagDetailView,
+    SkillTagListView,
     SkillTakedownView,
     SkillUpdateDiffView,
     SkillVersionDetailView,
@@ -525,6 +527,8 @@ urlpatterns = [
     path("api/v2/skills/name-check/", SkillNameCheckView.as_view(), name="skill_name_check"),
     path("api/v2/skills/hub/", SkillHubView.as_view(), name="skill_hub"),
     path("api/v2/skills/hub/tags/", SkillHubTagsView.as_view(), name="skill_hub_tags"),
+    path("api/v2/skills/tags/", SkillTagListView.as_view(), name="skill_tags"),
+    path("api/v2/skills/tags/<int:tag_id>/", SkillTagDetailView.as_view(), name="skill_tag_detail"),
     path("api/v2/skills/profile/", SkillProfileView.as_view(), name="skill_profile"),
     path(
         "api/v2/skills/effort-levels/",

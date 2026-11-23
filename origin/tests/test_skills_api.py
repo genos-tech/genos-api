@@ -20,7 +20,8 @@ from origin.models.note.personal_note_models import PersonalNoteFolder, Personal
 from origin.models.skills.skill_models import Skill, SkillInstall, SkillStar, SkillVersion
 from origin.search_engine.agent.acl import personal_note_acl_user_ids
 from origin.search_engine.note_context import FolderAclResolver
-from origin.services.skills import service
+from origin.services.skills import service, text
+from origin.services.skills import tags as skill_tags
 from origin.tests.test_base import BaseAPITestCase
 
 User = get_user_model()
@@ -93,7 +94,20 @@ class SkillBase(BaseAPITestCase):
             "bodyMarkdown": BODY,
             **over,
         }
+        # The editor can only pick tags from the owner's catalog (MIP-2211): most tests are about
+        # something else, so the tags they send are in the catalog already.
+        self.seed_tags(user, team, data["tags"])
         return self.client.post(LIST, data, format="json")
+
+    @staticmethod
+    def seed_tags(user, team, names):
+        if not (isinstance(names, list) and all(isinstance(t, str) for t in names)):
+            return
+        try:
+            clean = text.clean_tags(names)
+        except text.SkillTextError:
+            return  # a test of the tag rules: the API refuses it
+        skill_tags.ensure(team, user.pk, clean)
 
     def make_ok(self, user=None, **over):
         res = self.make(user, **over)
@@ -236,6 +250,7 @@ class TeamSkillTests(SkillBase):
         """MIP-2177: Save keeps a team skill's edit as the owner's draft."""
         skill = self.make_ok(visibility="team")
         self.as_user(self.user)
+        self.seed_tags(self.user, self.team_id, ["new"])
         res = self.client.patch(
             detail(skill["id"]),
             {"bodyMarkdown": "# T\n\n1. A new step.", "title": "Renamed", "tags": ["new"]},
