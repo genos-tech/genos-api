@@ -32,7 +32,7 @@ from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q
 from origin.services import schedule_audience
 from origin.services.schedule_jobs import AUDIENCE_KEY, Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, item, more
+from origin.services.schedule_jobs.report_kit import Links, counted, item, more, span
 
 DEFAULT_HOURS = 168
 MAX_LIST = 8
@@ -43,13 +43,6 @@ def _public(message: str):
     from origin.services.schedules import ScheduleRunError  # noqa: PLC0415 (import cycle)
 
     return ScheduleRunError(message)
-
-
-def _span(hours: int) -> str:
-    days, rest = divmod(hours, 24)
-    if days and not rest:
-        return "1 day" if days == 1 else f"{days} days"
-    return "1 hour" if hours == 1 else f"{hours} hours"
 
 
 def _audience(ctx: ToolContext, params: dict[str, Any]) -> set[str]:
@@ -143,9 +136,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         rows.append(item(f"{p.project_name}: {said}", Links.project(p.project_id), "project"))
     if len(active) > len(rows):
         rows.append(more(len(active) - len(rows), "projects"))
-    quiet = len(projects) - len(active)
-    if quiet and rows:
-        rows.append(item(f"{quiet} more shared project(s) had no new or closed tasks"))
+    # Projects with nothing new or closed are not listed: a quiet project is not news (MIP-1417).
     if rows:
         sections.append({"heading": "Projects", "key": "projects", "items": rows})
 
@@ -185,28 +176,27 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     total_created = sum(created.values())
     bits = []
     if total_closed:
-        bits.append(f"{total_closed} tasks closed")
+        bits.append(f"{counted(total_closed, 'task')} closed")
     if total_created:
-        bits.append(f"{total_created} new")
+        bits.append(f"{counted(total_created, 'new task')}")
     if joined:
         bits.append(f"{len(joined)} joined")
     return {
         "title": "Team activity",
         "summary": (
-            f"{', '.join(bits)} in the last {_span(hours)}."
+            f"{', '.join(bits)} in the last {span(hours)}."
             if bits
-            else f"Nothing to report for the last {_span(hours)}."
+            else f"Nothing to report for the last {span(hours)}."
         ),
         "sections": sections,
+        # No headline chip for the closed count: no section carries its name, so the chip would
+        # be a bare number; the summary line says it (MIP-1417).
         "stats": [
             {"key": key, "count": n}
-            for key, n in (
-                ("closed", total_closed),
-                ("projects", len(active)),
-                ("new_members", len(joined)),
-            )
+            for key, n in (("projects", len(active)), ("new_members", len(joined)))
             if n
         ],
+        "quiet": not sections,
     }
 
 

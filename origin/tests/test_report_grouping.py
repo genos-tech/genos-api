@@ -4,8 +4,9 @@ The rule, the same in every section of every job (`report_kit.arrange`):
 
   * task items are grouped by project (name, case-insensitive, then id), and every item of a
     project is contiguous, so a card can draw a header where `project` changes;
-  * inside a project: overdue first (the longest overdue first), then by due date, tasks with no
-    due date last, then by display id (the task number);
+  * inside a project: overdue first (the most important priority first, then the longest overdue,
+    MIP-1417), then by due date, tasks with no due date last, then by display id (the task
+    number);
   * anything that is not a task of a known project (to-dos, calendar events, requests, notes,
     chats) keeps its own order and follows the project groups;
   * EXCEPT "Start with" (MIP-1236): it is the briefing's top items in the order of what matters
@@ -89,6 +90,43 @@ class TestTheRule(SimpleTestCase):
             ],
         )
 
+    def test_overdue_goes_by_priority_before_how_late_it_is(self):
+        """A Low task that has been late for a month is not ahead of a Critical one that went late
+        yesterday (MIP-1417); at the same priority the longest overdue comes first."""
+
+        def t(text, task_id, priority, due):
+            f = TaskFacts(task_id, task_id, 1, "Alpha", "ALP", due, "Open", priority)
+            return task_item(text, f)
+
+        items = [
+            t("low, 40 days", 1, "Low", TODAY - timedelta(days=40)),
+            t("critical, 1 day", 2, "Critical", TODAY - timedelta(days=1)),
+            t("high, 5 days", 3, "High", TODAY - timedelta(days=5)),
+            t("high, 9 days", 4, "High", TODAY - timedelta(days=9)),
+            t("normal, 2 days", 5, "Normal", TODAY - timedelta(days=2)),
+        ]
+        self.assertEqual(
+            self.texts(arrange(items, TODAY)),
+            ["critical, 1 day", "high, 9 days", "high, 5 days", "normal, 2 days", "low, 40 days"],
+        )
+
+    def test_priority_breaks_a_tie_only_among_tasks_due_the_same_day(self):
+        def t(text, task_id, priority, days):
+            f = TaskFacts(
+                task_id, task_id, 1, "Alpha", "ALP", TODAY + timedelta(days=days), "Open", priority
+            )
+            return task_item(text, f)
+
+        items = [
+            t("critical in 9 days", 1, "Critical", 9),
+            t("normal tomorrow", 2, "Normal", 1),
+            t("high tomorrow", 3, "High", 1),
+        ]
+        self.assertEqual(
+            self.texts(arrange(items, TODAY)),
+            ["high tomorrow", "normal tomorrow", "critical in 9 days"],
+        )
+
     def test_the_display_id_is_the_number_not_the_text(self):
         items = [
             task_item("ten", facts(1, 1, "Alpha", "ALP", 10)),
@@ -162,7 +200,14 @@ class TestWhatToDoToday(Base):
             title, project=project, due_date=self.local_today() - timedelta(days=days)
         )
 
+    def decoys(self):
+        """Three tasks that rank above anything else on the board, so they fill "Start with" (the
+        briefing's top three) and the sections below are checked on their own: a task is listed
+        once per report (MIP-1417)."""
+        return [self.late(f"Decoy {n}", self.alpha, 40) for n in range(3)]
+
     def test_overdue_is_grouped_by_project_and_sorted_by_how_late(self):
+        self.decoys()
         b1 = self.late("Beta one day", self.beta, 1)
         a2 = self.late("Alpha two days", self.alpha, 2)
         b9 = self.late("Beta nine days", self.beta, 9)
@@ -179,11 +224,17 @@ class TestWhatToDoToday(Base):
         self.assert_contiguous(items)
 
     def test_every_task_section_is_grouped(self):
+        self.decoys()
         for n, project in enumerate((self.beta, self.alpha, self.beta, self.alpha)):
             task = self.make_task(
                 f"T{n}", project=project, due_date=self.local_today(), priority="High"
             )
             TaskMaster.objects.filter(pk=task.pk).update(
+                ts_updated_at=self.now - timedelta(days=10 + n)
+            )
+            # No due date and untouched: only "Gone quiet" lists it.
+            idle = self.make_task(f"Idle{n}", project=project)
+            TaskMaster.objects.filter(pk=idle.pk).update(
                 ts_updated_at=self.now - timedelta(days=10 + n)
             )
         report = self.run_job("what_to_do_today")
@@ -200,6 +251,7 @@ class TestWhatToDoToday(Base):
         self.assertEqual(checked, 2)
 
     def test_changed_tasks_are_grouped_and_notes_and_threads_follow(self):
+        self.decoys()
         b = self.make_task("Beta work", project=self.beta)
         a = self.make_task("Alpha work", project=self.alpha)
         self.comment(b, self.user2, "hello", at=self.ago(hours=2))
@@ -219,7 +271,7 @@ class TestWhatToDoToday(Base):
 
     def test_a_task_in_the_text_still_reads_as_before(self):
         task = self.late("Beta one day", self.beta, 1)
-        item = self.section(self.run_job("what_to_do_today"), "Overdue")[0]
+        item = self.section(self.run_job("what_to_do_today"), "Start with")[0]
         self.assertIn("Beta one day", item["text"])
         self.assertIn("1 day late", item["text"])
         self.assertEqual(item["link"], self.task_link(task))
@@ -295,7 +347,7 @@ class TestTheOtherJobs(Base):
         self.comment(late, self.user2, "x", at=self.ago(hours=5))
         self.comment(quiet, self.user2, "y", at=self.ago(hours=1))
         report = self.run_job("milestone_updates", milestone_id=milestone.milestone_id)
-        changed = self.section(report, "Changed in the last 168 hours")
+        changed = self.section(report, "Changed in the last 7 days")
         self.assertEqual(
             [i["link"] for i in changed], [self.task_link(late), self.task_link(quiet)]
         )

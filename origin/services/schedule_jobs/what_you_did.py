@@ -16,7 +16,14 @@ from django.utils import timezone
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import briefing
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, plain
+from origin.services.schedule_jobs.report_kit import (
+    Links,
+    arrange,
+    clip,
+    dedupe_tasks,
+    item,
+    plain,
+)
 from origin.services.user_time import zone_for_user_id
 
 # A report has more room than the briefing, which is sized for a model's context.
@@ -155,13 +162,17 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             }
         )
 
+    # A task the member changed and also opened with their AI app is one line, in "Tasks" (MIP-1417).
+    sections = dedupe_tasks(sections, ("tasks",))
+    # What is counted is what is listed: the AI app's rows that are left after that.
+    looked_n = sum(len(s["items"]) for s in sections if s.get("key") == "looked_at")
     totals = did["totals"]
     facts = [
         (totals["items"], "item", "items"),
         (totals["comments"], "comment", "comments"),
         (totals["todos_done"], "to-do finished", "to-dos finished"),
         (totals["messages"], "message sent", "messages sent"),
-        (len(looked), "item looked at with your AI app", "items looked at with your AI app"),
+        (looked_n, "item looked at with your AI app", "items looked at with your AI app"),
     ]
     said = [f"{n} {one if n == 1 else many}" for n, one, many in facts if n]
     summary = f"{', '.join(said)}." if said else f"Nothing saved in Genos for {day} yet."
@@ -169,6 +180,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         "title": f"What you did {day}, {did['local_date']}",
         "summary": clip(summary),
         "sections": sections,
+        "quiet": not sections,
         "stats": [
             {"key": key, "count": n}
             for key, n in (
@@ -176,7 +188,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 ("comments", totals["comments"]),
                 ("todos_done", totals["todos_done"]),
                 ("messages", totals["messages"]),
-                ("looked_at", len(looked)),
+                ("looked_at", looked_n),
             )
             if n
         ],

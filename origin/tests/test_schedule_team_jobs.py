@@ -199,7 +199,7 @@ class TestTeamActivityContent(TeamJobsBase):
         self.assertNotIn("Secret", text)
         self.assertIn(self.project.project_name, text)
         # The secret project's closes are in nobody's ranking and not in the totals.
-        self.assertIn("1 tasks closed", text)
+        self.assertIn("1 task closed", text)
         self.assertNotIn(f"{self.user.username}: 3", text)
 
     def test_per_reader_combination_each_reader_sees_only_projects_they_are_on(self):

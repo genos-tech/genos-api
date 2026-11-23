@@ -111,24 +111,27 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         sections.append({"heading": "To-dos left unfinished", "key": "todos_left", "items": shown})
 
     facts = [
-        (len(still_open), "task still open"),
-        (len(finished), "task closed"),
-        (len(left_todos), "to-do left"),
+        (len(still_open), "task still open", "tasks still open"),
+        (len(finished), "task closed", "tasks closed"),
+        (len(left_todos), "to-do left", "to-dos left"),
     ]
-    said = [f"{n} {label}{'' if n == 1 else 's'}" for n, label in facts if n]
+    said = [f"{n} {one if n == 1 else many}" for n, one, many in facts if n]
+    window = "last day" if days == 1 else f"last {days} days"
     summary = (
-        f"{', '.join(said)} from the last {days} days."
+        f"{', '.join(said)} from the {window}."
         if said
-        else f"Nothing saved in Genos for the last {days} days."
+        else f"Nothing saved in Genos for the {window}."
     )
     if verdict.same:
         summary += f" {verdict.same} unchanged since your last report."
     if verdict.quieted:
         summary += f" {verdict.quieted} quieted by you."
     return {
-        "title": f"What is left from the last {days} days, {today}",
+        "title": f"What is left from the {window}, {today}",
         "summary": clip(summary),
         "sections": sections,
+        # Nothing to act on: every open task was held back as unchanged, or there was none.
+        "quiet": not sections,
         "stats": [
             {"key": key, "count": n}
             for key, n in (

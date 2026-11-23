@@ -185,6 +185,15 @@ class TestTheKit(SimpleTestCase):
 
 
 class TestSectionsAndStats(SimpleTestCase):
+    def test_only_finished_todos_wear_a_check(self):
+        # MIP-1417: "To-dos for today" carried a green check although those to-dos are not done.
+        self.assertEqual(EMOJI["todos_today"], "⬜")
+        self.assertEqual(EMOJI["todos_done"], "✅")
+        for key in ("todos_today", "todos_earlier", "todos_left"):
+            self.assertNotIn(EMOJI[key], ("✅", "☑️", "✔️"), key)
+        self.assertEqual(stored(key="todos_today")["sections"][0]["emoji"], "⬜")
+        self.assertEqual(stored(key="todos_done")["sections"][0]["emoji"], "✅")
+
     def test_the_section_key_gets_the_servers_emoji(self):
         for key, emoji in EMOJI.items():
             section = stored(key=key)["sections"][0]
@@ -263,8 +272,9 @@ class TestWhatTheJobsFill(Base):
             due_date=self.local_today() - timedelta(days=3),
         )
         body = self.stored_report("what_to_do_today")
-        section = [s for s in body["sections"] if s["heading"] == "Overdue"][0]
-        self.assertEqual((section["key"], section["emoji"]), ("overdue", EMOJI["overdue"]))
+        # One task is all there is to start with: it is listed there, once (MIP-1417).
+        section = [s for s in body["sections"] if s["heading"] == "Start with"][0]
+        self.assertEqual((section["key"], section["emoji"]), ("start_with", EMOJI["start_with"]))
         line = section["items"][0]
         self.assertEqual(
             {k: v for k, v in line.items() if k != "text"},
@@ -290,24 +300,32 @@ class TestWhatTheJobsFill(Base):
     def test_a_task_due_later_has_no_overdue_days_and_a_closed_one_never_has(self):
         later = self.make_task("Later", project=self.alpha, due_date=self.local_today())
         body = self.stored_report("what_to_do_today")
-        line = [s for s in body["sections"] if s["heading"] == "Due today"][0]["items"][0]
+        line = body["sections"][0]["items"][0]
         self.assertEqual(line["due_date"], self.local_today().isoformat())
         self.assertNotIn("overdue_days", line)
         self.assertEqual(line["display_id"], later.display_id)
 
     def test_the_headline_counts_are_the_agendas_own(self):
-        for n in range(2):
+        # More than "Start with" holds, so the Overdue and Due today sections exist (a chip is only
+        # drawn for a section that is there: its name comes from the section's heading).
+        for n in range(5):
             self.make_task(
                 f"Late {n}", project=self.alpha, due_date=self.local_today() - timedelta(days=1)
             )
-        self.make_task("Due", project=self.alpha, due_date=self.local_today())
+        for n in range(2):
+            self.make_task(f"Due {n}", project=self.alpha, due_date=self.local_today())
         stats = {s["key"]: s["count"] for s in self.stored_report("what_to_do_today")["stats"]}
-        self.assertEqual(stats["overdue"], 2)
-        self.assertEqual(stats["due_today"], 1)
+        self.assertEqual(stats["overdue"], 5)
+        self.assertEqual(stats["due_today"], 2)
         quiet = self.stored_report("what_you_did", day="today")
         self.assertNotIn("stats", quiet)
 
     def test_the_detail_is_the_sentence_about_the_task_that_is_not_in_its_fields(self):
+        # Three overdue tasks fill "Start with", so the commented task is listed under "Changed".
+        for n in range(3):
+            self.make_task(
+                f"Late {n}", project=self.alpha, due_date=self.local_today() - timedelta(days=9)
+            )
         task = self.make_task("Hot", project=self.alpha)
         self.comment(task, self.user2, "hi", at=self.ago(hours=1))
         body = self.stored_report("what_to_do_today")
@@ -379,7 +397,7 @@ class TestWhatTheJobsFill(Base):
         body = self.stored_report("milestone_updates", milestone_id=milestone.milestone_id)
         keys = {s["heading"]: s.get("key") for s in body["sections"]}
         self.assertEqual(keys["Where it stands"], "where_it_stands")
-        self.assertEqual(keys["Changed in the last 168 hours"], "changed")
+        self.assertEqual(keys["Changed in the last 7 days"], "changed")
         self.assertEqual(keys["Ready to start"], "ready")
         stats = {s["key"]: s["count"] for s in body["stats"]}
         self.assertEqual(stats["changed"], 1)
@@ -418,6 +436,6 @@ class TestWhatTheJobsFill(Base):
         body = InboxItems.objects.get(item_type=ITEM_TYPE_GENOS_REPORT).item_body
         self.assertEqual(body["version"], 2)
         self.assertTrue(body["title"] and body["text"])
-        line = [s for s in body["sections"] if s.get("key") == "overdue"][0]["items"][0]
+        line = [s for s in body["sections"] if s.get("key") == "start_with"][0]["items"][0]
         self.assertEqual(line["kind"], "task")
         self.assertIn("Late", line["text"])

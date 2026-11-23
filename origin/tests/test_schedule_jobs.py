@@ -66,6 +66,14 @@ class JobBase(BriefingBase):
     def texts(report):
         return [i["text"] for s in report["sections"] for i in s["items"]]
 
+    @staticmethod
+    def row(report, link):
+        """The ONE row that links to `link`, wherever it is: a task is listed once per report
+        (MIP-1417), in the first section that holds it."""
+        found = [i for s in report["sections"] for i in s["items"] if i.get("link") == link]
+        assert len(found) == 1, f"{link} is listed {len(found)} times"
+        return found[0]
+
     def task_link(self, task):
         return f"/workspace/tasks/project/{task.project_id}/task/{task.task_id}"
 
@@ -135,15 +143,15 @@ class TestWhatToDoToday(JobBase):
         later = self.make_task("Next week", due_date=today + timedelta(days=7))
         report = self.run_job("what_to_do_today")
 
-        overdue = self.section(report, "Overdue")
-        self.assertEqual(len(overdue), 1)
-        self.assertEqual(overdue[0]["link"], self.task_link(late))
-        self.assertIn(late.display_id, overdue[0]["text"])
-        self.assertIn("Fix the login redirect", overdue[0]["text"])
-        self.assertIn("2 days late", overdue[0]["text"])
-        due_today = self.section(report, "Due today")
-        self.assertEqual([i["link"] for i in due_today], [self.task_link(due)])
-        self.assertIn("High", due_today[0]["text"])
+        # Two tasks are all there is to start with, so they are in "Start with" and nowhere else:
+        # a task is listed once (MIP-1417).
+        late_row = self.row(report, self.task_link(late))
+        self.assertIn(late.display_id, late_row["text"])
+        self.assertIn("Fix the login redirect", late_row["text"])
+        self.assertIn("2 days late", late_row["text"])
+        due_row = self.row(report, self.task_link(due))
+        self.assertIn("High", due_row["text"])
+        self.assertEqual([s["heading"] for s in report["sections"]], ["Start with"])
         self.assertNotIn("Next week", json.dumps(report))
         self.assertIn("1 overdue, 1 due today", report["summary"])
         self.assertTrue(report["title"].startswith("What to do today, "))
@@ -219,18 +227,55 @@ class TestWhatToDoToday(JobBase):
         narrow = self.run_job("what_to_do_today")
         self.assertEqual(self.section(narrow, "Changed in the last 24 hours"), [])
         wide = self.run_job("what_to_do_today", changed_hours=48)
-        changed = self.section(wide, "Changed in the last 48 hours")
-        self.assertEqual(len(changed), 1)
-        self.assertEqual(changed[0]["link"], self.task_link(task))
-        self.assertIn("by otheruser", changed[0]["text"])
+        # What someone changed is worth starting with, so the task is in "Start with" and not
+        # listed a second time under "Changed" (MIP-1417): its sentence says what changed.
+        row = self.row(wide, self.task_link(task))
+        self.assertIn("change from others", row["detail"])
+        self.assertEqual(self.section(wide, "Changed in the last 48 hours"), [])
+
+    def test_a_member_without_google_is_not_told_about_it_every_morning(self):
+        # No Google account is connected in the test: the briefing's sentence is written for an
+        # AI client ("Direct them to Settings"), so the report says nothing about it (MIP-1417).
+        self.make_task("Late", due_date=self.local_today() - timedelta(days=1))
+        report = self.run_job("what_to_do_today")
+        self.assertEqual(self.section(report, "On your calendar"), [])
+        self.assertNotIn("Google", json.dumps(report))
 
     def test_a_calendar_that_could_not_be_read_is_said_not_shown_as_no_meetings(self):
-        report = self.run_job("what_to_do_today")
-        # No Google account is connected in the test: the briefing says so as a note.
+        self.make_task("Late", due_date=self.local_today() - timedelta(days=1))
+        broken = {"events": None, "note": "No events could be read: token revoked."}
+        with mock.patch("origin.services.briefing._calendar_today", return_value=broken):
+            report = self.run_job("what_to_do_today")
         calendar = self.section(report, "On your calendar")
         self.assertEqual(len(calendar), 1)
-        self.assertTrue(calendar[0]["text"].startswith("Not shown: "))
+        # In plain words, never the tool's own message.
+        self.assertEqual(
+            calendar[0]["text"], "Not shown: the calendar could not be read right now."
+        )
+        self.assertNotIn("revoked", json.dumps(report))
         self.assertNotIn("link", calendar[0])
+        self.assertFalse(report["quiet"])  # there is a task to do, so the report goes out
+
+    def test_a_calendar_without_granted_access_says_where_to_fix_it(self):
+        self.make_task("Late", due_date=self.local_today() - timedelta(days=1))
+        note = "Google is connected but Calendar access hasn't been granted. Direct the user to X."
+        with mock.patch(
+            "origin.services.briefing._calendar_today", return_value={"events": None, "note": note}
+        ):
+            report = self.run_job("what_to_do_today")
+        (line,) = self.section(report, "On your calendar")
+        self.assertEqual(
+            line["text"],
+            "Not shown: Calendar access has not been granted (Settings → Integrations).",
+        )
+        self.assertNotIn("Direct", json.dumps(report))
+
+    def test_a_quiet_day_is_quiet_even_when_the_calendar_could_not_be_read(self):
+        broken = {"events": None, "note": "The calendar could not be read right now."}
+        with mock.patch("origin.services.briefing._calendar_today", return_value=broken):
+            report = self.run_job("what_to_do_today")
+        self.assertTrue(report["quiet"])  # one line about a broken calendar is not worth a push
+        self.assertEqual(report["summary"], "Nothing is overdue, due today or waiting on you.")
 
     def test_a_full_waiting_list_says_there_may_be_more(self):
         channel = self.channel([self.user, self.user2], title="Design")
