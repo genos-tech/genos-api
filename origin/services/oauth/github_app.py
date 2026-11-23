@@ -6,8 +6,8 @@ It reaches only repositories where the App is installed AND the person has acces
 OAuth scopes: the permissions are the App's own (read-only, set at registration).
 
 Not a sign-in provider: the OAuth App (`github.py`) keeps that, so the sign-in identity row is
-never touched. `has_flow` is False until the install / authorize flow lands (PR 2); until then
-nothing can start a connect with this provider and the registry does not expose it to the views.
+never touched. The browser flow (install or authorize, then the callback) is `oauth_views` +
+`services/github_app_link.py`, served only while `GITHUB_APP_ENABLED` is on (MIP-2087).
 """
 
 from urllib.parse import urlencode
@@ -28,7 +28,7 @@ _DEAD_REFRESH_ERRORS = {"bad_refresh_token", "invalid_grant"}
 
 class GitHubAppOAuthProvider(OAuthProvider):
     name = "github_app"
-    has_flow = False
+    has_flow = True  # routes are served; the view also needs GITHUB_APP_ENABLED (MIP-2087)
     rotates_refresh_token = True
 
     def authorize_url(self, *, state: str, intent: FlowIntent, redirect_uri: str) -> str:

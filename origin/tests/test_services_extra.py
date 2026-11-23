@@ -158,7 +158,8 @@ class TestOAuthRegistry(TestCase):
 
     def test_supported_provider_names(self):
         names = supported_provider_names()
-        self.assertEqual(set(names), {"google", "github"})
+        # `github_app` is served since MIP-2087 (its views also need GITHUB_APP_ENABLED).
+        self.assertEqual(set(names), {"google", "github", "github_app"})
 
 
 # ──────────────────────────────────────────────────────────────────────
