@@ -1688,6 +1688,7 @@ class AgentAskView(AuthenticatedAPIView):
                     else []
                 ),
                 locale=locale,
+                skill_ref=skill_run.history_ref(skill_to_run) if skill_to_run else None,
             )
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
@@ -4633,6 +4634,8 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
                 "error": error or None,
                 "started_at": r.started_at.isoformat(),
                 "sources": reconstruct_sources_for_run(r),
+                # The skill this turn ran (MIP-2189): the reference, so "Retry" sends it again.
+                "skill": r.skill_ref if skill_service.enabled() else None,
                 # The approved writes of this turn that have an undo (one run can
                 # approve several): `{step_id, step, tool_name, available_until,
                 # undone_at | null}`. Whether one can STILL be undone (the window,
