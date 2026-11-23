@@ -23,7 +23,7 @@ from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
-from origin.services.schedule_jobs import ReportItem
+from origin.services.schedule_jobs import ReportItem, ReportSection
 
 # A report line is a sentence, not a document: a snippet or a title is cut here.
 LINE_CHARS = 240
@@ -51,12 +51,21 @@ def item(text: str, link: str | None = None, kind: str | None = None) -> ReportI
     return out
 
 
-def _urgency(facts: TaskFacts) -> tuple:
-    """Within a project: by due date, so overdue comes first (the longest overdue first) and then
-    what is due soonest, tasks with no due date last, then by display id (the number: every
-    task of a group has the same project code)."""
+_PRIORITY_RANK = {"Critical": 0, "High": 1, "Normal": 2, "Low": 3, "Minimal": 4}
+
+
+def _urgency(facts: TaskFacts, today: date) -> tuple:
+    """Within a project, what a member should look at first (MIP-1417). Overdue tasks come first,
+    the most important priority first and, at the same priority, the longest overdue first: a Low
+    task that has been late for a month is not ahead of a Critical one that went late yesterday.
+    Then what is due soonest (the priority breaks a tie), tasks with no due date last, then by
+    display id (the number: every task of a group has the same project code)."""
     due = facts.due_date
-    return (due or date.max, facts.number or 0, facts.task_id)
+    rank = _PRIORITY_RANK.get(facts.priority, 2)
+    number = facts.number or 0
+    if due is not None and due < today and facts.status not in ("Closed", "Deleted"):
+        return (0, rank, due, number, facts.task_id)
+    return (1, due or date.max, rank, number, facts.task_id)
 
 
 def _typed_fields(facts: TaskFacts, today: date) -> dict[str, Any]:
@@ -86,9 +95,10 @@ def arrange(items: list[ReportItem], today: date) -> list[ReportItem]:
     """Group a section's TASK items by project and sort inside each group (MIP-1207).
 
     The rule, the same in every job: projects by name (case-insensitive, then id); inside a
-    project, overdue first (longest overdue first), then by due date, tasks with no due date
-    last, then by display id. Items that are not tasks of a known project (to-dos, events,
-    notes, chats, requests) keep their own order and follow the project groups. Every item of
+    project, overdue first (most important priority first, then longest overdue: `_urgency`),
+    then by due date, tasks with no due date last, then by display id. Items that are not tasks
+    of a known project (to-dos, events, notes, chats, requests) keep their own order and follow
+    the project groups. Every item of
     a project is contiguous, so a card can draw a header where `project` changes. Call it
     BEFORE appending the closing "and N more" line, which stays last."""
     grouped = [i for i in items if "_facts" in i]
@@ -97,7 +107,7 @@ def arrange(items: list[ReportItem], today: date) -> list[ReportItem]:
         key=lambda i: (
             i["_facts"].project_name.casefold(),  # type: ignore[typeddict-item]
             i["_facts"].project_id or 0,  # type: ignore[typeddict-item]
-            *_urgency(i["_facts"]),  # type: ignore[typeddict-item]
+            *_urgency(i["_facts"], today),  # type: ignore[typeddict-item]
         )
     )
     for i in grouped:
@@ -121,6 +131,65 @@ def in_order(items: list[ReportItem], today: date) -> list[ReportItem]:
 def more(count: int, noun: str) -> ReportItem:
     """The closing line of a capped list: how many are not shown."""
     return {"text": f"and {count} more {noun}", "kind": "more"}
+
+
+def span(hours: int) -> str:
+    """A look-back window in words: "24 hours", "7 days", "1 hour". Whole days only from two
+    days up, so the default day reads "24 hours" and a week "7 days", never "168 hours" or
+    "1 day"."""
+    days, rest = divmod(hours, 24)
+    if days >= 2 and not rest:
+        return f"{days} days"
+    return "1 hour" if hours == 1 else f"{hours} hours"
+
+
+def counted(count: int, one: str, many: str | None = None) -> str:
+    """ "1 task", "3 tasks": the number and the noun in the right number."""
+    return f"{count} {one if count == 1 else (many or one + 's')}"
+
+
+def status_line(total: int, breakdown: dict[str, int]) -> str:
+    """ "17 tasks: 9 open, 5 wip, 1 blocked, 2 closed": the statuses that have a task, none that
+    has not ("0 pending" is noise in a short report)."""
+    parts = [
+        f"{breakdown[s]} {s.lower()}"
+        for s in ("Open", "WIP", "Blocked", "Pending", "Closed")
+        if breakdown.get(s)
+    ]
+    return f"{counted(total, 'task')}: {', '.join(parts)}" if parts else counted(total, "task")
+
+
+def dedupe_tasks(
+    sections: list[ReportSection], priority: tuple[str, ...] = ()
+) -> list[ReportSection]:
+    """A task is listed once per report (MIP-1417).
+
+    A task that is overdue, was changed by someone and is blocked used to be listed in all three
+    sections, so a short report read as a long one. The first section (in `priority` order, by
+    section key; sections the tuple does not name come after, in their own order) keeps the row;
+    the same task in a later section is dropped. When the kept row has no sentence of its own
+    (`detail`) it takes the dropped row's ("commented by mina"), so what the later section
+    said is not lost. The sections keep their display order. A capped list's "and N more" line
+    is not a task and stays (those tasks are NOT listed anywhere, so the line is still true); a
+    section left with nothing goes."""
+    rank = {key: n for n, key in enumerate(priority)}
+    order = sorted(
+        range(len(sections)), key=lambda n: (rank.get(sections[n].get("key", ""), len(rank)), n)
+    )
+    first: dict[int, ReportItem] = {}
+    for n in order:
+        kept: list[ReportItem] = []
+        for entry in sections[n]["items"]:
+            task_id = entry.get("task_id") if entry.get("kind") == "task" else None
+            if task_id is None:
+                kept.append(entry)
+            elif task_id not in first:
+                first[task_id] = entry
+                kept.append(entry)
+            elif entry.get("detail") and not first[task_id].get("detail"):
+                first[task_id]["detail"] = entry["detail"]
+        sections[n]["items"] = kept
+    return [s for s in sections if s["items"]]
 
 
 @dataclass(frozen=True)

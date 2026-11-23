@@ -50,6 +50,7 @@ from origin.services.schedule_jobs.report_kit import (
     Links,
     arrange,
     clip,
+    dedupe_tasks,
     in_order,
     item,
     more,
@@ -87,6 +88,28 @@ _SECTION_KEYS = {
 
 # Sections whose order is the content: not grouped by project.
 _KEEP_ORDER = ("Start with",)
+
+# A task is listed once (MIP-1417): the first of these sections that holds it keeps the row. The
+# briefing's sections overlap (an overdue task that someone commented on is in "Start with",
+# "Overdue" and "Changed"), and a report that lists it three times reads three times as long.
+_ONE_LINE_PER_TASK = (
+    "start_with",
+    "overdue",
+    "due_today",
+    "waiting_on_you",
+    "changed",
+    "waiting_on_others",
+    "gone_quiet",
+)
+
+# What the briefing says about why it ranks a task, minus what the row's own marks already show
+# (the days late, the due date and the priority are chips on the card): saying them again under the
+# row is noise.
+_SHOWN_AS_CHIPS = ("overdue by ", "due today", "due tomorrow", "priority ")
+
+
+def _extra_reasons(reasons: list[str]) -> list[str]:
+    return [r for r in reasons if not r.startswith(_SHOWN_AS_CHIPS)]
 
 
 def _task_text(row: dict[str, Any]) -> str:
@@ -283,13 +306,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
 
     start = [
         links.task_item(
-            f"{_task_text(t)}: {'; '.join(t.get('reasons') or [])}"
-            if t.get("reasons")
-            else _task_text(t),
+            f"{_task_text(t)}: {'; '.join(extra)}" if extra else _task_text(t),
             t["task_id"],
-            "; ".join(t.get("reasons") or []),
+            "; ".join(extra),
         )
         for t in kept(data["suggested_next"])
+        for extra in [_extra_reasons(t.get("reasons") or [])]
     ]
     add("Start with", start)
     add(
@@ -330,9 +352,23 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         ],
     )
     calendar = agenda["calendar"]
+    notice: ReportSection | None = None
     if calendar.get("events") is None and calendar.get("note"):
-        # Not "no meetings": the calendar could not be read, and the member must know.
-        add("On your calendar", [item(f"Not shown: {calendar['note']}")])
+        # A member who never connected Google has nothing to be told every morning (the briefing's
+        # sentence is written for an AI client: "Direct them to Settings"). A calendar that
+        # SHOULD be there and could not be read is not "no meetings", and the member must know:
+        # one short line in plain words, never the tool's own message.
+        note = str(calendar["note"])
+        if "is not connected" not in note:
+            # Connected but Calendar access was never granted is a state the member can fix, so
+            # the line says where; anything else is "could not be read".
+            line = (
+                "Not shown: Calendar access has not been granted (Settings → Integrations)."
+                if "access hasn't been granted" in note
+                else "Not shown: the calendar could not be read right now."
+            )
+            add("On your calendar", [item(line)])
+            notice = sections[-1]
     else:
         add("On your calendar", _calendar_items(calendar, zone))
 
@@ -428,10 +464,17 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         summary += f" {verdict.quieted} quieted by you."
     if ai_sentences_on(params) and ai.skipped == report_ai.llm.SKIP_NO_CREDITS:
         summary += " AI notes were left out: you have no AI credits left this month."
+    sections = dedupe_tasks(sections, _ONE_LINE_PER_TASK)
+    # A headline chip is named by the section it counts (the card reads the name off the section's
+    # heading). When every task of a section is already listed under "Start with", the section is
+    # gone and its chip would be a bare number, so it goes too: the summary line still says it.
+    listed = {s.get("key") for s in sections}
     report: Report = {
         "title": f"What to do today, {agenda['local_date']}",
         "summary": clip(summary),
         "sections": sections,
+        # Nothing to act on: no section, or only the line saying the calendar could not be read.
+        "quiet": all(s is notice for s in sections),
         "stats": [
             {"key": key, "count": n}
             for key, n in (
@@ -447,6 +490,9 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 (report_memory.STAT_QUIETED, verdict.quieted),
             )
             if n
+            and (
+                key in (report_memory.STAT_STILL_SAME, report_memory.STAT_QUIETED) or key in listed
+            )
         ],
         "seen": verdict.seen,
     }

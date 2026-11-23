@@ -141,9 +141,9 @@ class TestMilestoneUpdates(JobBase):
         stands = self.texts(
             {"sections": [s for s in report["sections"] if s["heading"] == "Where it stands"]}
         )
-        self.assertIn("3 tasks: 1 open, 1 wip, 0 blocked, 0 pending, 1 closed", stands[0])
+        self.assertIn("3 tasks: 1 open, 1 wip, 1 closed", stands[0])
         self.assertIn("1 overdue", stands)
-        changed = self.section(report, "Changed in the last 168 hours")
+        changed = self.section(report, "Changed in the last 7 days")
         self.assertEqual(len(changed), 1)
         self.assertEqual(changed[0]["link"], self.task_link(a))
         self.assertIn("by otheruser", changed[0]["text"])
@@ -156,7 +156,7 @@ class TestMilestoneUpdates(JobBase):
         task = self.in_milestone("Mine")
         self.activity(task, self.user, "status_changed", "Open", "WIP", at=self.ago(hours=2))
         report = self.run_job("milestone_updates", milestone_id=self.milestone.milestone_id)
-        self.assertEqual(len(self.section(report, "Changed in the last 168 hours")), 1)
+        self.assertEqual(len(self.section(report, "Changed in the last 7 days")), 1)
 
     def test_the_window_is_a_parameter(self):
         task = self.in_milestone("Old change")
@@ -166,7 +166,7 @@ class TestMilestoneUpdates(JobBase):
         )
         self.assertEqual(self.section(narrow, "Changed in the last 24 hours"), [])
         wide = self.run_job("milestone_updates", milestone_id=self.milestone.milestone_id, hours=48)
-        self.assertEqual(len(self.section(wide, "Changed in the last 48 hours")), 1)
+        self.assertEqual(len(self.section(wide, "Changed in the last 2 days")), 1)
 
     def test_a_milestone_the_member_cannot_open_fails_in_words_not_as_empty(self):
         from origin.services.schedules import ScheduleRunError  # noqa: PLC0415
@@ -211,10 +211,11 @@ class TestMilestoneUpdates(JobBase):
         self.assertIn("Visible work", shown)
         self.assertNotIn("Hidden work", shown)
         # Nor is its existence given away by an "and 1 more" in the list it would have been in.
-        ready = self.section(report, "Ready to start")
-        self.assertEqual(
-            [i["text"] for i in ready], [f"{visible.display_id} · Visible work (Open)"]
-        )
+        # The visible task changed, so it is listed once, under "Changed" (a task is one line).
+        self.assertNotIn("more", [i.get("kind") for s in report["sections"] for i in s["items"]])
+        changed = self.section(report, "Changed in the last 7 days")
+        self.assertEqual([i["link"] for i in changed], [self.task_link(visible)])
+        self.assertEqual(self.section(report, "Ready to start"), [])
 
     def test_through_the_runner_a_missing_milestone_is_a_failed_run_with_the_sentence(self):
         sched = schedules.create(

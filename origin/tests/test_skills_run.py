@@ -4,7 +4,8 @@ the credit path and the switch.
 What matters, in the order the design lists it (note "Design: Genos Skills", section 4):
 
   * A typed name resolves mine > team > installed (official last), and the first group with a match
-    wins; two teammates with one name are refused with both candidates, never guessed.
+    wins; two teammates with one name are refused with both candidates, never guessed (since
+    MIP-2210 a team cannot share two skills of one name, so only older data can reach that).
   * ACL: a skill is run only by someone who may read it. A private, unpublished, hidden or other
     team's skill is the same "not found" as a missing one, a public skill needs an install, and a
     run never carries text the caller may not read.
@@ -72,6 +73,18 @@ class RunBase(SkillBase):
         team = self.other_team.team_id if owner == self.outsider else self.team.team_id
         return service.create(owner, team, fields(visibility=visibility, **over))
 
+    def legacy_team_skill(self, owner, slug="report"):
+        """A team skill whose name a teammate's team skill already uses. Since MIP-2210 the API and
+        the database refuse that, so only a database from before the rule can hold it: the index is
+        dropped (inside the test's transaction) and the name set underneath the service. Kept so the
+        picker's "two teammates, one name" answer stays covered for such data."""
+        with connection.cursor() as cur:
+            cur.execute("DROP INDEX IF EXISTS skill_slug_unique_in_team")
+        skill = self.skill(owner, "team", slug=f"{slug}-legacy")
+        Skill.objects.filter(pk=skill.pk).update(slug=slug)
+        skill.refresh_from_db()
+        return skill
+
     def public_skill(self, owner=None, **over):
         """A public skill by an outsider, installed by `self.user` unless `install=False`."""
         install = over.pop("install", True)
@@ -111,15 +124,14 @@ class ResolutionOrderTests(RunBase):
         Skill.objects.filter(pk=official.pk).update(is_official=True)
         got = self.resolve({"name": "report"})
         self.assertEqual((got.skill_id, got.author), (str(official.id), run.AUTHOR_OFFICIAL))
-        # An installed skill of the same name beats it.
-        other = self.public_skill(owner=self.third, body_markdown="INSTALLED")
-        self.assertEqual(other.owner, self.third)
-        # (a teammate's public skill needs the install, which `public_skill` made)
-        self.assertEqual(self.resolve({"name": "report"}).skill_id, str(other.id))
+        # An installed skill of the same name used to beat it. Since MIP-2210 a public name is
+        # unique, so a second public `report` cannot exist: an official skill's name is its own.
+        with self.assertRaises(service.SkillNameTaken):
+            self.public_skill(owner=self.third, body_markdown="INSTALLED")
 
     def test_two_teammates_with_one_name_are_refused_with_both_candidates(self):
         a = self.skill(self.user2, "team")
-        b = self.skill(self.third, "team")
+        b = self.legacy_team_skill(self.third)
         with self.assertRaises(run.SkillAmbiguous) as caught:
             self.resolve({"name": "report"})
         self.assertEqual(caught.exception.status, 409)
@@ -130,7 +142,7 @@ class ResolutionOrderTests(RunBase):
 
     def test_my_own_skill_ends_the_ambiguity(self):
         self.skill(self.user2, "team")
-        self.skill(self.third, "team")
+        self.legacy_team_skill(self.third)
         mine = self.skill(self.user)
         self.assertEqual(self.resolve({"name": "report"}).skill_id, str(mine.id))
 
@@ -592,7 +604,7 @@ class AskTests(RunBase):
 
     def test_an_ambiguous_name_answers_409_with_the_candidates(self):
         self.skill(self.user2, "team")
-        self.skill(self.third, "team")
+        self.legacy_team_skill(self.third)
         resp, _got = self.ask({"name": "report"})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.json()["code"], "ambiguous_name")

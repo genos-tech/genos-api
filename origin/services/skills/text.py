@@ -12,6 +12,8 @@ import re
 import unicodedata
 from typing import Any
 
+from origin.services.skills.official_slugs import OFFICIAL_SLUGS
+
 SLUG_MIN = 2
 SLUG_MAX = 40
 TITLE_MAX = 120
@@ -24,10 +26,10 @@ BODY_MAX_CHARS = 12_000  # about 3k tokens: the block sent to the model counts t
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _TAG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-# Names a person cannot take: the built-in commands of the `/` picker and the names the MCP
-# server already publishes as prompts. The official skills' slugs are added when they ship
-# (MIP-2048).
-RESERVED_SLUGS = frozenset(
+# Names a person cannot take: the built-in commands of the `/` picker, the names the MCP server
+# already publishes as prompts, and the slugs of the official skills (`official_slugs.py`, written
+# by `scripts/build_official_skills.py`): `/triage` must always mean Genos's own, never a lookalike.
+RESERVED_SLUGS = OFFICIAL_SLUGS | frozenset(
     {
         "help",
         "new",
@@ -48,9 +50,9 @@ class SkillTextError(ValueError):
     """A field does not meet the rule. The message is a sentence the page shows as written."""
 
 
-def clean_slug(value: Any) -> str:
+def clean_slug(value: Any, *, official: bool = False) -> str:
     """The name typed after `/`. Refuses instead of fixing: a changed name would surprise the
-    person who typed it."""
+    person who typed it. `official=True` (only `official.py`) lets the official slugs through."""
     slug = str(value or "").strip().lower()
     if not (SLUG_MIN <= len(slug) <= SLUG_MAX):
         raise SkillTextError(f"The name must be {SLUG_MIN} to {SLUG_MAX} characters.")
@@ -59,7 +61,7 @@ def clean_slug(value: Any) -> str:
             "The name may use lower-case letters, digits and single hyphens (for example "
             "`weekly-update`)."
         )
-    if slug in RESERVED_SLUGS:
+    if slug in (RESERVED_SLUGS - OFFICIAL_SLUGS if official else RESERVED_SLUGS):
         raise SkillTextError(f"`{slug}` is reserved. Choose another name.")
     return slug
 

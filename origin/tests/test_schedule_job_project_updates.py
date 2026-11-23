@@ -114,8 +114,14 @@ class TestProjectUpdates(JobBase):
                 "Blocked": "blocked",
             },
         )
+        # What needs a decision first, the standing counts last (MIP-1417).
+        self.assertEqual(
+            [s["heading"] for s in report["sections"]],
+            ["Blocked", "Slipped", "Done", "Moved", "Where it stands"],
+        )
         stands = self.section(report, "Where it stands")
         self.assertIn("Open", stands[0]["text"].title())
+        self.assertNotIn("pending", stands[0]["text"])  # no task is Pending: no "0 pending"
         self.assertIn("1 closed", stands[0]["text"])
         self.assertIn("1 blocked", stands[0]["text"])
         self.assertEqual([i["link"] for i in self.section(report, "Done")], [self.task_link(done)])
@@ -132,7 +138,7 @@ class TestProjectUpdates(JobBase):
         self.assertEqual([i["link"] for i in blocked_items], [self.task_link(blocked)])
         self.assertIn(f"waiting on {blocker.display_id}", blocked_items[0]["detail"])
         self.assertTrue(blocked_items[0]["detail"].startswith("newly blocked"))
-        for section in report["sections"][1:]:
+        for section in report["sections"][:-1]:
             for line in section["items"]:
                 self.assertEqual(
                     (line["kind"], line["project"]["id"]), ("task", self.project.project_id)
@@ -158,7 +164,9 @@ class TestProjectUpdates(JobBase):
         TaskActivity.objects.all().delete()
         self.activity(stuck, self.user2, "status_changed", "Open", "WIP", at=self.ago(hours=1))
         self.assertEqual(self.section(self.run_pu(), "Blocked")[0]["detail"], "blocked")
-        self.activity(stuck, self.user2, "status_changed", "Open", "Blocked", at=self.ago(minutes=30))
+        self.activity(
+            stuck, self.user2, "status_changed", "Open", "Blocked", at=self.ago(minutes=30)
+        )
         self.assertTrue(self.section(self.run_pu(), "Blocked")[0]["detail"].startswith("newly"))
 
     def test_a_due_date_edited_to_a_past_day_is_not_a_slip(self):
