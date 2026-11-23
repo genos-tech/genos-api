@@ -55,7 +55,9 @@ EMOJI = {
     "start_with": "🎯",
     "overdue": "🔥",
     "due_today": "📅",
-    "todos_today": "✅",
+    # An empty box: these to-dos are NOT done, so no check mark; the green check is for
+    # "todos_done" only (MIP-1417: a check on an unfinished to-do read as finished).
+    "todos_today": "⬜",
     "todos_earlier": "🕘",
     "calendar": "🗓️",
     "waiting_on_you": "🙋",
@@ -64,7 +66,7 @@ EMOJI = {
     "gone_quiet": "💤",
     "tasks": "🛠️",
     "notes": "📝",
-    "todos_done": "☑️",
+    "todos_done": "✅",
     "messages": "💬",
     "looked_at": "👀",
     "still_open": "🔓",

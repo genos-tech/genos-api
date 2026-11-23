@@ -185,6 +185,15 @@ class TestTheKit(SimpleTestCase):
 
 
 class TestSectionsAndStats(SimpleTestCase):
+    def test_only_finished_todos_wear_a_check(self):
+        # MIP-1417: "To-dos for today" carried a green check although those to-dos are not done.
+        self.assertEqual(EMOJI["todos_today"], "⬜")
+        self.assertEqual(EMOJI["todos_done"], "✅")
+        for key in ("todos_today", "todos_earlier", "todos_left"):
+            self.assertNotIn(EMOJI[key], ("✅", "☑️", "✔️"), key)
+        self.assertEqual(stored(key="todos_today")["sections"][0]["emoji"], "⬜")
+        self.assertEqual(stored(key="todos_done")["sections"][0]["emoji"], "✅")
+
     def test_the_section_key_gets_the_servers_emoji(self):
         for key, emoji in EMOJI.items():
             section = stored(key=key)["sections"][0]
