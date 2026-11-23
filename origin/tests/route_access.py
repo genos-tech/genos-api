@@ -269,7 +269,12 @@ REGISTRY = {
     "origin.views.common.skill_views.SkillDetailView": checked("get_readable", "get_owned"),
     "origin.views.common.skill_views.SkillVersionListView": checked("get_readable"),
     "origin.views.common.skill_views.SkillVersionDetailView": checked("get_readable"),
-    "origin.views.common.skill_views.SkillPublishView": checked("get_owned"),
+    "origin.views.common.skill_views.SkillPublishView": checked("get_editable"),
+    # MIP-2043: the owner adds and removes co-editors (`get_owned`); the team owner hides a team
+    # skill (`set_hidden` reads through `get_readable` and checks `is_team_owner`).
+    "origin.views.common.skill_views.SkillEditorsView": checked("get_readable", "get_owned"),
+    "origin.views.common.skill_views.SkillEditorDetailView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillHideView": checked("get_readable", "is_team_owner"),
     "origin.views.common.skill_views.SkillCopyView": checked("get_readable"),
     "origin.views.common.skill_views.SkillInstallView": checked("get_readable"),
     "origin.views.common.skill_views.SkillStarView": checked("get_readable"),
@@ -365,6 +370,11 @@ REGISTRY = {
     # views.common.gif_views
     "origin.views.common.gif_views.GifSearchView": signed_in(
         "proxies a GIPHY search; no workspace data"
+    ),
+    # views.common.github_app_webhook_views
+    "origin.views.common.github_app_webhook_views.GithubAppWebhookView": public(
+        "HMAC signature verified against the GitHub App's webhook secret; the tenant is the "
+        "stored installation-to-team link, never the payload"
     ),
     # views.common.github_views
     "origin.views.common.github_views.GithubAccessibleReposView": self_only(

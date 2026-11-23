@@ -71,6 +71,7 @@ EXEMPT = {
     # Authenticated by a signature over the RAW body; the sender is answered, not judged.
     "origin.views.common.billing_views.StripeWebhookView": "Stripe signature",
     "origin.views.common.github_views.GithubWebhookView": "GitHub signature",
+    "origin.views.common.github_app_webhook_views.GithubAppWebhookView": "GitHub signature",
     # JSON-RPC answers in its own words (-32600).
     "origin.views.public.mcp.views.McpView": "JSON-RPC error",
 }

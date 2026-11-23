@@ -992,7 +992,7 @@ class ErasureTests(SkillBase):
     def test_the_account_deletion_flow_erases_them(self):
         from origin.services.account_deletion import delete_account
 
-        mine = self.make_ok(user=self.user2, slug="leaver", visibility="team")
+        mine = self.make_ok(user=self.user2, slug="leaver", visibility="private")
         other = self.make_ok(user=self.user, slug="stays", visibility="public")
         self.as_user(self.user2)
         self.client.post(detail(other["id"], "star/"))

@@ -37,13 +37,33 @@ _REF_RE = re.compile(
     re.IGNORECASE,
 )
 _ID_RE = re.compile(_ID)
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FENCE_RE = re.compile(r"(```|~~~).*?(\1|\Z)", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 
+def _strip_html_comments(text: str) -> str:
+    """Replace each `<!-- ... -->` with a space; an unterminated `<!--` is left as it is.
+
+    A linear scan with `str.find`, not a lazy regex: a body of many `<!--` and no `-->` made the regex
+    quadratic (CodeQL py/polynomial-redos)."""
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = text.find("<!--", pos)
+        if start < 0:
+            break
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break
+        out.append(text[pos:start])
+        out.append(" ")
+        pos = end + 3
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _strip_ignored(text: str) -> str:
-    text = _HTML_COMMENT_RE.sub(" ", text)
+    text = _strip_html_comments(text)
     text = _FENCE_RE.sub(" ", text)
     return _INLINE_CODE_RE.sub(" ", text)
 

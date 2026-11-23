@@ -52,6 +52,17 @@ def get_effective_role(user_id, note_type, note_id, team_id=None):
     explicitly granted Viewer on a task note stays a Viewer, never gets
     auto-promoted to Editor via the implicit fallback.
     """
+    if note_type == NOTE_TYPE_PERSONAL:
+        # The body of a Genos Skill (MIP-2043): its roles come from the SKILL, never from a bare
+        # row, so a stray Viewer row or a share cannot open it and an Editor row works only while
+        # the person is a live member of the skill's team. Answered before the explicit row.
+        # Local import: the skills service imports this module's constants.
+        from origin.services.skills.service import skill_note_role  # noqa: PLC0415
+
+        is_skill_body, skill_role = skill_note_role(user_id, note_id)
+        if is_skill_body:
+            return skill_role
+
     explicit = get_explicit_role(user_id, note_type, note_id)
     if explicit is not None:
         return explicit
