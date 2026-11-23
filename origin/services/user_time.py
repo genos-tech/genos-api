@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
+from functools import lru_cache
 from zoneinfo import ZoneInfo, available_timezones
 
 from django.conf import settings
@@ -43,15 +44,23 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
-def is_valid_timezone(name: str | None) -> bool:
-    """Is `name` an IANA zone this Python/tzdata knows about?
+@lru_cache(maxsize=1)
+def _known_zones() -> frozenset[str]:
+    """The IANA names this Python/tzdata knows, read once per process.
 
-    `available_timezones()` builds a set of ~600 names, so the result is
-    cached by the caller pattern below rather than called per row.
-    """
+    `available_timezones()` walks the tzdata directory tree and opens every file in it, about
+    30 ms locally and more on a container's overlay disk, and allocates ~600 strings each time.
+    A briefing resolves the member's zone five times, so `get_my_briefing` spent about a
+    quarter of its CPU here (MIP-2092). The installed tzdata does not change under a running
+    process."""
+    return frozenset(available_timezones())
+
+
+def is_valid_timezone(name: str | None) -> bool:
+    """Is `name` an IANA zone this Python/tzdata knows about?"""
     if not name or not isinstance(name, str):
         return False
-    return name in available_timezones()
+    return name in _known_zones()
 
 
 def resolve_zone(name: str | None) -> ZoneInfo:

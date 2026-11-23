@@ -155,3 +155,20 @@ class TestTimezonePreferenceEndpoint(TestCase):
     def test_requires_authentication(self):
         anon = APIClient()
         self.assertIn(anon.get(URL).status_code, (401, 403))
+
+
+class KnownZonesAreReadOnceTests(TestCase):
+    """MIP-2092: `available_timezones()` walks the tzdata files on every call; a briefing
+    resolves the member's zone five times, so the name set is read once per process."""
+
+    def test_the_zone_names_are_read_once_however_many_zones_are_resolved(self):
+        from origin.services import user_time
+
+        user_time._known_zones.cache_clear()
+        with patch.object(user_time, "available_timezones", return_value={"Asia/Tokyo"}) as walk:
+            for _ in range(5):
+                self.assertTrue(is_valid_timezone("Asia/Tokyo"))
+                self.assertFalse(is_valid_timezone("Mars/Base"))
+                self.assertEqual(resolve_zone("Asia/Tokyo"), ZoneInfo("Asia/Tokyo"))
+        self.assertEqual(walk.call_count, 1)
+        user_time._known_zones.cache_clear()
