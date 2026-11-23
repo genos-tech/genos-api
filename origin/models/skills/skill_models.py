@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import uuid
 
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 
 from origin.models.common.team_models import TeamMaster
@@ -26,7 +28,15 @@ from origin.models.common.user_models import CustomUser
 
 # Only the models are exported by `from .skills.skill_models import *`: the constants below are
 # short generic names (VISIBILITY_*, STATUS_*) that would shadow other models'.
-__all__ = ["Skill", "SkillInstall", "SkillReport", "SkillStar", "SkillVersion"]
+__all__ = [
+    "PublicProfile",
+    "Skill",
+    "SkillInstall",
+    "SkillReport",
+    "SkillRunLog",
+    "SkillStar",
+    "SkillVersion",
+]
 
 VISIBILITY_PRIVATE = "private"
 VISIBILITY_TEAM = "team"
@@ -138,6 +148,19 @@ class Skill(models.Model):
         CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
 
+    # The Hub (MIP-2047). What a stranger searches and sorts is the PUBLISHED version, never the
+    # owner's draft, so it is kept here, written by `services/skills/hub.refresh_listing` whenever a
+    # version is cut: one indexed read answers a directory page, no join to the versions table.
+    # `hub_text` is the lower-cased title, name, description and tags (substring match, which also
+    # finds Japanese and Chinese, that no full-text config splits into words); `search_vector` adds
+    # the body for ranked word search.
+    hub_text = models.TextField(blank=True, default="")
+    hub_tags = models.JSONField(default=list, blank=True)
+    search_vector = SearchVectorField(null=True, blank=True)
+    # When the newest version was cut: the Hub's "recent". `published_at` is the first one, and
+    # `updated_at` moves with every draft save, so neither says when readers last got new text.
+    last_published_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         constraints = [
             # A name is unique among one owner's skills in a team (any visibility); a TEAM skill's
@@ -159,6 +182,25 @@ class Skill(models.Model):
         indexes = [
             models.Index(fields=["team", "visibility"], name="skill_team_visibility_idx"),
             models.Index(fields=["visibility", "-star_count"], name="skill_visibility_stars_idx"),
+            # The directory's three sorts, over the public active skills only (a small slice of the
+            # table): each is one index scan of a page, whatever the search or tag filter adds.
+            models.Index(
+                fields=["-star_count", "-last_published_at"],
+                name="skill_hub_stars_idx",
+                condition=models.Q(visibility="public", status="active"),
+            ),
+            models.Index(
+                fields=["-last_published_at"],
+                name="skill_hub_recent_idx",
+                condition=models.Q(visibility="public", status="active"),
+            ),
+            models.Index(
+                fields=["-run_count_30d", "-star_count"],
+                name="skill_hub_uses_idx",
+                condition=models.Q(visibility="public", status="active"),
+            ),
+            GinIndex(fields=["search_vector"], name="skill_hub_vector_idx"),
+            GinIndex(fields=["hub_tags"], name="skill_hub_tags_idx"),
         ]
 
     def __str__(self) -> str:
@@ -235,12 +277,56 @@ class SkillStar(models.Model):
         CustomUser, on_delete=models.CASCADE, to_field="id", related_name="skill_stars"
     )
     skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="stars")
+    # Only a star from an account at least 3 days old with a verified email, and not the author's
+    # own, moves `Skill.star_count` (design section 8). Any other account may still star: it is
+    # their bookmark (the Starred tab), it just does not count toward the public total.
+    counted = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["user", "skill"], name="skill_star_per_user")
         ]
+        # "How many stars did this account give today": the daily limit reads it.
+        indexes = [models.Index(fields=["user", "-created_at"], name="skill_star_user_day_idx")]
+
+
+class SkillRunLog(models.Model):
+    """One run of a skill by one account (the Hub's "uses", MIP-2047). `run_count_30d` is the
+    number of DISTINCT accounts that ran the skill in 30 days; the nightly `skills_refresh_hub`
+    command recomputes it and drops rows older than 90 days. An author only ever sees that total,
+    never who ran it: nothing that is not needed is kept (counsel's principle, 2026-11-21)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="run_logs")
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, to_field="id", related_name="skill_run_logs"
+    )
+    version_no = models.PositiveIntegerField(default=0)
+    surface = models.CharField(max_length=16, default="ask")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["skill", "user", "-created_at"], name="skill_run_skill_idx")
+        ]
+
+
+class PublicProfile(models.Model):
+    """The public identity of an author in the Hub (design K8): a handle chosen when they first make
+    a skill public, and an optional display name. The email and the team name are never shown."""
+
+    user = models.OneToOneField(
+        CustomUser,
+        on_delete=models.CASCADE,
+        to_field="id",
+        primary_key=True,
+        related_name="skill_profile",
+    )
+    # Lower case and unique (rules in `services/skills/hub.py`).
+    handle = models.CharField(max_length=30, unique=True)
+    display_name = models.CharField(max_length=60, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 REPORT_HARMFUL = "harmful"

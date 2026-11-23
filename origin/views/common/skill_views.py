@@ -24,6 +24,11 @@
     DELETE /api/v2/skills/<id>/editors/<user>/       remove a co-editor (the owner; a co-editor leaves)
     POST   /api/v2/skills/<id>/hide/                 hide a team skill from the team (the team owner)
     DELETE /api/v2/skills/<id>/hide/                 show it again
+    GET    /api/v2/skills/hub/?q=&tag=&sort=&...     the public directory (MIP-2047; 404 until GENOS_SKILLS_PUBLIC)
+    GET    /api/v2/skills/hub/tags/                  the directory's tags with counts
+    GET    /api/v2/skills/profile/                   my public profile (handle) and what publishing needs
+    PUT    /api/v2/skills/profile/                   choose the handle once; change the display name
+    GET    /api/v2/skills/<id>/publish-check/        the publish checklist, ticked off (the owner)
 
 The rules live in `services/skills/service.py`; this file is the wire: camelCase keys, one
 `{"error": "<sentence>"}` for every refusal, and JWT only (an API key does not manage skills).
@@ -43,7 +48,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.skills.skill_models import Skill, SkillStar, SkillVersion
-from origin.services.skills import effort, moderation, run, service, text
+from origin.services.skills import effort, hub, moderation, run, service, text
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR
@@ -56,6 +61,15 @@ IMPORT_MAX_CHARS = 100_000
 class SkillsThrottle(WindowRateThrottle):
     scope = "skills"
     rate = "120/min"
+    fail_closed = True
+
+
+class SkillsHubThrottle(WindowRateThrottle):
+    """The directory is the one place a stranger's query reaches the database: 60 searches a minute
+    per account (design section 8)."""
+
+    scope = "skills_hub"
+    rate = "60/min"
     fail_closed = True
 
 
@@ -76,6 +90,10 @@ _FIELDS = {
     "language": "language",
     "bodyMarkdown": "body_markdown",
     "visibility": "visibility",
+    # Making a skill public (MIP-2047): not stored on the skill.
+    "acceptTerms": "accept_terms",
+    "handle": "handle",
+    "displayName": "display_name",
 }
 
 
@@ -94,6 +112,7 @@ def _row(
     starred: bool | None = None,
     editing: bool | None = None,
     team_owner: bool | None = None,
+    version_hint: SkillVersion | None = None,
 ) -> dict[str, Any]:
     """A skill as the list and the page read it. A reader sees the metadata of the PUBLISHED
     version (what a reader gets must not move under them), never the owner's draft edits, and
@@ -101,8 +120,10 @@ def _row(
     `team_owner` let a list answer both questions for many rows in a fixed number of queries."""
     mine = service.is_owner(skill, user_id)
     edits = mine or (service.is_editor(skill, user_id) if editing is None else editing)
-    version = None if edits else service.version_for(skill, user_id)
+    # `version_hint` is the published version a list already fetched for all its rows in one query.
+    version = None if edits else (version_hint or service.version_for(skill, user_id))
     src = version if version is not None else skill
+    anonymous = skill.visibility == "public" and not edits
     hideable = (
         skill.visibility == "team"
         and skill.status in ("active", "hidden_by_team")
@@ -111,7 +132,9 @@ def _row(
     )
     out: dict[str, Any] = {
         "id": str(skill.id),
-        "teamId": str(skill.team_id),
+        # A public skill names neither the author's team nor the skill it was copied from to a
+        # stranger: the byline is the public handle, nothing that links an author's skills together.
+        "teamId": "" if anonymous else str(skill.team_id),
         "slug": src.slug or skill.slug,
         "title": src.title,
         "description": src.description,
@@ -127,7 +150,9 @@ def _row(
         "publishedVersionNo": skill.published_version_no,
         "source": skill.source,
         "isOfficial": skill.is_official,
-        "forkedFromId": str(skill.forked_from_id) if skill.forked_from_id else None,
+        "forkedFromId": (
+            str(skill.forked_from_id) if skill.forked_from_id and not anonymous else None
+        ),
         "starCount": skill.star_count,
         "runCount30d": skill.run_count_30d,
         "copyCount": skill.copy_count,
@@ -148,6 +173,10 @@ def _row(
     # the Hub's public handle exists (MIP-2047): the account name is not theirs to publish.
     if edits or skill.visibility == "team":
         out["ownerName"] = skill.owner.username if skill.owner_id else ""
+    if skill.visibility == "public":
+        # The byline of a public skill is the author's PUBLIC handle (MIP-2047), never the account
+        # name or the email: `null` while the author has none (an official skill).
+        out["author"] = hub.author_of(skill)
     if edits:
         out["noteId"] = skill.note_id
         # An operator's decision about the author's own skill: shown so they know why it stopped.
@@ -588,3 +617,122 @@ class SkillTakedownView(_Base):
         if problem:
             return problem
         return Response({"id": str(skill.id), "status": skill.status})
+
+
+# -- the Hub (MIP-2047) -------------------------------------------------------------------------
+
+
+def _int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class SkillHubView(_Base):
+    """The public directory. 404 until `GENOS_SKILLS_PUBLIC` is on. Three queries however many
+    rows: the page, the page's published versions, the caller's stars."""
+
+    throttle_classes = [SkillsThrottle, SkillsHubThrottle]
+
+    def get(self, request):
+        user = request.user
+        params = request.query_params
+        out, problem = self._run(
+            lambda: hub.directory(
+                user,
+                query=params.get("q", ""),
+                tag=params.get("tag", ""),
+                sort=params.get("sort") or "stars",
+                tool_level=params.get("tool_level", ""),
+                official=params.get("official") in ("1", "true"),
+                language=params.get("language", ""),
+                limit=_int(params.get("limit"), hub.PAGE_SIZE),
+                offset=_int(params.get("offset"), 0),
+            )
+        )
+        if problem:
+            return problem
+        rows, versions, has_more = out
+        starred = hub.starred_ids(user.pk, rows)
+        return Response(
+            {
+                "skills": [
+                    _row(
+                        s,
+                        user.pk,
+                        starred=str(s.id) in starred,
+                        editing=False,
+                        team_owner=False,
+                        version_hint=versions.get(s.pk),
+                    )
+                    for s in rows
+                ],
+                "hasMore": has_more,
+            }
+        )
+
+
+class SkillHubTagsView(_Base):
+    throttle_classes = [SkillsThrottle, SkillsHubThrottle]
+
+    def get(self, request):
+        tags, problem = self._run(lambda: hub.popular_tags())
+        if problem:
+            return problem
+        return Response({"tags": tags})
+
+
+def _profile_out(user: Any) -> dict[str, Any]:
+    profile = hub.get_profile(user.pk)
+    return {
+        "handle": profile.handle if profile else None,
+        "displayName": profile.display_name if profile else "",
+        "publicSkills": Skill.objects.filter(owner=user, visibility="public").count(),
+        "limits": {
+            "publishesPerDay": hub.PUBLISHES_PER_DAY,
+            "publicSkillsMax": hub.PUBLIC_SKILLS_MAX,
+            "starsPerDay": hub.STARS_PER_DAY,
+        },
+    }
+
+
+class SkillProfileView(_Base):
+    """My public profile: the handle (chosen once) and the display name."""
+
+    def get(self, request):
+        _ok, problem = self._run(hub.require_hub)
+        if problem:
+            return problem
+        return Response({"profile": _profile_out(request.user)})
+
+    def put(self, request):
+        body = request.data
+        _profile, problem = self._run(
+            lambda: hub.set_profile(request.user, body.get("handle"), body.get("displayName"))
+        )
+        if problem:
+            return problem
+        return Response({"profile": _profile_out(request.user)})
+
+
+class SkillPublishCheckView(_Base):
+    """The publish checklist for one skill, ticked off. The owner and the co-editors only (a reader
+    has nothing to publish)."""
+
+    def get(self, request, skill_id):
+        def build():
+            hub.require_hub()
+            skill = service.get_editable(request.user.pk, skill_id)
+            return hub.checklist(request.user, skill)
+
+        rows, problem = self._run(build)
+        if problem:
+            return problem
+        return Response(
+            {
+                "checks": rows,
+                "ready": all(r["ok"] for r in rows),
+                "profile": _profile_out(request.user),
+            }
+        )

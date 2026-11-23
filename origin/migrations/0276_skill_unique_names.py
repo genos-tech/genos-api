@@ -58,7 +58,7 @@ def rename_clashes(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0274_skills_safety"),
+        ("origin", "0275_skills_hub"),
     ]
 
     operations = [

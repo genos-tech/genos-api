@@ -283,7 +283,7 @@ class MigrationTests(NameRuleBase):
     """The data step renames the clashes before the indexes exist: the oldest keeps its name."""
 
     def run_step(self):
-        module = importlib.import_module("origin.migrations.0275_skill_unique_names")
+        module = importlib.import_module("origin.migrations.0276_skill_unique_names")
         module.rename_clashes(apps, None)
 
     def drop_indexes(self):

@@ -43,6 +43,17 @@ class SkillBase(BaseAPITestCase):
         tier = mock.patch("origin.search_engine.quota.get_effective_tier", return_value="max")
         tier.start()
         self.addCleanup(tier.stop)
+        # The Hub's account gates (plan, verified email, account age, handle, the terms click, the
+        # secrets scan, the daily limits) are tested in `test_skills_hub.py`. Everywhere else the
+        # tests are about what happens to a skill that IS public, so the gate lets them through.
+        self.gate_patch = mock.patch("origin.services.skills.hub.require_public_gate")
+        self.gate_patch.start()
+        self.addCleanup(self.gate_patch.stop)
+        # A star counts toward the public total only from an aged, verified account (also the Hub's
+        # tests): the fixtures' accounts are brand new, so every star counts here.
+        self.star_patch = mock.patch("origin.services.skills.hub.star_counts", return_value=True)
+        self.star_patch.start()
+        self.addCleanup(self.star_patch.stop)
         self.team_id = str(self.team.team_id)
         # An outsider: another team, no membership in this one.
         self.outsider = User.objects.create_user(
