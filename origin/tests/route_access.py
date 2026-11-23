@@ -609,6 +609,8 @@ REGISTRY = {
     "origin.views.note.favorite_note_views.NoteFavoriteView": checked(
         "validate_request_user", "get_effective_role"
     ),
+    # views.note.html_note_views (MIP-2214): the saved page, under the note's own read ACL
+    "origin.views.note.html_note_views.HtmlNoteView": checked("require_read_role"),
     # views.note.note_folder_tag_views
     "origin.views.note.note_folder_tag_views.NoteFolderTagLinkView": checked("get_folder_role"),
     "origin.views.note.note_folder_tag_views.NoteFolderTagView": checked(

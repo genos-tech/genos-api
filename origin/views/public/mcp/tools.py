@@ -142,6 +142,7 @@ from origin.services.security_events import (
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
     body_paging,
+    html_notes,
     note_blocks,
     note_threads,
     progress,
@@ -335,6 +336,12 @@ class McpTool:
     # it. Off, the entry is not listed and a call is answered as for a name nobody published.
     # "" = no such switch.
     setting: str = ""
+    # MCP-only arguments and a closing sentence that exist only while the Django setting `gated_by`
+    # is on (MIP-2214: `get_note` takes `include_html` only while `HTML_NOTES` is on). Off, the
+    # published schema and description are what they were, and the argument is refused as unknown.
+    gated_args: dict[str, Any] = field(default_factory=dict)
+    gated_text: str = ""
+    gated_by: str = ""
     # Applied to the registry schema after dialect conversion.
     schema_overrides: dict[str, Any] = field(default_factory=dict)
     # Applied to a property nested inside an array item's schema, keyed
@@ -797,7 +804,21 @@ CATALOG: tuple[McpTool, ...] = (
                 ),
             },
         },
-        augment=_chain(_with_comment_threads, _with_blocks),
+        augment=_chain(_with_comment_threads, _with_blocks, html_notes.read.with_html_fields),
+        # MIP-2214: only while `HTML_NOTES` is on; off, this entry is what it was.
+        gated_by="HTML_NOTES",
+        gated_args={
+            "include_html": {
+                "type": "boolean",
+                "description": ("For an HTML note: also return its page as `html`. Default false."),
+            },
+        },
+        gated_text=(
+            " `body_format` says whether a note is `html` or `blocknote`. An HTML note's "
+            "`body_markdown` is only the readable text made from its page (what search finds); "
+            "it also returns `html_rev`, and with `include_html: true` the page itself as "
+            "`html`. Change a page with `save_html_note`, not `update_note`."
+        ),
     ),
     # ---- chats: read only (MIP-885). No chat write is published. ----
     McpTool(
@@ -1630,6 +1651,33 @@ CATALOG: tuple[McpTool, ...] = (
                 ),
             }
         },
+    ),
+    McpTool(
+        name="save_html_note",
+        registry_name="save_html_note",
+        description=html_notes.save_html_note.mcp_description(),
+        write=True,
+        task_ref_args=("task_id",),
+        note_ref_args=("note_id",),
+        optional_args=("note_type",),
+        schema_overrides={
+            "note_id": {
+                **_NOTE_REF_SCHEMA,
+                "description": (
+                    "Only to REPLACE the page of an existing HTML note: its Genos URL, or a "
+                    "numeric id with `note_type`. Omit it to create a new note."
+                ),
+            },
+            "task_id": {
+                **_TASK_REF_SCHEMA,
+                "description": (
+                    "Optional, and only with note_type='task': attach the note to one task in "
+                    "the project. Its display id (PRJ-123), its Genos URL, or its numeric id."
+                ),
+            },
+        },
+        # Exists only while `HTML_NOTES` is on (MIP-2214).
+        setting="HTML_NOTES",
     ),
     McpTool(
         name="update_note",
@@ -2625,6 +2673,11 @@ def _registered(tool: McpTool):
     return registered
 
 
+def _gate_on(tool: McpTool) -> bool:
+    """Is the setting that `gated_args` / `gated_text` wait for on? (`gated_by`, MIP-2214.)"""
+    return bool(tool.gated_by) and bool(getattr(settings, tool.gated_by, False))
+
+
 def published(tool: McpTool) -> bool:
     """Is `tool` offered right now? Always, unless it is gated by a flag or a setting that is off."""
     if tool.setting and not getattr(settings, tool.setting, False):
@@ -2651,6 +2704,11 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
         properties.update(tool.mcp_only_args)
         properties.update(tool.surface_args)
         schema = {**schema, "properties": properties}
+    if tool.gated_args and _gate_on(tool):
+        schema = {
+            **schema,
+            "properties": {**(schema.get("properties") or {}), **tool.gated_args},
+        }
     for arg in tool.milestone_ref_args:
         properties = dict(schema.get("properties") or {})
         if arg in properties:
@@ -2880,6 +2938,7 @@ OVERWRITE_TOOLS = frozenset(
         "remove_task_delivery",
         "restore_note_version",
         "restore_task_body",
+        "save_html_note",  # with `note_id` it replaces an HTML note's page; the old page is kept as a revision
         "update_calendar_event",
         "edit_note_block",  # replaces or removes one block; the note's history keeps the old one
         "update_comment",
@@ -3048,6 +3107,8 @@ def description_for(tool: McpTool, credential_kind: str = "api_key") -> str:
     key, and OpenAI's review asks that descriptions match behaviour, so they are told what
     they actually need: write access in their connection (MIP-1110)."""
     text = _replaced(tool) + shared_flag_text(tool)
+    if tool.gated_text and _gate_on(tool):
+        text += tool.gated_text
     if credential_kind == "api_key":
         return text
     text = text.replace(
@@ -3324,7 +3385,8 @@ def call(
     # Taken out before anything else sees the call: the registry tool has no such
     # argument, and the in-app agent's copy of it must stay as it is.
     sent = dict(args)
-    mcp_args = {k: args.pop(k) for k in tool.mcp_only_args if k in args}
+    taken = (*tool.mcp_only_args, *(tool.gated_args if _gate_on(tool) else ()))
+    mcp_args = {k: args.pop(k) for k in taken if k in args}
     # MIP-1367: the paging arguments of the tools that take them (while the switch is on) belong to
     # this layer, not to the registry tool, so they are taken out here and checked in words before
     # anything runs. The switch is read ONCE per call.

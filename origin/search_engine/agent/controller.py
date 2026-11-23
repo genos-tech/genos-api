@@ -3542,6 +3542,7 @@ def _drive_loop(
     # behavior, byte-identical to the pre-B3 loop.
     planning_model = _resolve_planning_override()
     tools = _build_tool_declarations(disabled_tools)
+    declared_tool_names = {t.name for t in tools}
     # MIP-905 (AGENT_CONTENT_LENGTH, default off): how much CONTENT this member wants Genos to
     # write. Resolved ONCE per leg, after the tools are known (a run that cannot write content,
     # like a digest, has no level). `standard` leaves `gen_params` and the prompt untouched, so
@@ -4094,6 +4095,16 @@ def _drive_loop(
         resolved_args: list[dict[str, Any]] = []
         ref_errors: dict[int, str] = {}
         for i, c in enumerate(accumulated_function_calls):
+            # MIP-2197: only a tool DECLARED to the model for this run may run. `disabled_tools`
+            # (the Web search toggle, the plan tier, a skill run's list, the ops kill switch) used
+            # to filter the declarations only, so a name the model read in a skill or a note ran a
+            # hidden read tool. An undeclared name gets the sentence an unknown name gets, so a hidden
+            # tool cannot be told from an absent one; nothing runs and no approval card is made.
+            if c.name not in declared_tool_names:
+                log.warning("Agent run %s: model named undeclared tool %r; refused", run_id, c.name)
+                resolved_args.append(dict(c.args))
+                ref_errors[i] = f"Unknown tool: {c.name}"
+                continue
             try:
                 resolved_args.append(resolve_call(c.name, c.args, ctx.team_id, ctx.user_id))
             except ToolError as exc:

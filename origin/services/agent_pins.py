@@ -70,6 +70,7 @@ PIN_MODULES: dict[str, tuple[str, ...]] = {
     "test_agent_tell_model_undo": ("FlagOffTests",),
     "test_agent_truncation_pins": ("NormalRunPins",),
     "test_inapp_timeline_tool": ("TestFlagOffIsByteIdenticalToMain",),
+    "test_mcp_html_notes_pins": ("DeclarationPins", "SwitchOffPins", "PromptPins", "GuardPins"),
     "test_mcp_search_rewrite": ("ToolPassesItOnTests",),
     "test_mcp_search_window": ("InAppAgentIsUnchangedTests",),
     "test_mcp_skills_pins": ("DeclarationPins", "InstructionPins"),

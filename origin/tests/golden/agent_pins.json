@@ -99,6 +99,21 @@
       "prompt/legacy": "5c584581f941d6eaf4464bb4e5dede88bb9a0fecc149641af789ba7d7b4d2ab2",
       "prompt/registry": "06561aa5442dd7d0c7ea7461edb8daf7172760b9a800cb10584182629bf1ecb6"
     },
+    "test_mcp_html_notes_pins": {
+      "declaration:create_note:off": "92883edab87a653120ec84d5961b1b4a938f2675b00d06aa5b4a169d41434657",
+      "declaration:create_note:on": "92883edab87a653120ec84d5961b1b4a938f2675b00d06aa5b4a169d41434657",
+      "declaration:edit_note_block:off": "52892fbabb1b3cd155fea0499ac9d5919811e3afdd541c1648901d4822556b67",
+      "declaration:edit_note_block:on": "52892fbabb1b3cd155fea0499ac9d5919811e3afdd541c1648901d4822556b67",
+      "declaration:get_note:off": "bb840cc407d9e9a46a894ae26e05b7c920342ea9ef61ead832107b8fb82ec6fe",
+      "declaration:get_note:on": "a05a8247ce03f4847a14e1fc4256d89225e7ff46efc43d252a55dae0213cb8d5",
+      "declaration:save_html_note": "34800e928b3182651161b99dbc03c7bf8531d53044ff7aff7210473964fccbb1",
+      "declaration:update_note:off": "4714770ee5a3835cfc6d7687bf868d4f598879af719d85a38af8de868d4434e3",
+      "declaration:update_note:on": "4714770ee5a3835cfc6d7687bf868d4f598879af719d85a38af8de868d4434e3",
+      "guard:html_text_edit": "62391efd547d7c9c3a2f50d65152311b218151bc04181679de23d1fc8e1a98d0",
+      "prompt:make_html_note:can_save": "961763f1ea22ba0efd70e50f5fb20a4d38109c8745042829b854e5b13713732b",
+      "prompt:make_html_note:read_only": "2cd88e46871fb2366930325f7456db3d93586672f8749b6e68ba3c968e8ba3d3",
+      "prompts:list": "8eecbd4e13b52e23480cfc8dc82175c7399d643b8572d874dd712db1e037a5ff"
+    },
     "test_mcp_search_rewrite": {
       "app": "1542c07858aa7a8bc1a309be57a5517883ca2011aab1df7cc1e501923e4b8464",
       "mcp": "2e8697301b89f5284b6693419c0b9cac549b23fea11f6caf75f8e864279b20ef"

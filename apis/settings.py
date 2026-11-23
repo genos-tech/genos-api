@@ -2911,6 +2911,14 @@ AGENT_MAX_BODY_BYTES = int(os.environ.get("AGENT_MAX_BODY_BYTES") or "262144")
 GENOS_SKILLS = os.environ.get("GENOS_SKILLS", "false").lower() == "true"
 GENOS_SKILLS_PUBLIC = os.environ.get("GENOS_SKILLS_PUBLIC", "false").lower() == "true"
 
+# --- HTML notes (MIP-2214) ---
+# HTML_NOTES turns on saving an HTML page as a read-only note: the MCP tool `save_html_note`, its
+# prompt `make_html_note`, the `get_note` fields and `GET /api/v3/notes/<type>/<id>/html`. Off, the
+# tool and prompt are not listed, a call is answered as for a name nobody published, and the route
+# answers 404, so the catalog a client sees is what it was. Dark-shipped for the team's own use
+# first (the viewer is a later task). Off by default.
+HTML_NOTES = os.environ.get("HTML_NOTES", "false").lower() == "true"
+
 _validate_transport(
     debug=DEBUG,
     database=DATABASES["default"],

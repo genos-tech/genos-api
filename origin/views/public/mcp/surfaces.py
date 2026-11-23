@@ -98,6 +98,8 @@ DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
         "list_note_folders",
         "list_note_access",
         "create_note",
+        # MIP-2214: exists only while `HTML_NOTES` is on (`McpTool.setting`). Not on `core`.
+        "save_html_note",
         "update_note",
         "edit_note_block",
         "manage_note_folder",
