@@ -285,7 +285,7 @@ def _more_data(user) -> dict:
 
     skills = _capped(
         "skills",
-        Skill.objects.filter(owner=user).order_by("-created_at", "-id"),
+        Skill.objects.filter(owner=user).prefetch_related("grants").order_by("-created_at", "-id"),
         limits,
         lambda sk: {
             "skill_id": str(sk.id),
@@ -295,6 +295,20 @@ def _more_data(user) -> dict:
             "description": sk.description,
             "tags": sk.tags,
             "visibility": sk.visibility,
+            # Who a `specific` skill is shared with (MIP-2212): the kind and id of each grant.
+            "shares": [
+                {
+                    "kind": "user"
+                    if g.user_id
+                    else "mentionGroup"
+                    if g.mention_group_id
+                    else "groupChat"
+                    if g.channel_id
+                    else "project",
+                    "id": str(g.user_id or g.mention_group_id or g.channel_id or g.project_id),
+                }
+                for g in sk.grants.all()
+            ],
             "tool_level": sk.tool_level,
             "note_id": sk.note_id,
             "version": sk.current_version_no,
