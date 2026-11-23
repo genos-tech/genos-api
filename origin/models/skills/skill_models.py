@@ -31,6 +31,7 @@ from origin.models.common.user_models import CustomUser
 __all__ = [
     "PublicProfile",
     "Skill",
+    "SkillGrant",
     "SkillInstall",
     "SkillReport",
     "SkillRunLog",
@@ -41,10 +42,16 @@ __all__ = [
 
 VISIBILITY_PRIVATE = "private"
 VISIBILITY_TEAM = "team"
+VISIBILITY_SPECIFIC = "specific"
 VISIBILITY_PUBLIC = "public"
 VISIBILITY_CHOICES = [
     (VISIBILITY_PRIVATE, "private: the owner only"),
     (VISIBILITY_TEAM, "team: every member of the owner's team, not guests"),
+    (
+        VISIBILITY_SPECIFIC,
+        "specific: the people, mention groups, group chats and projects the owner chose "
+        "(`SkillGrant`), when they are on the owner's team",
+    ),
     (VISIBILITY_PUBLIC, "public: any signed-in Genos user"),
 ]
 
@@ -207,6 +214,105 @@ class Skill(models.Model):
 
     def __str__(self) -> str:
         return f"/{self.slug} ({self.visibility})"
+
+
+class SkillGrant(models.Model):
+    """One chosen reader of a `specific` skill (MIP-2212): a person, or a LIVE link to a mention group,
+    a group chat or a project. Exactly one target column is set.
+
+    A group is not expanded when it is picked: who is in it is asked every time the skill is read or
+    run (`service.can_read` / `visible_to`), so a person added to the chat gains the skill, and a person
+    who leaves it loses the skill, with nothing to sync. A grant never widens WHERE the skill runs: the
+    reader must still be a member of the skill's team (not a guest), as for a team skill.
+    Deleting the group, chat or project, or the person's account, deletes the grant."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="grants")
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, to_field="id", null=True, blank=True, related_name="+"
+    )
+    mention_group = models.ForeignKey(
+        "origin.MentionGroupMaster",
+        on_delete=models.CASCADE,
+        to_field="group_id",
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    channel = models.ForeignKey(
+        "origin.Channel", on_delete=models.CASCADE, null=True, blank=True, related_name="+"
+    )
+    project = models.ForeignKey(
+        "origin.ProjectMaster",
+        on_delete=models.CASCADE,
+        to_field="project_id",
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        user__isnull=False,
+                        mention_group__isnull=True,
+                        channel__isnull=True,
+                        project__isnull=True,
+                    )
+                    | models.Q(
+                        user__isnull=True,
+                        mention_group__isnull=False,
+                        channel__isnull=True,
+                        project__isnull=True,
+                    )
+                    | models.Q(
+                        user__isnull=True,
+                        mention_group__isnull=True,
+                        channel__isnull=False,
+                        project__isnull=True,
+                    )
+                    | models.Q(
+                        user__isnull=True,
+                        mention_group__isnull=True,
+                        channel__isnull=True,
+                        project__isnull=False,
+                    )
+                ),
+                name="skill_grant_one_target",
+            ),
+            models.UniqueConstraint(
+                fields=["skill", "user"],
+                condition=models.Q(user__isnull=False),
+                name="skill_grant_user_once",
+            ),
+            models.UniqueConstraint(
+                fields=["skill", "mention_group"],
+                condition=models.Q(mention_group__isnull=False),
+                name="skill_grant_group_once",
+            ),
+            models.UniqueConstraint(
+                fields=["skill", "channel"],
+                condition=models.Q(channel__isnull=False),
+                name="skill_grant_channel_once",
+            ),
+            models.UniqueConstraint(
+                fields=["skill", "project"],
+                condition=models.Q(project__isnull=False),
+                name="skill_grant_project_once",
+            ),
+        ]
+        indexes = [
+            # "Which skills am I granted": the list and the `/name` lookups read it by target.
+            models.Index(
+                fields=["user"], name="skill_grant_user_idx", condition=models.Q(user__isnull=False)
+            ),
+        ]
 
 
 class SkillTag(models.Model):
