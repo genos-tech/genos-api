@@ -56,6 +56,8 @@ from bisect import bisect_left
 from collections import Counter, defaultdict
 from typing import Any, Callable
 
+from origin.search_engine.agent.tools import md_linear
+
 # Maps a citation token ("task:12") to (href, fallback_label), or None
 # when it can't be resolved (unknown id, foreign team, unsupported type).
 EntityLinkResolver = Callable[[str], "tuple[str, str] | None"]
@@ -70,7 +72,6 @@ _BASE_PROPS = {
     "backgroundColor": "default",
 }
 
-_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 # Emphasis delimiter runs, paired by `_format_spans`. A run's (single,
 # double) style; `~` only pairs as `~~`.
 _DELIM_RUN_RE = re.compile(r"\*+|_+|~+")
@@ -79,16 +80,14 @@ _DELIM_STYLES = {"*": ("italic", "bold"), "_": ("italic", "bold"), "~": (None, "
 _STYLE_ORDER = ("bold", "italic", "strike")
 # Code spans are cut out before any other inline rule runs: their text is
 # literal, so `` `**x**` `` or `` `[a](b)` `` must not become bold or a link.
-_CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1")
+# (Code spans, links, bare chips, headings and list items are matched by the
+# linear scanners in `md_linear`: the regexes they replace were quadratic.)
 
 # Accept 1–6 `#` (markdown allows h1–h6) but cap the rendered level at 3,
 # which is what BlockNote's default theme supports — a `#### Sub` heading
 # renders as level 3 rather than leaking literal `####` into a paragraph.
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
-# Checklist before bullet: `- [ ] x` is also a valid bullet.
-_CHECK_RE = re.compile(r"^[-*+]\s+\[([ xX])\]\s+(.*)$")
-_BULLET_RE = re.compile(r"^[-*+•]\s+(.*)$")
-_NUMBERED_RE = re.compile(r"^\d+[.)]\s+(.*)$")
+# (`md_linear.match_heading`; list items: `match_check` before `match_bullet`,
+# since `- [ ] x` is also a valid bullet.)
 _QUOTE_RE = re.compile(r"^>\s?(.*)$")
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})\s*([^`\s]*)")
 _DIVIDER_RE = re.compile(r"^(?:-\s*){3,}$|^(?:\*\s*){3,}$|^(?:_\s*){3,}$")
@@ -422,7 +421,6 @@ _BARE_TOKEN_RE = re.compile(r"\[((?:chat|task|note|project|todo|milestone):[^\]\
 #     other label (`[the plan](task:12)`) stays a link, as before;
 #   - a bare `#PRJ-123` display id, which is what people type. Not inside
 #     a word (`a#B-1`) and not a heading (headings are cut off by then).
-_BARE_CHIP_RE = re.compile(r"\[((?:user|group|chat|task|note|project|milestone):[^\]\s]+)\](?!\()")
 _DISPLAY_ID_RE = re.compile(r"(?<![\w#/&])#([A-Za-z][A-Za-z0-9_]*-\d+)\b")
 
 # Stands in for an atom (code span, link) in the line handed to the
@@ -464,15 +462,14 @@ def _tokenize_inline(
         return []
     parts: _Parts = []
     cursor = 0
-    for m in _CODE_SPAN_RE.finditer(text):
-        _collect_links(text[cursor : m.start()], resolver, chips, parts)
+    for span_start, span_end, code in md_linear.iter_code_spans(text):
+        _collect_links(text[cursor:span_start], resolver, chips, parts)
         # CommonMark strips one space each side so `` `` `x` `` `` can
         # hold a backtick; ordinary spans are unaffected.
-        code = m.group(2)
         if len(code) > 2 and code.startswith(" ") and code.endswith(" "):
             code = code[1:-1]
         parts.append([_text_node(code, {"code": True})])
-        cursor = m.end()
+        cursor = span_end
     _collect_links(text[cursor:], resolver, chips, parts)
     parts = _math_atoms(parts)
 
@@ -518,9 +515,8 @@ def _collect_links(
     A target labelled `@…` or `#…` becomes a chip when the chip
     resolver knows it."""
     cursor = 0
-    for m in _LINK_RE.finditer(text):
-        _collect_citation_tokens(text[cursor : m.start()], resolver, chips, parts)
-        label, href = m.group(1), m.group(2)
+    for link_start, link_end, label, href in md_linear.iter_links(text):
+        _collect_citation_tokens(text[cursor:link_start], resolver, chips, parts)
         chip = chips(href) if chips and label.lstrip().startswith(("@", "#")) else None
         if chip:
             if _is_bare_display_id(label, chip):
@@ -536,7 +532,7 @@ def _collect_links(
             else:
                 # Non-URL target we can't resolve — keep the prose.
                 parts.append(label)
-        cursor = m.end()
+        cursor = link_end
     _collect_citation_tokens(text[cursor:], resolver, chips, parts)
 
 
@@ -569,10 +565,10 @@ def _collect_citation_tokens(
         parts.append(text)
         return
     found: list[tuple[int, int, list[dict[str, Any]]]] = []
-    for m in _BARE_CHIP_RE.finditer(text) if chips else ():
-        chip = chips(m.group(1))
+    for chip_start, chip_end, token in md_linear.iter_bare_chips(text) if chips else ():
+        chip = chips(token)
         if chip:
-            found.append((m.start(), m.end(), [chip]))
+            found.append((chip_start, chip_end, [chip]))
     for m in _DISPLAY_ID_RE.finditer(text) if chips else ():
         chip = chips(f"display:{m.group(1)}")
         if chip:
@@ -820,22 +816,23 @@ def _divider_block() -> dict[str, Any]:
 
 def _list_item(stripped: str) -> tuple[str, str, dict[str, Any]] | None:
     """(block_type, text, extra_props) when the line is a list item."""
-    check = _CHECK_RE.match(stripped)
+    check = md_linear.match_check(stripped)
     if check:
-        return "checkListItem", check.group(2), {"checked": check.group(1) != " "}
-    bullet = _BULLET_RE.match(stripped)
-    if bullet:
-        return "bulletListItem", bullet.group(1), {}
-    numbered = _NUMBERED_RE.match(stripped)
-    if numbered:
-        return "numberedListItem", numbered.group(1), {}
+        mark, text = check
+        return "checkListItem", text, {"checked": mark != " "}
+    bullet = md_linear.match_bullet(stripped)
+    if bullet is not None:
+        return "bulletListItem", bullet, {}
+    numbered = md_linear.match_numbered(stripped)
+    if numbered is not None:
+        return "numberedListItem", numbered, {}
     return None
 
 
 def _starts_block(stripped: str, lines: list[str], i: int) -> bool:
     """Would this line open a non-paragraph block? (Ends a paragraph.)"""
     return bool(
-        _HEADING_RE.match(stripped)
+        md_linear.match_heading(stripped)
         or _FENCE_RE.match(stripped)
         or (stripped.startswith("$$") and _display_math(lines, i) is not None)
         or _QUOTE_RE.match(stripped)
@@ -926,12 +923,13 @@ def markdown_to_blocks(
             blocks.append(_source_block("mathBlock", source))
             continue
 
-        heading = _HEADING_RE.match(stripped)
+        heading = md_linear.match_heading(stripped)
         if heading:
-            level = min(len(heading.group(1)), 3)
+            hashes, heading_text = heading
+            level = min(hashes, 3)
             list_stack.clear()
             blocks.append(
-                _block("heading", heading.group(2), level=level, resolver=resolver, chips=chips)
+                _block("heading", heading_text, level=level, resolver=resolver, chips=chips)
             )
             i += 1
             continue

@@ -53,6 +53,11 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
             "chatNotes": [],
         }
 
+        # A Genos Skill's body note is not a note to list (MIP-2121).
+        personal_note_ids = set(personal_note_ids) - PersonalNoteMaster.skill_body_ids(
+            personal_note_ids
+        )
+
         # Fetch personal notes metadata
         if personal_note_ids:
             personal_notes = (

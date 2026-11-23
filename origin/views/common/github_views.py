@@ -5,9 +5,11 @@ Three endpoints:
   GET  /api/v2/github/pulls/<owner>/<repo>/<number>/      — single PR detail + status
   POST /api/v2/github/webhook/                            — repo-side webhook for PR events
 
-GitHub OAuth App tokens don't expire, so the token helper just decrypts
-the stored value. We send only GETs here; the `repo` scope grants more
-than that on paper but the code-side discipline never writes.
+Every read made for a person resolves its token through
+`origin.services.github_credential` (MIP-2089): the GitHub App user token when
+`GITHUB_APP_ENABLED` is on and the App covers the repo, else the legacy OAuth
+token (which never expires; the `repo` scope grants more than we use, but the
+code-side discipline never writes). We send only GETs here.
 """
 
 from __future__ import annotations
@@ -42,6 +44,13 @@ from origin.models.common.user_models import (
 from origin.models.task.task_activity_models import TaskActivity, TaskActivityActionType
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
+from origin.services import github_app as github_app_service
+from origin.services.github_app_webhook import app_team_ids_for_repo
+from origin.services.github_credential import (
+    CredentialResolver,
+    github_credential,
+    installation_token,
+)
 from origin.services.github_webhooks import (
     forget_unregistered_delivery,
     is_valid_repo_ref,
@@ -65,12 +74,34 @@ logger = logging.getLogger(__name__)
 GITHUB_API_BASE = "https://api.github.com"
 
 
-def _connected_account(user) -> ConnectedAccount | None:
-    return ConnectedAccount.objects.filter(user=user, provider="github").first()
+def _connected_account(user, repo: tuple[str, str] | None = None) -> ConnectedAccount | None:
+    """The stored GitHub account whose token a call for `user` uses, or None when they have no
+    GitHub connection. A thin face on `github_credential` (the one seam, MIP-2089): pass
+    `repo=(owner, name)` for a call about one repository so the App-or-legacy choice sees it."""
+    credential = github_credential(user, repo)
+    return credential.account if credential is not None else None
 
 
 def _not_connected() -> Response:
     return Response({"detail": "github_not_connected"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TokenUnavailable(Exception):
+    """A credential's token could not be had earlier in this request (a dead App grant)."""
+
+
+class _UnreadableAnswer:
+    """What a call answers when its credential has no usable token (a dead App grant, a refresh
+    that failed): not a refusal and not a rate limit, so it is never cached and the walk reports
+    the repo as one it could not look at (`incomplete`), instead of the request failing."""
+
+    ok = False
+    status_code = 401
+    headers: dict = {}
+
+    @staticmethod
+    def json():
+        return {}
 
 
 class _GithubCredential:
@@ -91,6 +122,7 @@ class _GithubCredential:
         self._account = account
         self._owner_thread = threading.get_ident()
         self._token: str | None = None
+        self._token_failed = False
         self.upstream = 0
         # Lookups that failed for a reason that is NOT about access (a 5xx, a rate
         # limit, a 401), and the repos whose branch list failed the same way. The
@@ -103,7 +135,15 @@ class _GithubCredential:
         if self._token is None:
             if threading.get_ident() != self._owner_thread:
                 raise RuntimeError("GitHub token must be resolved in the request thread")
-            self._token = get_valid_access_token(self._account)
+            if self._token_failed:
+                # Not asked again: a dead App grant would otherwise retry its refresh (under the
+                # row lock) for every repo of the walk.
+                raise TokenUnavailable("GitHub token unavailable")
+            try:
+                self._token = get_valid_access_token(self._account)
+            except Exception:
+                self._token_failed = True
+                raise
         return self
 
     @property
@@ -113,8 +153,65 @@ class _GithubCredential:
         return self._token
 
 
+class _CredentialSet:
+    """The credentials ONE request's walk over several repositories uses (MIP-2089).
+
+    A repo the App covers is read with the person's App token, any other with their legacy token
+    (`github_credential`), so a walk can mix the two during the migration window. One
+    `_GithubCredential` per stored account, shared by every repo that account serves: its token is
+    resolved once, on the request thread. The tallies of the credentials add up here, so the
+    `gh.links` log line and the `incomplete` answer read as they did with a single credential.
+    """
+
+    def __init__(self, user):
+        self._resolver = CredentialResolver(user)
+        self._by_account: dict = {}
+        self._by_repo: dict[tuple[str, str], _GithubCredential | None] = {}
+
+    @property
+    def connected(self) -> bool:
+        """Does the person have any GitHub connection at all?"""
+        return self._resolver.for_repo(None) is not None
+
+    def for_repo(self, owner: str, repo: str) -> "_GithubCredential | None":
+        key = (owner.lower(), repo.lower())
+        if key not in self._by_repo:
+            chosen = self._resolver.for_repo((owner, repo))
+            if chosen is None:
+                self._by_repo[key] = None
+            else:
+                account_id = chosen.account.id
+                if account_id not in self._by_account:
+                    self._by_account[account_id] = _GithubCredential(chosen.account)
+                self._by_repo[key] = self._by_account[account_id]
+        return self._by_repo[key]
+
+    @property
+    def upstream(self) -> int:
+        return sum(c.upstream for c in self._by_account.values())
+
+    @property
+    def failed_lookups(self) -> int:
+        return sum(c.failed_lookups for c in self._by_account.values())
+
+    @property
+    def failed_repos(self) -> set[tuple[str, str]]:
+        return {r for c in self._by_account.values() for r in c.failed_repos}
+
+
 def _credential(account) -> _GithubCredential:
     return account if isinstance(account, _GithubCredential) else _GithubCredential(account)
+
+
+def _github_get_with_token(token: str, path: str, params: dict | None = None):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    return requests.get(
+        f"{GITHUB_API_BASE}{path}", headers=headers, params=params or {}, timeout=15
+    )
 
 
 def _github_get(
@@ -124,14 +221,7 @@ def _github_get(
         token = account.resolve().token
     else:
         token = get_valid_access_token(account)
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    return requests.get(
-        f"{GITHUB_API_BASE}{path}", headers=headers, params=params or {}, timeout=15
-    )
+    return _github_get_with_token(token, path, params)
 
 
 class GithubMyPullsView(APIView):
@@ -146,8 +236,8 @@ class GithubMyPullsView(APIView):
             return _not_connected()
         state = request.GET.get("state", "open")  # open | closed | all
         q = f"is:pr author:@me state:{state}"
-        resp = _github_get(
-            account,
+        resp = _call_github(
+            _GithubCredential(account),
             "/search/issues",
             params={"q": q, "sort": "updated", "order": "desc", "per_page": 50},
         )
@@ -215,8 +305,8 @@ class GithubAccessibleReposView(APIView):
         if account is None:
             return _not_connected()
 
-        resp = _github_get(
-            account,
+        resp = _call_github(
+            _GithubCredential(account),
             "/user/repos",
             params={
                 "per_page": self._PER_PAGE,
@@ -283,8 +373,8 @@ class GithubPullDetailView(APIView):
     """Single PR: metadata + combined status of the head commit so the
     UI can show a green/yellow/red CI badge.
 
-    Cached in Redis per GitHub account (see "Caching" above
-    `_BRANCH_CACHE_TTL`, and `_pull_detail_ttl` for how long). The task open
+    Cached in Redis per GitHub account (see "Server-side cache for GitHub fan-out"
+    below, and `_pull_detail_ttl` for how long). The task open
     and the table's PR column call this once per linked PR; it used to cost
     three live GitHub calls in a row every time (pull, then commit status,
     then check runs), about 1.7 s at the median. A miss now costs two round
@@ -301,7 +391,7 @@ class GithubPullDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request: Request, owner: str, repo: str, number: str):
-        account = _connected_account(request.user)
+        account = _connected_account(request.user, (owner, repo))
         if account is None:
             return _not_connected()
         credential = _GithubCredential(account)
@@ -729,7 +819,10 @@ def _fetch_pr_head_ref(owner: str, repo: str, number: int) -> str | None:
     Used to resolve `issue_comment` events to tasks. The webhook
     endpoint is unauthenticated, so we use a token from the repo's
     `GithubWebhookRegistration.registered_by` user — the same identity
-    that auto-registered the webhook in the first place.
+    that auto-registered the webhook in the first place. A read-only
+    installation token for this one repo comes first when an installation
+    of the App is linked to one of that user's teams (MIP-2089, design
+    section 5: background work in a linked team never holds a person's token).
     """
     key = _pr_head_ref_cache_key(owner, repo, number)
     cached = cache.get(key)
@@ -741,13 +834,25 @@ def _fetch_pr_head_ref(owner: str, repo: str, number: int) -> str | None:
     reg = GithubWebhookRegistration.objects.filter(owner__iexact=owner, repo__iexact=repo).first()
     if reg is None or reg.registered_by_id is None:
         return None
-    account = ConnectedAccount.objects.filter(
-        user_id=reg.registered_by_id, provider="github"
-    ).first()
-    if account is None:
-        return None
+    path = f"/repos/{owner}/{repo}/pulls/{number}"
+    resp = None
+    if github_app_service.is_enabled():
+        try:
+            token = installation_token(owner, repo, team_ids_for_user(reg.registered_by_id))
+            if token is not None:
+                resp = _github_get_with_token(token, path)
+        except Exception:  # noqa: BLE001 - the registrar's own credential still has its turn
+            logger.warning("PR head-ref lookup with an installation token failed", exc_info=True)
+            resp = None
+        if resp is not None and not resp.ok:
+            resp = None  # revoked early, permissions changed: try the registrar's credential
     try:
-        resp = _github_get(account, f"/repos/{owner}/{repo}/pulls/{number}")
+        if resp is None:
+            user = reg.registered_by
+            account = _connected_account(user, (owner, repo)) if user else None
+            if account is None:
+                return None
+            resp = _github_get(account, path)
     except Exception:
         logger.exception("PR head-ref lookup crashed on %s/%s#%s", owner, repo, number)
         return None
@@ -1130,8 +1235,8 @@ class GithubUnregisteredReposView(APIView):
     _MAX_CANDIDATES = 20
 
     def get(self, request: Request):
-        account = _connected_account(request.user)
-        if account is None:
+        resolver = CredentialResolver(request.user)
+        if resolver.for_repo(None) is None:
             return Response({"repos": [], "connected": False})
 
         repos = []
@@ -1145,7 +1250,8 @@ class GithubUnregisteredReposView(APIView):
                 forget_unregistered_delivery(row.owner, row.repo)
                 continue
             try:
-                resp = _github_get(account, f"/repos/{row.owner}/{row.repo}")
+                credential = resolver.for_repo((row.owner, row.repo))
+                resp = _github_get(credential.account, f"/repos/{row.owner}/{row.repo}")
             except Exception:  # noqa: BLE001 - one bad lookup must not hide the rest
                 logger.warning("GitHub repo lookup failed for an unregistered repo", exc_info=True)
                 continue
@@ -1210,6 +1316,31 @@ class GithubWebhookView(APIView):
             return Response({"detail": "invalid_signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
         event = request.headers.get("X-GitHub-Event") or request.META.get("HTTP_X_GITHUB_EVENT")
+        # The App covers this repo (an active installation linked to a live team, MIP-2088): its
+        # endpoint is the source of events for the teams it serves, so this hook no longer writes
+        # for THOSE teams and nothing is processed twice. A team this hook serves that the App does
+        # not (the installation is linked to another team only) keeps getting its events from here,
+        # so linking the App never silences a team it does not serve. After the signature check, so
+        # only the repo's own hook gets this answer; before any write.
+        team_ids_for = _repo_team_ids
+        if (
+            event in ("pull_request", "issue_comment", "pull_request_review_comment")
+            and repo_ref is not None
+            and payload is not None
+        ):
+            app_teams = {
+                str(t)
+                for t in app_team_ids_for_repo(
+                    repo_ref[0], repo_ref[1], (payload.get("repository") or {}).get("id")
+                )
+            }
+            if app_teams:
+                remaining = [
+                    t for t in _repo_team_ids(repo_ref[0], repo_ref[1]) if str(t) not in app_teams
+                ]
+                if not remaining:
+                    return Response({"detail": "covered_by_app"}, status=status.HTTP_200_OK)
+                team_ids_for = lambda _owner, _repo: remaining  # noqa: E731
         # A verified delivery from a repo Genos holds no registration for: it
         # answers 200 and writes nothing (`_repo_team_ids` fails closed), which
         # looks healthy from GitHub's side. Remember it so the integrations
@@ -1234,185 +1365,220 @@ class GithubWebhookView(APIView):
         if payload is None:
             return Response({"detail": "bad_json"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if _pr_url_repo_mismatch(event, payload, repo_ref):
-            logger.warning(
-                "GitHub webhook: %s delivery signed for %s names a PR in another repo",
-                event,
-                "/".join(repo_ref) if repo_ref else "no repo",
+        return handle_verified_event(event, payload, repo_ref, team_ids_for)
+
+
+def handle_verified_event(
+    event: str | None,
+    payload: dict,
+    repo_ref,
+    team_ids_for,
+    head_ref_fetcher=None,
+) -> Response:
+    """What a VERIFIED delivery does, shared by the legacy per-repo hook (`GithubWebhookView`) and
+    the GitHub App endpoint (`GithubAppWebhookView`, MIP-2088): one rule for task links, "Closes
+    MIP-n", needs-you signals and the merged-PR comment, whichever door the event came through.
+
+    `team_ids_for(owner, repo)` is the tenant boundary: the teams this delivery may write into.
+    The legacy hook answers with the registrar's teams (`_repo_team_ids`); the App endpoint with
+    the teams linked to the installation, whatever repo the PR url names (the PR-url guard below
+    already pinned it to the verified repo). `head_ref_fetcher(owner, repo, number)` resolves an
+    `issue_comment`'s head branch (default: the registrar's token, `_fetch_pr_head_ref`).
+
+    Events that change what the PR lookups cache but touch no task (`pull_request_review`,
+    `check_run`, `status`) refresh the repo's cached PR details so the CI badge and review state
+    are pushed instead of polled.
+    """
+    if _pr_url_repo_mismatch(event, payload, repo_ref):
+        logger.warning(
+            "GitHub webhook: %s delivery signed for %s names a PR in another repo",
+            event,
+            "/".join(repo_ref) if repo_ref else "no repo",
+        )
+        return Response({"detail": "repo_mismatch"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if event in ("pull_request_review", "check_run", "status"):
+        if repo_ref is not None:
+            _invalidate_pr_detail(repo_ref[0], repo_ref[1])
+        return Response({"detail": "ok", "refreshed": repo_ref is not None})
+
+    if event == "pull_request":
+        pr = payload.get("pull_request") or {}
+        action = payload.get("action")
+        merged = bool(pr.get("merged"))
+        head_ref = ((pr.get("head") or {}).get("ref")) or ""
+        html_url = pr.get("html_url") or ""
+
+        # Drop our Redis-cached lookups of this repo's PRs (and, when a
+        # PR is opened or reopened, its branch list) so the UI sees the
+        # new state on the next fetch. Only for the actions that change
+        # what we cache (state, draft, merged_at, title); a push to an
+        # existing PR (`synchronize`) changes none of it, and used to
+        # throw the branch list away on every push. Comment events skip
+        # this too — they don't touch cached fields.
+        ref = parse_pr_url_full(html_url)
+        # Which tenant this repo may write into. Derived from the PR
+        # url rather than trusted from the payload's `repository`
+        # block for no deep reason — this is the value already parsed
+        # here — but note both are attacker-supplied and the scope is
+        # only as good as the registration lookup they feed.
+        team_ids = []
+        if ref is not None:
+            owner_inv, repo_inv, number_inv = ref
+            if action in _PR_DATA_ACTIONS:
+                _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
+            elif action in _PR_DETAIL_ONLY_ACTIONS:
+                _invalidate_pr_detail(owner_inv, repo_inv)
+            if action in _BRANCH_LIST_ACTIONS:
+                _invalidate_branch_list(owner_inv, repo_inv)
+            team_ids = team_ids_for(owner_inv, repo_inv)
+
+        deliveries = None
+        updated = None
+        if ref is not None:
+            # The same two steps `reconcile_pr_deliveries` runs, so a
+            # recovered event and a live one close tasks by one rule.
+            applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
+            deliveries, updated = applied["deliveries"], applied["updated"]
+
+        # A reviewer was asked for: tell them through the Inbox and the task (MIP-2054).
+        # Team reviewers (`requested_team`) carry no `requested_reviewer` and are ignored.
+        if action == "review_requested" and ref is not None and not pr.get("draft"):
+            notified = _notify_review_requested(
+                owner_inv,
+                repo_inv,
+                pr,
+                payload.get("requested_reviewer"),
+                head_ref,
+                team_ids,
             )
-            return Response({"detail": "repo_mismatch"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if event == "pull_request":
-            pr = payload.get("pull_request") or {}
-            action = payload.get("action")
-            merged = bool(pr.get("merged"))
-            head_ref = ((pr.get("head") or {}).get("ref")) or ""
-            html_url = pr.get("html_url") or ""
-
-            # Drop our Redis-cached lookups of this repo's PRs (and, when a
-            # PR is opened or reopened, its branch list) so the UI sees the
-            # new state on the next fetch. Only for the actions that change
-            # what we cache (state, draft, merged_at, title); a push to an
-            # existing PR (`synchronize`) changes none of it, and used to
-            # throw the branch list away on every push. Comment events skip
-            # this too — they don't touch cached fields.
-            ref = parse_pr_url_full(html_url)
-            # Which tenant this repo may write into. Derived from the PR
-            # url rather than trusted from the payload's `repository`
-            # block for no deep reason — this is the value already parsed
-            # here — but note both are attacker-supplied and the scope is
-            # only as good as the registration lookup they feed.
-            team_ids = []
-            if ref is not None:
-                owner_inv, repo_inv, number_inv = ref
-                if action in _PR_DATA_ACTIONS:
-                    _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
-                elif action in _PR_DETAIL_ONLY_ACTIONS:
-                    _invalidate_pr_detail(owner_inv, repo_inv)
-                if action in _BRANCH_LIST_ACTIONS:
-                    _invalidate_branch_list(owner_inv, repo_inv)
-                team_ids = _repo_team_ids(owner_inv, repo_inv)
-
-            deliveries = None
-            updated = None
-            if ref is not None:
-                # The same two steps `reconcile_pr_deliveries` runs, so a
-                # recovered event and a live one close tasks by one rule.
-                applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
-                deliveries, updated = applied["deliveries"], applied["updated"]
-
-            # A reviewer was asked for: tell them through the Inbox and the task (MIP-2054).
-            # Team reviewers (`requested_team`) carry no `requested_reviewer` and are ignored.
-            if action == "review_requested" and ref is not None and not pr.get("draft"):
-                notified = _notify_review_requested(
-                    owner_inv,
-                    repo_inv,
-                    pr,
-                    payload.get("requested_reviewer"),
-                    head_ref,
-                    team_ids,
-                )
-                return Response(
-                    {"detail": "ok", "notified": notified, "deliveries": deliveries},
-                    status=status.HTTP_200_OK,
-                )
-
-            # MVP: only the merge transition fires. Other action types
-            # (opened, ready_for_review, closed-unmerged, etc.) are
-            # acknowledged but not acted on.
-            if action == "closed" and merged and head_ref:
-                updated = updated or 0
-                logger.info(
-                    "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
-                    html_url,
-                    head_ref,
-                    updated,
-                )
-                return Response(
-                    {"detail": "ok", "updated": updated, "deliveries": deliveries},
-                    status=status.HTTP_200_OK,
-                )
-
-            # Record a link activity when a PR is opened (or reopened) on a
-            # branch whose name carries a task's display id. Idempotent, so
-            # a reopen after this already fired won't duplicate the row.
-            if action in ("opened", "reopened") and head_ref:
-                pr_number = pr.get("number")
-                pr_title = pr.get("title") or ""
-                linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title, team_ids)
-                logger.info(
-                    "GitHub webhook: PR %s %s (head=%s) → linked %d task(s)",
-                    action,
-                    html_url,
-                    head_ref,
-                    linked,
-                )
-                return Response(
-                    {"detail": "ok", "linked": linked, "deliveries": deliveries},
-                    status=status.HTTP_200_OK,
-                )
-
-            if deliveries is not None:
-                return Response(
-                    {"detail": "ok", "deliveries": deliveries}, status=status.HTTP_200_OK
-                )
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        # Comment events — record on the auto-linked task's activity feed.
-        # Only `created` actions are recorded; edits/deletes are deferred.
-        if event == "pull_request_review_comment":
-            return self._handle_pr_comment_event(
-                payload=payload,
-                head_ref_source="payload",
-            )
-        if event == "issue_comment":
-            # Only PR comments — plain issue comments are out of scope.
-            issue = payload.get("issue") or {}
-            if not (issue.get("pull_request") or {}).get("html_url"):
-                return Response({"detail": "ignored_non_pr"}, status=status.HTTP_200_OK)
-            return self._handle_pr_comment_event(
-                payload=payload,
-                head_ref_source="fetch",
+            return Response(
+                {"detail": "ok", "notified": notified, "deliveries": deliveries},
+                status=status.HTTP_200_OK,
             )
 
+        # MVP: only the merge transition fires. Other action types
+        # (opened, ready_for_review, closed-unmerged, etc.) are
+        # acknowledged but not acted on.
+        if action == "closed" and merged and head_ref:
+            updated = updated or 0
+            logger.info(
+                "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
+                html_url,
+                head_ref,
+                updated,
+            )
+            return Response(
+                {"detail": "ok", "updated": updated, "deliveries": deliveries},
+                status=status.HTTP_200_OK,
+            )
+
+        # Record a link activity when a PR is opened (or reopened) on a
+        # branch whose name carries a task's display id. Idempotent, so
+        # a reopen after this already fired won't duplicate the row.
+        if action in ("opened", "reopened") and head_ref:
+            pr_number = pr.get("number")
+            pr_title = pr.get("title") or ""
+            linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title, team_ids)
+            logger.info(
+                "GitHub webhook: PR %s %s (head=%s) → linked %d task(s)",
+                action,
+                html_url,
+                head_ref,
+                linked,
+            )
+            return Response(
+                {"detail": "ok", "linked": linked, "deliveries": deliveries},
+                status=status.HTTP_200_OK,
+            )
+
+        if deliveries is not None:
+            return Response({"detail": "ok", "deliveries": deliveries}, status=status.HTTP_200_OK)
         return Response({"detail": "noop"}, status=status.HTTP_200_OK)
 
-    def _handle_pr_comment_event(self, *, payload: dict, head_ref_source: str) -> Response:
-        """Shared handler for `issue_comment` (PR comments only) and
-        `pull_request_review_comment` events. The two event types differ
-        in how the PR's head ref is obtained (`head_ref_source`):
-
-            "payload" — `pull_request_review_comment` payload already has
-                        `pull_request.head.ref`; use it directly.
-            "fetch"   — `issue_comment` payload has the PR URL but no
-                        head ref; one cached GitHub API call resolves it.
-        """
-        action = payload.get("action")
-        if action != "created":
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        comment = payload.get("comment") or {}
-        if not comment.get("id"):
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        if head_ref_source == "payload":
-            pr = payload.get("pull_request") or {}
-            head_ref = ((pr.get("head") or {}).get("ref")) or ""
-            pr_url = pr.get("html_url") or ""
-            comment_kind = "review"
-        else:
-            issue = payload.get("issue") or {}
-            pr_url = (issue.get("pull_request") or {}).get("html_url") or ""
-            ref = parse_pr_url(pr_url)
-            if ref is None:
-                return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-            owner, repo = ref
-            number = issue.get("number")
-            head_ref = _fetch_pr_head_ref(owner, repo, int(number)) if number else None
-            head_ref = head_ref or ""
-            comment_kind = "issue"
-
-        if not head_ref:
-            logger.info(
-                "GitHub webhook: PR comment skipped — could not resolve head ref (pr=%s)", pr_url
-            )
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        # The `review` branch above never parses the PR url, so resolve
-        # the tenant from it here rather than in each branch — both
-        # arrive with a `pr_url` and nothing else identifying the repo.
-        comment_ref = parse_pr_url(pr_url)
-        team_ids = _repo_team_ids(*comment_ref) if comment_ref else []
-
-        recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind, team_ids)
-        logger.info(
-            "GitHub webhook: %s comment %s (head=%s) → recorded %d activity row(s)",
-            comment_kind,
-            pr_url,
-            head_ref,
-            recorded,
+    # Comment events — record on the auto-linked task's activity feed.
+    # Only `created` actions are recorded; edits/deletes are deferred.
+    if event == "pull_request_review_comment":
+        return _handle_pr_comment_event(
+            payload=payload,
+            head_ref_source="payload",
+            team_ids_for=team_ids_for,
+            head_ref_fetcher=head_ref_fetcher,
         )
-        return Response({"detail": "ok", "recorded": recorded}, status=status.HTTP_200_OK)
+    if event == "issue_comment":
+        # Only PR comments — plain issue comments are out of scope.
+        issue = payload.get("issue") or {}
+        if not (issue.get("pull_request") or {}).get("html_url"):
+            return Response({"detail": "ignored_non_pr"}, status=status.HTTP_200_OK)
+        return _handle_pr_comment_event(
+            payload=payload,
+            head_ref_source="fetch",
+            team_ids_for=team_ids_for,
+            head_ref_fetcher=head_ref_fetcher,
+        )
+
+    return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+
+def _handle_pr_comment_event(
+    *, payload: dict, head_ref_source: str, team_ids_for, head_ref_fetcher=None
+) -> Response:
+    """Shared handler for `issue_comment` (PR comments only) and
+    `pull_request_review_comment` events. The two event types differ
+    in how the PR's head ref is obtained (`head_ref_source`):
+
+        "payload" — `pull_request_review_comment` payload already has
+                    `pull_request.head.ref`; use it directly.
+        "fetch"   — `issue_comment` payload has the PR URL but no
+                    head ref; one cached GitHub API call resolves it.
+    """
+    action = payload.get("action")
+    if action != "created":
+        return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    comment = payload.get("comment") or {}
+    if not comment.get("id"):
+        return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    if head_ref_source == "payload":
+        pr = payload.get("pull_request") or {}
+        head_ref = ((pr.get("head") or {}).get("ref")) or ""
+        pr_url = pr.get("html_url") or ""
+        comment_kind = "review"
+    else:
+        issue = payload.get("issue") or {}
+        pr_url = (issue.get("pull_request") or {}).get("html_url") or ""
+        ref = parse_pr_url(pr_url)
+        if ref is None:
+            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+        owner, repo = ref
+        number = issue.get("number")
+        fetch = head_ref_fetcher or _fetch_pr_head_ref
+        head_ref = fetch(owner, repo, int(number)) if number else None
+        head_ref = head_ref or ""
+        comment_kind = "issue"
+
+    if not head_ref:
+        logger.info(
+            "GitHub webhook: PR comment skipped — could not resolve head ref (pr=%s)", pr_url
+        )
+        return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    # The `review` branch above never parses the PR url, so resolve
+    # the tenant from it here rather than in each branch — both
+    # arrive with a `pr_url` and nothing else identifying the repo.
+    comment_ref = parse_pr_url(pr_url)
+    team_ids = team_ids_for(*comment_ref) if comment_ref else []
+
+    recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind, team_ids)
+    logger.info(
+        "GitHub webhook: %s comment %s (head=%s) → recorded %d activity row(s)",
+        comment_kind,
+        pr_url,
+        head_ref,
+        recorded,
+    )
+    return Response({"detail": "ok", "recorded": recorded}, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
@@ -1442,12 +1608,13 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 
 # ── Server-side cache for GitHub fan-out ──────────────────────────────
 #
-# The branches-for-task and pulls-for-task endpoints fan out one GitHub
-# call per known repo and (for pulls) one call per matching branch. A
-# table view of 100 tasks all calling these endpoints would otherwise
-# churn 100×N calls on first paint. We cache the per-repo branch list
-# and the per-branch PR lookup in Redis with a short TTL so the table
-# load coalesces down to ~N calls and re-paints cost nothing.
+# The branches-for-task and pulls-for-task endpoints make one GitHub call
+# per known repo: its pull requests (MIP-2089: the GitHub App has no
+# Contents permission, so branches are found through the pulls list, and a
+# branch with no PR yet is not seen). A table view of 100 tasks all calling
+# these endpoints would otherwise churn 100×N calls on first paint. We cache
+# the per-repo pulls list in Redis with a short TTL so the table load
+# coalesces down to ~N calls and re-paints cost nothing.
 #
 # Cache scope: ONE CONNECTED GITHUB ACCOUNT, never the repo alone.
 # The repos scanned are every `GithubWebhookRegistration` in the install,
@@ -1456,7 +1623,8 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 # REQUESTING user's token. A private repo can therefore answer 200 for one
 # user and 404 for the next; a repo-only key handed the first user's branch
 # names, commit SHAs and PR titles to everyone whose token could not read
-# them (MIP-974). So every key carries
+# them (MIP-974). An App token and a legacy token are different accounts
+# (rows), so an answer read through one is never served for the other. So every key carries
 #
 #   * the connected account's id AND its `ts_updated_at`: reconnecting
 #     GitHub writes the row, so a new token gets fresh keys, and a hit
@@ -1469,32 +1637,32 @@ def _branch_match_re(display_id: str) -> re.Pattern[str]:
 # limit, a 5xx or a timeout says nothing about access and is never cached.
 #
 # Invalidation. A webhook event can no longer name the keys to delete
-# (it does not know which accounts have entries), so each repo carries three
-# generation numbers that are part of the keys: one for its PR lookups, one
-# for its branch list, one for its PR detail. A bump orphans everything cached under that number
-# for that repo, whichever account wrote it. The helpers read the
-# generation BEFORE calling GitHub and write under that same key, so a
+# (it does not know which accounts have entries), so each repo carries
+# generation numbers that are part of the keys: one for its PR lookups (the
+# pulls list, and a PR by number) and one for its PR detail. (A third, for the
+# branch list, is still bumped by the webhook; no read uses it since
+# MIP-2089 and the webhook rework removes it.) A bump orphans everything cached
+# under that number for that repo, whichever account wrote it. The helpers read
+# the generation BEFORE calling GitHub and write under that same key, so a
 # fetch that straddles a bump lands under a key nobody reads again.
 #
-# What an event bumps (see `_invalidate_pr_caches`, `_invalidate_branch_list`):
-# a PR changing state, draft flag or title drops the PR lookups; a PR being
-# opened or reopened also drops the branch list; a push (`synchronize`)
-# changes neither, so a busy branch no longer throws the branch list away.
-# The PR detail (`GithubPullDetailView`, with the head commit's CI) is dropped
-# by all of those AND by a push (`_invalidate_pr_detail`), since a push is what
-# changes it. What no event reaches is a CI run finishing: GitHub sends this
-# webhook no `check_run` or `status`, so an open PR's detail is only ever as
-# fresh as `_PULL_DETAIL_TTL`.
-# GitHub sends no event when a branch is created or deleted, so the branch
-# list is otherwise only ever refreshed by its TTL: a new branch shows up, and
-# a deleted one disappears, within `_BRANCH_CACHE_TTL`, and its head
-# `commit_sha` can be that old.
+# What an event bumps (see `_invalidate_pr_caches`): a PR changing state, draft
+# flag or title (or being opened or reopened) drops the pulls lists; a push
+# (`synchronize`) changes neither. The PR detail (`GithubPullDetailView`, with
+# the head commit's CI) is dropped by all of those AND by a push
+# (`_invalidate_pr_detail`), since a push is what changes it. What no event
+# reaches is a CI run finishing: the legacy webhook is sent no `check_run` or
+# `status`, so an open PR's detail is only ever as fresh as `_PULL_DETAIL_TTL`.
+# A pulls list is otherwise only refreshed by its TTL, and its head
+# `commit_sha` (the branches route) can be that old.
 #
-# A miss fetches the registered repos in parallel (`_get_all`), so it costs
+# A miss fetches the registered repos in parallel (`_get_all_for`), so it costs
 # about one GitHub round trip however many repos are registered.
 
-_BRANCH_CACHE_TTL = 5 * 60  # seconds; per repo and account, shared by every task
-_PULL_CACHE_TTL = 60  # matches the frontend prStatusCache
+_PULL_CACHE_TTL = 60  # matches the frontend prStatusCache; also a repo's pulls list
+# The pulls list reads this many of a repo's most recently updated PRs, one page. A PR
+# older than that is found through the task's persisted auto-links (`task.links`) instead.
+_PULLS_PER_REPO = 100
 _PULL_DETAIL_TTL = 60  # an open PR's detail, or one whose CI is still moving
 _PULL_DETAIL_MERGED_TTL = 30 * 60  # a merged PR with finished CI
 # Most repos fetched at once on a miss. Per request, so the process-wide
@@ -1558,12 +1726,8 @@ def _scoped_key(
     return f"gh:v2:{kind}:{_account_scope(account)}:{gen}:{owner.lower()}:{repo.lower()}{tail}"
 
 
-def _branch_cache_key(account, owner: str, repo: str, *, gen: int | None = None) -> str:
-    return _scoped_key("branches", _BRANCHES, account, owner, repo, gen=gen)
-
-
-def _pull_cache_key(account, owner: str, repo: str, branch: str) -> str:
-    return _scoped_key("head_pull", _PRS, account, owner, repo, branch)
+def _pull_list_cache_key(account, owner: str, repo: str, *, gen: int | None = None) -> str:
+    return _scoped_key("pull_list", _PRS, account, owner, repo, gen=gen)
 
 
 def _pr_by_number_cache_key(account, owner: str, repo: str, number: int) -> str:
@@ -1657,55 +1821,126 @@ def _call_github(account, path: str, params: dict | None = None):
     """One GitHub call from the request thread, tallied on the request's
     credential (if it has one)."""
     if isinstance(account, _GithubCredential):
+        try:
+            account.resolve()
+        except RuntimeError:
+            raise  # a thread-rule violation is a bug, not a dead grant
+        except Exception as exc:  # noqa: BLE001 - ReauthRequired, a failed refresh
+            logger.warning("GitHub token unavailable: %s", type(exc).__name__)
+            return _UnreadableAnswer()
         account.upstream += 1
     return _github_get(account, path, params)
 
 
+def _get_all_for(calls: list[tuple[_GithubCredential, str, dict | None]]):
+    """GET each `(credential, path, params)` from GitHub and return the
+    answers in the order asked. More than one runs on a small pool, so N
+    repos cost one round trip, not N. Each call carries its own credential
+    (a walk can mix an App token and a legacy token).
+
+    The workers only call `_github_get`, with every token resolved here
+    first: no ORM, no cache, no logging off the request thread. An exception
+    in a call is raised from here once the others have finished, as it was
+    when the calls ran one by one. A call whose credential has no usable
+    token (a dead App grant) answers `_UnreadableAnswer` and the others still
+    run."""
+    answers: list = [None] * len(calls)
+    live: list[int] = []
+    for i, (account, _path, _params) in enumerate(calls):
+        try:
+            account.resolve()
+        except RuntimeError:
+            raise  # a thread-rule violation is a bug, not a dead grant
+        except Exception as exc:  # noqa: BLE001 - ReauthRequired, a failed refresh
+            logger.warning("GitHub token unavailable: %s", type(exc).__name__)
+            answers[i] = _UnreadableAnswer()
+            continue
+        account.upstream += 1
+        live.append(i)
+    if len(live) == 1:
+        account, path, params = calls[live[0]]
+        answers[live[0]] = _github_get(account, path, params)
+    elif live:
+        with ThreadPoolExecutor(
+            max_workers=min(_FETCH_MAX_WORKERS, len(live)), thread_name_prefix="gh-links"
+        ) as pool:
+            futures = {i: pool.submit(_github_get, *calls[i]) for i in live}
+            for i, future in futures.items():
+                answers[i] = future.result()
+    return answers
+
+
 def _get_all(account: _GithubCredential, calls: list[tuple[str, dict | None]]):
-    """GET each `(path, params)` from GitHub and return the answers in the
-    order asked. More than one runs on a small pool, so N repos cost one
-    round trip, not N.
-
-    The workers only call `_github_get`, with a token resolved here first:
-    no ORM, no cache, no logging off the request thread. An exception in a
-    call is raised from here once the others have finished, as it was when
-    the calls ran one by one."""
-    account.resolve()
-    account.upstream += len(calls)
-    if len(calls) == 1:
-        return [_github_get(account, *calls[0])]
-    with ThreadPoolExecutor(
-        max_workers=min(_FETCH_MAX_WORKERS, len(calls)), thread_name_prefix="gh-links"
-    ) as pool:
-        futures = [pool.submit(_github_get, account, path, params) for path, params in calls]
-        return [future.result() for future in futures]
+    """`_get_all_for` with one credential for every call."""
+    return _get_all_for([(account, path, params) for path, params in calls])
 
 
-def _branch_lists(
-    account, repos: list[tuple[str, str]], *, bypass_cache: bool = False
+def _slim_pull(owner: str, repo: str, pr: dict) -> dict:
+    """The fields of a PR the PR column and the task links show. `branch` is the head ref;
+    `head_sha` is the head commit (the branches route shows it) and is not sent with a pull."""
+    head = pr.get("head") or {}
+    return {
+        "owner": owner,
+        "repo": repo,
+        "branch": head.get("ref") or "",
+        "number": pr.get("number"),
+        "html_url": pr.get("html_url"),
+        "title": pr.get("title"),
+        "state": pr.get("state"),
+        "draft": pr.get("draft", False),
+        "merged_at": pr.get("merged_at"),
+        "head_sha": head.get("sha"),
+    }
+
+
+def _is_same_repo_pull(owner: str, repo: str, pr: dict) -> bool:
+    """Is this PR's head branch in the repository it targets (not a fork's)?
+
+    The old branch walk could only ever see branches of the registered repo itself. A pulls list
+    also names fork PRs, and anyone can open one against a public repo with a branch named after
+    somebody's task: it must not show on that task's PR column (or as its branch). A deleted fork
+    has no head repo and is skipped too."""
+    head_repo = (pr.get("head") or {}).get("repo")
+    if not isinstance(head_repo, dict) or not head_repo.get("full_name"):
+        return False
+    base_repo = (pr.get("base") or {}).get("repo")
+    target = (base_repo or {}).get("full_name") or f"{owner}/{repo}"
+    return str(head_repo["full_name"]).lower() == str(target).lower()
+
+
+def _pull_lists(
+    credentials: _CredentialSet, repos: list[tuple[str, str]], *, bypass_cache: bool = False
 ) -> list[list[dict] | None]:
-    """Each repo's branch list, in the order of `repos`: None where GitHub
-    refused this account or errored (the caller skips the repo).
+    """Each repo's recent pull requests as slim dicts, in the order of `repos`: None where GitHub
+    refused this account or errored (the caller skips the repo). MIP-2089: this replaces the
+    branch walk, because the GitHub App has no Contents permission and cannot list branches.
 
-    Cached lists come from two Redis round trips for all the repos together;
-    the repos that miss are fetched in parallel.
+    One `GET /repos/{o}/{r}/pulls?state=all&sort=updated` per repo (the newest `_PULLS_PER_REPO`),
+    only the PRs whose head branch is in that repo (`_is_same_repo_pull`). A branch with no PR is
+    not seen. Cached lists come from two Redis round trips for all the repos together; the repos
+    that miss are fetched in parallel, each with the credential `credentials` picks for it.
 
     When `bypass_cache=True`, skips the read but still writes the fresh
     result so subsequent natural fetches within the TTL benefit.
     """
     if not repos:
         return []
-    account = _credential(account)
-    gen_keys = [_generation_key(_BRANCHES, owner, repo) for owner, repo in repos]
+    out: list[list[dict] | None] = [None] * len(repos)
+    accounts = [credentials.for_repo(owner, repo) for owner, repo in repos]
+    gen_keys = [_generation_key(_PRS, owner, repo) for owner, repo in repos]
     gens = cache.get_many(gen_keys) or {}
     keys = [
-        _branch_cache_key(account, owner, repo, gen=gens.get(gen_key) or 0)
-        for (owner, repo), gen_key in zip(repos, gen_keys)
+        _pull_list_cache_key(account, owner, repo, gen=gens.get(gen_key) or 0)
+        if account is not None
+        else None
+        for account, (owner, repo), gen_key in zip(accounts, repos, gen_keys)
     ]
-    cached = {} if bypass_cache else (cache.get_many(keys) or {})
-    out: list[list[dict] | None] = [None] * len(repos)
+    live_keys = [k for k in keys if k is not None]
+    cached = {} if bypass_cache else (cache.get_many(live_keys) or {})
     misses: list[int] = []
     for i, key in enumerate(keys):
+        if key is None:
+            continue  # no credential for this repo: nothing to read it with
         value = cached.get(key)
         if value is None:
             misses.append(i)
@@ -1713,94 +1948,75 @@ def _branch_lists(
             out[i] = value
     if not misses:
         return out
-    answers = _get_all(
-        account,
-        [(f"/repos/{repos[i][0]}/{repos[i][1]}/branches", {"per_page": 100}) for i in misses],
+    answers = _get_all_for(
+        [
+            (
+                accounts[i],
+                f"/repos/{repos[i][0]}/{repos[i][1]}/pulls",
+                {
+                    "state": "all",
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": _PULLS_PER_REPO,
+                },
+            )
+            for i in misses
+        ]
     )
+    full: list[int] = []  # repos whose page was full: older PRs may be off it
     for i, resp in zip(misses, answers):
+        owner, repo = repos[i]
         if resp.ok:
-            out[i] = resp.json() or []
-            cache.set(keys[i], out[i], _BRANCH_CACHE_TTL)
+            items = resp.json()
+            items = items if isinstance(items, list) else []
+            out[i] = [
+                _slim_pull(owner, repo, pr)
+                for pr in items
+                if isinstance(pr, dict) and _is_same_repo_pull(owner, repo, pr)
+            ]
+            if len(items) >= _PULLS_PER_REPO:
+                full.append(i)
+            else:
+                cache.set(keys[i], out[i], _PULL_CACHE_TTL)
         elif _is_refusal(resp):
             cache.set(keys[i], _DENIED, _DENIED_CACHE_TTL)
         else:
-            account.failed_repos.add(repos[i])
+            accounts[i].failed_repos.add(repos[i])
+    if full:
+        # A busy repo (bots, a monorepo): an open PR untouched for a while can sit past the
+        # newest page. Open PRs are few, so ask for them too and merge by number.
+        extra = _get_all_for(
+            [
+                (
+                    accounts[i],
+                    f"/repos/{repos[i][0]}/{repos[i][1]}/pulls",
+                    {
+                        "state": "open",
+                        "sort": "updated",
+                        "direction": "desc",
+                        "per_page": _PULLS_PER_REPO,
+                    },
+                )
+                for i in full
+            ]
+        )
+        for i, resp in zip(full, extra):
+            owner, repo = repos[i]
+            if resp.ok:
+                items = resp.json()
+                have = {p["number"] for p in out[i]}
+                out[i] += [
+                    slim
+                    for pr in (items if isinstance(items, list) else [])
+                    if isinstance(pr, dict)
+                    and _is_same_repo_pull(owner, repo, pr)
+                    and (slim := _slim_pull(owner, repo, pr))["number"] not in have
+                ]
+                cache.set(keys[i], out[i], _PULL_CACHE_TTL)
+            else:
+                # The open list is missing: the answer may be short, so say so and do not keep it.
+                accounts[i].failed_repos.add(repos[i])
     return out
-
-
-def _list_repo_branches(
-    account,
-    owner: str,
-    repo: str,
-    *,
-    bypass_cache: bool = False,
-) -> list[dict] | None:
-    """Cached `GET /repos/{o}/{r}/branches` for one repo. Returns None on
-    upstream error so callers can skip the repo silently."""
-    return _branch_lists(account, [(owner, repo)], bypass_cache=bypass_cache)[0]
-
-
-def _find_pr_for_branch(
-    account: ConnectedAccount,
-    owner: str,
-    repo: str,
-    branch: str,
-    *,
-    bypass_cache: bool = False,
-) -> dict | None:
-    """Look up the PR (if any) whose head ref is `owner:branch`. Returns
-    a slim PR dict or None. Cached so the table doesn't re-fetch on
-    every row mount within the TTL.
-
-    When `bypass_cache=True`, skips the read but still writes the fresh
-    result so subsequent natural fetches within the TTL benefit.
-    """
-    key = _pull_cache_key(account, owner, repo, branch)
-    if not bypass_cache:
-        cached = cache.get(key)
-        if cached is not None:
-            if _is_denied(cached):
-                return None
-            # Cached payload may legitimately be the sentinel `{}` meaning
-            # "this branch has no PR" — normalize that back to None.
-            return cached or None
-    resp = _call_github(
-        account,
-        f"/repos/{owner}/{repo}/pulls",
-        params={
-            "head": f"{owner}:{branch}",
-            "state": "all",
-            "per_page": 1,
-            "sort": "updated",
-            "direction": "desc",
-        },
-    )
-    if not resp.ok:
-        if _is_refusal(resp):
-            cache.set(key, _DENIED, _DENIED_CACHE_TTL)
-        else:
-            _note_failed_lookup(account)
-        return None
-    items = resp.json() or []
-    if not items:
-        # Cache the "no PR" answer too — it's the common case for
-        # branches without an associated PR.
-        cache.set(key, {}, _PULL_CACHE_TTL)
-        return None
-    pr = items[0]
-    slim = {
-        "owner": owner,
-        "repo": repo,
-        "branch": branch,
-        "number": pr.get("number"),
-        "html_url": pr.get("html_url"),
-        "title": pr.get("title"),
-        "state": pr.get("state"),
-        "draft": pr.get("draft", False),
-        "merged_at": pr.get("merged_at"),
-    }
-    cache.set(key, slim, _PULL_CACHE_TTL)
-    return slim
 
 
 def _fetch_pr_by_number(
@@ -1812,12 +2028,13 @@ def _fetch_pr_by_number(
     bypass_cache: bool = False,
 ) -> dict | None:
     """Fetch a PR's detail by its number. Cached. Returns the same slim
-    dict shape as `_find_pr_for_branch` so the two sources can be unioned
-    in `GithubPullsForTaskView`.
+    dict shape as a `_pull_lists` entry (minus `head_sha`) so the two
+    sources can be unioned in `GithubPullsForTaskView`.
 
-    Used for auto-linked PR URLs persisted in `task.links` whose source
-    branch has since been deleted — branch-list-based lookup can't find
-    them anymore, but the PR record itself still lives on GitHub.
+    Used for auto-linked PR URLs persisted in `task.links` whose PR has
+    since fallen out of the repo's newest pulls (`_PULLS_PER_REPO`): the
+    pulls list can't find it anymore, but the PR record itself still
+    lives on GitHub.
 
     When `bypass_cache=True`, skips the read but still writes the fresh
     result so subsequent natural fetches within the TTL benefit.
@@ -1905,26 +2122,22 @@ def _invalidate_branch_list(owner: str, repo: str) -> None:
         logger.exception("Branch list invalidation failed for %s/%s", owner, repo)
 
 
-def _collect_repo_branches(
-    account,
+def _collect_repo_pulls(
+    credentials: _CredentialSet,
     repos,
     *,
     bypass_cache: bool = False,
 ) -> list[tuple[str, str, list[dict]]]:
-    """Fetch each registered repo's branch list once (Redis-cached; the
-    misses in parallel). Repos whose branch listing errors (404 no access /
+    """Fetch each registered repo's recent pulls once (Redis-cached; the
+    misses in parallel). Repos whose listing errors (404 no access /
     403 rate limit) are skipped silently so one bad repo doesn't poison the
     result. Output is in the order of `repos`."""
     repos = list(repos)
-    lists = _branch_lists(account, repos, bypass_cache=bypass_cache)
-    return [
-        (owner, repo, branches)
-        for (owner, repo), branches in zip(repos, lists)
-        if branches is not None
-    ]
+    lists = _pull_lists(credentials, repos, bypass_cache=bypass_cache)
+    return [(owner, repo, pulls) for (owner, repo), pulls in zip(repos, lists) if pulls is not None]
 
 
-def _log_links(route: str, account: _GithubCredential) -> None:
+def _log_links(route: str, account: "_GithubCredential | _CredentialSet") -> None:
     """One line per request that reached the cache: `hit` when every answer
     came from Redis, `miss` when GitHub was called, and how many calls."""
     logger.info(
@@ -1936,45 +2149,44 @@ def _log_links(route: str, account: _GithubCredential) -> None:
 
 
 def _pulls_for_task(
-    account: ConnectedAccount,
+    credentials: _CredentialSet,
     task,
     display_id: str,
-    repo_branches: list[tuple[str, str, list[dict]]],
+    repo_pulls: list[tuple[str, str, list[dict]]],
     *,
     bypass_cache: bool = False,
 ) -> list[dict]:
     """Resolve the auto-linked PRs for one task against pre-fetched
-    branch lists. Shared by the single and batched endpoints so the
-    two sources (live branch walk + persisted `task.links` auto-links)
+    pulls lists. Shared by the single and batched endpoints so the
+    two sources (live pulls walk + persisted `task.links` auto-links)
     and the html_url dedupe behave identically — see
     `GithubPullsForTaskView`'s docstring for the source semantics."""
     pattern = _branch_match_re(display_id)
     pulls: list[dict] = []
     seen_urls: set[str] = set()
-    # --- Source 1: live branches matching display_id -------------
-    for owner, repo, branches in repo_branches:
-        for branch in branches:
-            name = branch.get("name") or ""
-            if not pattern.search(name):
+    # --- Source 1: recent pulls whose head branch matches display_id ----
+    for owner, repo, repo_list in repo_pulls:
+        seen_branches: set[str] = set()
+        for pr in repo_list:
+            name = pr.get("branch") or ""
+            # The list is newest-updated first: of several PRs from one branch
+            # name (a closed one, then a new one) only the newest shows, as the
+            # per-branch lookup of the branch walk gave.
+            if not pattern.search(name) or name in seen_branches:
                 continue
-            pr = _find_pr_for_branch(account, owner, repo, name, bypass_cache=bypass_cache)
-            if pr is None:
-                continue
-            # Same PR can appear from different matching branches
-            # (rare — but a renamed-then-recreated branch could do
-            # it). Dedupe by html_url so the column shows one badge
-            # per PR.
+            seen_branches.add(name)
+            # Dedupe by html_url so the column shows one badge per PR.
             url = pr.get("html_url")
             if url and url in seen_urls:
                 continue
             if url:
                 seen_urls.add(url)
-            pulls.append(pr)
+            pulls.append({k: v for k, v in pr.items() if k != "head_sha"})
 
     # --- Source 2: PR URLs persisted in task.links with the
-    # `isAutoLinked` marker. Picks up PRs whose source branch has
-    # been deleted post-merge (Source 1's branch walk misses those
-    # because the branch is gone).
+    # `isAutoLinked` marker. Picks up PRs that have fallen out of the
+    # repo's newest pulls (Source 1 reads one page of them), typically a
+    # PR merged long ago.
     #
     # We re-validate that the fetched PR's head branch actually
     # contains the task's display_id. The flag is set by the
@@ -1994,7 +2206,10 @@ def _pulls_for_task(
         if ref is None:
             continue
         owner_p, repo_p, number = ref
-        pr = _fetch_pr_by_number(account, owner_p, repo_p, number, bypass_cache=bypass_cache)
+        link_account = credentials.for_repo(owner_p, repo_p)
+        if link_account is None:
+            continue
+        pr = _fetch_pr_by_number(link_account, owner_p, repo_p, number, bypass_cache=bypass_cache)
         if pr is None:
             continue
         head_ref = pr.get("branch") or ""
@@ -2022,7 +2237,11 @@ def _resolve_task_display_id(task_id: str):
 class GithubBranchesForTaskView(APIView):
     """List branches across known repos whose names reference this task's
     display ID. Returns an empty list when GitHub is not connected or no
-    match is found (the UI hides the section in that case)."""
+    match is found (the UI hides the section in that case).
+
+    Found through each repo's OPEN pull requests (MIP-2089): the GitHub App has
+    no Contents permission and cannot list branches. A branch with no open PR
+    (not pushed for review yet, or already merged) is not listed."""
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2039,36 +2258,40 @@ class GithubBranchesForTaskView(APIView):
             return Response({"branches": []})
         _task, display_id = resolved
 
-        account = _connected_account(request.user)
-        if account is None:
+        credentials = _CredentialSet(request.user)
+        if not credentials.connected:
             return Response({"branches": []})
-        account = _GithubCredential(account)
 
         pattern = _branch_match_re(display_id)
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
 
         matches: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
         # A repo that answers 404 (no access) / 403 (rate limit) / etc. is
         # left out, so one bad repo doesn't poison the list.
-        for owner, repo, branches in _collect_repo_branches(
-            account, repos, bypass_cache=bypass_cache
+        for owner, repo, repo_list in _collect_repo_pulls(
+            credentials, repos, bypass_cache=bypass_cache
         ):
-            for branch in branches:
-                name = branch.get("name") or ""
-                if not pattern.search(name):
+            for pr in repo_list:
+                name = pr.get("branch") or ""
+                # Open PRs only: a merged or closed PR's branch is usually gone,
+                # and a tree link to it would 404. One entry per branch name.
+                if pr.get("state") != "open" or not pattern.search(name):
                     continue
-                sha = (branch.get("commit") or {}).get("sha")
+                if (owner.lower(), repo.lower(), name) in seen:
+                    continue
+                seen.add((owner.lower(), repo.lower(), name))
                 matches.append(
                     {
                         "owner": owner,
                         "repo": repo,
                         "name": name,
                         "url": f"https://github.com/{owner}/{repo}/tree/{name}",
-                        "commit_sha": sha,
+                        "commit_sha": pr.get("head_sha"),
                     }
                 )
-        _log_links("branches_for_task", account)
+        _log_links("branches_for_task", credentials)
         return Response({"branches": matches})
 
 
@@ -2077,15 +2300,16 @@ class GithubPullsForTaskView(APIView):
 
     Two sources are unioned (deduped by html_url):
 
-      1. **Live branches** — for each repo we've registered our webhook on,
-         walk branches whose name contains the task's display ID and look
-         up each branch's PR. This is the "discovery" path.
+      1. **Recent pulls** — for each repo we've registered our webhook on,
+         read its newest pull requests (one call per repo, MIP-2089: the
+         GitHub App cannot list branches) and keep those whose head branch
+         contains the task's display ID. This is the "discovery" path.
       2. **Persisted auto-links** — PR URLs in `task.links` flagged with
          `isAutoLinked: true` AND whose head branch still matches this
-         task's display ID. Picks up PRs whose source branch has since
-         been deleted (typical post-merge cleanup) — without it the
-         column would go blank the moment a merged PR's branch is
-         removed. The branch-match re-validation is a backstop against
+         task's display ID. Picks up PRs that have fallen out of the
+         repo's newest pulls (typical for an old merged PR) — without it
+         the column would go blank once newer PRs push it off the page.
+         The branch-match re-validation is a backstop against
          stale/bad flags in `task.links` (e.g. from earlier frontend
          versions that auto-flagged body-pasted PR URLs).
 
@@ -2120,16 +2344,17 @@ class GithubPullsForTaskView(APIView):
             return Response({"pulls": []})
         task, display_id = resolved
 
-        account = _connected_account(request.user)
-        if account is None:
+        credentials = _CredentialSet(request.user)
+        if not credentials.connected:
             return Response({"pulls": []})
-        account = _GithubCredential(account)
 
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
-        repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
-        pulls = _pulls_for_task(account, task, display_id, repo_branches, bypass_cache=bypass_cache)
-        _log_links("pulls_for_task", account)
+        repo_pulls = _collect_repo_pulls(credentials, repos, bypass_cache=bypass_cache)
+        pulls = _pulls_for_task(
+            credentials, task, display_id, repo_pulls, bypass_cache=bypass_cache
+        )
+        _log_links("pulls_for_task", credentials)
         return Response({"pulls": pulls})
 
 
@@ -2138,8 +2363,8 @@ class GithubPullsForTasksView(APIView):
     `GET /api/v2/github/pulls/for-tasks/?task_ids=1,2,3`.
 
     One request resolves the PR column for a whole table paint instead
-    of one request per row. The repo/branch walk is hoisted out of the
-    per-task loop — each registered repo's branch list is fetched once
+    of one request per row. The repo/pulls walk is hoisted out of the
+    per-task loop — each registered repo's pulls list is fetched once
     per request (Redis-cached), then matched against every task's
     display ID. Per-task semantics (source union, branch-match
     backstop, html_url dedupe) are shared with the single view via
@@ -2153,8 +2378,8 @@ class GithubPullsForTasksView(APIView):
 
     `incomplete` (MIP-1412) names the tasks whose list may be SHORT because a
     GitHub call failed in a way that says nothing about access: a 5xx, a rate
-    limit, a 401, or a repo whose branch list could not be read (that one makes
-    every task incomplete: the branch we missed may be theirs). For those, `[]`
+    limit, a 401, or a repo whose pulls list could not be read (that one makes
+    every task incomplete: the PR we missed may be theirs). For those, `[]`
     means "could not look", not "no PR". A REFUSAL (404, a 403 that is not a rate
     limit) is not in it: it is the true answer for this account, and is
     remembered for `_DENIED_CACHE_TTL`. A failed lookup is never cached, so the
@@ -2164,9 +2389,9 @@ class GithubPullsForTasksView(APIView):
 
     permission_classes = [permissions.IsAuthenticated]
 
-    # Lower than burndown's 500: each task can trigger per-branch PR
-    # lookups on a cold cache, so the worst-case upstream fan-out per
-    # request is larger.
+    # Lower than burndown's 500: each task can trigger a by-number PR
+    # lookup for its persisted auto-links on a cold cache, so the
+    # worst-case upstream fan-out per request is larger.
     MAX_TASK_IDS = 200
 
     def get(self, request: Request):
@@ -2187,8 +2412,8 @@ class GithubPullsForTasksView(APIView):
         if not task_ids:
             return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
-        account = _connected_account(request.user)
-        if account is None:
+        credentials = _CredentialSet(request.user)
+        if not credentials.connected:
             return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
         with_display: list[tuple[TaskMaster, str]] = []
@@ -2203,21 +2428,20 @@ class GithubPullsForTasksView(APIView):
             with_display.append((task, display_id))
         if not with_display:
             return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
-        account = _GithubCredential(account)
 
         repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
         bypass_cache = request.GET.get("fresh") == "1"
-        repo_branches = _collect_repo_branches(account, repos, bypass_cache=bypass_cache)
+        repo_pulls = _collect_repo_pulls(credentials, repos, bypass_cache=bypass_cache)
 
         incomplete: list[str] = []
         for task, display_id in with_display:
-            failed_before = account.failed_lookups
+            failed_before = credentials.failed_lookups
             pulls_by_task[str(task.task_id)] = _pulls_for_task(
-                account, task, display_id, repo_branches, bypass_cache=bypass_cache
+                credentials, task, display_id, repo_pulls, bypass_cache=bypass_cache
             )
-            # A repo whose branch list could not be read may hold this task's
-            # branch, so then no task can be called complete.
-            if account.failed_repos or account.failed_lookups > failed_before:
+            # A repo whose pulls list could not be read may hold this task's
+            # PR, so then no task can be called complete.
+            if credentials.failed_repos or credentials.failed_lookups > failed_before:
                 incomplete.append(str(task.task_id))
-        _log_links("pulls_for_tasks", account)
+        _log_links("pulls_for_tasks", credentials)
         return Response({"pulls_by_task": pulls_by_task, "incomplete": sorted(incomplete, key=int)})

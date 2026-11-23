@@ -1,11 +1,11 @@
 """Tests for the PR auto-linking endpoint
 (`GET /api/v2/github/pulls/for-task/`).
 
-This endpoint walks repos registered for our webhook, finds branches
-whose names match the task's display ID, then looks up the PR (if any)
-for each match. The result feeds the task table's PR column — manual
-`task.links` entries are intentionally not surfaced (auto-linking is
-the single source of truth).
+This endpoint walks repos registered for our webhook, reads each repo's recent pull
+requests (MIP-2089: the GitHub App has no Contents permission, so there is no branch walk),
+and keeps those whose head branch name matches the task's display ID. The result feeds the
+task table's PR column — manual `task.links` entries are intentionally not surfaced
+(auto-linking is the single source of truth).
 """
 
 from unittest.mock import MagicMock, patch
@@ -23,6 +23,7 @@ from origin.models.common.user_models import (
 )
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.tests.github_pull_fakes import bad_response, pull, pulls_response
 
 User = get_user_model()
 
@@ -30,7 +31,7 @@ User = get_user_model()
 class TestPullsForTaskView(TestCase):
     def setUp(self):
         # Redis is a real backend; clear between tests so a cached
-        # branch list from a prior test doesn't shadow this test's mock.
+        # pulls list from a prior test doesn't shadow this test's mock.
         cache.clear()
         # The view resolves the user's GitHub token itself (once per request,
         # before any parallel fetch), and these accounts store a placeholder
@@ -78,41 +79,17 @@ class TestPullsForTaskView(TestCase):
             owner="acme", repo="rocket", hook_id=1, registered_by=self.user
         )
         self.client.force_authenticate(user=self.user)
+        self.url = f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}"
 
     def tearDown(self):
         cache.clear()
 
-    # ── Mock helpers ──────────────────────────────────────────────
-
     @staticmethod
-    def _branches_response(names):
+    def _pr_detail_response(pr: dict):
         resp = MagicMock(spec=requests.Response)
         resp.ok = True
         resp.status_code = 200
-        resp.json.return_value = [{"name": n, "commit": {"sha": f"sha-{n}"}} for n in names]
-        return resp
-
-    @staticmethod
-    def _pulls_response(items):
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = items
-        return resp
-
-    @staticmethod
-    def _empty_pulls_response():
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = []
-        return resp
-
-    @staticmethod
-    def _bad_response(status_code=404):
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = False
-        resp.status_code = status_code
+        resp.json.return_value = pr
         return resp
 
     # ── Happy paths ───────────────────────────────────────────────
@@ -120,26 +97,17 @@ class TestPullsForTaskView(TestCase):
     @patch("origin.views.common.github_views._github_get")
     def test_returns_pr_for_matching_branch(self, mock_get):
         branch = "feature/GEN-42-add-thing"
-        pr = {
-            "number": 7,
-            "html_url": "https://github.com/acme/rocket/pull/7",
-            "title": "Add thing",
-            "state": "open",
-            "draft": False,
-            "merged_at": None,
-        }
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["main", branch])
-            if path.endswith("/pulls"):
-                # head param must reference the matching branch.
-                self.assertEqual(params.get("head"), f"acme:{branch}")
-                return self._pulls_response([pr])
+            if path == "/repos/acme/rocket/pulls":
+                # One call per repo: all states, newest first. No `head` filter, no branch list.
+                self.assertEqual(params.get("state"), "all")
+                self.assertNotIn("head", params)
+                return pulls_response([pull(7, branch, title="Add thing"), pull(8, "main-fix")])
             self.fail(f"Unexpected GitHub path: {path}")
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         pulls = resp.json()["pulls"]
         self.assertEqual(len(pulls), 1)
@@ -147,98 +115,135 @@ class TestPullsForTaskView(TestCase):
         self.assertEqual(pulls[0]["owner"], "acme")
         self.assertEqual(pulls[0]["repo"], "rocket")
         self.assertEqual(pulls[0]["branch"], branch)
+        self.assertEqual(pulls[0]["title"], "Add thing")
+        # The internal head sha is for the branches route and is not part of a pull.
+        self.assertNotIn("head_sha", pulls[0])
+        self.assertEqual(mock_get.call_count, 1)
 
     @patch("origin.views.common.github_views._github_get")
-    def test_skips_branches_without_an_associated_pr(self, mock_get):
-        # The branch matches but has no PR yet — endpoint returns empty.
-        def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["feature/GEN-42-thing"])
-            if path.endswith("/pulls"):
-                return self._empty_pulls_response()
-            self.fail(f"Unexpected path: {path}")
-
-        mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+    def test_a_branch_with_no_pr_is_not_found(self, mock_get):
+        # The GitHub App cannot list branches, so a branch with no PR is invisible. The pulls
+        # list simply holds nothing for the task.
+        mock_get.return_value = pulls_response([pull(8, "feature/OTHER-1-thing")])
+        resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["pulls"], [])
 
     @patch("origin.views.common.github_views._github_get")
-    def test_dedupes_same_pr_across_branches(self, mock_get):
-        # Two branches both contain GEN-42 and the GitHub API happens to
-        # surface the same PR for each (rare — possible when a branch
-        # was renamed and the PR head was updated). The endpoint dedupes
-        # by html_url.
-        pr_url = "https://github.com/acme/rocket/pull/7"
-        pr = {
-            "number": 7,
-            "html_url": pr_url,
-            "title": "x",
-            "state": "open",
-            "draft": False,
-            "merged_at": None,
-        }
+    def test_does_not_alias_longer_ids(self, mock_get):
+        # GEN-4 must not match a GEN-42 branch, nor GEN-421.
+        mock_get.return_value = pulls_response(
+            [pull(1, "feature/GEN-421-x"), pull(2, "feature/GEN-4-x")]
+        )
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.json()["pulls"], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_only_the_newest_pr_of_one_branch_name_shows(self, mock_get):
+        # A closed PR and a newer one from the same branch name: the list is newest first, and
+        # only the first shows (the per-branch lookup of the old walk gave the same).
+        mock_get.return_value = pulls_response(
+            [
+                pull(9, "feature/GEN-42-a", state="open"),
+                pull(7, "feature/GEN-42-a", state="closed"),
+            ]
+        )
+        pulls = self.client.get(self.url).json()["pulls"]
+        self.assertEqual([p["number"] for p in pulls], [9])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_two_branches_two_prs_are_both_listed(self, mock_get):
+        mock_get.return_value = pulls_response(
+            [pull(9, "feature/GEN-42-a"), pull(7, "fix/GEN-42-b", state="closed")]
+        )
+        pulls = self.client.get(self.url).json()["pulls"]
+        self.assertEqual([p["number"] for p in pulls], [9, 7])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_fork_pr_is_not_linked_to_the_task(self, mock_get):
+        # Anyone can open a PR from a fork whose branch is named after somebody's task. The old
+        # branch walk only saw the repo's own branches; a forged name must not reach the column.
+        mock_get.return_value = pulls_response(
+            [
+                pull(5, "GEN-42-evil", head_repo="mallory/rocket"),
+                pull(6, "GEN-42-gone-fork", head_repo=None)
+                | {"head": {"ref": "GEN-42-x", "repo": None}},
+            ]
+        )
+        self.assertEqual(self.client.get(self.url).json()["pulls"], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_busy_repo_also_asks_for_its_open_prs(self, mock_get):
+        # A full page of other PRs: the task's open PR, untouched for a while, is past it.
+        filler = [pull(1000 + i, f"bot/{i}", state="closed") for i in range(100)]
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["feature/GEN-42-a", "fix/GEN-42-b"])
-            if path.endswith("/pulls"):
-                return self._pulls_response([pr])
-            self.fail(f"Unexpected path: {path}")
+            if path == "/repos/acme/rocket/pulls" and params["state"] == "all":
+                return pulls_response(filler)
+            if path == "/repos/acme/rocket/pulls" and params["state"] == "open":
+                return pulls_response([pull(7, "feature/GEN-42-old-but-open")])
+            self.fail(f"Unexpected GitHub path: {path} {params}")
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
-        pulls = resp.json()["pulls"]
-        self.assertEqual(len(pulls), 1)
+        pulls = self.client.get(self.url).json()["pulls"]
+        self.assertEqual([p["number"] for p in pulls], [7])
+        self.assertEqual(mock_get.call_count, 2)
+        # Cached together: nothing more is asked.
+        mock_get.reset_mock()
+        self.client.get(self.url)
+        self.assertEqual(mock_get.call_count, 0)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_short_page_asks_only_once(self, mock_get):
+        mock_get.return_value = pulls_response([pull(1, "x")])
+        self.client.get(self.url)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_failed_open_list_is_not_cached_and_is_reported(self, mock_get):
+        filler = [pull(1000 + i, f"bot/{i}", state="closed") for i in range(100)]
+
+        def side_effect(_account, path, params=None):
+            return pulls_response(filler) if params["state"] == "all" else bad_response(502)
+
+        mock_get.side_effect = side_effect
+        self.client.get(self.url)
+        mock_get.reset_mock()
+        self.client.get(self.url)
+        self.assertEqual(mock_get.call_count, 2)  # asked again: the short answer was not kept
 
     # ── Caching ───────────────────────────────────────────────────
 
     @patch("origin.views.common.github_views._github_get")
-    def test_branch_list_is_cached_across_requests(self, mock_get):
-        # First request hits the branches endpoint once; second request
-        # within the cache TTL should not re-fetch branches.
-        branch_resp = self._branches_response(["feature/GEN-42-x"])
-        pulls_resp = self._empty_pulls_response()
-
-        def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return branch_resp
-            if path.endswith("/pulls"):
-                return pulls_resp
-            self.fail(f"Unexpected path: {path}")
-
-        mock_get.side_effect = side_effect
-        url = f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}"
-        self.client.get(url)
-        # Reset the call log on the mock and re-request — the branch
-        # call should not happen again because the result is cached.
-        first_call_count = mock_get.call_count
+    def test_pulls_list_is_cached_across_requests(self, mock_get):
+        mock_get.return_value = pulls_response([pull(7, "feature/GEN-42-x")])
+        first = self.client.get(self.url).json()
+        self.assertEqual(mock_get.call_count, 1)
         mock_get.reset_mock()
-        self.client.get(url)
-        branches_calls = sum(1 for c in mock_get.call_args_list if c.args[1].endswith("/branches"))
-        self.assertEqual(branches_calls, 0)
-        # Sanity: cumulative calls should have decreased (we only call
-        # the pulls API on the second request — and even that is cached
-        # for the same branch, so it should also be skipped).
-        self.assertLess(mock_get.call_count, first_call_count)
+        second = self.client.get(self.url).json()
+        self.assertEqual(mock_get.call_count, 0)
+        self.assertEqual(first, second)
 
     @patch("origin.views.common.github_views._github_get")
-    def test_negative_pr_lookup_is_cached(self, mock_get):
-        # A branch with "no PR" result should also be cached so we don't
-        # spam GitHub asking about a branch that never gets one.
-        def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["feature/GEN-42-x"])
-            if path.endswith("/pulls"):
-                return self._empty_pulls_response()
-            self.fail(f"Unexpected path: {path}")
-
-        mock_get.side_effect = side_effect
-        url = f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}"
-        self.client.get(url)
+    def test_an_empty_answer_is_cached_too(self, mock_get):
+        mock_get.return_value = pulls_response([])
+        self.client.get(self.url)
         mock_get.reset_mock()
-        self.client.get(url)
-        # Both branches list AND pulls lookup should be cached now.
+        self.client.get(self.url)
+        self.assertEqual(mock_get.call_count, 0)
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_fresh_skips_the_read_and_rewrites_it(self, mock_get):
+        mock_get.return_value = pulls_response([pull(7, "feature/GEN-42-x")])
+        self.client.get(self.url)
+        mock_get.reset_mock()
+        mock_get.return_value = pulls_response([pull(7, "feature/GEN-42-x", state="closed")])
+        pulls = self.client.get(self.url + "&fresh=1").json()["pulls"]
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(pulls[0]["state"], "closed")
+        # The fresh answer was written: a plain request now serves it.
+        mock_get.reset_mock()
+        self.assertEqual(self.client.get(self.url).json()["pulls"][0]["state"], "closed")
         self.assertEqual(mock_get.call_count, 0)
 
     # ── Guard paths ───────────────────────────────────────────────
@@ -268,74 +273,57 @@ class TestPullsForTaskView(TestCase):
 
     def test_returns_empty_when_github_not_connected(self):
         self.account.delete()
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["pulls"], [])
 
     @patch("origin.views.common.github_views._github_get")
-    def test_skips_repo_when_branches_endpoint_errors(self, mock_get):
+    def test_skips_repo_when_pulls_endpoint_errors(self, mock_get):
         GithubWebhookRegistration.objects.create(
             owner="acme", repo="other", hook_id=2, registered_by=self.user
         )
-        pr = {
-            "number": 9,
-            "html_url": "https://github.com/acme/other/pull/9",
-            "title": "x",
-            "state": "open",
-            "draft": False,
-            "merged_at": None,
-        }
 
         def side_effect(_account, path, params=None):
-            if "/acme/rocket/branches" in path:
-                return self._bad_response(404)
-            if "/acme/other/branches" in path:
-                return self._branches_response(["feature/GEN-42-y"])
-            if path.endswith("/pulls"):
-                return self._pulls_response([pr])
+            if path == "/repos/acme/rocket/pulls":
+                return bad_response(404)
+            if path == "/repos/acme/other/pulls":
+                return pulls_response([pull(9, "feature/GEN-42-y", repo="other")])
             self.fail(f"Unexpected path: {path}")
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
-        pulls = resp.json()["pulls"]
+        pulls = self.client.get(self.url).json()["pulls"]
         self.assertEqual(len(pulls), 1)
         self.assertEqual(pulls[0]["repo"], "other")
 
     def test_401_when_unauthenticated(self):
         self.client.force_authenticate(user=None)
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        resp = self.client.get(self.url)
         self.assertIn(resp.status_code, (401, 403))
 
-    # ── Persistence: PR URL in task.links, branch deleted ─────────
+    # ── Persistence: PR URL in task.links, PR no longer in the newest pulls ──
     #
     # Once a PR is auto-discovered, the frontend stamps the link object
-    # with `isAutoLinked: true`. After the source branch is deleted
-    # (typical post-merge cleanup) the branch-walk path stops finding
-    # the PR — but we want the badge to keep showing. The endpoint must
-    # consult `task.links` as a fallback source.
+    # with `isAutoLinked: true`. After the PR falls out of the repo's newest pulls
+    # (a long-merged PR) the pulls walk stops finding it — but we want the badge
+    # to keep showing. The endpoint must consult `task.links` as a fallback source.
 
-    @staticmethod
-    def _pr_detail_response(pr: dict):
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = pr
-        return resp
-
-    @patch("origin.views.common.github_views._github_get")
-    def test_persisted_pr_url_surfaces_when_branch_is_gone(self, mock_get):
-        # Branch was deleted — branch listing returns no matching name.
-        url = "https://github.com/acme/rocket/pull/7"
+    def _auto_link(self, number):
+        url = f"https://github.com/acme/rocket/pull/{number}"
         self.task.links = [
             {
-                "id": "link-pr-1",
+                "id": f"link-pr-{number}",
                 "url": url,
-                "title": "acme/rocket#7",
+                "title": f"acme/rocket#{number}",
                 "isGitHub": True,
                 "isAutoLinked": True,
             }
         ]
         self.task.save(update_fields=["links"])
+        return url
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_persisted_pr_url_surfaces_when_it_left_the_newest_pulls(self, mock_get):
+        url = self._auto_link(7)
         merged_pr = {
             "number": 7,
             "html_url": url,
@@ -347,14 +335,14 @@ class TestPullsForTaskView(TestCase):
         }
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response([])  # branch gone
+            if path == "/repos/acme/rocket/pulls":
+                return pulls_response([])  # 7 is older than the page
             if path.endswith("/pulls/7"):
                 return self._pr_detail_response(merged_pr)
             self.fail(f"Unexpected path: {path}")
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         pulls = resp.json()["pulls"]
         self.assertEqual(len(pulls), 1)
@@ -366,19 +354,7 @@ class TestPullsForTaskView(TestCase):
 
     @patch("origin.views.common.github_views._github_get")
     def test_persisted_pr_url_closed_unmerged_renders_state(self, mock_get):
-        # Same persistence path, but the PR was closed without merging.
-        # We should still surface it with state=closed and merged_at=null.
-        url = "https://github.com/acme/rocket/pull/9"
-        self.task.links = [
-            {
-                "id": "link-pr-9",
-                "url": url,
-                "title": "acme/rocket#9",
-                "isGitHub": True,
-                "isAutoLinked": True,
-            }
-        ]
-        self.task.save(update_fields=["links"])
+        url = self._auto_link(9)
         closed_pr = {
             "number": 9,
             "html_url": url,
@@ -390,15 +366,14 @@ class TestPullsForTaskView(TestCase):
         }
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response([])
+            if path == "/repos/acme/rocket/pulls":
+                return pulls_response([])
             if path.endswith("/pulls/9"):
                 return self._pr_detail_response(closed_pr)
             self.fail(f"Unexpected path: {path}")
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
-        pulls = resp.json()["pulls"]
+        pulls = self.client.get(self.url).json()["pulls"]
         self.assertEqual(len(pulls), 1)
         self.assertEqual(pulls[0]["state"], "closed")
         self.assertIsNone(pulls[0]["merged_at"])
@@ -414,12 +389,11 @@ class TestPullsForTaskView(TestCase):
                 "url": "https://github.com/acme/rocket/pull/99",
                 "title": "Manual",
                 "isGitHub": True,
-                # No isAutoLinked: true here.
             }
         ]
         self.task.save(update_fields=["links"])
-        mock_get.return_value = self._branches_response([])  # nothing live
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        mock_get.return_value = pulls_response([])  # nothing live
+        resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["pulls"], [])
 
@@ -427,21 +401,9 @@ class TestPullsForTaskView(TestCase):
     def test_persisted_pr_with_unrelated_branch_is_dropped(self, mock_get):
         # Backstop for the old body-mirror bug: a link entry can carry
         # `isAutoLinked: true` even though its branch has nothing to do
-        # with this task (e.g. user referenced another task's PR from
-        # the body and a prior frontend version flagged it). Source 2
-        # must re-validate the PR's head branch against the task's
-        # display_id and skip the unrelated PR.
-        url = "https://github.com/acme/rocket/pull/77"
-        self.task.links = [
-            {
-                "id": "link-pr-77",
-                "url": url,
-                "title": "acme/rocket#77",
-                "isGitHub": True,
-                "isAutoLinked": True,  # set in error by old frontend code
-            }
-        ]
-        self.task.save(update_fields=["links"])
+        # with this task. Source 2 must re-validate the PR's head branch
+        # against the task's display_id and skip the unrelated PR.
+        url = self._auto_link(77)
         unrelated_pr = {
             "number": 77,
             "html_url": url,
@@ -453,71 +415,36 @@ class TestPullsForTaskView(TestCase):
         }
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response([])
+            if path == "/repos/acme/rocket/pulls":
+                return pulls_response([])
             if path.endswith("/pulls/77"):
                 return self._pr_detail_response(unrelated_pr)
             self.fail(f"Unexpected path: {path}")
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
+        resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["pulls"], [])
 
     @patch("origin.views.common.github_views._github_get")
-    def test_persisted_and_live_branch_for_same_pr_is_deduped(self, mock_get):
-        # The PR exists both via a still-live branch AND as a persisted
+    def test_persisted_and_live_pr_for_same_pr_is_deduped(self, mock_get):
+        # The PR exists both in the newest pulls AND as a persisted
         # auto-link in task.links — we should only see it once.
-        url = "https://github.com/acme/rocket/pull/12"
-        self.task.links = [
-            {
-                "id": "link-pr-12",
-                "url": url,
-                "title": "acme/rocket#12",
-                "isGitHub": True,
-                "isAutoLinked": True,
-            }
-        ]
-        self.task.save(update_fields=["links"])
-        live_pr = {
-            "number": 12,
-            "html_url": url,
-            "title": "Still in flight",
-            "state": "open",
-            "draft": False,
-            "merged_at": None,
-        }
+        self._auto_link(12)
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["feature/GEN-42-thing"])
-            if path.endswith("/pulls") and (params or {}).get("head"):
-                return self._pulls_response([live_pr])
-            if path.endswith("/pulls/12"):
-                return self._pr_detail_response(
-                    {**live_pr, "head": {"ref": "feature/GEN-42-thing"}}
-                )
-            self.fail(f"Unexpected path: {path}")
+            if path == "/repos/acme/rocket/pulls":
+                return pulls_response([pull(12, "feature/GEN-42-thing")])
+            self.fail(f"Unexpected path: {path}")  # the link is already shown: no by-number call
 
         mock_get.side_effect = side_effect
-        resp = self.client.get(f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}")
-        pulls = resp.json()["pulls"]
+        pulls = self.client.get(self.url).json()["pulls"]
         self.assertEqual(len(pulls), 1)
         self.assertEqual(pulls[0]["number"], 12)
 
     @patch("origin.views.common.github_views._github_get")
     def test_persisted_pr_lookup_is_cached(self, mock_get):
-        url = "https://github.com/acme/rocket/pull/22"
-        self.task.links = [
-            {
-                "id": "link-pr-22",
-                "url": url,
-                "title": "acme/rocket#22",
-                "isGitHub": True,
-                "isAutoLinked": True,
-            }
-        ]
-        self.task.save(update_fields=["links"])
+        url = self._auto_link(22)
         pr = {
             "number": 22,
             "html_url": url,
@@ -532,18 +459,16 @@ class TestPullsForTaskView(TestCase):
         }
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response([])
+            if path == "/repos/acme/rocket/pulls":
+                return pulls_response([])
             if path.endswith("/pulls/22"):
                 return self._pr_detail_response(pr)
             self.fail(f"Unexpected path: {path}")
 
         mock_get.side_effect = side_effect
-        url_endpoint = f"/api/v2/github/pulls/for-task/?task_id={self.task.task_id}"
-        self.client.get(url_endpoint)
+        self.client.get(self.url)
         # Reset the call log and re-request — the persisted-PR lookup
         # should be served from the cache.
         mock_get.reset_mock()
-        self.client.get(url_endpoint)
-        pulls_calls = sum(1 for c in mock_get.call_args_list if c.args[1].endswith("/pulls/22"))
-        self.assertEqual(pulls_calls, 0)
+        self.client.get(self.url)
+        self.assertEqual(mock_get.call_count, 0)

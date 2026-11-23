@@ -36,7 +36,7 @@ from origin.models.common.api_key_models import SCOPE_READ
 from origin.models.common.briefing_models import MemberBriefingState
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.team_models import TeamMaster, TeamMembers
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
@@ -1783,6 +1783,40 @@ class TestWhatYouDid(BriefingBase):
         self.assertEqual(today["totals"]["items"], 2)
         self.assertEqual(today["totals"]["comments"], 1)
         self.assertEqual(self.did()["yesterday"]["items"], [])
+
+    def test_editing_a_skill_body_note_is_not_something_i_did_or_news_for_me(self):
+        # A Genos Skill's body is a note in a hidden scope="skill" folder (MIP-2121): the report
+        # of what I did and of what changed for me never names it. A normal note still does.
+        folder = PersonalNoteFolder.objects.create(
+            team=self.team,
+            owner=self.user,
+            name="Skills",
+            scope=PersonalNoteFolder.SCOPE_SKILL,
+        )
+        skill_note = PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Weekly update",
+            body=[],
+            folder_id=folder.folder_id,
+        )
+        plain = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Plain", body=[]
+        )
+        for note, editor in ((skill_note, self.user), (skill_note, self.user2), (plain, self.user)):
+            v = NoteVersionMaster.objects.create(
+                team=self.team,
+                note_type=1,
+                note_id=note.note_id,
+                version_no=1 if editor == self.user else 2,
+                editor=editor,
+                title=note.title,
+            )
+            NoteVersionMaster.objects.filter(pk=v.pk).update(ts_updated_at=self.recent(minutes=10))
+        titles = [i["title"] for i in self.did()["today"]["items"] if i["type"] == "note"]
+        self.assertEqual(len(titles), 1)
+        self.assertNotIn("Weekly update", str(self.did()["today"]))
+        self.assertNotIn("Weekly update", str(self.brief()["changed_for_me"]))
 
     def test_what_other_people_did_is_not_mine(self):
         task = self.make_task()

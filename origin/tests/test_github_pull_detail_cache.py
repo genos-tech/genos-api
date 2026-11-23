@@ -44,7 +44,7 @@ class DetailWorld(World):
 
     def __init__(self):
         super().__init__()
-        self.access = {TOK_A: {"branches", "pulls", "pr", "status", "checks"}, TOK_B: set()}
+        self.access = {TOK_A: {"pulls", "pr", "status", "checks"}, TOK_B: set()}
         self.merged = False
         self.combined = {"state": "success", "total_count": 1, "statuses": [{"state": "success"}]}
         self.runs = [{"status": "completed", "conclusion": "success"}]
@@ -60,7 +60,7 @@ class DetailWorld(World):
             return "status"
         if path.endswith("/check-runs"):
             return "checks"
-        return World.kind_of(path)  # branches, pulls, or the PR itself
+        return World.kind_of(path)  # pulls, or the PR itself
 
     def __call__(self, url, headers=None, params=None, timeout=None):
         kind = self.kind_of(url)
@@ -74,7 +74,7 @@ class DetailWorld(World):
         forced = self.forced.get((token, kind))
         if forced is not None:
             return forced()
-        if kind in ("branches", "pulls"):  # the list lookups: the base world's
+        if kind == "pulls":  # the pulls list: the base world's
             return super().answer(token, kind, path, params)
         repo = "/".join(path.split("/")[2:4])
         if repo not in self.visible_repos or kind not in self.access.get(token, set()):
@@ -455,7 +455,7 @@ class TestWhichEventsDropTheDetail(DetailBase):
         self.post_webhook("closed")
         self.assertTrue(self.misses())
 
-    def test_a_push_drops_the_detail_but_not_the_lookups_or_the_branch_list(self):
+    def test_a_push_drops_the_detail_but_not_the_pulls_list(self):
         self.detail()
         self.branches(self.client_a)
         self.pulls(self.client_a)
@@ -586,7 +586,7 @@ class TestFreshSkipsTheCache(DetailBase):
         # B is refused, and the refusal is remembered for ten minutes ...
         self.assertEqual(self.detail(self.client_b).status_code, 502)
         # ... then B's access is granted (a reconnect, a repo invite).
-        self.world.access[TOK_B] = {"branches", "pulls", "pr", "status", "checks"}
+        self.world.access[TOK_B] = {"pulls", "pr", "status", "checks"}
         self.assertEqual(self.detail(self.client_b).status_code, 502)
         # A fresh request does not wait the ten minutes out.
         self.assertEqual(self.detail(self.client_b, url=self.FRESH).status_code, 200)

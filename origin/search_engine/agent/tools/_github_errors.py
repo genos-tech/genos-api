@@ -1,7 +1,7 @@
 """Turn a GitHub failure the caller can act on into a `ToolError`.
 
-The five PR tools call the live GitHub API with the key owner's own OAuth
-token. Two failures there are not bugs in Genos, and both used to escape
+The five PR tools call the live GitHub API with the key owner's own GitHub
+token (the App user token, or the legacy OAuth token). Two failures there are not bugs in Genos, and both used to escape
 the tools as raw exceptions:
 
 * **The grant is dead** (`ReauthRequired`): the refresh token was revoked
