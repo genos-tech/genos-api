@@ -20,6 +20,12 @@ Security rules (genos-security, design section 8):
   * **An Organization installation links only for an active member** (MIP-2169): the person's own
     user token asks `GET /user/memberships/orgs/{org}` and `state` must be `active`. Any other
     answer or failure refuses the link (`github_app_org_membership_unverified`).
+  * **The FIRST link of an Organization installation needs an organization admin** (MIP-2178): while
+    no team holds it, `role` must be `admin` too (`github_app_org_admin_required` for an active
+    member who is not). Later links by active members of a team that already holds it are as
+    before. The membership calls of one callback run concurrently, bounded in number, in workers
+    and in total time (`_check_memberships`), so a person with very many organizations cannot
+    outlast the worker timeout.
   * **Nothing here holds a credential.** The user token is used for one request and dropped; the
     stored token is `ConnectedAccount`'s (encrypted) and is written by the view.
 """
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -61,6 +68,15 @@ _MAX_PAGES = 5
 # be verified (not a member, invitation pending, the App's "Members: read" not accepted yet, or
 # GitHub unreachable). MIP-2169.
 MEMBERSHIP_UNVERIFIED = "github_app_org_membership_unverified"
+# Failure-page reason: the person is an active member of the organization but not an admin, and no
+# team holds the organization's installation yet, so only an admin may make the first link. MIP-2178.
+ADMIN_REQUIRED = "github_app_org_admin_required"
+
+# The membership calls of one callback: at most this many organizations are asked (the rest are
+# left out, as unverified), this many at a time, and the callback waits this long in total.
+MAX_MEMBERSHIP_CHECKS = 20
+MEMBERSHIP_WORKERS = 5
+MEMBERSHIP_BUDGET_SECONDS = 15
 
 _ACCOUNT_TYPES = {value for value, _ in INSTALLATION_ACCOUNT_TYPE_CHOICES}
 _SELECTIONS = {value for value, _ in REPOSITORY_SELECTION_CHOICES}
@@ -236,14 +252,37 @@ def parse_installation_hint(raw) -> Optional[int]:
     return int(raw)
 
 
-def org_membership_active(user_token: str, item: Installation) -> bool:
-    """Whether the person is an ACTIVE member of the installation's organization (MIP-2169).
+@dataclass(frozen=True)
+class OrgMembership:
+    """GitHub's answer to "is this person a member of this organization".
+
+    `verdict`: `active` (state active for the installation's own organization; `role` is GitHub's
+    `admin` or `member`), `not_member` (GitHub answered: 404, or a state that is not active, or an
+    answer about another organization) or `unverified` (anything else: 403 because the App's
+    "Members: read" is not accepted yet, 5xx, a timeout, an unreadable body). Only `not_member` is a
+    definitive no; `recheck_github_app_org_links --unlink` removes a link on nothing else.
+    """
+
+    verdict: str
+    role: Optional[str] = None
+
+    @property
+    def active(self) -> bool:
+        return self.verdict == "active"
+
+
+_UNVERIFIED = OrgMembership("unverified")
+_NOT_MEMBER = OrgMembership("not_member")
+
+
+def org_membership(user_token: str, item: Installation) -> OrgMembership:
+    """The person's membership of the installation's organization (MIP-2169, role MIP-2178).
 
     `GET /user/memberships/orgs/{org}` with the person's own user token. It needs the App's
     organization permission "Members: read": until the organization has accepted it GitHub answers
     403, which is refused like a 404 (not a member) or a `pending` invitation. Every failure,
     including a timeout, is "not verified"; only `state == "active"` for the very organization of
-    the installation passes. The log carries the organization login and the HTTP status only,
+    the installation is active. The log carries the organization login and the HTTP status only,
     never a token or GitHub's body.
     """
     org = item.account_login
@@ -260,34 +299,88 @@ def org_membership_active(user_token: str, item: Installation) -> bool:
         )
     except requests.RequestException as exc:
         log.warning("GitHub App org membership check for %s failed: %s", org, type(exc).__name__)
-        return False
+        return _UNVERIFIED
     if resp.status_code != 200:
         log.warning(
             "GitHub App org membership check for %s returned HTTP %s", org, resp.status_code
         )
-        return False
+        return _NOT_MEMBER if resp.status_code == 404 else _UNVERIFIED
     try:
         body = resp.json()
         state = body["state"]
         organization = body.get("organization")
+        role = body.get("role")
     except (ValueError, KeyError, TypeError, AttributeError):
         log.warning("GitHub App org membership check for %s returned an unreadable body", org)
-        return False
+        return _UNVERIFIED
     if state != "active":
         # `%r` of a short slice: GitHub's text can never add a line to the log.
         log.warning(
             "GitHub App org membership of %s is not active (state=%r)", org, str(state)[:20]
         )
-        return False
+        return _NOT_MEMBER
     # The answer must be about the installation's own organization: its id, when both are known.
     org_id = organization.get("id") if isinstance(organization, dict) else None
     if item.account_id is not None and org_id is not None and str(org_id) != str(item.account_id):
         log.warning("GitHub App org membership answer for %s names another organization", org)
-        return False
-    return True
+        return _NOT_MEMBER
+    return OrgMembership("active", role if isinstance(role, str) else None)
 
 
-def _may_link(item: Installation, *, user, team: TeamMaster, github_user_id: str) -> bool:
+def _check_memberships(user_token: str, items: list[Installation]) -> dict[int, OrgMembership]:
+    """`org_membership` for each installation, concurrently and bounded (MIP-2178).
+
+    At most `MEMBERSHIP_WORKERS` calls run at once, at most `MAX_MEMBERSHIP_CHECKS` organizations
+    are asked, and the whole step waits at most `MEMBERSHIP_BUDGET_SECONDS`: an organization not
+    answered by then (or beyond the cap) is `unverified`, so the callback always finishes inside
+    the worker timeout and nothing is stored on a slow GitHub. No database access in the workers.
+    """
+    verdicts: dict[int, OrgMembership] = {}
+    asked = items[:MAX_MEMBERSHIP_CHECKS]
+    for item in items[MAX_MEMBERSHIP_CHECKS:]:
+        verdicts[item.installation_id] = _UNVERIFIED
+    if len(items) > len(asked):
+        log.warning(
+            "GitHub App org membership: %s organizations, only the first %s are checked",
+            len(items),
+            len(asked),
+        )
+    if len(asked) <= 1:
+        for item in asked:
+            verdicts[item.installation_id] = org_membership(user_token, item)
+        return verdicts
+    pool = ThreadPoolExecutor(
+        max_workers=min(MEMBERSHIP_WORKERS, len(asked)), thread_name_prefix="gh-membership"
+    )
+    futures = {pool.submit(org_membership, user_token, item): item for item in asked}
+    done, pending = wait(futures, timeout=MEMBERSHIP_BUDGET_SECONDS)
+    # Do not wait for a call still in flight: it ends by its own request timeout.
+    pool.shutdown(wait=False, cancel_futures=True)
+    for future, item in futures.items():
+        verdict = _UNVERIFIED
+        if future in done:
+            try:
+                verdict = future.result()
+            except Exception as exc:  # noqa: BLE001 - one bad call must not fail the others
+                log.warning(
+                    "GitHub App org membership check for %s crashed: %s",
+                    item.account_login,
+                    type(exc).__name__,
+                )
+        verdicts[item.installation_id] = verdict
+    if pending:
+        log.warning(
+            "GitHub App org membership: %s of %s checks did not answer in %s s",
+            len(pending),
+            len(asked),
+            MEMBERSHIP_BUDGET_SECONDS,
+        )
+    return verdicts
+
+
+def _may_link(
+    item: Installation, *, user, team: TeamMaster, github_user_id: str, holders: set
+) -> bool:
     """Whether this person may bring this (listed) installation into this team.
 
     `/user/installations` also lists installations the person only reaches through ONE repository
@@ -300,14 +393,14 @@ def _may_link(item: Installation, *, user, team: TeamMaster, github_user_id: str
         it yet, the team already holds it, or the person already belongs to a team that holds it.
         A person who is not in the team that adopted an organization's installation cannot pull it
         into their own team. This is the local rule; the person's membership of the organization
-        itself is checked separately, over the network (`org_membership_active`, MIP-2169).
+        itself is checked separately, over the network (`org_membership`, MIP-2169; the first
+        claim also needs an admin, MIP-2178).
+
+    `holders` is the set of team ids holding this installation, read ONCE by the caller so this
+    rule and the "first claim needs an admin" rule see the same snapshot (MIP-2178).
     """
     if item.account_type == "User":
         return item.account_id is not None and str(item.account_id) == str(github_user_id)
-    links = GithubAppInstallationTeam.objects.filter(
-        installation__installation_id=item.installation_id
-    ).values_list("team_id", flat=True)
-    holders = set(links)
     if not holders or team.team_id in holders:
         return True
     return any(is_team_member(team_id, user.id) for team_id in holders)
@@ -332,33 +425,64 @@ def confirmed_installations(
       `_may_link`; the others are left out.
 
     An Organization installation also needs the person to be an active member of the organization
-    (`org_membership_active`, MIP-2169). The call runs only for installations that already passed
-    the local rules, and any failure of it leaves that installation out (with a hint: refuses it).
+    (`org_membership`, MIP-2169), and, when no team holds the installation yet, an admin of it
+    (MIP-2178: the first claim decides which team receives the organization's PR events). The
+    calls run only for installations that already passed the local rules, concurrently and bounded
+    (`_check_memberships`); any failure leaves that installation out (with a hint: refuses it).
 
     Raises `LinkError("installation_not_confirmed")` for a hint that does not answer,
-    `LinkError(MEMBERSHIP_UNVERIFIED)` when the only reason nothing links is a membership that
-    could not be verified, and `LinkError("no_installation")` when nothing passes.
+    `LinkError(ADMIN_REQUIRED)` when an active member would make a first claim, `LinkError(
+    MEMBERSHIP_UNVERIFIED)` when the only reason nothing links is a membership that could not be
+    verified, and `LinkError("no_installation")` when nothing passes.
     """
     listed = list_user_installations(user_token)
+    # One snapshot of who holds what, for both the local rule and the first-claim rule.
+    holders: dict[int, set] = {}
+    for installation_id, team_id in GithubAppInstallationTeam.objects.filter(
+        installation__installation_id__in=[i.installation_id for i in listed]
+    ).values_list("installation__installation_id", "team_id"):
+        holders.setdefault(installation_id, set()).add(team_id)
     allowed = [
-        i for i in listed if _may_link(i, user=user, team=team, github_user_id=github_user_id)
+        i
+        for i in listed
+        if _may_link(
+            i,
+            user=user,
+            team=team,
+            github_user_id=github_user_id,
+            holders=holders.get(i.installation_id, set()),
+        )
     ]
-
-    def verified(item: Installation) -> bool:
-        return item.account_type != "Organization" or org_membership_active(user_token, item)
 
     if hint_present:
         if hinted_installation_id is None:
             raise LinkError("installation_not_confirmed")
-        chosen = [i for i in allowed if i.installation_id == hinted_installation_id]
-        if not chosen:
+        allowed = [i for i in allowed if i.installation_id == hinted_installation_id]
+        if not allowed:
             raise LinkError("installation_not_confirmed")
-        if not verified(chosen[0]):
-            raise LinkError(MEMBERSHIP_UNVERIFIED)
-        return chosen
-    linkable = [i for i in allowed if verified(i)]
+
+    orgs = [i for i in allowed if i.account_type == "Organization"]
+    held = {installation_id for installation_id, teams in holders.items() if teams}
+    verdicts = _check_memberships(user_token, orgs)
+
+    linkable: list[Installation] = []
+    refusal: Optional[str] = None
+    for item in allowed:
+        reason = None
+        if item.account_type == "Organization":
+            membership = verdicts[item.installation_id]
+            if not membership.active:
+                reason = MEMBERSHIP_UNVERIFIED
+            elif item.installation_id not in held and membership.role != "admin":
+                reason = ADMIN_REQUIRED
+        if reason is None:
+            linkable.append(item)
+        elif refusal != ADMIN_REQUIRED:
+            refusal = reason
+    if hint_present and refusal:
+        raise LinkError(refusal)
     if not linkable:
-        raise LinkError(MEMBERSHIP_UNVERIFIED if allowed else "no_installation")
+        raise LinkError(refusal or "no_installation")
     return linkable
 
 

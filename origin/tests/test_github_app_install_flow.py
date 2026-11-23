@@ -12,6 +12,9 @@ The rules these pin:
   * the team link is written from the signed state, for a person who may manage that team.
 """
 
+import inspect
+import threading
+import time
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
@@ -24,7 +27,7 @@ from origin.models.common.github_app_models import GithubAppInstallation, Github
 from origin.models.common.security_event_models import SecurityEvent
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import ConnectedAccount
-from origin.services import crypto
+from origin.services import crypto, github_app_link
 from origin.views.common.oauth_views import (
     GITHUB_APP_BIND_COOKIE,
     _bind_hash,
@@ -91,7 +94,8 @@ class GitHubStub:
         self.installations = list(installations)
         self.github_user_id = github_user_id
         # `GET /user/memberships/orgs/{org}` (MIP-2169): org login -> a response (`_resp(...)`) or
-        # an exception to raise. An org not named here answers "active member".
+        # an exception to raise, or a function returning either. An org not named here answers
+        # "active admin" (the first claim of an organization needs an admin, MIP-2178).
         self.memberships = dict(memberships or {})
         self.calls = []
 
@@ -103,12 +107,14 @@ class GitHubStub:
         if "/user/memberships/orgs/" in url:
             org = url.rsplit("/", 1)[1]
             answer = self.memberships.get(org)
+            if inspect.isfunction(answer):
+                answer = answer()
             if isinstance(answer, BaseException):
                 raise answer
             if answer is not None:
                 return answer
             return _resp(
-                {"state": "active", "role": "member", "organization": {"login": org, "id": 5000}}
+                {"state": "active", "role": "admin", "organization": {"login": org, "id": 5000}}
             )
         if url.endswith("/user/installations"):
             return _resp(
@@ -810,6 +816,242 @@ class OrgMembershipTests(_Base):
         self._link()
         resp, _, _ = self._hinted({"genos-tech": _resp({"message": "x"}, status=404)})
         self.assertFailure(resp, REASON)
+
+
+ADMIN_REASON = "github_app_org_admin_required"
+
+
+def _member(role="member", state="active", org_id=5000):
+    return _resp({"state": state, "role": role, "organization": {"id": org_id}})
+
+
+@override_settings(**APP)
+class FirstClaimNeedsAdminTests(_Base):
+    """MIP-2178: while no team holds an Organization installation, linking it needs an organization
+    ADMIN (`state == active` and `role == admin`). Later links by active members of a team that
+    already holds it work as before."""
+
+    def _other_holder(self, member=None):
+        other_owner = User.objects.create_user(
+            username="o2", email="o2@example.com", password="pw123456"
+        )
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="other@example.com", owner=other_owner
+        )
+        TeamMembers.objects.create(team=other_team, attendee=other_owner)
+        if member is not None:
+            TeamMembers.objects.create(team=other_team, attendee=member)
+        self._link(team=other_team)
+        return other_team
+
+    def test_an_active_admin_makes_the_first_link(self):
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": _member("admin")}):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(GithubAppInstallationTeam.objects.get().team, self.team)
+
+    def test_an_active_member_who_is_not_admin_cannot_make_the_first_link(self):
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": _member("member")}):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertFailure(resp, ADMIN_REASON)
+        self.assertNothingStored()
+
+    def test_the_authorize_path_gives_the_admin_reason_too(self):
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": _member("member")}):
+            resp = self._callback(code="c", state=self._state())
+        self.assertFailure(resp, ADMIN_REASON)
+        self.assertNothingStored()
+
+    def test_a_missing_or_odd_role_is_not_admin(self):
+        for role in (None, "", "owner", "billing_manager", 1):
+            with self.subTest(role=role):
+                with GitHubStub([_installation(7001)], memberships={"genos-tech": _member(role)}):
+                    resp = self._callback(code="c", state=self._state(), installation_id="7001")
+                self.assertFailure(resp, ADMIN_REASON)
+                self.assertNothingStored()
+
+    def test_a_pending_admin_is_not_active_so_it_is_the_unverified_reason(self):
+        pending = _member("admin", state="pending")
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": pending}):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_a_member_of_the_team_that_already_holds_it_links_as_before(self):
+        self._link()
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": _member("member")}):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+
+    def test_a_member_of_another_team_that_holds_it_links_their_own_team_as_before(self):
+        self._other_holder(member=self.owner)
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": _member("member")}):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertTrue(GithubAppInstallationTeam.objects.filter(team=self.team).exists())
+
+    def test_a_holder_that_appears_during_the_membership_step_does_not_waive_the_admin_rule(self):
+        # Both rules read ONE snapshot of the holders: a team that links the installation while
+        # the (slow, concurrent) membership calls run must not turn this person's first claim
+        # into a "later link" that needs no admin.
+        real = github_app_link._check_memberships
+
+        def racing(token, items):
+            self._other_holder()
+            return real(token, items)
+
+        with mock.patch.object(github_app_link, "_check_memberships", side_effect=racing):
+            with GitHubStub([_installation(7001)], memberships={"genos-tech": _member("member")}):
+                resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertFailure(resp, ADMIN_REASON)
+        self.assertFalse(GithubAppInstallationTeam.objects.filter(team=self.team).exists())
+
+    def test_a_held_installation_still_needs_an_active_member(self):
+        self._link()
+        with GitHubStub(
+            [_installation(7001)], memberships={"genos-tech": _member("admin", "pending")}
+        ):
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertFailure(resp, REASON)
+
+    def test_the_authorize_path_keeps_the_linkable_and_names_the_admin_reason_otherwise(self):
+        held = _installation(7001)
+        first = _installation(7002, login="other-org")
+        mine = _installation(7003, login="me", type_="User", account_id=9001)
+        self._link()  # 7001 is held by this team
+        answers = {"genos-tech": _member("member"), "other-org": _member("member")}
+        with GitHubStub([held, first, mine], memberships=answers):
+            self._callback(code="c", state=self._state())
+        self.assertEqual(
+            sorted(GithubAppInstallation.objects.values_list("installation_id", flat=True)),
+            [7001, 7003],
+        )
+        self.assertFalse(
+            GithubAppInstallationTeam.objects.filter(installation__installation_id=7002).exists()
+        )
+
+    def test_admin_required_wins_over_unverified_when_nothing_links(self):
+        answers = {"genos-tech": _member("member"), "other-org": _resp({}, status=404)}
+        installations = [_installation(7001), _installation(7002, login="other-org")]
+        with GitHubStub(installations, memberships=answers):
+            resp = self._callback(code="c", state=self._state())
+        self.assertFailure(resp, ADMIN_REASON)
+        self.assertNothingStored()
+
+    def test_a_user_account_installation_needs_no_admin(self):
+        mine = _installation(7002, login="me", type_="User", account_id=9001)
+        with GitHubStub([mine]) as gh:
+            self._callback(code="c", state=self._state(), installation_id="7002")
+        self.assertEqual(gh.membership_calls(), [])
+        self.assertEqual(GithubAppInstallationTeam.objects.count(), 1)
+
+
+@override_settings(**APP)
+class ParallelMembershipTests(_Base):
+    """MIP-2178: the membership calls of one authorize callback run concurrently, bounded in count,
+    workers and total time."""
+
+    def _orgs(self, n):
+        return [_installation(7000 + i, login=f"org{i}") for i in range(n)]
+
+    def test_the_calls_overlap(self):
+        # Three calls that only finish when all three are in flight at once: a sequential loop
+        # would stall on the barrier (and time out) instead.
+        barrier = threading.Barrier(3, timeout=5)
+
+        def answer():
+            barrier.wait()
+            return _member("admin")
+
+        answers = {f"org{i}": answer for i in range(3)}
+        with GitHubStub(self._orgs(3), memberships=answers) as gh:
+            resp = self._callback(code="c", state=self._state())
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(len(gh.membership_calls()), 3)
+        self.assertEqual(GithubAppInstallationTeam.objects.count(), 3)
+
+    def test_no_more_than_the_worker_bound_run_at_once(self):
+        lock = threading.Lock()
+        running = {"now": 0, "max": 0}
+
+        def answer():
+            with lock:
+                running["now"] += 1
+                running["max"] = max(running["max"], running["now"])
+            time.sleep(0.05)
+            with lock:
+                running["now"] -= 1
+            return _member("admin")
+
+        answers = {f"org{i}": answer for i in range(12)}
+        with mock.patch.object(github_app_link, "MEMBERSHIP_WORKERS", 3):
+            with GitHubStub(self._orgs(12), memberships=answers):
+                self._callback(code="c", state=self._state())
+        self.assertLessEqual(running["max"], 3)
+        self.assertGreater(running["max"], 1)
+        self.assertEqual(GithubAppInstallationTeam.objects.count(), 12)
+
+    def test_only_the_first_cap_organizations_are_asked_and_the_rest_are_left_out(self):
+        with mock.patch.object(github_app_link, "MAX_MEMBERSHIP_CHECKS", 2):
+            with self.assertLogs("origin.services.github_app_link", level="WARNING"):
+                with GitHubStub(self._orgs(4)) as gh:
+                    resp = self._callback(code="c", state=self._state())
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(len(gh.membership_calls()), 2)
+        self.assertEqual(
+            sorted(GithubAppInstallation.objects.values_list("installation_id", flat=True)),
+            [7000, 7001],
+        )
+
+    def test_a_call_that_outlasts_the_total_budget_is_unverified_and_the_rest_still_link(self):
+        release = threading.Event()
+
+        def slow():
+            release.wait(5)
+            return _member("admin")
+
+        answers = {"org1": slow}
+        started = time.monotonic()
+        try:
+            with mock.patch.object(github_app_link, "MEMBERSHIP_BUDGET_SECONDS", 0.3):
+                with self.assertLogs("origin.services.github_app_link", level="WARNING"):
+                    with GitHubStub(self._orgs(2), memberships=answers):
+                        resp = self._callback(code="c", state=self._state())
+            elapsed = time.monotonic() - started
+        finally:
+            release.set()
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertLess(elapsed, 3)
+        self.assertEqual(
+            list(GithubAppInstallation.objects.values_list("installation_id", flat=True)), [7000]
+        )
+
+    def test_when_every_call_outlasts_the_budget_nothing_is_stored(self):
+        release = threading.Event()
+
+        def slow():
+            release.wait(5)
+            return _member("admin")
+
+        answers = {f"org{i}": slow for i in range(2)}
+        try:
+            with mock.patch.object(github_app_link, "MEMBERSHIP_BUDGET_SECONDS", 0.2):
+                with self.assertLogs("origin.services.github_app_link", level="WARNING"):
+                    with GitHubStub(self._orgs(2), memberships=answers):
+                        resp = self._callback(code="c", state=self._state())
+        finally:
+            release.set()
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_one_crashing_call_does_not_fail_the_others(self):
+        answers = {"org0": RuntimeError("boom")}
+        with self.assertLogs("origin.services.github_app_link", level="WARNING"):
+            with GitHubStub(self._orgs(2), memberships=answers):
+                self._callback(code="c", state=self._state())
+        self.assertEqual(
+            list(GithubAppInstallation.objects.values_list("installation_id", flat=True)), [7001]
+        )
 
 
 @override_settings(**APP)
