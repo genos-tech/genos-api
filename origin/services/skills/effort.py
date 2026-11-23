@@ -147,21 +147,23 @@ def apply(chosen: Any, effort: str, *, user_id: str, plan: str) -> tuple[Any, De
     if not requested or not active():
         return chosen, None
     ceiling = get_max_effort(str(user_id))
-    level = requested
-    degraded = False
+    # The plan ceiling first: a level the plan does not allow is not what the run asks for, so the
+    # credit step-down is judged on the level the run would really start at, and a drop that the
+    # plan alone caused is never reported as a credit step-down.
+    level = requested if LEVELS.index(requested) <= LEVELS.index(ceiling) else ceiling
+    start = level
     try:
         floor = int(getattr(settings.CREDIT_POLICY, "skill_effort_floor_milli", {}).get(level, 0))
         if floor > 0:
             balance = _balance_milli(user_id, plan)
             if balance is not None and balance < floor:
-                level, degraded = LEVELS[max(LEVELS.index(level) - 1, 0)], True
+                level = LEVELS[max(LEVELS.index(level) - 1, 0)]
     except Exception:  # noqa: BLE001 - a check that cannot run must not block a skill
         logger.debug("skills: could not read the balance for the effort step-down", exc_info=True)
-    # `resolve_user_effort` applies the plan ceiling and maps the level to the model of the
-    # caller's provider; the legacy model argument is unused because the level is explicit.
+    # `resolve_user_effort` maps the level to the model of the caller's provider; the legacy model
+    # argument is unused because the level is explicit.
     bound = resolve_user_effort(chosen.provider, level, "", max_effort=ceiling)
-    used = bound.effort
-    return bound, Decision(requested=requested, used=used, degraded=degraded and used != requested)
+    return bound, Decision(requested=start, used=bound.effort, degraded=bound.effort != start)
 
 
 def bind_kept(chosen: Any, effort: str, *, user_id: str) -> Any:

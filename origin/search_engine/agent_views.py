@@ -1405,6 +1405,7 @@ class AgentAskView(AuthenticatedAPIView):
         # read `chosen`: they all see the level's model, and the credits follow it. With the balance
         # low the run starts one level lower and says so in its first sentence.
         effort_fallback: dict | None = None
+        skill_note_before = skill_to_run.note if skill_to_run is not None else ""
         if skill_to_run is not None:
             chosen, effort_decision = skill_effort.apply(
                 chosen, skill_to_run.effort, user_id=user_id, plan=plan
@@ -1531,6 +1532,19 @@ class AgentAskView(AuthenticatedAPIView):
             return ceiling_resp
         if ceiling_note is not None:
             fallback_note = ceiling_note
+        if (
+            skill_to_run is not None
+            and skill_to_run.effort
+            and chosen.effort != skill_to_run.effort
+        ):
+            # The quota fallback or the monthly ceiling replaced the choice after the level was
+            # bound (their `LlmChoice` carries no effort): the run no longer runs at that level, so
+            # it must neither claim it (the step-down sentence, the done note) nor have a paused leg
+            # re-bind the dearer model they just routed away from.
+            skill_to_run = dataclasses.replace(
+                skill_to_run, effort=chosen.effort, note=skill_note_before
+            )
+            effort_fallback = None
         if effort_fallback is not None:
             # Rides the same `done` field as a model step-down; the keys say which kind it is.
             fallback_note = {**(fallback_note or {}), **effort_fallback}

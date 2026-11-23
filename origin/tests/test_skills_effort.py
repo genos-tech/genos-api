@@ -365,6 +365,48 @@ class DegradeAtLowCreditsTests(AskBase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(got["choice"].effort, "high")
 
+    def test_the_plan_ceiling_alone_is_not_reported_as_a_credit_step_down(self):
+        """Plan ceiling medium, skill high, 0.5 credits: under high's floor but over medium's. The
+        run is medium because of the PLAN: no credit sentence, no note, the prompt unchanged."""
+        balance = (policy_floor("high") + policy_floor("medium")) // 2
+        self.assertTrue(policy_floor("medium") <= balance < policy_floor("high"))
+        with mock.patch("origin.search_engine.quota.get_max_effort", return_value="medium"):
+            _resp, got = self.ask_with_balance(self.skill_at("high"), balance)
+        self.assertEqual(got["choice"].effort, "medium")
+        self.assertIsNone(got["stream"]["fallback_note"])
+        self.assertNotIn("AI credits are running low", got["kwargs"]["system_extra"])
+
+    def test_the_step_down_is_judged_on_the_level_the_plan_allows(self):
+        """Plan ceiling medium, skill high, a balance under MEDIUM's floor: it starts at low, said as a
+        step down from medium (the level the run would have started at), not from high."""
+        with mock.patch("origin.search_engine.quota.get_max_effort", return_value="medium"):
+            _resp, got = self.ask_with_balance(self.skill_at("high"), policy_floor("medium") - 1)
+        self.assertEqual(got["choice"].effort, "low")
+        self.assertEqual(
+            got["stream"]["fallback_note"],
+            {"requested_effort": "medium", "used_effort": "low", "reason": "credits"},
+        )
+        self.assertIn("set to medium effort", got["kwargs"]["system_extra"])
+
+    def test_a_choice_replaced_after_the_level_was_bound_is_not_claimed_or_kept(self):
+        """The monthly ceiling's route-down (or the quota fallback) hands back a choice with no
+        effort: the run is then not at the skill's level, so nothing may say it is, and a paused leg
+        must not re-bind the dearer model they routed away from."""
+        provider = settings.LLM_CATALOG.provider_order()[0]
+        routed = agent_views.LlmChoice(provider=provider, model=self.model_of("low", provider))
+        with mock.patch.object(
+            agent_views,
+            "_enforce_monthly_ceilings",
+            return_value=(None, {"requested_model": "a", "used_model": routed.model}, routed),
+        ):
+            _resp, got = self.ask_with_balance(self.skill_at("high"), 1)  # a step-down too
+        self.assertEqual(got["choice"].effort, "")
+        self.assertEqual(
+            got["stream"]["fallback_note"], {"requested_model": "a", "used_model": routed.model}
+        )
+        self.assertNotIn("effort", got["stream"]["resume_context"]["skill"])
+        self.assertNotIn("AI credits are running low", got["kwargs"]["system_extra"])
+
     def test_the_stepped_down_level_is_what_a_paused_run_keeps(self):
         skill = self.skill_at("high")
         _resp, got = self.ask_with_balance(skill, 1)
