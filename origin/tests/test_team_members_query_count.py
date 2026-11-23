@@ -232,9 +232,7 @@ class RichWorld(SharingWorld):
         User.objects.filter(pk=self.deleted_user.pk).update(is_deleted=True)
 
         # Profile data worth carrying through the exact-JSON comparison.
-        User.objects.filter(pk=b_owner.pk).update(
-            role="Designer", base_country="JP", about_me="Runs the guest team"
-        )
+        User.objects.filter(pk=b_owner.pk).update(role="Designer", about_me="Runs the guest team")
         User.objects.filter(pk=b_editor.pk).update(
             current_location="Berlin", location_shared=False, custom_status="away"
         )

@@ -176,7 +176,6 @@ def presence_profile(user) -> dict:
         "userName": user.username,
         "avatarImgPath": user.profile_image_file_name or "",
         "role": user.role or "",
-        "baseCountry": user.base_country or "",
         "currentLocation": shown_location(
             user.current_location, user.location_shared, is_self=False
         ),

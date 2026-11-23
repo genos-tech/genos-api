@@ -373,7 +373,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 "ts_joined_at": data["user"]["ts_created_at"],
                 "is_offline_forced": data["user"]["is_offline_forced"],
                 "role": data["user"]["role"],
-                "base_country": data["user"]["base_country"],
                 # The client mirrors these into localStorage and builds
                 # `myself` from it, so without them your own profile card
                 # comes back blank after every sign-out.
@@ -522,7 +521,6 @@ class DemoSignInView(APIView):
             "ts_joined_at": user.ts_created_at.isoformat() if user.ts_created_at else "",
             "is_offline_forced": user.is_offline_forced,
             "role": user.role or "",
-            "base_country": user.base_country or "",
             "phone_number": user.phone_number or "",
             "current_location": user.current_location or "",
             "about_me": user.about_me or "",

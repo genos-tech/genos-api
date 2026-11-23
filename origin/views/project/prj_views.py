@@ -375,7 +375,6 @@ class ProjectMasterView(AuthenticatedAPIView):
                     "attendee__is_offline_forced",
                     "attendee__role",
                     "member_role",
-                    "attendee__base_country",
                     "attendee__current_location",
                     "attendee__timezone",
                     "attendee__location_shared",
@@ -418,11 +417,6 @@ class ProjectMasterView(AuthenticatedAPIView):
                         # (job title). The owner's row reads "viewer";
                         # the client overlays "owner" via ownerUserId.
                         "memberRole": attendee["member_role"],
-                        "baseCountry": (
-                            attendee["attendee__base_country"]
-                            if attendee["attendee__base_country"]
-                            else ""
-                        ),
                         # No `phoneNumber` here, and it isn't an oversight.
                         # A project roster spans teams — `team__team_id` is
                         # per-row precisely because guests and shared-in

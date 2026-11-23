@@ -1108,7 +1108,6 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 # reads "viewer" here by design; the client overlays
                 # "owner" using `teamOwnerId`. See services/member_roles.
                 memberRole=F("member_role"),
-                baseCountry=F("attendee__base_country"),
                 # Phone rides along for TEAMMATES only. The external-guest
                 # rows built by `_external_people_rows` deliberately omit
                 # it — someone from another team is in this roster because
@@ -1141,7 +1140,6 @@ class GetMyTeamsView(AuthenticatedAPIView):
                 "isOfflineForced",
                 "role",
                 "memberRole",
-                "baseCountry",
                 "phoneNumber",
                 "currentLocation",
                 "timezone",
@@ -1260,7 +1258,6 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
         "profile_image_file_name",
         "is_offline_forced",
         "role",
-        "base_country",
         "current_location",
         "timezone",
         "location_shared",
@@ -1285,7 +1282,6 @@ def _external_people_rows(team_id, team_name, user_id) -> list:
                 "isOfflineForced": user["is_offline_forced"] or "",
                 "role": user["role"] or "",
                 "memberRole": GUEST,
-                "baseCountry": user["base_country"] or "",
                 "currentLocation": shown_location(
                     user["current_location"], location_shared, is_self=False
                 ),
@@ -1466,7 +1462,6 @@ class GetTeamMembersView(AuthenticatedAPIView):
             "attendee__profile_image_file_name",
             "attendee__is_offline_forced",
             "attendee__role",
-            "attendee__base_country",
             "attendee__phone_number",
             "attendee__current_location",
             "attendee__timezone",
@@ -1514,11 +1509,6 @@ class GetTeamMembersView(AuthenticatedAPIView):
                     # title). Owner's row reads "viewer"; the client
                     # overlays "owner" via teamOwnerId.
                     "memberRole": attendee["member_role"],
-                    "baseCountry": (
-                        attendee["attendee__base_country"]
-                        if attendee["attendee__base_country"]
-                        else ""
-                    ),
                     # Teammates only. `_external_people_rows` builds the
                     # guest rows for this same roster and omits this key.
                     "phoneNumber": attendee["attendee__phone_number"] or "",
@@ -1623,7 +1613,6 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
                 "attendee__is_offline_forced",
                 "attendee__role",
                 "member_role",
-                "attendee__base_country",
                 "attendee__phone_number",
                 "attendee__current_location",
                 "attendee__timezone",
@@ -1660,7 +1649,6 @@ class GetTeamMemberInfoView(AuthenticatedAPIView):
             "isOfflineForced": member_info.get("attendee__is_offline_forced", ""),
             "role": member_info.get("attendee__role", ""),
             "memberRole": member_info.get("member_role", "viewer"),
-            "baseCountry": member_info.get("attendee__base_country", ""),
             # This view is reachable only for a member of a team the caller
             # is themselves in, so the teammates-only rule already holds.
             "phoneNumber": member_info.get("attendee__phone_number") or "",
