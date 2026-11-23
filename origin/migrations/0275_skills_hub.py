@@ -41,7 +41,7 @@ def backfill_listing(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('origin', '0273_skills_safety'),
+        ('origin', '0274_skills_safety'),
     ]
 
     operations = [

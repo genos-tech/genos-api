@@ -14,14 +14,14 @@
     POST   /api/v2/skills/<id>/install/              pin a public skill (DELETE removes, PATCH accepts the update)
     POST   /api/v2/skills/<id>/star/                 star it (DELETE removes)
     GET    /api/v2/skills/<id>/export/               the SKILL.md text
+    POST   /api/v2/skills/<id>/report/               report a skill the caller can read (`reason`, `note`; MIP-2044)
+    POST   /api/v2/skills/<id>/takedown/             operator (staff) only: stop it for everybody (`reason`)
+    DELETE /api/v2/skills/<id>/takedown/             operator only: put it back (`reason` optional)
     GET    /api/v2/skills/<id>/editors/              who co-edits it (the owner and the co-editors)
     POST   /api/v2/skills/<id>/editors/              invite a teammate (`userId`; the owner)
     DELETE /api/v2/skills/<id>/editors/<user>/       remove a co-editor (the owner; a co-editor leaves)
     POST   /api/v2/skills/<id>/hide/                 hide a team skill from the team (the team owner)
     DELETE /api/v2/skills/<id>/hide/                 show it again
-    POST   /api/v2/skills/<id>/report/               report a skill the caller can read (`reason`, `note`; MIP-2044)
-    POST   /api/v2/skills/<id>/takedown/             operator (staff) only: stop it for everybody (`reason`)
-    DELETE /api/v2/skills/<id>/takedown/             operator only: put it back (`reason` optional)
     GET    /api/v2/skills/hub/?q=&tag=&sort=&...     the public directory (MIP-2047; 404 until GENOS_SKILLS_PUBLIC)
     GET    /api/v2/skills/hub/tags/                  the directory's tags with counts
     GET    /api/v2/skills/profile/                   my public profile (handle) and what publishing needs

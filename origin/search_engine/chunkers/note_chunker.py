@@ -239,7 +239,11 @@ def iter_task_note_chunks(
 def iter_personal_note_chunks(
     since: Optional[datetime] = None, note_ids: Optional[list[int]] = None
 ) -> Iterator[EntityChunks]:
-    qs = PersonalNoteMaster.objects.select_related("team", "owner")
+    # A Genos Skill's body note is never indexed (MIP-2121): it is the skill's text, read by the
+    # Skills editor and run on purpose, not a note the owner's search or agent should surface.
+    qs = PersonalNoteMaster.objects.select_related("team", "owner").exclude(
+        folder_id__in=PersonalNoteFolder.skill_folder_ids()
+    )
     if note_ids is not None:
         # One-off refresh of specific notes (a folder move), see
         # `refresh_personal_notes`.

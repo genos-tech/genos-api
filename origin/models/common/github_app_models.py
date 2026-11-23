@@ -85,3 +85,50 @@ class GithubAppInstallationTeam(models.Model):
 
     def __str__(self) -> str:
         return f"installation {self.installation_id} -> team {self.team_id}"
+
+
+class GithubAppInstallationRepository(models.Model):
+    """One repository an installation covers (MIP-2088), kept in step by the `installation` and
+    `installation_repositories` events. A delivery is routed only if its repository is listed here
+    (or the installation covers every repository of its account): the payload's `installation.id`
+    alone never widens what an installation may reach."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    installation = models.ForeignKey(
+        GithubAppInstallation, on_delete=models.CASCADE, related_name="repositories"
+    )
+    # GitHub's repository id: survives a rename. Null when an event did not carry it.
+    github_repo_id = models.BigIntegerField(null=True, blank=True)
+    # "owner/name", lower-cased: GitHub names are case-insensitive.
+    full_name = models.CharField(max_length=255)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["installation", "full_name"],
+                name="github_app_installation_repo_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["full_name"], name="github_app_repo_full_name_idx"),
+            models.Index(fields=["github_repo_id"], name="github_app_repo_id_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.full_name} (installation {self.installation_id})"
+
+
+class GithubAppWebhookDelivery(models.Model):
+    """A delivery of the App webhook that was processed (MIP-2088): the replay guard.
+
+    `X-GitHub-Delivery` is unique per delivery and unchanged by a redelivery. A row is written
+    before a delivery is processed and removed if processing fails, so a signed request captured
+    and replayed is answered `duplicate` and writes nothing, while a failed delivery (answered
+    5xx) can still be redelivered. Pruned after 30 days by the redeliver cron."""
+
+    delivery_id = models.CharField(max_length=64, primary_key=True)
+    event = models.CharField(max_length=64, blank=True, default="")
+    ts_received_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self) -> str:
+        return f"{self.event} {self.delivery_id}"

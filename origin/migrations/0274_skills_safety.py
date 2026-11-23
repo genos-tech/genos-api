@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('origin', '0272_skills_models'),
+        ('origin', '0273_github_app_webhook_support'),
     ]
 
     operations = [

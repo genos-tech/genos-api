@@ -34,6 +34,7 @@ from origin.views.common.client_perf_views import ClientPerfView
 from origin.views.common.contact_views import ContactView
 from origin.views.common.email_unsubscribe_views import email_unsubscribe
 from origin.views.common.gif_views import GifSearchView
+from origin.views.common.github_app_webhook_views import GithubAppWebhookView
 from origin.views.common.github_views import (
     GithubAccessibleReposView,
     GithubBranchesForTaskView,
@@ -264,6 +265,11 @@ urlpatterns = [
         "api/v2/github/webhook/",
         GithubWebhookView.as_view(),
         name="github_webhook",
+    ),
+    path(
+        "api/v2/github/app/webhook/",
+        GithubAppWebhookView.as_view(),
+        name="github_app_webhook",
     ),
     # Billing — Stripe self-serve subscriptions (tier system).
     path("api/v2/billing/config/", BillingConfigView.as_view(), name="billing_config"),
@@ -534,6 +540,12 @@ urlpatterns = [
     ),
     path("api/v2/skills/<uuid:skill_id>/star/", SkillStarView.as_view(), name="skill_star"),
     path("api/v2/skills/<uuid:skill_id>/export/", SkillExportView.as_view(), name="skill_export"),
+    path("api/v2/skills/<uuid:skill_id>/report/", SkillReportView.as_view(), name="skill_report"),
+    path(
+        "api/v2/skills/<uuid:skill_id>/takedown/",
+        SkillTakedownView.as_view(),
+        name="skill_takedown",
+    ),
     path(
         "api/v2/skills/<uuid:skill_id>/editors/",
         SkillEditorsView.as_view(),
@@ -549,12 +561,6 @@ urlpatterns = [
         "api/v2/skills/<uuid:skill_id>/publish-check/",
         SkillPublishCheckView.as_view(),
         name="skill_publish_check",
-    ),
-    path("api/v2/skills/<uuid:skill_id>/report/", SkillReportView.as_view(), name="skill_report"),
-    path(
-        "api/v2/skills/<uuid:skill_id>/takedown/",
-        SkillTakedownView.as_view(),
-        name="skill_takedown",
     ),
     path("api/v2/agent/work/", AgentWorkView.as_view(), name="agent_work"),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),

@@ -942,7 +942,7 @@ class MigrationBackfillTests(HubBase):
         skill = self.pub(self.outsider, handle="ana-lopez", slug="open-one", title="Roadmap review")
         Skill.objects.filter(pk=skill.pk).update(hub_text="", hub_tags=[], search_vector=None)
         self.assertEqual(self.hub_ids(self.user, q="roadmap"), [])
-        migration = importlib.import_module("origin.migrations.0274_skills_hub")
+        migration = importlib.import_module("origin.migrations.0275_skills_hub")
         migration.backfill_listing(apps, None)
         self.assertEqual(self.hub_ids(self.user, q="roadmap"), [str(skill.id)])
         self.assertEqual(self.hub_ids(self.user, tag="reports"), [str(skill.id)])

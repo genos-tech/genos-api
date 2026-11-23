@@ -384,6 +384,11 @@ REGISTRY = {
     "origin.views.common.gif_views.GifSearchView": signed_in(
         "proxies a GIPHY search; no workspace data"
     ),
+    # views.common.github_app_webhook_views
+    "origin.views.common.github_app_webhook_views.GithubAppWebhookView": public(
+        "HMAC signature verified against the GitHub App's webhook secret; the tenant is the "
+        "stored installation-to-team link, never the payload"
+    ),
     # views.common.github_views
     "origin.views.common.github_views.GithubAccessibleReposView": self_only(
         "repos visible to the caller's own GitHub token"
