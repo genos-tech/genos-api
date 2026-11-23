@@ -1,8 +1,11 @@
 """`save_html_note` (MIP-2214): MCP-only, see `html_notes/__init__.py`.
 
 Stores an HTML page as a note, or replaces the page of an HTML note, and answers with what the page
-needs to be fixed. The save NEVER fails for a fixable reason: it stores and warns. The only things
-refused are the size cap and the rate limit (both worded as what to do), a note that is not an HTML
+needs to be fixed. The save NEVER fails for a fixable reason: it stores and warns. HTML notes are a
+Core feature with per-plan limits (`services/html_note_limits.py`, the one table): a Free member's
+call stores nothing and is answered with a suggestion (not an error); the size, the count of HTML
+notes and the hourly rate are the plan's numbers. The only things
+refused are those limits (worded as what to do), a note that is not an HTML
 note (a BlockNote note is never converted: the answer suggests a new note), and what any note write
 refuses (no access, archived, wrong target).
 
@@ -35,7 +38,7 @@ from origin.search_engine.quota import (
     check_remaining_monthly,
     increment_usage,
 )
-from origin.services import html_notes
+from origin.services import html_note_limits, html_notes
 from origin.services.archive import archived_note_refusal
 from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.views.public.mcp.html_notes.guide import rules_text
@@ -65,18 +68,23 @@ def _feature_on() -> None:
         raise ToolError("HTML notes are not available yet.")
 
 
-def _prepare(args: dict[str, Any]) -> html_notes.PreparedHtml:
+def _prepare(
+    args: dict[str, Any], limits: html_note_limits.HtmlNoteLimits
+) -> html_notes.PreparedHtml:
     try:
         return html_notes.prepare(
-            args.get("html"), title=args.get("title"), summary=args.get("summary")
+            args.get("html"),
+            title=args.get("title"),
+            summary=args.get("summary"),
+            max_bytes=limits.max_bytes,
         )
     except html_notes.HtmlNoteRefused as refused:
         raise ToolError(str(refused)) from None
 
 
-def _count_save(ctx: ToolContext) -> None:
+def _count_save(ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits) -> None:
     try:
-        html_notes.check_rate(ctx.user_id)
+        html_notes.check_rate(ctx.user_id, limits.saves_per_hour)
     except html_notes.HtmlNoteRefused as refused:
         raise ToolError(str(refused)) from None
 
@@ -124,20 +132,28 @@ def _answer(
 
 
 def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Cheap checks first, the scan last: the size, then access and the rate limit, and only then
-    the (linear but not free) scan of up to 512 KB, so a caller with no access, or past the hourly
-    limit, makes the server do no work on the page."""
+    """The plan first (a Free member gets a suggestion and nothing is stored, a lookup that fails
+    reads as Core), then the cheap checks, the scan last: the plan's size, then access, the count
+    of notes and the rate limit, and only then the (linear but not free) scan of up to the plan's
+    size, so a caller with no access, or past a limit, makes the server do no work on the page."""
     _feature_on()
     try:
-        html_notes.check_input(args.get("html"))
+        limits = html_note_limits.limits_for(ctx.user_id)
+    except html_note_limits.HtmlNotesNotOnPlan as not_on_plan:
+        return not_on_plan.reply()
+    try:
+        html_notes.check_input(args.get("html"), limits.max_bytes)
+        html_notes.check_title_possible(args["html"], args.get("title"))
     except html_notes.HtmlNoteRefused as refused:
         raise ToolError(str(refused)) from None
     if args.get("note_id") not in (None, ""):
-        return _replace(args, ctx)
-    return _create(args, ctx)
+        return _replace(args, ctx, limits)
+    return _create(args, ctx, limits)
 
 
-def _replace(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def _replace(
+    args: dict[str, Any], ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits
+) -> dict[str, Any]:
     ref = load_readable_note(args, ctx)
     note = ref.note
     if (
@@ -163,8 +179,8 @@ def _replace(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         )
     if why := archived_note_refusal(ref.family, ref.note_id):
         raise ToolError(f"{why} Nothing was changed.")
-    _count_save(ctx)
-    prepared = _prepare(args)
+    _count_save(ctx, limits)
+    prepared = _prepare(args, limits)
 
     from origin.models.common.user_models import CustomUser  # noqa: PLC0415
 
@@ -195,7 +211,9 @@ def _replace(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return result
 
 
-def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+def _create(
+    args: dict[str, Any], ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits
+) -> dict[str, Any]:
     note_type = normalize_note_type(args.get("note_type"))
     if note_type == "shared":
         raise ToolError(
@@ -209,8 +227,12 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         raise ToolError(
             f"You've created all {note_limit} notes for this month. Upgrade your plan to keep going."
         )
-    _count_save(ctx)
-    prepared = _prepare(args)
+    try:
+        html_note_limits.check_room_for_new_note(ctx.user_id, limits)
+    except html_note_limits.HtmlNoteLimitReached as reached:
+        raise ToolError(str(reached)) from None
+    _count_save(ctx, limits)
+    prepared = _prepare(args, limits)
 
     # The note, its owner row and first version come from `create_note`'s helpers; the page is
     # added in the same transaction, so a failure leaves no note without a page.
@@ -252,6 +274,24 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return result
 
 
+def _size_limits_text() -> str:
+    core = html_note_limits.HTML_NOTE_LIMITS["core"]
+    pro = html_note_limits.HTML_NOTE_LIMITS["pro"]
+    return f"{core.max_bytes // 1024} KB on Core, {pro.max_bytes // 1024} KB on Pro and up"
+
+
+def _count_limits_text() -> str:
+    core = html_note_limits.HTML_NOTE_LIMITS["core"]
+    pro = html_note_limits.HTML_NOTE_LIMITS["pro"]
+    return f"{core.max_notes} on Core, {pro.max_notes} on Pro and up"
+
+
+def _rate_limits_text() -> str:
+    core = html_note_limits.HTML_NOTE_LIMITS["core"]
+    pro = html_note_limits.HTML_NOTE_LIMITS["pro"]
+    return f"{core.saves_per_hour} on Core, {pro.saves_per_hour} on Pro and up"
+
+
 SAVE_HTML_NOTE = Tool(
     name="save_html_note",
     description=(
@@ -264,7 +304,10 @@ SAVE_HTML_NOTE = Tool(
         "properties": {
             "html": {
                 "type": "STRING",
-                "description": "The whole page, starting with <!doctype html>. At most 512 KB.",
+                "description": (
+                    "The whole page, starting with <!doctype html>. "
+                    f"{_size_limits_text()} per page, by plan."
+                ),
             },
             "title": {
                 "type": "STRING",
@@ -335,9 +378,12 @@ def mcp_description() -> str:
         "and keep it. It creates a note of any kind `create_note` does ('personal', 'team' with "
         "`folder_id`, 'task' with `project_id`, 'chat' with `chat_id`) under the same sharing "
         "rules as every note, or, with `note_id` and `note_type`, REPLACES the page of an HTML "
-        "note you can edit (the earlier page is kept as a revision). It stores the page and "
-        "warns: the save is refused only when the page is over 512 KB or you have saved 30 "
-        "pages this hour. Anything else the page needs is returned as `warnings`, each with a "
+        "note you can edit (the earlier page is kept as a revision). HTML notes are a Core "
+        "plan feature: on the Free plan nothing is stored and the answer says what to tell the "
+        "user. It stores the page and warns: the save is refused only when the page is over "
+        f"the plan's size ({_size_limits_text()}), the member already owns the plan's count of "
+        f"HTML notes ({_count_limits_text()}), or the plan's saves per hour are used "
+        f"({_rate_limits_text()}); each refusal says the numbers and the fix. Anything else the page needs is returned as `warnings`, each with a "
         "fix in `suggestions`: read them and save again with `note_id` if you can improve the "
         "page. The page is shown in a sandboxed frame with no network, so follow these rules. "
         + rules_text()

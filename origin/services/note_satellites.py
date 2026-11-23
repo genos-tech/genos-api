@@ -5,7 +5,7 @@ trash (`services/note_delete.py`). But four tables point at a note by number onl
 foreign key, so nothing cascades into them when a project, a task or an account takes the note
 row with it:
 
-  * `NoteHtmlRevision`: an HTML note's pages (MIP-2214), up to 512 KB each;
+  * `NoteHtmlRevision`: an HTML note's pages (MIP-2214), up to the plan's page limit each (`html_note_limits`);
   * `NotePermissionMaster`: who may open it;
   * `NoteVersionMaster`: its history, every row of which holds the note's TITLE AND BODY;
   * `NoteSummary` (Spotlight): the cached LLM summary of the body, in clear text.

@@ -14,12 +14,14 @@ The page may be read by exactly the people who may read the note:
 
 from __future__ import annotations
 
+from unittest import mock
+
 from django.test import override_settings
 
 from origin.models.note.common_note_models import NoteFolderPermission, NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.project.prj_models import ProjectMembers
-from origin.services import html_notes
+from origin.services import html_note_limits, html_notes
 from origin.tests.test_note_role_probes_404 import MISSING, Probes
 from origin.views.utils.note_role import (
     NOTE_TYPE_CHAT,
@@ -99,6 +101,20 @@ class WhoMayRead(HtmlNoteApi):
                 self.assertEqual(len(data["sha256"]), 64)
                 self.assertEqual(data["size"], len(PAGE.encode()))
                 self.assertIsInstance(data["warnings"], list)
+
+    def test_reading_is_not_gated_by_the_plan(self):
+        """MIP-2216: saving needs Core, reading never does, so a downgrade keeps every page open."""
+        with mock.patch("origin.search_engine.quota.get_effective_tier", return_value="free"):
+            for family, code in FAMILIES:
+                with self.subTest(family=family):
+                    res = self.get(self.user, family, self.notes[code].note_id)
+                    self.assertEqual(res.status_code, 200, res.content)
+                    self.assertEqual(res.json()["rev"], 1)
+
+    def test_the_plan_count_covers_all_three_families(self):
+        owned = sum(1 for note in self.notes.values() if note.owner_id == self.user.id)
+        self.assertGreaterEqual(owned, 1)
+        self.assertEqual(html_note_limits.count_owned(self.user.id), owned)
 
     def test_the_numbers_1_2_3_name_the_same_families(self):
         for number, code in (

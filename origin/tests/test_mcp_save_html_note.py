@@ -34,7 +34,7 @@ from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.agent.controller import _build_tool_declarations
 from origin.search_engine.agent.tools import MCP_ONLY_REGISTRY, REGISTRY
-from origin.services import collab_push, html_notes, mcp_notice
+from origin.services import collab_push, html_note_limits, html_notes, mcp_notice
 from origin.services.collab_push import PushOutcome
 from origin.tests.test_mcp_endpoint import McpBase
 from origin.views.public.mcp import prompts, surfaces, tools
@@ -52,6 +52,9 @@ BAD = (
     "<script>fetch('/api')</script></body></html>"
 )
 OWNER, EDITOR, VIEWER = 1, 2, 3
+TIER_PATH = "origin.search_engine.quota.get_effective_tier"
+CORE = html_note_limits.HTML_NOTE_LIMITS["core"]
+PRO = html_note_limits.HTML_NOTE_LIMITS["pro"]
 
 
 def _paragraph(text: str) -> dict:
@@ -70,6 +73,10 @@ class HtmlBase(McpBase):
         super().setUp()
         cache.clear()
         self._key(scope=SCOPE_WRITE)
+        # Every member is on Core unless a test says so (`self.tier.return_value = "free"`).
+        tier_patcher = mock.patch(TIER_PATH, return_value="core")
+        self.tier = tier_patcher.start()
+        self.addCleanup(tier_patcher.stop)
         patcher = mock.patch.object(collab_push.requests, "post")
         self.collab = patcher.start()
         self.addCleanup(patcher.stop)
@@ -250,39 +257,35 @@ class StoreAndWarnTests(HtmlBase):
 
 class SizeAndRateTests(HtmlBase):
     def test_a_page_over_the_cap_is_refused_with_what_to_do_and_nothing_is_made(self):
-        text = self.refused(
-            SAVE, html="x" * (html_notes.MAX_HTML_BYTES + 1), note_type="personal", title="t"
-        )
+        text = self.refused(SAVE, html="x" * (CORE.max_bytes + 1), note_type="personal", title="t")
         self.assertIn("512 KB", text)
         self.assertIn("Nothing was saved", text)
         self.assertEqual(PersonalNoteMaster.objects.count(), 0)
         self.assertEqual(NoteHtmlRevision.objects.count(), 0)
 
     def test_a_page_exactly_at_the_cap_is_saved(self):
-        filler = "x" * (html_notes.MAX_HTML_BYTES - len(GOOD.encode()) - 7)
+        filler = "x" * (CORE.max_bytes - len(GOOD.encode()) - 7)
         page = GOOD.replace("</body>", f"<!--{filler}--></body>")
-        self.assertEqual(len(page.encode()), html_notes.MAX_HTML_BYTES)
+        self.assertEqual(len(page.encode()), CORE.max_bytes)
         made = self.save(page)
-        self.assertEqual(made["size_bytes"], html_notes.MAX_HTML_BYTES)
+        self.assertEqual(made["size_bytes"], CORE.max_bytes)
 
     def test_a_refused_size_does_not_use_up_a_save(self):
         for _ in range(3):
-            self.refused(
-                SAVE, html="x" * (html_notes.MAX_HTML_BYTES + 1), note_type="personal", title="t"
-            )
-        for _ in range(html_notes.SAVES_PER_HOUR):
+            self.refused(SAVE, html="x" * (CORE.max_bytes + 1), note_type="personal", title="t")
+        for _ in range(CORE.saves_per_hour):
             self.save()
 
     def test_the_thirty_first_save_in_an_hour_is_refused_with_when_to_retry(self):
-        for _ in range(html_notes.SAVES_PER_HOUR):
+        for _ in range(CORE.saves_per_hour):
             self.save()
         text = self.refused(SAVE, html=GOOD, note_type="personal", title="t")
         self.assertIn("30", text)
         self.assertIn("minutes", text)
-        self.assertEqual(PersonalNoteMaster.objects.count(), html_notes.SAVES_PER_HOUR)
+        self.assertEqual(PersonalNoteMaster.objects.count(), CORE.saves_per_hour)
 
     def test_the_limit_is_per_person(self):
-        for _ in range(html_notes.SAVES_PER_HOUR):
+        for _ in range(CORE.saves_per_hour):
             self.save()
         self._key(scope=SCOPE_WRITE, user=self.user2)
         made = self.ok(SAVE, html=GOOD, note_type="personal", title="t", summary="s")
@@ -798,7 +801,7 @@ class CheapChecksComeBeforeTheScan(HtmlBase):
         scan.assert_not_called()
 
     def test_a_caller_past_the_hourly_limit_never_reaches_the_scan(self):
-        for _ in range(html_notes.SAVES_PER_HOUR):
+        for _ in range(CORE.saves_per_hour):
             self.save()
         with mock.patch(self.SCAN) as scan:
             self.refused(SAVE, html=GOOD, note_type="personal", title="t")
@@ -808,7 +811,7 @@ class CheapChecksComeBeforeTheScan(HtmlBase):
         with mock.patch(self.SCAN) as scan:
             self.refused(
                 SAVE,
-                html="x" * (html_notes.MAX_HTML_BYTES + 1),
+                html="x" * (CORE.max_bytes + 1),
                 note_type="personal",
                 title="t",
             )

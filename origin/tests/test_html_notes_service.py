@@ -23,7 +23,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.html_note_models import NoteHtmlRevision
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.search_engine.chunkers.note_chunker import iter_personal_note_chunks
-from origin.services import html_notes
+from origin.services import html_note_limits, html_notes
 from origin.services.note_satellites import batched_note_cleanup, forget_note_satellites
 from origin.tests.test_base import BaseAPITestCase
 
@@ -62,14 +62,22 @@ class SizeCapTests(SimpleTestCase):
         with self.assertRaises(html_notes.HtmlNoteRefused):
             html_notes.check_size(wide)
 
-    def test_the_refusal_says_what_to_do_not_just_no(self):
+    def test_the_refusal_says_the_plans_number_and_what_to_do_not_just_no(self):
+        core = html_note_limits.HTML_NOTE_LIMITS["core"].max_bytes
         with self.assertRaises(html_notes.HtmlNoteRefused) as ctx:
-            html_notes.check_size("x" * (html_notes.MAX_HTML_BYTES + 1))
+            html_notes.check_size("x" * (core + 1), core)
         message = str(ctx.exception)
         self.assertIn("512 KB", message)
         self.assertIn("Nothing was saved", message)
+        self.assertIn("upgrade", message)
         self.assertIn("Make it smaller", message)
         self.assertIn("200 KB", message)
+
+    def test_the_default_ceiling_is_the_largest_plan_row(self):
+        self.assertEqual(
+            html_notes.MAX_HTML_BYTES,
+            max(r.max_bytes for r in html_note_limits.HTML_NOTE_LIMITS.values() if r),
+        )
 
     def test_a_lone_surrogate_does_not_crash_the_count(self):
         self.assertGreater(html_notes.byte_size("a\ud800b"), 0)
@@ -332,20 +340,26 @@ class RateLimitTests(SimpleTestCase):
     def setUp(self):
         cache.clear()
 
-    def test_thirty_an_hour_then_a_refusal_that_says_when(self):
-        for _ in range(html_notes.SAVES_PER_HOUR):
-            html_notes.check_rate("user-a")
+    def test_the_plans_number_an_hour_then_a_refusal_that_says_when(self):
+        for _ in range(30):
+            html_notes.check_rate("user-a", 30)
         with self.assertRaises(html_notes.HtmlNoteRefused) as ctx:
-            html_notes.check_rate("user-a")
+            html_notes.check_rate("user-a", 30)
         message = str(ctx.exception)
         self.assertIn("30", message)
         self.assertIn("Nothing was saved", message)
         self.assertIn("minutes", message)
 
     def test_it_is_counted_per_person(self):
-        for _ in range(html_notes.SAVES_PER_HOUR):
-            html_notes.check_rate("user-a")
-        html_notes.check_rate("user-b")  # does not raise
+        for _ in range(30):
+            html_notes.check_rate("user-a", 30)
+        html_notes.check_rate("user-b", 30)  # does not raise
+
+    def test_a_higher_number_lets_more_through(self):
+        for _ in range(60):
+            html_notes.check_rate("user-a", 60)
+        with self.assertRaises(html_notes.HtmlNoteRefused):
+            html_notes.check_rate("user-a", 60)
 
 
 class _Notes(BaseAPITestCase):
