@@ -266,6 +266,9 @@ REGISTRY = {
     # missing id. Lists and creates check team membership.
     "origin.views.common.skill_views.SkillListView": checked("is_team_member"),
     "origin.views.common.skill_views.SkillImportView": checked("is_team_member"),
+    # MIP-2210: the live name check; team members only, and it consults only the caller's own
+    # skills, the team's shared names and the public names (never someone's private skill).
+    "origin.views.common.skill_views.SkillNameCheckView": checked("is_team_member"),
     # MIP-2198: the effort levels for the caller's own provider and plan ceiling; no skill or team data.
     "origin.views.common.skill_views.SkillEffortLevelsView": self_only(
         "the caller's own plan ceiling and model provider (request.user); no skill or team data"

@@ -1,0 +1,428 @@
+{
+  "release": "v0.5.3",
+  "source": "https://github.com/genos-tech/genos-claude-plugin",
+  "docs_ref": "162e1c2ad0dd4d637a9e58bf5ecad0921f83cb96",
+  "skills": [
+    {
+      "slug": "handoff",
+      "title": "Hand off a task",
+      "description": "Hand off a task or a piece of work in Genos so someone else, or you tomorrow, can resume it: a hand-off note, one completion comment (ready or not, deliverables, order, open items), and a status that is true.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/handoff/SKILL.md"
+    },
+    {
+      "slug": "meeting-notes",
+      "title": "Meeting notes to tasks",
+      "description": "Turn meeting notes into Genos work: a minutes note, one task per action with owner and date, and each decision saved as a decision note. Shows the list first; assigns other people only after a yes.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/meeting-notes/SKILL.md"
+    },
+    {
+      "slug": "plan-project",
+      "title": "Plan a project",
+      "description": "Turn a goal into a Genos milestone: goal, success criteria, order of work, 3 to 10 tasks with dependencies, and a plan note. Shows the plan first and creates it in one call after a yes.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/plan-project/SKILL.md"
+    },
+    {
+      "slug": "record-decision",
+      "title": "Record a decision",
+      "description": "Save a decision in Genos as a note titled \"Decision: ...\": searches for an existing one first, then writes or updates it and links it from the task.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/record-decision/SKILL.md"
+    },
+    {
+      "slug": "tidy-board",
+      "title": "Tidy the board",
+      "description": "Tidy a Genos project or milestone: find stale work in progress, parents that do not match their children, loose tasks with no parent, Blocked tasks with nothing blocking them, and missing links, then fix them in one batch after a yes.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/tidy-board/SKILL.md"
+    },
+    {
+      "slug": "triage",
+      "title": "Triage inbox and mentions",
+      "description": "Triage your Genos inbox and mentions: each item that waits on you gets one of four outcomes (reply, make a task, make a to-do, or done), and nothing is posted without your yes.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/triage/SKILL.md"
+    },
+    {
+      "slug": "design-handoff",
+      "title": "Design handoff",
+      "description": "Hand a finished design to the people who build it: a spec note with what to build, states and edge cases, a link to it on every build task, and the open questions as comments. Shows the note and the list of tasks first; writes only after a yes.",
+      "tags": [
+        "design"
+      ],
+      "icon": "🎨",
+      "tool_level": "act",
+      "pack": "design",
+      "source_path": "plugins/genos-designer/skills/design-handoff/SKILL.md"
+    },
+    {
+      "slug": "ui-check",
+      "title": "UI check",
+      "description": "Turn the UI problems the person found while checking a build into one Genos task per problem, each with the device, steps, expected and actual, and a reference to the screenshot. Searches for duplicates first; creates the tasks in one call after a yes.",
+      "tags": [
+        "design"
+      ],
+      "icon": "🎨",
+      "tool_level": "act",
+      "pack": "design",
+      "source_path": "plugins/genos-designer/skills/ui-check/SKILL.md"
+    },
+    {
+      "slug": "file-bug",
+      "title": "File a bug",
+      "description": "File a bug in Genos so it can be fixed without questions: check it is real and not already fixed, search for a duplicate, write steps to reproduce, expected and actual behaviour, place it under a parent that will outlive it, and wire what blocks it and what waits for it.",
+      "tags": [
+        "engineering"
+      ],
+      "icon": "🛠️",
+      "tool_level": "act",
+      "pack": "engineering",
+      "source_path": "plugins/genos-engineering/skills/file-bug/SKILL.md"
+    },
+    {
+      "slug": "feedback-to-tasks",
+      "title": "Feedback to tasks",
+      "description": "Turn a pile of customer feedback into a short list of requests: group it into themes, search for what is already tracked, and create one task per new request under one parent after a yes, with no personal data copied.",
+      "tags": [
+        "founder"
+      ],
+      "icon": "🚀",
+      "tool_level": "act",
+      "pack": "founder",
+      "source_path": "plugins/genos-founder/skills/feedback-to-tasks/SKILL.md"
+    },
+    {
+      "slug": "investor-update",
+      "title": "Investor update",
+      "description": "Draft an investor or stakeholder update from what really shipped: highlights from closed work and milestones, what is next, the risks and the asks, with the figures the person gives. It is a draft note only and is never sent.",
+      "tags": [
+        "founder"
+      ],
+      "icon": "🚀",
+      "tool_level": "act",
+      "pack": "founder",
+      "source_path": "plugins/genos-founder/skills/investor-update/SKILL.md"
+    },
+    {
+      "slug": "campaign-plan",
+      "title": "Campaign plan",
+      "description": "Plan a marketing campaign in Genos: a milestone with a goal, audience and success numbers, one task per content piece with an owner and a date counted back from the launch, and a plan note. Shows the plan first and creates it in one call after a yes.",
+      "tags": [
+        "marketing"
+      ],
+      "icon": "📣",
+      "tool_level": "act",
+      "pack": "marketing",
+      "source_path": "plugins/genos-marketing/skills/campaign-plan/SKILL.md"
+    },
+    {
+      "slug": "campaign-recap",
+      "title": "Campaign recap",
+      "description": "Write the results note for a finished campaign: what was planned, what shipped, the numbers the person provides against the goal, what worked, what did not, and what to change next time. Saves it as a note after a yes.",
+      "tags": [
+        "marketing"
+      ],
+      "icon": "📣",
+      "tool_level": "act",
+      "pack": "marketing",
+      "source_path": "plugins/genos-marketing/skills/campaign-recap/SKILL.md"
+    },
+    {
+      "slug": "content-week",
+      "title": "Content week",
+      "description": "Show what publishes this week and what is still waiting for approval, from the content tasks and campaign milestones in Genos: by day, with owner, status and what each piece is waiting on. Reads only.",
+      "tags": [
+        "marketing"
+      ],
+      "icon": "📣",
+      "tool_level": "read",
+      "pack": "marketing",
+      "source_path": "plugins/genos-marketing/skills/content-week/SKILL.md"
+    },
+    {
+      "slug": "launch-checklist",
+      "title": "Launch checklist",
+      "description": "Build a launch checklist in Genos: one checklist task under the launch milestone with every item to check, and each approval (legal, product, leadership) as its own task that blocks the launch task. Shows the list and the blockers first; creates them after a yes.",
+      "tags": [
+        "marketing"
+      ],
+      "icon": "📣",
+      "tool_level": "act",
+      "pack": "marketing",
+      "source_path": "plugins/genos-marketing/skills/launch-checklist/SKILL.md"
+    },
+    {
+      "slug": "release-notes",
+      "title": "Release notes",
+      "description": "Write release notes from what really closed in a Genos milestone or sprint, in plain words for the reader, and save them as a note. Lists only tasks that are Closed and whose pull requests merged, and says what did not ship.",
+      "tags": [
+        "product"
+      ],
+      "icon": "🧭",
+      "tool_level": "act",
+      "pack": "product",
+      "source_path": "plugins/genos-product/skills/release-notes/SKILL.md"
+    },
+    {
+      "slug": "reprioritize",
+      "title": "Reprioritize",
+      "description": "Reorder a Genos milestone, sprint or backlog: a proposal with one reason per task, checked against blockers, due dates and workload, applied in one call only after a yes.",
+      "tags": [
+        "product"
+      ],
+      "icon": "🧭",
+      "tool_level": "act",
+      "pack": "product",
+      "source_path": "plugins/genos-product/skills/reprioritize/SKILL.md"
+    },
+    {
+      "slug": "status-report",
+      "title": "Status report",
+      "description": "Write a status report for a Genos project, milestone or sprint from the data, not from memory: what changed, what needs a decision, risks and what is stuck, grouped by project or milestone, and save it as a note after a yes.",
+      "tags": [
+        "product"
+      ],
+      "icon": "🧭",
+      "tool_level": "act",
+      "pack": "product",
+      "source_path": "plugins/genos-product/skills/status-report/SKILL.md"
+    },
+    {
+      "slug": "write-spec",
+      "title": "Write a spec",
+      "description": "Write a spec (PRD) for a piece of work in Genos: goal, why now, acceptance criteria a stranger can check, out of scope, risks and open questions, saved as a note linked from the task with the task body kept short.",
+      "tags": [
+        "product"
+      ],
+      "icon": "🧭",
+      "tool_level": "act",
+      "pack": "product",
+      "source_path": "plugins/genos-product/skills/write-spec/SKILL.md"
+    },
+    {
+      "slug": "experiment-log",
+      "title": "Experiment log",
+      "description": "Write up an experiment as a findings note in Genos: the question, data, method, numbers, conclusion and how to reproduce it, negative results included, with a comment on the task that says what was found. Shows the note first; saves it after a yes.",
+      "tags": [
+        "research"
+      ],
+      "icon": "🔬",
+      "tool_level": "act",
+      "pack": "research",
+      "source_path": "plugins/genos-research/skills/experiment-log/SKILL.md"
+    },
+    {
+      "slug": "literature-review",
+      "title": "Literature review",
+      "description": "Keep a literature review in Genos: one note per source with the claim, method, result and how it bears on the question, and one synthesis note that compares them and names the gaps. Works only from sources the person gives (links, pasted text, their own notes).",
+      "tags": [
+        "research"
+      ],
+      "icon": "🔬",
+      "tool_level": "act",
+      "pack": "research",
+      "source_path": "plugins/genos-research/skills/literature-review/SKILL.md"
+    },
+    {
+      "slug": "research-update",
+      "title": "Research update",
+      "description": "Write the weekly research update from what really closed and what was found: finished tasks, new findings notes, what is blocked and what is next, saved as a note after a yes.",
+      "tags": [
+        "research"
+      ],
+      "icon": "🔬",
+      "tool_level": "act",
+      "pack": "research",
+      "source_path": "plugins/genos-research/skills/research-update/SKILL.md"
+    },
+    {
+      "slug": "study-plan",
+      "title": "Study plan",
+      "description": "Turn a research question into a study plan in Genos: a milestone with the protocol, the steps in order (design, ethics or approvals, data collection, analysis, write-up) with dependencies and dates. Shows the plan first; creates it in one call after a yes.",
+      "tags": [
+        "research"
+      ],
+      "icon": "🔬",
+      "tool_level": "act",
+      "pack": "research",
+      "source_path": "plugins/genos-research/skills/study-plan/SKILL.md"
+    },
+    {
+      "slug": "account-brief",
+      "title": "Account brief",
+      "description": "Brief the person before a call or meeting with an account: what Genos already knows about it (tasks, notes, earlier calls, decisions), what was promised and is still open, what changed since the last contact, and three questions to ask. Reads only.",
+      "tags": [
+        "sales"
+      ],
+      "icon": "🤝",
+      "tool_level": "read",
+      "pack": "sales",
+      "source_path": "plugins/genos-sales/skills/account-brief/SKILL.md"
+    },
+    {
+      "slug": "call-follow-up",
+      "title": "Call follow-up",
+      "description": "Log a sales call and its follow-ups: a call note with what was said, decided and promised, then a task for each follow-up the team must do and a to-do with a date for each personal one. Shows everything first; creates it after a yes.",
+      "tags": [
+        "sales"
+      ],
+      "icon": "🤝",
+      "tool_level": "act",
+      "pack": "sales",
+      "source_path": "plugins/genos-sales/skills/call-follow-up/SKILL.md"
+    },
+    {
+      "slug": "pipeline-review",
+      "title": "Pipeline review",
+      "description": "Review a sales pipeline kept as Genos tasks: find the deals that went quiet, say what the next step is for each, and after a yes set the due dates, priorities or statuses in one call.",
+      "tags": [
+        "sales"
+      ],
+      "icon": "🤝",
+      "tool_level": "act",
+      "pack": "sales",
+      "source_path": "plugins/genos-sales/skills/pipeline-review/SKILL.md"
+    },
+    {
+      "slug": "assignment-plan",
+      "title": "Assignment plan",
+      "description": "Break an assignment into steps with dates counted back from the due date: research, outline, draft, revise, hand in, each with a date, as tasks in a Genos project or, if you have none, as dated to-dos. Shows the plan first; creates it after a yes.",
+      "tags": [
+        "student"
+      ],
+      "icon": "🎓",
+      "tool_level": "act",
+      "pack": "student",
+      "source_path": "plugins/genos-student/skills/assignment-plan/SKILL.md"
+    },
+    {
+      "slug": "exam-prep",
+      "title": "Exam prep",
+      "description": "Build a revision plan for an exam in Genos: a milestone with one task per topic, dated study sessions counted back from the exam, and a note with the topic list and what to review. If you have no project, it makes dated to-dos instead. Shows the plan first.",
+      "tags": [
+        "student"
+      ],
+      "icon": "🎓",
+      "tool_level": "act",
+      "pack": "student",
+      "source_path": "plugins/genos-student/skills/exam-prep/SKILL.md"
+    },
+    {
+      "slug": "escalate",
+      "title": "Escalate",
+      "description": "Escalate a customer issue that is stuck: read the task, write one comment with the facts (impact, since when, what was tried, what is needed and by when) that mentions the owner, and, if you say so, raise the priority. Shows the comment first; posts only after a yes.",
+      "tags": [
+        "support"
+      ],
+      "icon": "🎧",
+      "tool_level": "act",
+      "pack": "support",
+      "source_path": "plugins/genos-support/skills/escalate/SKILL.md"
+    },
+    {
+      "slug": "support-digest",
+      "title": "Support digest",
+      "description": "Write the weekly support digest from the support tasks in Genos: the themes customers hit, how many reports each, what was fixed, which escalations are still open and how old they are. Saves it as a note after a yes.",
+      "tags": [
+        "support"
+      ],
+      "icon": "🎧",
+      "tool_level": "act",
+      "pack": "support",
+      "source_path": "plugins/genos-support/skills/support-digest/SKILL.md"
+    },
+    {
+      "slug": "ticket-to-task",
+      "title": "Ticket to task",
+      "description": "Turn a customer report into a bug or a request in Genos: duplicate search first, a clear title and body, and no personal data copied from the customer. If the report is already tracked, add the new evidence as a comment instead.",
+      "tags": [
+        "support"
+      ],
+      "icon": "🎧",
+      "tool_level": "act",
+      "pack": "support",
+      "source_path": "plugins/genos-support/skills/ticket-to-task/SKILL.md"
+    },
+    {
+      "slug": "course-plan",
+      "title": "Course plan",
+      "description": "Plan a course in Genos: a milestone for each unit and a task for each lesson with a date, so the term is laid out in the order it will be taught. Shows the plan first; creates it after a yes.",
+      "tags": [
+        "teaching"
+      ],
+      "icon": "🍎",
+      "tool_level": "act",
+      "pack": "teaching",
+      "source_path": "plugins/genos-teaching/skills/course-plan/SKILL.md"
+    },
+    {
+      "slug": "grading-tracker",
+      "title": "Grading tracker",
+      "description": "Track grading in Genos with no student names: one task per assignment batch with a checklist of what is graded, how many remain, and when grades are due back; update the counts as the person reports progress. Shows the text first; writes after a yes.",
+      "tags": [
+        "teaching"
+      ],
+      "icon": "🍎",
+      "tool_level": "act",
+      "pack": "teaching",
+      "source_path": "plugins/genos-teaching/skills/grading-tracker/SKILL.md"
+    },
+    {
+      "slug": "lesson-prep",
+      "title": "Lesson prep",
+      "description": "Prepare the teaching week: the lessons coming up, the materials still to make with their dates, the classes in the calendar, and a to-do for each preparation step you choose.",
+      "tags": [
+        "teaching"
+      ],
+      "icon": "🍎",
+      "tool_level": "act",
+      "pack": "teaching",
+      "source_path": "plugins/genos-teaching/skills/lesson-prep/SKILL.md"
+    }
+  ],
+  "excluded": {
+    "catchup": "built on the connector-only briefing (the in-app built-in `/catch-me-up` covers it)",
+    "close-out": "reads merged pull requests and checks with gh on the person's machine",
+    "design-review": "replies to and resolves note comments, which the in-app agent cannot do",
+    "open-pr": "reads a pull request's checks with gh on the person's machine",
+    "ready-to-merge": "reads a pull request's checks with gh on the person's machine",
+    "setup": "writes the Genos rules into Claude's memory file and installs plugins: Claude Code only",
+    "start-task": "branches and reads the code with git on the person's machine",
+    "study-week": "built on the connector-only briefing",
+    "weekly-priorities": "built on the connector-only briefing",
+    "weekly-review": "built on the connector-only briefing",
+    "wrapup": "built on the connector-only briefing"
+  }
+}

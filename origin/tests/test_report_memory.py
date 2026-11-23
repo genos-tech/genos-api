@@ -275,8 +275,11 @@ class TestItDoesNotRepeatItself(MemoryBase):
         self.activity(task, self.user2, new="WIP", old="Open", at=self.ago(hours=2))
         first, _ = self.file()
         second = self.report_now()
-        self.assertIn("Changed in the last 24 hours", [s["heading"] for s in second["sections"]])
-        self.assertIn(task.task_id, self.listed_ids(second))  # it is "activity": reported
+        self.assertIn(task.task_id, self.listed_ids(first))
+        # It is "activity", so it is reported again, once: under "Start with", where the first
+        # section that holds a task keeps its row (MIP-1417), not a second time under "Changed".
+        self.assertIn(task.task_id, self.listed_ids(second))
+        self.assertEqual(self.stat(second, "still_same"), 0)
 
     def test_a_task_the_member_cannot_open_is_never_held_or_counted(self):
         project = ProjectMaster.objects.create(

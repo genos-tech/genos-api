@@ -634,7 +634,9 @@ class LeavingTests(SharingBase):
         self.assertEqual(self.call(self.user2, "delete", detail(private["id"])).status_code, 204)
 
     def test_the_new_owner_gets_a_free_name_when_theirs_is_taken(self):
-        mine = self.make_ok(user=self.user, slug="weekly", visibility="team")
+        # The new owner already has a skill of this name (MIP-2210: a second TEAM skill with the
+        # name cannot exist, so theirs is private).
+        mine = self.make_ok(user=self.user, slug="weekly")
         theirs = self.skill(slug="weekly")
         team_membership.remove_team_member(self.team.team_id, self.user2.pk)
         self.assertEqual(Skill.objects.get(pk=theirs["id"]).slug, "weekly-2")

@@ -45,6 +45,8 @@ from origin.services.schedule_jobs.report_kit import (
     in_order,
     item,
     more,
+    span,
+    status_line,
 )
 from origin.services.task_blocking import CLOSED_STATUSES
 from origin.services.user_time import zone_for_user_id
@@ -68,13 +70,6 @@ def _day(value: Any) -> date | None:
         return date.fromisoformat(value[:10])
     except ValueError:
         return None
-
-
-def _span(hours: int) -> str:
-    days, rest = divmod(hours, 24)
-    if days and not rest:
-        return "1 day" if days == 1 else f"{days} days"
-    return "1 hour" if hours == 1 else f"{hours} hours"
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
@@ -160,18 +155,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             return names.get(str(row.actor_id), "someone")
         return "system"
 
-    done_rows: list[tuple[Any, TaskActivity]] = []
-    moved_rows: list[tuple[Any, TaskActivity]] = []
-    for task_id, row in last_status.items():
-        task = readable.get(task_id)
-        if task is None:
-            continue
-        if task.status == "Closed":
-            done_rows.append((task, row))
-        elif task.status != "Blocked" and task_id not in not_open:
-            moved_rows.append((task, row))
-    for rows in (done_rows, moved_rows):
-        rows.sort(key=lambda pair: pair[1].ts_created_at, reverse=True)
+    # A task is in ONE section (MIP-1417), the one that matters most: Blocked, then Slipped, then
+    # Done, then Moved. A task that went overdue AND was started this week is a slipped task, not
+    # two lines.
+    blocked = [t for t in (readable.get(i) for i in blocked_ids) if t is not None]
+    blocked_set = {t.task_id for t in blocked}
 
     slipped: dict[int, str] = {}
     for task_id, row in pushed.items():
@@ -183,8 +171,21 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     for task_id in went_late:
         if task_id in readable:
             slipped.setdefault(task_id, "went overdue")
+    slipped = {i: said for i, said in slipped.items() if i not in blocked_set}
 
-    blocked = [t for t in (readable.get(i) for i in blocked_ids) if t is not None]
+    done_rows: list[tuple[Any, TaskActivity]] = []
+    moved_rows: list[tuple[Any, TaskActivity]] = []
+    for task_id, row in last_status.items():
+        task = readable.get(task_id)
+        if task is None:
+            continue
+        if task.status == "Closed":
+            done_rows.append((task, row))
+        elif task.status != "Blocked" and task_id not in not_open and task_id not in slipped:
+            moved_rows.append((task, row))
+    for rows in (done_rows, moved_rows):
+        rows.sort(key=lambda pair: pair[1].ts_created_at, reverse=True)
+
     # What each blocked task waits on, when it waits on tasks (one query; a blocker the member
     # may not open is not named).
     waits: dict[int, list[int]] = {}
@@ -232,21 +233,39 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             items.append(more(total - len(items), "tasks"))
         return items
 
+    # What needs a decision comes first (the card opens its first two sections): Blocked, Slipped,
+    # then what got done and what moved, and the standing counts last (MIP-1417).
     sections: list[ReportSection] = []
-    breakdown = summary["status_breakdown"]
-    stands = [
-        item(
-            f"{summary['total_tasks']} tasks: "
-            + ", ".join(
-                f"{breakdown.get(s, 0)} {s.lower()}"
-                for s in ("Open", "WIP", "Blocked", "Pending", "Closed")
-            )
+    if blocked:
+        rows = []
+        for task in shown_blocked:
+            names_of = [
+                blockers[b].display_id for b in waits.get(task.task_id, []) if b in blockers
+            ]
+            said = (
+                "newly blocked"
+                if task.task_id in last_status and last_status[task.task_id].new_value == "Blocked"
+                else "blocked"
+            ) + (f", waiting on {', '.join(sorted(names_of)[:3])}" if names_of else "")
+            rows.append(line(task, said))
+        sections.append(
+            {
+                "heading": "Blocked",
+                "key": "blocked",
+                "items": capped(arrange(rows, today), len(blocked)),
+            }
         )
-    ]
-    if summary.get("overdue_count"):
-        stands.append(item(f"{summary['overdue_count']} overdue"))
-    sections.append({"heading": "Where it stands", "key": "where_it_stands", "items": stands})
-
+    if slipped:
+        sections.append(
+            {
+                "heading": "Slipped",
+                "key": "overdue",
+                "items": capped(
+                    arrange([line(readable[i], slipped[i]) for i in ranked[:MAX_LIST]], today),
+                    len(ranked),
+                ),
+            }
+        )
     if done_rows:
         sections.append(
             {
@@ -269,36 +288,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 ),
             }
         )
-    if slipped:
-        sections.append(
-            {
-                "heading": "Slipped",
-                "key": "overdue",
-                "items": capped(
-                    arrange([line(readable[i], slipped[i]) for i in ranked[:MAX_LIST]], today),
-                    len(ranked),
-                ),
-            }
-        )
-    if blocked:
-        rows = []
-        for task in shown_blocked:
-            names_of = [
-                blockers[b].display_id for b in waits.get(task.task_id, []) if b in blockers
-            ]
-            said = (
-                "newly blocked"
-                if task.task_id in last_status and last_status[task.task_id].new_value == "Blocked"
-                else "blocked"
-            ) + (f", waiting on {', '.join(sorted(names_of)[:3])}" if names_of else "")
-            rows.append(line(task, said))
-        sections.append(
-            {
-                "heading": "Blocked",
-                "key": "blocked",
-                "items": capped(arrange(rows, today), len(blocked)),
-            }
-        )
+    news = bool(sections)
+    stands = [item(status_line(summary["total_tasks"], summary["status_breakdown"]))]
+    if summary.get("overdue_count"):
+        stands.append(item(f"{summary['overdue_count']} overdue"))
+    sections.append({"heading": "Where it stands", "key": "where_it_stands", "items": stands})
 
     counts = (
         ("done", len(done_rows)),
@@ -308,14 +302,16 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     )
     said_counts = [f"{n} {label}" for label, n in counts if n]
     line_text = (
-        f"{', '.join(said_counts)} in the last {_span(hours)}."
+        f"{', '.join(said_counts)} in the last {span(hours)}."
         if said_counts
-        else f"Nothing moved in the last {_span(hours)}."
+        else f"Nothing moved in the last {span(hours)}."
     )
     return {
         "title": f"Project: {summary.get('project_name') or 'Project'}",
         "summary": clip(line_text),
         "sections": sections,
+        # Nothing moved, slipped or is blocked: the standing counts alone are not news (MIP-1417).
+        "quiet": not news,
         "stats": [
             {"key": key, "count": n}
             for key, n in (

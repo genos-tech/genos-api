@@ -23,7 +23,18 @@ from origin.search_engine.agent.tools.get_milestone_summary import GET_MILESTONE
 from origin.services import briefing
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, more, plain
+from origin.services.schedule_jobs.report_kit import (
+    Links,
+    arrange,
+    clip,
+    counted,
+    dedupe_tasks,
+    item,
+    more,
+    plain,
+    span,
+    status_line,
+)
 from origin.services.user_time import zone_for_user_id
 
 DEFAULT_HOURS = 168
@@ -149,35 +160,18 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     if len(ranked) > MAX_CHANGED:
         changed_items.append(more(len(ranked) - MAX_CHANGED, "changed tasks"))
 
-    breakdown = summary["status_breakdown"]
-    stands = [
-        item(
-            f"{summary['total_tasks']} tasks: "
-            + ", ".join(
-                f"{breakdown.get(s, 0)} {s.lower()}"
-                for s in ("Open", "WIP", "Blocked", "Pending", "Closed")
-            )
-        )
-    ]
+    stands = [item(status_line(summary["total_tasks"], summary["status_breakdown"]))]
     if summary.get("overdue_count"):
         stands.append(item(f"{summary['overdue_count']} overdue"))
     if summary.get("due_date"):
         stands.append(item(f"Due {summary['due_date']}"))
 
-    sections: list[ReportSection] = [
-        {"heading": "Where it stands", "key": "where_it_stands", "items": stands}
-    ]
-    if changed_items:
-        sections.append(
-            {
-                "heading": f"Changed in the last {hours} hours",
-                "key": "changed",
-                "items": changed_items,
-            }
-        )
+    # What needs a decision comes first (the card opens its first two sections): what waits on
+    # blockers, then what changed, then what is ready, and the standing counts last (MIP-1417).
+    by_key: dict[str, ReportSection] = {}
     for heading, key, count_key, section_key in (
-        ("Ready to start", "ready_now", "ready_now_count", "ready"),
         ("Waiting on blockers", "blocked", "blocked_count", "blocked"),
+        ("Ready to start", "ready_now", "ready_now_count", "ready"),
     ):
         rows = summary.get(key) or []
         if rows:
@@ -187,18 +181,43 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             total = summary.get(count_key, len(rows)) if all_openable else len(shown)
             if total > len(shown):
                 shown.append(more(total - len(shown), "tasks"))
-            sections.append({"heading": heading, "key": section_key, "items": shown})
+            by_key[section_key] = {"heading": heading, "key": section_key, "items": shown}
+    if changed_items:
+        by_key["changed"] = {
+            "heading": f"Changed in the last {span(hours)}",
+            "key": "changed",
+            "items": changed_items,
+        }
+    # A task is one line, in the section that matters most (a ready task that also changed is
+    # listed under what changed).
+    sections = dedupe_tasks(
+        [by_key[k] for k in ("blocked", "changed", "ready") if k in by_key],
+        ("blocked", "changed", "ready"),
+    )
+    news = any(s["key"] in ("blocked", "changed") for s in sections)
+    sections.append({"heading": "Where it stands", "key": "where_it_stands", "items": stands})
 
+    # The count matches the list: a changed task that is listed under "Waiting on blockers" is
+    # that line, not a second one under "Changed".
+    under_blockers = {
+        i["task_id"] for i in (by_key.get("blocked") or {"items": []})["items"] if i.get("task_id")
+    }
+    changed_n = len([t for t in by_task if t not in under_blockers])
     title = summary.get("title") or "Milestone"
-    line = f"{len(by_task)} task(s) changed in the last {hours} hours; {summary['total_tasks']} in all."
+    line = (
+        f"{counted(changed_n, 'task')} changed in the last {span(hours)}; "
+        f"{summary['total_tasks']} in all."
+    )
     return {
         "title": f"Milestone: {title}",
         "summary": clip(line),
         "sections": sections,
+        # Nothing changed and nothing waits on a blocker: the counts alone are not news (MIP-1417).
+        "quiet": not news,
         "stats": [
             {"key": key, "count": n}
             for key, n in (
-                ("changed", len(by_task)),
+                ("changed", changed_n),
                 ("overdue", summary.get("overdue_count") or 0),
             )
             if n

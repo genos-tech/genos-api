@@ -219,6 +219,9 @@ class TestTheSentenceLandsInDetail(AiBase):
 
     def test_it_joins_the_reason_the_task_is_listed_instead_of_replacing_it(self):
         task = self.overdue(comment="Waiting for the vendor.")
+        # A comment from someone else in the window: the reason the task is listed that the row's
+        # own marks do not show (the days late and the priority are chips, so they are left out).
+        self.comment(task, self.user2, "Any news?", at=self.now - timedelta(hours=1))
         self.model.reply = answer(t1="The vendor has not answered.")
         report = self.run_job("what_to_do_today")
         start = {i["link"]: i for i in self.section(report, "Start with")}
@@ -394,7 +397,7 @@ class TestNeverFailsAtTheOuterEdge(AiBase):
         task = self.overdue(comment="x")
         with mock.patch.object(report_ai.context, "gather", side_effect=RuntimeError("db hiccup")):
             report = self.run_job("what_to_do_today")
-        self.assertTrue(self.section(report, "Overdue"))
+        self.assertTrue(self.section(report, "Start with"))
         self.assertIsNone(self.detail_of(report, task))
         self.assertEqual(report["ai_skipped"], "call_failed")
         self.assertEqual(self.model.calls, [])
@@ -649,7 +652,7 @@ class TestHostileReplies(AiBase):
     def test_garbage_is_the_plain_report(self):
         task, report = self.run_with("x", "I am sorry, I cannot help with that.")
         self.assertIsNone(self.detail_of(report, task))
-        self.assertTrue(self.section(report, "Overdue"))
+        self.assertTrue(self.section(report, "Start with"))
 
 
 class TestNeverFailsAReport(AiBase):
@@ -657,7 +660,7 @@ class TestNeverFailsAReport(AiBase):
         task = self.overdue(comment="x")
         self.model.reply = RuntimeError("503 from the provider, prompt was: Waiting")
         report = self.run_job("what_to_do_today")
-        self.assertTrue(self.section(report, "Overdue"))
+        self.assertTrue(self.section(report, "Start with"))
         self.assertIsNone(self.detail_of(report, task))
 
     def test_the_failure_text_is_not_logged_only_its_type(self):
