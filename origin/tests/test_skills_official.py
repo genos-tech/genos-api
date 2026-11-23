@@ -337,13 +337,38 @@ class ReleaseUpdateTests(SyncBase):
 
 
 class OnlyOfficialTests(SyncBase):
-    def test_a_members_skill_of_the_same_name_is_not_touched(self):
+    def test_a_members_public_skill_of_the_same_name_is_skipped_and_reported(self):
+        """MIP-2210: public names are unique, so the member who published first keeps the name and
+        the official skill of that name waits. Nothing of the member's is touched, nothing errors."""
         mine = Skill.objects.create(
             team=self.team,
             owner=self.user,
             slug=TRIAGE,
             title="My triage",
             visibility="public",
+            published_version_no=1,
+            current_version_no=1,
+        )
+        out = sync_command("--apply")
+        mine.refresh_from_db()
+        self.assertEqual((mine.title, mine.is_official, mine.source), ("My triage", False, "user"))
+        self.assertEqual(mine.versions.count(), 0)
+        self.assertEqual(official_skills().filter(slug=TRIAGE).count(), 0)
+        self.assertEqual(official_skills().count(), self.catalog_count - 1)
+        self.assertIn("skipped   triage", out)
+        self.assertIn("1 skipped", out)
+        # The dry run says the same, and the next run keeps skipping without an error.
+        self.assertIn("skipped   triage", sync_command())
+        sync_command("--apply")
+        self.assertEqual(official_skills().filter(slug=TRIAGE).count(), 0)
+
+    def test_a_members_private_skill_of_the_same_name_is_not_touched(self):
+        mine = Skill.objects.create(
+            team=self.team,
+            owner=self.user,
+            slug=TRIAGE,
+            title="My triage",
+            visibility="private",
             published_version_no=1,
             current_version_no=1,
         )
