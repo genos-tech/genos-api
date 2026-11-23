@@ -147,6 +147,7 @@ def metered_request(
     team_id=None,
     chosen=None,
     run_id=None,
+    credit_budget_usd_micro: int = 0,
 ) -> Iterator[RequestOutcome]:
     """Bind, open and close one logical request on a non-streaming surface.
 
@@ -155,13 +156,19 @@ def metered_request(
     and re-raised — the row is written either way, because "this request
     happened and cost money" is a fact the reconciliation needs whether or
     not the user got an answer.
+
+    `credit_budget_usd_micro` (default 0 = none) is what the loop may spend before it stops itself
+    on the member's balance (`spend.credit_budget_exhausted`): only a surface that runs the agent
+    loop passes one (a scheduled skill run, MIP-2045); the others stay exactly as they were.
     """
     if spend.current_context() is not None:
         # Already inside a logical request — see the module docstring.
         yield RequestOutcome()
         return
 
-    spend_kwargs = spend_kwargs_for(surface, user_id, team_id, chosen, run_id)
+    spend_kwargs = spend_kwargs_for(
+        surface, user_id, team_id, chosen, run_id, credit_budget_usd_micro
+    )
     open_request(spend_kwargs)
     outcome = RequestOutcome()
     try:
