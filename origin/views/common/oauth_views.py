@@ -60,7 +60,7 @@ from origin.services.oauth.registry import get_provider, supported_provider_name
 from origin.services.security_events import record_security_event
 from origin.views.common.object_body import ObjectBodyMixin
 
-from .auth_views import _set_refresh_cookie
+from .auth_views import OAuthCallbackThrottle, _set_refresh_cookie
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -413,6 +413,7 @@ class OAuthCallbackView(APIView):
     """Exchange code, look up or create user/connection, redirect."""
 
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [OAuthCallbackThrottle]
 
     def get(self, request: Request, provider_name: str):
         if provider_name not in supported_provider_names() or not _flow_open(provider_name):
