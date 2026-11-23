@@ -89,6 +89,15 @@ class InboxSenderTests(BaseAPITestCase):
         self.assertIsNone(row["senderId"])
         self.assertIsNone(row["sender"])
 
+    def test_a_row_the_reader_sent_to_themself_has_no_sender(self):
+        # A to-do reminder is filed with sender = receiver (todo_reminders.py).
+        item = self._item(self.user, item_type=9, request_status="")
+
+        row = self._items()[item.item_id]
+
+        self.assertIsNone(row["senderId"])
+        self.assertIsNone(row["sender"])
+
     def test_someone_who_is_in_no_team_of_the_receiver_is_named(self):
         # A join-team request comes from a person who is not a member yet.
         stranger = User.objects.create_user(

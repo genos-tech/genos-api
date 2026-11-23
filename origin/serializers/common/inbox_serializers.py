@@ -20,12 +20,14 @@ def inbox_sender(item: InboxItems) -> dict | None:
     """`{userId, userName, avatarImgPath}` for the person who sent `item`, else None.
 
     None for a row nobody sent (the digest, a report, a trial notice: `sender` is NULL), for an
-    account that no longer exists, and for a system account (the card then shows the type's own
-    mark, as it does for Genos). Read `item.sender` from a queryset that did
+    account that no longer exists, for a system account (the card then shows the type's own
+    mark, as it does for Genos) and for a row the reader sent to themself (a to-do reminder is
+    filed with sender = receiver: there is no one else to show, and the reader's own face on
+    their own reminder would hide the reminder mark). Read `item.sender` from a queryset that did
     `select_related("sender")`: this makes no query of its own. A deleted person arrives already
     anonymised ("Deleted user", no avatar), which is what the rest of the product shows too."""
     sender = item.sender
-    if sender is None or sender.is_system_user:
+    if sender is None or sender.is_system_user or item.sender_id == item.receiver_id:
         return None
     return dict(InboxSenderSerializer(sender).data)
 
