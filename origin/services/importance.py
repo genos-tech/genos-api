@@ -529,13 +529,25 @@ def score_task(
 # --------------------------------------------------------------------------- #
 
 
-def today_counts(ctx: ToolContext, now: datetime) -> dict[int, Counter]:
+def today_counts(
+    ctx: ToolContext,
+    now: datetime,
+    zone: Any = None,
+    access: LabelAccess | None = None,
+) -> dict[int, Counter]:
     """What has happened since the member's local midnight, per task, with the rules the
     rollups use (it is the rollups' own `compute` for one day, never stored). A failure is
-    logged and means "nothing counted today", never a failed briefing."""
+    logged and means "nothing counted today", never a failed briefing.
+
+    `zone` and `access` are the caller's, when it holds them (the briefing does), so they are
+    not looked up again. The member's own AI-app markers are not read: `classify` counts none
+    of them (MIP-2202)."""
     try:
-        today = now.astimezone(zone_for_user_id(str(ctx.user_id))).date()
-        found = item_activity.compute(ctx, [today])
+        zone = zone or zone_for_user_id(str(ctx.user_id))
+        today = now.astimezone(zone).date()
+        found = item_activity.compute(
+            ctx, [today], zone=zone, access=access, skip=frozenset({"markers"})
+        )
     except Exception:  # noqa: BLE001 - the importance view never fails a briefing
         log.warning("Today's activity not counted for importance", exc_info=True)
         return {}
@@ -559,11 +571,13 @@ def rank(
     week: item_activity.WeekSeries | None,
     pool: list[TaskMaster],
     project_id: int | None = None,
+    zone: Any = None,
+    access: LabelAccess | None = None,
 ) -> tuple[list[Scored], dict[int, Counter]]:
     """Every candidate with a score worth showing, best first, and what happened today per
     task. `pool` is the member's open tasks as the briefing already knows them; the tasks of
     their week are added. Marked `not_important` tasks never appear."""
-    zone = zone_for_user_id(str(ctx.user_id))
+    zone = zone or zone_for_user_id(str(ctx.user_id))
     today = now.astimezone(zone).date()
     candidates: dict[int, TaskMaster] = {t.task_id: t for t in pool}
     if week is not None:
@@ -573,8 +587,8 @@ def rank(
             if project_id is not None and task.project_id != project_id:
                 continue
             candidates.setdefault(task_id, task)
-    live = today_counts(ctx, now)
-    access = LabelAccess(ctx)
+    access = access or LabelAccess(ctx)
+    live = today_counts(ctx, now, zone, access)
     extra = {t for t in live if t not in candidates}
     if extra:
         for task_id, task in access.tasks(extra).items():
@@ -605,10 +619,11 @@ def suggestions(
     pool: list[TaskMaster],
     scored: list[Scored],
     live: dict[int, Counter],
+    zone: Any = None,
 ) -> list[dict[str, Any]]:
     """Where activity and the fields disagree, as a question to the member. Computed on read,
     never stored, never applied: nothing here changes a task."""
-    zone = zone_for_user_id(str(ctx.user_id))
+    zone = zone or zone_for_user_id(str(ctx.user_id))
     today = now.astimezone(zone).date()
     out: list[dict[str, Any]] = []
     raise_it = [
@@ -665,15 +680,27 @@ def _suggestion(task: TaskMaster, kind: str, text: str) -> dict[str, Any]:
     }
 
 
-def people_counts(ctx: ToolContext, now: datetime, tasks: list[TaskMaster]) -> dict[int, int]:
+def people_counts(
+    ctx: ToolContext,
+    now: datetime,
+    tasks: list[TaskMaster],
+    access: LabelAccess | None = None,
+) -> dict[int, int]:
     """`task_id -> how many OTHER people did something on it in the last 7 days`: a count, never
-    a name. One read of the lines' sources for all `tasks`; a failure gives no counts."""
+    a name. One read of the lines' sources for all `tasks`; a failure gives no counts. A merged
+    PR has no actor and the member's own AI-app markers are the member's, so neither is read
+    (MIP-2202); `access` is the caller's, when it holds one."""
     if not tasks:
         return {}
     me = str(ctx.user_id)
     try:
         events, _capped = item_lines.read_events(
-            ctx, LabelAccess(ctx), {t.task_id: t for t in tasks}, now - timedelta(days=7), now
+            ctx,
+            access or LabelAccess(ctx),
+            {t.task_id: t for t in tasks},
+            now - timedelta(days=7),
+            now,
+            frozenset({"deliveries", "markers"}),
         )
     except Exception:  # noqa: BLE001 - a count is never a reason to fail
         log.warning("People on items not counted for importance", exc_info=True)
