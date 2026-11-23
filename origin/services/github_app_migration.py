@@ -23,9 +23,10 @@ Rules these keep (genos-security, design section 8):
   * **Only the Genos hook is ever deleted.** The hook is read first; it is deleted only if its URL
     path is the legacy webhook path (`/api/v2/github/webhook/`). A hook that points elsewhere, or
     that GitHub answers a redirect for, is left alone and reported.
-  * **The registration row stays.** The reconcile cron and the PR scans still read it to know which
-    repos Genos watches; only the hook at GitHub goes, and the row stops accepting the shared secret
-    (a hook that no longer exists signs nothing). Deleting the rows is a later step.
+  * **The registration row stays.** Only the hook at GitHub goes, and the row stops accepting the
+    shared secret (a hook that no longer exists signs nothing). The reconcile cron and the PR scans
+    read the repos of the App's installations too and use App credentials for them (MIP-2194), so
+    the row is no longer needed for a covered repo; deleting the rows is a later cleanup step.
   * **Nothing here prints or logs a token, a secret or GitHub's answer.** Logs carry counts, row ids
     and an outcome word; an exception is logged by class only.
   * **Idempotent.** A hook GitHub no longer has (404) counts as already gone; a second run finds
@@ -327,6 +328,22 @@ UNREADABLE = "unreadable"
 STALE = "changed_meanwhile"
 
 
+def registration_needs_registrar_token(registration: GithubWebhookRegistration) -> bool:
+    """Does anything still use the registrar's legacy token for this registration?
+
+    Not when the hook at GitHub is gone (`is_migrated`: the legacy hook was deleted, so there is
+    nothing to re-key, adopt or delete) and the App serves EVERY team the registrar writes for
+    (`classify` says `covered`: an active installation linked to each of those teams covers the
+    repo), so the reconcile cron reads it with an installation token and the PR scans with the
+    requester's own credential, with no registrar token (MIP-2194). Anything else (a live hook,
+    a repo the App does not cover or no longer covers: suspended, unlinked, switch off, or covers
+    only another team's installation) needs it.
+    """
+    if not is_migrated(registration):
+        return True
+    return classify(registration).verdict != COVERED
+
+
 @dataclass
 class GrantPlan:
     """The legacy `github` rows that can be revoked, and the ones held back."""
@@ -344,9 +361,13 @@ def plan_grant_revocation(
     """The `github` rows whose stored token holds the `repo` scope, split into:
 
     * `eligible`: the person has moved (has a `github_app` connection), or `include_unmoved`;
-    * `registrars`: eligible people who still administer a legacy hook (`registered_by`). Their
-      token is what the reconcile cron and `rekey_github_webhooks` use for that hook, so it is
-      kept unless `include_registrars` says the hooks are dealt with.
+    * `registrars`: eligible people whose token a legacy hook registration still needs
+      (`registered_by`), kept unless `include_registrars` says the hooks are dealt with. A
+      registration needs it (`registration_needs_registrar_token`) unless its hook is gone
+      (`migrate_github_hooks_to_app` ran) AND the App covers the repo, because then the reconcile
+      cron and the PR scans read it with the App's credentials (MIP-2194), and nothing else uses
+      the registrar's token. So a registrar whose every repo is covered is eligible; one with a
+      live hook, or a repo the App does not (or no longer) covers, is held back.
     """
     moved = Exists(ConnectedAccount.objects.filter(user=OuterRef("user"), provider="github_app"))
     rows = ConnectedAccount.objects.filter(provider="github", scopes__contains=["repo"])
@@ -355,11 +376,10 @@ def plan_grant_revocation(
     plan.unmoved = candidates.exclude(moved).count()
     if not include_unmoved:
         candidates = candidates.filter(moved)
-    registrar_ids = set(
-        GithubWebhookRegistration.objects.exclude(registered_by__isnull=True).values_list(
-            "registered_by_id", flat=True
-        )
-    )
+    registrar_ids = set()
+    for registration in GithubWebhookRegistration.objects.exclude(registered_by__isnull=True):
+        if registration_needs_registrar_token(registration):
+            registrar_ids.add(registration.registered_by_id)
     for account in candidates:
         if account.user_id in registrar_ids and not include_registrars:
             plan.registrars.append(account)

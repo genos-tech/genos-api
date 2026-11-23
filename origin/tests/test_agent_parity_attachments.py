@@ -1195,4 +1195,7 @@ class McpFlagOffTests(McpFilesBase):
         with mock.patch.dict(settings.SEARCH_ENGINE, OFF):
             visible = {t.name for t in mcp.visible_tools(SCOPE_WRITE, allow_destructive=True)}
         self.assertFalse(flagged & visible)
-        self.assertEqual(len(visible), len(mcp.CATALOG) - len(flagged))
+        # MIP-2046: the Genos Skills reads are gated by the `GENOS_SKILLS` setting (off here), not a flag.
+        gated = {t.name for t in mcp.CATALOG if t.setting}
+        self.assertFalse(gated & visible)
+        self.assertEqual(len(visible), len(mcp.CATALOG) - len(flagged) - len(gated))

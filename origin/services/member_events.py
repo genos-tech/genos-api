@@ -160,6 +160,11 @@ NO_SINGLE_ITEM = frozenset(
         "list_calendar_events",
         "get_calendar_event",  # MIP-1059, offered only while `AGENT_PARITY_TOOLS` is on
         "list_calendars",
+        # MIP-2046: a skill is not a work item (task, note, chat), so a call names none; offered only
+        # while `GENOS_SKILLS` is on.
+        "list_my_skills",
+        "get_skill",
+        "run_skill",
         "get_my_blockers",
         "list_my_inbox",
         "get_my_throughput",
