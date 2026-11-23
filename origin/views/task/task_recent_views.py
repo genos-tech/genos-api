@@ -35,6 +35,8 @@ def _serialize(row) -> dict:
             "color": colors["chipColor"],
             "textColor": colors["textColor"],
         },
+        "assigneeId": str(task.assignee_id) if task.assignee_id else None,
+        "assigneeName": task.assignee.username if task.assignee else None,
         "tsUpdated": task.ts_updated_at,
         "tsOpened": row.ts_opened_at,
     }
