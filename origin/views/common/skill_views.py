@@ -94,6 +94,8 @@ _FIELDS = {
     "language": "language",
     "bodyMarkdown": "body_markdown",
     "visibility": "visibility",
+    # Who a `specific` skill is shared with (MIP-2212): `[{kind, id}]`, the whole list.
+    "shares": "shares",
     # Making a skill public (MIP-2047): not stored on the skill.
     "acceptTerms": "accept_terms",
     "handle": "handle",
@@ -130,8 +132,10 @@ def _row(
     src = version if version is not None else skill
     anonymous = skill.visibility == "public" and not edits
     hideable = (
-        skill.visibility == "team"
-        and skill.status in ("active", "hidden_by_team")
+        (
+            (skill.visibility == "team" and skill.status == "active")
+            or (skill.visibility in ("team", "specific") and skill.status == "hidden_by_team")
+        )
         and not mine
         and (service.is_team_owner(skill, user_id) if team_owner is None else team_owner)
     )
@@ -188,7 +192,7 @@ def _row(
     }
     # Who wrote it: a teammate by name. An outside author of a public skill stays unnamed until
     # the Hub's public handle exists (MIP-2047): the account name is not theirs to publish.
-    if edits or skill.visibility == "team":
+    if edits or skill.visibility in ("team", "specific"):
         out["ownerName"] = skill.owner.username if skill.owner_id else ""
     if skill.visibility == "public":
         # The byline of a public skill is the author's PUBLIC handle (MIP-2047), never the account
@@ -217,6 +221,14 @@ def _add_draft_state(out: dict[str, Any], skill: Skill, user_id: Any) -> None:
     changed = service.unpublished_changes(skill, live_text=out.get("bodyMarkdown"))
     out["unpublishedChanges"] = [_WIRE_NAMES[name] for name in changed]
     out["hasUnpublishedChanges"] = bool(changed)
+
+
+def _add_shares(out: dict[str, Any], skill: Skill, user_id: Any) -> None:
+    """The owner's page and save answer: who the skill is shared with (MIP-2212), as chips. Only the
+    owner gets it (a co-editor may not change it, and it names people and chats); a list leaves it
+    out. Kept whatever the visibility is, so the editor can show it when the owner picks "specific"."""
+    if service.is_owner(skill, user_id):
+        out["shares"] = service.grants_view(skill, user_id)
 
 
 def _version_row(version: SkillVersion, *, with_body: bool = False) -> dict[str, Any]:
@@ -444,6 +456,7 @@ class SkillDetailView(_Base):
         _add_draft_state(out, skill, user.pk)
         if service.reads_draft(skill, user.pk):
             out["editors"] = [_person(u) for u in service.editors_of(skill)]
+        _add_shares(out, skill, user.pk)
         attributed = service.attribution(skill, user.pk)
         if attributed is not None:
             out["forkedFrom"] = attributed
@@ -464,6 +477,7 @@ class SkillDetailView(_Base):
         out = _row(skill, request.user.pk)
         out["bodyMarkdown"] = service.body_markdown_for(skill, request.user.pk)
         _add_draft_state(out, skill, request.user.pk)
+        _add_shares(out, skill, request.user.pk)
         return Response({"skill": out})
 
     def delete(self, request, skill_id):

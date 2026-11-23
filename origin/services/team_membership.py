@@ -173,6 +173,7 @@ def drop_in_team_access(team_id, attendee_id) -> None:
     from origin.services.skills import service as skills_service
 
     skills_service.drop_editor_rows(attendee_id, team_id)
+    skills_service.end_sharing_for_leaver(attendee_id, team_id)
 
     revoke_team_api_keys(team_id, attendee_id)
 

@@ -10,8 +10,9 @@ eval list, and the placeholder is how they see an HTML note). The note's ACL is 
 THE SCAN IS ADVICE, NOT A BOUNDARY. The page is untrusted content. What keeps it harmless is the
 viewer's sandboxed frame and CSP (a later phase), never this file: it only tells the author, in
 words a model can act on, which parts will be blocked and what to do about each. A save is therefore
-never refused for a fixable reason; the one hard limit is size (`MAX_HTML_BYTES`), and its message
-says what to do instead of just saying no.
+never refused for a fixable reason. The hard limits are the member's plan limits (size, count of
+HTML notes, saves per hour: `html_note_limits.HTML_NOTE_LIMITS`, the one table, MIP-2216), and each
+message says the numbers and what to do instead of just saying no.
 
 Everything is stdlib (`html.parser`); the regexes run over script and style text only and are
 linear (no nested quantifiers).
@@ -35,14 +36,15 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.html_note_models import NoteHtmlRevision
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.services.html_note_limits import MAX_PAGE_BYTES, PLAN_PLACE
 
 BODY_FORMAT_BLOCKNOTE = "blocknote"
 BODY_FORMAT_HTML = "html"
 
-#: The hard cap on one page, in UTF-8 bytes (decision D3). 200 KB is a better target.
-MAX_HTML_BYTES = 512 * 1024
-#: Saves one person may make per hour, across all their HTML notes (a backstop against a loop).
-SAVES_PER_HOUR = 30
+#: The largest page any plan may save, in UTF-8 bytes. Derived from the plan table
+#: (`html_note_limits.HTML_NOTE_LIMITS`, MIP-2216), which holds the per-plan size, count and hourly
+#: rate: the numbers live there and nowhere else. 200 KB is a better target for any page.
+MAX_HTML_BYTES = MAX_PAGE_BYTES
 #: Revisions kept per note; older ones are dropped on each save.
 KEEP_REVISIONS = 20
 #: The most characters of visible text the placeholder body carries (it is what search finds).
@@ -423,21 +425,23 @@ def byte_size(html: str) -> int:
     return len(html.encode("utf-8", errors="surrogatepass"))
 
 
-def check_size(html: str) -> int:
-    """The page's size in bytes, or `HtmlNoteRefused` saying how to make it fit."""
+def check_size(html: str, max_bytes: int = MAX_HTML_BYTES) -> int:
+    """The page's size in bytes, or `HtmlNoteRefused` saying how to make it fit. `max_bytes` is the
+    member's plan limit (`html_note_limits.limits_for`); with none given, the largest any plan has."""
     size = byte_size(html)
-    if size > MAX_HTML_BYTES:
+    if size > max_bytes:
         raise HtmlNoteRefused(
-            f"The page is {size:,} bytes and the limit is {MAX_HTML_BYTES:,} bytes "
-            f"({MAX_HTML_BYTES // 1024} KB). Nothing was saved. Make it smaller and save again: "
-            "remove embedded images or shrink them, drop repeated data, shorten inline libraries. "
-            "About 200 KB is a good target. If it cannot be smaller, split it into several pages "
-            "and link them in the summary."
+            f"The page is {size:,} bytes and your plan's limit is {max_bytes:,} bytes "
+            f"({max_bytes // 1024} KB) per page. Nothing was saved. Make it smaller and save "
+            "again: remove embedded images or shrink them, drop repeated data, shorten inline "
+            "libraries. About 200 KB is a good target. If it cannot be smaller, split it into "
+            "several pages and link them in the summary, or upgrade for a higher limit "
+            f"({PLAN_PLACE})."
         )
     return size
 
 
-def check_input(html: Any) -> int:
+def check_input(html: Any, max_bytes: int = MAX_HTML_BYTES) -> int:
     """The cheap checks on the page argument, done BEFORE access and the rate limit and long before
     the scan: it is a non-blank string within the size cap. Returns the size in bytes."""
     if not isinstance(html, str) or not html.strip():
@@ -445,15 +449,16 @@ def check_input(html: Any) -> int:
             "`html` is required: the whole page as one string, starting with <!doctype html>. "
             "Nothing was saved."
         )
-    return check_size(html)
+    return check_size(html, max_bytes)
 
 
 def _rate_key(user_id: str) -> str:
     return f"html_notes:saves:{user_id}:{timezone.now().strftime('%Y%m%d%H')}"
 
 
-def check_rate(user_id: str) -> None:
+def check_rate(user_id: str, per_hour: int) -> None:
     """Count one save for `user_id` in this clock hour, or refuse with the time to wait.
+    `per_hour` is the member's plan limit (`HtmlNoteLimits.saves_per_hour`).
 
     A fixed window (one cache increment), like `services/throttles`: up to twice the rate across an
     hour boundary, which suits a backstop. The default cache ignores a Redis outage, so a
@@ -466,12 +471,12 @@ def check_rate(user_id: str) -> None:
     except ValueError:  # the key expired between add and incr
         cache.set(key, 1, 3700)
         used = 1
-    if used > SAVES_PER_HOUR:
+    if used > per_hour:
         minutes = 60 - timezone.now().minute
         raise HtmlNoteRefused(
-            f"You have saved {SAVES_PER_HOUR} HTML pages this hour, which is the limit. Nothing "
+            f"You have saved {per_hour} HTML pages this hour, which is your plan's limit. Nothing "
             f"was saved. Try again in about {minutes} minutes, and put several changes into one "
-            "save instead of saving after each."
+            f"save instead of saving after each. A higher plan allows more ({PLAN_PLACE})."
         )
 
 
@@ -519,18 +524,39 @@ class PreparedHtml:
     body: list[dict[str, Any]]
 
 
-def prepare(html: Any, *, title: str | None = None, summary: str | None = None) -> PreparedHtml:
+_NEEDS_TITLE = (
+    "The page needs a title: pass `title`, or add a <title> to the page. Nothing was saved."
+)
+
+
+def check_title_possible(html: str, title: str | None) -> None:
+    """Refuse, BEFORE a save is counted, a page that cannot get a title: no `title` argument and no
+    `<title` anywhere in it. A cheap substring test (the scan stays after the rate limit), so a
+    caller retrying title-less pages is told at once and uses no save from the hour. A page that
+    passes can still be refused by `prepare` (a `<title>` only inside an SVG); that one counts."""
+    if (title or "").strip():
+        return
+    if "<title" not in html.lower():
+        raise HtmlNoteRefused(_NEEDS_TITLE)
+
+
+def prepare(
+    html: Any,
+    *,
+    title: str | None = None,
+    summary: str | None = None,
+    max_bytes: int = MAX_HTML_BYTES,
+) -> PreparedHtml:
     """Validate and scan a page before anything is written. Raises `HtmlNoteRefused`.
 
     `title` wins over the page's `<title>`; with neither, the save is refused with the fix.
+    `max_bytes` is the member's plan limit.
     """
-    size = check_input(html)
+    size = check_input(html, max_bytes)
     scan = scan_html(html)
     chosen = (title or "").strip() or scan.title
     if not chosen:
-        raise HtmlNoteRefused(
-            "The page needs a title: pass `title`, or add a <title> to the page. Nothing was saved."
-        )
+        raise HtmlNoteRefused(_NEEDS_TITLE)
     chosen = chosen[:MAX_TITLE_CHARS]
     note_summary = " ".join((summary or "").split())[:MAX_SUMMARY_CHARS]
     if not note_summary:

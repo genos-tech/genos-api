@@ -59,6 +59,7 @@ from origin.models.skills.skill_models import (
     TOOL_LEVEL_ACT,
     TOOL_LEVEL_READ,
     VISIBILITY_PUBLIC,
+    VISIBILITY_SPECIFIC,
     VISIBILITY_TEAM,
     Skill,
     SkillInstall,
@@ -220,8 +221,9 @@ def _by_id(user: Any, team_id: str, skill_id: str) -> tuple[Skill, SkillInstall 
         if str(skill.team_id) != team_id:
             raise service.SkillNotFound
         return skill, None
-    if skill.visibility == VISIBILITY_TEAM:
-        # A team skill runs in its own team: its text names that team's work.
+    if skill.visibility in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC):
+        # A team skill runs in its own team: its text names that team's work. A skill shared with
+        # chosen people is the same (`get_readable` already asked its grants, live).
         if str(skill.team_id) != team_id:
             raise service.SkillNotFound
         # `can_read` lets the team owner (and a co-editor) SEE a hidden team skill, to show it again;
@@ -242,13 +244,14 @@ def _by_name(user: Any, team_id: str, slug: str) -> tuple[Skill, SkillInstall | 
     mine = Skill.objects.filter(owner=user, team_id=team_id, slug=slug).first()
     if mine is not None:
         return mine, None
-    # 2. team: only for a member of the team (not a guest), published and active
+    # 2. team: only for a member of the team (not a guest), published and active: a team skill, or
+    # one shared with this person (`shared_readers`, the one rule `can_read` and the lists use)
     if service.is_team_member(team_id, user.pk):
         teammates = list(
             Skill.objects.select_related("owner")
             .filter(
+                service.shared_readers(user.pk),
                 team_id=team_id,
-                visibility=VISIBILITY_TEAM,
                 slug=slug,
                 published_version_no__gt=0,
                 status=STATUS_ACTIVE,
@@ -295,7 +298,11 @@ def _author_of(user: Any, skill: Skill) -> str:
         return AUTHOR_YOU
     if _is_official(skill):
         return AUTHOR_OFFICIAL
-    return AUTHOR_TEAMMATE if skill.visibility == VISIBILITY_TEAM else AUTHOR_OUTSIDE
+    return (
+        AUTHOR_TEAMMATE
+        if skill.visibility in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC)
+        else AUTHOR_OUTSIDE
+    )
 
 
 def _load(
@@ -684,8 +691,8 @@ def runnable(user: Any, team_id: Any) -> list[dict[str, Any]]:
     mine = list(base.filter(owner=user, team_id=team_id).order_by("slug")[:PICKER_GROUP_CAP])
     team = list(
         base.filter(
+            service.shared_readers(user.pk),
             team_id=team_id,
-            visibility=VISIBILITY_TEAM,
             published_version_no__gt=0,
             status=STATUS_ACTIVE,
         )
