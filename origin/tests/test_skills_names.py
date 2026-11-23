@@ -326,6 +326,20 @@ class MigrationTests(NameRuleBase):
         self.run_step()
         self.assertEqual(Skill.objects.get(pk=newer.pk).slug, "a" * 38 + "-2")
 
+    def test_a_cut_that_ends_in_a_hyphen_does_not_make_a_double_hyphen(self):
+        self.drop_indexes()
+        long = "a" * 37 + "-bb"  # the 38th character is the hyphen
+        Skill.objects.create(
+            team=self.team, owner=self.user, slug=long, title="x", visibility="team"
+        )
+        newer = Skill.objects.create(
+            team=self.team, owner=self.user2, slug=long, title="y", visibility="team"
+        )
+        self.run_step()
+        renamed = Skill.objects.get(pk=newer.pk).slug
+        self.assertEqual(renamed, "a" * 37 + "-2")
+        self.assertNotIn("--", renamed)
+
     def tearDown(self):
         cache.clear()
         super().tearDown()

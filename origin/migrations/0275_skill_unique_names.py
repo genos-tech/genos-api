@@ -48,7 +48,8 @@ def rename_clashes(apps, schema_editor):
             while True:
                 n += 1
                 suffix = f"-{n}"
-                candidate = f"{skill.slug[: SLUG_MAX - len(suffix)]}{suffix}"
+                # No trailing hyphen before the suffix: a double hyphen breaks the name rule.
+                candidate = f"{skill.slug[: SLUG_MAX - len(suffix)].rstrip('-')}{suffix}"
                 if _free(Skill, skill, candidate):
                     break
             Skill.objects.filter(pk=skill.pk).update(slug=candidate)
