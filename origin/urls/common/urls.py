@@ -106,7 +106,10 @@ from origin.views.common.security_event_views import (
 from origin.views.common.skill_views import (
     SkillCopyView,
     SkillDetailView,
+    SkillEditorDetailView,
+    SkillEditorsView,
     SkillExportView,
+    SkillHideView,
     SkillImportView,
     SkillInstallView,
     SkillListView,
@@ -528,6 +531,17 @@ urlpatterns = [
     ),
     path("api/v2/skills/<uuid:skill_id>/star/", SkillStarView.as_view(), name="skill_star"),
     path("api/v2/skills/<uuid:skill_id>/export/", SkillExportView.as_view(), name="skill_export"),
+    path(
+        "api/v2/skills/<uuid:skill_id>/editors/",
+        SkillEditorsView.as_view(),
+        name="skill_editors",
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/editors/<uuid:user_id>/",
+        SkillEditorDetailView.as_view(),
+        name="skill_editor_detail",
+    ),
+    path("api/v2/skills/<uuid:skill_id>/hide/", SkillHideView.as_view(), name="skill_hide"),
     path("api/v2/agent/work/", AgentWorkView.as_view(), name="agent_work"),
     path("api/v2/mcp/connections/", McpConnectionListView.as_view(), name="mcp_connections"),
     path(

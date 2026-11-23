@@ -60,6 +60,8 @@ from django.conf import settings
 from django.core.exceptions import MiddlewareNotUsed
 from django.db import connections
 
+from origin.services import section_perf
+
 log = logging.getLogger("origin.perf")
 
 DEFAULT_CPU_STAT_PATH = "/sys/fs/cgroup/cpu.stat"
@@ -259,7 +261,7 @@ def _tool(request) -> str:
     chars = getattr(request, "mcp_result_chars", None)
     if not isinstance(name, str) or not isinstance(chars, int):
         return ""
-    return f" tool={name} result_chars={chars}"
+    return f" tool={name} result_chars={chars}{section_perf.take()}"
 
 
 class RequestPerfMiddleware:
@@ -298,6 +300,7 @@ class RequestPerfMiddleware:
     def _handle(self, request, count: int):
         if self._skipped(request):
             return self.get_response(request)
+        section_perf.reset()
         span = self._begin(count)
         if span is None:
             return self.get_response(request)

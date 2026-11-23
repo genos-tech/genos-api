@@ -8,6 +8,7 @@ invite all go through it, so everything attached to "a person joined" is written
 the accept endpoint and the invite-signup path.
 """
 
+import logging
 from dataclasses import dataclass
 
 from django.db import transaction
@@ -15,6 +16,8 @@ from django.utils import timezone
 
 from origin.models.common.team_models import TeamMembers
 from origin.services.team_default_chats import join_default_chats
+
+logger = logging.getLogger(__name__)
 
 
 class InviteAcceptError(Exception):
@@ -165,6 +168,12 @@ def drop_in_team_access(team_id, attendee_id) -> None:
         via_group_type="external_grant"
     ).delete()
 
+    # A Genos Skill's co-editor role is an Editor row on the skill's hidden note, which the two
+    # revokes above do not reach (MIP-2043).
+    from origin.services.skills import service as skills_service
+
+    skills_service.drop_editor_rows(attendee_id, team_id)
+
     revoke_team_api_keys(team_id, attendee_id)
 
 
@@ -219,6 +228,15 @@ def remove_team_member(team_id, attendee_id) -> int:
         if member is not None:
             member.is_deleted = True
             member.save(update_fields=["is_deleted", "ts_updated_at"])
+        # What the person shared with the team stays with the team (Genos Skills, MIP-2043): their
+        # team skills move to the team owner. A failure here must not keep the person on the team.
+        try:
+            from origin.services.skills import service as skills_service
+
+            with transaction.atomic():
+                skills_service.hand_over_team_skills(team_id, attendee_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("skills: hand-over failed for user=%s team=%s", attendee_id, team_id)
         drop_in_team_access(team_id, attendee_id)
         withdrawn = drop_team_member_participation(team_id, attendee_id)
         # The last live member going closes the team; its data is purged by the cron (MIP-1958).
