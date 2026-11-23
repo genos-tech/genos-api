@@ -287,6 +287,10 @@ class AgentRun(models.Model):
     # row, and this with it. NULL on every run that never paused, and on a run
     # paused before the column existed, which resumes as it always did.
     resume_context = models.JSONField(null=True, blank=True, default=None)
+    # The skill this ask ran (MIP-2189, `GENOS_SKILLS`): `{"id", "version_no", "slug"}`, the REFERENCE
+    # only (never the text), so a turn reloaded from history can be retried with the same skill.
+    # NULL on every plain ask and on every run before the column existed.
+    skill_ref = models.JSONField(null=True, blank=True, default=None)
     # The asker withdrew THIS answer from the team-shared `spotlight_answer`
     # lane (DELETE /api/v2/agent/shared-answers/<run_id>/). The conversation
     # itself stays, and so does the asker's private `conversation` memory;
