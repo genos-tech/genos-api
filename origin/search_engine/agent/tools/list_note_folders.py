@@ -58,6 +58,8 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG
             team=ctx.team_id, owner=ctx.user_id, parent_note_id__isnull=True
         )
         .exclude(folder_id__in=_team_folder_ids(ctx))
+        # A Genos Skill's body note is not one of the user's notes to list (MIP-2121).
+        .exclude(folder_id__in=PersonalNoteFolder.skill_folder_ids())
         .values("note_id", "title", "folder_id")
         .order_by("title")[:_MAX_NOTES]
     )

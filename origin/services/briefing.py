@@ -46,7 +46,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMembers
@@ -66,7 +66,7 @@ from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
-from origin.services import member_events
+from origin.services import member_events, section_perf
 from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
 from origin.services.plain_text import body_text, message_text
 from origin.services.user_time import zone_for_user_id
@@ -718,7 +718,9 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
         )
     )
     owned = {
-        1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team),
+        1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team).exclude(
+            folder_id__in=PersonalNoteFolder.skill_folder_ids()
+        ),
         2: own_task_notes,
         # A chat note has no author exception (MIP-1492): the ones the caller wrote and can
         # still open, through their chat or a grant, by the rule `get_effective_role` applies.
@@ -1633,8 +1635,14 @@ def _did_in(
         )
     }
     by_note: dict[tuple[int, int], list[Any]] = {}
+    # A Genos Skill's body note is not a note to report on (MIP-2121).
+    skill_bodies = PersonalNoteMaster.skill_body_ids(
+        v.note_id for v in versions if v.note_type == 1
+    )
     for v in versions:
         note = notes.get((v.note_type, v.note_id))
+        if v.note_type == 1 and v.note_id in skill_bodies:
+            continue
         if note is not None and _may_read_note(ctx, v.note_type, note):
             by_note.setdefault((v.note_type, v.note_id), []).append(v)
     for (kind, note_id), rows in by_note.items():
@@ -1957,7 +1965,36 @@ def suggested_next(
 # --------------------------------------------------------------------------- #
 
 
+def _timed(name: str, fn: Callable[..., Any], *args: Any) -> Any:
+    with section_perf.section(name):
+        return fn(*args)
+
+
 def build_briefing(
+    ctx: ToolContext,
+    *,
+    window: Any = None,
+    since: Any = None,
+    project_id: Any = None,
+    now: datetime | None = None,
+    page_only: bool = False,
+    structured: bool = False,
+) -> dict[str, Any]:
+    """See `_build_briefing`. The only addition is the per-section query count (MIP-2179), kept
+    only when `AGENT_CALL_LOG` is on, for the `perf.request` line; the result is the same."""
+    with section_perf.collecting():
+        return _build_briefing(
+            ctx,
+            window=window,
+            since=since,
+            project_id=project_id,
+            now=now,
+            page_only=page_only,
+            structured=structured,
+        )
+
+
+def _build_briefing(
     ctx: ToolContext,
     *,
     window: Any = None,
@@ -1975,42 +2012,52 @@ def build_briefing(
     facts as data (`events[].data`, `suggested_next[].reason_codes`) so a page can say them in
     the member's language. Off by default: what the MCP tool returns is unchanged."""
     now = now or timezone.now()
-    zone = zone_for_user_id(ctx.user_id)
-    project = _check_project(ctx, project_id)
-    win = resolve_window(ctx, window, since, now, zone)
-    names = _Names(ctx)
+    with section_perf.section("setup"):
+        zone = zone_for_user_id(ctx.user_id)
+        project = _check_project(ctx, project_id)
+        win = resolve_window(ctx, window, since, now, zone)
+        names = _Names(ctx)
 
-    items, total_changed, automated_only = changed_for_me(ctx, win, project, names, structured)
-    me = None if page_only else CustomUser.objects.filter(id=ctx.user_id).first()
-    team = None if page_only else TeamMaster.objects.filter(team_id=ctx.team_id).first()
-    agenda_section = agenda(ctx, now, zone, project, calendar=not page_only)
-    waiting_me = waiting_on_me(ctx, now, names)
-    chat_answers = (
-        {"chats": [], "total": 0, "truncated": False}
-        if page_only
-        else answers_in_chats(
-            ctx,
-            now,
-            project,
-            names,
-            {str(m["message_id"]) for m in waiting_me["mentions"] if m.get("source") == "chat"},
+    with section_perf.section("changed_for_me"):
+        items, total_changed, automated_only = changed_for_me(ctx, win, project, names, structured)
+    with section_perf.section("me_team"):
+        me = None if page_only else CustomUser.objects.filter(id=ctx.user_id).first()
+        team = None if page_only else TeamMaster.objects.filter(team_id=ctx.team_id).first()
+    with section_perf.section("agenda"):
+        agenda_section = agenda(ctx, now, zone, project, calendar=not page_only)
+    with section_perf.section("waiting_on_me"):
+        waiting_me = waiting_on_me(ctx, now, names)
+    with section_perf.section("chat_answers"):
+        chat_answers = (
+            {"chats": [], "total": 0, "truncated": False}
+            if page_only
+            else answers_in_chats(
+                ctx,
+                now,
+                project,
+                names,
+                {str(m["message_id"]) for m in waiting_me["mentions"] if m.get("source") == "chat"},
+            )
         )
-    )
-    waiting_others = waiting_on_others(ctx, names)
+    with section_perf.section("waiting_on_others"):
+        waiting_others = waiting_on_others(ctx, names)
     # The per-day table (MIP-1084): brought up to yesterday and read ONCE, before anything is
     # ranked, so the first briefing ranks with the same week the second one does.
     from origin.services import item_activity  # noqa: PLC0415 - it reads item_lines, which reads this module
 
-    activity, week = item_activity.briefing_data(ctx, now)
-    ranked, importance_block, excluded = important_next(
-        ctx, now, zone, items, project, week, structured
-    )
-    suggestions = (
-        ranked
-        if ranked is not None
-        else suggested_next(ctx, now, zone, win, items, project, excluded, structured)
-    )
-    did = {} if page_only else what_you_did(ctx, now, zone, names)
+    with section_perf.section("item_activity"):
+        activity, week = item_activity.briefing_data(ctx, now)
+    with section_perf.section("ranking"):
+        ranked, importance_block, excluded = important_next(
+            ctx, now, zone, items, project, week, structured
+        )
+        suggestions = (
+            ranked
+            if ranked is not None
+            else suggested_next(ctx, now, zone, win, items, project, excluded, structured)
+        )
+    with section_perf.section("what_you_did"):
+        did = {} if page_only else what_you_did(ctx, now, zone, names)
 
     # People are named in one batch, after every section has said who it needs.
     for item in items:
@@ -2045,13 +2092,16 @@ def build_briefing(
         },
         "waiting_on_me": waiting_me,
         "waiting_on_others": waiting_others,
-        "stale_mine": {} if page_only else stale_mine(ctx, now, zone, project),
+        "stale_mine": {}
+        if page_only
+        else _timed("stale_mine", stale_mine, ctx, now, zone, project),
         "what_you_did": did,
         "activity": activity,
         "suggested_next": suggestions,
         "importance": importance_block,
     }
-    names.fill()
+    with section_perf.section("names"):
+        names.fill()
     asked = waiting_me["requests"], waiting_me["mentions"]
     # Said only when there is news, so a briefing without it reads as it always did.
     answered = (
@@ -2065,5 +2115,6 @@ def build_briefing(
         f"{agenda_section['overdue_count']} overdue."
     )
     if win.commit:
-        win.commit()
+        with section_perf.section("commit"):
+            win.commit()
     return payload
