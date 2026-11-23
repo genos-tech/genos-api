@@ -788,3 +788,246 @@ class RepoScopeSwitchTests(TestCase):
     def test_the_switch_does_not_depend_on_the_app_being_on(self):
         # A rollback of the App switch must not bring the broad scope back.
         self.assertNotIn("repo", self._scopes("connect"))
+
+
+@override_settings(**APP)
+class UnregisterTests(Base):
+    """`migrate_github_hooks_to_app --unregister owner/name` (MIP-2091): stop tracking repos the
+    maintainer chose (a personal repo, another organization's) that no installation covers."""
+
+    def setUp(self):
+        self.user = self._user("registrar")
+        self.team = self._team("Acme", self.user)
+        # The two repos Ken chose to stop tracking, plus one that stays tracked.
+        self.chosen = self._registration("kentarokamiyajp", "equity-investment", self.user, 11)
+        self.other_org = self._registration("weikiy-tech", "chat-app-prototype", self.user, 12)
+        self.kept = self._registration("acme", "api", self.user, 13)
+        self._link(self._installation(), self.team, self.user)  # covers acme/api only
+
+    def _unregister(self, gh, *args):
+        gh.RequestException = requests.RequestException
+        return self._run("--unregister", *args)
+
+    def _exists(self, reg):
+        return GithubWebhookRegistration.objects.filter(pk=reg.pk).exists()
+
+    def test_dry_run_lists_the_rows_and_changes_and_calls_nothing(self):
+        with mock.patch(GITHUB) as gh:
+            out, _ = self._run(
+                "--unregister",
+                "kentarokamiyajp/equity-investment",
+                "--unregister",
+                "weikiy-tech/chat-app-prototype",
+            )
+        gh.get.assert_not_called()
+        gh.delete.assert_not_called()
+        self.assertIn("would_unregister kentarokamiyajp/equity-investment", out)
+        self.assertIn("would_unregister weikiy-tech/chat-app-prototype", out)
+        self.assertIn(str(self.team.team_id), out)
+        self.assertIn("2 registration(s): 2 would_unregister", out)
+        self.assertIn("Dry run: nothing was changed", out)
+        self.assertEqual(GithubWebhookRegistration.objects.count(), 3)
+
+    def test_counts_only_dry_run_names_no_repository(self):
+        out, _ = self._run("--unregister", "kentarokamiyajp/equity-investment", "--counts-only")
+        self.assertNotIn("equity-investment", out)
+        self.assertIn("1 registration(s): 1 would_unregister", out)
+
+    def test_apply_deletes_the_hook_then_the_row_and_leaves_other_repos_alone(self):
+        with (
+            mock.patch(GITHUB) as gh,
+            self.assertLogs("origin.management.commands", level="INFO") as cmd_logs,
+        ):
+            gh.get.return_value = _resp(200, _hook_body())
+            gh.delete.return_value = _resp(204)
+            out, err = self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        gh.delete.assert_called_once()
+        self.assertEqual(
+            gh.delete.call_args.args[0],
+            "https://api.github.com/repos/kentarokamiyajp/equity-investment/hooks/11",
+        )
+        self.assertEqual(
+            gh.delete.call_args.kwargs["headers"]["Authorization"], f"Bearer {LEGACY_TOKEN}"
+        )
+        self.assertFalse(gh.delete.call_args.kwargs["allow_redirects"])
+        self.assertIn("deleted        kentarokamiyajp/equity-investment", out)
+        self.assertFalse(self._exists(self.chosen))
+        self.assertTrue(self._exists(self.other_org))
+        self.assertTrue(self._exists(self.kept))
+        self.assertTrue(any("outcome=deleted" in line for line in cmd_logs.output))
+        for text in (out, err, *cmd_logs.output):
+            self.assertNotIn(LEGACY_TOKEN, text)
+
+    def test_apply_with_both_chosen_repos_and_a_covered_repo_named_too(self):
+        # Covered or not does not matter: the maintainer named it.
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(200, _hook_body())
+            gh.delete.return_value = _resp(204)
+            out, _ = self._unregister(
+                gh,
+                "kentarokamiyajp/equity-investment",
+                "--unregister",
+                "weikiy-tech/chat-app-prototype",
+                "--unregister",
+                "acme/api",
+                "--apply",
+            )
+        self.assertEqual(gh.delete.call_count, 3)
+        self.assertEqual(GithubWebhookRegistration.objects.count(), 0)
+        self.assertIn("3 registration(s): 3 deleted", out)
+
+    def test_second_run_is_a_no_op(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(200, _hook_body())
+            gh.delete.return_value = _resp(204)
+            self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        with mock.patch(GITHUB) as gh:
+            out, _ = self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        gh.get.assert_not_called()
+        gh.delete.assert_not_called()
+        self.assertIn("not_registered", out)
+
+    def test_repo_name_matches_ignoring_case_and_repeats_are_collapsed(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(200, _hook_body())
+            gh.delete.return_value = _resp(204)
+            self._unregister(
+                gh,
+                "KentaroKamiyaJP/Equity-Investment",
+                "--unregister",
+                "kentarokamiyajp/equity-investment",
+                "--apply",
+            )
+        gh.delete.assert_called_once()
+        self.assertFalse(self._exists(self.chosen))
+
+    def test_a_hook_github_no_longer_has_still_drops_the_row(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.side_effect = _github_get(_resp(404))
+            out, _ = self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        gh.delete.assert_not_called()
+        self.assertIn("already_gone", out)
+        self.assertFalse(self._exists(self.chosen))
+
+    def test_registrar_with_no_connection_leaves_the_hook_and_drops_the_row(self):
+        ConnectedAccount.objects.filter(user=self.user, provider="github").delete()
+        with mock.patch(GITHUB) as gh:
+            out, _ = self._unregister(gh, "weikiy-tech/chat-app-prototype", "--apply")
+        gh.get.assert_not_called()
+        gh.delete.assert_not_called()
+        self.assertIn("hook_left_no_token", out)
+        self.assertIn("1 hook(s) could not be deleted from here", out)
+        self.assertFalse(self._exists(self.other_org))
+        self.assertTrue(self._exists(self.chosen))
+
+    def test_registrar_who_lost_access_leaves_the_hook_and_drops_the_row(self):
+        # Another organization's repo: the registrar's token is refused.
+        for status in (401, 403):
+            reg = self._registration("weikiy-tech", f"lost-{status}", self.user, 20 + status)
+            with mock.patch(GITHUB) as gh:
+                gh.get.return_value = _resp(status)
+                out, _ = self._unregister(gh, f"weikiy-tech/lost-{status}", "--apply")
+            gh.delete.assert_not_called()
+            self.assertIn("hook_left_no_access", out)
+            self.assertFalse(self._exists(reg))
+
+    def test_a_404_for_a_registrar_who_cannot_see_the_repo_is_not_read_as_gone(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.side_effect = _github_get(_resp(404), repo=_resp(404))
+            out, _ = self._unregister(gh, "weikiy-tech/chat-app-prototype", "--apply")
+        gh.delete.assert_not_called()
+        self.assertIn("hook_left_no_access", out)
+        self.assertFalse(self._exists(self.other_org))
+
+    def test_a_hook_pointing_elsewhere_is_never_deleted(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(200, _hook_body("https://ci.example.com/hook"))
+            out, _ = self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        gh.delete.assert_not_called()
+        self.assertIn("hook_left_not_ours", out)
+        self.assertFalse(self._exists(self.chosen))
+
+    def test_a_genos_hook_of_another_environment_is_never_deleted(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(
+                200, _hook_body("https://staging.example.org/api/v2/github/webhook/")
+            )
+            self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        gh.delete.assert_not_called()
+
+    def test_a_github_error_changes_nothing_and_exits_non_zero(self):
+        for kind in ("get_5xx", "get_redirect", "get_timeout", "delete_5xx"):
+            with mock.patch(GITHUB) as gh:
+                gh.RequestException = requests.RequestException
+                if kind == "get_5xx":
+                    gh.get.return_value = _resp(502)
+                elif kind == "get_redirect":
+                    gh.get.return_value = _resp(301)
+                elif kind == "get_timeout":
+                    gh.get.side_effect = requests.Timeout("slow")
+                else:
+                    gh.get.return_value = _resp(200, _hook_body())
+                    gh.delete.return_value = _resp(500)
+                with self.assertRaises(CommandError, msg=kind):
+                    self._run("--unregister", "kentarokamiyajp/equity-investment", "--apply")
+            self.assertTrue(self._exists(self.chosen), kind)
+
+    def test_one_failing_repo_does_not_stop_the_next(self):
+        def get(url, **kwargs):
+            if "equity-investment" in url:
+                return _resp(502)
+            return _resp(200, _hook_body())
+
+        with mock.patch(GITHUB) as gh:
+            gh.RequestException = requests.RequestException
+            gh.get.side_effect = get
+            gh.delete.return_value = _resp(204)
+            with self.assertRaises(CommandError):
+                self._run(
+                    "--unregister",
+                    "kentarokamiyajp/equity-investment",
+                    "--unregister",
+                    "weikiy-tech/chat-app-prototype",
+                    "--apply",
+                )
+        self.assertTrue(self._exists(self.chosen))
+        self.assertFalse(self._exists(self.other_org))
+
+    def test_a_repo_with_no_registration_is_reported_and_is_not_an_error(self):
+        with mock.patch(GITHUB) as gh:
+            out, _ = self._unregister(gh, "nobody/nothing", "--apply")
+        gh.get.assert_not_called()
+        self.assertIn("not_registered", out)
+        self.assertEqual(GithubWebhookRegistration.objects.count(), 3)
+
+    def test_works_with_the_app_switch_off(self):
+        with override_settings(GITHUB_APP_ENABLED=False):
+            with mock.patch(GITHUB) as gh:
+                gh.get.return_value = _resp(200, _hook_body())
+                gh.delete.return_value = _resp(204)
+                self._unregister(gh, "kentarokamiyajp/equity-investment", "--apply")
+        self.assertFalse(self._exists(self.chosen))
+
+    def test_apply_refuses_when_the_backend_url_is_unset(self):
+        # Without it no hook can be recognised as ours: every row would be dropped, the hook left.
+        with override_settings(BACKEND_BASE_URL=""):
+            with mock.patch(GITHUB) as gh:
+                with self.assertRaises(CommandError):
+                    self._run("--unregister", "kentarokamiyajp/equity-investment", "--apply")
+        gh.get.assert_not_called()
+        self.assertTrue(self._exists(self.chosen))
+
+    def test_bad_arguments_are_refused(self):
+        for args in (
+            ("--unregister", "no-slash"),
+            ("--unregister", "a/b/c"),
+            ("--unregister", "/repo"),
+            ("--unregister", "owner/"),
+            ("--unregister", "owner/name", "--restore"),
+            ("--unregister", "owner/name", "--check-github"),
+            ("--unregister", "owner/name", "--team", str(self.team.team_id)),
+            ("--unregister", "owner/name", "--repo", "a/b"),
+        ):
+            with self.subTest(args=args), self.assertRaises(CommandError):
+                self._run(*args)
+        self.assertEqual(GithubWebhookRegistration.objects.count(), 3)

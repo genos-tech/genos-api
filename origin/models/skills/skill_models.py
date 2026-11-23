@@ -36,6 +36,7 @@ __all__ = [
     "SkillReport",
     "SkillRunLog",
     "SkillStar",
+    "SkillTag",
     "SkillVersion",
 ]
 
@@ -101,8 +102,9 @@ class Skill(models.Model):
     slug = models.CharField(max_length=40)
     title = models.CharField(max_length=120)
     description = models.CharField(max_length=280, blank=True, default="")
-    # Up to 5 lower-case tags. A list, not a vocabulary table: the shared vocabulary and the
-    # directory filters belong to the Hub (MIP-2047).
+    # Up to 5 lower-case tag NAMES, each one a `SkillTag` in the OWNER's catalog (MIP-2211: the
+    # editor only picks from the catalog). Names, not foreign keys, so versions, the SKILL.md
+    # file and the Hub keep reading plain strings; `services/skills/tags.py` keeps the two in step.
     tags = models.JSONField(default=list, blank=True)
     icon = models.CharField(max_length=16, blank=True, default="")
     # The live body: `PersonalNoteMaster.note_id`, filed in the owner's hidden skill folder. A
@@ -311,6 +313,40 @@ class SkillGrant(models.Model):
                 fields=["user"], name="skill_grant_user_idx", condition=models.Q(user__isnull=False)
             ),
         ]
+
+
+class SkillTag(models.Model):
+    """One entry of a member's skill tag catalog (MIP-2211): a name and a chip colour, picked in the
+    skill editor and managed in the same Manage tags dialog as to-do tags. Scoped per owner and
+    team like `ToDoCategory`; a skill's tags come from its OWNER's catalog, so a co-editor picks
+    from the owner's list. Names keep the skill tag rules (`services/skills/text.py`) because they
+    travel in the SKILL.md file and the Hub's filter."""
+
+    tag_id = models.BigAutoField(primary_key=True)
+    # CASCADE like `Skill.team`: a NULL team would slip past the unique constraint (NULLs differ).
+    team = models.ForeignKey(
+        TeamMaster, on_delete=models.CASCADE, to_field="team_id", related_name="skill_tags"
+    )
+    owner = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, to_field="id", related_name="skill_tags"
+    )
+    name = models.CharField(max_length=24)
+    # Same shape as `ToDoCategory`: a preset hex and the text colour that reads on it.
+    color = models.CharField(max_length=10, default="#808080")
+    text_color = models.CharField(max_length=10, default="white")
+    sort_order = models.IntegerField(default=0)
+    ts_created_at = models.DateTimeField(auto_now_add=True)
+    ts_updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "owner", "name"], name="uniq_skill_tag_per_owner"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.owner_id})"
 
 
 class SkillVersion(models.Model):

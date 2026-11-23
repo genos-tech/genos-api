@@ -9,6 +9,8 @@ migration in the design MIP-2057, section 6; the runbook is
     python manage.py migrate_github_hooks_to_app --repo owner/name     # one repo
     python manage.py migrate_github_hooks_to_app --apply               # delete the covered hooks
     python manage.py migrate_github_hooks_to_app --restore [--apply]   # rollback: recreate them
+    python manage.py migrate_github_hooks_to_app --unregister owner/name [--unregister ...] [--apply]
+                                                       # stop tracking chosen repos (see below)
 
 The report lists, per team, the legacy hooks the App covers (`would delete`), the ones it does not
 (`kept`) and why, then a total. A hook is COVERED when every team it writes for is served by an
@@ -34,6 +36,19 @@ itself: if the installation is later suspended or unlinked, or the App is switch
 that depended on the App stops getting events until `--restore --apply` (the row stays, so a task
 save does not recreate the hook).
 
+`--unregister owner/name` (repeatable; each repo is named, never "all") stops tracking repos the
+maintainer chose, covered by the App or not, for example a personal repo or another organization's
+that no installation will ever cover. It is a dry run too: it lists the registration row(s) and the
+teams each writes for, calls nothing. With `--apply` it deletes the Genos hook at GitHub with the
+registrar's own stored connection when that is possible (read first, deleted only if it is the
+Genos hook, as above), then the registration row. When the hook cannot be deleted from here (the
+registrar has no usable connection or lost admin on the repo, or the hook points elsewhere) the row
+is removed anyway and the run says `hook_left_*`: the hook, if it still exists, is for the repo's
+admin to delete in GitHub's settings (its deliveries then write nothing). A transient GitHub
+failure changes nothing for that repo and exits non-zero: run again. Run it BEFORE
+`revoke_legacy_github_grants` (it needs the registrar's token), and revoke after, or a member
+linking a PR of that repo can register it again. Stored task and PR data of the repo is untouched.
+
 Output names team ids and `owner/repo`, never a token, a secret, a name or an email. Production:
 run it only with the maintainer's go.
 """
@@ -42,6 +57,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from urllib.parse import urlparse
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -49,20 +65,30 @@ from origin.services import crypto, github_app
 from origin.services.github_app_migration import (
     ALREADY_HOOKED,
     COVERED,
+    GITHUB_ERROR,
+    HOOK_LEFT,
     NO_TEAMS,
     NOT_COVERED,
+    NOT_REGISTERED,
     PARTLY_COVERED,
     RESTORED,
     STILL_PRESENT,
     HookPlan,
+    classify,
     is_migrated,
     migrate_hook,
     plan_hook_migration,
     probe_hook,
+    registrations_for_repo,
     restore_hook,
     summarize,
+    unregister_registration,
 )
-from origin.services.github_webhooks import hook_admin_headers
+from origin.services.github_webhooks import (
+    _webhook_payload_url,
+    hook_admin_headers,
+    is_valid_repo_ref,
+)
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +125,13 @@ class Command(BaseCommand):
         )
         parser.add_argument("--team", help="Only the hooks that write for this team id.")
         parser.add_argument("--repo", help="Only this repository, as owner/name.")
+        parser.add_argument(
+            "--unregister",
+            action="append",
+            metavar="OWNER/NAME",
+            help="Stop tracking this repo: delete its hook at GitHub if possible, then its "
+            "registration row (with --apply; else report). Repeat for several repos.",
+        )
 
     def handle(self, *args, **options):
         apply: bool = options["apply"]
@@ -106,6 +139,13 @@ class Command(BaseCommand):
         check_github: bool = options["check_github"]
         team = options["team"]
         repo = options["repo"]
+        if options["unregister"]:
+            if options["restore"] or check_github or team or repo:
+                raise CommandError(
+                    "--unregister names its repos itself: not with --restore, --check-github, "
+                    "--team or --repo."
+                )
+            return self._unregister(options["unregister"], apply=apply, counts_only=counts_only)
         if team:
             try:
                 team = str(uuid.UUID(str(team)))
@@ -153,6 +193,77 @@ class Command(BaseCommand):
             self.stdout.write("Dry run: nothing was changed. Run with --apply to delete.")
             return
         self._apply(plans, counts_only=counts_only)
+
+    # ---- unregister --------------------------------------------------------------------------
+
+    def _unregister(self, repos: list[str], *, apply: bool, counts_only: bool) -> None:
+        refs = []
+        for raw in repos:
+            ref = (raw or "").strip()
+            owner, _, name = ref.partition("/")
+            if ref.count("/") != 1 or not is_valid_repo_ref(owner, name):
+                raise CommandError(f"--unregister must be owner/name, got {raw!r}.")
+            if ref.lower() not in {r.lower() for r in refs}:
+                refs.append(ref)
+        if apply:
+            if not urlparse(_webhook_payload_url()).netloc:
+                raise CommandError(
+                    "BACKEND_BASE_URL is unset: the Genos hook cannot be recognised, so none "
+                    "would be deleted and every row would be dropped with its hook left behind."
+                )
+            crypto.require_keyring()
+
+        results = []
+        for ref in refs:
+            rows = registrations_for_repo(ref)
+            if not rows:
+                results.append((ref, NOT_REGISTERED))
+                if not counts_only:
+                    self.stdout.write(f"{NOT_REGISTERED:14} {ref}  nothing to do")
+                continue
+            for row in rows:
+                name = f"{row.owner}/{row.repo}"
+                if not apply:
+                    teams = classify(row).teams
+                    results.append((name, "would_unregister"))
+                    if not counts_only:
+                        self.stdout.write(
+                            f"would_unregister {name}  hook {row.hook_id}, writes for "
+                            f"{len(teams)} team(s): {', '.join(teams) or '(none)'}"
+                        )
+                    continue
+                outcome = unregister_registration(row)
+                results.append((name, outcome))
+                log.info(
+                    "[github-hooks-migrate] unregister registration=%s outcome=%s", row.pk, outcome
+                )
+                if not counts_only:
+                    self.stdout.write(f"{outcome:14} {name}")
+
+        counts = summarize(outcome for _, outcome in results)
+        self.stdout.write(
+            f"{len(results)} registration(s): "
+            + ", ".join(f"{n} {outcome}" for outcome, n in sorted(counts.items()))
+        )
+        if not apply:
+            self.stdout.write("Dry run: nothing was changed. Run with --apply to unregister.")
+            return
+        left = [o for _, o in results if o.startswith(HOOK_LEFT)]
+        if left:
+            self.stdout.write(
+                f"{len(left)} hook(s) could not be deleted from here and may still exist on "
+                "GitHub: the repo's admin deletes them in the repo's Settings > Webhooks."
+            )
+        failed = [name for name, o in results if o == GITHUB_ERROR]
+        if failed:
+            for name in failed:
+                self.stderr.write(
+                    f"still registered: {'a repo' if counts_only else name} ({GITHUB_ERROR})"
+                )
+            raise CommandError(
+                f"{len(failed)} repo(s) were not unregistered (GitHub did not answer cleanly). "
+                "Nothing changed for them: run again."
+            )
 
     # ---- rollback ----------------------------------------------------------------------------
 

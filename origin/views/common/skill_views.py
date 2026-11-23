@@ -49,6 +49,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.skills.skill_models import Skill, SkillStar, SkillVersion
 from origin.services.skills import effort, hub, moderation, run, service, text
+from origin.services.skills import tags as skill_tags
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR
@@ -115,6 +116,7 @@ def _row(
     editing: bool | None = None,
     team_owner: bool | None = None,
     version_hint: SkillVersion | None = None,
+    tag_colors: dict[tuple[str, str], dict[str, tuple[str, str]]] | None = None,
 ) -> dict[str, Any]:
     """A skill as the list and the page read it. A reader sees the metadata of the PUBLISHED
     version (what a reader gets must not move under them), never the owner's draft edits, and
@@ -143,6 +145,15 @@ def _row(
         "title": src.title,
         "description": src.description,
         "tags": list(src.tags or []),
+        "tagChips": skill_tags.chips(
+            list(src.tags or []),
+            (
+                tag_colors
+                if tag_colors is not None
+                else skill_tags.color_map([skill], user_id, {skill.note_id} if edits else None)
+            ).get((str(skill.team_id), str(skill.owner_id))),
+            coloured=edits or skill.visibility != "public",
+        ),
         "icon": src.icon,
         "argumentHint": src.argument_hint,
         "toolLevel": src.tool_level,
@@ -310,6 +321,7 @@ class SkillListView(_Base):
                 str(t): is_team_member(t, user.pk)
                 for t in {s.team_id for s in rows if s.note_id in editing}
             }
+        colors = skill_tags.color_map(rows, user.pk, editing) if rows else {}
         return Response(
             {
                 "skills": [
@@ -319,6 +331,7 @@ class SkillListView(_Base):
                         starred=str(s.id) in starred,
                         editing=s.note_id in editing and member_of.get(str(s.team_id), False),
                         team_owner=str(s.team_id) in owned_teams,
+                        tag_colors=colors,
                     )
                     for s in rows
                 ],
@@ -333,7 +346,9 @@ class SkillListView(_Base):
         team = self._team(body.get("team_id"))
         if team is None:
             return _error("`team_id` is required.")
-        skill, problem = self._run(lambda: service.create(request.user, team, _fields(body)))
+        skill, problem = self._run(
+            lambda: service.create(request.user, team, _fields(body), tags_mode="strict")
+        )
         if problem:
             return problem
         return Response({"skill": _row(skill, request.user.pk)}, status=status.HTTP_201_CREATED)
@@ -669,6 +684,8 @@ class SkillHubView(_Base):
             return problem
         rows, versions, has_more = out
         starred = hub.starred_ids(user.pk, rows)
+        # Only the caller's own public skills carry a colour; everyone else's are grey.
+        hub_colors = skill_tags.color_map(rows, user.pk)
         return Response(
             {
                 "skills": [
@@ -679,6 +696,7 @@ class SkillHubView(_Base):
                         editing=False,
                         team_owner=False,
                         version_hint=versions.get(s.pk),
+                        tag_colors=hub_colors,
                     )
                     for s in rows
                 ],
@@ -695,6 +713,97 @@ class SkillHubTagsView(_Base):
         if problem:
             return problem
         return Response({"tags": tags})
+
+
+def _tag_out(tag: Any) -> dict[str, Any]:
+    return {
+        "tagId": tag.tag_id,
+        "name": tag.name,
+        "color": tag.color,
+        "textColor": tag.text_color,
+        "sortOrder": tag.sort_order,
+    }
+
+
+def _tag_body(body: Any) -> dict[str, Any]:
+    """The wire's `textColor` as the service's `text_color`; only the keys that were sent."""
+    out = {k: body[k] for k in ("name", "color", "sort_order") if k in body}
+    if "sortOrder" in body:
+        out["sort_order"] = body["sortOrder"]
+    if "textColor" in body:
+        out["text_color"] = body["textColor"]
+    return out
+
+
+class SkillTagListView(_Base):
+    """The skill tag catalog (MIP-2211). GET `?skill_id=` is the catalog the skill's tags come from
+    (its OWNER's; `editable` is true only for the owner, who alone manages it); GET `?team_id=` is
+    the caller's own catalog in a team (a new skill's editor). POST makes a tag in the caller's
+    own catalog."""
+
+    def get(self, request):
+        user = request.user
+        skill_id = request.query_params.get("skill_id")
+        if skill_id:
+
+            def owners_catalog():
+                skill = service.get_editable(user.pk, skill_id)
+                return skill, skill_tags.catalog(skill.team_id, skill.owner_id)
+
+            out, problem = self._run(owners_catalog)
+            if problem:
+                return problem
+            skill, rows = out
+            return Response(
+                {
+                    "tags": [_tag_out(t) for t in rows],
+                    "editable": service.is_owner(skill, user.pk),
+                }
+            )
+        team = self._team(request.query_params.get("team_id"))
+        if team is None:
+            return _error("`team_id` or `skill_id` is required.")
+        _, problem = self._run(lambda: service._require_member(user, team))
+        if problem:
+            return problem
+        return Response(
+            {"tags": [_tag_out(t) for t in skill_tags.catalog(team, user.pk)], "editable": True}
+        )
+
+    def post(self, request):
+        user = request.user
+        body = request.data
+        team = self._team(body.get("team_id"))
+        if team is None:
+            return _error("`team_id` is required.")
+
+        def make():
+            service._require_member(user, team)
+            return skill_tags.create_tag(user, team, body.get("name"), _tag_body(body))
+
+        tag, problem = self._run(make)
+        if problem:
+            return problem
+        return Response(_tag_out(tag), status=status.HTTP_201_CREATED)
+
+
+class SkillTagDetailView(_Base):
+    """PATCH / DELETE one tag of the caller's own catalog. A tag that is not theirs is a 404."""
+
+    def patch(self, request, tag_id):
+        user = request.user
+        tag, problem = self._run(
+            lambda: skill_tags.update_tag(tag_id, user, _tag_body(request.data))
+        )
+        if problem:
+            return problem
+        return Response(_tag_out(tag))
+
+    def delete(self, request, tag_id):
+        _, problem = self._run(lambda: skill_tags.delete_tag(tag_id, request.user))
+        if problem:
+            return problem
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 def _profile_out(user: Any) -> dict[str, Any]:
