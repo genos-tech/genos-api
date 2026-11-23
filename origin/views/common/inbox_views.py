@@ -306,7 +306,10 @@ class InboxItemView(AuthenticatedAPIView):
         server_time = capture_server_time()
         since, force_full = check_since(request)
 
-        qs = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id))
+        # `select_related("sender")`: each card's sender rides on the same query (no query per item).
+        qs = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id)).select_related(
+            "sender"
+        )
         if since is None:
             # Full load: hide soft-deleted rows.
             qs = qs.filter(is_deleted=False)
@@ -338,6 +341,7 @@ class InboxItemView(AuthenticatedAPIView):
         ai_sources = inbox_ai.sources_public(request.user, rows)
         items = []
         for item in rows:
+            sender = inbox_sender(item)
             entry = {
                 "itemId": item.item_id,
                 "itemBody": item.item_body,
@@ -346,6 +350,12 @@ class InboxItemView(AuthenticatedAPIView):
                 "requestStatus": item.request_status,
                 "isDeleted": item.is_deleted,
                 "tsSent": item.ts_created_at,
+                # Who the card is about (MIP-2181): the person who sent it, so every card can show
+                # their face without reading the body. Both null for a row nobody sent (digest,
+                # report, trial notice) and for a system account. The receiver already reads this
+                # person's name in the body; there is no email here.
+                "senderId": sender["userId"] if sender else None,
+                "sender": sender,
                 # Request routing payload (e.g. note-access items carry
                 # note_type/note_id/note_title so the client can open the
                 # referenced note). Null for plain activity items.

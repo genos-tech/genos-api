@@ -20,7 +20,10 @@ confirms that a private or other team's skill exists.
 
 READING THE TEXT. The owner reads the LIVE note (what the editor shows). Everybody else reads the
 published version: a team or public skill's text moves under a reader only when a new version is
-cut (`cut_version`: on publish, and for a team skill on every save that changes the text).
+cut (`cut_version`), and that happens only when the owner publishes or first shares the skill.
+Saving (`update`) keeps the edit as the owner's draft for a team skill too (MIP-2177, Ken
+2026-11-23): the live note and the skill row ARE the draft, the version is the published copy, and
+`unpublished_changes` says how they differ.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ from typing import Any
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import F, Q, QuerySet
+from django.db.models import F, OuterRef, Q, QuerySet, Subquery
 from django.utils import timezone
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -311,6 +314,38 @@ def _hash(blocks: list[dict], meta: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+# The metadata a version freezes (the same names on `Skill` and `SkillVersion`). The text is the
+# other half of a version.
+_VERSIONED_FIELDS = (
+    "slug",
+    "title",
+    "description",
+    "tags",
+    "icon",
+    "tool_level",
+    "argument_hint",
+    "effort",
+    "language",
+)
+
+
+def unpublished_changes(skill: Skill, *, live_text: str | None = None) -> list[str]:
+    """How the owner's draft differs from what readers get: the `Skill` field names that changed
+    since the published version, plus `"body_markdown"` when the text did. Empty for a private
+    skill (nobody reads it, there is nothing to publish) and for one with nothing new. Compared on
+    the markdown, not the block JSON, so opening the editor never counts as an edit.
+    `live_text` saves rendering the note again when the caller has done it."""
+    if skill.visibility == VISIBILITY_PRIVATE or skill.published_version_no <= 0:
+        return []
+    version = skill.versions.filter(version_no=skill.published_version_no).first()
+    if version is None:
+        return []
+    changed = [name for name in _VERSIONED_FIELDS if getattr(skill, name) != getattr(version, name)]
+    if (live_markdown(skill) if live_text is None else live_text) != version.body_markdown:
+        changed.append("body_markdown")
+    return changed
+
+
 def cut_version(skill: Skill, user: CustomUser, *, changelog: str = "") -> SkillVersion | None:
     """Snapshot the live note and metadata as the next immutable version, and make it the
     skill's current AND published one. Returns None when nothing changed since the newest
@@ -319,17 +354,7 @@ def cut_version(skill: Skill, user: CustomUser, *, changelog: str = "") -> Skill
     blocks = _live_blocks(skill)
     # The editor can grow the note past the limit that the API enforces: a sentence, not a 500.
     markdown = _wrap(lambda: text.check_body_markdown(blocks_to_markdown(blocks)))
-    meta = {
-        "slug": skill.slug,
-        "title": skill.title,
-        "description": skill.description,
-        "tags": skill.tags,
-        "icon": skill.icon,
-        "tool_level": skill.tool_level,
-        "argument_hint": skill.argument_hint,
-        "effort": skill.effort,
-        "language": skill.language,
-    }
+    meta = {name: getattr(skill, name) for name in _VERSIONED_FIELDS}
     digest = _hash(blocks, meta)
     newest = skill.versions.order_by("-version_no").first()
     if newest is not None and newest.content_hash == digest:
@@ -556,16 +581,16 @@ def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
         skill.save(update_fields=["public_from_version_no"])
 
 
-def update(user: CustomUser, skill_id: Any, fields: Fields, *, changelog: str = "") -> Skill:
-    """Change what is given; the owner only. A team skill cuts a new version when the text or
-    its metadata changed (design section 3); a public one only when the owner publishes."""
+def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
+    """Change what is given; the owner only. This SAVES THE OWNER'S DRAFT and never cuts a version,
+    whatever the visibility (MIP-2177): readers keep the published version until the owner calls
+    `publish`. The one exception is an explicit change of visibility to team or public, which
+    shares the skill and so publishes its current text (`_set_visibility`)."""
     require_enabled()
     with transaction.atomic():
         skill = get_owned(user.pk, skill_id, lock=True)
-        meta_changed = False
         if fields.title is not None:
             skill.title = _wrap(lambda: text.clean_title(fields.title))
-            meta_changed = True
         if fields.slug is not None:
             slug = _wrap(lambda: text.clean_slug(fields.slug))
             if slug != skill.slug:
@@ -574,16 +599,12 @@ def update(user: CustomUser, skill_id: Any, fields: Fields, *, changelog: str = 
                 skill.slug = slug
         if fields.description is not None:
             skill.description = _wrap(lambda: text.clean_description(fields.description))
-            meta_changed = True
         if fields.tags is not None:
             skill.tags = _wrap(lambda: text.clean_tags(fields.tags))
-            meta_changed = True
         if fields.argument_hint is not None:
             skill.argument_hint = _wrap(lambda: text.clean_argument_hint(fields.argument_hint))
-            meta_changed = True
         if fields.tool_level is not None:
             skill.tool_level = _clean_choice(fields.tool_level, _TOOL_LEVELS, "The tool level")
-            meta_changed = True
         if fields.effort is not None:
             skill.effort = (
                 _clean_choice(fields.effort, _EFFORTS, "The effort") if fields.effort else ""
@@ -592,7 +613,6 @@ def update(user: CustomUser, skill_id: Any, fields: Fields, *, changelog: str = 
             skill.icon = _clean_icon(fields.icon)
         if fields.language is not None:
             skill.language = str(fields.language or "")[:16]
-        body_changed = False
         push: tuple[int, list[dict]] | None = None
         if fields.body_markdown is not None:
             markdown = _wrap(lambda: text.check_body_markdown(str(fields.body_markdown)))
@@ -600,7 +620,6 @@ def update(user: CustomUser, skill_id: Any, fields: Fields, *, changelog: str = 
             if skill.note_id is not None:
                 _save_note(skill.note_id, title=skill.title, body=blocks)
                 push = (skill.note_id, blocks)
-            body_changed = True
         elif fields.title is not None and skill.note_id is not None:
             _save_note(skill.note_id, title=skill.title)
         try:
@@ -614,8 +633,6 @@ def update(user: CustomUser, skill_id: Any, fields: Fields, *, changelog: str = 
                 user,
                 _clean_choice(fields.visibility, _VISIBILITIES, "The visibility"),
             )
-        if skill.visibility == VISIBILITY_TEAM and (body_changed or meta_changed):
-            cut_version(skill, user, changelog=changelog)  # None when nothing is new
         if push:
             transaction.on_commit(lambda: _push_to_editor(*push))
     skill.refresh_from_db()
@@ -734,11 +751,27 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
     require_enabled()
     if tab not in TABS:
         raise SkillError(f"`tab` must be one of: {', '.join(TABS)}.")
+    # Readers' tabs sort by when the PUBLISHED version was cut, never by `updated_at`: a draft save
+    # moves that column, and a teammate must not see a skill jump to the top for an edit they
+    # cannot read yet (MIP-2177). A skill with no published version (the owner's own) sorts last.
+    published_at = Subquery(
+        SkillVersion.objects.filter(
+            skill_id=OuterRef("pk"), version_no=OuterRef("published_version_no")
+        ).values("created_at")[:1]
+    )
     base = Skill.objects.select_related("owner")
     if tab == "installed":
-        return base.filter(visible_to(user.pk), installs__user=user).order_by("-updated_at")
+        return (
+            base.filter(visible_to(user.pk), installs__user=user)
+            .annotate(shown_at=published_at)
+            .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
+        )
     if tab == "starred":
-        return base.filter(visible_to(user.pk), stars__user=user).order_by("-updated_at")
+        return (
+            base.filter(visible_to(user.pk), stars__user=user)
+            .annotate(shown_at=published_at)
+            .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
+        )
     _require_member(user, team_id)
     if tab == "mine":
         return base.filter(owner=user, team_id=team_id).order_by("-updated_at")
@@ -750,7 +783,8 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
             status=STATUS_ACTIVE,
         )
         .exclude(owner=user)
-        .order_by("-updated_at")
+        .annotate(shown_at=published_at)
+        .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
     )
 
 

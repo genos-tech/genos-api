@@ -102,8 +102,8 @@ class Skill(models.Model):
     )
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     # The newest cut version (0 = none yet) and the one readers outside the owner's reach get.
-    # For a team skill they move together; a public skill's published version moves only when the
-    # owner publishes again.
+    # They move together at every publish; a version is cut only by `publish` or by sharing the
+    # skill, never by saving an edit (MIP-2177).
     current_version_no = models.PositiveIntegerField(default=0)
     published_version_no = models.PositiveIntegerField(default=0)
     # The first version a reader OUTSIDE the team may open once the skill is public. Versions cut
@@ -142,8 +142,9 @@ class Skill(models.Model):
 
 
 class SkillVersion(models.Model):
-    """An immutable snapshot of a skill, cut at publish (and, for a team skill, at each save that
-    changes the text). The row never changes once written."""
+    """An immutable snapshot of a skill, cut when the owner publishes or first shares the
+    skill (saving an edit does not cut one: the edit is the owner's draft). The row never changes
+    once written."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="versions")
