@@ -27,7 +27,7 @@ pagination. A tools-only server needs none of it, and each one would be
 a feature to maintain for no caller.
 
 Statelessness is a runtime constraint, not a preference. The API runs on
-gunicorn `gthread` with 8 threads and `--max-requests 1000`; a held-open
+gunicorn `gthread` with 8 threads and `--max-requests 300`; a held-open
 SSE stream would occupy one of those eight slots and then be killed
 mid-flight on recycle. So every response here is a single JSON object.
 """

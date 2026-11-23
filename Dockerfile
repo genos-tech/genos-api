@@ -60,8 +60,12 @@ EXPOSE 8000
 # a hang rather than an error: the master keeps the socket open). A fork is up in
 # a fraction of a second, and `apis/wsgi.py` imports the URLconf in the master so
 # the first request does not have to. Costs a few tens of MB more, because the
-# master now holds the imported app (the service is capped at 500 MB). Not removing
-# `--max-requests`: memory climbs from ~150 MB to 400-500 MB between recycles.
+# master now holds the imported app (the service was capped at 500 MB, 1 GB since
+# 2026-11-23). Not removing `--max-requests`: memory climbs from ~150 MB to 400-500 MB
+# over 1000 requests (about 0.3 MB a request). MIP-2092: a worker SIGKILLed for memory
+# dropped every request in flight (502 under four parallel briefings), so the limit is
+# 300: ~150 MB + 300 x 0.3 MB = ~240 MB at the recycle, well under 400 MB, and a recycle is
+# cheap with `--preload` (a fork). With the jitter a worker serves 300 to 400 requests.
 #
 # `--keep-alive 0` (MIP-944, second half): a retiring gthread worker stops
 # accepting, then waits for every open connection before it exits, and the
