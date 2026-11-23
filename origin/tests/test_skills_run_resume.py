@@ -61,7 +61,14 @@ class SkillResumeKeepsCeilingTests(SkillResumeBase):
         run_id, _token = self.run_skill()
         kept = self.row(run_id).resume_context
         self.assertEqual(
-            kept["skill"], {"id": str(self.skill.id), "tool_level": "act", "outside": False}
+            kept["skill"],
+            {
+                "id": str(self.skill.id),
+                "team_id": str(self.team.team_id),
+                "version_no": 0,
+                "tool_level": "act",
+                "outside": False,
+            },
         )
         self.assertNotIn("SECRET-SKILL-WORDS", repr(kept))
 
@@ -97,13 +104,48 @@ class SkillResumeKeepsCeilingTests(SkillResumeBase):
         self.assertIn("create_task_plan", self.resumed_kwargs()["disabled_tools"])
 
 
+class SkillResumeKeepsTheVersionTests(SkillResumeBase):
+    def test_a_version_published_while_the_card_waited_is_not_swapped_in(self):
+        """The reader's text must not move under them: the resumed leg runs the version the first leg
+        ran, with the ceiling it had (a new `read` version must not leave `act` tools declared under
+        a block that says "may only read")."""
+        mate = self.other
+        theirs = service.create(
+            mate,
+            self.team.team_id,
+            service.Fields(
+                title="Mate skill",
+                slug="mate-skill",
+                description="d",
+                tool_level="act",
+                body_markdown="STEP: VERSION-ONE-WORDS",
+                visibility="team",
+            ),
+        )
+        run_id, token = self.ask(skill={"id": str(theirs.id)})
+        service.update(
+            mate,
+            theirs.id,
+            service.Fields(body_markdown="STEP: VERSION-TWO-WORDS", tool_level="read"),
+        )
+        service.publish(mate, theirs.id)
+        self.decide_to_the_end(run_id, token)
+        first, resumed = self.legs
+        self.assertIn("VERSION-ONE-WORDS", first)
+        self.assertIn("VERSION-ONE-WORDS", resumed)
+        self.assertNotIn("VERSION-TWO-WORDS", resumed)
+        self.assertIn("approves one by one", resumed)  # the kept `act` level, in words
+
+
 class SkillResumeWithTheContextFlagOffTests(SkillResumeBase):
     """`AGENT_RESUME_KEEPS_BLOCKS` off keeps no context at all, but the ceiling is not context."""
 
     flags: dict = {}
 
     def test_the_ceiling_and_the_block_survive_while_nothing_else_is_kept(self):
-        run_id, token = self.ask(skill={"id": str(self.skill.id)}, thread_context=self.make_thread())
+        run_id, token = self.ask(
+            skill={"id": str(self.skill.id)}, thread_context=self.make_thread()
+        )
         kept = self.row(run_id).resume_context
         self.assertEqual(set(kept), {"skill"})  # no private summary on the row
         self.decide_to_the_end(run_id, token)

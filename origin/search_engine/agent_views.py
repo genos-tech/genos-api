@@ -1318,7 +1318,9 @@ class AgentAskView(AuthenticatedAPIView):
         skill_to_run: skill_run.ResolvedSkill | None = None
         if data.get("skill") is not None and skill_service.enabled():
             try:
-                skill_to_run = skill_run.resolve(request.user, team_id, data["skill"])
+                # `claimed_team`, not `team_id`: asking about a task of a shared project swaps `team_id` for
+                # the HOST team, but the person's skills belong to the team they are asking from.
+                skill_to_run = skill_run.resolve(request.user, claimed_team, data["skill"])
             except skill_service.SkillError as exc:
                 return Response(
                     {"error": str(exc), **({"code": exc.code} if exc.code else {}), **exc.extra},
