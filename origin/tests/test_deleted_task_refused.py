@@ -35,6 +35,7 @@ from django.utils import timezone
 from origin.models.common.user_models import ConnectedAccount, GithubWebhookRegistration
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskComments, TaskDependency, TaskMaster
+from origin.tests.github_pull_fakes import pull
 from origin.tests.test_base import BaseAPITestCase
 from origin.views.utils.scope_guards import can_access_task
 
@@ -374,29 +375,12 @@ class TestGithubBatchDropsADeletedTask(DeletedTaskBase):
         live, gone = self.task(), self.task(deleted=True)
 
         def fake(_account, path, params=None):
+            # One pulls list per repo (MIP-2089: no branch walk): a PR from each task's branch.
             resp = MagicMock(spec=requests.Response)
             resp.ok, resp.status_code = True, 200
-            if path.endswith("/branches"):
-                resp.json.return_value = [
-                    {"name": f"feature/{t.display_id}-x", "commit": {"sha": "s"}}
-                    for t in (live, gone)
-                ]
-            else:
-                head = (params or {}).get("head", "")
-                resp.json.return_value = (
-                    [
-                        {
-                            "number": 7,
-                            "html_url": "https://github.com/acme/rocket/pull/7",
-                            "title": "t",
-                            "state": "open",
-                            "draft": False,
-                            "merged_at": None,
-                        }
-                    ]
-                    if head.startswith("acme:feature/")
-                    else []
-                )
+            resp.json.return_value = [
+                pull(7 + i, f"feature/{t.display_id}-x") for i, t in enumerate((live, gone))
+            ]
             return resp
 
         with patch("origin.views.common.github_views._github_get", side_effect=fake):

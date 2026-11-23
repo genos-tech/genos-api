@@ -3,13 +3,13 @@
 
 We mock GitHub's HTTP API and `get_valid_access_token` so the tests run
 offline. The endpoint scans `GithubWebhookRegistration` rows for repos
-to query and filters branches by a word-boundary regex against the task's
-`display_id` (e.g. "GEN-42").
+to query, reads each repo's pulls (MIP-2089: the GitHub App has no Contents
+permission, so a branch is seen through its open PR) and filters the head
+branches by a word-boundary regex against the task's `display_id` (e.g. "GEN-42").
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import requests
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
@@ -22,6 +22,7 @@ from origin.models.common.user_models import (
 )
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.tests.github_pull_fakes import bad_response, pull, pulls_response
 from origin.views.common.github_views import _branch_match_re
 
 User = get_user_model()
@@ -116,18 +117,16 @@ class TestBranchesForTaskView(TestCase):
         self.client.force_authenticate(user=self.user)
 
     @staticmethod
-    def _mock_branches_response(names: list[str]):
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = [{"name": n, "commit": {"sha": f"sha-{n}"}} for n in names]
-        return resp
+    def _mock_pulls_response(branches: list[str], *, state="open"):
+        """The repo's pulls list: one PR per branch (MIP-2089: no Contents permission, so a
+        branch is only seen through its PR)."""
+        return pulls_response([pull(i + 1, b, state=state) for i, b in enumerate(branches)])
 
     # ── Happy paths ───────────────────────────────────────────────
 
     @patch("origin.views.common.github_views._github_get")
     def test_returns_matching_branches(self, mock_get):
-        mock_get.return_value = self._mock_branches_response(
+        mock_get.return_value = self._mock_pulls_response(
             [
                 "main",
                 "feature/GEN-42-something",
@@ -145,18 +144,40 @@ class TestBranchesForTaskView(TestCase):
             self.assertEqual(b["owner"], "acme")
             self.assertEqual(b["repo"], "rocket")
             self.assertTrue(b["url"].startswith("https://github.com/acme/rocket/tree/"))
+            # The head commit of the PR is the branch's commit.
+            self.assertEqual(b["commit_sha"], f"sha-{b['name']}")
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_found_through_the_pulls_list_not_the_branches_endpoint(self, mock_get):
+        mock_get.return_value = self._mock_pulls_response(["GEN-42-a"])
+        self.client.get(f"/api/v2/github/branches/for-task/?task_id={self.task.task_id}")
+        paths = [c.args[1] for c in mock_get.call_args_list]
+        self.assertEqual(paths, ["/repos/acme/rocket/pulls"])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_merged_or_closed_pr_branch_is_not_listed(self, mock_get):
+        # Its branch is usually deleted: a tree link would 404.
+        mock_get.return_value = self._mock_pulls_response(["GEN-42-done"], state="closed")
+        resp = self.client.get(f"/api/v2/github/branches/for-task/?task_id={self.task.task_id}")
+        self.assertEqual(resp.json()["branches"], [])
+
+    @patch("origin.views.common.github_views._github_get")
+    def test_a_fork_branch_is_not_listed(self, mock_get):
+        mock_get.return_value = pulls_response([pull(3, "GEN-42-evil", head_repo="mallory/rocket")])
+        resp = self.client.get(f"/api/v2/github/branches/for-task/?task_id={self.task.task_id}")
+        self.assertEqual(resp.json()["branches"], [])
 
     @patch("origin.views.common.github_views._github_get")
     def test_does_not_alias_longer_ids(self, mock_get):
         # Critical: GEN-420 must not be returned for task GEN-42.
-        mock_get.return_value = self._mock_branches_response(["GEN-420-other-task", "GEN-42"])
+        mock_get.return_value = self._mock_pulls_response(["GEN-420-other-task", "GEN-42"])
         resp = self.client.get(f"/api/v2/github/branches/for-task/?task_id={self.task.task_id}")
         branches = resp.json()["branches"]
         self.assertEqual([b["name"] for b in branches], ["GEN-42"])
 
     @patch("origin.views.common.github_views._github_get")
     def test_returns_empty_when_no_match(self, mock_get):
-        mock_get.return_value = self._mock_branches_response(["main", "develop"])
+        mock_get.return_value = self._mock_pulls_response(["main", "develop"])
         resp = self.client.get(f"/api/v2/github/branches/for-task/?task_id={self.task.task_id}")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["branches"], [])
@@ -203,10 +224,8 @@ class TestBranchesForTaskView(TestCase):
         GithubWebhookRegistration.objects.create(
             owner="acme", repo="other", hook_id=2, registered_by=self.user
         )
-        good_resp = self._mock_branches_response(["GEN-42-fix"])
-        bad_resp = MagicMock(spec=requests.Response)
-        bad_resp.ok = False
-        bad_resp.status_code = 404
+        good_resp = pulls_response([pull(1, "GEN-42-fix", repo="other")])
+        bad_resp = bad_response(404)
 
         # `values_list("owner", "repo").distinct()` ordering isn't
         # guaranteed, so return based on the called path.

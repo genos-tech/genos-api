@@ -1,4 +1,4 @@
-"""The GitHub branch / PR lookups behind a task's Links section and the PR
+"""The GitHub pulls / PR lookups behind a task's Links section and the PR
 column are cached in Redis, and that cache must never hand one user's
 GitHub answer to another user (MIP-974).
 
@@ -6,7 +6,8 @@ The views scan EVERY repo registered in the install and ask GitHub with
 the REQUESTING user's token. A user whose token cannot see a private repo
 gets a 404 live, but while the cache was keyed by repo alone, a hit skipped
 GitHub and returned the branch names, commit SHAs and PR titles another
-user had just fetched.
+user had just fetched. (MIP-2089: a task's branches and PRs are now both read
+from the repo's pulls list; there is no branch list.)
 
 These tests run the real views against a fake GitHub that answers per
 token (`requests.get` is the only thing patched, plus the token lookup),
@@ -34,11 +35,11 @@ from origin.models.task.task_models import TaskMaster
 from origin.tests.test_github_webhook import WEBHOOK_SECRET, _pr_payload, _sign
 from origin.views.common import github_views
 from origin.views.common.github_views import (
+    _CredentialSet,
     _fetch_pr_by_number,
-    _find_pr_for_branch,
     _invalidate_branch_list,
     _invalidate_pr_caches,
-    _list_repo_branches,
+    _pull_lists,
 )
 
 User = get_user_model()
@@ -63,8 +64,9 @@ class World:
     endpoints that token may read; everything else is a 404."""
 
     def __init__(self):
-        self.access = {TOK_A: {"branches", "pulls", "pr"}, TOK_B: set()}
-        self.branch_names = ["main", BRANCH]
+        self.access = {TOK_A: {"pulls", "pr"}, TOK_B: set()}
+        # The head branches of the repo's PRs, newest first (BRANCH is PR 7).
+        self.pr_branches = [BRANCH]
         self.pr_state = "open"
         self.pr_merged_at = None
         self.old_pr_head = "feature/GEN-42-deleted"
@@ -78,8 +80,6 @@ class World:
 
     @staticmethod
     def kind_of(path: str) -> str:
-        if path.endswith("/branches"):
-            return "branches"
         if path.endswith("/pulls"):
             return "pulls"
         return "pr"
@@ -92,7 +92,8 @@ class World:
             "state": self.pr_state,
             "draft": False,
             "merged_at": self.pr_merged_at,
-            "head": {"ref": head},
+            "head": {"ref": head, "sha": f"sha-{head}", "repo": {"full_name": "acme/rocket"}},
+            "base": {"repo": {"full_name": "acme/rocket"}},
             "unrelated": "dropped by the slim dict",
         }
 
@@ -113,13 +114,14 @@ class World:
         repo = "/".join(path.split("/")[2:4])
         if repo not in self.visible_repos or kind not in self.access.get(token, set()):
             return _resp(404, {"message": "Not Found"})
-        if kind == "branches":
-            return _resp(
-                200, [{"name": n, "commit": {"sha": f"sha-{n}"}} for n in self.branch_names]
-            )
         if kind == "pulls":
-            head = (params or {})["head"].split(":", 1)[1]
-            return _resp(200, [self.pr_item(7, PR_URL, head)] if head == BRANCH else [])
+            items = []
+            for i, head in enumerate(self.pr_branches):
+                number = 7 if head == BRANCH else 100 + i
+                items.append(
+                    self.pr_item(number, f"https://github.com/acme/rocket/pull/{number}", head)
+                )
+            return _resp(200, items)
         number = int(path.rsplit("/", 1)[1])
         return _resp(200, self.pr_item(number, OLD_PR_URL, self.old_pr_head))
 
@@ -284,7 +286,7 @@ class TestPayloadsUnchanged(GithubLinkCacheBase):
 
     def test_pulls_payload_for_a_pr_found_by_number(self):
         self.link_old_pr()
-        self.world.branch_names = ["main"]
+        self.world.pr_branches = []
         expected = [
             {
                 "owner": "acme",
@@ -314,36 +316,32 @@ class TestPayloadsUnchanged(GithubLinkCacheBase):
 
 
 class TestOneUsersAnswerIsNotServedToAnother(GithubLinkCacheBase):
-    def test_branch_list(self):
+    def test_branches_route(self):
         self.assertEqual(len(self.branches(self.client_a)), 1)
         self.assertEqual(self.branches(self.client_b), [])
         # B's token was actually asked: the hit did not stand in for GitHub.
-        self.assertEqual(self.world.calls_by(TOK_B, "branches"), 1)
+        self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 1)
 
-    def test_branch_pr_lookup(self):
-        # B can list the repo's branches but not read its pulls, so the only
-        # thing that could hand B the PR is A's cached pulls lookup.
-        self.world.access[TOK_B] = {"branches"}
+    def test_pulls_route(self):
         self.assertEqual([p["number"] for p in self.pulls(self.client_a)], [7])
         self.assertEqual(self.pulls(self.client_b), [])
         self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 1)
 
-    def test_branch_pr_lookup_batched(self):
-        self.world.access[TOK_B] = {"branches"}
+    def test_pulls_batched(self):
         self.assertEqual([p["number"] for p in self.pulls_batch(self.client_a)], [7])
         self.assertEqual(self.pulls_batch(self.client_b), [])
         self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 1)
 
     def test_pr_by_number(self):
         self.link_old_pr()
-        self.world.branch_names = ["main"]
+        self.world.pr_branches = []
         self.assertEqual([p["number"] for p in self.pulls(self.client_a)], [22])
         self.assertEqual(self.pulls(self.client_b), [])
         self.assertEqual(self.world.calls_by(TOK_B, "pr"), 1)
 
     def test_pr_by_number_batched(self):
         self.link_old_pr()
-        self.world.branch_names = ["main"]
+        self.world.pr_branches = []
         self.assertEqual([p["number"] for p in self.pulls_batch(self.client_a)], [22])
         self.assertEqual(self.pulls_batch(self.client_b), [])
         self.assertEqual(self.world.calls_by(TOK_B, "pr"), 1)
@@ -358,15 +356,12 @@ class TestOneUsersAnswerIsNotServedToAnother(GithubLinkCacheBase):
         self.assertEqual({p["number"] for p in self.pulls(self.client_a)}, {7, 22})
 
     def test_helpers_are_scoped_to_the_account(self):
-        """The three cached helpers directly, with `_fetch_pr_by_number`'s
+        """The two cached helpers directly, with `_fetch_pr_by_number`'s
         signature as the agent's add_task_delivery tool calls it."""
         self.world.access[TOK_B] = set()
-        a_branches = _list_repo_branches(self.account_a, "acme", "rocket")
-        self.assertEqual([b["name"] for b in a_branches], ["main", BRANCH])
-        self.assertIsNone(_list_repo_branches(self.account_b, "acme", "rocket"))
-        a_pr = _find_pr_for_branch(self.account_a, "acme", "rocket", BRANCH)
-        self.assertEqual(a_pr["number"], 7)
-        self.assertIsNone(_find_pr_for_branch(self.account_b, "acme", "rocket", BRANCH))
+        a_pulls = _pull_lists(_CredentialSet(self.user_a), [("acme", "rocket")])[0]
+        self.assertEqual([p["branch"] for p in a_pulls], [BRANCH])
+        self.assertIsNone(_pull_lists(_CredentialSet(self.user_b), [("acme", "rocket")])[0])
         self.assertEqual(_fetch_pr_by_number(self.account_a, "acme", "rocket", 22)["number"], 22)
         self.assertIsNone(_fetch_pr_by_number(self.account_b, "acme", "rocket", 22))
 
@@ -386,47 +381,41 @@ class TestNoTokenWorkOnAHit(GithubLinkCacheBase):
 
 
 class TestRefusalsAreCachedPerAccount(GithubLinkCacheBase):
-    def test_404_on_the_branch_list_is_cached(self):
+    def test_404_on_the_pulls_list_is_cached(self):
         self.branches(self.client_b)
         self.branches(self.client_b)
         self.pulls(self.client_b)
         self.pulls_batch(self.client_b)
         self.assertEqual(self.world.calls_by(TOK_B), 1)
 
-    def test_404_on_a_pr_lookup_by_branch_is_cached(self):
-        self.world.access[TOK_B] = {"branches"}
-        self.pulls(self.client_b)
-        self.pulls(self.client_b)
-        self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 1)
-
     def test_404_on_a_pr_by_number_is_cached(self):
         self.link_old_pr()
-        self.world.branch_names = ["main"]
+        self.world.pr_branches = []
         self.pulls(self.client_b)
         self.pulls(self.client_b)
         self.assertEqual(self.world.calls_by(TOK_B, "pr"), 1)
 
     def test_a_403_that_is_not_a_rate_limit_is_cached(self):
-        self.world.forced[(TOK_B, "branches")] = lambda: _resp(
+        self.world.forced[(TOK_B, "pulls")] = lambda: _resp(
             403, {"message": "Resource protected by organization SAML enforcement."}
         )
         self.assertEqual(self.branches(self.client_b), [])
         self.assertEqual(self.branches(self.client_b), [])
-        self.assertEqual(self.world.calls_by(TOK_B, "branches"), 1)
+        self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 1)
 
     def test_the_refusal_lasts_ten_minutes_and_no_longer(self):
         with self.clock() as advance:
             self.branches(self.client_b)
             advance(9 * 60)
             self.branches(self.client_b)
-            self.assertEqual(self.world.calls_by(TOK_B, "branches"), 1)
+            self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 1)
             advance(2 * 60)
             self.branches(self.client_b)
-            self.assertEqual(self.world.calls_by(TOK_B, "branches"), 2)
+            self.assertEqual(self.world.calls_by(TOK_B, "pulls"), 2)
 
     def test_fresh_asks_again_and_a_new_grant_shows(self):
         self.assertEqual(self.branches(self.client_b), [])
-        self.world.access[TOK_B] = {"branches"}
+        self.world.access[TOK_B] = {"pulls"}
         self.assertEqual(self.branches(self.client_b), [])  # remembered refusal
         self.assertEqual(len(self.branches(self.client_b, fresh=True)), 1)
         # ... and the fresh answer replaced the refusal.
@@ -477,26 +466,26 @@ class TestTransientFailuresAreNotRemembered(GithubLinkCacheBase):
                 self.assertGreater(len(request()), 0)
                 self.assertGreater(self.world.calls_by(TOK_A, kind), first)
 
-    def test_branch_list(self):
-        self._run("branches", lambda: self.branches(self.client_a))
+    def test_the_pulls_list_for_the_branches_route(self):
+        self._run("pulls", lambda: self.branches(self.client_a))
 
-    def test_pr_lookup_by_branch(self):
+    def test_the_pulls_list(self):
         self._run("pulls", lambda: self.pulls(self.client_a))
 
     def test_pr_by_number(self):
         self.link_old_pr()
-        self.world.branch_names = ["main"]
+        self.world.pr_branches = []
         self._run("pr", lambda: self.pulls(self.client_a))
 
     def test_a_failure_does_not_replace_the_entry_it_was_refreshing(self):
         self.assertEqual(len(self.branches(self.client_a)), 1)
-        self.world.forced[(TOK_A, "branches")] = self.FAILURES["503"]
+        self.world.forced[(TOK_A, "pulls")] = self.FAILURES["503"]
         # fresh=1 skips the read, GitHub fails: the good entry must survive.
         self.assertEqual(self.branches(self.client_a, fresh=True), [])
-        del self.world.forced[(TOK_A, "branches")]
-        calls = self.world.calls_by(TOK_A, "branches")
+        del self.world.forced[(TOK_A, "pulls")]
+        calls = self.world.calls_by(TOK_A, "pulls")
         self.assertEqual(len(self.branches(self.client_a)), 1)
-        self.assertEqual(self.world.calls_by(TOK_A, "branches"), calls)
+        self.assertEqual(self.world.calls_by(TOK_A, "pulls"), calls)
 
 
 # -- a reconnect, fresh=1, webhook events ---------------------------------------------
@@ -506,20 +495,20 @@ class TestKeysFollowTheConnection(GithubLinkCacheBase):
     def test_reconnecting_misses(self):
         self.branches(self.client_a)
         self.branches(self.client_a)
-        self.assertEqual(self.world.calls_by(TOK_A, "branches"), 1)
+        self.assertEqual(self.world.calls_by(TOK_A, "pulls"), 1)
         # What a reconnect does to the row: new token, ts_updated_at moves.
         ConnectedAccount.objects.filter(pk=self.account_a.pk).update(
             ts_updated_at=timezone.now() + timedelta(seconds=5)
         )
         self.branches(self.client_a)
-        self.assertEqual(self.world.calls_by(TOK_A, "branches"), 2)
+        self.assertEqual(self.world.calls_by(TOK_A, "pulls"), 2)
 
     def test_reconnecting_forgets_a_refusal(self):
         self.assertEqual(self.branches(self.client_b), [])
         ConnectedAccount.objects.filter(pk=self.account_b.pk).update(
             ts_updated_at=timezone.now() + timedelta(seconds=5)
         )
-        self.world.access[TOK_B] = {"branches"}
+        self.world.access[TOK_B] = {"pulls"}
         self.assertEqual(len(self.branches(self.client_b)), 1)
 
     def test_pr_lookups_miss_after_a_reconnect_too(self):
@@ -538,12 +527,12 @@ class TestKeysFollowTheConnection(GithubLinkCacheBase):
 class TestFreshBypassesReads(GithubLinkCacheBase):
     def test_fresh_reads_through_and_still_writes(self):
         self.assertEqual(len(self.branches(self.client_a)), 1)
-        self.world.branch_names = ["main", BRANCH, "GEN-42-second"]
+        self.world.pr_branches = [BRANCH, "GEN-42-second"]
         self.assertEqual(len(self.branches(self.client_a)), 1)  # warm, old list
         self.assertEqual(len(self.branches(self.client_a, fresh=True)), 2)
-        calls = self.world.calls_by(TOK_A, "branches")
+        calls = self.world.calls_by(TOK_A, "pulls")
         self.assertEqual(len(self.branches(self.client_a)), 2)  # the fresh write
-        self.assertEqual(self.world.calls_by(TOK_A, "branches"), calls)
+        self.assertEqual(self.world.calls_by(TOK_A, "pulls"), calls)
 
     def test_fresh_on_the_pr_lookups(self):
         self.link_old_pr()
@@ -574,13 +563,13 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
         del self.world.hooks[kind]
         n = self.world.calls_by(TOK_A, kind)
         self.world.pr_state = "closed"
-        self.world.branch_names = ["main", BRANCH, "GEN-42-second"]
         expect_new(request())
         self.assertGreater(self.world.calls_by(TOK_A, kind), n)
 
-    def test_a_branch_list_fetched_across_an_event_is_not_kept(self):
+    def test_the_branches_route_across_an_event_is_not_kept(self):
+        # The new answer has a closed PR only, whose branch is not listed.
         self._straddle(
-            "branches", lambda: self.branches(self.client_a), lambda r: self.assertEqual(len(r), 2)
+            "pulls", lambda: self.branches(self.client_a), lambda r: self.assertEqual(r, [])
         )
 
     def test_a_pr_lookup_fetched_across_an_event_is_not_kept(self):
@@ -592,7 +581,7 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
 
     def test_a_pr_by_number_fetched_across_an_event_is_not_kept(self):
         self.link_old_pr()
-        self.world.branch_names = ["main"]
+        self.world.pr_branches = []
         self._straddle(
             "pr",
             lambda: self.pulls(self.client_a),
@@ -604,14 +593,16 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
         self.assertEqual(len(self.branches(self.client_a)), 1)
         self.world.pr_state = "closed"
         self.world.pr_merged_at = "2026-11-01T00:00:00Z"
-        self.world.branch_names = ["main", BRANCH, "GEN-42-second"]
         self.assertEqual(self.post_webhook("closed").status_code, 200)
         pulls = self.pulls(self.client_a)
         self.assertEqual({p["state"] for p in pulls}, {"closed"})
         self.assertEqual({p["merged_at"] for p in pulls}, {"2026-11-01T00:00:00Z"})
-        # A close does not add a branch: the branch list is still the cached one.
-        self.assertEqual(len(self.branches(self.client_a)), 1)
-        # A PR being opened does (the new branch just got pushed).
+        # A merged PR's branch is not listed.
+        self.assertEqual(self.branches(self.client_a), [])
+        # A PR being opened shows its branch (the new branch just got pushed).
+        self.world.pr_state = "open"
+        self.world.pr_merged_at = None
+        self.world.pr_branches = [BRANCH, "GEN-42-second"]
         self.assertEqual(self.post_webhook("opened").status_code, 200)
         self.assertEqual(len(self.branches(self.client_a)), 2)
 
@@ -626,7 +617,7 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
         self.assertEqual({p["state"] for p in self.pulls(self.client_a)}, {"closed"})
 
     def test_it_reaches_every_users_entries(self):
-        self.world.access[TOK_B] = {"branches", "pulls", "pr"}
+        self.world.access[TOK_B] = {"pulls", "pr"}
         self.pulls(self.client_a)
         self.pulls(self.client_b)
         self.world.pr_state = "closed"
@@ -648,11 +639,10 @@ class TestWebhookEventsDropTheCaches(GithubLinkCacheBase):
         self.assertEqual(self.world.calls_by(TOK_A, "pulls", "/acme/rocket/"), 1)
         self.post_webhook("opened", url="https://github.com/acme/other/pull/3", head="x")
         self.assertEqual(self.pulls(self.client_a)[0]["number"], 7)
-        # acme/rocket's branch list and PR lookup came from the cache; only
-        # the repo that had the event was asked again.
+        # acme/rocket's pulls list came from the cache; only the repo that
+        # had the event was asked again.
         self.assertEqual(self.world.calls_by(TOK_A, "pulls", "/acme/rocket/"), 1)
-        self.assertEqual(self.world.calls_by(TOK_A, "branches", "/acme/rocket/"), 1)
-        self.assertEqual(self.world.calls_by(TOK_A, "branches", "/acme/other/"), 2)
+        self.assertEqual(self.world.calls_by(TOK_A, "pulls", "/acme/other/"), 2)
 
     def test_reconcile_and_other_callers_use_the_same_entry_point(self):
         """`reconcile_pr_deliveries` calls `_invalidate_pr_caches(owner, repo,
