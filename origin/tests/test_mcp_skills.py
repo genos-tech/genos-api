@@ -7,7 +7,8 @@ What matters, in the order tested:
   * ACL as the REST API and `/name`: the same skills in the same order (mine, team, installed,
     official), a teammate reads the PUBLISHED text and never the owner's draft, a private, unpublished
     or other team's skill is the same "not found" as a missing one, a public skill needs an install to
-    run (but may be read by id, as over REST), and an outside author's skill is held to `read`.
+    run (but may be read by id, as over REST), and an outside author's skill keeps its declared
+    ceiling but may only lead to a new task, note or to-do (the stranger rule of MIP-2044).
   * The text is untrusted: `get_skill` fences it (the client gets the untrusted-content notice),
     hidden characters are removed, and a run's instructions keep it between `skill_text` markers
     under rules it cannot change.
@@ -197,10 +198,12 @@ class ListTests(McpSkillBase):
         Skill.objects.filter(pk=gone.pk).update(status="taken_down")
         self.assertEqual(self.listed(), [])
 
-    def test_an_outside_authors_skill_is_listed_as_read_only(self):
+    def test_an_outside_authors_skill_is_listed_with_its_declared_level(self):
+        # MIP-2044 replaced the blanket `read` hold on a stranger's skill with a tool allowlist
+        # (new task, note or to-do only), so the level shown is the one the skill declares.
         self.public_skill(slug="stranger", tool_level="act")
         (row,) = self.listed()
-        self.assertEqual((row["author"], row["tool_level"]), ("outside", "read"))
+        self.assertEqual((row["author"], row["tool_level"]), ("outside", "act"))
 
     def test_a_query_narrows_the_list_and_an_empty_result_says_what_to_do(self):
         self.skill(self.user, slug="weekly-report", title="Weekly report", description="A report.")
@@ -286,7 +289,7 @@ class GetTests(McpSkillBase):
         public = self.public_skill(install=False, body_markdown="PUBLIC STEPS")
         _, data = self.ok("get_skill", skill=str(public.id))
         self.assertIn("PUBLIC STEPS", data["text"])
-        self.assertEqual((data["author"], data["tool_level"]), ("outside", "read"))
+        self.assertEqual(data["author"], "outside")
         self.assertNotIn("installed_version_no", data)
         # ... but a typed name does not find it (no squatting).
         self.assertIn("No skill named", self.refused("get_skill", skill="report"))
@@ -405,13 +408,34 @@ class RunTests(McpSkillBase):
         self.assertNotIn("may only read", act["instructions"])
         self.assertEqual(act["tool_level"], "act")
 
-    def test_an_outside_authors_skill_is_read_only_and_says_it_is_unreviewed(self):
+    def test_an_outside_authors_skill_may_only_lead_to_a_new_task_note_or_todo(self):
+        # Main's agreed rule (MIP-2044): a stranger's skill keeps the level it declares, and loses
+        # every write but the creation of a task, a note or a to-do, and the web. A read-level
+        # stranger skill is still read only.
         self.public_skill(slug="stranger", tool_level="act", body_markdown="STRANGER STEPS")
         _, data = self.ok("run_skill", skill="stranger")
-        self.assertEqual((data["author"], data["tool_level"]), ("outside", "read"))
-        self.assertIn("may only read", data["instructions"])
+        self.assertEqual((data["author"], data["tool_level"]), ("outside", "act"))
         self.assertIn("not on the person's team", data["instructions"])
         self.assertIn("send anything outside Genos", data["instructions"])
+        self.assertIn("a new task, note or to-do", data["instructions"])
+        self.assertIn(run.STRANGER_LEAK_RULE, data["instructions"])
+        self.assertIn(run.CANNOT_CHANGE_RULES, data["instructions"])
+        self.public_skill(slug="reader", tool_level="read", body_markdown="READER STEPS")
+        _, read = self.ok("run_skill", skill="reader")
+        self.assertEqual(read["tool_level"], "read")
+        self.assertIn("may only read", read["instructions"])
+
+    def test_a_hidden_or_taken_down_skill_does_not_run_by_id_or_name(self):
+        # run_skill goes through `run.resolve`, which holds the takedown and the hidden rule of
+        # #1168: a skill that is not active is the same "not found" as a missing one.
+        team = self.team_skill(self.user2, slug="gone-team", body_markdown="TEAM STEPS")
+        public = self.public_skill(slug="gone-public", body_markdown="PUBLIC STEPS")
+        for skill in (team, public):
+            Skill.objects.filter(pk=skill.pk).update(status="taken_down")
+            for ref in (str(skill.id), skill.slug):
+                self.assertIn("list_my_skills", self.refused("run_skill", skill=ref), ref)
+        Skill.objects.filter(pk=team.pk).update(status="hidden_by_team")
+        self.assertIn("list_my_skills", self.refused("run_skill", skill=str(team.id)))
 
     def test_a_teammate_runs_the_published_version_never_the_draft(self):
         skill = self.team_skill(self.user2, slug="shared", body_markdown="PUBLISHED STEPS")

@@ -113,7 +113,8 @@ class InstructionPins(SimpleTestCase):
             _digest(self._instructions(run.AUTHOR_TEAMMATE, "act")),
         )
 
-    def test_an_outside_authors_skill_is_held_to_read(self):
+    def test_an_outside_authors_skill_may_only_propose_a_task_note_or_todo(self):
         text = self._instructions(run.AUTHOR_OUTSIDE, "act")
-        self.assertIn("may only read", text)
+        self.assertNotIn("may only read", text)
+        self.assertIn("a new task, note or to-do", text)
         PINS.check(self, "instructions:outside:act", _digest(text))

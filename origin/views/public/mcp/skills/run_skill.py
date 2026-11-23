@@ -26,7 +26,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "version_no": resolved.version_no,
         "is_draft": resolved.draft,
         "author": resolved.author,
-        "tool_level": resolved.effective_level,
+        "tool_level": resolved.tool_level,
         "genos_ai_credits_spent": 0,
         "instructions": out["instructions"],
         "__summary__": f"Instructions for /{resolved.slug}.",
