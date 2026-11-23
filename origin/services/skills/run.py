@@ -58,6 +58,7 @@ from origin.models.skills.skill_models import (
     SkillInstall,
     SkillVersion,
 )
+from origin.services.skills import effort as skill_effort
 from origin.services.skills import service
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,9 @@ class ResolvedSkill:
     tool_level: str  # as the skill declares it, before the outside-author cap
     body_markdown: str
     note: str = ""  # a sentence for the answer, set when a retry could not get the same version
+    #: The skill's effort level ("" = the caller's own setting). After the ask view has stepped a
+    #: run down for low credits it holds the level the run STARTED at (MIP-2198).
+    effort: str = ""
 
     @property
     def effective_level(self) -> str:
@@ -337,6 +341,7 @@ def _load(
         tool_level=level,
         body_markdown=markdown,
         note=note,
+        effort=skill_effort.clean(getattr(meta, "effort", "")),
     )
 
 
@@ -441,13 +446,16 @@ _KEPT = "skill"
 
 
 def resume_ref(run: ResolvedSkill) -> dict[str, Any]:
-    return {
+    ref: dict[str, Any] = {
         "id": run.skill_id,
         "team_id": run.team_id,
         "version_no": run.version_no,
         "tool_level": run.effective_level,
         "outside": run.author == AUTHOR_OUTSIDE,
     }
+    if run.effort:  # the level the first leg ran at: `/decide/` binds the same one (MIP-2198)
+        ref["effort"] = run.effort
+    return ref
 
 
 def kept_ref(resume_context: Any) -> dict[str, Any] | None:
@@ -458,6 +466,11 @@ def kept_ref(resume_context: Any) -> dict[str, Any] | None:
     if not isinstance(kept, dict) or not isinstance(kept.get("id"), str):
         return None
     return kept
+
+
+def effort_for_kept(kept: dict[str, Any]) -> str:
+    """The effort level a paused run started at, or "" (none kept, or a value that cannot be read)."""
+    return skill_effort.clean(kept.get("effort"))
 
 
 def disabled_tools_for_kept(kept: dict[str, Any]) -> set[str]:

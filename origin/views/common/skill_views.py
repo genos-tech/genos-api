@@ -4,6 +4,7 @@
     GET    /api/v2/skills/?team_id=&tab=runnable     the `/` picker: what the caller may run here (MIP-2042)
     POST   /api/v2/skills/                           create one (`team_id` in the body)
     POST   /api/v2/skills/import/                    a new skill from a SKILL.md file
+    GET    /api/v2/skills/effort-levels/             the effort levels and their relative cost for the caller (MIP-2198)
     GET    /api/v2/skills/<id>/                      one skill with its text
     PATCH  /api/v2/skills/<id>/                      save the owner's draft (readers keep the published version)
     DELETE /api/v2/skills/<id>/                      delete it (the owner)
@@ -38,7 +39,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.skills.skill_models import Skill, SkillStar, SkillVersion
-from origin.services.skills import run, service, text
+from origin.services.skills import effort, run, service, text
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR
@@ -284,6 +285,43 @@ class SkillListView(_Base):
         if problem:
             return problem
         return Response({"skill": _row(skill, request.user.pk)}, status=status.HTTP_201_CREATED)
+
+
+class SkillEffortLevelsView(_Base):
+    """What each effort level of a skill means for THIS caller, for the editor's choice (MIP-2198).
+
+    `enabled` is false while the agent is not on effort levels (a skill's level changes nothing
+    then); the rows are the table of `services/skills/effort.py`, read from the model catalog and the
+    credit policy, for the caller's own provider and plan ceiling. `relativeCost` is a guide next to
+    the choice (1 = a low run), never a price."""
+
+    def get(self, request):
+        from origin.search_engine.llm.choice import resolve_user_effort  # noqa: PLC0415
+        from origin.search_engine.quota import get_max_effort  # noqa: PLC0415
+
+        if not effort.active():
+            return Response({"enabled": False, "levels": []})
+        user = request.user
+        ceiling = get_max_effort(str(user.pk))
+        provider = resolve_user_effort(
+            user.preferred_llm_provider, None, user.preferred_llm_model, max_effort=ceiling
+        ).provider
+        return Response(
+            {
+                "enabled": True,
+                "maxEffort": ceiling,
+                "levels": [
+                    {
+                        "level": row.level,
+                        "modelLabel": row.model_label,
+                        "maxSteps": row.max_steps,
+                        "relativeCost": row.relative_cost,
+                        "locked": row.locked,
+                    }
+                    for row in effort.table(provider, ceiling)
+                ],
+            }
+        )
 
 
 class SkillImportView(_Base):
