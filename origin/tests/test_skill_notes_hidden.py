@@ -11,11 +11,13 @@ normal note that must be unchanged.
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest import mock
 
 from django.test import override_settings
 from django.utils import timezone
 
 from origin.models.note.common_note_models import NotePermissionMaster
+from origin.models.note.favorite_note_models import NoteFavoriteMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.recent_note_models import NoteRecentMaster
 from origin.search_engine import purge
@@ -194,6 +196,27 @@ class SkillNotesHiddenTests(test_skills_api.SkillBase):
         )
         self.record(self.plain)
         self.assertEqual(self.recent_titles(), ["Plain note"])
+
+    def test_favorites_do_not_list_the_skill_note_but_keep_normal_ones(self):
+        for note in (self.skill_note, self.plain):
+            NoteFavoriteMaster.objects.create(
+                team=self.team, user=self.user, note_type=1, note_id=note.note_id
+            )
+        self.as_user(self.user)
+        res = self.client.get(
+            f"/api/v2/note/favorite/meta/?team_id={self.team_id}&user_id={self.user.id}"
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual([n["title"] for n in res.json()["personalNotes"]], ["Plain note"])
+
+    def test_opening_the_skill_note_still_marks_its_activity_read(self):
+        with mock.patch(
+            "origin.views.note.recent_note_views.activity_seen.mark_note_activity_read",
+            return_value=[7],
+        ) as marked:
+            res = self.record(self.skill_note)
+        self.assertEqual(res.json()["readActivityIds"], [7])
+        marked.assert_called_once()
 
     def test_the_skills_editor_still_opens_and_saves_the_body(self):
         self.as_user(self.user)

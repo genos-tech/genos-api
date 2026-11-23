@@ -60,13 +60,19 @@ class RecordNoteOpenView(AuthenticatedAPIView):
         # A Genos Skill's body note is opened by the Skills editor, not as a note: it is never
         # recorded, so it cannot appear in Recent notes (MIP-2121). The answer keeps its shape.
         if data["note_type"] == 1 and PersonalNoteMaster.skill_body_ids([data["note_id"]]):
+            read_ids = activity_seen.safely(
+                activity_seen.mark_note_activity_read,
+                request_user_id,
+                data["note_type"],
+                data["note_id"],
+            )
             return Response(
                 {
                     "message": "Skill notes are not recorded as recent.",
                     "noteId": data["note_id"],
                     "noteType": data["note_type"],
                     "tsOpenedAt": None,
-                    "readActivityIds": [],
+                    "readActivityIds": read_ids,
                 },
                 status=status.HTTP_200_OK,
             )

@@ -46,7 +46,7 @@ from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.note.personal_note_models import PersonalNoteMaster
+from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.models.project.prj_models import ProjectMembers
@@ -718,7 +718,9 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
         )
     )
     owned = {
-        1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team),
+        1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team).exclude(
+            folder_id__in=PersonalNoteFolder.skill_folder_ids()
+        ),
         2: own_task_notes,
         # A chat note has no author exception (MIP-1492): the ones the caller wrote and can
         # still open, through their chat or a grant, by the rule `get_effective_role` applies.
@@ -1625,8 +1627,14 @@ def _did_in(
         )
     }
     by_note: dict[tuple[int, int], list[Any]] = {}
+    # A Genos Skill's body note is not a note to report on (MIP-2121).
+    skill_bodies = PersonalNoteMaster.skill_body_ids(
+        v.note_id for v in versions if v.note_type == 1
+    )
     for v in versions:
         note = notes.get((v.note_type, v.note_id))
+        if v.note_type == 1 and v.note_id in skill_bodies:
+            continue
         if note is not None and _may_read_note(ctx, v.note_type, note):
             by_note.setdefault((v.note_type, v.note_id), []).append(v)
     for (kind, note_id), rows in by_note.items():
