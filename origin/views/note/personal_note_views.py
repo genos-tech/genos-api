@@ -12,6 +12,7 @@ from origin.serializers.note.note_serializers import *
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
+from origin.views.utils.html_note_refusal import html_note_put_refusal
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import (
     is_team_folder,
@@ -320,6 +321,10 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             note = PersonalNoteMaster.objects.get(note_id=data["note_id"])
         except PersonalNoteMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # An HTML note's text is made from its page (MIP-2218): guide, write nothing.
+        if res := html_note_put_refusal(note):
+            return res
 
         # An autosave changes the title and the body, and the app sends nothing
         # else (moves have their own endpoints). The whole request used to reach

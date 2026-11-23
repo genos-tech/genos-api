@@ -17,6 +17,23 @@ def is_html_note(note) -> bool:
     return getattr(note, "body_format", None) == BODY_FORMAT_HTML
 
 
+def refuse_html_comment(note, note_id: int) -> None:
+    """Raise a `ToolError` that says what to do, when `note` is an HTML note; else return (MIP-2218).
+
+    A comment thread on a note is anchored in the note's text, which for an HTML note is only a
+    placeholder: the next page replace overwrites it and the anchor is lost. So the comment tools
+    write nothing and point at the places a conversation can live.
+    """
+    if not is_html_note(note):
+        return
+    raise ToolError(
+        f"Note {note_id} is an HTML note: comments cannot be anchored in it, because its text is "
+        "only a placeholder made from its page and the next page replace would lose the anchor. "
+        "Nothing was changed. To discuss the note, comment on the task it belongs to or reply in "
+        "the chat it came from instead."
+    )
+
+
 def refuse_html_text_edit(note, note_id: int) -> None:
     """Raise a `ToolError` that says what to do, when `note` is an HTML note; else return."""
     if not is_html_note(note):
