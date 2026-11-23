@@ -108,8 +108,9 @@ def effective_effort(sched: MemberSchedule, job) -> str:
 
 def _effort_cost(job) -> dict[str, Any] | None:
     """What one run costs at each level: an ESTIMATE from the size of the real prompt and the
-    catalog's prices (`report_ai.estimate`), never a measurement. None for a job with no AI."""
-    if not job.uses_ai:
+    catalog's prices (`report_ai.estimate`), never a measurement. None for a job with no AI, and for
+    one that says the report-sentence estimate does not describe it (`cost_estimated`)."""
+    if not job.uses_ai or not job.cost_estimated:
         return None
     from origin.services.report_ai import effort as effort_mod  # noqa: PLC0415
     from origin.services.report_ai import estimate  # noqa: PLC0415
@@ -146,7 +147,8 @@ def job_catalog() -> list[dict[str, Any]]:
     """What a schedule can run: key, title, what it does and the parameters it takes, and
     (MIP-1212) whether it uses AI, the effort it defaults to and what a run costs at each level.
     A job with an `agent_note` (where an id comes from, MIP-1630) lists it for the AI client; the
-    REST page picks its own keys and never shows it."""
+    REST page picks its own keys and never shows it. A job behind a switch that is off is left out
+    (`Job.available`)."""
     return [
         {
             "job": job.key,
@@ -159,4 +161,5 @@ def job_catalog() -> list[dict[str, Any]]:
             **({"agent_note": job.agent_note} if job.agent_note else {}),
         }
         for job in sorted(JOBS.values(), key=lambda j: j.key)
+        if job.available is None or job.available()
     ]
