@@ -4,7 +4,8 @@
     GET    /api/v2/skills/?team_id=&tab=runnable     the `/` picker: what the caller may run here (MIP-2042)
     POST   /api/v2/skills/                           create one (`team_id` in the body)
     POST   /api/v2/skills/import/                    a new skill from a SKILL.md file
-    GET    /api/v2/skills/effort-levels/             the effort levels and their relative cost for the caller (MIP-2198)
+    GET    /api/v2/skills/name-check/?team_id=&slug=&visibility=&skill_id=   is the name free where it is shared (MIP-2210)
+    GET    /api/v2/skills/effort-levels/            the effort levels and their relative cost for the caller (MIP-2198)
     GET    /api/v2/skills/<id>/                      one skill with its text
     PATCH  /api/v2/skills/<id>/                      save the owner's draft (readers keep the published version)
     DELETE /api/v2/skills/<id>/                      delete it (the owner)
@@ -210,6 +211,10 @@ class _Base(AuthenticatedAPIView):
             return None, _error(str(exc))
         except service.SkillError as exc:
             extra = {**({"code": exc.code} if exc.code else {}), **exc.extra}
+            field = getattr(exc, "field", "")
+            if field:
+                # A refusal about one field (a taken name, MIP-2210): the editor shows it under it.
+                extra["fieldErrors"] = {field: [str(exc)]}
             return None, _error(str(exc), exc.status, **extra)
 
     @staticmethod
@@ -291,6 +296,37 @@ class SkillListView(_Base):
         if problem:
             return problem
         return Response({"skill": _row(skill, request.user.pk)}, status=status.HTTP_201_CREATED)
+
+
+class SkillNameCheckView(_Base):
+    """The editor's live name check (MIP-2210): is `slug` free where the skill is (or is going to
+    be) shared? `visibility` is private (default) | team | public; `skill_id` is the skill being
+    edited, so its own name is not a clash. Always a 200 for a well-formed question: a badly formed
+    or taken name answers `available: false` with the sentence to show. Only the caller's own
+    skills, the team's shared skills and the public names are consulted (never someone's private
+    skill)."""
+
+    def get(self, request):
+        team = self._team(request.query_params.get("team_id"))
+        if team is None:
+            return _error("`team_id` is required.")
+        if not is_team_member(team, request.user.pk):
+            return _error("Team not found.", status.HTTP_404_NOT_FOUND)
+        skill_id = request.query_params.get("skill_id")
+        if skill_id and as_uuid(skill_id) is None:
+            return _error("`skill_id` is not valid.")
+        result, problem = self._run(
+            lambda: service.check_name(
+                request.user,
+                team,
+                request.query_params.get("slug"),
+                request.query_params.get("visibility"),
+                skill_id,
+            )
+        )
+        if problem:
+            return problem
+        return Response(result)
 
 
 class SkillEffortLevelsView(_Base):

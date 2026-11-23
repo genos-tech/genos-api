@@ -145,6 +145,15 @@ class SkillConflict(SkillError):
     status = 409
 
 
+class SkillNameTaken(SkillError):
+    """The name is already used in the place it has to be unique (MIP-2210). A 400 with the field
+    it is about, so the editor shows the sentence under the name."""
+
+    status = 400
+    code = "name_taken"
+    field = "slug"
+
+
 class SkillLimitReached(SkillError):
     """The plan's count of skills is used up."""
 
@@ -639,14 +648,114 @@ def _clean_icon(value: Any) -> str:
     return icon
 
 
-def _slug_free(team_id: Any, owner_id: Any, slug: str, *, exclude: Any = None) -> bool:
-    qs = Skill.objects.filter(team_id=team_id, owner_id=owner_id, slug=slug)
-    if exclude is not None:
-        qs = qs.exclude(pk=exclude)
-    return not qs.exists()
+def name_conflict(
+    team_id: Any,
+    owner_id: Any,
+    slug: str,
+    visibility: str = VISIBILITY_PRIVATE,
+    *,
+    exclude: Any = None,
+) -> str | None:
+    """The sentence saying why `slug` cannot be used, or `None` when it is free (MIP-2210).
+
+    A name has to be unique in the place the skill is read from:
+
+    * always, among the owner's own skills in the team (what `/name` resolves first);
+    * a TEAM skill, also among the team's shared skills (whoever owns them);
+    * a PUBLIC skill, also among all public skills.
+
+    A private skill is never compared with anybody else's skills, so the answer cannot reveal that
+    someone else's private skill exists. `exclude` is the skill being renamed or shared."""
+
+    def taken(**where: Any) -> bool:
+        qs = Skill.objects.filter(slug=slug, **where)
+        if exclude is not None:
+            qs = qs.exclude(pk=exclude)
+        return qs.exists()
+
+    if taken(team_id=team_id, owner_id=owner_id):
+        return f"You already have a skill named `{slug}`. Choose another name."
+    if visibility == VISIBILITY_TEAM and taken(team_id=team_id, visibility=VISIBILITY_TEAM):
+        return f"Your team already shares a skill named `{slug}`. Choose another name."
+    if visibility == VISIBILITY_PUBLIC and taken(visibility=VISIBILITY_PUBLIC):
+        return f"A public skill is already named `{slug}`. Choose another name to publish this one."
+    return None
 
 
-def _free_slug(team_id: Any, owner_id: Any, base: str) -> str:
+def require_name_free(
+    team_id: Any,
+    owner_id: Any,
+    slug: str,
+    visibility: str = VISIBILITY_PRIVATE,
+    *,
+    exclude: Any = None,
+) -> None:
+    problem = name_conflict(team_id, owner_id, slug, visibility, exclude=exclude)
+    if problem:
+        raise SkillNameTaken(problem)
+
+
+def _taken_after_race(
+    skill_slug: str, team_id: Any, owner_id: Any, visibility: str, exclude: Any
+) -> SkillNameTaken:
+    """The unique constraint refused a write that passed the check (two saves at once): say the
+    same sentence the check would have."""
+    problem = name_conflict(team_id, owner_id, skill_slug, visibility, exclude=exclude)
+    return SkillNameTaken(
+        problem or f"The name `{skill_slug}` was just taken. Choose another name."
+    )
+
+
+def check_name(
+    user: CustomUser,
+    team_id: Any,
+    slug: Any,
+    visibility: Any = None,
+    skill_id: Any = None,
+) -> dict[str, Any]:
+    """The editor's live check: `{"available", "slug", "message"}` for a name typed in the field.
+    `visibility` is where the skill is (or is going to be) shared; `skill_id` is the skill being
+    edited, so its own name is not a clash. A badly formed name is "not available" with the rule
+    as the message. Only the caller's own skills, the team's shared skills and the public names
+    are consulted."""
+    require_enabled()
+    _require_member(user, team_id)
+    try:
+        clean = text.clean_slug(slug)
+    except text.SkillTextError as exc:
+        return {"available": False, "slug": str(slug or "").strip().lower(), "message": str(exc)}
+    target = _clean_choice(visibility or VISIBILITY_PRIVATE, _VISIBILITIES, "The visibility")
+    exclude = None
+    if skill_id:
+        # Only the caller's own skill in this team may be excluded.
+        exclude = (
+            Skill.objects.filter(pk=skill_id, owner_id=user.pk, team_id=team_id)
+            .values_list("pk", flat=True)
+            .first()
+        )
+    problem = name_conflict(team_id, user.pk, clean, target, exclude=exclude)
+    return {"available": problem is None, "slug": clean, "message": problem or ""}
+
+
+def _slug_free(
+    team_id: Any,
+    owner_id: Any,
+    slug: str,
+    *,
+    exclude: Any = None,
+    visibility: str = VISIBILITY_PRIVATE,
+) -> bool:
+    return name_conflict(team_id, owner_id, slug, visibility, exclude=exclude) is None
+
+
+def _free_slug(
+    team_id: Any,
+    owner_id: Any,
+    base: str,
+    *,
+    exclude: Any = None,
+    visibility: str = VISIBILITY_PRIVATE,
+) -> str:
     """`base`, or `base-2`, `base-3`... for a skill made without a name (an import, a copy)."""
     candidate = base
     n = 1
@@ -655,7 +764,7 @@ def _free_slug(team_id: Any, owner_id: Any, base: str) -> str:
             clean = text.clean_slug(candidate)
         except text.SkillTextError:
             clean = None
-        if clean and _slug_free(team_id, owner_id, clean):
+        if clean and _slug_free(team_id, owner_id, clean, exclude=exclude, visibility=visibility):
             return clean
         n += 1
         suffix = f"-{n}"
@@ -692,19 +801,19 @@ def create(
     if source not in _SOURCES or source == "official":
         raise SkillError("Unknown source.")
     title = _wrap(lambda: text.clean_title(fields.title))
+    visibility = _clean_choice(
+        fields.visibility or VISIBILITY_PRIVATE, _VISIBILITIES, "The visibility"
+    )
     slug = (
         _wrap(lambda: text.clean_slug(fields.slug))
         if fields.slug
-        else _free_slug(team_id, user.pk, text.slugify(title))
+        else _free_slug(team_id, user.pk, text.slugify(title), visibility=visibility)
     )
     description = _wrap(lambda: text.clean_description(fields.description))
     tags = _wrap(lambda: text.clean_tags(fields.tags))
     hint = _wrap(lambda: text.clean_argument_hint(fields.argument_hint))
     tool_level = _clean_choice(fields.tool_level or TOOL_LEVEL_READ, _TOOL_LEVELS, "The tool level")
     effort = _clean_choice(fields.effort, _EFFORTS, "The effort") if fields.effort else ""
-    visibility = _clean_choice(
-        fields.visibility or VISIBILITY_PRIVATE, _VISIBILITIES, "The visibility"
-    )
     markdown = _wrap(lambda: text.check_body_markdown(str(fields.body_markdown or "")))
     blocks = markdown_to_blocks(markdown)
 
@@ -712,8 +821,7 @@ def create(
         # Serialise one member's creates so two at once cannot both pass the plan count.
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         _require_room(user.pk)
-        if not _slug_free(team_id, user.pk, slug):
-            raise SkillConflict(f"You already have a skill named `{slug}`.")
+        require_name_free(team_id, user.pk, slug, visibility)
         note = _create_note(user, team_id, title, blocks)
         try:
             with transaction.atomic():
@@ -735,7 +843,7 @@ def create(
                     forked_from_version_no=forked_from_version_no,
                 )
         except IntegrityError as exc:  # a racing create took the name
-            raise SkillConflict(f"You already have a skill named `{slug}`.") from exc
+            raise _taken_after_race(slug, team_id, user.pk, VISIBILITY_PRIVATE, None) from exc
         if visibility != VISIBILITY_PRIVATE:
             _set_visibility(skill, user, visibility)
     return skill
@@ -760,8 +868,19 @@ def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
             raise SkillError(
                 "This skill cannot be public yet: " + " ".join(problems), problems=problems
             )
+    # The name has to be free where the skill is going (MIP-2210): the team's shared names for a
+    # team skill, the public names for a public one.
+    require_name_free(skill.team_id, skill.owner_id, skill.slug, visibility, exclude=skill.pk)
+    previous = skill.visibility
     skill.visibility = visibility
-    skill.save(update_fields=["visibility", "updated_at"])
+    try:
+        with transaction.atomic():
+            skill.save(update_fields=["visibility", "updated_at"])
+    except IntegrityError as exc:  # another skill took the name in the same moment
+        skill.visibility = previous
+        raise _taken_after_race(
+            skill.slug, skill.team_id, skill.owner_id, visibility, skill.pk
+        ) from exc
     if visibility == VISIBILITY_PRIVATE:
         return
     cut_version(skill, user)  # None when the text is the newest version's already
@@ -795,8 +914,12 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
         if fields.slug is not None:
             slug = _wrap(lambda: text.clean_slug(fields.slug))
             if slug != skill.slug:
-                if not _slug_free(skill.team_id, skill.owner_id, slug, exclude=skill.pk):
-                    raise SkillConflict(f"You already have a skill named `{slug}`.")
+                # Checked where the skill is read from NOW (a public skill's new name must be free
+                # among the public names); a change of visibility in the same call is checked
+                # again for where it is going (`_set_visibility`).
+                require_name_free(
+                    skill.team_id, skill.owner_id, slug, skill.visibility, exclude=skill.pk
+                )
                 skill.slug = slug
         if fields.description is not None:
             skill.description = _wrap(lambda: text.clean_description(fields.description))
@@ -827,7 +950,9 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
             with transaction.atomic():
                 skill.save()
         except IntegrityError as exc:  # a racing write took the new name
-            raise SkillConflict(f"You already have a skill named `{skill.slug}`.") from exc
+            raise _taken_after_race(
+                skill.slug, skill.team_id, skill.owner_id, skill.visibility, skill.pk
+            ) from exc
         if fields.visibility is not None:
             _set_visibility(
                 skill,
@@ -1082,8 +1207,10 @@ def hand_over_team_skills(team_id: Any, leaver_id: Any) -> int:
                     note.owner = heir
                     note.folder_id = folder.folder_id
                     note.save(update_fields=["owner", "folder_id", "ts_updated_at"])
-            if not _slug_free(team_id, heir.pk, skill.slug):
-                skill.slug = _free_slug(team_id, heir.pk, skill.slug)
+            if not _slug_free(team_id, heir.pk, skill.slug, exclude=skill.pk):
+                skill.slug = _free_slug(
+                    team_id, heir.pk, skill.slug, exclude=skill.pk, visibility=skill.visibility
+                )
             skill.owner = heir
             fields = ["owner", "slug", "updated_at"]
             if skill.status == STATUS_HIDDEN_BY_TEAM:
