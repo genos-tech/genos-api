@@ -45,3 +45,5 @@ cb2f1a494dded934cf3595ab88ba1d408b2cc91f:origin/tests/test_field_encryption.py:g
 179956be6292c6f82b6e5f7a233d0223809f1648:origin/tests/test_mcp_result_log.py:generic-api-key:29
 # Fake webhook signing secret the MIP-2054 review-requested test signs its own payloads with.
 6a6e69798e02e54e07048495821cdc059b5e6056:origin/tests/test_pr_review_requested_signal.py:generic-api-key:24
+# Made-up AWS-shaped key (AKIA + A to P) in the Hub test that checks a public skill's text is refused when it carries a secret (MIP-2047); it belongs to no account.
+9edb95613133eaf973ee85037b336da868184937:origin/tests/test_skills_hub.py:aws-access-token:157
