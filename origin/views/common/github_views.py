@@ -45,6 +45,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
 from origin.services import github_app as github_app_service
+from origin.services import pr_signals
 from origin.services.github_app_webhook import app_team_ids_for_repo
 from origin.services.github_credential import (
     CredentialResolver,
@@ -1131,6 +1132,27 @@ def _comment_on_merged_pr(owner: str, repo: str, pr: dict, head_ref: str, team_i
         return 0
 
 
+def _linked_tasks(owner: str, repo: str, number, head_ref: str, team_ids: list) -> list:
+    """The live tasks, inside `team_ids`, a PR is linked to: the ones a delivery row names for its
+    url plus the ones its branch names. The tenant boundary is `team_ids`."""
+    if number is None or not team_ids:
+        return []
+    pr_url = canonical_pr_url(owner, repo, number)
+    task_ids = set(
+        TaskDelivery.objects.filter(team_id__in=team_ids, pr_url=pr_url).values_list(
+            "task_id", flat=True
+        )
+    )
+    task_ids |= {task.task_id for task in _tasks_for_branch(head_ref, team_ids)}
+    if not task_ids:
+        return []
+    return list(
+        TaskMaster.objects.filter(
+            task_id__in=task_ids, team_id__in=team_ids, is_deleted=False
+        ).order_by("task_id")
+    )
+
+
 def _notify_review_requested(
     owner: str, repo: str, pr: dict, requested_reviewer, head_ref: str, team_ids: list
 ) -> int:
@@ -1141,18 +1163,9 @@ def _notify_review_requested(
         number = pr.get("number")
         if number is None or not team_ids or not isinstance(requested_reviewer, dict):
             return 0
-        pr_url = canonical_pr_url(owner, repo, number)
-        task_ids = set(
-            TaskDelivery.objects.filter(team_id__in=team_ids, pr_url=pr_url).values_list(
-                "task_id", flat=True
-            )
-        )
-        task_ids |= {task.task_id for task in _tasks_for_branch(head_ref, team_ids)}
-        if not task_ids:
+        tasks = _linked_tasks(owner, repo, number, head_ref, team_ids)
+        if not tasks:
             return 0
-        tasks = TaskMaster.objects.filter(
-            task_id__in=task_ids, team_id__in=team_ids, is_deleted=False
-        ).order_by("task_id")
         return notify_review_requested_tasks(
             tasks,
             requested_reviewer=requested_reviewer,
@@ -1160,10 +1173,34 @@ def _notify_review_requested(
             repo=repo.lower(),
             number=int(number),
             title=pr.get("title") or "",
-            pr_url=pr_url,
+            pr_url=canonical_pr_url(owner, repo, number),
         )
     except Exception:  # noqa: BLE001
         logger.exception("GitHub webhook: review-requested notice failed for %s/%s", owner, repo)
+        return 0
+
+
+def _author_signals(event: str, payload: dict, repo_ref, team_ids: list, pr_reader) -> int:
+    """The PR author's signals (MIP-2062, `origin.services.pr_signals`) for a `pull_request_review`,
+    `check_run` or `status`. Never raises, and a failure rolls nothing back: the delivery has
+    already refreshed the cached PR details, and GitHub is not to retry a 5xx (MIP-861)."""
+    if repo_ref is None or not team_ids:
+        return 0
+    owner, repo = repo_ref
+
+    def find_tasks(number, head_ref):
+        return _linked_tasks(owner, repo, number, head_ref, team_ids)
+
+    try:
+        if event == "pull_request_review":
+            return pr_signals.handle_review_event(
+                owner, repo, payload, team_ids, pr_reader, find_tasks
+            )
+        return pr_signals.handle_ci_event(
+            event, owner, repo, payload, team_ids, pr_reader, find_tasks
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("GitHub webhook: %s signal failed for %s/%s", event, owner, repo)
         return 0
 
 
@@ -1374,6 +1411,7 @@ def handle_verified_event(
     repo_ref,
     team_ids_for,
     head_ref_fetcher=None,
+    pr_reader=None,
 ) -> Response:
     """What a VERIFIED delivery does, shared by the legacy per-repo hook (`GithubWebhookView`) and
     the GitHub App endpoint (`GithubAppWebhookView`, MIP-2088): one rule for task links, "Closes
@@ -1384,10 +1422,13 @@ def handle_verified_event(
     the teams linked to the installation, whatever repo the PR url names (the PR-url guard below
     already pinned it to the verified repo). `head_ref_fetcher(owner, repo, number)` resolves an
     `issue_comment`'s head branch (default: the registrar's token, `_fetch_pr_head_ref`).
+    `pr_reader` (`pr_signal_reader.InstallationReader`, App endpoint only) answers the GitHub reads
+    the author's signals need.
 
-    Events that change what the PR lookups cache but touch no task (`pull_request_review`,
-    `check_run`, `status`) refresh the repo's cached PR details so the CI badge and review state
-    are pushed instead of polled.
+    `pull_request_review`, `check_run` and `status` refresh the repo's cached PR details so the CI
+    badge and review state are pushed instead of polled, then tell the PR's author what happened
+    (changes requested, approved, CI failing, approved and green: MIP-2062). Only the App endpoint
+    receives them.
     """
     if _pr_url_repo_mismatch(event, payload, repo_ref):
         logger.warning(
@@ -1400,7 +1441,10 @@ def handle_verified_event(
     if event in ("pull_request_review", "check_run", "status"):
         if repo_ref is not None:
             _invalidate_pr_detail(repo_ref[0], repo_ref[1])
-        return Response({"detail": "ok", "refreshed": repo_ref is not None})
+        notified = _author_signals(
+            event, payload, repo_ref, team_ids_for(*repo_ref) if repo_ref else [], pr_reader
+        )
+        return Response({"detail": "ok", "refreshed": repo_ref is not None, "notified": notified})
 
     if event == "pull_request":
         pr = payload.get("pull_request") or {}
@@ -1440,6 +1484,12 @@ def handle_verified_event(
             # recovered event and a live one close tasks by one rule.
             applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
             deliveries, updated = applied["deliveries"], applied["updated"]
+            if action == "closed":
+                # A closed or merged PR waits on nobody: retire its unread signals (MIP-2062).
+                try:
+                    pr_signals.retire_closed_pr(owner_inv, repo_inv, number_inv, team_ids)
+                except Exception:  # noqa: BLE001
+                    logger.exception("GitHub webhook: retiring PR signals failed: %s", html_url)
 
         # A reviewer was asked for: tell them through the Inbox and the task (MIP-2054).
         # Team reviewers (`requested_team`) carry no `requested_reviewer` and are ignored.

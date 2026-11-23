@@ -1287,11 +1287,19 @@ def waiting_on_me(ctx: ToolContext, now: datetime, names: _Names) -> dict[str, A
     }
     # PRs whose review was asked of the caller (MIP-2054): the unread Inbox items of that kind.
     # The key is absent when there are none, so a briefing without PR reviews is unchanged.
-    from origin.services.pr_needs_you import pending_review_rows  # noqa: PLC0415
+    from origin.services.pr_needs_you import (  # noqa: PLC0415
+        pending_review_rows,
+        pending_signal_rows,
+    )
 
     pr_reviews = pending_review_rows(ctx.user_id, ctx.team_id)
     if pr_reviews:
         waiting["pr_reviews"] = pr_reviews
+    # What happened to the caller's own PRs (MIP-2062: changes requested, approved, CI failing,
+    # approved and green), from the same store. Absent when there is nothing, as `pr_reviews`.
+    pr_updates = pending_signal_rows(ctx.user_id, ctx.team_id)
+    if pr_updates:
+        waiting["pr_updates"] = pr_updates
     return waiting
 
 
