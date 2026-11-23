@@ -140,33 +140,60 @@ def _verify_state(state: str) -> dict:
     return signing.loads(state, salt=STATE_SALT, max_age=STATE_TOKEN_MAX_AGE_SECONDS)
 
 
-# The GitHub App flow binds its state to the browser that started it (MIP-2087). Without this, a
-# signed state is a bearer ticket: an attacker who starts a connect for THEIR team can hand the
-# GitHub URL (with their state) to someone else, and when that person authorizes, the callback
-# stores THEIR token and links THEIR installations under the attacker's account and team. The
-# random value lives in an HttpOnly cookie scoped to this flow's routes; the state carries only its
-# hash, so the callback links nothing unless the same browser comes back.
+# Every connect flow binds its state to the browser that started it (the GitHub App in MIP-2087,
+# Google and the GitHub OAuth App in MIP-2170). Without this, a signed state is a bearer ticket: an
+# attacker who starts a connect can hand the provider URL (with their state) to someone else, and
+# when that person authorizes, the callback stores THEIR token under the attacker's account. The
+# random value lives in an HttpOnly cookie scoped to the provider's routes (one cookie per
+# provider, so two flows in one browser do not clobber each other); the state carries only its
+# hash, so the callback stores nothing unless the same browser comes back.
 GITHUB_APP_BIND_COOKIE = "github_app_bind"
 GITHUB_APP_BIND_PATH = "/api/v2/oauth/github_app/"
+
+
+def _bind_cookie_name(provider_name: str) -> str:
+    return f"{provider_name}_bind"
+
+
+def _bind_cookie_path(provider_name: str) -> str:
+    return f"/api/v2/oauth/{provider_name}/"
+
+
+def _new_bind() -> str:
+    return secrets.token_urlsafe(24)
 
 
 def _bind_hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _bind_matches(request: Request, state_payload: dict) -> bool:
-    cookie = request.COOKIES.get(GITHUB_APP_BIND_COOKIE)
+def _bind_matches(request: Request, state_payload: dict, provider_name: str = "github_app") -> bool:
+    cookie = request.COOKIES.get(_bind_cookie_name(provider_name))
     expected = state_payload.get("bind")
     if not cookie or not isinstance(expected, str):
         return False
     return hmac.compare_digest(_bind_hash(cookie), expected)
 
 
-def _clear_bind_cookie(response) -> None:
+def _set_bind_cookie(response, provider_name: str, bind: str) -> None:
+    """Same attributes as the refresh cookie (the client's XHR must send credentials for the
+    browser to keep it); HttpOnly, scoped to this flow's routes, gone with the state."""
+    response.set_cookie(
+        _bind_cookie_name(provider_name),
+        bind,
+        max_age=STATE_TOKEN_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path=_bind_cookie_path(provider_name),
+    )
+
+
+def _clear_bind_cookie(response, provider_name: str = "github_app") -> None:
     """One use: the cookie is dropped as soon as the callback has looked at it."""
     response.delete_cookie(
-        GITHUB_APP_BIND_COOKIE,
-        path=GITHUB_APP_BIND_PATH,
+        _bind_cookie_name(provider_name),
+        path=_bind_cookie_path(provider_name),
         samesite=settings.AUTH_COOKIE_SAMESITE,
     )
 
@@ -324,11 +351,19 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
         provider: OAuthProvider = get_provider(provider_name)
         if provider_name == "github_app":
             return self._github_app_url(request, provider, next_path)
-        state = _sign_state(intent="connect", user_id=str(request.user.id), next_path=next_path)
+        bind = _new_bind()
+        state = _sign_state(
+            intent="connect",
+            user_id=str(request.user.id),
+            next_path=_safe_next(next_path, "/workspace/integrations"),
+            bind=_bind_hash(bind),
+        )
         url = provider.authorize_url(
             state=state, intent="connect", redirect_uri=_redirect_uri(provider_name)
         )
-        return Response({"url": url})
+        response = Response({"url": url})
+        _set_bind_cookie(response, provider_name, bind)
+        return response
 
     @staticmethod
     def _github_app_url(request: Request, provider: OAuthProvider, next_path) -> Response:
@@ -341,7 +376,7 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
             team = github_app_link.resolve_link_team(request.user, request.data.get("team_id"))
         except github_app_link.LinkError as exc:
             return Response({"detail": exc.reason}, status=exc.status)
-        bind = secrets.token_urlsafe(24)
+        bind = _new_bind()
         state = _sign_state(
             intent="connect",
             user_id=str(request.user.id),
@@ -357,17 +392,7 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
         else:
             url = github_app_link.install_url(state=state)
         response = Response({"url": url})
-        # Same attributes as the refresh cookie (the client's XHR must send credentials for the
-        # browser to keep it); HttpOnly, scoped to this flow's routes, gone with the state.
-        response.set_cookie(
-            GITHUB_APP_BIND_COOKIE,
-            bind,
-            max_age=STATE_TOKEN_MAX_AGE_SECONDS,
-            httponly=True,
-            secure=settings.AUTH_COOKIE_SECURE,
-            samesite=settings.AUTH_COOKIE_SAMESITE,
-            path=GITHUB_APP_BIND_PATH,
-        )
+        _set_bind_cookie(response, "github_app", bind)
         return response
 
 
@@ -411,8 +436,48 @@ class OAuthCallbackView(APIView):
             return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
 
         intent: FlowIntent = state_payload["intent"]
+        if intent not in ("login", "connect"):
+            return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
+        if intent == "connect":
+            # The sign-in flow has no signed-in person to protect; a connect does (MIP-2170).
+            response = self._connect_callback(request, provider_name, code, state_payload)
+            _clear_bind_cookie(response, provider_name)
+            return response
         next_path: str = state_payload.get("next") or "/jointeam"
+        return self._login_callback(provider_name, code, state_payload, next_path)
 
+    def _connect_callback(
+        self, request: Request, provider_name: str, code: str, state_payload: dict
+    ) -> HttpResponseRedirect:
+        if not _bind_matches(request, state_payload, provider_name):
+            # The browser coming back is not the one that started this connect (or its cookie is
+            # gone): the state may have been handed over by someone else. Nothing is exchanged or
+            # stored; the person presses Connect again.
+            return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
+        provider: OAuthProvider = get_provider(provider_name)
+        try:
+            token_response: TokenResponse = provider.exchange_code(
+                code=code, redirect_uri=_redirect_uri(provider_name)
+            )
+            profile: ProviderProfile = provider.fetch_profile(
+                access_token=token_response.access_token
+            )
+        except Exception as exc:  # noqa: BLE001 — network / provider failures vary
+            logger.exception(
+                "OAuth %s callback failed during exchange/profile: %s", provider_name, exc
+            )
+            return HttpResponseRedirect(_frontend_failure_url(reason="provider_error"))
+        return self._handle_connect(
+            provider_name=provider_name,
+            profile=profile,
+            token_response=token_response,
+            initiating_user_id=state_payload.get("user_id"),
+            next_path=state_payload.get("next"),
+        )
+
+    def _login_callback(
+        self, provider_name: str, code: str, state_payload: dict, next_path: str
+    ) -> HttpResponseRedirect:
         provider: OAuthProvider = get_provider(provider_name)
         try:
             token_response: TokenResponse = provider.exchange_code(
@@ -427,21 +492,13 @@ class OAuthCallbackView(APIView):
             )
             return HttpResponseRedirect(_frontend_failure_url(reason="provider_error"))
 
-        if intent == "login":
-            return self._handle_login(
-                provider_name=provider_name,
-                profile=profile,
-                token_response=token_response,
-                next_path=next_path,
-                terms_accepted_at=state_payload.get("terms_accepted_at"),
-                terms_version=state_payload.get("terms_version"),
-            )
-        return self._handle_connect(
+        return self._handle_login(
             provider_name=provider_name,
             profile=profile,
             token_response=token_response,
-            initiating_user_id=state_payload.get("user_id"),
             next_path=next_path,
+            terms_accepted_at=state_payload.get("terms_accepted_at"),
+            terms_version=state_payload.get("terms_version"),
         )
 
     # ---- helpers ----------------------------------------------------
@@ -604,9 +661,10 @@ class OAuthCallbackView(APIView):
         if failure:
             return HttpResponseRedirect(_frontend_failure_url(reason=failure))
 
-        # User is already signed in; no new JWT needed. Just bounce
-        # them back to wherever they came from (typically the
-        # integrations page).
+        # User is already signed in; no new JWT needed. Just bounce them back to wherever they
+        # came from (typically the integrations page). Same-site only, re-checked here because the
+        # state may predate the check at initiate.
+        next_path = _safe_next(next_path, "/workspace/integrations")
         return HttpResponseRedirect(f"{settings.FRONTEND_BASE_URL}{next_path}")
 
     def _connect_account(
@@ -814,31 +872,38 @@ class IntegrationsListView(APIView):
         accounts = ConnectedAccount.objects.filter(user=request.user).order_by(
             "provider", "-is_login_identity", "ts_created_at", "id"
         )
-        return Response(
-            {
-                "primary_auth_provider": request.user.primary_auth_provider,
-                "connections": [
-                    {
-                        # `id` is what every per-account operation keys
-                        # on (calendar reads/writes, disconnect). Without
-                        # it a client holding two Google accounts has no
-                        # way to address either one.
-                        "id": str(a.id),
-                        "provider": a.provider,
-                        "provider_email": a.provider_email,
-                        "label": a.label,
-                        "scopes": a.scopes,
-                        "connected_at": a.ts_created_at,
-                        # Read from the flag, not from a provider-string
-                        # comparison: with two Google rows the old
-                        # comparison marked both as primary and made
-                        # both undeletable.
-                        "is_primary": a.is_login_identity,
-                    }
-                    for a in accounts
-                ],
-            }
-        )
+        payload = {
+            "primary_auth_provider": request.user.primary_auth_provider,
+            "connections": [
+                {
+                    # `id` is what every per-account operation keys
+                    # on (calendar reads/writes, disconnect). Without
+                    # it a client holding two Google accounts has no
+                    # way to address either one.
+                    "id": str(a.id),
+                    "provider": a.provider,
+                    "provider_email": a.provider_email,
+                    "label": a.label,
+                    "scopes": a.scopes,
+                    "connected_at": a.ts_created_at,
+                    # Read from the flag, not from a provider-string
+                    # comparison: with two Google rows the old
+                    # comparison marked both as primary and made
+                    # both undeletable.
+                    "is_primary": a.is_login_identity,
+                }
+                for a in accounts
+            ],
+        }
+        # The GitHub App block (MIP-2090) exists only while the switch is on: off, the answer is
+        # byte for byte what it was, and a client that finds no block treats the App as off.
+        # `?team_id=` is the team the card describes (the active one); a person in several teams
+        # who names none gets an empty block, never a guess.
+        if github_app.is_enabled():
+            payload["github_app"] = github_app_link.connections_block(
+                request.user, request.query_params.get("team_id")
+            )
+        return Response(payload)
 
 
 class IntegrationsDisconnectView(ObjectBodyMixin, APIView):

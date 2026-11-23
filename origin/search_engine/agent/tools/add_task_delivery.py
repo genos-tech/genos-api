@@ -71,7 +71,7 @@ def _github_pr(user_id: str, owner: str, repo: str, number: int) -> dict | None:
     )
 
     user = CustomUser.objects.filter(id=user_id).first()
-    account = _connected_account(user) if user else None
+    account = _connected_account(user, (owner, repo)) if user else None
     if account is None:
         return None
     try:

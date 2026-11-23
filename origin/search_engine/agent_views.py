@@ -195,6 +195,9 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.services.skills import effort as skill_effort
+from origin.services.skills import run as skill_run
+from origin.services.skills import service as skill_service
 from origin.services.throttles import (
     AgentThrottle,
     AgentUndoThrottle,
@@ -1308,6 +1311,23 @@ class AgentAskView(AuthenticatedAPIView):
                 return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # A skill the person runs with `/name` (MIP-2042, `GENOS_SKILLS`). Resolved by the asker's own access
+        # BEFORE anything is spent or written, like the task below: a refused skill (unknown, not theirs,
+        # ambiguous, empty) opens no cost rollup and leaves no run row. With the switch off the field is
+        # ignored, as an unknown one always was. The run itself is an ordinary ask: the credit gate, the cost
+        # meter, the history and the approval cards below are the ones every ask goes through.
+        skill_to_run: skill_run.ResolvedSkill | None = None
+        if data.get("skill") is not None and skill_service.enabled():
+            try:
+                # `claimed_team`, not `team_id`: asking about a task of a shared project swaps `team_id` for
+                # the HOST team, but the person's skills belong to the team they are asking from.
+                skill_to_run = skill_run.resolve(request.user, claimed_team, data["skill"])
+            except skill_service.SkillError as exc:
+                return Response(
+                    {"error": str(exc), **({"code": exc.code} if exc.code else {}), **exc.extra},
+                    status=exc.status,
+                )
+
         # The task or milestone the ask is about (MIP-1057), read by the asker's own access BEFORE
         # anything is spent or written: a refused ask opens no cost rollup, mints no session and leaves
         # no run row. A task that does not exist, one that was deleted, one in another team and one the
@@ -1379,6 +1399,29 @@ class AgentAskView(AuthenticatedAPIView):
         credit_block = _credit_gate(user_id, plan)
         if credit_block is not None:
             return credit_block
+
+        # A skill's effort level (MIP-2198) decides the model tier, the thinking budget and the step
+        # limit of THIS run, so it is bound here, before the quota checks, the cost meter and the loop
+        # read `chosen`: they all see the level's model, and the credits follow it. With the balance
+        # low the run starts one level lower and says so in its first sentence.
+        effort_fallback: dict | None = None
+        skill_note_before = skill_to_run.note if skill_to_run is not None else ""
+        if skill_to_run is not None:
+            chosen, effort_decision = skill_effort.apply(
+                chosen, skill_to_run.effort, user_id=user_id, plan=plan
+            )
+            if effort_decision is not None:
+                skill_to_run = dataclasses.replace(skill_to_run, effort=effort_decision.used)
+                if effort_decision.degraded:
+                    skill_to_run = dataclasses.replace(
+                        skill_to_run,
+                        note=" ".join(n for n in (skill_to_run.note, effort_decision.note) if n),
+                    )
+                    effort_fallback = {
+                        "requested_effort": effort_decision.requested,
+                        "used_effort": effort_decision.used,
+                        "reason": "credits",
+                    }
 
         if not _credits_authoritative():
             llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
@@ -1489,6 +1532,22 @@ class AgentAskView(AuthenticatedAPIView):
             return ceiling_resp
         if ceiling_note is not None:
             fallback_note = ceiling_note
+        if (
+            skill_to_run is not None
+            and skill_to_run.effort
+            and chosen.effort != skill_to_run.effort
+        ):
+            # The quota fallback or the monthly ceiling replaced the choice after the level was
+            # bound (their `LlmChoice` carries no effort): the run no longer runs at that level, so
+            # it must neither claim it (the step-down sentence, the done note) nor have a paused leg
+            # re-bind the dearer model they just routed away from.
+            skill_to_run = dataclasses.replace(
+                skill_to_run, effort=chosen.effort, note=skill_note_before
+            )
+            effort_fallback = None
+        if effort_fallback is not None:
+            # Rides the same `done` field as a model step-down; the keys say which kind it is.
+            fallback_note = {**(fallback_note or {}), **effort_fallback}
 
         # Cost meter — mint the logical request id NOW, before any paid
         # call. Everything this ask spends, on either thread, is grouped
@@ -1669,6 +1728,7 @@ class AgentAskView(AuthenticatedAPIView):
                     else []
                 ),
                 locale=locale,
+                skill_ref=skill_run.history_ref(skill_to_run) if skill_to_run else None,
             )
         except Exception:  # noqa: BLE001
             log.exception("Failed to create AgentRun row; continuing without persistence")
@@ -1925,6 +1985,14 @@ class AgentAskView(AuthenticatedAPIView):
         if tier_extra:
             system_extra = f"{system_extra}\n\n{tier_extra}" if system_extra else tier_extra
 
+        # The skill the person chose (MIP-2042): its text fenced, last, next to the question. Its tool level
+        # is a ceiling that only HIDES tools from the caller's own set (never declares one they lack), so
+        # the model cannot call what the skill may not do.
+        if skill_to_run is not None:
+            skill_extra = skill_run.build_block(skill_to_run)
+            system_extra = f"{system_extra}\n\n{skill_extra}" if system_extra else skill_extra
+            disabled_tools = disabled_tools | skill_run.disabled_tools(skill_to_run)
+
         # What /decide/ will hand a resumed leg if this ask pauses on a write
         # (MIP-977); written by `_stream_ndjson` at the pause, not before.
         keeps_turns = _resume_keeps_turns()
@@ -1949,6 +2017,10 @@ class AgentAskView(AuthenticatedAPIView):
             if _resume_keeps_blocks()
             else None
         )
+        if skill_to_run is not None:
+            # The skill's REFERENCE (ids and its tool level, never its text) is kept whatever the flag
+            # above says: it is the ceiling `/decide/` must put back on the resumed leg, not context.
+            resume_context = {**(resume_context or {}), "skill": skill_run.resume_ref(skill_to_run)}
 
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
@@ -2609,6 +2681,13 @@ class AgentDecideView(AuthenticatedAPIView):
         # problem in practice; it's also the principle-of-least-surprise
         # behavior — the user's *current* preference is what counts.
         resumed_choice = _resolve_choice_for(request.user)
+        # A paused run of a skill (MIP-2198) continues at the effort level its first leg started at,
+        # not at whatever the caller's own setting is now: the same model tier, budget and step limit.
+        skill_kept = skill_run.kept_ref(run.resume_context)
+        if skill_kept is not None:
+            resumed_choice = skill_effort.bind_kept(
+                resumed_choice, skill_run.effort_for_kept(skill_kept), user_id=request_user_id
+            )
 
         # Cost meter — the resumed leg is a CONTINUATION of the original
         # ask, not a new logical request: no quota increments here, and
@@ -2651,6 +2730,17 @@ class AgentDecideView(AuthenticatedAPIView):
         resumed_extra, resumed_dropped = (
             _resumed_context(run) if _resume_keeps_blocks() else (None, [])
         )
+        # A run of a skill (MIP-2042) keeps its ceiling across the pause, whatever the flag above says: the
+        # resumed leg hides the same tools the first leg did (it could otherwise declare every tool the
+        # caller has, composite writes included), and gets the skill's block again from what the person may
+        # run NOW (a skill deleted or hidden while the card waited is not replayed).
+        if skill_kept is not None:
+            resumed_disabled = resumed_disabled | skill_run.disabled_tools_for_kept(skill_kept)
+            skill_block = skill_run.rebuild_block(skill_kept, request.user, run.team_id)
+            if skill_block:
+                resumed_extra = (
+                    f"{resumed_extra}\n\n{skill_block}" if resumed_extra else skill_block
+                )
         # ...and the earlier turns of its conversation, which sit in the messages and
         # not the system prompt (MIP-991). Without them every decision finished a
         # follow-up ask as if it were the first question of the conversation.
@@ -4590,6 +4680,8 @@ def _build_turns_payload(session: AgentSession) -> list[dict[str, Any]]:
                 "error": error or None,
                 "started_at": r.started_at.isoformat(),
                 "sources": reconstruct_sources_for_run(r),
+                # The skill this turn ran (MIP-2189): the reference, so "Retry" sends it again.
+                "skill": r.skill_ref if skill_service.enabled() else None,
                 # The approved writes of this turn that have an undo (one run can
                 # approve several): `{step_id, step, tool_name, available_until,
                 # undone_at | null}`. Whether one can STILL be undone (the window,

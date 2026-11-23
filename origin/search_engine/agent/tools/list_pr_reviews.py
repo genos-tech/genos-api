@@ -70,7 +70,7 @@ def _run_unguarded(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except CustomUser.DoesNotExist:
         raise ToolError("Current user record not found.")
 
-    account = _connected_account(user)
+    account = _connected_account(user, (owner, repo))
     if account is None:
         raise ToolError("GitHub is not connected for this user.")
 

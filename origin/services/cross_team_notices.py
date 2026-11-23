@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 
+from origin.serializers.common.inbox_serializers import sender_keys
 from origin.services import inbox_via
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ def notice_for(item) -> dict:
             "isRead": item.is_read,
             "requestStatus": item.request_status,
             "tsSent": item.ts_created_at.isoformat(),
+            **sender_keys(item),
             "itemOptionals": inbox_via.optionals_for_viewer(
                 item.item_optionals, sender_id=item.sender_id, viewer_id=item.receiver_id
             ),
@@ -161,12 +163,16 @@ def pending_notices(*, item_type: int, key: str, values) -> list[dict]:
     matches = Q()
     for value in keys:
         matches |= Q(**{f"item_optionals__{key}": value})
-    items = InboxItems.objects.filter(
-        matches,
-        item_type=item_type,
-        request_status="pending",
-        is_deleted=False,
-    ).order_by("ts_created_at")
+    items = (
+        InboxItems.objects.select_related("sender")
+        .filter(
+            matches,
+            item_type=item_type,
+            request_status="pending",
+            is_deleted=False,
+        )
+        .order_by("ts_created_at")
+    )
     return [notice_for(item) for item in items]
 
 
@@ -247,9 +253,7 @@ def notify_connection_answer(conn, responder, accepted: bool):
     other = hi if lo == str(asking_team_id) else lo
     other_name = _name(other)
     verb = (
-        " accepted your connection request."
-        if accepted
-        else " declined your connection request."
+        " accepted your connection request." if accepted else " declined your connection request."
     )
     return _answer_notice(
         team_id=asking_team_id,

@@ -13,16 +13,21 @@ What matters, each with a test that fails when it is removed:
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
+from unittest import mock
 
 from origin.models.chat.unified_models import Channel, ChannelMember, Message
 from origin.models.common.team_models import TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
+from origin.models.task.task_activity_models import TaskActivity
 from origin.services import schedule_audience as audience
 from origin.services import schedules
 from origin.services.schedule_jobs import EMOJI, JOBS
 from origin.tests.test_schedule_chat_delivery import ChatBase
+
+UTC = dt_timezone.utc
 
 
 class TeamJobsBase(ChatBase):
@@ -117,12 +122,49 @@ class TestTeamActivityContent(TeamJobsBase):
         self.activity(task, actor, "status_changed", "Open", "Closed", at=self.now - ago)
         return task
 
+    def only_outsider_joined_in_window(self):
+        """setUp stamps every membership with the REAL clock, while `self.now` is 15:00 JST of the
+        real day: after 06:00 UTC the real clock is later than `self.now`, so the other members
+        would count as joined in the window (MIP-2195). Stamp them all from `self.now`."""
+        TeamMembers.objects.update(ts_joined_at=self.now - timedelta(days=90))
+        TeamMembers.objects.filter(attendee=self.outsider).update(ts_joined_at=self.now)
+
+    def test_it_gives_the_same_report_whatever_the_real_clock_says(self):
+        instants = (
+            datetime(2026, 11, 22, 23, 59, 59, tzinfo=UTC),  # just before UTC midnight
+            datetime(2026, 11, 23, 0, 0, 1, tzinfo=UTC),  # just after UTC midnight
+            datetime(2026, 11, 22, 14, 59, 59, tzinfo=UTC),  # just before Tokyo midnight
+            datetime(2026, 11, 22, 15, 0, 1, tzinfo=UTC),  # just after Tokyo midnight
+            datetime(2026, 11, 23, 6, 40, tzinfo=UTC),  # when CI began to fail
+            datetime(2026, 11, 22, 23, 30, tzinfo=UTC),  # Sunday night UTC (week end)
+            datetime(2026, 11, 23, 0, 30, tzinfo=UTC),  # Monday start of the week
+        )
+        for real in instants:
+            with self.subTest(real_clock=real.isoformat()):
+                with mock.patch("django.utils.timezone.now", return_value=real):
+                    self.now = self.midnight_jst() + timedelta(hours=15)
+                TaskActivity.objects.all().delete()
+                self.close(self.project, self.user2, f"A {real}")
+                self.close(self.project, self.user, f"C {real}")
+                self.close(self.project, self.user, f"Old {real}", ago=timedelta(days=30))
+                self.only_outsider_joined_in_window()
+                report = self.run_job("team_activity")
+                self.assertIn(f"{self.project.project_name}: 2 closed", self.texts(report)[0])
+                self.assertEqual(self.section(report, "New on the team")[0]["text"], "outsider")
+
+    def test_the_window_edge_is_inclusive(self):
+        self.only_outsider_joined_in_window()
+        self.close(self.project, self.user, "Edge", ago=timedelta(hours=24))
+        self.close(self.project, self.user, "Just outside", ago=timedelta(hours=24, seconds=1))
+        report = self.run_job("team_activity", hours=24)
+        self.assertIn(f"{self.project.project_name}: 1 closed", self.texts(report)[0])
+
     def test_it_counts_closed_and_new_tasks_names_new_members_and_top_closers(self):
         self.close(self.project, self.user2, "Ship A")
         self.close(self.project, self.user2, "Ship B")
         self.close(self.project, self.user, "Ship C")
         self.close(self.project, self.user, "Too old", ago=timedelta(days=30))
-        TeamMembers.objects.filter(attendee=self.outsider).update(ts_joined_at=self.now)
+        self.only_outsider_joined_in_window()
         report = self.run_job("team_activity")
         projects = self.section(report, "Projects")
         self.assertIn(f"{self.project.project_name}: 3 closed", projects[0]["text"])

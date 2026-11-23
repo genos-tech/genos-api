@@ -301,6 +301,15 @@ export default defineRailway(() => {
       DJANGO_DEBUG: preserve(),
       DJANGO_SECRET_KEY: preserve(),
       FIELD_ENCRYPTION_KEYS: preserve(),
+      // The GitHub App (MIP-2088): the cron redelivers the App webhook's failures. All off, and
+      // all empty, until the switch is turned on for this service too.
+      GITHUB_APP_CLIENT_ID: preserve(),
+      GITHUB_APP_CLIENT_SECRET: preserve(),
+      GITHUB_APP_ENABLED: preserve(),
+      GITHUB_APP_ID: preserve(),
+      GITHUB_APP_PRIVATE_KEY: preserve(),
+      GITHUB_APP_SLUG: preserve(),
+      GITHUB_APP_WEBHOOK_SECRET: preserve(),
       GITHUB_OAUTH_CLIENT_ID: preserve(),
       GITHUB_OAUTH_CLIENT_SECRET: preserve(),
       GOOGLE_OAUTH_CLIENT_ID: preserve(),

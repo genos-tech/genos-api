@@ -1,8 +1,10 @@
 """`fetch_pr` tool — load metadata for one GitHub pull request.
 
-Uses the calling user's OAuth-stored GitHub token (resolved from
-`ctx.user_id`) to call the live GitHub API — there's no internal mirror
-of PR data, the integration is read-mostly and stateless.
+Uses the calling user's stored GitHub token (resolved from `ctx.user_id`
+through `github_credential`, MIP-2089: their App user token when the App
+covers the repo, else the legacy OAuth token) to call the live GitHub
+API — there's no internal mirror of PR data, the integration is
+read-mostly and stateless.
 
 Returns a slim, LLM-friendly summary: title, state (open/draft/merged/
 closed), branches, diff stats, dates, author, and a truncated body. PR
@@ -51,7 +53,7 @@ def _run_unguarded(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     except CustomUser.DoesNotExist:
         raise ToolError("Current user record not found.")
 
-    account = _connected_account(user)
+    account = _connected_account(user, (owner, repo))
     if account is None:
         raise ToolError("GitHub is not connected for this user.")
 

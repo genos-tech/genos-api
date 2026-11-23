@@ -216,6 +216,7 @@ class InboxItemView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        **echo_sender_keys(request.user, serializer.data.get("receiver")),
                         # Echoed so the caller can hand the socket-delivered
                         # payload the same shape a later GET returns. The
                         # sockets handlers copy this dict straight into their
@@ -276,7 +277,20 @@ class InboxItemView(AuthenticatedAPIView):
         serializer = InboxItemsSerializer(inbox_item, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            # The sockets service rebuilds the pushed card from this answer, and the client
+            # replaces its stored row with it: without the sender the answered card would lose its
+            # face (MIP-2182). The reader is the receiver, so only the sender can be named. This
+            # answer is the model's own fields, where `sender` is already the raw user id the
+            # handlers read back, so the person goes under `senderProfile` instead.
+            keys = sender_keys(inbox_item)
+            return Response(
+                {
+                    **serializer.data,
+                    "senderId": keys["senderId"],
+                    "senderProfile": keys["sender"],
+                },
+                status=status.HTTP_200_OK,
+            )
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -306,7 +320,10 @@ class InboxItemView(AuthenticatedAPIView):
         server_time = capture_server_time()
         since, force_full = check_since(request)
 
-        qs = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id))
+        # `select_related("sender")`: each card's sender rides on the same query (no query per item).
+        qs = InboxItems.objects.filter(Q(team_id=team_id, receiver=user_id)).select_related(
+            "sender"
+        )
         if since is None:
             # Full load: hide soft-deleted rows.
             qs = qs.filter(is_deleted=False)
@@ -346,6 +363,11 @@ class InboxItemView(AuthenticatedAPIView):
                 "requestStatus": item.request_status,
                 "isDeleted": item.is_deleted,
                 "tsSent": item.ts_created_at,
+                # Who the card is about (MIP-2181): the person who sent it, so every card can show
+                # their face without reading the body. Both null for a row nobody sent (digest,
+                # report, trial notice) and for a system account. The receiver already reads this
+                # person's name in the body; there is no email here.
+                **sender_keys(item),
                 # Request routing payload (e.g. note-access items carry
                 # note_type/note_id/note_title so the client can open the
                 # referenced note). Null for plain activity items.
@@ -475,6 +497,7 @@ class InboxItemForJoinTeamRequestView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        **echo_sender_keys(request.user, serializer.data.get("receiver")),
                     },
                     "receiver": serializer.data.get("receiver", None),
                 },
@@ -554,6 +577,7 @@ class InboxItemForJoinProjectRequestView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        **echo_sender_keys(request.user, serializer.data.get("receiver")),
                     },
                     "receiver": serializer.data.get("receiver", None),
                 },
@@ -749,6 +773,7 @@ class InboxItemForJoinGMRequestView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        **echo_sender_keys(request.user, serializer.data.get("receiver")),
                     },
                     "receiver": serializer.data.get("receiver", None),
                 },
@@ -958,6 +983,7 @@ class InboxItemForNoteAccessRequestView(AuthenticatedAPIView):
                         "itemType": serializer.data.get("item_type", None),
                         "isRead": serializer.data.get("is_read", None),
                         "tsSent": serializer.data.get("ts_created_at", None),
+                        **echo_sender_keys(sender, serializer.data.get("receiver")),
                         # Carried so the owner's live-delivered item is
                         # note-clickable without waiting for a reload — mirrors
                         # the field the delta GET now returns.

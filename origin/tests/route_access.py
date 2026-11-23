@@ -266,14 +266,27 @@ REGISTRY = {
     # missing id. Lists and creates check team membership.
     "origin.views.common.skill_views.SkillListView": checked("is_team_member"),
     "origin.views.common.skill_views.SkillImportView": checked("is_team_member"),
+    # MIP-2198: the effort levels for the caller's own provider and plan ceiling; no skill or team data.
+    "origin.views.common.skill_views.SkillEffortLevelsView": self_only(
+        "the caller's own plan ceiling and model provider (request.user); no skill or team data"
+    ),
     "origin.views.common.skill_views.SkillDetailView": checked("get_readable", "get_owned"),
     "origin.views.common.skill_views.SkillVersionListView": checked("get_readable"),
     "origin.views.common.skill_views.SkillVersionDetailView": checked("get_readable"),
-    "origin.views.common.skill_views.SkillPublishView": checked("get_owned"),
+    "origin.views.common.skill_views.SkillPublishView": checked("get_editable"),
+    # MIP-2043: the owner adds and removes co-editors (`get_owned`); the team owner hides a team
+    # skill (`set_hidden` reads through `get_readable` and checks `is_team_owner`).
+    "origin.views.common.skill_views.SkillEditorsView": checked("get_readable", "get_owned"),
+    "origin.views.common.skill_views.SkillEditorDetailView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillHideView": checked("get_readable", "is_team_owner"),
     "origin.views.common.skill_views.SkillCopyView": checked("get_readable"),
     "origin.views.common.skill_views.SkillInstallView": checked("get_readable"),
     "origin.views.common.skill_views.SkillStarView": checked("get_readable"),
     "origin.views.common.skill_views.SkillExportView": checked("get_readable"),
+    # MIP-2044: a report is filed on a skill the caller can READ (and not their own); the takedown
+    # is the operator's (`is_staff`), and anyone else gets the same 404 as an unknown skill.
+    "origin.views.common.skill_views.SkillReportView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillTakedownView": checked("require_operator"),
     # views.common.inbox_ai_views (MIP-1209): the item is looked up by id AND receiver=request.user
     # and not deleted; anything else (someone else's, deleted, not an AI item) is the same 404
     "origin.views.common.inbox_ai_views.InboxAiSourceView": self_only(
@@ -361,6 +374,11 @@ REGISTRY = {
     # views.common.gif_views
     "origin.views.common.gif_views.GifSearchView": signed_in(
         "proxies a GIPHY search; no workspace data"
+    ),
+    # views.common.github_app_webhook_views
+    "origin.views.common.github_app_webhook_views.GithubAppWebhookView": public(
+        "HMAC signature verified against the GitHub App's webhook secret; the tenant is the "
+        "stored installation-to-team link, never the payload"
     ),
     # views.common.github_views
     "origin.views.common.github_views.GithubAccessibleReposView": self_only(
