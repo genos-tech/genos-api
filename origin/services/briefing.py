@@ -718,9 +718,9 @@ def _changed_notes(ctx: ToolContext, win: Window, names: _Names) -> list[dict[st
         )
     )
     owned = {
-        1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team).exclude(
-            folder_id__in=PersonalNoteFolder.skill_folder_ids()
-        ),
+        1: PersonalNoteMaster.objects.filter(owner_id=me, team_id=team)
+        .exclude(folder_id__in=PersonalNoteFolder.skill_folder_ids())
+        .exclude(note_id__in=PersonalNoteMaster.skill_subtree_ids(owner_id=me)),
         2: own_task_notes,
         # A chat note has no author exception (MIP-1492): the ones the caller wrote and can
         # still open, through their chat or a grant, by the rule `get_effective_role` applies.
