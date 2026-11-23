@@ -80,6 +80,7 @@ from origin.services.deleted_account_leftovers import delete_for_user as delete_
 from origin.services.deleted_account_memberships import end_group_memberships
 from origin.services.oauth import revoke as oauth_revoke
 from origin.services.security_events import record_security_event
+from origin.services.skills import service as skills_service
 from origin.views.utils.note_acl_resync import purge_notes_from_index
 
 log = logging.getLogger(__name__)
@@ -187,6 +188,9 @@ def _delete_personal_data(user, closing_team_ids=()) -> None:
     # FK cascade fires and the tick would keep running them.
     MemberSchedule.objects.filter(user=user).delete()
     MemberScheduleSeed.objects.filter(user=user).delete()  # the marker (MIP-1178)
+    # Their Genos Skills, stars and installs (MIP-2040), and the body notes of the skills: the
+    # account is soft-deleted, so no FK cascade fires.
+    skills_service.erase_for_user(user)
     # The rest of what no cascade reached (MIP-1783): the email outbox, the whole inbox (the
     # reports those schedules filed (MIP-1149), notices, digests, reminders, requests), flags, pins,
     # reminders, reactions, recents, to-do schedules, favorites, quota counters, and the

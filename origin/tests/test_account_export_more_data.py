@@ -82,6 +82,7 @@ NEW_KEYS = [
     "connected_apps",
     "connected_accounts",
     "agent_calls",  # MIP-2006
+    "skills",  # MIP-2040
     "more_counts",
     "export_limits",
 ]

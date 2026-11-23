@@ -60,8 +60,11 @@ class AllPersonalNotesView(AuthenticatedAPIView):
 
         # See AllPersonalNoteMetaView — notes in a TEAM folder belong to
         # the Team Notes space, not to My Notes.
+        # A Genos Skill's body note lives in a hidden "skill" folder (MIP-2040): it belongs to the
+        # Skills page, never to My Notes.
         team_folder_ids = PersonalNoteFolder.objects.filter(
-            team=data["team_id"], scope=PersonalNoteFolder.SCOPE_TEAM
+            team=data["team_id"],
+            scope__in=[PersonalNoteFolder.SCOPE_TEAM, PersonalNoteFolder.SCOPE_SKILL],
         ).values_list("folder_id", flat=True)
 
         personal_notes = (
@@ -113,8 +116,11 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
         # Notes the caller filed in a TEAM folder belong to the Team
         # Notes space and are served by `/note/team/meta/`. Excluding
         # them here keeps one note out of two sidebar sections.
+        # A Genos Skill's body note lives in a hidden "skill" folder (MIP-2040): it belongs to the
+        # Skills page, never to My Notes.
         team_folder_ids = PersonalNoteFolder.objects.filter(
-            team=data["team_id"], scope=PersonalNoteFolder.SCOPE_TEAM
+            team=data["team_id"],
+            scope__in=[PersonalNoteFolder.SCOPE_TEAM, PersonalNoteFolder.SCOPE_SKILL],
         ).values_list("folder_id", flat=True)
 
         personal_notes = (

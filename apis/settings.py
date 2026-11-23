@@ -2893,6 +2893,15 @@ SOCKETS_INTERNAL_SECRET = os.environ.get("SOCKETS_INTERNAL_SECRET", "")
 # falls back to the default, a non-number fails at boot like the other ints).
 AGENT_MAX_BODY_BYTES = int(os.environ.get("AGENT_MAX_BODY_BYTES") or "262144")
 
+# --- Genos Skills (MIP-2040) ---
+# GENOS_SKILLS turns the skills REST API on (`/api/v2/skills/`); off, every route answers 404 as
+# if it did not exist. Dark-shipped: the page, the `/` picker and the runner are later tasks.
+# GENOS_SKILLS_PUBLIC additionally lets a skill be made PUBLIC (readable by any signed-in user).
+# Keep it off until the safety work of the milestone has shipped (stranger ceiling, publish scan,
+# report and takedown: MIP-2044): the design forbids a public directory before it.
+GENOS_SKILLS = os.environ.get("GENOS_SKILLS", "false").lower() == "true"
+GENOS_SKILLS_PUBLIC = os.environ.get("GENOS_SKILLS_PUBLIC", "false").lower() == "true"
+
 _validate_transport(
     debug=DEBUG,
     database=DATABASES["default"],

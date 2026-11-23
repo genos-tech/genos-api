@@ -59,6 +59,8 @@ ROW_LIMITS = {
     "connected_accounts": 100,
     # The agent call log (MIP-2006): 90 days at a heavy user's few hundred calls a day.
     "agent_calls": 50000,
+    # Their Genos Skills (MIP-2040); a plan keeps at most 100 and the top plans are unlimited.
+    "skills": 1000,
 }
 
 # Task-history fields whose old/new values are the person's own plain words or enum values. Any other
@@ -277,6 +279,30 @@ def _more_data(user) -> dict:
         agent_calls.export_row,
     )
 
+    # Their Genos Skills (MIP-2040): the metadata the body note (in "personal_notes") does not
+    # carry. The text itself is the live note, exported there.
+    from origin.models.skills.skill_models import Skill  # noqa: PLC0415
+
+    skills = _capped(
+        "skills",
+        Skill.objects.filter(owner=user).order_by("-created_at", "-id"),
+        limits,
+        lambda sk: {
+            "skill_id": str(sk.id),
+            "team_id": str(sk.team_id),
+            "name": sk.slug,
+            "title": sk.title,
+            "description": sk.description,
+            "tags": sk.tags,
+            "visibility": sk.visibility,
+            "tool_level": sk.tool_level,
+            "note_id": sk.note_id,
+            "version": sk.current_version_no,
+            "created_at": _iso(sk.created_at),
+            "updated_at": _iso(sk.updated_at),
+        },
+    )
+
     data = {
         "ai_questions": ai_questions,
         "ai_feedback": ai_feedback,
@@ -290,6 +316,7 @@ def _more_data(user) -> dict:
         "connected_apps": connected_apps,
         "connected_accounts": connected_accounts,
         "agent_calls": agent_call_rows,
+        "skills": skills,
     }
     data["more_counts"] = {k: len(v) for k, v in data.items()}
     data["export_limits"] = limits
