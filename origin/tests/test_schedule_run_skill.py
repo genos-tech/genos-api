@@ -48,6 +48,7 @@ from origin.services import schedule_text, schedules
 from origin.services.report_ai import effort as effort_mod
 from origin.services.schedule_jobs import JOBS, run_skill
 from origin.services.skills import service
+from origin.tests.skill_fence_helpers import strip_tag
 from origin.tests.test_skills_api import SkillBase
 
 BODY_V1 = (
@@ -392,7 +393,7 @@ class PermissionTests(Base):
 
     def test_the_skill_text_is_fenced_and_the_run_is_told_nobody_is_there(self):
         self.execute(self.schedule(self.skill()))
-        extra = self.system_extra()
+        extra = strip_tag(self.system_extra())
         self.assertIn("<skill_text>", extra)
         self.assertIn("FIRST-VERSION", extra)
         self.assertIn("SCHEDULED RUN", extra)

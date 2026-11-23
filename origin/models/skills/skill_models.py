@@ -22,6 +22,7 @@ import uuid
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
+from django.utils import timezone
 
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
@@ -33,6 +34,7 @@ __all__ = [
     "Skill",
     "SkillInstall",
     "SkillReport",
+    "SkillRunConfirmation",
     "SkillRunLog",
     "SkillStar",
     "SkillVersion",
@@ -147,6 +149,13 @@ class Skill(models.Model):
     moderated_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
+    # MIP-2192. The operator marked the takedown HARMFUL (not only spam or a copyright claim): the
+    # copies made earlier carry `source_harmful_at` and need their owner's confirmation before they run.
+    takedown_harmful = models.BooleanField(default=False)
+    # Set on each COPY (`forked_from`) when its source is taken down as harmful, cleared when the
+    # source is restored. Kept on the copy so a run and a list read it with no join, and so it
+    # survives the source being deleted (`forked_from` is SET_NULL).
+    source_harmful_at = models.DateTimeField(null=True, blank=True)
 
     # The Hub (MIP-2047). What a stranger searches and sorts is the PUBLISHED version, never the
     # owner's draft, so it is kept here, written by `services/skills/hub.refresh_listing` whenever a
@@ -309,6 +318,39 @@ class SkillRunLog(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["skill", "user", "-created_at"], name="skill_run_skill_idx")
+        ]
+
+
+CONFIRM_OUTSIDE = "outside"
+CONFIRM_HARMFUL = "harmful"
+CONFIRM_KIND_CHOICES = [
+    (CONFIRM_OUTSIDE, "the first run of one version of an outside author's skill"),
+    (CONFIRM_HARMFUL, "a copy whose source was taken down as harmful"),
+]
+
+
+class SkillRunConfirmation(models.Model):
+    """One person confirmed they read a skill before it runs (MIP-2192). `outside`: an outside
+    author's skill, once per VERSION (a new version asks again). `harmful`: a copy of a skill an
+    operator took down as harmful, `version_no` 0, valid while `confirmed_at` is not older than the
+    copy's `source_harmful_at` (a second harmful takedown asks again). Rows go with the account and
+    with the skill."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.CASCADE, to_field="id", related_name="skill_confirmations"
+    )
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="confirmations")
+    version_no = models.PositiveIntegerField(default=0)
+    kind = models.CharField(max_length=8, choices=CONFIRM_KIND_CHOICES)
+    # Not `auto_now_add`: a harmful confirmation is refreshed after a second harmful takedown.
+    confirmed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "skill", "kind", "version_no"], name="skill_confirm_once"
+            )
         ]
 
 
