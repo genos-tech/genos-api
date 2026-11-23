@@ -6,6 +6,11 @@ class OriginConfig(AppConfig):
     name = "origin"
 
     def ready(self):
+        # Audit of operator commands in production (MIP-2260); a no-op elsewhere.
+        from origin.services import operator_audit
+
+        operator_audit.install()
+
         # Same import-for-side-effect rule as the signals below: the
         # @register() decorators attach the deploy-time config checks.
         from origin import checks  # noqa: F401

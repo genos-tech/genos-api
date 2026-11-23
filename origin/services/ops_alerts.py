@@ -220,6 +220,7 @@ def resolve_quiet(*, now=None) -> int:
 _SECURITY_SUMMARIES = {
     "alert.export": "Account data exported",
     "alert.forbidden_burst": "Burst of refused requests",
+    "alert.ops_command_unlisted": "Operator ran a command outside the allowlist",
 }
 
 
@@ -238,9 +239,11 @@ def raise_security_alert(event) -> None:
     summary = _SECURITY_SUMMARIES.get(event.action, event.action)
     if "refused" in meta:
         summary = f"{summary}: {meta['refused']} in {meta.get('window_seconds', '?')} s"
+    if meta.get("command"):
+        summary = f"{summary}: {meta['command']}"
     raise_alert(
         OpsAlertKind.SECURITY,
-        f"security:{event.action}:{who}",
+        f"security:{event.action}:{who}:{meta.get('command', '')}"[:128],
         f"{summary} ({who})",
         {
             "action": event.action,
@@ -248,7 +251,7 @@ def raise_security_alert(event) -> None:
             "caller": who,
             "source": event.source,
             "ip": event.ip or "",
-            **{k: meta[k] for k in ("path", "method") if k in meta},
+            **{k: meta[k] for k in ("path", "method", "command") if k in meta},
         },
     )
 
