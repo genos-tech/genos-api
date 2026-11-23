@@ -1,10 +1,11 @@
 """The rows that hang off a note by `(note_type, note_id)` and die with it (MIP-1517).
 
 A note is HARD-deleted: none of the three note tables has an `is_deleted` flag, and there is no
-trash (`services/note_delete.py`). But three tables point at a note by number only, with no
+trash (`services/note_delete.py`). But four tables point at a note by number only, with no
 foreign key, so nothing cascades into them when a project, a task or an account takes the note
 row with it:
 
+  * `NoteHtmlRevision`: an HTML note's pages (MIP-2214), up to 512 KB each;
   * `NotePermissionMaster`: who may open it;
   * `NoteVersionMaster`: its history, every row of which holds the note's TITLE AND BODY;
   * `NoteSummary` (Spotlight): the cached LLM summary of the body, in clear text.
@@ -33,6 +34,7 @@ from contextvars import ContextVar
 from django.db import transaction
 
 from origin.models.note.common_note_models import NotePermissionMaster, TaskNoteRoleRevoke
+from origin.models.note.html_note_models import NoteHtmlRevision
 from origin.models.note.version_note_models import NoteVersionMaster
 from origin.search_engine.models import NoteSummary
 
@@ -49,6 +51,7 @@ _SATELLITES = (
     NotePermissionMaster,
     NoteVersionMaster,
     NoteSummary,
+    NoteHtmlRevision,  # an HTML note's pages (MIP-2214)
 )
 
 

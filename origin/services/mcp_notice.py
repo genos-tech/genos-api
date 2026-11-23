@@ -376,6 +376,10 @@ RULES: dict[str, Callable[[dict, dict], Notice | None]] = {
     "manage_milestone": _milestone,
     "add_comment": _comment,
     "create_note": _created_note,
+    # An HTML page saved as a note (MIP-2214): a new note is a creation, a replaced page an edit.
+    "save_html_note": lambda args, payload: (
+        _created_note(args, payload) if payload.get("created") else _edited_note(args, payload)
+    ),
     # A comment on a note by an AI app: the key's owner is told, as for a task comment. Starting a
     # thread and answering one are the same act to the person reading the feed, so one switch.
     "comment_on_note": _commented_note,

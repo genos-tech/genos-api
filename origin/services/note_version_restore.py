@@ -50,6 +50,15 @@ def restore_note_version(
         note = model.objects.get(note_id=note_id)
     except model.DoesNotExist:
         raise RestoreRefused("Note not found.", 404)
+    if getattr(note, "body_format", "blocknote") == "html":
+        # An HTML note's text is made from its page (MIP-2214): restoring an old text would leave
+        # the page as it is and make the note say something else.
+        raise RestoreRefused(
+            "This is an HTML note: its text is made from its page, so an earlier text version "
+            "cannot be restored and nothing was changed. To go back to an earlier page, save "
+            "that page again with `save_html_note` and this note's `note_id`.",
+            409,
+        )
 
     with transaction.atomic():
         keep_current_state(

@@ -25,6 +25,7 @@ from .common.user_models import *
 from .note.chat_note_models import *
 from .note.common_note_models import *
 from .note.favorite_note_models import *
+from .note.html_note_models import *
 from .note.note_template_models import *
 from .note.personal_note_models import *
 from .note.recent_note_models import *

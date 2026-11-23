@@ -106,6 +106,10 @@ class PersonalNoteMaster(models.Model):
     folder_id = models.BigIntegerField(blank=True, null=True, db_index=True)
     title = models.CharField(max_length=255)
     body = models.JSONField(blank=True, null=True)
+    # "blocknote" (the editor's JSON, always, before MIP-2214) or "html" (a saved HTML page, whose
+    # text is in `NoteHtmlRevision`; `body` then only holds the readable placeholder that search,
+    # exports and history work on). Set by `origin.services.html_notes`, never by a client.
+    body_format = models.CharField(max_length=16, default="blocknote", db_default="blocknote")
     # Snapshot of every user mentioned in `body` after the latest save.
     # The PUT view computes a delta against this column and emits one
     # toast per newly-mentioned user; the column itself is what
