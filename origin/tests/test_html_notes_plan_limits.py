@@ -270,6 +270,14 @@ class RatePerTier(HtmlBase):
             )
         self.refused(SAVE, html=GOOD, note_id=note.note_id, note_type="personal", summary="s")
 
+    def test_a_page_with_no_title_anywhere_uses_no_save_from_the_hour(self):
+        untitled = "<!doctype html><html><body><p>no title</p></body></html>"
+        for _ in range(CORE.saves_per_hour + 5):
+            text = self.refused(SAVE, html=untitled, note_type="personal")
+            self.assertIn("needs a title", text)
+        for _ in range(CORE.saves_per_hour):
+            self.save()  # the whole hour is still there
+
     def test_a_caller_past_the_hour_never_reaches_the_scan(self):
         for _ in range(CORE.saves_per_hour):
             self.save()

@@ -524,6 +524,22 @@ class PreparedHtml:
     body: list[dict[str, Any]]
 
 
+_NEEDS_TITLE = (
+    "The page needs a title: pass `title`, or add a <title> to the page. Nothing was saved."
+)
+
+
+def check_title_possible(html: str, title: str | None) -> None:
+    """Refuse, BEFORE a save is counted, a page that cannot get a title: no `title` argument and no
+    `<title` anywhere in it. A cheap substring test (the scan stays after the rate limit), so a
+    caller retrying title-less pages is told at once and uses no save from the hour. A page that
+    passes can still be refused by `prepare` (a `<title>` only inside an SVG); that one counts."""
+    if (title or "").strip():
+        return
+    if "<title" not in html.lower():
+        raise HtmlNoteRefused(_NEEDS_TITLE)
+
+
 def prepare(
     html: Any,
     *,
@@ -540,9 +556,7 @@ def prepare(
     scan = scan_html(html)
     chosen = (title or "").strip() or scan.title
     if not chosen:
-        raise HtmlNoteRefused(
-            "The page needs a title: pass `title`, or add a <title> to the page. Nothing was saved."
-        )
+        raise HtmlNoteRefused(_NEEDS_TITLE)
     chosen = chosen[:MAX_TITLE_CHARS]
     note_summary = " ".join((summary or "").split())[:MAX_SUMMARY_CHARS]
     if not note_summary:

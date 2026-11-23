@@ -6,6 +6,11 @@ the places every MCP client does see: `save_html_note`'s description and the `ma
 prompt (MIP-2214, plan section 7).
 """
 
+from origin.services.html_note_limits import HTML_NOTE_LIMITS
+
+# The size rule quotes the plan table, never a number of its own (MIP-2216).
+_CORE = HTML_NOTE_LIMITS["core"]
+
 #: The numbered rules, as plain sentences. The viewer shows the page in a sandboxed frame with no
 #: network, no storage and no way to navigate, so each rule is "what to do instead".
 GENERATION_RULES: tuple[str, ...] = (
@@ -22,7 +27,8 @@ GENERATION_RULES: tuple[str, ...] = (
     "Support light and dark themes (prefers-color-scheme), work down to 360 px wide, and give "
     "charts ARIA labels.",
     "Respect prefers-reduced-motion.",
-    "Stay well under the plan's page limit (512 KB on Core); 200 KB is a better target.",
+    "Stay well under the plan's page limit "
+    f"({_CORE.max_bytes // 1024} KB on Core); 200 KB is a better target.",
     "Pass a 1 to 3 sentence `summary`: it is what a search for the page finds.",
 )
 

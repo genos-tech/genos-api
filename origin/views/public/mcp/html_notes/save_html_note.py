@@ -143,6 +143,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return not_on_plan.reply()
     try:
         html_notes.check_input(args.get("html"), limits.max_bytes)
+        html_notes.check_title_possible(args["html"], args.get("title"))
     except html_notes.HtmlNoteRefused as refused:
         raise ToolError(str(refused)) from None
     if args.get("note_id") not in (None, ""):
