@@ -310,7 +310,7 @@ class GetTests(McpSkillBase):
 
     def test_two_teammates_with_one_name_are_answered_with_both_ids(self):
         a = self.team_skill(self.user2, slug="dup")
-        b = self.team_skill(self.third, slug="dup")
+        b = self.legacy_team_skill(self.third, slug="dup")
         text = self.refused("get_skill", skill="dup")
         self.assertIn(str(a.id), text)
         self.assertIn(str(b.id), text)
@@ -321,7 +321,7 @@ class GetTests(McpSkillBase):
 
     def test_the_ambiguity_answer_names_ids_only_never_an_account_name(self):
         self.team_skill(self.user2, slug="dup")
-        self.team_skill(self.third, slug="dup")
+        self.legacy_team_skill(self.third, slug="dup")
         text = self.refused("get_skill", skill="dup")
         self.assertNotIn(self.user2.username, text)
         self.assertNotIn(self.third.username, text)
