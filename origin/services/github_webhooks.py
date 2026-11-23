@@ -88,6 +88,11 @@ def _webhook_payload_url() -> str:
     return f"{base}/api/v2/github/webhook/"
 
 
+def github_api_headers(token: str) -> dict:
+    """The headers of one GitHub REST call with `token` (a person's or an installation's)."""
+    return _hooks_api_headers(token)
+
+
 def _hooks_api_headers(token: str) -> dict:
     return {
         "Authorization": f"Bearer {token}",

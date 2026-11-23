@@ -195,6 +195,7 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.services.skills import effort as skill_effort
 from origin.services.skills import run as skill_run
 from origin.services.skills import service as skill_service
 from origin.services.throttles import (
@@ -1399,6 +1400,29 @@ class AgentAskView(AuthenticatedAPIView):
         if credit_block is not None:
             return credit_block
 
+        # A skill's effort level (MIP-2198) decides the model tier, the thinking budget and the step
+        # limit of THIS run, so it is bound here, before the quota checks, the cost meter and the loop
+        # read `chosen`: they all see the level's model, and the credits follow it. With the balance
+        # low the run starts one level lower and says so in its first sentence.
+        effort_fallback: dict | None = None
+        skill_note_before = skill_to_run.note if skill_to_run is not None else ""
+        if skill_to_run is not None:
+            chosen, effort_decision = skill_effort.apply(
+                chosen, skill_to_run.effort, user_id=user_id, plan=plan
+            )
+            if effort_decision is not None:
+                skill_to_run = dataclasses.replace(skill_to_run, effort=effort_decision.used)
+                if effort_decision.degraded:
+                    skill_to_run = dataclasses.replace(
+                        skill_to_run,
+                        note=" ".join(n for n in (skill_to_run.note, effort_decision.note) if n),
+                    )
+                    effort_fallback = {
+                        "requested_effort": effort_decision.requested,
+                        "used_effort": effort_decision.used,
+                        "reason": "credits",
+                    }
+
         if not _credits_authoritative():
             llm_ok, llm_used, llm_limit = check_remaining(user_id, LLM_ASK_KEY)
             if not llm_ok:
@@ -1508,6 +1532,22 @@ class AgentAskView(AuthenticatedAPIView):
             return ceiling_resp
         if ceiling_note is not None:
             fallback_note = ceiling_note
+        if (
+            skill_to_run is not None
+            and skill_to_run.effort
+            and chosen.effort != skill_to_run.effort
+        ):
+            # The quota fallback or the monthly ceiling replaced the choice after the level was
+            # bound (their `LlmChoice` carries no effort): the run no longer runs at that level, so
+            # it must neither claim it (the step-down sentence, the done note) nor have a paused leg
+            # re-bind the dearer model they just routed away from.
+            skill_to_run = dataclasses.replace(
+                skill_to_run, effort=chosen.effort, note=skill_note_before
+            )
+            effort_fallback = None
+        if effort_fallback is not None:
+            # Rides the same `done` field as a model step-down; the keys say which kind it is.
+            fallback_note = {**(fallback_note or {}), **effort_fallback}
 
         # Cost meter — mint the logical request id NOW, before any paid
         # call. Everything this ask spends, on either thread, is grouped
@@ -2642,6 +2682,13 @@ class AgentDecideView(AuthenticatedAPIView):
         # problem in practice; it's also the principle-of-least-surprise
         # behavior — the user's *current* preference is what counts.
         resumed_choice = _resolve_choice_for(request.user)
+        # A paused run of a skill (MIP-2198) continues at the effort level its first leg started at,
+        # not at whatever the caller's own setting is now: the same model tier, budget and step limit.
+        skill_kept = skill_run.kept_ref(run.resume_context)
+        if skill_kept is not None:
+            resumed_choice = skill_effort.bind_kept(
+                resumed_choice, skill_run.effort_for_kept(skill_kept), user_id=request_user_id
+            )
 
         # Cost meter — the resumed leg is a CONTINUATION of the original
         # ask, not a new logical request: no quota increments here, and
@@ -2688,7 +2735,6 @@ class AgentDecideView(AuthenticatedAPIView):
         # resumed leg hides the same tools the first leg did (it could otherwise declare every tool the
         # caller has, composite writes included), and gets the skill's block again from what the person may
         # run NOW (a skill deleted or hidden while the card waited is not replayed).
-        skill_kept = skill_run.kept_ref(run.resume_context)
         if skill_kept is not None:
             resumed_disabled = resumed_disabled | skill_run.disabled_tools_for_kept(skill_kept)
             skill_block = skill_run.rebuild_block(skill_kept, request.user, run.team_id)
