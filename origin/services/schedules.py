@@ -357,11 +357,35 @@ def clean_ai_effort(value: Any) -> str:
     return level
 
 
+def _offered(job) -> bool:
+    """Whether a job may be chosen now: it is not behind a switch that is off (`Job.available`)."""
+    return job.available is None or bool(job.available())
+
+
+def _check_params_for_owner(
+    ctx: ToolContext, job_key: str, params: dict[str, Any], schedule_id: Any
+) -> dict[str, Any]:
+    """Run the job's own check of `params` against what the OWNER may use (`Job.check_params`,
+    MIP-2045), and keep the size limit on what it returns. Call inside the transaction that holds
+    the member's row lock, so a count it makes cannot be raced."""
+    job = JOBS.get(job_key)
+    if job is None or job.check_params is None:
+        return params
+    checked = job.check_params(ctx, dict(params), schedule_id)
+    try:
+        size = len(json.dumps(checked, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        raise ScheduleError("`params` must be plain JSON values.") from None
+    if size > MAX_PARAMS_BYTES:
+        raise ScheduleError(f"`params` is too large: at most {MAX_PARAMS_BYTES} bytes.")
+    return checked
+
+
 def clean_params(job_key: str, params: Any) -> dict[str, Any]:
     """Check `params` against the job's `params_schema` (see `schedule_jobs`)."""
     job = JOBS.get(job_key)
-    if job is None:
-        known = ", ".join(sorted(JOBS)) or "none yet"
+    if job is None or not _offered(job):
+        known = ", ".join(sorted(k for k, j in JOBS.items() if _offered(j))) or "none yet"
         raise ScheduleError(
             f"There is no job called {str(job_key)[:40]!r}. Available jobs: {known}."
         )
@@ -630,6 +654,7 @@ def create(
                 limit=cap,
                 used=used,
             )
+        cleaned_params = _check_params_for_owner(ctx, job, cleaned_params, None)
         _refuse_duplicate(ctx, name=clean, job=job, params=cleaned_params, rec=rec, target=target)
         return MemberSchedule.objects.create(
             user_id=user.pk,
@@ -680,7 +705,9 @@ def update(
             dirty.append("name")
         if "job" in changes or "params" in changes:
             job = changes.get("job", sched.job)
-            sched.params = clean_params(job, changes.get("params", sched.params))
+            sched.params = _check_params_for_owner(
+                ctx, job, clean_params(job, changes.get("params", sched.params)), sched.pk
+            )
             sched.job = job
             dirty += ["job", "params"]
         if {"deliver_channel_id", "job", "params"} & set(changes):
@@ -807,8 +834,16 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
         # returns, and a delivery that then fails must not roll that record back. The money is
         # spent either way; losing its row would be spend nobody can see. Jobs write nothing to
         # the workspace, so nothing else needs the two to stand or fall together.
-        with transaction.atomic():
+        if job.unwrapped:
+            # A job that holds a long model loop (a skill run, MIP-2045) is NOT wrapped: inside a
+            # savepoint every spend row it records would wait on the end of the loop, and a process
+            # that dies mid-run (a deploy, an OOM) would roll back the record of money the provider
+            # already charged. Such a job writes nothing else, records its spend as it goes, and
+            # turns its own failures into a report, so it needs no savepoint of its own.
             report: Report = job.run(ctx, _run_params(sched, job))
+        else:
+            with transaction.atomic():
+                report = job.run(ctx, _run_params(sched, job))
         _check_report(report)
         with transaction.atomic():
             schedule_delivery.deliver(sched, report, run_at=run_at)
