@@ -141,6 +141,11 @@ def _cancel_billing(user) -> set:
     whose subscription was cancelled, so the erasure can drop their plan to free.
 
     No network call for a person who never paid: a customer id is the only thing that asks Stripe.
+
+    Two accepted limits. (1) The cancel is not locked against the erasure: if someone joins a team
+    the person was the last live member of in those few milliseconds, the team stays open with its
+    plan cancelled (the webhook then drops it to free). (2) If the erasure itself fails after the
+    cancel, the subscriptions stay cancelled and the account stays; repeating the deletion finishes it.
     """
     from origin.services import stripe_billing
 
