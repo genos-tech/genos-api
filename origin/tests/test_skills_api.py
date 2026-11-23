@@ -931,7 +931,7 @@ class SkillFileTests(SkillBase):
 
     def test_a_claude_skill_file_with_extra_keys_imports(self):
         content = (
-            "---\nname: meeting-notes\ndescription: Turn notes into tasks\n"
+            "---\nname: meeting-minutes\ndescription: Turn notes into tasks\n"
             "allowed-tools: Read, Grep\n---\n\n# Meeting notes\n\n1. Read them.\n"
         )
         res = self.client.post(
@@ -939,7 +939,7 @@ class SkillFileTests(SkillBase):
         )
         self.assertEqual(res.status_code, 201, res.content)
         skill = res.json()["skill"]
-        self.assertEqual((skill["slug"], skill["title"]), ("meeting-notes", "Meeting notes"))
+        self.assertEqual((skill["slug"], skill["title"]), ("meeting-minutes", "Meeting notes"))
         self.assertEqual(skill["description"], "Turn notes into tasks")
 
     def test_a_file_without_front_matter_is_all_body(self):
