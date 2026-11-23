@@ -2782,6 +2782,15 @@ GITHUB_APP_PRIVATE_KEY = os.environ.get("GITHUB_APP_PRIVATE_KEY", "").replace("\
 GITHUB_APP_WEBHOOK_SECRET = os.environ.get("GITHUB_APP_WEBHOOK_SECRET", "").strip()
 # The App's URL slug: https://github.com/apps/<slug>/installations/new
 GITHUB_APP_SLUG = os.environ.get("GITHUB_APP_SLUG", "").strip()
+# Phase 4 of the App migration (MIP-2091): when on, the OAuth App's "connect" flow no longer asks for
+# the `repo` scope (it asks for sign-in scopes only), so nothing in Genos can mint a never-expiring
+# token for all of a person's code again. Off by default. Turn it on only after the migration is
+# done (operations/GITHUB_APP_MIGRATION_RUNBOOK.md in genos-docs). While the App is off, Connect GitHub would
+# then give a token that cannot read private repositories, so a rollback of GITHUB_APP_ENABLED
+# unsets this too.
+GITHUB_CONNECT_REPO_SCOPE_REMOVED = os.environ.get(
+    "GITHUB_CONNECT_REPO_SCOPE_REMOVED", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _validate_github_app(

@@ -118,7 +118,9 @@ def hook_admin_headers(user, registration) -> Optional[dict]:
     if account is None:
         return None
     try:
-        return _hooks_api_headers(get_valid_access_token(account))
+        token = get_valid_access_token(account)
+        # An empty token is a cleared legacy connection (`revoke_legacy_github_grants`): none.
+        return _hooks_api_headers(token) if token else None
     except ReauthRequired:
         # A revoked or expired connection is the user's to fix, not a
         # fault: WARNING, so a cron that reaches many repos is not failed

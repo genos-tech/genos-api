@@ -23,6 +23,7 @@ import threading
 import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
 import requests
 from django.conf import settings
@@ -346,6 +347,22 @@ class GithubAccessibleReposView(APIView):
             entry["repo_count"] += 1
 
         client_id = settings.GITHUB_OAUTH_CLIENT_ID
+        manage_url = (
+            f"https://github.com/settings/connections/applications/{client_id}"
+            if client_id
+            else None
+        )
+        if account.provider == "github_app":
+            # An App connection is managed on the App's own page (MIP-2090): GitHub lists the
+            # accounts where it is installed and opens each one's repository picker. The OAuth
+            # App's page above would show the wrong application, so with no App slug configured
+            # there is no link at all (the card then shows none).
+            manage_url = (
+                f"https://github.com/apps/{quote(settings.GITHUB_APP_SLUG, safe='')}"
+                "/installations/new"
+                if settings.GITHUB_APP_SLUG
+                else None
+            )
         return Response(
             {
                 "repos": repos,
@@ -353,11 +370,7 @@ class GithubAccessibleReposView(APIView):
                 # in GitHub's activity order.
                 "owners": sorted(owners.values(), key=lambda o: o["login"].lower()),
                 "truncated": len(repos) >= self._PER_PAGE,
-                "manage_url": (
-                    f"https://github.com/settings/connections/applications/{client_id}"
-                    if client_id
-                    else None
-                ),
+                "manage_url": manage_url,
             }
         )
 

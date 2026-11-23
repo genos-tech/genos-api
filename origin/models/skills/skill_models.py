@@ -26,7 +26,7 @@ from origin.models.common.user_models import CustomUser
 
 # Only the models are exported by `from .skills.skill_models import *`: the constants below are
 # short generic names (VISIBILITY_*, STATUS_*) that would shadow other models'.
-__all__ = ["Skill", "SkillInstall", "SkillStar", "SkillVersion"]
+__all__ = ["Skill", "SkillInstall", "SkillReport", "SkillStar", "SkillVersion"]
 
 VISIBILITY_PRIVATE = "private"
 VISIBILITY_TEAM = "team"
@@ -40,11 +40,13 @@ VISIBILITY_CHOICES = [
 STATUS_ACTIVE = "active"
 STATUS_HIDDEN_BY_TEAM = "hidden_by_team"
 STATUS_REPORTED_HIDDEN = "reported_hidden"
+STATUS_IN_REVIEW = "in_review"
 STATUS_TAKEN_DOWN = "taken_down"
 STATUS_CHOICES = [
     (STATUS_ACTIVE, "active"),
     (STATUS_HIDDEN_BY_TEAM, "hidden from the team by the team owner"),
     (STATUS_REPORTED_HIDDEN, "hidden after reports, waiting for an operator"),
+    (STATUS_IN_REVIEW, "held after the publish-time scan, waiting for an operator"),
     (STATUS_TAKEN_DOWN, "taken down by an operator"),
 ]
 
@@ -127,6 +129,14 @@ class Skill(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     published_at = models.DateTimeField(null=True, blank=True)
+
+    # What an operator last decided about a held, reported or taken-down skill (MIP-2044): the
+    # sentence the author is shown, who decided and when. Empty while the skill was never moderated.
+    moderation_reason = models.CharField(max_length=500, blank=True, default="")
+    moderated_at = models.DateTimeField(null=True, blank=True)
+    moderated_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
 
     class Meta:
         constraints = [
@@ -217,3 +227,65 @@ class SkillStar(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["user", "skill"], name="skill_star_per_user")
         ]
+
+
+REPORT_HARMFUL = "harmful"
+REPORT_SPAM = "spam"
+REPORT_COPYRIGHT = "copyright"
+REPORT_PERSONAL_DATA = "personal_data"
+REPORT_OFFENSIVE = "offensive"
+REPORT_OTHER = "other"
+REPORT_REASON_CHOICES = [
+    (REPORT_HARMFUL, "harmful or tries to misuse my data"),
+    (REPORT_SPAM, "spam"),
+    (REPORT_COPYRIGHT, "copyright"),
+    (REPORT_PERSONAL_DATA, "personal data"),
+    (REPORT_OFFENSIVE, "offensive"),
+    (REPORT_OTHER, "other"),
+]
+
+REPORT_OPEN = "open"
+REPORT_UPHELD = "upheld"
+REPORT_DISMISSED = "dismissed"
+REPORT_STATUS_CHOICES = [
+    (REPORT_OPEN, "waiting for an operator"),
+    (REPORT_UPHELD, "an operator agreed: the skill was taken down"),
+    (REPORT_DISMISSED, "an operator looked and left the skill up"),
+]
+
+
+class SkillReport(models.Model):
+    """A signed-in member's report of a skill they can read (MIP-2044). Three open reports from
+    different accounts within 7 days hide the skill until an operator decides; the operator queue is
+    the `skills_moderate` command. The reporter's account is kept only as a link: deleting it leaves the report
+    (the skill's moderation record) without a name."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="reports")
+    # The version the reporter was reading, so a decision is about the text they saw.
+    version_no = models.PositiveIntegerField(default=0)
+    reporter = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="skill_reports"
+    )
+    reason = models.CharField(max_length=16, choices=REPORT_REASON_CHOICES)
+    text = models.CharField(max_length=1000, blank=True, default="")
+    status = models.CharField(max_length=10, choices=REPORT_STATUS_CHOICES, default=REPORT_OPEN)
+    resolved_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # One open report per account and skill: a second click is the same report.
+            models.UniqueConstraint(
+                fields=["skill", "reporter"],
+                condition=models.Q(status="open"),
+                name="skill_one_open_report_per_reporter",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["skill", "status", "created_at"], name="skill_report_queue_idx")
+        ]
+        ordering = ["-created_at"]
