@@ -3,12 +3,11 @@ import logging
 import secrets
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
@@ -108,7 +107,7 @@ from origin.serializers.common.user_serializers import (
     UserCreateSerializer,
     UserSerializer,
 )
-from origin.services import first_month_trial, signup_consent, start_here_note
+from origin.services import first_month_trial, password_policy, signup_consent, start_here_note
 from origin.services.email import send_templated_email
 
 User = get_user_model()
@@ -210,10 +209,12 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
 
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(
-                {"message": serializer.errors.items()},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            body_out = {"message": serializer.errors.items()}
+            # A refused password carries a stable code so the client can say why in the
+            # member's language (MIP-2238); other 400s keep their old shape.
+            if "password" in serializer.errors:
+                body_out.update(password_policy.rejection_payload(serializer.errors["password"]))
+            return Response(body_out, status=status.HTTP_400_BAD_REQUEST)
 
         user = serializer.save(**signup_consent.acceptance_fields())
 
@@ -1102,11 +1103,15 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            validate_password(new_password, user=user)
-        except DjangoValidationError as exc:
+        refusals = password_policy.check_password_policy(new_password, user=user)
+        if refusals:
             return Response(
-                {"detail": " ".join(exc.messages)},
+                {
+                    "detail": " ".join(text for _, text in refusals),
+                    **password_policy.rejection_payload(
+                        [SimpleNamespace(code=code) for code, _ in refusals]
+                    ),
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
