@@ -210,21 +210,137 @@ class TeamSkillTests(SkillBase):
         self.as_user(self.user2)
         self.assertEqual(self.client.get(detail(skill["id"])).status_code, 404)
 
-    def test_a_save_cuts_a_new_version_and_readers_follow_it(self):
+    def test_a_save_stays_private_and_only_publish_makes_the_version_readers_see(self):
+        """MIP-2177: Save keeps a team skill's edit as the owner's draft."""
         skill = self.make_ok(visibility="team")
         self.as_user(self.user)
         res = self.client.patch(
             detail(skill["id"]),
-            {"bodyMarkdown": "# T\n\n1. A new step."},
+            {"bodyMarkdown": "# T\n\n1. A new step.", "title": "Renamed", "tags": ["new"]},
             format="json",
         )
-        self.assertEqual(res.json()["skill"]["publishedVersionNo"], 2)
+        self.assertEqual(res.status_code, 200, res.content)
+        saved = res.json()["skill"]
+        # The owner sees the draft, and is told it is not published.
+        self.assertEqual(saved["publishedVersionNo"], 1)
+        self.assertEqual(saved["currentVersionNo"], 1)
+        self.assertEqual(saved["title"], "Renamed")
+        self.assertIn("A new step", saved["bodyMarkdown"])
+        self.assertTrue(saved["hasUnpublishedChanges"])
+        self.assertEqual(sorted(saved["unpublishedChanges"]), ["bodyMarkdown", "tags", "title"])
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 1)
+
+        # A teammate still gets the old text, title and tags: page, list, versions, export.
         self.as_user(self.user2)
-        self.assertIn(
-            "A new step", self.client.get(detail(skill["id"])).json()["skill"]["bodyMarkdown"]
+        seen = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertIn("Read the open tasks", seen["bodyMarkdown"])
+        self.assertNotIn("A new step", seen["bodyMarkdown"])
+        self.assertEqual((seen["title"], seen["tags"]), ("Weekly update", ["reports"]))
+        self.assertNotIn("hasUnpublishedChanges", seen)
+        self.assertNotIn("unpublishedChanges", seen)
+        team_tab = self.client.get(f"{LIST}?team_id={self.team_id}&tab=team").json()["skills"]
+        self.assertEqual([s["title"] for s in team_tab], ["Weekly update"])
+        listed = self.client.get(detail(skill["id"], "versions/")).json()["versions"]
+        self.assertEqual([v["versionNo"] for v in listed], [1])
+        exported = self.client.get(detail(skill["id"], "export/")).json()["content"]
+        self.assertNotIn("A new step", exported)
+
+        # Publishing makes the version; then readers follow it.
+        self.as_user(self.user)
+        res = self.client.post(
+            detail(skill["id"], "publish/"), {"changelog": "New step"}, format="json"
         )
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(res.json()["version"]["versionNo"], 2)
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 2)
+        again = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertEqual(again["publishedVersionNo"], 2)
+        self.assertFalse(again["hasUnpublishedChanges"])
+        self.assertEqual(again["unpublishedChanges"], [])
+        self.as_user(self.user2)
+        seen = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertIn("A new step", seen["bodyMarkdown"])
+        self.assertEqual(seen["title"], "Renamed")
         listed = self.client.get(detail(skill["id"], "versions/")).json()["versions"]
         self.assertEqual([v["versionNo"] for v in listed], [2, 1])
+
+    def test_the_owners_page_says_what_differs_from_the_published_version(self):
+        skill = self.make_ok(visibility="team")
+        self.as_user(self.user)
+        page = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertFalse(page["hasUnpublishedChanges"])
+        self.assertEqual(page["unpublishedChanges"], [])
+
+        self.client.patch(detail(skill["id"]), {"toolLevel": "act"}, format="json")
+        page = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertEqual(page["unpublishedChanges"], ["toolLevel"])
+        # Putting it back is no change at all.
+        self.client.patch(detail(skill["id"]), {"toolLevel": "read"}, format="json")
+        page = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertFalse(page["hasUnpublishedChanges"])
+
+        # A text edit made in the collaborative editor (the note itself, not a PATCH) counts too.
+        PersonalNoteMaster.objects.filter(note_id=skill["noteId"]).update(
+            body=[{"type": "paragraph", "content": [{"type": "text", "text": "Edited live."}]}]
+        )
+        page = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertEqual(page["unpublishedChanges"], ["bodyMarkdown"])
+        self.assertEqual(self.client.post(detail(skill["id"], "publish/")).status_code, 201)
+        page = self.client.get(detail(skill["id"])).json()["skill"]
+        self.assertFalse(page["hasUnpublishedChanges"])
+
+    def test_sharing_a_private_skill_publishes_its_text_and_a_resave_does_not(self):
+        skill = self.make_ok()
+        self.assertFalse(skill.get("hasUnpublishedChanges", False))
+        self.client.patch(detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. Draft."}, format="json")
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 0)
+        # Choosing "team" is the explicit share: it publishes what the owner has now.
+        res = self.client.patch(detail(skill["id"]), {"visibility": "team"}, format="json")
+        self.assertEqual(res.json()["skill"]["publishedVersionNo"], 1)
+        self.assertFalse(res.json()["skill"]["hasUnpublishedChanges"])
+        self.as_user(self.user2)
+        self.assertIn(
+            "Draft.", self.client.get(detail(skill["id"])).json()["skill"]["bodyMarkdown"]
+        )
+
+    def test_saving_with_the_same_visibility_does_not_publish(self):
+        skill = self.make_ok(visibility="team")
+        res = self.client.patch(
+            detail(skill["id"]),
+            {"bodyMarkdown": "# T\n\n1. Fresh.", "visibility": "team"},
+            format="json",
+        )
+        self.assertEqual(res.json()["skill"]["publishedVersionNo"], 1)
+        self.assertTrue(res.json()["skill"]["hasUnpublishedChanges"])
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 1)
+
+    def test_a_teammate_cannot_save_or_publish_the_owners_draft(self):
+        skill = self.make_ok(visibility="team")
+        self.client.patch(detail(skill["id"]), {"title": "Draft title"}, format="json")
+        self.as_user(self.user2)
+        self.assertEqual(
+            self.client.patch(detail(skill["id"]), {"title": "Mine"}, format="json").status_code,
+            403,
+        )
+        self.assertEqual(self.client.post(detail(skill["id"], "publish/")).status_code, 403)
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 1)
+        self.as_user(self.outsider)
+        self.assertEqual(self.client.post(detail(skill["id"], "publish/")).status_code, 404)
+
+    def test_a_private_skill_is_unchanged_by_the_draft_rule(self):
+        skill = self.make_ok()
+        res = self.client.patch(
+            detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. Mine.", "title": "T2"}, format="json"
+        )
+        out = res.json()["skill"]
+        self.assertEqual(
+            (out["title"], out["publishedVersionNo"], out["currentVersionNo"]), ("T2", 0, 0)
+        )
+        self.assertIn("Mine.", out["bodyMarkdown"])
+        self.assertFalse(out["hasUnpublishedChanges"])
+        self.assertEqual(out["unpublishedChanges"], [])
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 0)
+        self.assertEqual(self.client.post(detail(skill["id"], "publish/")).status_code, 400)
 
     def test_going_back_to_private_stops_every_other_reader_at_once(self):
         skill = self.make_ok(visibility="team")
@@ -577,6 +693,7 @@ class VersionTests(SkillBase):
     def test_a_version_keeps_the_text_it_was_cut_with(self):
         skill = self.make_ok(visibility="team")
         self.client.patch(detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. Other."}, format="json")
+        self.client.post(detail(skill["id"], "publish/"), {}, format="json")
         old = self.client.get(detail(skill["id"], "versions/1/")).json()["version"]
         new = self.client.get(detail(skill["id"], "versions/2/")).json()["version"]
         self.assertIn("Read the open tasks", old["bodyMarkdown"])
@@ -923,17 +1040,15 @@ class ReviewFindingsTests(SkillBase):
 
     def test_a_long_changelog_or_a_note_grown_past_the_limit_is_a_400_not_a_500(self):
         skill = self.make_ok(visibility="team")
-        self.client.patch(detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. New."}, format="json")
         res = self.client.post(
             detail(skill["id"], "publish/"), {"changelog": "x" * 300}, format="json"
         )
         self.assertEqual(res.status_code, 409)  # nothing changed: a sentence, not a 500
-        res = self.client.patch(
-            detail(skill["id"]),
-            {"bodyMarkdown": "# T\n\n1. Newer.", "changelog": "y" * 300},
-            format="json",
+        self.client.patch(detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. New."}, format="json")
+        res = self.client.post(
+            detail(skill["id"], "publish/"), {"changelog": "y" * 300}, format="json"
         )
-        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.status_code, 201, res.content)
         self.assertEqual(
             len(SkillVersion.objects.filter(skill_id=skill["id"]).first().changelog), 280
         )
@@ -1020,12 +1135,3 @@ class ReviewFindingsTests(SkillBase):
         for suffix in ("publish/", "copy/"):
             res = self.client.post(detail(skill["id"], suffix), [], format="json")
             self.assertEqual(res.status_code, 400, suffix)
-
-    def test_a_team_skill_saved_with_its_visibility_still_cuts_a_version(self):
-        skill = self.make_ok(visibility="team")
-        res = self.client.patch(
-            detail(skill["id"]),
-            {"bodyMarkdown": "# T\n\n1. Fresh.", "visibility": "team"},
-            format="json",
-        )
-        self.assertEqual(res.json()["skill"]["publishedVersionNo"], 2)

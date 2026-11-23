@@ -4,11 +4,11 @@
     POST   /api/v2/skills/                           create one (`team_id` in the body)
     POST   /api/v2/skills/import/                    a new skill from a SKILL.md file
     GET    /api/v2/skills/<id>/                      one skill with its text
-    PATCH  /api/v2/skills/<id>/                      change it (the owner)
+    PATCH  /api/v2/skills/<id>/                      save the owner's draft (readers keep the published version)
     DELETE /api/v2/skills/<id>/                      delete it (the owner)
     GET    /api/v2/skills/<id>/versions/             the versions a reader may see
     GET    /api/v2/skills/<id>/versions/<n>/         one version with its text
-    POST   /api/v2/skills/<id>/publish/              cut a new version (the owner)
+    POST   /api/v2/skills/<id>/publish/              cut a new version from the draft (the owner)
     POST   /api/v2/skills/<id>/copy/                 copy into the caller's own skills (`team_id`)
     POST   /api/v2/skills/<id>/install/              pin a public skill (DELETE removes, PATCH accepts the update)
     POST   /api/v2/skills/<id>/star/                 star it (DELETE removes)
@@ -119,6 +119,21 @@ def _row(skill: Skill, user_id: Any, *, starred: bool | None = None) -> dict[str
     return out
 
 
+_WIRE_NAMES = {py: wire for wire, py in _FIELDS.items()}
+
+
+def _add_draft_state(out: dict[str, Any], skill: Skill, user_id: Any) -> None:
+    """The owner's page and save answer: how the draft differs from the published version, so the
+    editor can offer "Publish changes". `unpublishedChanges` names the fields (camelCase, the same
+    keys a PATCH takes; the text is `bodyMarkdown`). Readers never get it, and the list leaves it
+    out (one extra query per row)."""
+    if not service.is_owner(skill, user_id):
+        return
+    changed = service.unpublished_changes(skill, live_text=out.get("bodyMarkdown"))
+    out["unpublishedChanges"] = [_WIRE_NAMES[name] for name in changed]
+    out["hasUnpublishedChanges"] = bool(changed)
+
+
 def _version_row(version: SkillVersion, *, with_body: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {
         "versionNo": version.version_no,
@@ -224,6 +239,7 @@ class SkillDetailView(_Base):
             return problem
         out = _row(skill, user.pk, starred=service.is_starred(user.pk, skill))
         out["bodyMarkdown"] = service.body_markdown_for(skill, user.pk)
+        _add_draft_state(out, skill, user.pk)
         installed = service.installed_version(user.pk, skill)
         if installed is not None:
             out["installedVersionNo"] = installed
@@ -235,14 +251,12 @@ class SkillDetailView(_Base):
         fields = _fields(body)
         if all(getattr(fields, f) is None for f in service.Fields.__dataclass_fields__):
             return _error("Nothing to change.")
-        changelog = body.get("changelog") if isinstance(body.get("changelog"), str) else ""
-        skill, problem = self._run(
-            lambda: service.update(request.user, skill_id, fields, changelog=changelog)
-        )
+        skill, problem = self._run(lambda: service.update(request.user, skill_id, fields))
         if problem:
             return problem
         out = _row(skill, request.user.pk)
         out["bodyMarkdown"] = service.body_markdown_for(skill, request.user.pk)
+        _add_draft_state(out, skill, request.user.pk)
         return Response({"skill": out})
 
     def delete(self, request, skill_id):
