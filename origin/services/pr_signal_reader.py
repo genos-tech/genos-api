@@ -35,6 +35,7 @@ _SHA = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 #: How long the PRs of one commit are remembered (a burst of `status` events names one commit).
 _PULLS_FOR_COMMIT_TTL = 60
+_REVIEWS_PAGE = 100
 #: Review states that count (GitHub reports them upper case through REST).
 _APPROVED = "APPROVED"
 _CHANGES = "CHANGES_REQUESTED"
@@ -85,8 +86,9 @@ class InstallationReader:
     # -- lookups --------------------------------------------------------------------------------
 
     def reviews(self, owner: str, repo: str, number: int) -> list | None:
-        body = self._get(owner, repo, f"/pulls/{int(number)}/reviews", {"per_page": 100})
-        return body if isinstance(body, list) else None
+        body = self._get(owner, repo, f"/pulls/{int(number)}/reviews", {"per_page": _REVIEWS_PAGE})
+        # A full page may have more behind it (oldest first): unknown, never guessed from a prefix.
+        return body if isinstance(body, list) and len(body) < _REVIEWS_PAGE else None
 
     def check_runs(self, owner: str, repo: str, sha: str) -> dict | None:
         if not _SHA.match(sha or ""):

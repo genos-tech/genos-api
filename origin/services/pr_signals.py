@@ -155,13 +155,24 @@ def _has_open_linked_pr(owner: str, repo: str, team_ids: list) -> bool:
 
 
 def _repo_awaits_green(owner: str, repo: str, team_ids: list) -> bool:
-    """Does any PR of this repo have an "approved" or "ready" notice, or an unread "CI failing" one?"""
-    prefix = canonical_pr_url(owner, repo, 0).rsplit("/", 1)[0] + "/"
+    """Is an OPEN linked PR of this repo waiting on CI: it has an "approved" or "ready" notice, or an
+    unread "CI failing" one? Merged and closed PRs are not asked about (their rows are not OPEN)."""
+    open_urls = list(
+        TaskDelivery.objects.filter(
+            team_id__in=team_ids,
+            repo_owner=owner.lower(),
+            repo_name=repo.lower(),
+            state=TaskDeliveryState.OPEN,
+            pr_url__isnull=False,
+        ).values_list("pr_url", flat=True)
+    )
+    if not open_urls:
+        return False
     rows = InboxItems.objects.filter(
         team_id__in=team_ids,
         item_type=0,
         is_deleted=False,
-        item_optionals__pr_url__startswith=prefix,
+        item_optionals__pr_url__in=open_urls,
     )
     return rows.filter(
         Q(item_optionals__kind__in=[needs_you.KIND_APPROVED, needs_you.KIND_READY])

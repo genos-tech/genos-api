@@ -113,6 +113,25 @@ def _comment_has(task_id: int, text: str, *, since=None) -> bool:
     )
 
 
+def _debounced(
+    task_id: int, prefix: str, window: timedelta | None, reset_prefix: str | None
+) -> bool:
+    """Was a comment with `prefix` written inside `window`, with no comment of `reset_prefix` since?
+    (A "ready" after a failure ends that failure's quiet period: a new failure is news again.)"""
+    since = timezone.now() - (window or timedelta())
+    last = (
+        TaskComments.objects.filter(task_id=task_id, sender__isnull=True, ts_sent_at__gte=since)
+        .annotate(_text=Cast("comment_body", TextField()))
+        .filter(_text__contains=f'"{prefix}')
+        .order_by("-ts_sent_at")
+        .values_list("ts_sent_at", flat=True)
+        .first()
+    )
+    if last is None:
+        return False
+    return not (reset_prefix and _comment_has(task_id, f'"{reset_prefix}', since=last))
+
+
 def _already_posted(task_id: int, key: str) -> bool:
     return _comment_has(task_id, f'"{key}"')
 
@@ -151,6 +170,7 @@ def write_pr_notice(
     extra: dict | None = None,
     debounce_prefix: str | None = None,
     debounce: timedelta | None = None,
+    debounce_reset_prefix: str | None = None,
     resolve_kinds: tuple[str, ...] = (),
 ) -> bool:
     """The comment and the Inbox item for `receiver` on `task`. True when written, False when
@@ -175,8 +195,8 @@ def write_pr_notice(
         comment_id = next_task_comment_id(current.task_id)  # locks the task row
         if _already_posted(current.task_id, key):
             return False
-        if debounce_prefix and _comment_has(
-            current.task_id, f'"{debounce_prefix}', since=timezone.now() - (debounce or timedelta())
+        if debounce_prefix and _debounced(
+            current.task_id, debounce_prefix, debounce, debounce_reset_prefix
         ):
             return False
         comment = TaskComments.objects.create(
@@ -243,7 +263,10 @@ def resolve_items(
         rows = rows.filter(item_optionals__task_id=task_id)
     if team_ids is not None:
         rows = rows.filter(team_id__in=list(team_ids))
-    return rows.update(is_read=True)
+    with (
+        transaction.atomic()
+    ):  # a savepoint: a DB error here must not abort the caller's transaction
+        return rows.update(is_read=True)
 
 
 def notify_review_requested(
@@ -367,7 +390,17 @@ def notify_author(
     debounce_prefix = (
         f"genos-pr-{SIGNAL_NAMES[signal]}:{pr_url}:" if signal == KIND_CI_FAILING else None
     )
-    resolve = (KIND_CI_FAILING, KIND_CHANGES_REQUESTED) if signal == KIND_READY else ()
+    # What this signal makes untrue: "ready" supersedes the failing, changes-requested and approved
+    # notices; a new failure or change request retires an earlier "ready". An approval retires
+    # nothing (a change request by ANOTHER reviewer still stands).
+    resolve = {
+        KIND_READY: (KIND_CI_FAILING, KIND_CHANGES_REQUESTED, KIND_APPROVED),
+        KIND_CI_FAILING: (KIND_READY,),
+        KIND_CHANGES_REQUESTED: (KIND_READY,),
+    }.get(signal, ())
+    reset_prefix = (
+        f"genos-pr-{SIGNAL_NAMES[KIND_READY]}:{pr_url}:" if signal == KIND_CI_FAILING else None
+    )
     written = 0
     for task in tasks:
         try:
@@ -384,6 +417,7 @@ def notify_author(
                 extra={"signal": SIGNAL_NAMES[signal], **(extra or {})},
                 debounce_prefix=debounce_prefix,
                 debounce=CI_DEBOUNCE if debounce_prefix else None,
+                debounce_reset_prefix=reset_prefix,
                 resolve_kinds=resolve,
             ):
                 written += 1

@@ -471,7 +471,34 @@ class TestReadyToMerge(SignalBase):
         unread = set(
             self.items().filter(is_read=False).values_list("item_optionals__kind", flat=True)
         )
-        self.assertEqual(unread, {needs_you.KIND_APPROVED, needs_you.KIND_READY})
+        self.assertEqual(unread, {needs_you.KIND_READY})  # ready supersedes the other three
+
+    def test_a_new_failure_after_ready_is_news_again_and_retires_the_ready_item(self):
+        self.post(_check_run("failure"), "check_run")
+        self.approve_with_pending_ci()
+        self.green()
+        self.post(_check_run("success"), "check_run")
+        self.assertEqual(self.items(needs_you.KIND_READY).filter(is_read=False).count(), 1)
+        other = "fff9999aaa0000"  # a later push fails inside the first failure's debounce window
+        self.gh.pulls[0]["sha"] = other
+        self.post(_check_run("failure", sha=other), "check_run")
+        self.assertEqual(self.items(needs_you.KIND_CI_FAILING).count(), 2)
+        self.assertEqual(self.items(needs_you.KIND_READY).filter(is_read=False).count(), 0)
+
+    def test_changes_requested_after_ready_retires_the_ready_item(self):
+        self.approve_with_pending_ci()
+        self.green()
+        self.post(_check_run("success"), "check_run")
+        self.post(_review("changes_requested", review_id=5), "pull_request_review")
+        self.assertEqual(self.items(needs_you.KIND_READY).filter(is_read=False).count(), 0)
+
+    def test_a_merged_pr_is_not_asked_about_again(self):
+        self.approve_with_pending_ci()
+        self.task.deliveries.update(state=TaskDeliveryState.MERGED)
+        self.green()
+        self.gh.calls.clear()
+        self.post(_check_run("success"), "check_run")
+        self.assertEqual(self.gh.calls, [])
 
     def test_a_green_commit_retires_a_failing_item_even_without_an_approval(self):
         self.post(_check_run("failure"), "check_run")
@@ -570,6 +597,15 @@ class TestReaderRules(SignalBase):
         )
         self.assertTrue(get.call_args.args[0].endswith("/repos/owner/repo/pulls/42/reviews"))
         self.assertFalse(get.call_args.kwargs["allow_redirects"])
+
+    def test_a_full_page_of_reviews_is_unknown_not_a_prefix(self):
+        response = mock.MagicMock(ok=True, status_code=200)
+        response.json.return_value = [{"state": "COMMENTED", "user": {"id": i}} for i in range(100)]
+        with (
+            mock.patch.object(reader_mod.github_app, "get_installation_token", return_value="t"),
+            mock.patch.object(reader_mod.requests, "get", return_value=response),
+        ):
+            self.assertIsNone(reader_mod.InstallationReader(1).reviews("owner", "repo", 1))
 
     def test_a_bad_repo_name_makes_no_request(self):
         with mock.patch.object(reader_mod.requests, "get") as get:
