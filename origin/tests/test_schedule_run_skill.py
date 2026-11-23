@@ -259,12 +259,230 @@ class SavingTests(Base):
         Skill.objects.filter(pk=mine.pk).update(status="taken_down", owner=self.user)
         schedules.update(self.ctx, sched.id, time_of_day="09:15")
 
-    def test_the_job_is_never_posted_in_a_chat(self):
-        """An AI report goes to the Inbox only: its cost is filed on an Inbox item."""
+    def test_the_job_may_go_to_a_chat_only_when_it_says_so(self):
+        """Only a job that says `ai_in_private_chat` (this one) may post an AI report in a chat; every
+        other AI job keeps going to the Inbox only (`schedule_audience.HAS_AI`)."""
         from origin.services import schedule_audience  # noqa: PLC0415
 
         self.assertTrue(JOBS["run_skill"].ai_applies({"skill_id": "x"}))
+        self.assertTrue(JOBS["run_skill"].ai_in_private_chat)
         self.assertTrue(schedule_audience.HAS_AI)
+        self.assertEqual([k for k, j in JOBS.items() if j.ai_in_private_chat], ["run_skill"])
+
+
+class ChatDeliveryTests(Base):
+    """A scheduled skill's report posted in a chat only its owner is in (MIP-2196). The cost line
+    is in the message; a chat other people read never receives it, at saving AND at every run, and
+    a run that must be refused is refused BEFORE the model is called."""
+
+    def gm(self, *members, title="Genos reports", **extra):
+        from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember  # noqa: PLC0415
+
+        extra.setdefault("is_private", True)
+        channel = Channel.objects.create(
+            team=self.team, kind=ChannelKind.GM, title=title, owner=self.user, **extra
+        )
+        for user in members:
+            ChannelMember.objects.create(channel=channel, user=user)
+        return channel
+
+    def to_chat(self, skill, channel, **kw):
+        return self.schedule(skill, deliver_channel_id=channel.id, **kw)
+
+    def posted(self, channel):
+        from origin.models.chat.unified_models import Message  # noqa: PLC0415
+
+        return list(Message.objects.filter(channel=channel).order_by("seq"))
+
+    def test_the_owner_picks_a_chat_only_they_are_in(self):
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        self.assertEqual(sched.deliver_channel_id, alone.id)
+
+    def test_a_chat_other_people_read_is_refused_without_naming_them(self):
+        from origin.services import schedule_audience  # noqa: PLC0415
+
+        shared = self.gm(self.user, self.user2, title="Squad")
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            self.to_chat(self.skill(), shared)
+        self.assertEqual(str(caught.exception), schedule_audience.AI_NOT_ALONE)
+        self.assertNotIn(self.user2.username, str(caught.exception))
+        self.assertEqual(MemberSchedule.objects.count(), 0)
+
+    def test_a_public_chat_and_a_direct_message_are_refused_even_when_the_owner_is_alone(self):
+        from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember  # noqa: PLC0415
+
+        public = self.gm(self.user, title="Open", is_private=False)
+        direct = Channel.objects.create(team=self.team, kind=ChannelKind.DM, owner=self.user)
+        ChannelMember.objects.create(channel=direct, user=self.user)
+        skill = self.skill()
+        for chat in (public, direct):
+            with self.subTest(kind=chat.kind), self.assertRaises(schedules.ScheduleError):
+                self.to_chat(skill, chat)
+
+    def test_a_project_chat_is_refused_while_others_are_on_the_project(self):
+        from origin.models.chat.unified_models import Channel, ChannelKind  # noqa: PLC0415
+        from origin.models.project.prj_models import ProjectMaster, ProjectMembers  # noqa: PLC0415
+
+        project = ProjectMaster.objects.create(
+            project_name="Shared", team=self.team, owner=self.user
+        )
+        ProjectMembers.objects.create(project=project, attendee=self.user)
+        ProjectMembers.objects.create(project=project, attendee=self.user2)
+        pm = Channel.objects.get_or_create(
+            team=self.team,
+            kind=ChannelKind.PM,
+            project=project,
+            defaults={"title": "", "owner": self.user, "legacy_chat_id": project.project_id},
+        )[0]
+        with self.assertRaises(schedules.ScheduleError):
+            self.to_chat(self.skill(), pm)
+
+    def test_a_run_posts_one_message_with_its_cost_line_and_files_nothing_in_the_inbox(self):
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        status, error = self.execute(sched)
+        self.assertEqual((status, error), (STATUS_OK, ""))
+        self.assertEqual(self.inbox(), [])
+        (message,) = self.posted(alone)
+        self.assertIsNone(message.sender_id)
+        row = AiRequestCost.objects.get()
+        marker = message.metadata["scheduleReport"]
+        self.assertEqual(marker["job"], "run_skill")
+        self.assertEqual(marker["scheduleId"], str(sched.id))
+        self.assertEqual(marker["ai"]["request_id"], str(row.request_id))
+        self.assertEqual(marker["ai"]["producer"], "schedule")
+        # The cost line is a block of the message itself, not only metadata.
+        texts = [
+            b["content"][0]["text"]
+            for b in message.body
+            if b["content"] and b["content"][0].get("type") == "text"
+        ]
+        self.assertTrue(any(t.startswith("AI usage:") for t in texts), texts)
+        self.assertIn("Three things need you this week.", texts)
+        sched.refresh_from_db()
+        self.assertEqual(sched.last_result["title"], "Weekly review")
+
+    def test_a_person_added_to_the_chat_since_stops_the_run_before_the_model_is_called(self):
+        from origin.models.chat.unified_models import ChannelMember  # noqa: PLC0415
+        from origin.services import schedule_audience  # noqa: PLC0415
+
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        ChannelMember.objects.create(channel=alone, user=self.user2)
+        status, error = self.execute(sched)
+        self.assertEqual((status, error), (STATUS_FAILED, schedule_audience.AI_NOT_ALONE))
+        self.assertEqual(self.agent.calls, [])  # nothing was spent on a report nobody may read
+        self.assertEqual(AiRequestCost.objects.count(), 0)
+        self.assertEqual(self.posted(alone), [])
+        self.assertEqual(self.inbox(), [])
+
+    def test_a_person_added_while_the_model_runs_gets_nothing_and_the_report_goes_to_the_inbox(
+        self,
+    ):
+        from origin.models.chat.unified_models import ChannelMember  # noqa: PLC0415
+
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        scripted = self.agent
+
+        def joined_mid_run(*args, **kwargs):
+            ChannelMember.objects.create(channel=alone, user=self.user2)
+            return scripted(*args, **kwargs)
+
+        with mock.patch.object(controller, "run_agent", joined_mid_run):
+            status, error = self.execute(sched)
+        self.assertEqual((status, error), (STATUS_OK, ""))
+        self.assertEqual(self.posted(alone), [])  # the colleague never receives it
+        (item,) = self.inbox()  # the credits were spent: the owner keeps the report and its cost
+        self.assertEqual(
+            item.item_optionals["ai"]["request_id"], str(AiRequestCost.objects.get().request_id)
+        )
+
+    def test_the_owner_leaving_the_chat_stops_the_run_before_the_model_is_called(self):
+        from origin.models.chat.unified_models import ChannelMember  # noqa: PLC0415
+
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        ChannelMember.objects.filter(channel=alone, user=self.user).delete()
+        status, _error = self.execute(sched)
+        self.assertEqual(status, STATUS_FAILED)
+        self.assertEqual(self.agent.calls, [])
+
+    def test_a_repeat_of_one_scheduled_run_posts_once(self):
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        at = datetime(2026, 11, 24, 8, 30, tzinfo=timezone.utc)
+        self.assertEqual(schedules._execute(sched, run_at=at)[0], STATUS_OK)
+        self.assertEqual(schedules._execute(sched, run_at=at)[0], STATUS_OK)
+        self.assertEqual(len(self.posted(alone)), 1)
+
+    def test_at_zero_credits_the_chat_gets_the_one_line_and_no_cost(self):
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        with (
+            authoritative(),
+            mock.patch("origin.search_engine.credit_ledger.balance_milli", return_value=0),
+        ):
+            status, error = self.execute(sched)
+        self.assertEqual((status, error), (STATUS_OK, ""))
+        self.assertEqual(self.agent.calls, [])
+        (message,) = self.posted(alone)
+        self.assertIn("no AI credits left", message.body[1]["content"][0]["text"])
+        self.assertNotIn("ai", message.metadata["scheduleReport"])
+        self.assertFalse(
+            any("AI usage" in b["content"][0].get("text", "") for b in message.body if b["content"])
+        )
+        sched.refresh_from_db()
+        self.assertEqual(sched.last_result["ai_skipped"], "no_credits")
+
+    def test_a_job_that_names_no_request_posts_nothing(self):
+        from origin.services import schedule_delivery  # noqa: PLC0415
+        from origin.services.schedules import ScheduleRunError  # noqa: PLC0415
+
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        report = {"title": "T", "summary": "S", "sections": []}  # no request, no skip reason
+        with self.assertRaises(Exception) as caught:
+            schedule_delivery.deliver(sched, report)
+        self.assertNotIsInstance(caught.exception, ScheduleRunError)
+        self.assertEqual(self.posted(alone), [])
+
+    def test_run_now_in_a_chat_counts_toward_the_daily_limit(self):
+        alone = self.gm(self.user)
+        sched = self.to_chat(self.skill(), alone)
+        now = datetime(2026, 11, 23, 9, 0, tzinfo=timezone.utc)
+        for i in range(schedules.AI_RUN_NOW_PER_DAY):
+            result = schedules.run_now(self.ctx, sched.id, now=now + timedelta(minutes=5 * i))
+            self.assertEqual(result["status"], STATUS_OK)
+        with self.assertRaises(schedules.ScheduleError) as caught:
+            schedules.run_now(self.ctx, sched.id, now=now + timedelta(minutes=30))
+        self.assertIn("by hand", str(caught.exception))
+        self.assertEqual(len(self.posted(alone)), schedules.AI_RUN_NOW_PER_DAY)
+
+    def test_the_cost_line_is_numbers_only(self):
+        from origin.services import schedule_delivery  # noqa: PLC0415
+
+        line = schedule_delivery.cost_line
+        self.assertEqual(
+            line({"metered": True, "credits_milli": 1830, "lower_bound": False}),
+            "AI usage: 1.83 credits.",
+        )
+        self.assertEqual(
+            line({"metered": True, "credits_milli": 500, "lower_bound": True}),
+            "AI usage: at least 0.50 credits.",
+        )
+        self.assertEqual(line({"metered": False}), "AI usage of this run was not measured.")
+        self.assertEqual(
+            line({"metered": True, "credits_milli": 2, "lower_bound": True}),
+            "AI usage of this run was not measured.",
+        )
+
+    def test_the_inbox_path_is_untouched(self):
+        sched = self.schedule(self.skill())
+        self.assertEqual(self.execute(sched)[0], STATUS_OK)
+        (item,) = self.inbox()
+        self.assertIn("ai", item.item_optionals)
 
 
 class RunAccessTests(Base):

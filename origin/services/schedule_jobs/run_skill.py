@@ -24,8 +24,11 @@ report is one line saying so (`Report.ai_skipped`), the run counts as a success 
 keeps its time, so it runs again when credits are back. The loop also stops itself mid-run when the
 balance is spent (`credit_budget_usd_micro`), and the partial answer is kept.
 
-WHERE IT GOES. Where a schedule's report goes today: the owner's Inbox. A report with an AI part is
-never posted in a chat (`schedule_audience.HAS_AI`): its cost is filed on the Inbox item.
+WHERE IT GOES. The owner's Inbox (the cost is on the Inbox item), or a chat the owner is ALONE in
+(MIP-2196): one system-authored message with the cost line in it. Never a chat other people read
+(`schedule_audience.HAS_AI`), checked when the schedule is saved and again before every run, so a
+person added to that chat since stops the run BEFORE the model is called. One who joins while the
+model runs gets nothing: the report is filed in the Inbox with its cost (`schedule_delivery.deliver`).
 
 SWITCHED OFF. `GENOS_SKILLS` off: the job is not offered (`Job.available`), a schedule cannot be
 saved with it, and an existing row's run fails with a sentence. Nothing is called.
@@ -460,8 +463,8 @@ register_job(
         key=JOB_KEY,
         title="Run a skill",
         description=(
-            "Runs one of your skills on this schedule and files what it finds in your Inbox. It "
-            "only reads (it changes nothing), uses your AI credits like a question in Spotlight, "
+            "Runs one of your skills on this schedule and files what it finds in your Inbox, or "
+            "posts it in a chat only you are in. It only reads (it changes nothing), uses your AI credits like a question in Spotlight, "
             "and runs the published version you picked."
         ),
         run=run,
@@ -474,6 +477,7 @@ register_job(
             "required": ["skill_id"],
         },
         uses_ai=True,
+        ai_in_private_chat=True,
         effort_default=EFFORT_DEFAULT,
         agent_note=(
             "`skill_id` is a skill's id from the skills list (a skill you own with a published "
