@@ -71,6 +71,40 @@ def _fail(msg: str) -> None:
     raise CreditPolicyError(f"credit_policy.yaml: {msg}")
 
 
+_EFFORT_LEVELS = ("low", "medium", "high")
+
+
+def _parse_skill_effort(raw: dict) -> dict[str, int]:
+    """`skill_effort:` -> {level: degrade-below balance in milli-credits}. Optional and boot-fatal.
+
+    Absent means a skill run never degrades (an older policy file). Present, every level must be
+    declared with a non-negative number: a level without a floor would silently be "never
+    degrade", which is a commercial decision and not a default.
+    """
+    section = raw.get("skill_effort")
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        _fail("skill_effort must be a mapping of effort level -> {degrade_below_credits}")
+    missing = set(_EFFORT_LEVELS) - set(section)
+    if missing:
+        _fail(f"skill_effort is missing level(s) {sorted(missing)}")
+    unknown = set(section) - set(_EFFORT_LEVELS)
+    if unknown:
+        _fail(f"skill_effort names unknown level(s) {sorted(unknown)}")
+    out: dict[str, int] = {}
+    for level, entry in section.items():
+        if not isinstance(entry, dict) or set(entry) != {"degrade_below_credits"}:
+            _fail(f"skill_effort.{level} must be {{degrade_below_credits: <number>}}")
+        value = entry["degrade_below_credits"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            _fail(f"skill_effort.{level}.degrade_below_credits must be >= 0, got {value!r}")
+        out[level] = int(round(float(value) * 1000))
+    if out["low"] != 0:
+        _fail("skill_effort.low.degrade_below_credits must be 0: low is the floor")
+    return out
+
+
 @dataclass(frozen=True)
 class CreditPolicy:
     """The commercial numbers, loaded once at boot.
@@ -112,6 +146,9 @@ class CreditPolicy:
     #: Defaults to empty: selling no packs is a valid configuration, and
     #: is what an older policy file means.
     credit_packs_milli: dict[str, int] = field(default_factory=dict)
+    #: effort level -> the balance (milli-credits) under which a Genos Skill run starts one level
+    #: lower (MIP-2198). Outside both fingerprints, like the packs. Empty = never degrade.
+    skill_effort_floor_milli: dict[str, int] = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
 
     @property
@@ -224,12 +261,14 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
     ceilings = _parse_plan_map(raw, "monthly_ceiling_usd", scale=1.0)
 
     packs = _parse_credit_packs(raw)
+    skill_effort = _parse_skill_effort(raw)
 
     top_unknown = set(raw) - {
         "policy",
         "entitlements",
         "monthly_ceiling_usd",
         "credit_packs",
+        "skill_effort",
     }
     if top_unknown:
         _fail(f"unknown top-level key(s) {sorted(top_unknown)}")
@@ -259,6 +298,7 @@ def load_credit_policy(path: str | Path) -> CreditPolicy:
             p: (int(v) if v is not None else None) for p, v in entitlements.items()
         },
         credit_packs_milli=packs,
+        skill_effort_floor_milli=skill_effort,
         monthly_ceiling_usd=ceilings,
         fingerprint=_fp(policy_payload),
         entitlement_fingerprint=_fp(entitlement_payload),
