@@ -106,6 +106,17 @@
     "test_mcp_search_window": {
       "search_knowledge_base/declaration": "a2cfb0b2c22515072f7b557911d9104203101e6d41898d763c455d45e865260c"
     },
+    "test_mcp_skills_pins": {
+      "declaration:get_skill": "90c744e63b0993a75bfad9b869fc1c7768b1411fc89b7135d5eed2a23efdabac",
+      "declaration:list_my_skills": "98305f2359267971be70e17745e6f477c9258fc672b14800d8e066a3cebef4dd",
+      "declaration:run_skill": "50f4ab34cc7268aeca29c93b33e20292257aba53688385939eb2c9e0d691889d",
+      "instructions:outside:act": "a62b79a393d4ce38f52c2e7248774a450a20f02094230dc2583c8a60be4c2c3a",
+      "instructions:outside:read": "f0cc96c630f93b3a3349e976b9c3541044159d7e28c61ca316be9392e79c26db",
+      "instructions:teammate:act": "b79f09005da7f4f78e50eaefd9962d194f0d54ee1e2a6431c1f9f00f65c98c02",
+      "instructions:you:act": "eda128b3263f80ae88cb0d1583b42013bedf70bf55f5fa99b8b678dab67f4155",
+      "instructions:you:read": "2d12d53f16b5a7f355c72ea162c4e89745d9ac08c56cdced67a43060134b9ccd",
+      "skills_surface:names": "df93096df97a9019e2e1f9bd88fc3efc5067d407fb01a0f732ca29def420ce90"
+    },
     "test_task_close_notice": {
       "thread/closed": "21192f28aee0f436195f6f96f695a8e14486b85901e71ae9a0deff90574c7f0d"
     }
