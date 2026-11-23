@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
@@ -137,7 +138,6 @@ _NAVIGATION_RE = re.compile(
     r"\blocation\s*(?:\.\s*href\s*=(?!=)|\.\s*(?:assign|replace)\s*\(|=(?!=))"
 )
 _STORAGE_RE = re.compile(r"\b(localStorage|sessionStorage|indexedDB|document\s*\.\s*cookie)\b")
-_CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^)'\"]*)\1\s*\)", re.IGNORECASE)
 _CSS_IMPORT_RE = re.compile(r"@import\s+(?:url\(\s*)?['\"]?([^'\")\s;]+)", re.IGNORECASE)
 _FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com", "use.typekit.net", "fonts.bunny.net")
 _NO_TEXT_TAGS = frozenset({"script", "style", "noscript", "template", "head", "iframe", "object"})
@@ -166,8 +166,28 @@ def _is_font_host(url: str) -> bool:
     return any(host in lowered for host in _FONT_HOSTS)
 
 
+def _css_urls(css: str) -> Iterator[str]:
+    """The target of each `url(...)` in `css`, quotes and spaces removed.
+
+    A plain scan with `str.find`, NOT a regex: `url(` followed by a long run of spaces, or by
+    thousands of `url(` with no `)`, made the regex quadratic on a 512 KB page. Each `find` moves
+    forward, and a missing `)` ends the scan, so the cost is linear.
+    """
+    lowered = css.lower()
+    position = 0
+    while True:
+        start = lowered.find("url(", position)
+        if start < 0:
+            return
+        end = css.find(")", start + 4)
+        if end < 0:
+            return
+        yield css[start + 4 : end].strip().strip("'\"").strip()
+        position = end + 1
+
+
 def _example(value: str) -> str:
-    one_line = " ".join(value.split())
+    one_line = " ".join(value[: _EXAMPLE_CHARS * 4].split())
     return one_line if len(one_line) <= _EXAMPLE_CHARS else one_line[: _EXAMPLE_CHARS - 1] + "…"
 
 
@@ -192,30 +212,29 @@ class _Scanner(HTMLParser):
         self._svg_depth = 0
         self._in_script = False
         self._in_style = False
-        self._found: dict[str, list[str]] = {}
+        # code -> [how many times, the first few distinct examples]: bounded however hostile the page
+        self._found: dict[str, list] = {}
         self.text_len = 0
 
     # -- bookkeeping --------------------------------------------------------------------------
     def _hit(self, code: str, example: str = "") -> None:
-        examples = self._found.setdefault(code, [])
-        examples.append(_example(example) if example else "")
+        entry = self._found.setdefault(code, [0, []])
+        entry[0] += 1
+        if example and len(entry[1]) < MAX_EXAMPLES:
+            shown = _example(example)
+            if shown not in entry[1]:
+                entry[1].append(shown)
 
     def warnings(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for code in _ADVICE:  # a fixed, readable order
-            hits = self._found.get(code)
-            if not hits:
+            found = self._found.get(code)
+            if not found:
                 continue
             what, fix = _ADVICE[code]
-            shown = []
-            for example in hits:
-                if example and example not in shown:
-                    shown.append(example)
-                if len(shown) >= MAX_EXAMPLES:
-                    break
-            entry: dict[str, Any] = {"code": code, "message": what, "fix": fix, "count": len(hits)}
-            if shown:
-                entry["examples"] = shown
+            entry: dict[str, Any] = {"code": code, "message": what, "fix": fix, "count": found[0]}
+            if found[1]:
+                entry["examples"] = list(found[1])
             out.append(entry)
         return out
 
@@ -224,7 +243,7 @@ class _Scanner(HTMLParser):
         for imported in _CSS_IMPORT_RE.findall(css):
             if not _is_inline_value(imported):
                 self._hit("external_font" if _is_font_host(imported) else "external_css", imported)
-        for _quote, target in _CSS_URL_RE.findall(css):
+        for target in _css_urls(css):
             if not target or _is_inline_value(target):
                 continue
             if _is_font_host(target) or target.lower().split("?")[0].endswith(

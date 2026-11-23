@@ -207,15 +207,60 @@ class ScanTests(SimpleTestCase):
         scan = html_notes.scan_html(page("<p>start</p><div <<<>>> <script"))
         self.assertIn("start", scan.text)
 
-    def test_a_big_hostile_page_is_scanned_quickly(self):
+    def test_hostile_pages_at_the_cap_are_scanned_in_linear_time(self):
+        """Each input is about the 512 KB cap and aimed at one regex or parser path: a runaway
+        (quadratic) scan would take minutes here, a linear one a fraction of a second."""
         import time
 
-        nasty = page(
-            ("<script>" + "fetch(" * 2000 + "</script>") * 50 + "<p>" + "a" * 200_000 + "</p>"
-        )
-        started = time.monotonic()
-        html_notes.scan_html(nasty)
-        self.assertLess(time.monotonic() - started, 5)
+        n = html_notes.MAX_HTML_BYTES
+        style, script = "<style>", "<script>"
+        cases = {
+            "url( then spaces": style + "url(" + " " * n,
+            "url( repeated, never closed": style + "url(" * (n // 4),
+            "url( repeated, closed": style + "url(a)" * (n // 6),
+            "@import then spaces": style + "@import" + " " * n,
+            "@import repeated": style + "@import " * (n // 8),
+            "fetch then spaces": script + "fetch" + " " * n,
+            "fetch repeated": script + "fetch " * (n // 6),
+            "location then spaces": script + "location" + " " * n,
+            "location repeated": script + "location " * (n // 9),
+            "window then spaces": script + "window" + " " * n,
+            "document then spaces": script + "document" + " " * n,
+            "lots of tiny scripts": "<script>a</script>" * (n // 18),
+            "open angle brackets": "<" * n,
+            "unclosed tags": "<a " * (n // 3),
+            "unclosed comments": "<!--" * (n // 4),
+            "unterminated attribute": "<a b='" * (n // 6),
+            "entities": "&amp" * (n // 4) + "&#" * (n // 8),
+            "block tags": "<p>" * (n // 3),
+            "deep nesting": "<div>" * (n // 5),
+            "svg nesting": "<svg><title>" * (n // 12),
+            "many images": '<img src="https://x/a.png">' * (n // 28),
+            "huge attribute": '<img src="' + "a" * n + '">',
+        }
+        slowest = ("", 0.0)
+        for name, markup in cases.items():
+            with self.subTest(case=name):
+                started = time.monotonic()
+                html_notes.scan_html(markup)
+                took = time.monotonic() - started
+                if took > slowest[1]:
+                    slowest = (name, took)
+                self.assertLess(took, 3, f"{name} took {took:.1f}s")
+
+    def test_a_flood_of_findings_is_counted_without_growing_the_answer(self):
+        scan = html_notes.scan_html(page('<img src="https://x/a.png">' * 20_000))
+        found = next(w for w in scan.warnings if w["code"] == "remote_image")
+        self.assertEqual(found["count"], 20_000)
+        self.assertLessEqual(len(found["examples"]), html_notes.MAX_EXAMPLES)
+
+    def test_css_urls_are_read_without_a_regex(self):
+        from origin.services.html_notes import _css_urls
+
+        css = "a{background:url( 'x.png' )} b{src:url(\"y.woff\")} c{d:url(z.png)} e{f:url(no-close"
+        self.assertEqual(list(_css_urls(css)), ["x.png", "y.woff", "z.png"])
+        self.assertEqual(list(_css_urls("URL(Q.png)")), ["Q.png"])
+        self.assertEqual(list(_css_urls("no urls here")), [])
 
 
 class PrepareTests(SimpleTestCase):
