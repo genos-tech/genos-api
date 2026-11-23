@@ -18,6 +18,7 @@ from origin.search_engine.agent.tools import Tool, ToolContext
 from origin.search_engine.agent.tools.base import ToolError, ToolForbidden
 from origin.search_engine.agent.tools.body_limits import check_body_size
 from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
+from origin.search_engine.agent.tools.html_note_guard import refuse_html_text_edit
 from origin.search_engine.agent.tools.note_access import has_write_permission, load_readable_note
 from origin.search_engine.agent.tools.note_body_hash import note_body_hash
 from origin.search_engine.agent.tools.update_note import _wrap_blocknote
@@ -140,6 +141,8 @@ def run_edit(
     if why := archived_note_refusal(ref.family, ref.note_id):
         raise ToolError(f"{why} Nothing was changed.")
     note = ref.note
+    # An HTML note's blocks are only the placeholder made from its page (MIP-2214).
+    refuse_html_text_edit(note, ref.note_id)
 
     try:
         done = collab_push.edit_note_block(

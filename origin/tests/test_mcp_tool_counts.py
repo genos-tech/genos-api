@@ -44,8 +44,11 @@ MCP_ONLY = 21
 # MIP-2046: three more MCP-only reads (list_my_skills, get_skill, run_skill), published only while the
 # top-level setting GENOS_SKILLS is on (`McpTool.setting`). They are in CATALOG and MCP_ONLY_REGISTRY but in
 # neither PUBLISHED nor OFFERED: with the switch off (the default) a client is offered what it was.
-SETTING_GATED = 3
-OFFERED_WITH_SKILLS = OFFERED + SETTING_GATED
+# MIP-2214 added a fourth, a WRITE: `save_html_note`, published only while the setting HTML_NOTES is on
+# (off by default). `SKILLS_GATED` are the three reads; `SETTING_GATED` is all of them.
+SKILLS_GATED = 3
+SETTING_GATED = 4
+OFFERED_WITH_SKILLS = OFFERED + SKILLS_GATED
 MCP_ONLY_READS = 7
 MCP_ONLY_WRITES = 14
 REGISTRY_SIZE = 88
@@ -103,19 +106,29 @@ class McpToolCountTests(SimpleTestCase):
         self.assertEqual(sum(1 for t in self.mcp_only if t.write), MCP_ONLY_WRITES, HOW)
         self.assertEqual(len(MCP_ONLY_REGISTRY), MCP_ONLY + SETTING_GATED, HOW)
 
-    def test_the_setting_gated_tools_are_three_reads_off_by_default(self):
+    def test_the_setting_gated_tools_are_three_skills_reads_and_one_html_write_off_by_default(self):
         self.assertEqual(len(self.gated), SETTING_GATED, HOW)
-        self.assertEqual({t.setting for t in self.gated}, {"GENOS_SKILLS"})
-        self.assertFalse(any(t.write for t in self.gated))
+        self.assertEqual({t.setting for t in self.gated}, {"GENOS_SKILLS", "HTML_NOTES"})
+        skills = [t for t in self.gated if t.setting == "GENOS_SKILLS"]
+        html = [t for t in self.gated if t.setting == "HTML_NOTES"]
+        self.assertEqual(len(skills), SKILLS_GATED, HOW)
+        self.assertFalse(any(t.write for t in skills))
+        self.assertEqual([(t.name, t.write) for t in html], [("save_html_note", True)])
         for tool in self.gated:
             with self.subTest(tool=tool.name):
                 self.assertIn(tool.registry_name, MCP_ONLY_REGISTRY)
         self.assertFalse(settings.GENOS_SKILLS)
+        self.assertFalse(settings.HTML_NOTES)
         self.assertFalse(any(published(t) for t in self.gated))
         with self.settings(GENOS_SKILLS=True):
-            self.assertTrue(all(published(t) for t in self.gated))
-        # Production keeps the switch off until the skills are released.
+            self.assertTrue(all(published(t) for t in skills))
+            self.assertFalse(any(published(t) for t in html))
+        with self.settings(HTML_NOTES=True):
+            self.assertTrue(all(published(t) for t in html))
+            self.assertFalse(any(published(t) for t in skills))
+        # Production keeps both switches off until the features are released.
         self.assertFalse(production.GENOS_SKILLS)
+        self.assertFalse(production.HTML_NOTES)
 
     def test_the_registry_and_what_was_left_out(self):
         self.assertEqual(len(REGISTRY), REGISTRY_SIZE, HOW)
@@ -137,6 +150,16 @@ class McpToolCountTests(SimpleTestCase):
             rolled_back = [t for t in CATALOG if published(t)]
         self.assertEqual(len(rolled_back), PUBLISHED, HOW)
 
+    def test_with_the_html_notes_switch_on_a_client_is_offered_one_more_write(self):
+        with (
+            mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE),
+            self.settings(HTML_NOTES=True),
+        ):
+            offered = [t for t in CATALOG if published(t)]
+        self.assertEqual(len(offered), OFFERED + 1, HOW)
+        self.assertEqual(sum(1 for t in offered if not t.write), OFFERED_READS, HOW)
+        self.assertEqual(sum(1 for t in offered if t.write), OFFERED_WRITES + 1, HOW)
+
     def test_with_the_skills_switch_on_a_client_is_offered_three_more_reads(self):
         with (
             mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE),
@@ -144,5 +167,5 @@ class McpToolCountTests(SimpleTestCase):
         ):
             offered = [t for t in CATALOG if published(t)]
         self.assertEqual(len(offered), OFFERED_WITH_SKILLS, HOW)
-        self.assertEqual(sum(1 for t in offered if not t.write), OFFERED_READS + SETTING_GATED, HOW)
+        self.assertEqual(sum(1 for t in offered if not t.write), OFFERED_READS + SKILLS_GATED, HOW)
         self.assertEqual(sum(1 for t in offered if t.write), OFFERED_WRITES, HOW)

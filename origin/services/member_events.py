@@ -185,6 +185,7 @@ NO_SINGLE_ITEM = frozenset(
         "create_task",
         "create_task_plan",
         "create_note",
+        "save_html_note",  # a new note, or the page of one named by `note_id` in the result
         "create_todo_item",
         "update_todo_item",
         "delete_todo_item",
