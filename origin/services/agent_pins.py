@@ -72,6 +72,7 @@ PIN_MODULES: dict[str, tuple[str, ...]] = {
     "test_inapp_timeline_tool": ("TestFlagOffIsByteIdenticalToMain",),
     "test_mcp_search_rewrite": ("ToolPassesItOnTests",),
     "test_mcp_search_window": ("InAppAgentIsUnchangedTests",),
+    "test_mcp_skills_pins": ("DeclarationPins", "InstructionPins"),
     "test_task_close_notice": ("TestFlagOffIsMain",),
 }
 
