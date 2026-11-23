@@ -65,7 +65,7 @@ def visible_recents(user_id, team_id, statuses) -> list[TaskRecent]:
             task__is_init_task=False,
             task__is_deleted=False,
         )
-        .select_related("task", "task__project")
+        .select_related("task", "task__project", "task__assignee")
         .order_by("-ts_opened_at", "-id")
     )
     kept: dict[int, int] = {}

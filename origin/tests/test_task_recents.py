@@ -201,9 +201,22 @@ class ReadTests(RecentsBase):
                 "include_all": "true",
             },
         ).data[0]
-        self.assertEqual(set(row), set(search) | {"tsOpened"})
+        # The task bar's rows also carry the assignee (MIP-2174).
+        self.assertEqual(set(row), set(search) | {"tsOpened", "assigneeId", "assigneeName"})
         for key in set(search) - {"tsUpdated"}:
             self.assertEqual(row[key], search[key], key)
+
+    def test_the_row_carries_the_assignee_or_none_when_unassigned(self):
+        """MIP-2174: without it the task bar drew an unassigned "?" on every recent row."""
+        mine = self.make_task(title="Mine", assignee=self.user2)
+        free = self.make_task(title="Free")
+        self.open(mine.task_id)
+        self.open(free.task_id)
+        rows = {r["title"]: r for r in self.recents()}
+        self.assertEqual(rows["Mine"]["assigneeId"], str(self.user2.id))
+        self.assertEqual(rows["Mine"]["assigneeName"], self.user2.username)
+        self.assertIsNone(rows["Free"]["assigneeId"])
+        self.assertIsNone(rows["Free"]["assigneeName"])
 
     def test_the_team_id_is_required_and_must_be_a_uuid(self):
         self.authenticate()
