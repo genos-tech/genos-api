@@ -57,6 +57,20 @@ class RecordNoteOpenView(AuthenticatedAPIView):
             return Response({"error": "Note not found."}, status=status.HTTP_404_NOT_FOUND)
         data["note_id"], data["note_type"] = ref
 
+        # A Genos Skill's body note is opened by the Skills editor, not as a note: it is never
+        # recorded, so it cannot appear in Recent notes (MIP-2121). The answer keeps its shape.
+        if data["note_type"] == 1 and PersonalNoteMaster.skill_body_ids([data["note_id"]]):
+            return Response(
+                {
+                    "message": "Skill notes are not recorded as recent.",
+                    "noteId": data["note_id"],
+                    "noteType": data["note_type"],
+                    "tsOpenedAt": None,
+                    "readActivityIds": [],
+                },
+                status=status.HTTP_200_OK,
+            )
+
         # `get_or_create` + an explicit `save()` on the existing branch is
         # used (instead of `update_or_create(defaults={})`) so we never
         # depend on Django version-specific behaviour around whether an
@@ -137,6 +151,9 @@ class AllRecentNotesMetaView(AuthenticatedAPIView):
             )
             for note_type in (1, 2, 3)
         }
+        # A skill's body note recorded before the record rule existed is dropped here too, so the
+        # cap counts what is shown (MIP-2121).
+        readable[1] = set(readable[1]) - PersonalNoteMaster.skill_body_ids(readable[1])
         shown = [r for r in recents if r["note_id"] in readable.get(r["note_type"], ())][
             :RECENT_NOTES_CAP
         ]

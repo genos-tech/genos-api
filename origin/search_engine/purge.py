@@ -462,8 +462,19 @@ def _resolve_notes(eids: list[str]) -> tuple[set[str], int]:
         live = set(
             model.objects.filter(note_id__in=by_pk.keys()).values_list("note_id", flat=True)
         )
+        if label == "personal":
+            live -= _skill_note_ids(by_pk.keys())
         dead.update(eid for pk, eid in by_pk.items() if pk not in live)
     return dead, unparseable
+
+
+def _skill_note_ids(note_ids) -> set[int]:
+    """The personal notes among `note_ids` that are a Genos Skill's body (filed in the hidden
+    skills folder). They are never indexed (MIP-2121), so a chunk already in the index from before
+    that rule is dead here and the sweep removes it."""
+    from origin.models.note.personal_note_models import PersonalNoteMaster
+
+    return PersonalNoteMaster.skill_body_ids(note_ids)
 
 
 def _resolve_note_folders(eids: list[str]) -> tuple[set[str], int]:
@@ -477,10 +488,11 @@ def _resolve_note_folders(eids: list[str]) -> tuple[set[str], int]:
             unparseable += 1
         else:
             by_pk[pk] = eid
+    # The hidden Genos-Skills folder is never indexed (MIP-2121), so an old chunk of it is dead.
     live = set(
-        PersonalNoteFolder.objects.filter(folder_id__in=by_pk.keys()).values_list(
-            "folder_id", flat=True
-        )
+        PersonalNoteFolder.objects.filter(folder_id__in=by_pk.keys())
+        .exclude(scope=PersonalNoteFolder.SCOPE_SKILL)
+        .values_list("folder_id", flat=True)
     )
     return {eid for pk, eid in by_pk.items() if pk not in live}, unparseable
 
@@ -517,6 +529,8 @@ def _resolve_note_summaries(eids: list[str]) -> tuple[set[str], int]:
                 note_type=code, note_id__in=by_pk.keys()
             ).values_list("note_id", flat=True)
         )
+        if code == 1:
+            live_notes -= _skill_note_ids(by_pk.keys())
         live = live_notes & live_summaries
         dead.update(eid for pk, eid in by_pk.items() if pk not in live)
     return dead, unparseable
