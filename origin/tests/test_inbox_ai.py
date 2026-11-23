@@ -109,8 +109,13 @@ class TestTheInventory(SimpleTestCase):
     def test_only_the_jobs_known_to_use_ai_claim_it(self):
         # A job that can use AI must name the request that paid, or say why it spent nothing
         # (below); adding one to this list is the reminder to answer that. `what_to_do_today` does
-        # since MIP-1210 (its AI sentences; the member can turn them off).
-        self.assertEqual([k for k, j in JOBS.items() if j.uses_ai], ["what_to_do_today"])
+        # since MIP-1210 (its AI sentences; the member can turn them off). `run_skill` does since
+        # MIP-2045: it always returns the request that paid (`ai_request_id`), or says why it spent
+        # nothing (`ai_skipped`: credits, the operator's switches), and a failed run is a one-line
+        # report that still names its request, never a raise that would roll the record back.
+        self.assertEqual(
+            sorted(k for k, j in JOBS.items() if j.uses_ai), ["run_skill", "what_to_do_today"]
+        )
 
 
 class TestTheCostBlock(BaseAPITestCase):
