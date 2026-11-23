@@ -221,21 +221,33 @@ def _own_traces(
     return acted, own, capped
 
 
-def compute(ctx: ToolContext, days: list[date]) -> dict[tuple[int, date], dict[str, Any]]:
+def compute(
+    ctx: ToolContext,
+    days: list[date],
+    *,
+    zone: Any = None,
+    access: LabelAccess | None = None,
+    skip: frozenset[str] = frozenset(),
+) -> dict[tuple[int, date], dict[str, Any]]:
     """`(task_id, day) -> {"mine", ..., "capped"}` for the member's local `days`, from the
     sources. Only items with something counted appear. What a day follows and counts depends on
     that day alone (the tasks of the member's by role, the ones they acted on that day), so a
     day built by itself equals the same day inside a range, unless a cap cut (`capped`).
     Reads one day at a time, so a read cap in one day cannot change another's counts. Writes
-    nothing."""
+    nothing.
+
+    A caller that already holds the member's `zone` and a `LabelAccess` passes them, so the
+    briefing's ranking does not look them up again; `skip` names event readers whose events the
+    caller does not count (`item_lines.read_events`). Left out, the answer is what it always
+    was (MIP-2202)."""
     if not days:
         return {}
     me = str(ctx.user_id)
-    zone = zone_for_user_id(me)
+    zone = zone or zone_for_user_id(me)
     days = sorted(set(days))
     since, _ = day_bounds(days[0], zone)
     _, until = day_bounds(days[-1], zone)
-    access = LabelAccess(ctx)
+    access = access or LabelAccess(ctx)
     role_ids, role_capped = _role_ids(ctx, since)
     acted, own, traces_capped = _own_traces(ctx, zone, days, since, until)
     readable = access.tasks({*role_ids, *(t for ids in acted.values() for t in ids)})
@@ -250,7 +262,7 @@ def compute(ctx: ToolContext, days: list[date]) -> dict[tuple[int, date], dict[s
             reverse=True,
         )
         tasks = {t.task_id: t for t in ranked[:CANDIDATE_MAX]}
-        events, capped = item_lines.read_events(ctx, access, tasks, start, end)
+        events, capped = item_lines.read_events(ctx, access, tasks, start, end, skip)
         flag = capped or role_capped or traces_capped or len(ranked) > CANDIDATE_MAX
         for task_id, found in events.items():
             counts = Counter(classify(e, me) for e in found)
