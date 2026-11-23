@@ -146,6 +146,69 @@ def resolve_link_team(user, team_id) -> TeamMaster:
     return team
 
 
+def installation_manage_url(installation: GithubAppInstallation) -> str:
+    """The installation's own settings page on GitHub, where repositories are added or removed.
+    An organization's lives under the organization; a personal account's under the person's
+    settings. Built from the stored login and id only (login quoted), never from a request."""
+    iid = int(installation.installation_id)
+    if installation.account_type == "Organization":
+        login = quote(installation.account_login, safe="")
+        return f"https://github.com/organizations/{login}/settings/installations/{iid}"
+    return f"https://github.com/settings/installations/{iid}"
+
+
+def _readable_team(user, team_id) -> Optional[TeamMaster]:
+    """The team the Connections card describes, for a person who may only LOOK at it: the one
+    named, or the person's only team, and only a team the person belongs to. None otherwise (no
+    team named in a several-team account, an unknown team, a stranger's team: all alike).
+    Unlike `resolve_link_team` this never needs the owner or editor role and never raises."""
+    ids = _own_team_ids(user)
+    if team_id in (None, ""):
+        if len(ids) != 1:
+            return None
+        team_id = next(iter(ids))
+    try:
+        team_id = uuid.UUID(str(team_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    if team_id not in ids:
+        return None
+    return TeamMaster.objects.filter(team_id=team_id, is_deleted=False).first()
+
+
+def connections_block(user, team_id) -> dict:
+    """What `/integrations/me/` adds while `GITHUB_APP_ENABLED` is on (MIP-2090): whether this
+    team has the App installed, on which accounts, and whether this person may link one.
+
+    Public facts only: the installed accounts' logins and settings links, which every member of
+    the team may see on GitHub's side anyway. No token, no secret. The caller leaves the key out
+    when the switch is off, so an older client sees nothing new."""
+    team = _readable_team(user, team_id)
+    if team is None:
+        return {"enabled": True, "team_id": None, "can_link": False, "installations": []}
+    links = (
+        GithubAppInstallationTeam.objects.filter(team=team)
+        .select_related("installation")
+        .order_by("installation__account_login", "installation__installation_id")
+    )
+    return {
+        "enabled": True,
+        "team_id": str(team.team_id),
+        "can_link": can_manage(resolve_team_role(team, user.id)),
+        "installations": [
+            {
+                "installation_id": link.installation.installation_id,
+                "account_login": link.installation.account_login,
+                "account_type": link.installation.account_type,
+                "repository_selection": link.installation.repository_selection,
+                "suspended": link.installation.suspended_at is not None,
+                "manage_url": installation_manage_url(link.installation),
+            }
+            for link in links
+        ],
+    }
+
+
 def team_has_active_installation(team: TeamMaster) -> bool:
     return GithubAppInstallationTeam.objects.filter(
         team=team, installation__suspended_at__isnull=True

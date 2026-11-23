@@ -14,6 +14,9 @@
     POST   /api/v2/skills/<id>/install/              pin a public skill (DELETE removes, PATCH accepts the update)
     POST   /api/v2/skills/<id>/star/                 star it (DELETE removes)
     GET    /api/v2/skills/<id>/export/               the SKILL.md text
+    POST   /api/v2/skills/<id>/report/               report a skill the caller can read (`reason`, `note`; MIP-2044)
+    POST   /api/v2/skills/<id>/takedown/             operator (staff) only: stop it for everybody (`reason`)
+    DELETE /api/v2/skills/<id>/takedown/             operator only: put it back (`reason` optional)
     GET    /api/v2/skills/<id>/editors/              who co-edits it (the owner and the co-editors)
     POST   /api/v2/skills/<id>/editors/              invite a teammate (`userId`; the owner)
     DELETE /api/v2/skills/<id>/editors/<user>/       remove a co-editor (the owner; a co-editor leaves)
@@ -38,7 +41,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from origin.models.common.team_models import TeamMaster
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.skills.skill_models import Skill, SkillStar, SkillVersion
-from origin.services.skills import run, service, text
+from origin.services.skills import moderation, run, service, text
 from origin.services.throttles import WindowRateThrottle
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR
@@ -145,6 +148,9 @@ def _row(
         out["ownerName"] = skill.owner.username if skill.owner_id else ""
     if edits:
         out["noteId"] = skill.note_id
+        # An operator's decision about the author's own skill: shown so they know why it stopped.
+        if skill.status in service.MODERATED_STATUSES:
+            out["moderationReason"] = skill.moderation_reason
     if starred is not None:
         out["starred"] = starred
     return out
@@ -470,3 +476,41 @@ class SkillExportView(_Base):
             return problem
         slug, content = out
         return Response({"filename": f"{slug}/SKILL.md", "content": content})
+
+
+class SkillReportView(_Base):
+    """Report a skill the caller can read (inside the skill page and the list row; no page of its
+    own). Idempotent: a second report of the same skill by the same account is the first."""
+
+    def post(self, request, skill_id):
+        body = request.data
+        out, problem = self._run(
+            lambda: moderation.report(request.user, skill_id, body.get("reason"), body.get("note"))
+        )
+        if problem:
+            return problem
+        row, created = out
+        return Response(
+            {"reported": True, "reportId": str(row.id)},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class SkillTakedownView(_Base):
+    """The operator API: stop a skill for everybody (POST) or put it back (DELETE). Staff only; any
+    other caller gets the same 404 as an unknown skill."""
+
+    def post(self, request, skill_id):
+        skill, problem = self._run(
+            lambda: moderation.take_down(request.user, skill_id, request.data.get("reason"))
+        )
+        if problem:
+            return problem
+        return Response({"id": str(skill.id), "status": skill.status})
+
+    def delete(self, request, skill_id):
+        reason = request.data.get("reason") if hasattr(request.data, "get") else ""
+        skill, problem = self._run(lambda: moderation.restore(request.user, skill_id, reason))
+        if problem:
+            return problem
+        return Response({"id": str(skill.id), "status": skill.status})

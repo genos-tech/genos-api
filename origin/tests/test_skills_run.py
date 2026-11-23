@@ -366,14 +366,17 @@ class CeilingTests(RunBase):
         self.assertFalse(SINGLE_WRITE_TOOLS & hidden)
         self.assertIn("create_task_plan", hidden)
 
-    def test_an_outside_skill_is_read_only_whatever_it_asks_and_has_no_web(self):
+    def test_an_outside_skill_has_the_level_it_declares_minus_what_a_stranger_never_gets(self):
+        """The read-only hold of MIP-2042 is lifted by the safety guards (MIP-2044,
+        `test_skills_safety`): an `act` skill proposes single writes, and loses the stranger set."""
         public = self.public_skill(tool_level="act")
         got = self.resolve({"id": str(public.id)})
-        self.assertEqual(got.tool_level, "act")  # what the author declared
-        self.assertEqual(got.effective_level, "read")  # what the run is held to
+        self.assertEqual(got.tool_level, "act")
         hidden = run.disabled_tools(got)
-        self.assertTrue(disabled_tools_for_level("read") <= hidden)
+        self.assertTrue(disabled_tools_for_level("act") <= hidden)
+        self.assertNotIn("create_task", hidden)
         self.assertIn("search_web", hidden)
+        self.assertIn("delete_note", hidden)
 
     def test_a_ceiling_read_back_from_a_paused_run_fails_closed(self):
         self.assertEqual(
