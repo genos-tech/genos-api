@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('origin', '0275_skills_hub'),
+        ('origin', '0276_skill_unique_names'),
     ]
 
     operations = [
