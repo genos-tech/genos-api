@@ -176,7 +176,8 @@ class ApplyTests(SyncBase):
         skills = list(official_skills())
         self.assertEqual({s.slug for s in skills}, set(OFFICIAL_SLUGS))
         owner = User.objects.get(blind_index.USER_EMAIL.matches(official.OFFICIAL_EMAIL))
-        team = TeamMaster.objects.get(team_name=official.OFFICIAL_TEAM_NAME)
+        team = TeamMaster.objects.get(owner=owner)
+        self.assertEqual(team.team_name, official.OFFICIAL_TEAM_NAME)
         self.assertTrue(owner.is_system_user)
         self.assertFalse(owner.has_usable_password())
         self.assertEqual(team.owner_id, owner.pk)
@@ -367,6 +368,20 @@ class OnlyOfficialTests(SyncBase):
         self.assertEqual(official_skills().filter(slug=TRIAGE).count(), 1)
         self.assertEqual(Skill.objects.filter(slug=TRIAGE).count(), 2)
 
+    def test_a_member_who_already_has_an_official_name_can_still_save_that_skill(self):
+        """Reserving the names does not lock an existing skill: it is only refused for a NEW name."""
+        mine = service.create(
+            self.user,
+            self.team.team_id,
+            service.Fields(title="My notes", slug="plain-name", body_markdown="# Mine\n\n1. Read."),
+        )
+        Skill.objects.filter(pk=mine.pk).update(slug="handoff")  # made before the name was reserved
+        service.update(self.user, mine.pk, service.Fields(slug="handoff", title="Renamed title"))
+        mine.refresh_from_db()
+        self.assertEqual((mine.slug, mine.title), ("handoff", "Renamed title"))
+        with self.assertRaises(service.SkillError):
+            service.update(self.user, mine.pk, service.Fields(slug="triage"))
+
     def test_an_account_that_is_not_ours_on_the_official_address_is_refused(self):
         User.objects.create_user(
             username="someone", email=official.OFFICIAL_EMAIL, password="x-pass-123"
@@ -379,6 +394,31 @@ class OnlyOfficialTests(SyncBase):
         self.assertEqual(
             TeamMaster.objects.filter(team_name=official.OFFICIAL_TEAM_NAME).count(), 0
         )
+
+    def test_a_member_taking_the_team_name_does_not_block_the_sync(self):
+        TeamMaster.objects.create(
+            team_name=official.OFFICIAL_TEAM_NAME, team_email="squat@example.com", owner=self.user
+        )
+        sync_command("--apply")
+        owner = User.objects.get(blind_index.USER_EMAIL.matches(official.OFFICIAL_EMAIL))
+        team = TeamMaster.objects.get(owner=owner)
+        self.assertNotEqual(team.team_id, self.team.team_id)
+        self.assertEqual(official_skills().count(), self.catalog_count)
+        out = sync_command("--apply")
+        self.assertIn(f"0 created, 0 updated, {self.catalog_count} unchanged", out)
+
+    def test_a_takedown_that_lands_after_the_dry_look_is_not_overwritten(self):
+        sync_command("--apply")
+        skill = official_skills().get(slug=TRIAGE)
+        stale = Skill.objects.get(pk=skill.pk)  # what the classify step saw: active
+        Skill.objects.filter(pk=skill.pk).update(status="taken_down")
+        spec = next(s for s in official.load_catalog() if s.slug == TRIAGE)
+        user, team = official.find_account()
+        changed = official.Spec(
+            **{**spec.__dict__, "body_markdown": spec.body_markdown + "\n- new"}
+        )
+        official._write(changed, user, team, stale)
+        self.assertEqual(skill.versions.count(), 1)
 
     def test_a_moderation_decision_is_never_undone(self):
         sync_command("--apply")

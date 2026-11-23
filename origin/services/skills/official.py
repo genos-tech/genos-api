@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -172,7 +173,8 @@ def find_account() -> tuple[CustomUser | None, TeamMaster | None]:
             "An account that is not a Genos system account already uses the official address. "
             "Nothing was written."
         )
-    return user, TeamMaster.objects.filter(owner=user, team_name=OFFICIAL_TEAM_NAME).first()
+    # By owner, not by name: a team name is unique across every customer, so a member could take it.
+    return user, TeamMaster.objects.filter(owner=user).order_by("ts_created_at").first()
 
 
 def ensure_account() -> tuple[CustomUser, TeamMaster]:
@@ -186,11 +188,12 @@ def ensure_account() -> tuple[CustomUser, TeamMaster]:
             is_email_verified=True,
         )
     if team is None:
-        if TeamMaster.objects.filter(team_name=OFFICIAL_TEAM_NAME).exists():
-            raise CatalogError("A team that is not the official one already has its name.")
-        team = TeamMaster.objects.create(
-            team_name=OFFICIAL_TEAM_NAME, team_email=OFFICIAL_TEAM_EMAIL, owner=user
-        )
+        name = OFFICIAL_TEAM_NAME
+        if TeamMaster.objects.filter(
+            team_name=name
+        ).exists():  # a member took the name: still works
+            name = f"{OFFICIAL_TEAM_NAME} {uuid.uuid4().hex[:6]}"
+        team = TeamMaster.objects.create(team_name=name, team_email=OFFICIAL_TEAM_EMAIL, owner=user)
     return user, team
 
 
@@ -262,6 +265,8 @@ def _write(spec: Spec, user: CustomUser, team: TeamMaster, existing: Skill | Non
             )
         else:
             skill = Skill.objects.select_for_update().get(pk=existing.pk)
+            if skill.status in service.MODERATED_STATUSES:
+                return  # an operator acted since the dry look: that decision stands
             if skill.note_id is not None:
                 service._save_note(skill.note_id, title=spec.title, body=blocks)
             for name, value in fields.items():

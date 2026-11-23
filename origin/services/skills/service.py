@@ -821,7 +821,9 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
             fields.slug = None
         if fields.title is not None:
             skill.title = _wrap(lambda: text.clean_title(fields.title))
-        if fields.slug is not None:
+        # The skill's own name is not checked again: a member who already has a skill named like an
+        # official one (`triage`, made before the name was reserved) must still be able to save it.
+        if fields.slug is not None and str(fields.slug).strip().lower() != skill.slug:
             slug = _wrap(lambda: text.clean_slug(fields.slug))
             if slug != skill.slug:
                 if not _slug_free(skill.team_id, skill.owner_id, slug, exclude=skill.pk):
