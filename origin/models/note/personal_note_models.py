@@ -5,6 +5,9 @@ from django.db import models
 from origin.models.common.team_models import TeamMaster
 from origin.models.common.user_models import CustomUser
 
+# How many parent hops a note tree is followed (matches `search_engine.note_context._MAX_DEPTH`).
+MAX_NOTE_DEPTH = 12
+
 
 class PersonalNoteFolder(models.Model):
     """User-created folder for organizing notes in the sidebar.
@@ -121,15 +124,68 @@ class PersonalNoteMaster(models.Model):
 
     @classmethod
     def skill_body_ids(cls, note_ids) -> set[int]:
-        """The ids among `note_ids` that are a Genos Skill's body note (MIP-2121): one query."""
-        ids = list(note_ids)
+        """The ids among `note_ids` that are a Genos Skill's body note, or a sub-note anywhere
+        under one (MIP-2121, MIP-2191).
+
+        A skill's body is a note filed in a hidden skill folder; a child note carries no folder
+        of its own (`folder_id` NULL, `parent_note_id` set) and follows its root, so each id is
+        walked up its parent chain to the root. One query for the folders, then one per level of
+        depth (a flat set of ordinary notes costs two).
+        """
+        ids = {int(i) for i in note_ids}
         if not ids:
             return set()
-        return set(
-            cls.objects.filter(
-                note_id__in=ids, folder_id__in=PersonalNoteFolder.skill_folder_ids()
-            ).values_list("note_id", flat=True)
+        skill_folders = set(
+            PersonalNoteFolder.skill_folder_ids().values_list("folder_id", flat=True)
         )
+        if not skill_folders:
+            return set()
+        found: set[int] = set()
+        # origin id -> the note whose folder/parent decides it (starts as the note itself)
+        current = {i: i for i in ids}
+        for _ in range(MAX_NOTE_DEPTH):
+            rows = {
+                note_id: (folder_id, parent_id)
+                for note_id, folder_id, parent_id in cls.objects.filter(
+                    note_id__in=set(current.values())
+                ).values_list("note_id", "folder_id", "parent_note_id")
+            }
+            nxt: dict[int, int] = {}
+            for origin, at in current.items():
+                folder_id, parent_id = rows.get(at, (None, None))
+                if folder_id is not None:
+                    if folder_id in skill_folders:
+                        found.add(origin)
+                elif parent_id is not None:
+                    nxt[origin] = parent_id
+            if not nxt:
+                break
+            current = nxt
+        return found
+
+    @classmethod
+    def skill_subtree_ids(cls, owner_id=None) -> set[int]:
+        """Every note that is a skill body or sits under one (MIP-2191): the body notes in the
+        hidden skill folders (of `owner_id` when given), then their descendants, one query per
+        level. Used to leave them out of a list; empty (and one query) when nobody has a skill."""
+        roots = cls.objects.filter(folder_id__in=PersonalNoteFolder.skill_folder_ids())
+        if owner_id is not None:
+            roots = roots.filter(owner_id=owner_id)
+        found = set(roots.values_list("note_id", flat=True))
+        frontier = set(found)
+        for _ in range(MAX_NOTE_DEPTH):
+            if not frontier:
+                break
+            frontier = (
+                set(
+                    cls.objects.filter(parent_note_id__in=frontier).values_list(
+                        "note_id", flat=True
+                    )
+                )
+                - found
+            )
+            found |= frontier
+        return found
 
 
 def personal_note_attachment_path(instance, filename):

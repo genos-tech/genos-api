@@ -224,3 +224,122 @@ class SkillNotesHiddenTests(test_skills_api.SkillBase):
         self.assertEqual(res.status_code, 200, res.content)
         self.assertIn("Read the open tasks", res.json()["skill"]["bodyMarkdown"])
         self.assertEqual(res.json()["skill"]["noteId"], self.skill_note.note_id)
+
+
+PERSONAL = "/api/v2/note/personal/"
+
+
+@override_settings(GENOS_SKILLS=True, GENOS_SKILLS_PUBLIC=True)
+class SkillSubNotesHiddenTests(test_skills_api.SkillBase):
+    """A note nested under a skill's body, or filed in the skill folder by hand, is not a note
+    (MIP-2191). The create path refuses both; a sub-note that already exists is still hidden."""
+
+    def setUp(self):
+        super().setUp()
+        self.skill = self.make_ok()
+        self.skill_note = PersonalNoteMaster.objects.get(note_id=self.skill["noteId"])
+        self.skill_folder_id = self.skill_note.folder_id
+        self.plain = PersonalNoteMaster.objects.create(
+            team=self.team, owner=self.user, title="Plain note", body=_bn("ordinary text")
+        )
+        self.as_user(self.user)
+
+    def create(self, **extra):
+        body = {
+            "team_id": self.team_id,
+            "user_id": str(self.user.id),
+            "title": "New page",
+            "body": _bn("text"),
+            **extra,
+        }
+        return self.client.post(PERSONAL, body, format="json")
+
+    def legacy_child(self, parent):
+        # a row made before the create path refused it
+        return PersonalNoteMaster.objects.create(
+            team=self.team,
+            owner=self.user,
+            title="Old sub page",
+            body=_bn("old"),
+            parent_note_id=parent.note_id,
+        )
+
+    # -- the create path ---------------------------------------------------------------------
+
+    def test_a_sub_note_under_a_skill_body_is_refused(self):
+        before = PersonalNoteMaster.objects.count()
+        res = self.create(parent_note_id=self.skill_note.note_id)
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn("top level", res.json()["error"])
+        self.assertEqual(PersonalNoteMaster.objects.count(), before)
+
+    def test_a_sub_note_under_a_sub_note_of_a_skill_body_is_refused(self):
+        child = self.legacy_child(self.skill_note)
+        res = self.create(parent_note_id=child.note_id)
+        self.assertEqual(res.status_code, 400, res.content)
+
+    def test_a_note_filed_in_the_skill_folder_by_hand_is_refused(self):
+        before = PersonalNoteMaster.objects.count()
+        res = self.create(folder_id=self.skill_folder_id)
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertEqual(res.json()["error"], "Target folder not found.")
+        self.assertEqual(PersonalNoteMaster.objects.count(), before)
+
+    def test_a_sub_note_under_a_normal_note_and_a_normal_folder_still_work(self):
+        res = self.create(parent_note_id=self.plain.note_id)
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(res.json()["parentNoteId"], self.plain.note_id)
+        folder = PersonalNoteFolder.objects.create(team=self.team, owner=self.user, name="Ideas")
+        res = self.create(folder_id=folder.folder_id)
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(res.json()["folderId"], folder.folder_id)
+
+    # -- a sub-note that already exists ------------------------------------------------------
+
+    def test_skill_body_ids_follow_the_parent_chain_to_the_root(self):
+        child = self.legacy_child(self.skill_note)
+        grandchild = self.legacy_child(child)
+        under_plain = self.legacy_child(self.plain)
+        got = PersonalNoteMaster.skill_body_ids(
+            [
+                self.skill_note.note_id,
+                child.note_id,
+                grandchild.note_id,
+                self.plain.note_id,
+                under_plain.note_id,
+            ]
+        )
+        self.assertEqual(got, {self.skill_note.note_id, child.note_id, grandchild.note_id})
+
+    def test_skill_body_ids_of_nothing_or_without_skills_is_empty(self):
+        self.assertEqual(PersonalNoteMaster.skill_body_ids([]), set())
+        self.assertEqual(PersonalNoteMaster.skill_body_ids([self.plain.note_id]), set())
+
+    def test_my_notes_lists_leave_a_sub_note_of_a_skill_out(self):
+        child = self.legacy_child(self.skill_note)
+        under_plain = self.legacy_child(self.plain)
+        query = f"?team_id={self.team_id}&user_id={self.user.id}"
+        for path in ("all/", "meta/"):
+            res = self.client.get(f"{PERSONAL}{path}{query}")
+            self.assertEqual(res.status_code, 200, res.content)
+            ids = {n["noteId"] for n in res.json()}
+            self.assertEqual(ids, {self.plain.note_id, under_plain.note_id}, path)
+            self.assertNotIn(child.note_id, ids)
+
+    def test_a_sub_note_of_a_skill_is_not_listed_in_recent_or_favorites(self):
+        child = self.legacy_child(self.skill_note)
+        NotePermissionMaster.objects.create(
+            team=self.team, user=self.user, note_id=child.note_id, note_type=1, role_id=ROLE_OWNER
+        )
+        NoteRecentMaster.objects.create(
+            team=self.team, user=self.user, note_type=1, note_id=child.note_id
+        )
+        NoteFavoriteMaster.objects.create(
+            team=self.team, user=self.user, note_type=1, note_id=child.note_id
+        )
+        res = self.client.get(f"{RECENT_META}?team_id={self.team_id}&user_id={self.user.id}")
+        self.assertEqual(res.json()["personalNotes"], [])
+        res = self.client.get(
+            f"/api/v2/note/favorite/meta/?team_id={self.team_id}&user_id={self.user.id}"
+        )
+        self.assertEqual(res.json()["personalNotes"], [])
