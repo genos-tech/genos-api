@@ -260,6 +260,20 @@ REGISTRY = {
     "origin.views.common.schedule_views.ScheduleRunView": self_only(
         "the caller's own schedule: looked up by id AND user AND team, anything else is a 404"
     ),
+    # views.common.skill_views (MIP-2040): a skill is read through `get_readable` (owner, team
+    # member who is not a guest, or any signed-in user for a published public skill) and changed
+    # through `get_owned` (owner who is still on the team); anyone else gets the same 404 as a
+    # missing id. Lists and creates check team membership.
+    "origin.views.common.skill_views.SkillListView": checked("is_team_member"),
+    "origin.views.common.skill_views.SkillImportView": checked("is_team_member"),
+    "origin.views.common.skill_views.SkillDetailView": checked("get_readable", "get_owned"),
+    "origin.views.common.skill_views.SkillVersionListView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillVersionDetailView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillPublishView": checked("get_owned"),
+    "origin.views.common.skill_views.SkillCopyView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillInstallView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillStarView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillExportView": checked("get_readable"),
     # views.common.inbox_ai_views (MIP-1209): the item is looked up by id AND receiver=request.user
     # and not deleted; anything else (someone else's, deleted, not an AI item) is the same 404
     "origin.views.common.inbox_ai_views.InboxAiSourceView": self_only(
