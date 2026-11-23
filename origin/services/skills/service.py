@@ -806,8 +806,12 @@ def create(
     source: str = "user",
     forked_from: Skill | None = None,
     forked_from_version_no: int | None = None,
+    tags_mode: str = "ensure",
 ) -> Skill:
-    """A new skill, private unless `fields.visibility` says otherwise (and may be set)."""
+    """A new skill, private unless `fields.visibility` says otherwise (and may be set).
+
+    `tags_mode` (MIP-2211): `"strict"` (the editor's REST write) refuses a tag that is not in the
+    owner's catalog; `"ensure"` adds a missing one with a neutral colour (a copy or a hand-over)."""
     require_enabled()
     _require_member(user, team_id)
     if source not in _SOURCES or source == "official":
@@ -834,6 +838,9 @@ def create(
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         _require_room(user.pk)
         require_name_free(team_id, user.pk, slug, visibility)
+        _check_tags(
+            tags_mode, team_id, user.pk, tags, colors_from=_source_catalog(forked_from, user.pk)
+        )
         note = _create_note(user, team_id, title, blocks)
         try:
             with transaction.atomic():
@@ -859,6 +866,52 @@ def create(
         if visibility != VISIBILITY_PRIVATE:
             _set_visibility(skill, user, visibility, fields)
     return skill
+
+
+def _lock_owner_first(skill_id: Any) -> None:
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports this module
+
+    skill_tags.lock_owner_of_skill(skill_id)
+
+
+def _lock_owner_first_of_user(user_id: Any) -> None:
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports this module
+
+    skill_tags.lock_owner(user_id)
+
+
+def _source_catalog(source: Skill | None, copier_id: Any) -> tuple[Any, Any] | None:
+    """Whose catalog a copy takes its chip colours from: the original's owner, in its team. Never
+    a PUBLIC skill's, unless the copier is its owner or an editor: a stranger who copies from the
+    Hub would otherwise read the author's palette out of their own catalog, which the grey chips
+    of a public skill exist to prevent."""
+    if source is None:
+        return None
+    if source.visibility == VISIBILITY_PUBLIC and not (
+        is_owner(source, copier_id) or can_edit(source, copier_id)
+    ):
+        return None
+    return (source.team_id, source.owner_id)
+
+
+def _check_tags(
+    mode: str,
+    team_id: Any,
+    owner_id: Any,
+    names: list[str],
+    *,
+    colors_from: tuple[Any, Any] | None = None,
+) -> None:
+    """The owner's catalog against a skill's tag names, inside the write's transaction (the owner's
+    row is already locked, or is locked here): strict refuses an unknown name, ensure adds it."""
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports this module
+
+    if not names:
+        return
+    if mode == "strict":
+        skill_tags.require_known(team_id, owner_id, names)
+    else:
+        skill_tags.ensure(team_id, owner_id, names, colors_from=colors_from)
 
 
 def _set_visibility(
@@ -928,6 +981,9 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
     shares the skill and so publishes its current text (`_set_visibility`)."""
     require_enabled()
     with transaction.atomic():
+        # The owner's row first, then the skill: the order Manage tags' rename takes, and the order
+        # the public gate needs (it locks the owner) when this save also makes the skill public.
+        _lock_owner_first(skill_id)
         skill = get_editable(user.pk, skill_id, lock=True)
         if not is_owner(skill, user.pk):
             # A co-editor writes the text and the details. The name teammates type and who the
@@ -955,7 +1011,17 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
         if fields.description is not None:
             skill.description = _wrap(lambda: text.clean_description(fields.description))
         if fields.tags is not None:
-            skill.tags = _wrap(lambda: text.clean_tags(fields.tags))
+            new_tags = _wrap(lambda: text.clean_tags(fields.tags))
+            # The editor can only pick: a name must be in the OWNER's catalog (a co-editor's tags
+            # come from the owner's list). Names the skill already carries are kept even if the
+            # owner deleted them from the catalog since: a save of other fields must not fail.
+            _check_tags(
+                "strict",
+                skill.team_id,
+                skill.owner_id,
+                [n for n in new_tags if n not in (skill.tags or [])],
+            )
+            skill.tags = new_tags
         if fields.argument_hint is not None:
             skill.argument_hint = _wrap(lambda: text.clean_argument_hint(fields.argument_hint))
         if fields.tool_level is not None:
@@ -1003,6 +1069,7 @@ def publish(user: CustomUser, skill_id: Any, *, changelog: str = "") -> SkillVer
     again: the text may have changed since it went public."""
     require_enabled()
     with transaction.atomic():
+        _lock_owner_first(skill_id)  # before the skill: a tag rename holds the owner, then skills
         skill = get_editable(user.pk, skill_id, lock=True)
         if skill.visibility == VISIBILITY_PRIVATE:
             raise SkillError("A private skill has no readers: share it with your team first.")
@@ -1228,6 +1295,9 @@ def hand_over_team_skills(team_id: Any, leaver_id: Any) -> int:
         return 0
     moved = 0
     with transaction.atomic():
+        # The heir's row first (the order every tag write takes): a rename in the heir's catalog
+        # cannot then slip between this copy of the names and the move of the skills.
+        _lock_owner_first_of_user(heir.pk)
         skills = list(
             Skill.objects.select_for_update().filter(
                 team_id=team_id, owner_id=leaver_id, visibility=VISIBILITY_TEAM
@@ -1248,6 +1318,10 @@ def hand_over_team_skills(team_id: Any, leaver_id: Any) -> int:
                 skill.slug = _free_slug(
                     team_id, heir.pk, skill.slug, exclude=skill.pk, visibility=skill.visibility
                 )
+            # The heir's catalog gets the tags the skill carries, in the leaver's colours (MIP-2211).
+            _check_tags(
+                "ensure", team_id, heir.pk, skill.tags or [], colors_from=(team_id, leaver_id)
+            )
             skill.owner = heir
             fields = ["owner", "slug", "updated_at"]
             if skill.status == STATUS_HIDDEN_BY_TEAM:
