@@ -747,6 +747,58 @@ def _family_revoked(fam) -> bool:
         return False
 
 
+def _grace_window_gone(jti: str) -> bool:
+    """True only when the cache answered and holds no window for this jti. A cache that is down
+    says nothing, so it is NOT treated as an expired window (a revocation must never be a guess)."""
+    try:
+        return cache.get(_grace_key(jti)) is None
+    except Exception:
+        return False
+
+
+def _revoke_family_tokens(user_id, fam) -> int:
+    """Blacklist every still-valid refresh token of one login family in the database (MIP-2242).
+
+    `_revoke_family` is cache-only; this one survives a cache flush. A family is the `fam` claim,
+    so the user's outstanding tokens are decoded (unverified: they were issued by us) and matched.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+    count = 0
+    try:
+        outstanding = OutstandingToken.objects.filter(
+            user_id=user_id, expires_at__gt=timezone.now()
+        ).exclude(blacklistedtoken__isnull=False)
+        for row in outstanding.iterator():
+            try:
+                payload = RefreshToken(row.token, verify=False).payload
+            except Exception:
+                continue
+            token_fam = payload.get(_FAMILY_CLAIM) or payload.get(jwt_api_settings.JTI_CLAIM)
+            if token_fam == fam:
+                BlacklistedToken.objects.get_or_create(token=row)
+                count += 1
+    except Exception:
+        logger.exception("refresh family tokens not blacklisted")
+    return count
+
+
+def _handle_refresh_reuse(request, old, jti, user_id) -> None:
+    """A blacklisted refresh token came back outside the grace window: someone holds a copy.
+    Whoever refreshed first keeps a chain, so the whole family goes, thief and owner both; the
+    owner signs in again. Writes a security event (ids and counts only)."""
+    fam = old.get(_FAMILY_CLAIM) or jti
+    _revoke_family(fam)
+    revoked = _revoke_family_tokens(user_id, fam)
+    user = User.objects.filter(id=user_id).first() if user_id else None
+    record_security_event(
+        SecurityAction.REFRESH_REUSED,
+        request=request,
+        actor=user,
+        metadata={"tokens_revoked": revoked},
+    )
+
+
 def _consume_grace(jti: str, user_id) -> bool:
     """One use of the window. Fails closed on anything unexpected, including a cache that is down."""
     try:
@@ -797,6 +849,8 @@ class CookieTokenRefreshView(TokenRefreshView):
         if graced:
             # Rotated before: only the grace window lets it through.
             if not _consume_grace(jti, user_id):
+                if _grace_window_gone(jti):
+                    _handle_refresh_reuse(request, old, jti, user_id)
                 return Response({"error": "Invalid or expired refresh token"}, status=403)
         else:
             # Opened BEFORE the rotation commits, so another tab that arrives between the

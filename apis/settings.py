@@ -513,17 +513,12 @@ REQUEST_PERF_LOG = os.environ.get("REQUEST_PERF_LOG", "").strip().lower() not in
 REQUEST_PERF_CPU_STAT_PATH = os.environ.get("REQUEST_PERF_CPU_STAT_PATH", "/sys/fs/cgroup/cpu.stat")
 
 SIMPLE_JWT = {
-    # NOT shortened, deliberately. A shorter access token would be the
-    # normal hardening move, but the frontend has no proactive refresh:
-    # `AuthContext` only refreshes when `accessToken` is null, and
-    # nothing nulls it on expiry (no `exp` watcher, and the axios
-    # interceptor deliberately skips 401 because it assumes AuthContext
-    # owns that path). So an expired access token silently breaks the
-    # session until the user reloads the page. At 24h almost everyone
-    # reloads first; at 30 minutes it would happen to everyone, twice an
-    # hour. Shortening this is blocked on adding proactive refresh
-    # frontend-side — see operations/AUTH_SECURITY_PLAN.md §3.1.
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=24),
+    # 30 minutes (MIP-2242), env-tunable with ACCESS_TOKEN_LIFETIME_MINUTES. The browser renews it
+    # ahead of expiry from the refresh cookie (AuthContext), so a person stays signed in for the
+    # refresh token's 7 days; a stolen access token now dies within the half hour.
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME_MINUTES", "30"))
+    ),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,

@@ -30,6 +30,9 @@ class SecurityAction(models.TextChoices):
     SIGNIN_SUCCEEDED = "signin.succeeded", "Signed in"
     SIGNIN_FAILED = "signin.failed", "Sign-in failed"
     SIGNOUT = "signout", "Signed out"
+    # A rotated refresh token came back after its grace window: the whole login family is revoked
+    # (MIP-2242). Count of tokens only.
+    REFRESH_REUSED = "session.refresh_reused", "Session ended: sign-in token reused"
     PASSWORD_RESET_REQUESTED = "password.reset_requested", "Password reset requested"
     PASSWORD_RESET = "password.reset", "Password reset"
     MCP_CONNECTED = "mcp.connected", "AI app connected"
