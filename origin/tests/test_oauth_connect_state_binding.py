@@ -207,10 +207,11 @@ class ConnectStateBindingTests(TestCase):
         self.assertIn("github_app_bind", res.cookies)
         self.assertNotIn("github_bind", res.cookies)
 
-    def test_sign_in_is_not_affected(self):
-        """The login flow has no signed-in person to protect and sends no cookie."""
+    def test_sign_in_is_bound_too(self):
+        """The sign-in flow carries the same binding since MIP-2188 (login CSRF); its own
+        behaviour is covered in test_oauth_login_state_binding."""
         res = APIClient().get("/api/v2/oauth/google/initiate/", {"intent": "login"})
         self.assertEqual(res.status_code, 302)
-        self.assertNotIn("google_bind", res.cookies)
+        self.assertIn("google_bind", res.cookies)
         state = parse_qs(urlparse(res["Location"]).query)["state"][0]
-        self.assertNotIn("bind", oauth_views._verify_state(state))
+        self.assertIn("bind", oauth_views._verify_state(state))
