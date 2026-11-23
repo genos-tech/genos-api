@@ -195,6 +195,8 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.services.skills import run as skill_run
+from origin.services.skills import service as skill_service
 from origin.services.throttles import (
     AgentThrottle,
     AgentUndoThrottle,
@@ -1308,6 +1310,21 @@ class AgentAskView(AuthenticatedAPIView):
                 return Response({"error": task_context.NOT_FOUND}, status=status.HTTP_404_NOT_FOUND)
             return Response({"error": "Team not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # A skill the person runs with `/name` (MIP-2042, `GENOS_SKILLS`). Resolved by the asker's own access
+        # BEFORE anything is spent or written, like the task below: a refused skill (unknown, not theirs,
+        # ambiguous, empty) opens no cost rollup and leaves no run row. With the switch off the field is
+        # ignored, as an unknown one always was. The run itself is an ordinary ask: the credit gate, the cost
+        # meter, the history and the approval cards below are the ones every ask goes through.
+        skill_to_run: skill_run.ResolvedSkill | None = None
+        if data.get("skill") is not None and skill_service.enabled():
+            try:
+                skill_to_run = skill_run.resolve(request.user, team_id, data["skill"])
+            except skill_service.SkillError as exc:
+                return Response(
+                    {"error": str(exc), **({"code": exc.code} if exc.code else {}), **exc.extra},
+                    status=exc.status,
+                )
+
         # The task or milestone the ask is about (MIP-1057), read by the asker's own access BEFORE
         # anything is spent or written: a refused ask opens no cost rollup, mints no session and leaves
         # no run row. A task that does not exist, one that was deleted, one in another team and one the
@@ -1925,6 +1942,14 @@ class AgentAskView(AuthenticatedAPIView):
         if tier_extra:
             system_extra = f"{system_extra}\n\n{tier_extra}" if system_extra else tier_extra
 
+        # The skill the person chose (MIP-2042): its text fenced, last, next to the question. Its tool level
+        # is a ceiling that only HIDES tools from the caller's own set (never declares one they lack), so
+        # the model cannot call what the skill may not do.
+        if skill_to_run is not None:
+            skill_extra = skill_run.build_block(skill_to_run)
+            system_extra = f"{system_extra}\n\n{skill_extra}" if system_extra else skill_extra
+            disabled_tools = disabled_tools | skill_run.disabled_tools(skill_to_run)
+
         # What /decide/ will hand a resumed leg if this ask pauses on a write
         # (MIP-977); written by `_stream_ndjson` at the pause, not before.
         keeps_turns = _resume_keeps_turns()
@@ -1949,6 +1974,10 @@ class AgentAskView(AuthenticatedAPIView):
             if _resume_keeps_blocks()
             else None
         )
+        if skill_to_run is not None:
+            # The skill's REFERENCE (ids and its tool level, never its text) is kept whatever the flag
+            # above says: it is the ceiling `/decide/` must put back on the resumed leg, not context.
+            resume_context = {**(resume_context or {}), "skill": skill_run.resume_ref(skill_to_run)}
 
         # `chosen` is captured in the worker closure so the contextvar
         # is set inside the controller's threading.Thread — a bare
@@ -2651,6 +2680,18 @@ class AgentDecideView(AuthenticatedAPIView):
         resumed_extra, resumed_dropped = (
             _resumed_context(run) if _resume_keeps_blocks() else (None, [])
         )
+        # A run of a skill (MIP-2042) keeps its ceiling across the pause, whatever the flag above says: the
+        # resumed leg hides the same tools the first leg did (it could otherwise declare every tool the
+        # caller has, composite writes included), and gets the skill's block again from what the person may
+        # run NOW (a skill deleted or hidden while the card waited is not replayed).
+        skill_kept = skill_run.kept_ref(run.resume_context)
+        if skill_kept is not None:
+            resumed_disabled = resumed_disabled | skill_run.disabled_tools_for_kept(skill_kept)
+            skill_block = skill_run.rebuild_block(skill_kept, request.user, run.team_id)
+            if skill_block:
+                resumed_extra = (
+                    f"{resumed_extra}\n\n{skill_block}" if resumed_extra else skill_block
+                )
         # ...and the earlier turns of its conversation, which sit in the messages and
         # not the system prompt (MIP-991). Without them every decision finished a
         # follow-up ask as if it were the first question of the conversation.
