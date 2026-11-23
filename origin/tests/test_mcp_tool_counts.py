@@ -41,6 +41,11 @@ FROM_REGISTRY = (
 FROM_REGISTRY_READS = 47
 FROM_REGISTRY_WRITES = 36
 MCP_ONLY = 21
+# MIP-2046: three more MCP-only reads (list_my_skills, get_skill, run_skill), published only while the
+# top-level setting GENOS_SKILLS is on (`McpTool.setting`). They are in CATALOG and MCP_ONLY_REGISTRY but in
+# neither PUBLISHED nor OFFERED: with the switch off (the default) a client is offered what it was.
+SETTING_GATED = 3
+OFFERED_WITH_SKILLS = OFFERED + SETTING_GATED
 MCP_ONLY_READS = 7
 MCP_ONLY_WRITES = 14
 REGISTRY_SIZE = 88
@@ -62,11 +67,16 @@ HOW = (
 class McpToolCountTests(SimpleTestCase):
     def setUp(self):
         self.flagged = [t for t in CATALOG if t.flag]
-        self.mcp_only = [t for t in CATALOG if not t.flag and t.registry_name in MCP_ONLY_REGISTRY]
-        self.shared = [t for t in CATALOG if not t.flag and t.registry_name in REGISTRY]
+        self.gated = [t for t in CATALOG if t.setting]
+        plain = [t for t in CATALOG if not t.flag and not t.setting]
+        self.mcp_only = [t for t in plain if t.registry_name in MCP_ONLY_REGISTRY]
+        self.shared = [t for t in plain if t.registry_name in REGISTRY]
 
     def test_every_published_tool_is_backed_by_exactly_one_registry(self):
-        self.assertEqual(len(self.mcp_only) + len(self.shared) + len(self.flagged), len(CATALOG))
+        self.assertEqual(
+            len(self.mcp_only) + len(self.shared) + len(self.flagged) + len(self.gated),
+            len(CATALOG),
+        )
         self.assertEqual({t.registry_name for t in self.mcp_only} & set(REGISTRY), set())
         # A flag-gated tool is backed by the app's flag-gated registry and by no other, so it
         # cannot shadow (or be shadowed by) a registered tool of the same name.
@@ -77,7 +87,7 @@ class McpToolCountTests(SimpleTestCase):
                 self.assertNotIn(tool.registry_name, REGISTRY)
 
     def test_published_total(self):
-        self.assertEqual(len(CATALOG) - len(self.flagged), PUBLISHED, HOW)
+        self.assertEqual(len(CATALOG) - len(self.flagged) - len(self.gated), PUBLISHED, HOW)
         self.assertEqual(len(self.flagged), FLAGGED, HOW)
         self.assertEqual(sum(1 for t in self.flagged if t.write), FLAGGED_WRITES, HOW)
         self.assertEqual(sum(1 for t in self.flagged if not t.write), FLAGGED_READS, HOW)
@@ -91,7 +101,21 @@ class McpToolCountTests(SimpleTestCase):
         self.assertEqual(len(self.mcp_only), MCP_ONLY, HOW)
         self.assertEqual(sum(1 for t in self.mcp_only if not t.write), MCP_ONLY_READS, HOW)
         self.assertEqual(sum(1 for t in self.mcp_only if t.write), MCP_ONLY_WRITES, HOW)
-        self.assertEqual(len(MCP_ONLY_REGISTRY), MCP_ONLY, HOW)
+        self.assertEqual(len(MCP_ONLY_REGISTRY), MCP_ONLY + SETTING_GATED, HOW)
+
+    def test_the_setting_gated_tools_are_three_reads_off_by_default(self):
+        self.assertEqual(len(self.gated), SETTING_GATED, HOW)
+        self.assertEqual({t.setting for t in self.gated}, {"GENOS_SKILLS"})
+        self.assertFalse(any(t.write for t in self.gated))
+        for tool in self.gated:
+            with self.subTest(tool=tool.name):
+                self.assertIn(tool.registry_name, MCP_ONLY_REGISTRY)
+        self.assertFalse(settings.GENOS_SKILLS)
+        self.assertFalse(any(published(t) for t in self.gated))
+        with self.settings(GENOS_SKILLS=True):
+            self.assertTrue(all(published(t) for t in self.gated))
+        # Production keeps the switch off until the skills are released.
+        self.assertFalse(production.GENOS_SKILLS)
 
     def test_the_registry_and_what_was_left_out(self):
         self.assertEqual(len(REGISTRY), REGISTRY_SIZE, HOW)
@@ -112,3 +136,13 @@ class McpToolCountTests(SimpleTestCase):
         ):
             rolled_back = [t for t in CATALOG if published(t)]
         self.assertEqual(len(rolled_back), PUBLISHED, HOW)
+
+    def test_with_the_skills_switch_on_a_client_is_offered_three_more_reads(self):
+        with (
+            mock.patch.dict(settings.SEARCH_ENGINE, production.SEARCH_ENGINE),
+            self.settings(GENOS_SKILLS=True),
+        ):
+            offered = [t for t in CATALOG if published(t)]
+        self.assertEqual(len(offered), OFFERED_WITH_SKILLS, HOW)
+        self.assertEqual(sum(1 for t in offered if not t.write), OFFERED_READS + SETTING_GATED, HOW)
+        self.assertEqual(sum(1 for t in offered if t.write), OFFERED_WRITES, HOW)

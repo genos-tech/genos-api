@@ -187,6 +187,13 @@ DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
         "list_pr_files",
         "list_pr_commits",
     ),
+    # MIP-2046: the Genos Skills tools. They exist only while `GENOS_SKILLS` is on (`McpTool.setting`);
+    # off, this endpoint lists nothing. NOT on `core` on purpose: core is what the general skills call.
+    "skills": (
+        "list_my_skills",
+        "get_skill",
+        "run_skill",
+    ),
 }
 
 # URL segment -> surface key. `full` is the bare path and has no segment.
