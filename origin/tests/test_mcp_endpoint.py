@@ -1750,8 +1750,12 @@ class TestTheNewWrites(McpBase):
         """One refusal per published write, because the check is per tool
         and a new entry is exactly the thing that forgets it."""
         self._key(scope=SCOPE_READ)
-        # With the parity flag on, so the flag-gated write (MIP-1563) is a published one too.
-        with patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True}):
+        # With the parity flag on, so the flag-gated write (MIP-1563) is a published one too, and with
+        # HTML_NOTES on, so the setting-gated write `save_html_note` (MIP-2214) is one.
+        with (
+            patch.dict(settings.SEARCH_ENGINE, {"AGENT_PARITY_TOOLS": True}),
+            override_settings(HTML_NOTES=True),
+        ):
             for tool in tools.CATALOG:
                 if not tool.write:
                     continue

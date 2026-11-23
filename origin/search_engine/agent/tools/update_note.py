@@ -46,6 +46,7 @@ from origin.search_engine.agent.tools.body_mentions import notify_note_mentions
 from origin.search_engine.agent.tools.entity_chips import chip_resolver
 from origin.search_engine.agent.tools.entity_links import resolve_note_entity_link
 from origin.search_engine.agent.tools.field_limits import NOTE_TITLE_MAX, check_text_length
+from origin.search_engine.agent.tools.html_note_guard import refuse_html_text_edit
 from origin.search_engine.agent.tools.note_access import has_write_permission, note_not_found
 from origin.search_engine.agent.tools.note_body_hash import note_body_hash
 from origin.search_engine.agent.tools.note_targets import (
@@ -318,6 +319,10 @@ def _apply_changes(
     note_type_code: int,
     move_plan=None,
 ) -> dict[str, Any]:
+    if has_title or has_body:
+        # An HTML note's text is made from its page (MIP-2214): answer with the way to change it
+        # and write nothing. Only a folder move, which touches neither, goes on.
+        refuse_html_text_edit(note, note_id)
     update_fields: list[str] = []
     changed: list[str] = []
     # Over MCP only (MIP-1647): refuse the WHOLE call, before anything is written, when the body is

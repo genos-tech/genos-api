@@ -3,6 +3,7 @@ from django.urls import path
 from origin.views.note.chat_note_views import *
 from origin.views.note.collab_access_views import CollabAccessCheckView
 from origin.views.note.favorite_note_views import *
+from origin.views.note.html_note_views import HtmlNoteView
 from origin.views.note.note_folder_tag_views import (
     NoteFolderTagLinkView,
     NoteFolderTagView,
@@ -197,5 +198,11 @@ urlpatterns = [
         "api/v2/note/version/restore/",
         NoteVersionRestoreView.as_view(),
         name="note_version_restore",
+    ),
+    # HTML notes (MIP-2214): the saved page, under the note's own ACL. 404 while HTML_NOTES is off.
+    path(
+        "api/v3/notes/<str:note_type>/<int:note_id>/html",
+        HtmlNoteView.as_view(),
+        name="note_html",
     ),
 ]

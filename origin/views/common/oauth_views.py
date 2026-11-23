@@ -86,7 +86,7 @@ def _frontend_success_url(*, access_token: str, next_path: str) -> str:
     and any `/workspace/*` destination would immediately fire team-
     scoped requests with an empty `teamId`, blowing up the backend.
     """
-    next_safe = next_path if next_path.startswith("/") else "/jointeam"
+    next_safe = _safe_next(next_path, "/jointeam")
     fragment = urlencode({"access": access_token, "next": next_safe})
     return f"{settings.FRONTEND_BASE_URL}/oauth/success#{fragment}"
 
@@ -140,13 +140,18 @@ def _verify_state(state: str) -> dict:
     return signing.loads(state, salt=STATE_SALT, max_age=STATE_TOKEN_MAX_AGE_SECONDS)
 
 
-# Every connect flow binds its state to the browser that started it (the GitHub App in MIP-2087,
-# Google and the GitHub OAuth App in MIP-2170). Without this, a signed state is a bearer ticket: an
-# attacker who starts a connect can hand the provider URL (with their state) to someone else, and
-# when that person authorizes, the callback stores THEIR token under the attacker's account. The
-# random value lives in an HttpOnly cookie scoped to the provider's routes (one cookie per
-# provider, so two flows in one browser do not clobber each other); the state carries only its
-# hash, so the callback stores nothing unless the same browser comes back.
+# Every flow binds its state to the browser that started it (the GitHub App in MIP-2087, Google and
+# the GitHub OAuth App connects in MIP-2170, the sign-in in MIP-2188). Without this, a signed state
+# is a bearer ticket: an attacker who starts a connect can hand the provider URL (with their state)
+# to someone else, and when that person authorizes, the callback stores THEIR token under the
+# attacker's account; one who starts a sign-in can hand over the callback link and sign the victim's
+# browser in to the ATTACKER's account. The random value lives in an HttpOnly cookie scoped to the
+# provider's routes (one cookie per provider, shared by that provider's login and connect, which
+# overwrite each other if started in one browser within ten minutes: press the button again); the
+# state carries only its hash, so the callback does nothing unless the same browser comes back.
+# Accepted residual (MIP-2188): the cookie has no `__Host-` prefix, because that prefix demands
+# `Path=/` and this one is scoped to the flow's routes; planting it needs control of a sibling
+# subdomain, and a planted value only lets that party bind a flow they started themselves.
 GITHUB_APP_BIND_COOKIE = "github_app_bind"
 GITHUB_APP_BIND_PATH = "/api/v2/oauth/github_app/"
 
@@ -309,19 +314,27 @@ class OAuthInitiateView(ObjectBodyMixin, APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        next_path = request.GET.get("next", "/jointeam")
+        next_path = _safe_next(request.GET.get("next"), "/jointeam")
 
         provider: OAuthProvider = get_provider(provider_name)
+        # Login CSRF (MIP-2188, RFC 6749 section 10.12): there is no signed-in person to carry the
+        # binding, so the cookie set on this top-level redirect is the only proof that the browser
+        # finishing the flow is the one that started it. Otherwise an attacker could approve their
+        # own sign-in, stop at the redirect, and hand the callback link to a victim.
+        bind = _new_bind()
         state = _sign_state(
             intent="login",
             user_id=None,
             next_path=next_path,
             terms_accepted=signup_consent.is_accepted(request.GET.get("accepted_terms")),
+            bind=_bind_hash(bind),
         )
         url = provider.authorize_url(
             state=state, intent="login", redirect_uri=_redirect_uri(provider_name)
         )
-        return HttpResponseRedirect(url)
+        response = HttpResponseRedirect(url)
+        _set_bind_cookie(response, provider_name, bind)
+        return response
 
     def post(self, request: Request, provider_name: str):
         # With the GitHub App on, the existing "Connect GitHub" button (which posts to `github`)
@@ -439,12 +452,11 @@ class OAuthCallbackView(APIView):
         if intent not in ("login", "connect"):
             return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
         if intent == "connect":
-            # The sign-in flow has no signed-in person to protect; a connect does (MIP-2170).
             response = self._connect_callback(request, provider_name, code, state_payload)
-            _clear_bind_cookie(response, provider_name)
-            return response
-        next_path: str = state_payload.get("next") or "/jointeam"
-        return self._login_callback(provider_name, code, state_payload, next_path)
+        else:
+            response = self._login_callback(request, provider_name, code, state_payload)
+        _clear_bind_cookie(response, provider_name)
+        return response
 
     def _connect_callback(
         self, request: Request, provider_name: str, code: str, state_payload: dict
@@ -476,8 +488,13 @@ class OAuthCallbackView(APIView):
         )
 
     def _login_callback(
-        self, provider_name: str, code: str, state_payload: dict, next_path: str
+        self, request: Request, provider_name: str, code: str, state_payload: dict
     ) -> HttpResponseRedirect:
+        if not _bind_matches(request, state_payload, provider_name):
+            # Not the browser that started this sign-in (or its cookie is gone, or the state is an
+            # older one without a binding): no code is exchanged and no session is minted.
+            return HttpResponseRedirect(_frontend_failure_url(reason="invalid_state"))
+        next_path = _safe_next(state_payload.get("next"), "/jointeam")
         provider: OAuthProvider = get_provider(provider_name)
         try:
             token_response: TokenResponse = provider.exchange_code(
