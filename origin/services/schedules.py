@@ -829,6 +829,11 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
         return STATUS_FAILED, "That job no longer exists."
     ctx = ToolContext(team_id=str(sched.team_id), user_id=str(sched.user_id))
     try:
+        if sched.deliver_channel_id and job.ai_applies(sched.params):
+            # A report that spends AI usage and goes to a chat: ask the audience rule BEFORE the
+            # model is called (MIP-2196). Someone added to the chat since the schedule was saved
+            # stops the run here, and nothing is spent on a report that could not be posted.
+            schedule_delivery.check_chat_target(sched)
         # The job and the delivery are two savepoints, not one (MIP-1210): a job that calls a
         # model has recorded what it spent (`AiSpendEvent`, `AiRequestCost`) by the time it
         # returns, and a delivery that then fails must not roll that record back. The money is
@@ -883,12 +888,13 @@ AI_RUN_NOW_PER_DAY = 3
 
 def _ai_run_now_count(sched: MemberSchedule, now: datetime) -> int:
     """How many hand-made reports of this schedule spent AI usage since the member's midnight."""
+    from origin.models.chat.unified_models import Message  # noqa: PLC0415
     from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems  # noqa: PLC0415
 
     midnight = now.astimezone(user_zone(sched.user)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    return (
+    in_inbox = (
         InboxItems.objects.filter(
             receiver_id=sched.user_id,
             item_type=ITEM_TYPE_GENOS_REPORT,
@@ -899,6 +905,16 @@ def _ai_run_now_count(sched: MemberSchedule, now: datetime) -> int:
         .exclude(item_optionals__has_key="run_at")
         .count()
     )
+    # A report posted in a chat counts the same (MIP-2196): else pointing the schedule at a chat
+    # would lift the limit. A scheduled run has an idempotency key; a hand-made one has none.
+    in_chat = Message.objects.filter(
+        sender__isnull=True,  # a report has no author; this keeps the lookup on `msg_sender_ts_idx`
+        metadata__scheduleReport__scheduleId=str(sched.id),
+        metadata__scheduleReport__has_key="ai",
+        correlation_id__isnull=True,
+        ts_sent_at__gte=midnight,
+    ).count()
+    return in_inbox + in_chat
 
 
 def _require_ai_run_now_room(sched: MemberSchedule, now: datetime) -> None:
