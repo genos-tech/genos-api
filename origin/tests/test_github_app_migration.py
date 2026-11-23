@@ -43,7 +43,7 @@ User = get_user_model()
 
 LEGACY_TOKEN = "gho_legacy-repo-token-SECRET"
 HOOK_URL = "https://api.example.test/api/v2/github/webhook/"
-APP = dict(GITHUB_APP_ENABLED=True)
+APP = dict(GITHUB_APP_ENABLED=True, BACKEND_BASE_URL="https://api.example.test")
 GITHUB = "origin.services.github_app_migration.requests"
 
 
@@ -56,6 +56,17 @@ def _resp(status=200, body=None):
 
 def _hook_body(url=HOOK_URL):
     return {"id": 99, "config": {"url": url}}
+
+
+def _github_get(hook, *, repo=None):
+    """A `requests.get` stand-in: the hook URL answers `hook`, the repo URL `repo` (default: the
+    registrar can see it and administer it), as a 404 on the hook needs both to mean "gone"."""
+    repo = repo if repo is not None else _resp(200, {"permissions": {"admin": True}})
+
+    def get(url, **kwargs):
+        return hook if "/hooks/" in url else repo
+
+    return get
 
 
 class Base(TestCase):
@@ -320,7 +331,7 @@ class HookMigrationApplyTests(Base):
             gh.delete.return_value = _resp(204)
             self._apply(gh)
         with mock.patch(GITHUB) as gh:
-            gh.get.return_value = _resp(404)
+            gh.get.side_effect = _github_get(_resp(404))
             out, _ = self._apply(gh)
         gh.delete.assert_not_called()
         self.assertIn("deleted 0, already gone 1, left 0 of 1 covered hook(s)", out)
@@ -362,14 +373,58 @@ class HookMigrationApplyTests(Base):
         self.reg.refresh_from_db()
         self.assertTrue(self.reg.accepts_shared_secret)
 
-    def test_hook_url_is_matched_by_path_so_a_changed_host_still_counts(self):
+    def test_a_genos_hook_of_another_environment_is_not_deleted(self):
+        # Same path, another host: a staging copy of this database must not delete production hooks.
         with mock.patch(GITHUB) as gh:
             gh.get.return_value = _resp(
-                200, _hook_body("https://old-host.example.org/api/v2/github/webhook")
+                200, _hook_body("https://staging.example.org/api/v2/github/webhook/")
+            )
+            with self.assertRaises(CommandError):
+                self._apply(gh)
+        gh.delete.assert_not_called()
+
+    def test_hook_url_match_ignores_case_and_a_trailing_slash(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(
+                200, _hook_body("https://API.example.test/api/v2/github/webhook")
             )
             gh.delete.return_value = _resp(204)
             self._apply(gh)
         gh.delete.assert_called_once()
+
+    def test_a_404_for_a_registrar_who_cannot_see_the_repo_is_not_read_as_gone(self):
+        # GitHub answers 404 for a hook it will not show this token, exactly as for a missing hook.
+        for repo_answer in (_resp(404), _resp(200, {"permissions": {"admin": False}}), _resp(500)):
+            with mock.patch(GITHUB) as gh:
+                gh.get.side_effect = _github_get(_resp(404), repo=repo_answer)
+                with self.assertRaises(CommandError):
+                    self._apply(gh)
+            gh.delete.assert_not_called()
+            self.reg.refresh_from_db()
+            self.assertTrue(self.reg.accepts_shared_secret)
+
+    def test_an_empty_stored_token_is_no_token_not_a_request_with_an_empty_bearer(self):
+        ConnectedAccount.objects.filter(user=self.user, provider="github").update(
+            access_token_encrypted=crypto.encrypt("")
+        )
+        with mock.patch(GITHUB) as gh:
+            with self.assertRaises(CommandError):
+                self._apply(gh)
+        gh.get.assert_not_called()
+
+    def test_apply_drops_the_own_secret_and_marks_the_row_migrated(self):
+        GithubWebhookRegistration.objects.filter(pk=self.reg.pk).update(
+            secret="own-hook-secret", accepts_shared_secret=False
+        )
+        self.reg.refresh_from_db()
+        self.assertFalse(mig.is_migrated(self.reg))  # a healthy re-keyed hook
+        with mock.patch(GITHUB) as gh:
+            gh.get.return_value = _resp(200, _hook_body())
+            gh.delete.return_value = _resp(204)
+            self._apply(gh)
+        self.reg.refresh_from_db()
+        self.assertIsNone(self.reg.secret)
+        self.assertTrue(mig.is_migrated(self.reg))
 
     def test_registrar_without_a_github_connection_fails_the_run_and_deletes_nothing(self):
         ConnectedAccount.objects.filter(user=self.user, provider="github").delete()
@@ -432,7 +487,7 @@ class HookMigrationApplyTests(Base):
         self.assertEqual(mig.probe_hook(bad, {}), mig.INVALID_REPO)
 
 
-@override_settings(GITHUB_APP_ENABLED=False)
+@override_settings(GITHUB_APP_ENABLED=False, BACKEND_BASE_URL="https://api.example.test")
 class HookRestoreTests(Base):
     """`--restore`, the rollback: recreate the hooks GitHub no longer has."""
 
@@ -448,7 +503,7 @@ class HookRestoreTests(Base):
 
     def test_report_asks_github_read_only_and_creates_nothing(self):
         with mock.patch(GITHUB) as gh:
-            gh.get.return_value = _resp(404)
+            gh.get.side_effect = _github_get(_resp(404))
             out, _ = self._restore(gh)
         gh.post.assert_not_called()
         self.assertIn("would_restore", out)
@@ -458,7 +513,7 @@ class HookRestoreTests(Base):
 
     def test_apply_recreates_a_gone_hook_with_a_secret_of_its_own(self):
         with mock.patch(GITHUB) as gh:
-            gh.get.return_value = _resp(404)
+            gh.get.side_effect = _github_get(_resp(404))
             gh.post.return_value = _resp(201, {"id": 4242})
             out, _ = self._restore(gh, "--apply")
         body = gh.post.call_args.kwargs["json"]
@@ -482,6 +537,28 @@ class HookRestoreTests(Base):
         gh.post.assert_not_called()
         self.assertIn("still_present", out)
 
+    def test_only_rows_this_command_migrated_are_restored(self):
+        # A healthy hook an admin removed on purpose (it has its own secret) is not recreated.
+        healthy = self._registration("acme", "web", self.user, hook_id=5)
+        GithubWebhookRegistration.objects.filter(pk=healthy.pk).update(
+            secret="own-hook-secret", accepts_shared_secret=False
+        )
+        with mock.patch(GITHUB) as gh:
+            gh.get.side_effect = _github_get(_resp(404))
+            gh.post.return_value = _resp(201, {"id": 4242})
+            out, _ = self._restore(gh, "--apply")
+        self.assertEqual(gh.post.call_count, 1)
+        self.assertNotIn("acme/web", out)
+        healthy.refresh_from_db()
+        self.assertEqual(healthy.hook_id, 5)
+
+    def test_a_404_the_registrar_cannot_vouch_for_is_not_recreated(self):
+        with mock.patch(GITHUB) as gh:
+            gh.get.side_effect = _github_get(_resp(404), repo=_resp(404))
+            with self.assertRaises(CommandError):
+                self._restore(gh, "--apply")
+        gh.post.assert_not_called()
+
     def test_apply_refuses_while_the_app_switch_is_on(self):
         with override_settings(GITHUB_APP_ENABLED=True):
             with mock.patch(GITHUB) as gh:
@@ -491,7 +568,7 @@ class HookRestoreTests(Base):
 
     def test_a_refusal_leaves_the_row_and_fails_the_run(self):
         with mock.patch(GITHUB) as gh:
-            gh.get.return_value = _resp(404)
+            gh.get.side_effect = _github_get(_resp(404))
             gh.post.return_value = _resp(403)
             with self.assertRaises(CommandError):
                 self._restore(gh, "--apply")
@@ -500,7 +577,7 @@ class HookRestoreTests(Base):
 
     def test_a_second_hook_with_our_url_is_not_a_failure(self):
         with mock.patch(GITHUB) as gh:
-            gh.get.return_value = _resp(404)
+            gh.get.side_effect = _github_get(_resp(404))
             gh.post.return_value = _resp(422)
             out, _ = self._restore(gh, "--apply")
         self.assertIn("already_hooked", out)
@@ -517,7 +594,7 @@ class HookRestoreTests(Base):
                 gh.delete.return_value = _resp(204)
                 self._run("--apply")
         with mock.patch(GITHUB) as gh:
-            gh.get.return_value = _resp(404)
+            gh.get.side_effect = _github_get(_resp(404))
             gh.post.return_value = _resp(201, {"id": 7})
             self._restore(gh, "--apply")
         self.reg.refresh_from_db()

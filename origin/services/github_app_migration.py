@@ -138,7 +138,35 @@ def _is_legacy_hook(hook) -> bool:
     url = ((hook or {}).get("config") or {}).get("url") if isinstance(hook, dict) else None
     if not isinstance(url, str):
         return False
-    return urlparse(url).path.rstrip("/") == LEGACY_HOOK_PATH
+    # Host AND path: a Genos hook of another environment (a staging copy of this database) points
+    # at its own host and is not ours to delete from here. With BACKEND_BASE_URL unset nothing
+    # matches, so nothing is deleted.
+    parsed, ours = urlparse(url), urlparse(_webhook_payload_url())
+    return (
+        parsed.path.rstrip("/") == LEGACY_HOOK_PATH
+        and bool(ours.netloc)
+        and parsed.netloc.lower() == ours.netloc.lower()
+    )
+
+
+def _registrar_is_admin(registration: GithubWebhookRegistration, headers: dict) -> bool:
+    """Can the registrar's token still administer the repo? GitHub answers 404 for a hook it will
+    not show a token (the registrar left the organization, the repo was transferred or made
+    private, the registrar lost admin) exactly as for a hook that is gone, so a 404 counts as "gone"
+    only when the repo itself is visible with `permissions.admin` true."""
+    try:
+        resp = requests.get(
+            f"{GITHUB_API_BASE}/repos/{registration.owner}/{registration.repo}",
+            headers=headers,
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+        return (
+            resp.status_code == 200 and (resp.json().get("permissions") or {}).get("admin") is True
+        )
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        log.warning("[github-hooks-migrate] admin check error=%s", type(exc).__name__)
+        return False
 
 
 def _hook_url(registration: GithubWebhookRegistration) -> Optional[str]:
@@ -162,7 +190,7 @@ def probe_hook(registration: GithubWebhookRegistration, headers: dict) -> str:
         log.warning("[github-hooks-migrate] probe error=%s", type(exc).__name__)
         return GITHUB_ERROR
     if resp.status_code == 404:
-        return ALREADY_GONE
+        return ALREADY_GONE if _registrar_is_admin(registration, headers) else NO_ACCESS
     if resp.status_code in (401, 403):
         return NO_ACCESS
     if resp.status_code != 200:
@@ -194,10 +222,19 @@ def migrate_hook(plan: HookPlan) -> str:
     else:
         outcome = state
     if outcome in (DELETED, ALREADY_GONE):
+        # The hook no longer exists, so its secret signs nothing: stop accepting the shared one and
+        # drop the own one. `no secret and not accepting the shared one` is also what marks a row
+        # this tool migrated (`is_migrated`), so `--restore` recreates only those.
         GithubWebhookRegistration.objects.filter(pk=registration.pk).update(
-            accepts_shared_secret=False
+            accepts_shared_secret=False, secret=None
         )
     return outcome
+
+
+def is_migrated(registration: GithubWebhookRegistration) -> bool:
+    """A row `migrate_hook` migrated: no own secret and not accepting the shared one. A healthy
+    hook has one or the other (`rekey_hook` stores the own secret before clearing the flag)."""
+    return not registration.accepts_shared_secret and not registration.secret
 
 
 def _delete(registration: GithubWebhookRegistration, headers: dict) -> str:
@@ -338,8 +375,11 @@ def revoke_legacy_grant(account: ConnectedAccount) -> str:
 
     The row stays (it is the sign-in identity; deleting it would lock the person out and orphan
     their account), but loses the token and the `repo` scope: the stored token is dead anyway, and
-    Genos keeps nothing it does not need. The clear is a compare-and-swap on the ciphertext we
-    read, so a token stored by a sign-in in the meantime is not erased.
+    Genos keeps nothing it does not need. The row then reads like a sign-in-only connection (login
+    scopes, no usable token), which GitHub already answers 401 or 404 for private repositories.
+    The clear is a compare-and-swap on the ciphertext we read, so a token stored by a sign-in in
+    the meantime is not erased from the database. (GitHub's grant delete kills every token of the
+    grant, so a token issued during the run is dead at GitHub too: that person signs in again.)
     """
     try:
         token = crypto.decrypt(account.access_token_encrypted)

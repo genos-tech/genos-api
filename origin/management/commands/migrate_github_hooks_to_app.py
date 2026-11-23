@@ -26,9 +26,13 @@ hook in place, is listed, and makes the run exit non-zero; the legacy endpoint k
 deliveries meanwhile, so nothing is processed twice.
 
 `--restore` is the rollback. Turn `GITHUB_APP_ENABLED` off first (while it is on, the legacy endpoint
-drops the deliveries of a repo the App covers). For every registration whose hook GitHub no longer
-has, it recreates the hook with a fresh secret of its own (report first, `--apply` to create; a
-hook that still exists is left alone). It asks GitHub (read only) even without `--apply`.
+drops the deliveries of a repo the App covers). For every registration this command migrated (no
+own secret, not accepting the shared one) whose hook GitHub no longer has, it recreates the hook
+with a fresh secret of its own (report first, `--apply` to create; a hook that still exists is left
+alone). It asks GitHub (read only) even without `--apply`. Note the deletion does not repair
+itself: if the installation is later suspended or unlinked, or the App is switched off, a team
+that depended on the App stops getting events until `--restore --apply` (the row stays, so a task
+save does not recreate the hook).
 
 Output names team ids and `owner/repo`, never a token, a secret, a name or an email. Production:
 run it only with the maintainer's go.
@@ -51,6 +55,7 @@ from origin.services.github_app_migration import (
     RESTORED,
     STILL_PRESENT,
     HookPlan,
+    is_migrated,
     migrate_hook,
     plan_hook_migration,
     probe_hook,
@@ -80,7 +85,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--counts-only",
             action="store_true",
-            help="Print counts only: no team ids, no repository names.",
+            help="Print counts per team only: no repository names.",
         )
         parser.add_argument(
             "--check-github",
@@ -90,7 +95,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--restore",
             action="store_true",
-            help="Rollback: recreate the hooks GitHub no longer has (with --apply; else report).",
+            help="Rollback: recreate the hooks this command deleted (with --apply; else report).",
         )
         parser.add_argument("--team", help="Only the hooks that write for this team id.")
         parser.add_argument("--repo", help="Only this repository, as owner/name.")
@@ -119,9 +124,12 @@ class Command(BaseCommand):
                     "deliveries for any repo the App covers. Turn it off first."
                 )
             crypto.require_keyring()
-            return self._restore(
-                plan_hook_migration(team=team, repo=repo), apply=apply, counts_only=counts_only
-            )
+            # Only the rows this command migrated: a hook an admin removed on purpose, or never
+            # deleted by this tool, is not recreated.
+            migrated = [
+                p for p in plan_hook_migration(team=team, repo=repo) if is_migrated(p.registration)
+            ]
+            return self._restore(migrated, apply=apply, counts_only=counts_only)
 
         if not github_app.is_enabled():
             if apply:
