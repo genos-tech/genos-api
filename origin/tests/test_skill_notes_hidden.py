@@ -343,3 +343,24 @@ class SkillSubNotesHiddenTests(test_skills_api.SkillBase):
             f"/api/v2/note/favorite/meta/?team_id={self.team_id}&user_id={self.user.id}"
         )
         self.assertEqual(res.json()["personalNotes"], [])
+
+    def test_a_bad_parent_note_id_is_a_400_from_the_serializer_not_a_500(self):
+        res = self.create(parent_note_id="abc")
+        self.assertEqual(res.status_code, 400, res.content)
+
+    def test_skill_body_ids_ignore_ids_that_are_not_numbers(self):
+        self.assertEqual(
+            PersonalNoteMaster.skill_body_ids(["abc", None, str(self.skill_note.note_id)]),
+            {self.skill_note.note_id},
+        )
+
+    def test_the_walk_up_and_the_walk_down_reach_the_same_depth(self):
+        from origin.models.note.personal_note_models import MAX_NOTE_DEPTH
+
+        node = self.skill_note
+        deepest = None
+        for _ in range(MAX_NOTE_DEPTH):
+            node = self.legacy_child(node)
+            deepest = node
+        self.assertIn(deepest.note_id, PersonalNoteMaster.skill_subtree_ids())
+        self.assertEqual(PersonalNoteMaster.skill_body_ids([deepest.note_id]), {deepest.note_id})

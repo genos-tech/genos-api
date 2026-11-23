@@ -132,7 +132,12 @@ class PersonalNoteMaster(models.Model):
         walked up its parent chain to the root. One query for the folders, then one per level of
         depth (a flat set of ordinary notes costs two).
         """
-        ids = {int(i) for i in note_ids}
+        ids: set[int] = set()
+        for raw in note_ids:
+            try:
+                ids.add(int(raw))
+            except (TypeError, ValueError):
+                continue  # not a note id: nothing to hide (a serializer rejects it where it matters)
         if not ids:
             return set()
         skill_folders = set(
@@ -143,7 +148,8 @@ class PersonalNoteMaster(models.Model):
         found: set[int] = set()
         # origin id -> the note whose folder/parent decides it (starts as the note itself)
         current = {i: i for i in ids}
-        for _ in range(MAX_NOTE_DEPTH):
+        # the note itself, then MAX_NOTE_DEPTH parent hops (the same reach as `skill_subtree_ids`)
+        for _ in range(MAX_NOTE_DEPTH + 1):
             rows = {
                 note_id: (folder_id, parent_id)
                 for note_id, folder_id, parent_id in cls.objects.filter(
