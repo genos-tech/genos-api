@@ -181,3 +181,34 @@ monthly_ceiling_usd:
     pro: 10
     max: 20
     enterprise: unlimited
+
+# ---------------------------------------------------------------------
+#  Genos Skills: the credit side of a skill's effort level (MIP-2198).
+#
+#  What a level IS (the model tier, the thinking budget, the step limit)
+#  is `efforts:` in llm_models.yaml, the one table the in-app agent reads
+#  for every ask. This section adds only what the COMMERCIAL layer owns:
+#  the balance below which a skill run steps down ONE level instead of
+#  starting at a level the caller can no longer afford.
+#
+#  `degrade_below_credits`: when the caller's balance (monthly + bought
+#  credits) is under this number, a run at that level starts one level
+#  lower and says so. 0 = never degrade (low is the floor). A balance of
+#  zero is refused exactly like any ask (the credit gate); this is the
+#  rung before that, so an almost-empty wallet still gets an answer.
+#  Unlimited plans never degrade.
+#
+#  PROVISIONAL like every number in this file: one credit is $0.10 of
+#  provider cost, a medium ask is about 0.1 to 0.2 credits and a high one
+#  up to about 1, so the floors sit near a typical run of that level.
+#  Replace them with measured per-level costs when the benchmark has
+#  them. Outside both fingerprints: it changes neither what a request
+#  costs nor what a plan includes, only where a skill run starts.
+# ---------------------------------------------------------------------
+skill_effort:
+    low:
+        degrade_below_credits: 0
+    medium:
+        degrade_below_credits: 0.3
+    high:
+        degrade_below_credits: 1

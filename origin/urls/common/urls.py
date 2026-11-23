@@ -108,6 +108,7 @@ from origin.views.common.skill_views import (
     SkillDetailView,
     SkillEditorDetailView,
     SkillEditorsView,
+    SkillEffortLevelsView,
     SkillExportView,
     SkillHideView,
     SkillImportView,
@@ -513,6 +514,11 @@ urlpatterns = [
     ),
     path("api/v2/skills/", SkillListView.as_view(), name="skills"),
     path("api/v2/skills/import/", SkillImportView.as_view(), name="skill_import"),
+    path(
+        "api/v2/skills/effort-levels/",
+        SkillEffortLevelsView.as_view(),
+        name="skill_effort_levels",
+    ),
     path("api/v2/skills/<uuid:skill_id>/", SkillDetailView.as_view(), name="skill_detail"),
     path(
         "api/v2/skills/<uuid:skill_id>/versions/",
