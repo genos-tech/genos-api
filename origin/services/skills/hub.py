@@ -232,7 +232,9 @@ def account_problems(user: CustomUser) -> list[str]:
     return out
 
 
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+# Every part is bounded to what an address may hold (64 characters before the @, 63 a label): an
+# unbounded `+` re-scans a long run of address characters from each start, which is quadratic.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}")
 _PHONE_RE = re.compile(r"(?<!\d)(?:\+?\d[\s().-]?){9,14}\d(?!\d)")
 # Secrets that look like secrets: a provider's key prefix, a private key block, a key assigned to a
 # long value. A regex scan, gitleaks-style: it catches the common leaks, not every one.

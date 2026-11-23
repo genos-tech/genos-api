@@ -11,6 +11,7 @@ runners.
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from unittest import mock
 
@@ -175,6 +176,17 @@ class PublishGateTests(HubBase):
             self.assertEqual(res.status_code, 400, label)
             skill.refresh_from_db()
             self.assertEqual(skill.visibility, "private", label)
+
+    def test_the_email_scan_stays_fast_on_a_long_run_of_address_characters(self):
+        """CodeQL py/polynomial-redos: an unbounded local part re-scanned a long run from every
+        start. A 12,000-character run with no @ must cost about one pass, and real addresses
+        (long ones included) are still found."""
+        run_text = "%" * 12000 + "a." * 3000
+        started = time.monotonic()
+        self.assertIsNone(hub._EMAIL_RE.search(run_text))
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIsNotNone(hub._EMAIL_RE.search("write ana.lopez@example.co.jp now"))
+        self.assertIsNotNone(hub._EMAIL_RE.search("x" * 100 + "@example.com"))
 
     def test_a_flagged_text_goes_public_only_after_an_operator(self):
         make_eligible(self.user)
