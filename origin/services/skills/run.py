@@ -209,6 +209,10 @@ def _by_id(user: Any, team_id: str, skill_id: str) -> tuple[Skill, SkillInstall 
         # A team skill runs in its own team: its text names that team's work.
         if str(skill.team_id) != team_id:
             raise service.SkillNotFound
+        # `can_read` lets the team owner (and a co-editor) SEE a hidden team skill, to show it again;
+        # that is not a licence to run it. Hidden or taken down is not runnable: the same 404.
+        if skill.status != STATUS_ACTIVE:
+            raise service.SkillNotFound
         return skill, None
     if skill.visibility == VISIBILITY_PUBLIC:
         install = _install_of(user, skill)
