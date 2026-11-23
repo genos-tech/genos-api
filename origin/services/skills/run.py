@@ -370,6 +370,24 @@ def _load(
     )
 
 
+# -- uses (the Hub's "most used") ---------------------------------------------------------------
+
+
+def record_use(user: Any, resolved: ResolvedSkill) -> None:
+    """Count this run toward the Hub's "uses" when the skill is a PUBLIC one run from a published
+    version by somebody other than its author (MIP-2047). One indexed read; a failure never stops the
+    run (`hub.record_run` swallows it)."""
+    if resolved.draft or resolved.version_no <= 0:
+        return
+    skill = Skill.objects.filter(
+        pk=resolved.skill_id, visibility=VISIBILITY_PUBLIC, status=STATUS_ACTIVE
+    ).first()
+    if skill is not None:
+        from origin.services.skills import hub  # noqa: PLC0415 - hub imports `service`, as this does
+
+        hub.record_run(user, skill, resolved.version_no, "ask")
+
+
 # -- the block ----------------------------------------------------------------------------------
 
 

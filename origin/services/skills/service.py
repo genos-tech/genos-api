@@ -329,7 +329,11 @@ def visible_to(user_id: Any) -> Q:
 def get_readable(user_id: Any, skill_id: Any) -> Skill:
     """The skill when the member may read it, else the same "not found" a missing id gets."""
     try:
-        skill = Skill.objects.select_related("owner").filter(pk=skill_id).first()
+        skill = (
+            Skill.objects.select_related("owner", "owner__skill_profile")
+            .filter(pk=skill_id)
+            .first()
+        )
     except (ValueError, TypeError):  # not a UUID
         skill = None
     if skill is None or not can_read(skill, user_id):
@@ -527,6 +531,9 @@ def cut_version(skill: Skill, user: CustomUser, *, changelog: str = "") -> Skill
     if skill.published_at is None:
         skill.published_at = timezone.now()
     skill.save(update_fields=["current_version_no", "published_version_no", "published_at"])
+    from origin.services.skills import hub  # noqa: PLC0415 - hub imports this module
+
+    hub.refresh_listing(skill, version)  # the directory reads the published version's columns
     return version
 
 
@@ -623,6 +630,11 @@ class Fields:
     language: Any = None
     body_markdown: Any = None
     visibility: Any = None
+    # Making a skill public (MIP-2047): the author's confirmation of the content terms, and the
+    # public handle and display name when they have none yet. Not stored on the skill.
+    accept_terms: Any = None
+    handle: Any = None
+    display_name: Any = None
 
 
 def _clean_choice(value: Any, allowed: tuple[str, ...], what: str) -> str:
@@ -737,11 +749,13 @@ def create(
         except IntegrityError as exc:  # a racing create took the name
             raise SkillConflict(f"You already have a skill named `{slug}`.") from exc
         if visibility != VISIBILITY_PRIVATE:
-            _set_visibility(skill, user, visibility)
+            _set_visibility(skill, user, visibility, fields)
     return skill
 
 
-def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
+def _set_visibility(
+    skill: Skill, user: CustomUser, visibility: str, fields: Fields | None = None
+) -> None:
     """Move a skill between private / team / public. Team and public need a published version, so
     going there cuts one (a public skill must also pass the content checklist). Going back to
     private keeps the versions and stops everyone else's access at once. Inside a transaction."""
@@ -760,6 +774,18 @@ def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
             raise SkillError(
                 "This skill cannot be public yet: " + " ".join(problems), problems=problems
             )
+        # The Hub's gates (MIP-2047): plan, verified email, account age, a handle, no secrets or
+        # personal data, the daily and per-account limits, the author's confirmation of the terms.
+        from origin.services.skills import hub  # noqa: PLC0415 - hub imports this module
+
+        hub.require_public_gate(
+            user,
+            skill,
+            new_public=True,
+            accept_terms=getattr(fields, "accept_terms", None),
+            handle=getattr(fields, "handle", None),
+            display_name=getattr(fields, "display_name", None),
+        )
     skill.visibility = visibility
     skill.save(update_fields=["visibility", "updated_at"])
     if visibility == VISIBILITY_PRIVATE:
@@ -771,6 +797,9 @@ def _set_visibility(skill: Skill, user: CustomUser, visibility: str) -> None:
         skill.public_from_version_no = skill.published_version_no
         skill.save(update_fields=["public_from_version_no"])
         hold_if_flagged(skill)
+        newest = skill.versions.filter(version_no=skill.published_version_no).first()
+        if newest is not None:  # a version cut while team-only has no directory columns yet
+            hub.refresh_listing(skill, newest)
 
 
 def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
@@ -833,6 +862,7 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
                 skill,
                 user,
                 _clean_choice(fields.visibility, _VISIBILITIES, "The visibility"),
+                fields,
             )
         if push:
             transaction.on_commit(lambda: _push_to_editor(*push))
@@ -856,6 +886,11 @@ def publish(user: CustomUser, skill_id: Any, *, changelog: str = "") -> SkillVer
                 raise SkillError(
                     "This skill cannot be published yet: " + " ".join(problems), problems=problems
                 )
+            from origin.services.skills import hub  # noqa: PLC0415 - hub imports this module
+
+            # The same gates as going public (the account may have changed since), but not the
+            # terms: they were confirmed when the skill first went public.
+            hub.require_public_gate(user, skill, new_public=False)
         version = cut_version(skill, user, changelog=changelog)
         if version is None:
             raise SkillConflict("Nothing changed since the last version.")
@@ -1107,7 +1142,11 @@ def attribution(skill: Skill, user_id: Any) -> dict[str, Any] | None:
     title."""
     if skill.forked_from_id is None:
         return None
-    origin = Skill.objects.select_related("owner").filter(pk=skill.forked_from_id).first()
+    origin = (
+        Skill.objects.select_related("owner", "owner__skill_profile")
+        .filter(pk=skill.forked_from_id)
+        .first()
+    )
     out: dict[str, Any] = {"versionNo": skill.forked_from_version_no}
     if origin is None or not can_read(origin, user_id):
         return {**out, "available": False}
@@ -1120,6 +1159,14 @@ def attribution(skill: Skill, user_id: Any) -> dict[str, Any] | None:
             origin.owner.username if origin.owner_id and origin.visibility != "public" else ""
         ),
     )
+    if origin.visibility == VISIBILITY_PUBLIC:
+        # A public skill is credited by its public handle (never the account name); a copy keeps
+        # the credit even after the original's author changes the text.
+        from origin.services.skills import hub  # noqa: PLC0415 - hub imports this module
+
+        author = hub.author_of(origin)
+        if author:
+            out["author"] = author
     return out
 
 
@@ -1185,7 +1232,7 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
             skill_id=OuterRef("pk"), version_no=OuterRef("published_version_no")
         ).values("created_at")[:1]
     )
-    base = Skill.objects.select_related("owner")
+    base = Skill.objects.select_related("owner", "owner__skill_profile")
     if tab == "installed":
         return (
             base.filter(visible_to(user.pk), installs__user=user)
@@ -1318,22 +1365,38 @@ def installed_version(user_id: Any, skill: Skill) -> int | None:
 
 
 def star(user: CustomUser, skill_id: Any) -> bool:
-    """Star a skill the member can read. One per account; idempotent. The account-age and
-    verified-email rule and the daily rate limit are the Hub's (MIP-2047)."""
+    """Star a skill the member can read. One per account; idempotent; at most 100 a day. The star
+    is always a bookmark, and it moves the PUBLIC total only when the account is at least 3 days old
+    with a verified email and is not the author's (`hub.star_counts`, MIP-2047)."""
     require_enabled()
+    from origin.services.skills import hub  # noqa: PLC0415 - hub imports this module
+
     skill = get_readable(user.pk, skill_id)
     with transaction.atomic():
-        _row, created = SkillStar.objects.get_or_create(user=user, skill=skill)
-        if created:
+        # The account row is the lock that makes the daily count one decision.
+        CustomUser.objects.select_for_update().filter(pk=user.pk).first()
+        if SkillStar.objects.filter(user=user, skill=skill).exists():
+            return False
+        hub.require_star_room(user)
+        counted = hub.star_counts(user, skill)
+        try:
+            with transaction.atomic():
+                SkillStar.objects.create(user=user, skill=skill, counted=counted)
+        except IntegrityError:  # a racing click made it first
+            return False
+        if counted:
             Skill.objects.filter(pk=skill.pk).update(star_count=F("star_count") + 1)
-    return created
+    return True
 
 
 def unstar(user: CustomUser, skill_id: Any) -> None:
     require_enabled()
     with transaction.atomic():
-        deleted, _ = SkillStar.objects.filter(user=user, skill_id=skill_id).delete()
-        if deleted:
+        row = SkillStar.objects.filter(user=user, skill_id=skill_id).first()
+        if row is None:
+            return
+        row.delete()
+        if row.counted:
             Skill.objects.filter(pk=skill_id, star_count__gt=0).update(
                 star_count=F("star_count") - 1
             )
