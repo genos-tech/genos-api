@@ -28,6 +28,10 @@ Deliberately narrow, so it only ever acts on a transition:
 * GitHub answering 401 / 403 / 429 (or erroring, or not answering) stops
   that repo for this run; the next run tries again. Other repos go on.
 
+With `GITHUB_APP_ENABLED` it first asks the GitHub App's deliveries API to redeliver the App
+webhook's transient failures (`github_app_redeliver`, MIP-2088; needs the App's secrets on this
+service) and prunes the replay-guard rows.
+
 With `PR_NUDGES_ENABLED` it also hands each PR that is still open to
 `pr_merge_readiness.check_open_pr` (MIP-2056): the "ready to merge" and "no activity" task comments
 and the cached `merge_readiness` that `get_task` shows. No new service: this cron has the token and
@@ -46,7 +50,10 @@ import requests
 from origin.management.cron_command import CronCommand
 from origin.models.common.user_models import GithubWebhookRegistration
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
+from origin.services import github_app
 from origin.services import pr_merge_readiness as readiness
+from origin.services.github_app_redeliver import redeliver_failed_deliveries
+from origin.services.github_app_webhook import prune_deliveries
 from origin.services.github_webhooks import GITHUB_API_BASE, hook_admin_headers
 from origin.views.common.github_views import (
     _invalidate_pr_caches,
@@ -77,6 +84,7 @@ class Command(CronCommand):
 
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
+        self._redeliver_app_failures(dry_run=dry_run)
         totals = {"repos": 0, "checked": 0, "still_open": 0, "closed": 0, "tasks": 0, "nudges": 0}
         self._nudge_budget = [MAX_NUDGES_PER_RUN]
         seen: set[tuple[str, str]] = set()
@@ -92,6 +100,32 @@ class Command(CronCommand):
             f"checked={totals['checked']} still_open={totals['still_open']} "
             f"closed_on_github={totals['closed']} tasks_closed={totals['tasks']}"
             + (f" nudges={totals['nudges']}" if readiness.enabled() else "")
+        )
+
+    def _redeliver_app_failures(self, *, dry_run: bool) -> None:
+        """First step (MIP-2088): ask GitHub to redeliver the App webhook's transient failures, and
+        drop the replay-guard rows past their retention. Off with `GITHUB_APP_ENABLED`. A failure
+        here is logged at WARNING and never stops the reconcile below, which recovers PR state
+        from the PR itself."""
+        if not github_app.is_enabled():
+            return
+        try:
+            counts = redeliver_failed_deliveries(dry_run=dry_run)
+            pruned = 0 if dry_run else prune_deliveries()
+        except github_app.GithubAppError as exc:
+            log.warning("reconcile_pr_deliveries: App redelivery skipped: %s", exc)
+            return
+        except Exception as exc:  # noqa: BLE001
+            # A recovery aid: whatever goes wrong (a database error while pruning), the legacy
+            # reconcile below still runs. The type only: a message can quote a query.
+            log.warning(
+                "reconcile_pr_deliveries: App redelivery step failed: %s", type(exc).__name__
+            )
+            return
+        prefix = "[dry-run] " if dry_run else ""
+        self.stdout.write(
+            f"{prefix}app redelivery: listed={counts['listed']} failed={counts['failed']} "
+            f"redelivered={counts['redelivered']} pruned={pruned}"
         )
 
     def _reconcile_repo(self, registration, totals: dict, *, dry_run: bool) -> None:

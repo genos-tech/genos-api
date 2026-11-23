@@ -45,6 +45,7 @@ from origin.models.task.task_activity_models import TaskActivity, TaskActivityAc
 from origin.models.task.task_delivery_models import TaskDelivery, TaskDeliveryState
 from origin.models.task.task_models import TaskMaster
 from origin.services import github_app as github_app_service
+from origin.services.github_app_webhook import app_team_ids_for_repo
 from origin.services.github_credential import (
     CredentialResolver,
     github_credential,
@@ -1315,6 +1316,31 @@ class GithubWebhookView(APIView):
             return Response({"detail": "invalid_signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
         event = request.headers.get("X-GitHub-Event") or request.META.get("HTTP_X_GITHUB_EVENT")
+        # The App covers this repo (an active installation linked to a live team, MIP-2088): its
+        # endpoint is the source of events for the teams it serves, so this hook no longer writes
+        # for THOSE teams and nothing is processed twice. A team this hook serves that the App does
+        # not (the installation is linked to another team only) keeps getting its events from here,
+        # so linking the App never silences a team it does not serve. After the signature check, so
+        # only the repo's own hook gets this answer; before any write.
+        team_ids_for = _repo_team_ids
+        if (
+            event in ("pull_request", "issue_comment", "pull_request_review_comment")
+            and repo_ref is not None
+            and payload is not None
+        ):
+            app_teams = {
+                str(t)
+                for t in app_team_ids_for_repo(
+                    repo_ref[0], repo_ref[1], (payload.get("repository") or {}).get("id")
+                )
+            }
+            if app_teams:
+                remaining = [
+                    t for t in _repo_team_ids(repo_ref[0], repo_ref[1]) if str(t) not in app_teams
+                ]
+                if not remaining:
+                    return Response({"detail": "covered_by_app"}, status=status.HTTP_200_OK)
+                team_ids_for = lambda _owner, _repo: remaining  # noqa: E731
         # A verified delivery from a repo Genos holds no registration for: it
         # answers 200 and writes nothing (`_repo_team_ids` fails closed), which
         # looks healthy from GitHub's side. Remember it so the integrations
@@ -1339,185 +1365,220 @@ class GithubWebhookView(APIView):
         if payload is None:
             return Response({"detail": "bad_json"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if _pr_url_repo_mismatch(event, payload, repo_ref):
-            logger.warning(
-                "GitHub webhook: %s delivery signed for %s names a PR in another repo",
-                event,
-                "/".join(repo_ref) if repo_ref else "no repo",
+        return handle_verified_event(event, payload, repo_ref, team_ids_for)
+
+
+def handle_verified_event(
+    event: str | None,
+    payload: dict,
+    repo_ref,
+    team_ids_for,
+    head_ref_fetcher=None,
+) -> Response:
+    """What a VERIFIED delivery does, shared by the legacy per-repo hook (`GithubWebhookView`) and
+    the GitHub App endpoint (`GithubAppWebhookView`, MIP-2088): one rule for task links, "Closes
+    MIP-n", needs-you signals and the merged-PR comment, whichever door the event came through.
+
+    `team_ids_for(owner, repo)` is the tenant boundary: the teams this delivery may write into.
+    The legacy hook answers with the registrar's teams (`_repo_team_ids`); the App endpoint with
+    the teams linked to the installation, whatever repo the PR url names (the PR-url guard below
+    already pinned it to the verified repo). `head_ref_fetcher(owner, repo, number)` resolves an
+    `issue_comment`'s head branch (default: the registrar's token, `_fetch_pr_head_ref`).
+
+    Events that change what the PR lookups cache but touch no task (`pull_request_review`,
+    `check_run`, `status`) refresh the repo's cached PR details so the CI badge and review state
+    are pushed instead of polled.
+    """
+    if _pr_url_repo_mismatch(event, payload, repo_ref):
+        logger.warning(
+            "GitHub webhook: %s delivery signed for %s names a PR in another repo",
+            event,
+            "/".join(repo_ref) if repo_ref else "no repo",
+        )
+        return Response({"detail": "repo_mismatch"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if event in ("pull_request_review", "check_run", "status"):
+        if repo_ref is not None:
+            _invalidate_pr_detail(repo_ref[0], repo_ref[1])
+        return Response({"detail": "ok", "refreshed": repo_ref is not None})
+
+    if event == "pull_request":
+        pr = payload.get("pull_request") or {}
+        action = payload.get("action")
+        merged = bool(pr.get("merged"))
+        head_ref = ((pr.get("head") or {}).get("ref")) or ""
+        html_url = pr.get("html_url") or ""
+
+        # Drop our Redis-cached lookups of this repo's PRs (and, when a
+        # PR is opened or reopened, its branch list) so the UI sees the
+        # new state on the next fetch. Only for the actions that change
+        # what we cache (state, draft, merged_at, title); a push to an
+        # existing PR (`synchronize`) changes none of it, and used to
+        # throw the branch list away on every push. Comment events skip
+        # this too — they don't touch cached fields.
+        ref = parse_pr_url_full(html_url)
+        # Which tenant this repo may write into. Derived from the PR
+        # url rather than trusted from the payload's `repository`
+        # block for no deep reason — this is the value already parsed
+        # here — but note both are attacker-supplied and the scope is
+        # only as good as the registration lookup they feed.
+        team_ids = []
+        if ref is not None:
+            owner_inv, repo_inv, number_inv = ref
+            if action in _PR_DATA_ACTIONS:
+                _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
+            elif action in _PR_DETAIL_ONLY_ACTIONS:
+                _invalidate_pr_detail(owner_inv, repo_inv)
+            if action in _BRANCH_LIST_ACTIONS:
+                _invalidate_branch_list(owner_inv, repo_inv)
+            team_ids = team_ids_for(owner_inv, repo_inv)
+
+        deliveries = None
+        updated = None
+        if ref is not None:
+            # The same two steps `reconcile_pr_deliveries` runs, so a
+            # recovered event and a live one close tasks by one rule.
+            applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
+            deliveries, updated = applied["deliveries"], applied["updated"]
+
+        # A reviewer was asked for: tell them through the Inbox and the task (MIP-2054).
+        # Team reviewers (`requested_team`) carry no `requested_reviewer` and are ignored.
+        if action == "review_requested" and ref is not None and not pr.get("draft"):
+            notified = _notify_review_requested(
+                owner_inv,
+                repo_inv,
+                pr,
+                payload.get("requested_reviewer"),
+                head_ref,
+                team_ids,
             )
-            return Response({"detail": "repo_mismatch"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if event == "pull_request":
-            pr = payload.get("pull_request") or {}
-            action = payload.get("action")
-            merged = bool(pr.get("merged"))
-            head_ref = ((pr.get("head") or {}).get("ref")) or ""
-            html_url = pr.get("html_url") or ""
-
-            # Drop our Redis-cached lookups of this repo's PRs (and, when a
-            # PR is opened or reopened, its branch list) so the UI sees the
-            # new state on the next fetch. Only for the actions that change
-            # what we cache (state, draft, merged_at, title); a push to an
-            # existing PR (`synchronize`) changes none of it, and used to
-            # throw the branch list away on every push. Comment events skip
-            # this too — they don't touch cached fields.
-            ref = parse_pr_url_full(html_url)
-            # Which tenant this repo may write into. Derived from the PR
-            # url rather than trusted from the payload's `repository`
-            # block for no deep reason — this is the value already parsed
-            # here — but note both are attacker-supplied and the scope is
-            # only as good as the registration lookup they feed.
-            team_ids = []
-            if ref is not None:
-                owner_inv, repo_inv, number_inv = ref
-                if action in _PR_DATA_ACTIONS:
-                    _invalidate_pr_caches(owner_inv, repo_inv, number_inv, head_ref or None)
-                elif action in _PR_DETAIL_ONLY_ACTIONS:
-                    _invalidate_pr_detail(owner_inv, repo_inv)
-                if action in _BRANCH_LIST_ACTIONS:
-                    _invalidate_branch_list(owner_inv, repo_inv)
-                team_ids = _repo_team_ids(owner_inv, repo_inv)
-
-            deliveries = None
-            updated = None
-            if ref is not None:
-                # The same two steps `reconcile_pr_deliveries` runs, so a
-                # recovered event and a live one close tasks by one rule.
-                applied = apply_pull_request(owner_inv, repo_inv, pr, action, team_ids)
-                deliveries, updated = applied["deliveries"], applied["updated"]
-
-            # A reviewer was asked for: tell them through the Inbox and the task (MIP-2054).
-            # Team reviewers (`requested_team`) carry no `requested_reviewer` and are ignored.
-            if action == "review_requested" and ref is not None and not pr.get("draft"):
-                notified = _notify_review_requested(
-                    owner_inv,
-                    repo_inv,
-                    pr,
-                    payload.get("requested_reviewer"),
-                    head_ref,
-                    team_ids,
-                )
-                return Response(
-                    {"detail": "ok", "notified": notified, "deliveries": deliveries},
-                    status=status.HTTP_200_OK,
-                )
-
-            # MVP: only the merge transition fires. Other action types
-            # (opened, ready_for_review, closed-unmerged, etc.) are
-            # acknowledged but not acted on.
-            if action == "closed" and merged and head_ref:
-                updated = updated or 0
-                logger.info(
-                    "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
-                    html_url,
-                    head_ref,
-                    updated,
-                )
-                return Response(
-                    {"detail": "ok", "updated": updated, "deliveries": deliveries},
-                    status=status.HTTP_200_OK,
-                )
-
-            # Record a link activity when a PR is opened (or reopened) on a
-            # branch whose name carries a task's display id. Idempotent, so
-            # a reopen after this already fired won't duplicate the row.
-            if action in ("opened", "reopened") and head_ref:
-                pr_number = pr.get("number")
-                pr_title = pr.get("title") or ""
-                linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title, team_ids)
-                logger.info(
-                    "GitHub webhook: PR %s %s (head=%s) → linked %d task(s)",
-                    action,
-                    html_url,
-                    head_ref,
-                    linked,
-                )
-                return Response(
-                    {"detail": "ok", "linked": linked, "deliveries": deliveries},
-                    status=status.HTTP_200_OK,
-                )
-
-            if deliveries is not None:
-                return Response(
-                    {"detail": "ok", "deliveries": deliveries}, status=status.HTTP_200_OK
-                )
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        # Comment events — record on the auto-linked task's activity feed.
-        # Only `created` actions are recorded; edits/deletes are deferred.
-        if event == "pull_request_review_comment":
-            return self._handle_pr_comment_event(
-                payload=payload,
-                head_ref_source="payload",
-            )
-        if event == "issue_comment":
-            # Only PR comments — plain issue comments are out of scope.
-            issue = payload.get("issue") or {}
-            if not (issue.get("pull_request") or {}).get("html_url"):
-                return Response({"detail": "ignored_non_pr"}, status=status.HTTP_200_OK)
-            return self._handle_pr_comment_event(
-                payload=payload,
-                head_ref_source="fetch",
+            return Response(
+                {"detail": "ok", "notified": notified, "deliveries": deliveries},
+                status=status.HTTP_200_OK,
             )
 
+        # MVP: only the merge transition fires. Other action types
+        # (opened, ready_for_review, closed-unmerged, etc.) are
+        # acknowledged but not acted on.
+        if action == "closed" and merged and head_ref:
+            updated = updated or 0
+            logger.info(
+                "GitHub webhook: PR merged %s (head=%s) → updated %d task(s)",
+                html_url,
+                head_ref,
+                updated,
+            )
+            return Response(
+                {"detail": "ok", "updated": updated, "deliveries": deliveries},
+                status=status.HTTP_200_OK,
+            )
+
+        # Record a link activity when a PR is opened (or reopened) on a
+        # branch whose name carries a task's display id. Idempotent, so
+        # a reopen after this already fired won't duplicate the row.
+        if action in ("opened", "reopened") and head_ref:
+            pr_number = pr.get("number")
+            pr_title = pr.get("title") or ""
+            linked = _record_pr_link_activity(head_ref, html_url, pr_number, pr_title, team_ids)
+            logger.info(
+                "GitHub webhook: PR %s %s (head=%s) → linked %d task(s)",
+                action,
+                html_url,
+                head_ref,
+                linked,
+            )
+            return Response(
+                {"detail": "ok", "linked": linked, "deliveries": deliveries},
+                status=status.HTTP_200_OK,
+            )
+
+        if deliveries is not None:
+            return Response({"detail": "ok", "deliveries": deliveries}, status=status.HTTP_200_OK)
         return Response({"detail": "noop"}, status=status.HTTP_200_OK)
 
-    def _handle_pr_comment_event(self, *, payload: dict, head_ref_source: str) -> Response:
-        """Shared handler for `issue_comment` (PR comments only) and
-        `pull_request_review_comment` events. The two event types differ
-        in how the PR's head ref is obtained (`head_ref_source`):
-
-            "payload" — `pull_request_review_comment` payload already has
-                        `pull_request.head.ref`; use it directly.
-            "fetch"   — `issue_comment` payload has the PR URL but no
-                        head ref; one cached GitHub API call resolves it.
-        """
-        action = payload.get("action")
-        if action != "created":
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        comment = payload.get("comment") or {}
-        if not comment.get("id"):
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        if head_ref_source == "payload":
-            pr = payload.get("pull_request") or {}
-            head_ref = ((pr.get("head") or {}).get("ref")) or ""
-            pr_url = pr.get("html_url") or ""
-            comment_kind = "review"
-        else:
-            issue = payload.get("issue") or {}
-            pr_url = (issue.get("pull_request") or {}).get("html_url") or ""
-            ref = parse_pr_url(pr_url)
-            if ref is None:
-                return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-            owner, repo = ref
-            number = issue.get("number")
-            head_ref = _fetch_pr_head_ref(owner, repo, int(number)) if number else None
-            head_ref = head_ref or ""
-            comment_kind = "issue"
-
-        if not head_ref:
-            logger.info(
-                "GitHub webhook: PR comment skipped — could not resolve head ref (pr=%s)", pr_url
-            )
-            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
-
-        # The `review` branch above never parses the PR url, so resolve
-        # the tenant from it here rather than in each branch — both
-        # arrive with a `pr_url` and nothing else identifying the repo.
-        comment_ref = parse_pr_url(pr_url)
-        team_ids = _repo_team_ids(*comment_ref) if comment_ref else []
-
-        recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind, team_ids)
-        logger.info(
-            "GitHub webhook: %s comment %s (head=%s) → recorded %d activity row(s)",
-            comment_kind,
-            pr_url,
-            head_ref,
-            recorded,
+    # Comment events — record on the auto-linked task's activity feed.
+    # Only `created` actions are recorded; edits/deletes are deferred.
+    if event == "pull_request_review_comment":
+        return _handle_pr_comment_event(
+            payload=payload,
+            head_ref_source="payload",
+            team_ids_for=team_ids_for,
+            head_ref_fetcher=head_ref_fetcher,
         )
-        return Response({"detail": "ok", "recorded": recorded}, status=status.HTTP_200_OK)
+    if event == "issue_comment":
+        # Only PR comments — plain issue comments are out of scope.
+        issue = payload.get("issue") or {}
+        if not (issue.get("pull_request") or {}).get("html_url"):
+            return Response({"detail": "ignored_non_pr"}, status=status.HTTP_200_OK)
+        return _handle_pr_comment_event(
+            payload=payload,
+            head_ref_source="fetch",
+            team_ids_for=team_ids_for,
+            head_ref_fetcher=head_ref_fetcher,
+        )
+
+    return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+
+def _handle_pr_comment_event(
+    *, payload: dict, head_ref_source: str, team_ids_for, head_ref_fetcher=None
+) -> Response:
+    """Shared handler for `issue_comment` (PR comments only) and
+    `pull_request_review_comment` events. The two event types differ
+    in how the PR's head ref is obtained (`head_ref_source`):
+
+        "payload" — `pull_request_review_comment` payload already has
+                    `pull_request.head.ref`; use it directly.
+        "fetch"   — `issue_comment` payload has the PR URL but no
+                    head ref; one cached GitHub API call resolves it.
+    """
+    action = payload.get("action")
+    if action != "created":
+        return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    comment = payload.get("comment") or {}
+    if not comment.get("id"):
+        return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    if head_ref_source == "payload":
+        pr = payload.get("pull_request") or {}
+        head_ref = ((pr.get("head") or {}).get("ref")) or ""
+        pr_url = pr.get("html_url") or ""
+        comment_kind = "review"
+    else:
+        issue = payload.get("issue") or {}
+        pr_url = (issue.get("pull_request") or {}).get("html_url") or ""
+        ref = parse_pr_url(pr_url)
+        if ref is None:
+            return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+        owner, repo = ref
+        number = issue.get("number")
+        fetch = head_ref_fetcher or _fetch_pr_head_ref
+        head_ref = fetch(owner, repo, int(number)) if number else None
+        head_ref = head_ref or ""
+        comment_kind = "issue"
+
+    if not head_ref:
+        logger.info(
+            "GitHub webhook: PR comment skipped — could not resolve head ref (pr=%s)", pr_url
+        )
+        return Response({"detail": "noop"}, status=status.HTTP_200_OK)
+
+    # The `review` branch above never parses the PR url, so resolve
+    # the tenant from it here rather than in each branch — both
+    # arrive with a `pr_url` and nothing else identifying the repo.
+    comment_ref = parse_pr_url(pr_url)
+    team_ids = team_ids_for(*comment_ref) if comment_ref else []
+
+    recorded = _record_pr_comment_activity(head_ref, pr_url, comment, comment_kind, team_ids)
+    logger.info(
+        "GitHub webhook: %s comment %s (head=%s) → recorded %d activity row(s)",
+        comment_kind,
+        pr_url,
+        head_ref,
+        recorded,
+    )
+    return Response({"detail": "ok", "recorded": recorded}, status=status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------
