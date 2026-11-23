@@ -1373,6 +1373,8 @@ def star(user: CustomUser, skill_id: Any) -> bool:
 
     skill = get_readable(user.pk, skill_id)
     with transaction.atomic():
+        # The account row is the lock that makes the daily count one decision.
+        CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         if SkillStar.objects.filter(user=user, skill=skill).exists():
             return False
         hub.require_star_room(user)

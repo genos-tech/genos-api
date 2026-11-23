@@ -121,6 +121,7 @@ def _row(
     # `version_hint` is the published version a list already fetched for all its rows in one query.
     version = None if edits else (version_hint or service.version_for(skill, user_id))
     src = version if version is not None else skill
+    anonymous = skill.visibility == "public" and not edits
     hideable = (
         skill.visibility == "team"
         and skill.status in ("active", "hidden_by_team")
@@ -129,7 +130,9 @@ def _row(
     )
     out: dict[str, Any] = {
         "id": str(skill.id),
-        "teamId": str(skill.team_id),
+        # A public skill names neither the author's team nor the skill it was copied from to a
+        # stranger: the byline is the public handle, nothing that links an author's skills together.
+        "teamId": "" if anonymous else str(skill.team_id),
         "slug": src.slug or skill.slug,
         "title": src.title,
         "description": src.description,
@@ -145,7 +148,9 @@ def _row(
         "publishedVersionNo": skill.published_version_no,
         "source": skill.source,
         "isOfficial": skill.is_official,
-        "forkedFromId": str(skill.forked_from_id) if skill.forked_from_id else None,
+        "forkedFromId": (
+            str(skill.forked_from_id) if skill.forked_from_id and not anonymous else None
+        ),
         "starCount": skill.star_count,
         "runCount30d": skill.run_count_30d,
         "copyCount": skill.copy_count,

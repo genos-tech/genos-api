@@ -712,6 +712,8 @@ class UsesTests(HubBase):
     def setUp(self):
         super().setUp()
         self.skill = self.pub(self.outsider, handle="ana-lopez", slug="open-one")
+        make_eligible(self.user)
+        make_eligible(self.user2)
 
     def runs(self):
         self.skill.refresh_from_db()
@@ -724,6 +726,16 @@ class UsesTests(HubBase):
         hub.record_run(self.outsider, self.skill, 1)
         self.assertEqual(self.runs(), 2)
         self.assertEqual(SkillRunLog.objects.filter(skill=self.skill).count(), 3)
+
+    def test_a_new_or_unverified_account_is_logged_but_does_not_count(self):
+        make_eligible(self.user, days=1)
+        make_eligible(self.user2, verified=False)
+        hub.record_run(self.user, self.skill, 1)
+        hub.record_run(self.user2, self.skill, 1)
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(SkillRunLog.objects.filter(skill=self.skill).count(), 2)
+        hub.refresh_run_counts()
+        self.assertEqual(self.runs(), 0, "the nightly count applies the same rule")
 
     def test_the_nightly_job_makes_it_exact_and_lets_it_fall(self):
         hub.record_run(self.user, self.skill, 1)
@@ -776,6 +788,7 @@ class UsesTests(HubBase):
 
 class AskCountsUseTests(SafetyBase):
     def test_asking_with_a_public_skill_counts_one_use(self):
+        make_eligible(self.user)
         skill = self.public_skill(slug="report", body_markdown="STEP: do it")
         resp, _captured = self.ask({"id": str(skill.id)})
         self.assertEqual(resp.status_code, 200, getattr(resp, "content", b""))
@@ -785,6 +798,154 @@ class AskCountsUseTests(SafetyBase):
         skill.refresh_from_db()
         self.assertEqual(skill.run_count_30d, 1, "the same account twice is one runner")
         self.assertEqual(SkillRunLog.objects.filter(skill=skill).count(), 2)
+
+
+# -- review findings (limits cannot be walked around) ------------------------------------------------
+
+
+class LimitHardeningTests(HubBase):
+    def setUp(self):
+        super().setUp()
+        self.gate_patch.stop()
+        make_eligible(self.user)
+        PublicProfile.objects.create(user=self.user, handle="ana-lopez")
+        tier = mock.patch("origin.search_engine.quota.get_effective_tier", return_value="core")
+        tier.start()
+        self.addCleanup(tier.stop)
+
+    def patch_visibility(self, skill, visibility, **body):
+        self.as_user(self.user)
+        return self.client.patch(
+            detail(skill.id), {"visibility": visibility, **body}, format="json"
+        )
+
+    def test_going_private_and_public_again_does_not_reset_the_publishes_of_the_day(self):
+        skill = service.create(
+            self.user, self.team.team_id, self.fields(visibility="private", slug="walk-around")
+        )
+        with mock.patch.object(hub, "PUBLISHES_PER_DAY", 2):
+            self.assertEqual(
+                self.patch_visibility(skill, "public", acceptTerms=True).status_code, 200
+            )
+            for n in range(1, 3):  # one more version of the public skill: the second of the day
+                self.as_user(self.user)
+                self.client.patch(
+                    detail(skill.id), {"bodyMarkdown": f"# T\n\n1. Step {n}."}, format="json"
+                )
+                res = self.client.post(detail(skill.id, "publish/"), {}, format="json")
+            self.assertEqual(res.status_code, 429, res.content)
+            self.assertEqual(self.patch_visibility(skill, "private").status_code, 200)
+            self.client.patch(detail(skill.id), {"bodyMarkdown": "# T\n\n1. Other."}, format="json")
+            res = self.patch_visibility(skill, "public", acceptTerms=True)
+            self.assertEqual(res.status_code, 429, "private and public again is not a new day")
+            self.assertEqual(res.json()["code"], "publish_limit")
+
+    def test_a_co_editor_publishes_a_public_skill_on_the_owners_account(self):
+        skill = service.create(
+            self.user, self.team.team_id, self.fields(visibility="private", slug="shared-one")
+        )
+        self.assertEqual(self.patch_visibility(skill, "public", acceptTerms=True).status_code, 200)
+        service.add_editor(self.user, skill.id, self.user2.pk)
+        # The co-editor is a brand-new, unverified account with no handle: that is not what the
+        # gate looks at, the owner is.
+        self.as_user(self.user2)
+        self.client.patch(
+            detail(skill.id), {"bodyMarkdown": "# T\n\n1. A better step."}, format="json"
+        )
+        res = self.client.post(detail(skill.id, "publish/"), {"changelog": "Better"}, format="json")
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertFalse(PublicProfile.objects.filter(user=self.user2).exists())
+
+    def test_a_publish_by_a_co_editor_stops_when_the_owner_is_no_longer_eligible(self):
+        skill = service.create(
+            self.user, self.team.team_id, self.fields(visibility="private", slug="shared-two")
+        )
+        self.patch_visibility(skill, "public", acceptTerms=True)
+        service.add_editor(self.user, skill.id, self.user2.pk)
+        make_eligible(self.user, verified=False)
+        self.as_user(self.user2)
+        self.client.patch(detail(skill.id), {"bodyMarkdown": "# T\n\n1. Changed."}, format="json")
+        res = self.client.post(detail(skill.id, "publish/"), {}, format="json")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Verify your email", res.json()["error"])
+
+    def test_the_gate_locks_the_owner_so_parallel_publishes_cannot_both_pass(self):
+        skill = service.create(
+            self.user, self.team.team_id, self.fields(visibility="private", slug="lock-one")
+        )
+        with mock.patch(
+            "django.db.models.query.QuerySet.select_for_update", autospec=True
+        ) as locked:
+            locked.side_effect = lambda qs, *a, **k: qs
+            self.patch_visibility(skill, "public", acceptTerms=True)
+        self.assertTrue(locked.called)
+
+    def test_a_handle_or_display_name_cannot_pose_as_genos_or_an_operator(self):
+        for bad in ("genos-team", "official-skills", "the-admin", "support1", "my-genos"):
+            self.as_user(self.user2)
+            res = self.client.put(PROFILE, {"handle": bad}, format="json")
+            self.assertEqual(res.status_code, 400, bad)
+        self.as_user(self.user2)
+        self.assertEqual(
+            self.client.put(PROFILE, {"handle": "bo-lee"}, format="json").status_code, 200
+        )
+        for bad in ("Genos Official", "Staff Member", "bo@example.com", "call +81 90 1234 5678"):
+            res = self.client.put(PROFILE, {"displayName": bad}, format="json")
+            self.assertEqual(res.status_code, 400, bad)
+        res = self.client.put(PROFILE, {"displayName": "Bo Lee"}, format="json")
+        self.assertEqual(res.json()["profile"]["displayName"], "Bo Lee")
+
+
+class HubPrivacyTests(HubBase):
+    def test_the_offset_is_capped(self):
+        self.pub(self.outsider, slug="one-skill")
+        self.as_user(self.user)
+        res = self.client.get(HUB, {"offset": 10**9})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["skills"], [])
+
+    def test_a_stranger_gets_neither_the_team_id_nor_the_fork_id_of_a_public_skill(self):
+        skill = self.pub(self.outsider, handle="ana-lopez", slug="open-one")
+        forked = service.copy(self.user, skill.id, self.team.team_id)
+        for url in (HUB, detail(skill.id)):
+            res = self.get(url)
+            raw = res.json()
+            row = raw["skills"][0] if "skills" in raw else raw["skill"]
+            self.assertEqual(row["teamId"], "")
+            self.assertIsNone(row["forkedFromId"])
+        # The author and the copier see their own.
+        self.assertEqual(
+            self.get(detail(skill.id), self.outsider).json()["skill"]["teamId"],
+            str(self.other_team.team_id),
+        )
+        mine = self.get(detail(forked.id)).json()["skill"]
+        self.assertEqual(mine["forkedFromId"], str(skill.id))
+
+    def test_the_tag_counts_follow_a_takedown_on_the_very_next_request(self):
+        skill = self.pub(self.outsider, handle="ana-lopez", slug="open-one", tags=["reports"])
+        self.assertEqual([t["tag"] for t in self.get(HUB + "tags/").json()["tags"]], ["reports"])
+        moderation.take_down(self.staff, skill.id, "A test of the takedown.")
+        self.assertEqual(self.get(HUB + "tags/").json()["tags"], [])
+
+    def test_the_tag_counts_skip_a_skill_without_a_public_version(self):
+        skill = self.pub(self.outsider, handle="ana-lopez", slug="open-one", tags=["reports"])
+        Skill.objects.filter(pk=skill.pk).update(public_from_version_no=0)
+        self.assertEqual(self.get(HUB + "tags/").json()["tags"], [])
+
+
+class MigrationBackfillTests(HubBase):
+    def test_the_backfill_writes_the_listing_of_a_skill_that_was_already_public(self):
+        import importlib
+
+        from django.apps import apps
+
+        skill = self.pub(self.outsider, handle="ana-lopez", slug="open-one", title="Roadmap review")
+        Skill.objects.filter(pk=skill.pk).update(hub_text="", hub_tags=[], search_vector=None)
+        self.assertEqual(self.hub_ids(self.user, q="roadmap"), [])
+        migration = importlib.import_module("origin.migrations.0274_skills_hub")
+        migration.backfill_listing(apps, None)
+        self.assertEqual(self.hub_ids(self.user, q="roadmap"), [str(skill.id)])
+        self.assertEqual(self.hub_ids(self.user, tag="reports"), [str(skill.id)])
 
 
 # -- the access rules the Hub adds are the old ones -------------------------------------------------------

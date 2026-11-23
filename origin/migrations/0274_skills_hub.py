@@ -5,7 +5,37 @@ import django.contrib.postgres.search
 import django.db.models.deletion
 import uuid
 from django.conf import settings
+from django.contrib.postgres.search import SearchVector
 from django.db import migrations, models
+from django.db.models import Value
+
+
+def backfill_listing(apps, schema_editor):
+    """Write the directory columns of every skill that is already public from its published
+    version, so a skill made public before the Hub is found by search and tag at once. Inline (no
+    service import): a migration must not depend on code that moves."""
+    Skill = apps.get_model("origin", "Skill")
+    SkillVersion = apps.get_model("origin", "SkillVersion")
+    for skill in Skill.objects.filter(visibility="public", published_version_no__gt=0).iterator():
+        version = SkillVersion.objects.filter(
+            skill_id=skill.pk, version_no=skill.published_version_no
+        ).first()
+        if version is None:
+            continue
+        tags = [str(t) for t in (version.tags or [])]
+        text = " ".join(
+            str(p) for p in [version.title, version.slug, version.description, *tags] if p
+        ).lower()
+        vector = (
+            SearchVector(Value(version.title), weight="A", config="simple")
+            + SearchVector(Value(version.slug), weight="A", config="simple")
+            + SearchVector(Value(version.description), weight="B", config="simple")
+            + SearchVector(Value(" ".join(tags)), weight="B", config="simple")
+            + SearchVector(Value(version.body_markdown), weight="D", config="simple")
+        )
+        Skill.objects.filter(pk=skill.pk).update(
+            hub_text=text, hub_tags=tags, search_vector=vector, last_published_at=version.created_at
+        )
 
 
 class Migration(migrations.Migration):
@@ -96,4 +126,5 @@ class Migration(migrations.Migration):
             model_name='skillrunlog',
             index=models.Index(fields=['skill', 'user', '-created_at'], name='skill_run_skill_idx'),
         ),
+        migrations.RunPython(backfill_listing, migrations.RunPython.noop),
     ]

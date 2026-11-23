@@ -36,8 +36,7 @@ from functools import reduce
 from typing import Any
 
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-from django.core.cache import cache
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import Count, F, Q, QuerySet, Value
 from django.utils import timezone
 
@@ -71,6 +70,7 @@ SORTS = ("stars", "recent", "uses")
 PAGE_SIZE = 24
 PAGE_SIZE_MAX = 48
 QUERY_MAX = 80
+MAX_OFFSET = 1000
 RUN_WINDOW = timedelta(days=30)
 RUN_LOG_KEEP = timedelta(days=90)
 
@@ -98,10 +98,6 @@ RESERVED_HANDLES = frozenset(
         "claude",
     }
 )
-
-TAGS_CACHE_KEY = "skills:hub:tags:v1"
-TAGS_CACHE_SECONDS = 60
-TAGS_SCAN_LIMIT = 5000
 
 
 class HubLimitReached(service.SkillError):
@@ -134,15 +130,30 @@ def clean_handle(value: Any) -> str:
             "The handle may use lower-case letters, digits and single hyphens (for example "
             "`ana-lopez`)."
         )
-    if handle in RESERVED_HANDLES:
+    if handle in RESERVED_HANDLES or _impersonates(handle):
         raise service.SkillError(f"`{handle}` is reserved. Choose another handle.")
     return handle
+
+
+# Words that make a name read like Genos, an operator or an official skill. Matched inside the
+# name with the punctuation taken out, so `genos-team` and `Official Genos` are refused too.
+_IMPERSONATION = ("genos", "official", "admin", "support", "staff", "moderator", "operator")
+
+
+def _impersonates(value: str) -> bool:
+    compact = re.sub(r"[^a-z0-9]", "", value.lower())
+    return any(word in compact for word in _IMPERSONATION)
 
 
 def clean_display_name(value: Any) -> str:
     name = " ".join(str(value or "").split())
     if len(name) > 60:
         raise service.SkillError("The display name may be at most 60 characters.")
+    if name and (_impersonates(name) or _EMAIL_RE.search(name) or _PHONE_RE.search(name)):
+        raise service.SkillError(
+            "The display name cannot look like Genos or an operator, or hold an email address "
+            "or a phone number."
+        )
     return name
 
 
@@ -267,13 +278,17 @@ def content_problems(skill: Skill, markdown: str) -> list[str]:
     return out
 
 
-def _published_today(user_id: Any) -> int:
-    """Versions this account cut on public skills in the last day."""
+def _published_today(owner_id: Any) -> int:
+    """Versions cut in the last day on this account's skills while they were public. Counted from
+    each skill's first public version on, whatever its visibility is NOW (making a skill private
+    and public again does not reset the day), and by the skill's OWNER (a co-editor's publish is
+    the owner's)."""
     since = timezone.now() - timedelta(days=1)
     return SkillVersion.objects.filter(
-        created_by_id=user_id,
+        skill__owner_id=owner_id,
         created_at__gte=since,
-        skill__visibility=VISIBILITY_PUBLIC,
+        skill__public_from_version_no__gt=0,
+        version_no__gte=F("skill__public_from_version_no"),
     ).count()
 
 
@@ -307,10 +322,14 @@ def require_public_gate(
     every problem listed (`problems`), so the checklist can show them together. Called with the skill
     row locked, inside the transaction that makes it public or publishes a public version."""
     require_hub()
-    problems = account_problems(user)
+    # The skill's OWNER is who publishes, whoever presses the button: a co-editor's new version is
+    # the owner's (their plan, their handle, their daily count). The owner's row is locked so two
+    # parallel requests cannot both pass the per-account limits.
+    owner = CustomUser.objects.select_for_update().get(pk=skill.owner_id)
+    problems = account_problems(owner)
     if new_public and accept_terms is not True:
         problems.append("Confirm the content terms and the license before you publish.")
-    profile = get_profile(user.pk)
+    profile = get_profile(owner.pk)
     if profile is None and handle in (None, ""):
         problems.append("Choose a public handle.")
     markdown = service.live_markdown(skill)
@@ -320,8 +339,8 @@ def require_public_gate(
             "This skill cannot be public yet: " + " ".join(problems), problems=problems
         )
     if profile is None:
-        set_profile(user, handle, display_name)
-    require_publish_room(user, skill, new_public=new_public)
+        set_profile(owner, handle, display_name)
+    require_publish_room(owner, skill, new_public=new_public)
 
 
 def checklist(user: CustomUser, skill: Skill) -> list[dict[str, Any]]:
@@ -435,7 +454,7 @@ def directory(
     query = " ".join(str(query or "").split())[:QUERY_MAX]
     tag = str(tag or "").strip().lower()[:24]
     limit = max(1, min(int(limit or PAGE_SIZE), PAGE_SIZE_MAX))
-    offset = max(0, int(offset or 0))
+    offset = max(0, min(int(offset or 0), MAX_OFFSET))
 
     qs: QuerySet[Skill] = Skill.objects.filter(
         visibility=VISIBILITY_PUBLIC,
@@ -466,11 +485,11 @@ def directory(
         qs = qs.annotate(rank=rank)
 
     if sort == "recent":
-        order = [F("last_published_at").desc(nulls_last=True), "-star_count"]
+        order = ["-last_published_at", "-star_count"]
     elif sort == "uses":
-        order = ["-run_count_30d", "-star_count", F("last_published_at").desc(nulls_last=True)]
+        order = ["-run_count_30d", "-star_count", "-last_published_at"]
     else:
-        order = ["-star_count", F("last_published_at").desc(nulls_last=True)]
+        order = ["-star_count", "-last_published_at"]
     if rank is not None and sort == "stars":
         # A search with the default sort: the best match first, then the stars.
         order = ["-rank", *order]
@@ -490,25 +509,22 @@ def directory(
 
 
 def popular_tags(limit: int = 24) -> list[dict[str, Any]]:
-    """The tags of the public skills with their counts, most used first (the filter chips). One
-    column of one slice of the table, counted in Python and cached a minute."""
+    """The tags of the public, active skills with their counts, most used first (the filter chips).
+    One grouped query over the same slice `directory` reads, never cached: a skill that was just
+    taken down or held takes its tags out of the counts on the next request."""
     require_hub()
-    cached = cache.get(TAGS_CACHE_KEY)
-    if isinstance(cached, list):
-        return cached[:limit]
-    counts: dict[str, int] = {}
-    rows = Skill.objects.filter(
-        visibility=VISIBILITY_PUBLIC, status=STATUS_ACTIVE, published_version_no__gt=0
-    ).values_list("hub_tags", flat=True)[:TAGS_SCAN_LIMIT]
-    for tags in rows:
-        for t in tags or []:
-            counts[t] = counts.get(t, 0) + 1
-    out = [
-        {"tag": t, "count": n}
-        for t, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:60]
-    ]
-    cache.set(TAGS_CACHE_KEY, out, TAGS_CACHE_SECONDS)
-    return out[:limit]
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT tag, count(*) AS n
+            FROM {Skill._meta.db_table} AS s, jsonb_array_elements_text(s.hub_tags) AS tag
+            WHERE s.visibility = %s AND s.status = %s
+              AND s.published_version_no > 0 AND s.public_from_version_no > 0
+            GROUP BY tag ORDER BY n DESC, tag LIMIT %s
+            """,  # noqa: S608 - the table name is the model's, the values are parameters
+            [VISIBILITY_PUBLIC, STATUS_ACTIVE, max(1, min(int(limit), 60))],
+        )
+        return [{"tag": tag, "count": n} for tag, n in cursor.fetchall()]
 
 
 def starred_ids(user_id: Any, skills: list[Skill]) -> set[str]:
@@ -545,33 +561,46 @@ def require_star_room(user: CustomUser) -> None:
 # -- uses ----------------------------------------------------------------------------------------
 
 
+def _counts_as_runner(user: Any) -> bool:
+    """The star rule for a use: a verified account at least 3 days old. A brand-new account can
+    still run a skill (and is logged); it just does not count toward the public number."""
+    return bool(getattr(user, "is_email_verified", False)) and _age(user) >= STAR_MIN_AGE
+
+
 def record_run(user: Any, skill: Skill, version_no: int, surface: str = "ask") -> None:
-    """Note that this account ran this skill. Counts the skill's distinct runners of the last 30
-    days incrementally (the nightly command makes it exact). A failure here never stops the run."""
+    """Note that this account ran this skill. Adds to the skill's distinct runners of the last 30
+    days when the account counts and has not run it in that window (the nightly command makes it
+    exact). A failure here never stops the run."""
     try:
         if service.is_owner(skill, getattr(user, "pk", None)):
             return  # running one's own skill is not a use by somebody else
         since = timezone.now() - RUN_WINDOW
         with transaction.atomic():
+            # The skill row is the lock that makes "first run in the window" one decision.
+            Skill.objects.select_for_update().filter(pk=skill.pk).first()
             first = not SkillRunLog.objects.filter(
                 skill=skill, user=user, created_at__gte=since
             ).exists()
             SkillRunLog.objects.create(
                 skill=skill, user=user, version_no=version_no, surface=surface[:16]
             )
-            if first:
+            if first and _counts_as_runner(user):
                 Skill.objects.filter(pk=skill.pk).update(run_count_30d=F("run_count_30d") + 1)
     except Exception:  # noqa: BLE001
         logger.exception("hub: record_run failed for skill=%s", getattr(skill, "pk", None))
 
 
 def refresh_run_counts(now: Any = None) -> dict[str, int]:
-    """Recompute `run_count_30d` (distinct runners, 30 days) for every skill that has or had runs,
-    and drop log rows older than 90 days. The nightly job; safe to run twice."""
+    """Recompute `run_count_30d` (distinct accounts that count, 30 days) for every skill that has
+    or had runs, and drop log rows older than 90 days. The nightly job; safe to run twice."""
     now = now or timezone.now()
     since = now - RUN_WINDOW
     fresh = dict(
-        SkillRunLog.objects.filter(created_at__gte=since)
+        SkillRunLog.objects.filter(
+            created_at__gte=since,
+            user__is_email_verified=True,
+            user__ts_created_at__lte=now - STAR_MIN_AGE,
+        )
         .values("skill_id")
         .annotate(n=Count("user_id", distinct=True))
         .values_list("skill_id", "n")
@@ -581,7 +610,7 @@ def refresh_run_counts(now: Any = None) -> dict[str, int]:
         changed += (
             Skill.objects.filter(pk=skill_id).exclude(run_count_30d=n).update(run_count_30d=n)
         )
-    # Skills whose runs all aged out: back to zero.
+    # Skills whose runs all aged out (or never counted): back to zero.
     stale = (
         Skill.objects.filter(run_count_30d__gt=0)
         .exclude(pk__in=list(fresh))
