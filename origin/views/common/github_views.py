@@ -52,6 +52,7 @@ from origin.services.github_credential import (
     github_credential,
     installation_token,
 )
+from origin.services.github_watched_repos import app_repos, merge_repos, registered_repos
 from origin.services.github_webhooks import (
     forget_unregistered_delivery,
     is_valid_repo_ref,
@@ -1605,9 +1606,10 @@ def _handle_pr_comment_event(
 # branch whose name matches the task's display ID, so the task UI can show
 # them under the Links section without the user having to paste branch URLs.
 #
-# Scoped to repos with an existing `GithubWebhookRegistration` row — i.e.
-# repos this team has already touched via a PR link. That keeps the API
-# fan-out bounded and avoids querying every repo the user can see.
+# Scoped to the repos Genos watches: those with a `GithubWebhookRegistration`
+# row, plus those the GitHub App lists for the requester's teams (MIP-2194).
+# That keeps the API fan-out bounded and avoids querying every repo the user
+# can see.
 
 
 def _branch_match_re(display_id: str) -> re.Pattern[str]:
@@ -2135,6 +2137,14 @@ def _invalidate_branch_list(owner: str, repo: str) -> None:
         logger.exception("Branch list invalidation failed for %s/%s", owner, repo)
 
 
+def _watched_repos(user) -> list[tuple[str, str]]:
+    """The repos a PR-column scan walks (MIP-2194): every legacy hook registration (install-wide,
+    as before) plus the repos the GitHub App lists for the teams the requester is in, so a repo the
+    App covers needs no registration row. Each repo is still read with the requester's own
+    credential (`_CredentialSet`); this only decides which repos are looked at."""
+    return merge_repos(registered_repos(), app_repos(team_ids_for_user(user.id)))
+
+
 def _collect_repo_pulls(
     credentials: _CredentialSet,
     repos,
@@ -2276,7 +2286,7 @@ class GithubBranchesForTaskView(APIView):
             return Response({"branches": []})
 
         pattern = _branch_match_re(display_id)
-        repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+        repos = _watched_repos(request.user)
         bypass_cache = request.GET.get("fresh") == "1"
 
         matches: list[dict] = []
@@ -2361,7 +2371,7 @@ class GithubPullsForTaskView(APIView):
         if not credentials.connected:
             return Response({"pulls": []})
 
-        repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+        repos = _watched_repos(request.user)
         bypass_cache = request.GET.get("fresh") == "1"
         repo_pulls = _collect_repo_pulls(credentials, repos, bypass_cache=bypass_cache)
         pulls = _pulls_for_task(
@@ -2442,7 +2452,7 @@ class GithubPullsForTasksView(APIView):
         if not with_display:
             return Response({"pulls_by_task": pulls_by_task, "incomplete": []})
 
-        repos = GithubWebhookRegistration.objects.values_list("owner", "repo").distinct()
+        repos = _watched_repos(request.user)
         bypass_cache = request.GET.get("fresh") == "1"
         repo_pulls = _collect_repo_pulls(credentials, repos, bypass_cache=bypass_cache)
 

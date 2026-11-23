@@ -12,9 +12,12 @@ the App (they hold a `github_app` connection). By default the command leaves alo
 
   * people with no App connection (`--include-unmoved` includes them: they lose Genos' GitHub
     access until they connect the App);
-  * people who still administer a legacy hook (`registered_by` of a registration): the reconcile
-    cron and `rekey_github_webhooks` use that token for the hook. Deal with the hooks first
-    (`migrate_github_hooks_to_app`), or pass `--include-registrars`.
+  * people whose token a legacy hook registration still needs (`registered_by` of a registration
+    whose hook is still live, or whose repo the GitHub App does not cover): the reconcile cron and
+    `rekey_github_webhooks` use that token. A registrar whose every hook was migrated
+    (`migrate_github_hooks_to_app`) and whose repos the App covers is NOT held back: the cron and
+    the PR scans read those repos with the App's credentials (MIP-2194). Otherwise deal with the
+    hooks first, or pass `--include-registrars`.
 
 `--apply` asks GitHub to delete the OAuth App's grant for each person (which also removes the app
 from their "Authorized OAuth Apps": at their next sign-in with GitHub they see the consent screen
@@ -82,7 +85,7 @@ class Command(BaseCommand):
         self.stdout.write(
             f"{len(plan.eligible)} legacy grant(s) eligible"
             + (f", {len(batch)} in this run (--limit)" if len(batch) != len(plan.eligible) else "")
-            + f"; {len(plan.registrars)} held back (still a hook's administrator); "
+            + f"; {len(plan.registrars)} held back (a legacy hook or an uncovered repo still needs their token); "
             f"{plan.unmoved} with no GitHub App connection"
             + (" (included)" if options["include_unmoved"] else " (not touched)")
         )
