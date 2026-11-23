@@ -42,6 +42,9 @@ from origin.models.common.api_key_models import ApiKey, hash_key
 from origin.services import security_events
 
 KEYWORD = "ApiKey"
+SUSPENDED_MESSAGE = (
+    "This API key is suspended after unusual activity. Its owner can re-enable it in Settings."
+)
 
 # `last_used_at` is a debugging affordance, not an audit record. Writing
 # it on every request would double the write cost of the public API to
@@ -87,6 +90,11 @@ class ApiKeyAuthentication(authentication.BaseAuthentication):
         if user is None or not user.is_active or getattr(user, "is_deleted", False):
             security_events.note_api_key_rejected(_django(request), key, "account_inactive")
             raise exceptions.AuthenticationFailed("Invalid or revoked API key.")
+
+        if key.suspended_at is not None:
+            # A live key paused by the detector (MIP-2259): its owner can re-enable it.
+            security_events.note_api_key_rejected(_django(request), key, "suspended")
+            raise exceptions.AuthenticationFailed(SUSPENDED_MESSAGE)
 
         self._touch(key)
         security_events.note_api_key_used(_django(request), key)

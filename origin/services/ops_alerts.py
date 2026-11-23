@@ -220,6 +220,7 @@ def resolve_quiet(*, now=None) -> int:
 _SECURITY_SUMMARIES = {
     "alert.export": "Account data exported",
     "alert.forbidden_burst": "Burst of refused requests",
+    "alert.read_volume": "Unusual read volume",
 }
 
 

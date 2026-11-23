@@ -4,6 +4,7 @@ from origin.views.common.agent_work_views import AgentWorkView
 from origin.views.common.api_key_views import (
     ApiKeyDetailView,
     ApiKeyListCreateView,
+    ApiKeyResumeView,
     TeamApiKeyDetailView,
     TeamApiKeyListView,
 )
@@ -61,6 +62,7 @@ from origin.views.common.mcp_connection_views import (
     McpConnectionDetailView,
     McpConnectionListView,
     McpConnectionQuietView,
+    McpConnectionResumeView,
     TeamMcpConnectionDetailView,
     TeamMcpConnectionListView,
 )
@@ -502,6 +504,16 @@ urlpatterns = [
     ),
     path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
     path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
+    path(
+        "api/v2/api-keys/<uuid:key_id>/resume/",
+        ApiKeyResumeView.as_view(),
+        name="api_key_resume",
+    ),
+    path(
+        "api/v2/mcp/connections/<uuid:connection_id>/resume/",
+        McpConnectionResumeView.as_view(),
+        name="mcp_connection_resume",
+    ),
     # Connecting an AI app over MCP (MIP-1077): the consent page's two calls.
     path(
         "api/v2/mcp/oauth/consent/context/",
