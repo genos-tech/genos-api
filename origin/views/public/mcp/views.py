@@ -25,7 +25,14 @@ from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.llm import spend as llm_spend
 from origin.search_engine.metered import metered_request
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import agent_calls, mcp_notice, mcp_oauth, member_events, security_events
+from origin.services import (
+    agent_calls,
+    briefing_gate,
+    mcp_notice,
+    mcp_oauth,
+    member_events,
+    security_events,
+)
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
 from origin.views.public.anonymous_throttle import McpAnonymousThrottle
@@ -591,6 +598,43 @@ class McpView(PublicApiView):
         )
 
     def _call_tool(
+        self,
+        params: dict[str, Any],
+        ctx: ToolContext,
+        scope: str,
+        allow_destructive: bool,
+        credential_kind: str = "api_key",
+        request=None,
+        surface: str | None = None,
+    ) -> dict[str, Any]:
+        """One `get_my_briefing` in flight per member (MIP-2092): a second one asked while the
+        first is being built gets a "retry in N seconds" suggestion instead of running a heavy
+        call in parallel (`origin/services/briefing_gate.py`). Every other call goes straight on."""
+        held = None
+        if params.get("name") == briefing_gate.TOOL_NAME:
+            gate = briefing_gate.enter(ctx.team_id, ctx.user_id)
+            if isinstance(gate, briefing_gate.Busy):
+                busy = briefing_gate.busy_result(gate)
+                note_result(request, briefing_gate.TOOL_NAME, busy)
+                trace = getattr(self, "_agent_trace", None)
+                if trace is not None:
+                    trace.result = busy
+                return busy
+            held = gate
+        try:
+            return self._call_tool_ungated(
+                params,
+                ctx,
+                scope,
+                allow_destructive,
+                credential_kind=credential_kind,
+                request=request,
+                surface=surface,
+            )
+        finally:
+            briefing_gate.leave(held)
+
+    def _call_tool_ungated(
         self,
         params: dict[str, Any],
         ctx: ToolContext,
