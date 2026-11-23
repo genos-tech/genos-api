@@ -66,7 +66,7 @@ from origin.search_engine.agent.tools.list_my_mentions import LIST_MY_MENTIONS
 from origin.search_engine.agent.tools.list_today_todos import LIST_TODAY_TODOS
 from origin.search_engine.agent.tools.list_uncompleted_todos import LIST_UNCOMPLETED_TODOS
 from origin.search_engine.chunkers.base import CHAT_TYPE_LABEL
-from origin.services import member_events, section_perf
+from origin.services import member_events, note_scope, section_perf
 from origin.services.channel_scope import chat_note_member_q, readable_chats_qs
 from origin.services.plain_text import body_text, message_text
 from origin.services.user_time import zone_for_user_id
@@ -1618,24 +1618,26 @@ def _did_in(
             team_id=team, editor_id=me, ts_updated_at__gte=since, ts_updated_at__lt=until
         ).order_by("-ts_updated_at")[:EVENT_POOL]
     )
-    note_models = {1: PersonalNoteMaster, 2: TaskNoteMaster, 3: ChatNoteMaster}
-    notes = {
-        (kind, n.note_id): n
-        for kind, model in note_models.items()
-        for n in model.objects.filter(
-            note_id__in={v.note_id for v in versions if v.note_type == kind}, team_id=team
-        )
-    }
     by_note: dict[tuple[int, int], list[Any]] = {}
     # A Genos Skill's body note is not a note to report on (MIP-2121).
     skill_bodies = PersonalNoteMaster.skill_body_ids(
         v.note_id for v in versions if v.note_type == 1
     )
+    # Which notes the member can open now is decided for ALL of them at once, by the one batch
+    # rule `get_note` and the item lines use (`note_scope`), in a fixed number of queries. It was
+    # one `_may_read_note` per note: two to four queries each, hundreds on a busy day (MIP-2202).
+    notes = note_scope.readable_note_rows(
+        ctx,
+        {
+            (v.note_type, v.note_id)
+            for v in versions
+            if not (v.note_type == 1 and v.note_id in skill_bodies)
+        },
+    )
     for v in versions:
-        note = notes.get((v.note_type, v.note_id))
         if v.note_type == 1 and v.note_id in skill_bodies:
             continue
-        if note is not None and _may_read_note(ctx, v.note_type, note):
+        if (v.note_type, v.note_id) in notes:
             by_note.setdefault((v.note_type, v.note_id), []).append(v)
     for (kind, note_id), rows in by_note.items():
         rows.sort(key=lambda v: v.ts_updated_at)
@@ -1870,15 +1872,20 @@ def important_next(
         if not importance.engaged(week):
             return None, importance.briefing_block(prefs, []), importance.excluded(prefs)
         pool = _suggestion_pool(ctx, items, project_id)
-        scored, live = importance.rank(ctx, now, prefs, week, pool, project_id)
+        # One zone and one access object for the whole ranking: each used to look itself up
+        # again in every step (MIP-2202).
+        access = LabelAccess(ctx)
+        scored, live = importance.rank(
+            ctx, now, prefs, week, pool, project_id, zone=zone, access=access
+        )
         top = scored[: importance.TOP_BRIEFING]
-        people = importance.people_counts(ctx, now, [s.task for s in top])
+        people = importance.people_counts(ctx, now, [s.task for s in top], access)
         today = now.astimezone(zone).date()
         shown = [
             importance.shaped(s, _task_row(s.task, today), people, structured=structured)
             for s in top
         ]
-        found = importance.suggestions(ctx, now, prefs, week, pool, scored, live)
+        found = importance.suggestions(ctx, now, prefs, week, pool, scored, live, zone)
         return shown, importance.briefing_block(prefs, found), importance.excluded(prefs)
     except Exception:  # noqa: BLE001 - what matters to the member never fails a briefing
         log.warning("Importance ranking failed; using the plain ranking", exc_info=True)
