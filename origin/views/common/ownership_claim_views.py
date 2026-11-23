@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from origin.models.common.inbox_models import InboxItems
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
+from origin.serializers.common.inbox_serializers import sender_keys
 from origin.services import change_feed
 from origin.services.member_roles import EDITOR, resolve_team_role
 from origin.services.ownership_claim import (
@@ -237,6 +238,7 @@ class TeamOwnershipClaimStatusView(AuthenticatedAPIView):
                     "isRead": item.is_read,
                     "requestStatus": item.request_status,
                     "tsSent": item.ts_created_at.isoformat(),
+                    **sender_keys(item),
                     "itemOptionals": item.item_optionals,
                 },
             }
