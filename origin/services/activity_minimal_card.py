@@ -202,7 +202,7 @@ def minimal_card_activity_ids(activities: Iterable[Any]) -> set:
     the task (the task's rule) or the note (the note's rule).
 
     A fixed number of queries: none when no row is such a mention, at most five for the task
-    rows and, for each type of note present, at most seven (`note_reader_pairs`), however many
+    rows and, for each type of note present, at most eight (`note_reader_pairs`), however many
     rows, recipients and notes."""
     candidates = _candidates(activities)
     if not candidates:

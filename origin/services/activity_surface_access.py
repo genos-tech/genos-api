@@ -41,6 +41,7 @@ from origin.views.utils.note_role import (
     NOTE_TYPE_PERSONAL,
     NOTE_TYPE_TASK,
     readable_note_ids,
+    without_skill_bodies,
 )
 
 # The surfaces this module judges, and the note type each note surface is.
@@ -80,6 +81,9 @@ def _readable_notes(user_id, surface: int, note_ids: set[int]) -> set[int]:
                 "note_id", flat=True
             )
         )
+        # A skill body's owner reads it only while on the skill's team (MIP-2190): the batch
+        # rule below says so, the owner exception does not.
+        owned = without_skill_bodies(owned) if owned else owned
     return owned | readable_note_ids(user_id, _NOTE_TYPE[surface], note_ids - owned)
 
 

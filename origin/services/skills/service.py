@@ -277,6 +277,64 @@ def skill_body_ids(note_ids: Any) -> set[int]:
     return set(Skill.objects.filter(note_id__in=ids).values_list("note_id", flat=True))
 
 
+def skill_body_reader_pairs(user_ids: Any, note_ids: Any) -> tuple[set[int], set[tuple[str, int]]]:
+    """`(skill body note ids among note_ids, the (user id, note id) pairs that can read them)`:
+    `skill_note_role(...)[1] is not None` for many people and notes at once, in four queries at
+    most however many (MIP-2190). The batch checks of `note_role` use it, so they cannot disagree
+    with the single-note rule: the owner reads while on the team, a co-editor while on the team
+    and the skill is not taken down, nobody else does, whatever row they hold."""
+    who = {str(u) for u in user_ids if u}
+    wanted = _note_ids(note_ids)
+    if not who or not wanted:
+        return set(), set()
+    skills = list(
+        Skill.objects.filter(note_id__in=wanted).values("note_id", "owner_id", "team_id", "status")
+    )
+    bodies = {row["note_id"] for row in skills}
+    if not skills:
+        return bodies, set()
+    teams = {row["team_id"] for row in skills}
+    on_team = {
+        (str(team), str(user))
+        for team, user in TeamMembers.objects.filter(
+            team_id__in=teams, attendee_id__in=who, is_deleted=False
+        ).values_list("team_id", "attendee_id")
+    } | {
+        (str(team), str(user))
+        for team, user in TeamMaster.objects.filter(
+            team_id__in=teams, owner_id__in=who
+        ).values_list("team_id", "owner_id")
+    }
+    editing = {
+        (str(user), note)
+        for user, note in NotePermissionMaster.objects.filter(
+            note_type=NOTE_TYPE_PERSONAL, note_id__in=bodies, role_id=ROLE_EDITOR, user_id__in=who
+        ).values_list("user_id", "note_id")
+    }
+    pairs: set[tuple[str, int]] = set()
+    for row in skills:
+        note, team, owner = row["note_id"], str(row["team_id"]), str(row["owner_id"])
+        if owner in who and (team, owner) in on_team:
+            pairs.add((owner, note))
+        if row["status"] != STATUS_TAKEN_DOWN:
+            pairs |= {
+                (user, note)
+                for user in who
+                if user != owner and (user, note) in editing and (team, user) in on_team
+            }
+    return bodies, pairs
+
+
+def _note_ids(note_ids: Any) -> set[int]:
+    out: set[int] = set()
+    for n in note_ids:
+        try:
+            out.add(int(n))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def can_read(skill: Skill, user_id: Any) -> bool:
     """May this member see the skill (its metadata and its published text)."""
     if is_owner(skill, user_id):
