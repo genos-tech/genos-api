@@ -1,0 +1,42 @@
+"""The slugs of the official skills (MIP-2048): reserved, so nobody else can take the name
+after which an official skill runs. Written by `scripts/build_official_skills.py`; a test
+pins it to `official_catalog/manifest.json`."""
+
+OFFICIAL_SLUGS = frozenset(
+    {
+        "account-brief",
+        "assignment-plan",
+        "call-follow-up",
+        "campaign-plan",
+        "campaign-recap",
+        "content-week",
+        "course-plan",
+        "design-handoff",
+        "escalate",
+        "exam-prep",
+        "experiment-log",
+        "feedback-to-tasks",
+        "file-bug",
+        "grading-tracker",
+        "handoff",
+        "investor-update",
+        "launch-checklist",
+        "lesson-prep",
+        "literature-review",
+        "meeting-notes",
+        "pipeline-review",
+        "plan-project",
+        "record-decision",
+        "release-notes",
+        "reprioritize",
+        "research-update",
+        "status-report",
+        "study-plan",
+        "support-digest",
+        "ticket-to-task",
+        "tidy-board",
+        "triage",
+        "ui-check",
+        "write-spec",
+    }
+)
