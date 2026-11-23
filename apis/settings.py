@@ -553,6 +553,27 @@ SIMPLE_JWT = {
 }
 
 
+# Asymmetric session tokens (MIP-2243, rollout in operations/AUTH_SECURITY_PLAN.md
+# §3.3). Everything here is inert at its default: the api signs HS256 with
+# JWT_SECRET_KEY and accepts HS256, exactly as before. See origin/services/jwt_backend.py.
+#   JWT_SIGNING_ALGORITHM  HS256 (default) | RS256 (the switch that changes what is minted)
+#   JWT_PRIVATE_KEY        PEM, api only; needed for RS256
+#   JWT_PUBLIC_KEY         PEM; derived from the private key when absent; lets the api
+#                          ACCEPT RS256 tokens even while it still signs HS256
+#   JWT_ACCEPT_HS256       true (default) | false (the end of the window: HS256 refused)
+#   JWT_KEY_ID             optional `kid` header for later key rotation
+JWT_SIGNING_ALGORITHM = os.environ.get("JWT_SIGNING_ALGORITHM", "HS256").strip().upper() or "HS256"
+JWT_PRIVATE_KEY = os.environ.get("JWT_PRIVATE_KEY", "")
+JWT_PUBLIC_KEY = os.environ.get("JWT_PUBLIC_KEY", "")
+JWT_ACCEPT_HS256 = os.environ.get("JWT_ACCEPT_HS256", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+JWT_KEY_ID = os.environ.get("JWT_KEY_ID", "").strip()
+
+
 def _validate_prod_secrets(
     *, debug: bool, secret_key: str, jwt_signing_key: str, database_url: str | None
 ) -> None:
