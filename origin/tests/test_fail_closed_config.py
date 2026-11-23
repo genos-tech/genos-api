@@ -603,6 +603,7 @@ _PUBLIC_DRF = {
     "api/v2/oauth/<str:provider_name>/initiate/",
     "api/v2/oauth/<str:provider_name>/callback/",
     "api/v2/github/webhook/",
+    "api/v2/github/app/webhook/",
     "api/v2/billing/plans/",
     "api/v2/billing/stripe/webhook/",
     "api/v2/team/invite/preview/",

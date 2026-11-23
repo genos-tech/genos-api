@@ -6,14 +6,24 @@ cannot disagree about them. A view translates `SkillError` to a status code and 
 Access, in one table. "Published" means `published_version_no > 0`; `status` must be `active` for
 anyone but the owner.
 
-| visibility | read, run (when running ships)             | change                      |
-| private    | the owner                                   | the owner                   |
-| team       | a member of the skill's team, NOT a guest   | the owner                   |
-| public     | any signed-in user (needs a version)        | the owner                   |
+| visibility | read, run (when running ships)             | text, details, publish    | rename, share, delete, editors |
+| private    | the owner, the co-editors                   | the owner, the co-editors | the owner |
+| team       | a member of the skill's team, NOT a guest   | the owner, the co-editors | the owner |
+| public     | any signed-in user (needs a version)        | the owner, the co-editors | the owner |
 
-Co-editors (`NotePermissionMaster` rows on the body note) and the team owner's "hide from the
-team" switch belong to the team-sharing task (MIP-2043); this module answers "owner" for every
-write until then.
+Team sharing (MIP-2043):
+
+* A CO-EDITOR is a member of the skill's team the owner invited: an Editor row
+  (`NotePermissionMaster`, role 2) on the skill's body note, valid only while the person is on the
+  team. They read the owner's live draft, edit the text and the details, and publish a new
+  version. They cannot rename the skill, change who it is shared with, delete it or add editors.
+* The TEAM OWNER may hide a team skill from the team (`hidden_by_team`) and show it again. A hidden
+  skill is a 404 for every member but its owner and co-editors; the team owner still sees it, to
+  unhide it. Moving the skill private and back does not clear the hide.
+* The body note answers to the skill, not to the note rules (`skill_note_role`): the owner is its
+  Owner, a co-editor its Editor, everybody else (a stray Viewer row too) has no role.
+* When a member leaves the team or deletes the account, their team skills move to the team owner
+  (`hand_over_team_skills`); their private skills are deleted with the account.
 
 A stranger's id is the same "not found" as a missing one (`get_readable`), so an id never
 confirms that a private or other team's skill exists.
@@ -41,11 +51,14 @@ from django.utils import timezone
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
+from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
 from origin.models.skills.skill_models import (
     EFFORT_CHOICES,
     SOURCE_CHOICES,
     STATUS_ACTIVE,
+    STATUS_HIDDEN_BY_TEAM,
+    STATUS_TAKEN_DOWN,
     TOOL_LEVEL_ACT,
     TOOL_LEVEL_READ,
     VISIBILITY_PRIVATE,
@@ -61,9 +74,13 @@ from origin.search_engine.agent.tools.blocknote_render import blocks_to_markdown
 from origin.services import collab_push
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.services.skills import text
+from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR, ROLE_OWNER
 from origin.views.utils.scope_guards import is_team_member
 
 logger = logging.getLogger(__name__)
+
+# How many co-editors one skill may have. A skill is a short document one team works on.
+MAX_EDITORS = 20
 
 SKILL_FOLDER_NAME = "Skills"
 
@@ -168,10 +185,86 @@ def _published(skill: Skill) -> bool:
     return skill.published_version_no > 0 and skill.status == STATUS_ACTIVE
 
 
+def _editor_rows(note_id: Any):
+    return NotePermissionMaster.objects.filter(
+        note_type=NOTE_TYPE_PERSONAL, note_id=note_id, role_id=ROLE_EDITOR
+    )
+
+
+def is_editor(skill: Skill, user_id: Any) -> bool:
+    """A co-editor: an Editor row on the body note, held by someone who is still on the skill's
+    team. The row alone is not enough (a person who left the team keeps no access even if a row
+    survived), and the owner is not counted here."""
+    if skill.note_id is None or user_id is None or is_owner(skill, user_id):
+        return False
+    if not _editor_rows(skill.note_id).filter(user_id=user_id).exists():
+        return False
+    return is_team_member(skill.team_id, user_id)
+
+
+def is_team_owner(skill: Skill, user_id: Any) -> bool:
+    return TeamMaster.objects.filter(team_id=skill.team_id, owner_id=user_id).exists()
+
+
+def can_edit(skill: Skill, user_id: Any) -> bool:
+    """May this member change the text and details and publish: the owner and the co-editors."""
+    return is_owner(skill, user_id) or (
+        skill.status != STATUS_TAKEN_DOWN and is_editor(skill, user_id)
+    )
+
+
+def reads_draft(skill: Skill, user_id: Any) -> bool:
+    """Whose reading is the live note and the owner's metadata, not the published version."""
+    return is_owner(skill, user_id) or is_editor(skill, user_id)
+
+
+def can_hide(skill: Skill, user_id: Any) -> bool:
+    """May this member hide the skill from, or show it to, the team: the team owner, for a team
+    skill someone else wrote, that no operator has taken over."""
+    return (
+        skill.visibility == VISIBILITY_TEAM
+        and skill.status in (STATUS_ACTIVE, STATUS_HIDDEN_BY_TEAM)
+        and not is_owner(skill, user_id)
+        and is_team_owner(skill, user_id)
+    )
+
+
+def skill_note_role(user_id: Any, note_id: Any) -> tuple[bool, int | None]:
+    """`(is_skill_body, role)` for the note rules (`note_role.get_effective_role`). The body of a
+    skill answers to the skill: its owner is the note's Owner, a co-editor its Editor, and nobody
+    else has a role, whatever row they hold (a Viewer row, a share, an access request)."""
+    skill = Skill.objects.filter(note_id=note_id).first()
+    if skill is None:
+        return False, None
+    if is_owner(skill, user_id):
+        # An owner who has left the team may only delete (`get_owned`), not write into it.
+        return True, ROLE_OWNER if is_team_member(skill.team_id, user_id) else None
+    if skill.status != STATUS_TAKEN_DOWN and is_editor(skill, user_id):
+        return True, ROLE_EDITOR
+    return True, None
+
+
+def skill_body_ids(note_ids: Any) -> set[int]:
+    """Which of these note ids are skill bodies, in one query."""
+    ids = list(note_ids)
+    if not ids:
+        return set()
+    return set(Skill.objects.filter(note_id__in=ids).values_list("note_id", flat=True))
+
+
 def can_read(skill: Skill, user_id: Any) -> bool:
     """May this member see the skill (its metadata and its published text)."""
     if is_owner(skill, user_id):
         return True
+    if is_editor(skill, user_id) and skill.status != STATUS_TAKEN_DOWN:
+        return True  # an invited co-editor reads the draft, private or not
+    if (
+        skill.visibility == VISIBILITY_TEAM
+        and skill.status == STATUS_HIDDEN_BY_TEAM
+        and skill.published_version_no > 0
+        and is_team_owner(skill, user_id)
+    ):
+        return True  # the team owner sees what they hid, to show it again
     if not _published(skill):
         return False
     if skill.visibility == VISIBILITY_PUBLIC:
@@ -192,8 +285,28 @@ def visible_to(user_id: Any) -> Q:
     ) | Q(team_id__in=TeamMaster.objects.filter(owner_id=user_id).values("team_id"))
     published = Q(published_version_no__gt=0, status=STATUS_ACTIVE)
     public = Q(visibility=VISIBILITY_PUBLIC) if public_enabled() else Q(pk__in=[])
-    return Q(owner_id=user_id) | (
-        published & (public | (Q(visibility=VISIBILITY_TEAM) & in_my_teams))
+    # A co-editor (an Editor row on the body note, still on the team) reads the draft, private or
+    # not; the team owner sees the team skills they hid. The same two rules as `can_read`.
+    editing = (
+        Q(
+            note_id__in=NotePermissionMaster.objects.filter(
+                user_id=user_id, note_type=NOTE_TYPE_PERSONAL, role_id=ROLE_EDITOR
+            ).values("note_id")
+        )
+        & in_my_teams
+        & ~Q(status=STATUS_TAKEN_DOWN)
+    )
+    moderating = Q(
+        visibility=VISIBILITY_TEAM,
+        status=STATUS_HIDDEN_BY_TEAM,
+        published_version_no__gt=0,
+        team_id__in=TeamMaster.objects.filter(owner_id=user_id).values("team_id"),
+    )
+    return (
+        Q(owner_id=user_id)
+        | editing
+        | moderating
+        | (published & (public | (Q(visibility=VISIBILITY_TEAM) & in_my_teams)))
     )
 
 
@@ -219,6 +332,26 @@ def get_owned(user_id: Any, skill_id: Any, *, lock: bool = False, need_team: boo
         raise SkillForbidden("You are no longer a member of this skill's team.")
     if lock:
         skill = Skill.objects.select_for_update().get(pk=skill.pk)
+    return skill
+
+
+def get_editable(user_id: Any, skill_id: Any, *, lock: bool = False) -> Skill:
+    """The skill when the member may change its text and details and publish it: the owner or a
+    co-editor, both still on the team. A reader gets a 403, a stranger the "not found". With
+    `lock`, the row is locked and the check is made again on the locked row, so a removal that
+    raced the call is honoured."""
+    skill = get_readable(user_id, skill_id)
+
+    def check(row: Skill) -> None:
+        if not can_edit(row, user_id):
+            raise SkillForbidden("Only the owner and the editors can change this skill.")
+        if not is_team_member(row.team_id, user_id):
+            raise SkillForbidden("You are no longer a member of this skill's team.")
+
+    check(skill)
+    if lock:
+        skill = Skill.objects.select_for_update().get(pk=skill.pk)
+        check(skill)
     return skill
 
 
@@ -588,7 +721,16 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
     shares the skill and so publishes its current text (`_set_visibility`)."""
     require_enabled()
     with transaction.atomic():
-        skill = get_owned(user.pk, skill_id, lock=True)
+        skill = get_editable(user.pk, skill_id, lock=True)
+        if not is_owner(skill, user.pk):
+            # A co-editor writes the text and the details. The name teammates type and who the
+            # skill is shared with stay the owner's.
+            if fields.slug is not None and fields.slug != skill.slug:
+                raise SkillForbidden("Only the owner can rename this skill.")
+            if fields.visibility is not None and fields.visibility != skill.visibility:
+                raise SkillForbidden("Only the owner can change who this skill is shared with.")
+            fields.visibility = None
+            fields.slug = None
         if fields.title is not None:
             skill.title = _wrap(lambda: text.clean_title(fields.title))
         if fields.slug is not None:
@@ -645,7 +787,7 @@ def publish(user: CustomUser, skill_id: Any, *, changelog: str = "") -> SkillVer
     again: the text may have changed since it went public."""
     require_enabled()
     with transaction.atomic():
-        skill = get_owned(user.pk, skill_id, lock=True)
+        skill = get_editable(user.pk, skill_id, lock=True)
         if skill.visibility == VISIBILITY_PRIVATE:
             raise SkillError("A private skill has no readers: share it with your team first.")
         if skill.visibility == VISIBILITY_PUBLIC:
@@ -673,16 +815,23 @@ def _delete_skill_and_note(skill: Skill) -> None:
     skill.delete()
     if note_id is not None:
         try:
-            delete_note(team_id=team_id, family="personal", note_id=note_id)
+            delete_note(team_id=team_id, family="personal", note_id=note_id, skill_body=True)
         except DeleteRefused:  # a body that is already gone is not a failure
             logger.warning("skills: body note %s was already gone", note_id)
 
 
 def erase_for_user(user: CustomUser) -> None:
-    """Account erasure: the person's skills go with them, whatever their visibility, and so do
-    their stars and installs (counters are corrected). The softer hand-over of a team skill to the
-    team owner is the team-sharing task's (MIP-2043); until then nothing of a departed member's
-    is left running on their authority."""
+    """Account erasure. The person's TEAM skills move to the team owner (design section 6: the
+    team keeps what it shares); every other skill of theirs goes with them (private, and a team
+    skill with no live team owner to take it), and so do their stars, installs and co-editor
+    rows (counters are corrected)."""
+    for team_id in set(
+        Skill.objects.filter(owner=user, visibility=VISIBILITY_TEAM).values_list(
+            "team_id", flat=True
+        )
+    ):
+        hand_over_team_skills(team_id, user.pk)
+    drop_editor_rows(user.pk)
     for skill in Skill.objects.filter(owner=user):
         _delete_skill_and_note(skill)
     for star in SkillStar.objects.filter(user=user).select_related("skill"):
@@ -697,6 +846,222 @@ def erase_for_user(user: CustomUser) -> None:
     SkillInstall.objects.filter(user=user).delete()
 
 
+# -- team sharing: co-editors, hide, hand-over ------------------------------------------------------
+
+
+def editors_of(skill: Skill) -> list[CustomUser]:
+    """The co-editors, by name: the Editor rows whose holders are still on the skill's team."""
+    if skill.note_id is None:
+        return []
+    ids = list(_editor_rows(skill.note_id).values_list("user_id", flat=True))
+    if not ids:
+        return []
+    # Who of them is on the team, in one query (the team owner counts as a member).
+    on_team = {
+        str(i)
+        for i in TeamMembers.objects.filter(
+            team_id=skill.team_id, attendee_id__in=ids, is_deleted=False
+        ).values_list("attendee_id", flat=True)
+    } | {
+        str(i)
+        for i in TeamMaster.objects.filter(team_id=skill.team_id, owner_id__in=ids).values_list(
+            "owner_id", flat=True
+        )
+    }
+    return [
+        u
+        for u in CustomUser.objects.filter(pk__in=ids).order_by("username")
+        if str(u.pk) in on_team
+    ]
+
+
+def list_editors(user_id: Any, skill_id: Any) -> list[CustomUser]:
+    """Who edits this skill with its owner. The owner and the co-editors may ask."""
+    require_enabled()
+    skill = get_readable(user_id, skill_id)
+    if not (is_owner(skill, user_id) or is_editor(skill, user_id)):
+        raise SkillForbidden("Only the owner and the editors can see who edits this skill.")
+    return editors_of(skill)
+
+
+def add_editor(user: CustomUser, skill_id: Any, target_id: Any) -> list[CustomUser]:
+    """Invite a member of the skill's team to edit it. The owner only. The person must be on the
+    team now (a guest is not), the owner cannot invite themself, and a skill an operator took down
+    takes no new editors. Idempotent."""
+    require_enabled()
+    with transaction.atomic():
+        skill = get_owned(user.pk, skill_id, lock=True)
+        if skill.status == STATUS_TAKEN_DOWN:
+            raise SkillForbidden("This skill was taken down.")
+        if skill.note_id is None:
+            raise SkillError("This skill has no text to edit.")
+        target = CustomUser.objects.filter(pk=target_id, is_deleted=False).first()
+        # Lock the person's membership row, so a removal that races this invitation either ran
+        # first (and the check below refuses) or runs after (and `drop_editor_rows` ends the row).
+        TeamMembers.objects.select_for_update().filter(
+            team_id=skill.team_id, attendee_id=target_id
+        ).first()
+        # The same sentence for "no such person" and "not on this team": it must not tell which.
+        if target is None or not is_team_member(skill.team_id, target.pk):
+            raise SkillNotFound("That person is not on this team.")
+        if is_owner(skill, target.pk):
+            raise SkillError("The owner already edits this skill.")
+        rows = _editor_rows(skill.note_id)
+        if not rows.filter(user_id=target.pk).exists() and rows.count() >= MAX_EDITORS:
+            raise SkillError(f"A skill may have up to {MAX_EDITORS} editors.")
+        NotePermissionMaster.objects.update_or_create(
+            user=target,
+            note_type=NOTE_TYPE_PERSONAL,
+            note_id=skill.note_id,
+            defaults={"team_id": skill.team_id, "role_id": ROLE_EDITOR},
+        )
+    return editors_of(skill)
+
+
+def remove_editor(user: CustomUser, skill_id: Any, target_id: Any) -> list[CustomUser]:
+    """Take a co-editor's role away. The owner may remove anyone; a co-editor may remove only
+    themself (leave the skill). The note's search chunks are purged: the index stamped the
+    editor as a reader, and the reindex restores them with the narrower list."""
+    require_enabled()
+    with transaction.atomic():
+        skill = get_readable(user.pk, skill_id)
+        leaving = str(target_id) == str(user.pk)
+        if not (is_owner(skill, user.pk) or (leaving and is_editor(skill, user.pk))):
+            raise SkillForbidden("Only the owner can remove an editor.")
+        skill = Skill.objects.select_for_update().get(pk=skill.pk)
+        deleted, _ = _editor_rows(skill.note_id).filter(user_id=target_id).delete()
+        if not deleted:
+            raise SkillNotFound("That person is not an editor of this skill.")
+    _search_narrowed([skill.note_id])
+    return editors_of(skill)
+
+
+def _search_narrowed(note_ids: list[int]) -> None:
+    """Who may read these body notes got smaller: drop their chunks and touch the notes, so the
+    incremental reindex restores them with the narrower ACL. Best effort; the sweep retries."""
+    from origin.search_engine.purge import purge_note  # noqa: PLC0415 - search_engine is heavy
+
+    for note_id in note_ids:
+        purge_note("personal", note_id)
+    PersonalNoteMaster.objects.filter(note_id__in=note_ids).update(ts_updated_at=timezone.now())
+
+
+def drop_editor_rows(user_id: Any, team_id: Any = None) -> int:
+    """The person left a team (or the account): end their co-editing there. `team_id=None` = every
+    team. `revoke_team_note_roles` does not reach a skill's hidden folder, so this does."""
+    skills = Skill.objects.filter(note_id__isnull=False)
+    if team_id is not None:
+        skills = skills.filter(team_id=team_id)
+    rows = NotePermissionMaster.objects.filter(
+        user_id=user_id,
+        note_type=NOTE_TYPE_PERSONAL,
+        role_id=ROLE_EDITOR,
+        note_id__in=skills.values("note_id"),
+    )
+    note_ids = list(rows.values_list("note_id", flat=True))
+    if not note_ids:
+        return 0
+    deleted, _ = rows.delete()
+    _search_narrowed(note_ids)
+    return deleted
+
+
+def set_hidden(user: CustomUser, skill_id: Any, hidden: bool) -> Skill:
+    """The team owner hides a team skill from the team, or shows it again. The status is
+    `hidden_by_team`; it never overwrites an operator's (`reported_hidden`, `taken_down`) and an
+    owner's own change of visibility does not clear it. The skill's owner and co-editors keep
+    editing it; everybody else gets the "not found"."""
+    require_enabled()
+    with transaction.atomic():
+        skill = get_readable(user.pk, skill_id)
+        if is_owner(skill, user.pk):
+            raise SkillForbidden("This is your own skill: make it private instead of hiding it.")
+        if not is_team_owner(skill, user.pk):
+            raise SkillForbidden("Only the team owner can hide a team skill.")
+        skill = Skill.objects.select_for_update().get(pk=skill.pk)
+        if skill.visibility != VISIBILITY_TEAM:
+            raise SkillError("Only a team skill can be hidden from the team.")
+        if skill.status not in (STATUS_ACTIVE, STATUS_HIDDEN_BY_TEAM):
+            raise SkillConflict("An operator is looking at this skill: it cannot be changed here.")
+        wanted = STATUS_HIDDEN_BY_TEAM if hidden else STATUS_ACTIVE
+        if skill.status != wanted:
+            skill.status = wanted
+            skill.save(update_fields=["status", "updated_at"])
+            logger.info("skills: team owner %s set skill %s to %s", user.pk, skill.pk, skill.status)
+    return skill
+
+
+def hand_over_team_skills(team_id: Any, leaver_id: Any) -> int:
+    """The leaver's TEAM skills in this team move to the team owner (design section 6). Each moves
+    with its body note (owner, hidden folder), its versions, stars and copies; the co-editors stay;
+    the name is made free for the new owner if they already use it. The new owner's plan count is
+    not checked: this is a hand-over, not a new skill. With no other live team owner there is
+    nobody to take them and nothing changes (the caller then deletes). Returns how many moved."""
+    team = (
+        TeamMaster.objects.filter(team_id=team_id, is_deleted=False).select_related("owner").first()
+    )  # a team that is closing has nobody to hand over to: its skills go with it
+    heir = team.owner if team else None
+    if heir is None or str(heir.pk) == str(leaver_id) or heir.is_deleted:
+        return 0
+    moved = 0
+    with transaction.atomic():
+        skills = list(
+            Skill.objects.select_for_update().filter(
+                team_id=team_id, owner_id=leaver_id, visibility=VISIBILITY_TEAM
+            )
+        )
+        for skill in skills:
+            if skill.note_id is not None:
+                folder = _skill_folder(heir, team_id)
+                NotePermissionMaster.objects.filter(
+                    note_type=NOTE_TYPE_PERSONAL, note_id=skill.note_id, user_id=heir.pk
+                ).delete()  # an Editor row of the heir: they own it now
+                note = PersonalNoteMaster.objects.filter(note_id=skill.note_id).first()
+                if note is not None:
+                    note.owner = heir
+                    note.folder_id = folder.folder_id
+                    note.save(update_fields=["owner", "folder_id", "ts_updated_at"])
+            if not _slug_free(team_id, heir.pk, skill.slug):
+                skill.slug = _free_slug(team_id, heir.pk, skill.slug)
+            skill.owner = heir
+            fields = ["owner", "slug", "updated_at"]
+            if skill.status == STATUS_HIDDEN_BY_TEAM:
+                # The team owner is the one who hid it and is now its owner, who cannot show their
+                # own skill again (`set_hidden`): the hide ends with the hand-over.
+                skill.status = STATUS_ACTIVE
+                fields.append("status")
+            skill.save(update_fields=fields)
+            moved += 1
+        note_ids = [s.note_id for s in skills if s.note_id is not None]
+        if note_ids:
+            # The index stamped the old owner as the note's reader.
+            transaction.on_commit(lambda: _search_narrowed(note_ids))
+    return moved
+
+
+def attribution(skill: Skill, user_id: Any) -> dict[str, Any] | None:
+    """Where a copy came from, for the page of the copy: `None` for a skill that is not a copy (or
+    whose original is gone), the original's title, author and version when the viewer may still read
+    it, else `{"available": False}`: a skill that went private must not keep telling people its
+    title."""
+    if skill.forked_from_id is None:
+        return None
+    origin = Skill.objects.select_related("owner").filter(pk=skill.forked_from_id).first()
+    out: dict[str, Any] = {"versionNo": skill.forked_from_version_no}
+    if origin is None or not can_read(origin, user_id):
+        return {**out, "available": False}
+    version = None if reads_draft(origin, user_id) else version_for(origin, user_id)
+    out.update(
+        available=True,
+        id=str(origin.pk),
+        title=(version.title if version else origin.title),
+        ownerName=(
+            origin.owner.username if origin.owner_id and origin.visibility != "public" else ""
+        ),
+    )
+    return out
+
+
 # -- reading --------------------------------------------------------------------------------------
 
 
@@ -708,19 +1073,19 @@ def version_for(skill: Skill, user_id: Any) -> SkillVersion | None:
 
 
 def body_markdown_for(skill: Skill, user_id: Any) -> str:
-    """The owner reads the live note; everybody else the published version."""
-    if is_owner(skill, user_id):
+    """The owner and the co-editors read the live note; everybody else the published version."""
+    if reads_draft(skill, user_id):
         return live_markdown(skill)
     version = version_for(skill, user_id)
     return version.body_markdown if version else ""
 
 
 def _readable_versions(skill: Skill, user_id: Any) -> QuerySet[SkillVersion]:
-    """The versions this member may open. The owner: all. A reader: up to the published one,
-    never a draft cut ahead of it; and for a PUBLIC skill only from the version that passed the
-    public checklist (`public_from_version_no`), never the team-only history before it."""
+    """The versions this member may open. The owner and the co-editors: all. A reader: up to the
+    published one, never a draft cut ahead of it; and for a PUBLIC skill only from the version that
+    passed the public checklist (`public_from_version_no`), never the team-only history before it."""
     qs = skill.versions.all()
-    if is_owner(skill, user_id):
+    if reads_draft(skill, user_id):
         return qs
     qs = qs.filter(version_no__lte=skill.published_version_no)
     if skill.visibility == VISIBILITY_PUBLIC:
@@ -775,13 +1140,14 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
     _require_member(user, team_id)
     if tab == "mine":
         return base.filter(owner=user, team_id=team_id).order_by("-updated_at")
+    # What the team page shows: the published team skills of teammates, plus the skills the member
+    # co-edits (a private one the owner invited them to included) and, for the team owner, the team
+    # skills they hid. `visible_to` already holds exactly those rules; this narrows it to the team
+    # and to somebody else's skills.
     return (
-        base.filter(
-            team_id=team_id,
-            visibility=VISIBILITY_TEAM,
-            published_version_no__gt=0,
-            status=STATUS_ACTIVE,
-        )
+        base.filter(team_id=team_id)
+        .filter(visible_to(user.pk))
+        .exclude(visibility=VISIBILITY_PUBLIC)
         .exclude(owner=user)
         .annotate(shown_at=published_at)
         .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
@@ -797,6 +1163,15 @@ def copy(user: CustomUser, skill_id: Any, team_id: Any) -> Skill:
     who can read a skill can copy it (the owner included: a fork of one's own)."""
     require_enabled()
     source = get_readable(user.pk, skill_id)
+    if not is_owner(source, user.pk):
+        if source.visibility == VISIBILITY_PRIVATE:
+            # A co-editor was invited to work on it, not to take it elsewhere (design section 6).
+            raise SkillForbidden("Only the owner can copy a private skill.")
+        if source.status != STATUS_ACTIVE:
+            raise SkillForbidden("This skill is hidden from the team.")
+        if source.visibility == VISIBILITY_TEAM and str(source.team_id) != str(team_id):
+            # A team's skill stays in its team: cross-team sharing is the Hub's job (public skills).
+            raise SkillForbidden("A team skill can only be copied into its own team.")
     version = version_for(source, user.pk) if not is_owner(source, user.pk) else None
     if is_owner(source, user.pk):
         markdown = live_markdown(source)
@@ -911,7 +1286,7 @@ def export_file(user_id: Any, skill_id: Any) -> tuple[str, str]:
     """`(slug, SKILL.md text)`: a reader gets the published version's name and words."""
     require_enabled()
     skill = get_readable(user_id, skill_id)
-    version = None if is_owner(skill, user_id) else version_for(skill, user_id)
+    version = None if reads_draft(skill, user_id) else version_for(skill, user_id)
     markdown = body_markdown_for(skill, user_id)
     description = version.description if version else skill.description
     slug = (version.slug if version else "") or skill.slug

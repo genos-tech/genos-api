@@ -53,6 +53,9 @@ def _resolve_note_for_summary(summary: NoteSummary):
             note = PersonalNoteMaster.objects.get(note_id=summary.note_id)
         except PersonalNoteMaster.DoesNotExist:
             return None, set()
+        # A skill's body note is never indexed, nor is a summary of it (MIP-2121).
+        if PersonalNoteMaster.skill_body_ids([summary.note_id]):
+            return None, set()
         owner_id = getattr(note, "owner_id", None)
         acl = personal_note_acl_user_ids(owner_id=owner_id, note_id=summary.note_id)
         return note, acl
