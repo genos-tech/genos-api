@@ -50,11 +50,16 @@ length, at most `MAX_SECTIONS` sections of `MAX_ITEMS` items, and a link is kept
 is an app path (`/workspace/...`) or an `https` URL. Anything else is dropped, never
 repaired. The client shows every string as plain text and checks a link again.
 
-## An empty report is still delivered
+## A quiet day files nothing (MIP-1417)
 
-A daily summary that says "Nothing is overdue" is an answer; silence looks like a broken
-schedule. So a report with no items is filed too, with the job's own summary (or a short
-default). The member who does not want it edits the schedule.
+A report that says "Nothing is overdue" is not worth a push at nine every morning: a member
+learns to ignore the schedule, and then misses the day it matters. A job marks such a run
+`quiet` (nothing a person could act on). A SCHEDULED run of a quiet report files no Inbox item,
+sends no push and posts nothing in a chat; the schedule's `last_result` says it ran with 0
+items, so the Schedules page does not read as a broken schedule. "Run now" (no `run_at`) still
+files the report: the member asked, and the answer "nothing" is the answer. A report that paid
+for AI is always filed, so the cost is never hidden. A job that does not set `quiet` is filed
+as before, whatever it holds (a report with no items still gets the job's summary).
 
 ## At-least-once
 
@@ -302,6 +307,19 @@ def _run_key(run_at: datetime) -> str:
     return run_at.astimezone(dt_timezone.utc).isoformat()
 
 
+def is_quiet_tick(report: Report, run_at: datetime | None) -> bool:
+    """A scheduled run (not "Run now") of a report the job marked `quiet`, that spent no AI."""
+    return run_at is not None and report.get("quiet") is True and not report.get("ai_request_id")
+
+
+def _note_quiet(schedule: MemberSchedule, body: dict[str, Any]) -> None:
+    """Remember on the schedule that a run found nothing to report, and file nothing."""
+    result = {"title": body["title"], "items": 0}
+    MemberSchedule.objects.filter(pk=schedule.pk).update(last_result=result)
+    schedule.last_result = result
+    log.info("schedule_quiet schedule=%s", schedule.id)
+
+
 CHAT_MARKER = "scheduleReport"
 
 
@@ -376,6 +394,9 @@ def deliver_to_chat(
         raise ScheduleRunError(why)
 
     body = clean_report(report, schedule.name)
+    if is_quiet_tick(report, run_at):
+        _note_quiet(schedule, body)
+        return None
     delivered = sum(len(section["items"]) for section in body["sections"])
     result = {"title": body["title"], "items": delivered}
     key = _chat_key(schedule, run_at) if run_at is not None else None
@@ -422,6 +443,9 @@ def deliver(
     if schedule.deliver_channel_id:
         return deliver_to_chat(schedule, report, run_at=run_at)
     body = clean_report(report, schedule.name)
+    if is_quiet_tick(report, run_at):
+        _note_quiet(schedule, body)
+        return None
     delivered = sum(len(section["items"]) for section in body["sections"])
     result = {"title": body["title"], "items": delivered}
     optionals: dict[str, Any] = {

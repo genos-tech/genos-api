@@ -148,6 +148,12 @@ class Report(TypedDict):
     # not reachable from this process): a short code. A run that spent nothing says so instead
     # of naming a request, and its report is filed plain (no `ai` block, "No AI used").
     ai_skipped: NotRequired[str]
+    # True when the run found nothing worth the member's attention (MIP-1417): no section a person
+    # could act on. A scheduled run (a tick) of such a report files no Inbox item, sends no push and
+    # posts nothing in a chat; "Run now" still files it, so a member who asks sees the answer. A
+    # report that paid for AI is filed regardless (the cost must be visible). Left out by a job
+    # that has no such notion: the report is filed as before.
+    quiet: NotRequired[bool]
 
 
 @dataclass(frozen=True)

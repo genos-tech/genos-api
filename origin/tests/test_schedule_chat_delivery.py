@@ -293,6 +293,9 @@ class TestRunning(ChatBase):
         self.assertEqual(push.call_count, 1)
 
     def test_a_repeat_of_one_scheduled_run_posts_once_and_run_now_posts_every_time(self):
+        # Something to say: a blocked task. A project with nothing to report posts nothing on a
+        # scheduled run (MIP-1417, test_report_outputs_mip1417).
+        self.make_task("Waiting on the vendor", status="Blocked")
         sched = self.save(self.pm)
         at = timezone.now().replace(microsecond=0)
         self.assertEqual(self.run_it(sched, run_at=at)[0], "ok")

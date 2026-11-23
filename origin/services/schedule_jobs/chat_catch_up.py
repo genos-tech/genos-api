@@ -23,18 +23,11 @@ from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMembe
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services.channel_scope import chat_member_q
 from origin.services.schedule_jobs import AUDIENCE_KEY, Job, Report, register_job
-from origin.services.schedule_jobs.report_kit import Links, item, more
+from origin.services.schedule_jobs.report_kit import Links, counted, item, more, span
 
 DEFAULT_HOURS = 24
 MAX_LIST = 8
 MIN_BUSY = 3
-
-
-def _span(hours: int) -> str:
-    days, rest = divmod(hours, 24)
-    if days and not rest:
-        return "1 day" if days == 1 else f"{days} days"
-    return "1 hour" if hours == 1 else f"{hours} hours"
 
 
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
@@ -90,14 +83,16 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     return {
         "title": "Group chat catch-up",
         "summary": (
-            f"{len(busy)} busy group chat(s) in the last {_span(hours)}."
+            f"{counted(len(busy), 'busy group chat')} in the last {span(hours)}."
             if busy
-            else f"No group chat was busy in the last {_span(hours)}."
+            else f"No group chat was busy in the last {span(hours)}."
         ),
-        "sections": [{"heading": "Busy group chats", "key": "messages", "items": rows}]
+        # The section's key is the headline chip's key, so the chip is named by the heading.
+        "sections": [{"heading": "Busy group chats", "key": "chats", "items": rows}]
         if rows
         else [],
         "stats": [{"key": "chats", "count": len(busy)}] if busy else [],
+        "quiet": not busy,
     }
 
 

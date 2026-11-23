@@ -16,7 +16,14 @@ from django.utils import timezone
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.services import briefing
 from origin.services.schedule_jobs import Job, Report, ReportSection, register_job
-from origin.services.schedule_jobs.report_kit import Links, arrange, clip, item, plain
+from origin.services.schedule_jobs.report_kit import (
+    Links,
+    arrange,
+    clip,
+    dedupe_tasks,
+    item,
+    plain,
+)
 from origin.services.user_time import zone_for_user_id
 
 # A report has more room than the briefing, which is sized for a model's context.
@@ -165,10 +172,13 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     ]
     said = [f"{n} {one if n == 1 else many}" for n, one, many in facts if n]
     summary = f"{', '.join(said)}." if said else f"Nothing saved in Genos for {day} yet."
+    # A task the member changed and also opened with their AI app is one line, in "Tasks" (MIP-1417).
+    sections = dedupe_tasks(sections, ("tasks",))
     return {
         "title": f"What you did {day}, {did['local_date']}",
         "summary": clip(summary),
         "sections": sections,
+        "quiet": not sections,
         "stats": [
             {"key": key, "count": n}
             for key, n in (
