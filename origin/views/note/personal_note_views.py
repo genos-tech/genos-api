@@ -66,10 +66,13 @@ class AllPersonalNotesView(AuthenticatedAPIView):
             team=data["team_id"],
             scope__in=[PersonalNoteFolder.SCOPE_TEAM, PersonalNoteFolder.SCOPE_SKILL],
         ).values_list("folder_id", flat=True)
+        # ... and so does a sub-note anywhere under one (MIP-2191): it has no folder of its own.
+        skill_subtree = PersonalNoteMaster.skill_subtree_ids(owner_id=data["user_id"])
 
         personal_notes = (
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
             .exclude(folder_id__in=team_folder_ids)
+            .exclude(note_id__in=skill_subtree)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 roleId=Value(ROLE_OWNER, output_field=IntegerField()),
@@ -122,10 +125,13 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
             team=data["team_id"],
             scope__in=[PersonalNoteFolder.SCOPE_TEAM, PersonalNoteFolder.SCOPE_SKILL],
         ).values_list("folder_id", flat=True)
+        # ... and so does a sub-note anywhere under one (MIP-2191): it has no folder of its own.
+        skill_subtree = PersonalNoteMaster.skill_subtree_ids(owner_id=data["user_id"])
 
         personal_notes = (
             PersonalNoteMaster.objects.filter(team=data["team_id"], owner=data["user_id"])
             .exclude(folder_id__in=team_folder_ids)
+            .exclude(note_id__in=skill_subtree)
             .annotate(
                 noteType=Value(NOTE_TYPE, output_field=IntegerField()),
                 noteId=F("note_id"),
@@ -173,6 +179,18 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
             return res
 
         data["parent_note_id"] = request.data.get("parent_note_id")
+        # A skill's text belongs to the Skills editor (MIP-2040): nothing is nested under its body
+        # note, whose sub-pages would be indexed and listed as ordinary notes (MIP-2191).
+        if data["parent_note_id"] is not None and PersonalNoteMaster.skill_body_ids(
+            [data["parent_note_id"]]
+        ):
+            return Response(
+                {
+                    "error": "A skill's note takes no sub-notes. Create the note at the top "
+                    "level of My Notes instead."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Optional folder placement — "New note here" on a sidebar
         # folder. A PERSONAL folder must be the caller's own, so a note
@@ -204,6 +222,13 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             folder_scope = folder["scope"]
+            if folder_scope == PersonalNoteFolder.SCOPE_SKILL:
+                # The hidden folder a skill's body lives in is not a place to file notes
+                # (MIP-2191); to the caller it is not a folder at all.
+                return Response(
+                    {"error": "Target folder not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             if folder_scope == PersonalNoteFolder.SCOPE_TEAM:
                 role = get_folder_role(request_user_id, folder_id, folder["team_id"])
                 if role is None or role > ROLE_EDITOR:
