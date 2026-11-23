@@ -259,6 +259,9 @@ class TestTheOtherReports(JobBase):
         links = [i["link"] for s in report["sections"] for i in s["items"] if i.get("link")]
         self.assertEqual(links.count(self.task_link(task)), 1)
         self.assertEqual([s["heading"] for s in report["sections"]], ["Tasks"])
+        # What is counted is what is listed: no chip or summary for a section that is not there.
+        self.assertNotIn("looked_at", {s["key"] for s in report["stats"]})
+        self.assertNotIn("looked at", report["summary"])
 
 
 class TestProjectUpdates(JobBase):
@@ -343,6 +346,18 @@ class TestMilestoneUpdates(JobBase):
         self.assertEqual(headings[0], "Waiting on blockers")
         self.assertEqual(headings[-1], "Where it stands")
         self.assertFalse(report["quiet"])
+
+    def test_the_changed_count_is_what_the_changed_list_holds(self):
+        waiting = self.make_task("Waiting", milestone=self.milestone, status="Blocked")
+        blocker = self.make_task("Their part", assignee=self.user2, milestone=self.milestone)
+        TaskDependency.objects.create(blocker_task=blocker, blocked_task=waiting)
+        self.comment(waiting, self.user2, "any news", at=self.ago(hours=1))
+        self.comment(blocker, self.user2, "on it", at=self.ago(hours=1))
+        report = self.run_mu()
+        changed = self.section(report, "Changed in the last 7 days")
+        self.assertEqual(len(changed), 1)  # the blocked task is under "Waiting on blockers"
+        self.assertEqual({s["key"]: s["count"] for s in report["stats"]}["changed"], 1)
+        self.assertTrue(report["summary"].startswith("1 task changed"))
 
     def test_nothing_changed_and_nothing_blocked_is_quiet(self):
         self.make_task("Waiting for its turn", milestone=self.milestone)
@@ -475,6 +490,24 @@ class TestAQuietDayFilesNothing(ChatBase):
         item = schedule_delivery.deliver(sched, report, run_at=self.now)
         self.assertIsNotNone(item)
         self.assertEqual(item.item_body["text"], schedule_delivery.DEFAULT_SUMMARY)
+
+    def test_the_schedule_says_the_run_was_quiet(self):
+        sched = self.inbox_schedule()
+        self.tick(sched)
+        sched.refresh_from_db()
+        self.assertEqual(sched.last_result["quiet"], True)
+
+    def test_an_ai_job_that_names_no_cost_is_not_hidden_by_a_quiet_day(self):
+        # An AI report must say what it cost (`require_cost`) or why it cost nothing. A job that
+        # forgets is found by a failed run, not skipped because the day was quiet.
+        sched = self.inbox_schedule(ai_sentences=True)
+        report = {"title": "t", "summary": "", "sections": [], "quiet": True}
+        with self.assertRaises(Exception):  # noqa: B017 (require_cost's own error)
+            schedule_delivery.deliver(sched, report, run_at=self.now)
+        self.assertIsNone(
+            schedule_delivery.deliver(sched, {**report, "ai_skipped": "off"}, run_at=self.now)
+        )
+        self.assertEqual(self.filed().count(), 0)
 
     def test_a_quiet_report_that_paid_for_ai_is_never_hidden(self):
         report = {"title": "t", "summary": "", "sections": [], "quiet": True}

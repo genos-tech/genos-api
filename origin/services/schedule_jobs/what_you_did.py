@@ -162,18 +162,20 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
             }
         )
 
+    # A task the member changed and also opened with their AI app is one line, in "Tasks" (MIP-1417).
+    sections = dedupe_tasks(sections, ("tasks",))
+    # What is counted is what is listed: the AI app's rows that are left after that.
+    looked_n = sum(len(s["items"]) for s in sections if s.get("key") == "looked_at")
     totals = did["totals"]
     facts = [
         (totals["items"], "item", "items"),
         (totals["comments"], "comment", "comments"),
         (totals["todos_done"], "to-do finished", "to-dos finished"),
         (totals["messages"], "message sent", "messages sent"),
-        (len(looked), "item looked at with your AI app", "items looked at with your AI app"),
+        (looked_n, "item looked at with your AI app", "items looked at with your AI app"),
     ]
     said = [f"{n} {one if n == 1 else many}" for n, one, many in facts if n]
     summary = f"{', '.join(said)}." if said else f"Nothing saved in Genos for {day} yet."
-    # A task the member changed and also opened with their AI app is one line, in "Tasks" (MIP-1417).
-    sections = dedupe_tasks(sections, ("tasks",))
     return {
         "title": f"What you did {day}, {did['local_date']}",
         "summary": clip(summary),
@@ -186,7 +188,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
                 ("comments", totals["comments"]),
                 ("todos_done", totals["todos_done"]),
                 ("messages", totals["messages"]),
-                ("looked_at", len(looked)),
+                ("looked_at", looked_n),
             )
             if n
         ],

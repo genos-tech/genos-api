@@ -197,9 +197,15 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     news = any(s["key"] in ("blocked", "changed") for s in sections)
     sections.append({"heading": "Where it stands", "key": "where_it_stands", "items": stands})
 
+    # The count matches the list: a changed task that is listed under "Waiting on blockers" is
+    # that line, not a second one under "Changed".
+    under_blockers = {
+        i["task_id"] for i in (by_key.get("blocked") or {"items": []})["items"] if i.get("task_id")
+    }
+    changed_n = len([t for t in by_task if t not in under_blockers])
     title = summary.get("title") or "Milestone"
     line = (
-        f"{counted(len(by_task), 'task')} changed in the last {span(hours)}; "
+        f"{counted(changed_n, 'task')} changed in the last {span(hours)}; "
         f"{summary['total_tasks']} in all."
     )
     return {
@@ -211,7 +217,7 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         "stats": [
             {"key": key, "count": n}
             for key, n in (
-                ("changed", len(by_task)),
+                ("changed", changed_n),
                 ("overdue", summary.get("overdue_count") or 0),
             )
             if n

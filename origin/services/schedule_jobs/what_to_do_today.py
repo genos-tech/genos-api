@@ -358,8 +358,16 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
         # sentence is written for an AI client: "Direct them to Settings"). A calendar that
         # SHOULD be there and could not be read is not "no meetings", and the member must know:
         # one short line in plain words, never the tool's own message.
-        if "is not connected" not in str(calendar["note"]):
-            add("On your calendar", [item("Not shown: the calendar could not be read right now.")])
+        note = str(calendar["note"])
+        if "is not connected" not in note:
+            # Connected but Calendar access was never granted is a state the member can fix, so
+            # the line says where; anything else is "could not be read".
+            line = (
+                "Not shown: Calendar access has not been granted (Settings → Integrations)."
+                if "access hasn't been granted" in note
+                else "Not shown: the calendar could not be read right now."
+            )
+            add("On your calendar", [item(line)])
             notice = sections[-1]
     else:
         add("On your calendar", _calendar_items(calendar, zone))

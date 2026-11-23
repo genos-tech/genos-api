@@ -312,9 +312,17 @@ def is_quiet_tick(report: Report, run_at: datetime | None) -> bool:
     return run_at is not None and report.get("quiet") is True and not report.get("ai_request_id")
 
 
+def _ai_unaccounted(schedule: MemberSchedule, report: Report) -> bool:
+    """An AI job whose report names neither the request that paid for it nor why it spent
+    nothing: it is filed (and `require_cost` fails the run) rather than skipped, so a job that
+    forgets to say what it cost is found, not hidden by a quiet day."""
+    job = JOBS.get(schedule.job)
+    return job is not None and job.ai_applies(schedule.params) and not report.get("ai_skipped")
+
+
 def _note_quiet(schedule: MemberSchedule, body: dict[str, Any]) -> None:
     """Remember on the schedule that a run found nothing to report, and file nothing."""
-    result = {"title": body["title"], "items": 0}
+    result = {"title": body["title"], "items": 0, "quiet": True}
     MemberSchedule.objects.filter(pk=schedule.pk).update(last_result=result)
     schedule.last_result = result
     log.info("schedule_quiet schedule=%s", schedule.id)
@@ -443,7 +451,7 @@ def deliver(
     if schedule.deliver_channel_id:
         return deliver_to_chat(schedule, report, run_at=run_at)
     body = clean_report(report, schedule.name)
-    if is_quiet_tick(report, run_at):
+    if is_quiet_tick(report, run_at) and not _ai_unaccounted(schedule, report):
         _note_quiet(schedule, body)
         return None
     delivered = sum(len(section["items"]) for section in body["sections"])

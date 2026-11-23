@@ -256,6 +256,20 @@ class TestWhatToDoToday(JobBase):
         self.assertNotIn("link", calendar[0])
         self.assertFalse(report["quiet"])  # there is a task to do, so the report goes out
 
+    def test_a_calendar_without_granted_access_says_where_to_fix_it(self):
+        self.make_task("Late", due_date=self.local_today() - timedelta(days=1))
+        note = "Google is connected but Calendar access hasn't been granted. Direct the user to X."
+        with mock.patch(
+            "origin.services.briefing._calendar_today", return_value={"events": None, "note": note}
+        ):
+            report = self.run_job("what_to_do_today")
+        (line,) = self.section(report, "On your calendar")
+        self.assertEqual(
+            line["text"],
+            "Not shown: Calendar access has not been granted (Settings → Integrations).",
+        )
+        self.assertNotIn("Direct", json.dumps(report))
+
     def test_a_quiet_day_is_quiet_even_when_the_calendar_could_not_be_read(self):
         broken = {"events": None, "note": "The calendar could not be read right now."}
         with mock.patch("origin.services.briefing._calendar_today", return_value=broken):
