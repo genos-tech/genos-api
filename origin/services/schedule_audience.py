@@ -17,7 +17,9 @@ report is allowed in a chat only when each of those people could open everything
   and the report would name projects or chats they are not in.
 * **A report about the owner** (what to do today, what you did, what is left: their tasks,
   to-dos and calendar): never a chat other people read.
-* **A report with an AI part** goes to the Inbox only: its cost is filed on an Inbox item.
+* **A report with an AI part** goes to the Inbox only: its cost is filed on an Inbox item. One
+  exception (MIP-2196): a job that says `ai_in_private_chat` (a scheduled skill) may also go to a
+  chat only the owner is in, the cost line being part of the message. Any other chat refuses it.
 
 Nothing here names a person who is not allowed: a refusal says "not everyone", never who.
 
@@ -57,6 +59,10 @@ EXTERNAL = "A chat shared with other teams cannot take a scheduled report."
 HAS_AI = (
     "A report with AI sentences goes to your Inbox only. Turn its AI sentences off to post it "
     "in a chat."
+)
+AI_NOT_ALONE = (
+    "A skill report uses your AI credits and shows what it cost, so it can only be posted in a "
+    "chat only you are in. Pick a chat with just you, or send it to your Inbox."
 )
 ABOUT_YOU = (
     "This report is about you (your tasks, to-dos and calendar), so it goes to your Inbox or to "
@@ -133,9 +139,13 @@ def problem(
     if not can_read_chat(channel, team_id, user_id):
         return NOT_FOUND
     job = JOBS.get(job_key)
-    if job is not None and job.ai_applies(params):
-        return HAS_AI
     reader_ids = readers(channel)
+    if job is not None and job.ai_applies(params):
+        # A report that spent AI usage carries its cost line: only a chat nobody else reads may
+        # hold it, and only for a job that says so (MIP-2196).
+        if job.ai_in_private_chat:
+            return None if reader_ids <= {str(user_id)} else AI_NOT_ALONE
+        return HAS_AI
     if reader_ids <= {str(user_id)}:
         return None  # nobody else reads it: it is as private as the Inbox
     if job is not None and job.share_chats:

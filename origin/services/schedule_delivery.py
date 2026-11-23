@@ -1,7 +1,8 @@
 """Where a schedule run's report goes: the member's own Inbox (MIP-1149).
 
 (A schedule can also point at a chat, MIP-1420: `deliver_to_chat` posts the report there as one
-message instead. Everything below describes the Inbox path.)
+message instead. A report that spent AI usage (a scheduled skill, MIP-2196) goes only to a chat the
+owner is alone in, and its cost line is in the message. Everything below describes the Inbox path.)
 
 `deliver` is the one function the runner calls. It files ONE Inbox item (`item_type`
 `ITEM_TYPE_GENOS_REPORT`, 10, in `inbox_models.py`) for the schedule's owner, in the schedule's team, and keeps the
@@ -82,7 +83,7 @@ from urllib.parse import urlsplit
 from django.conf import settings
 from django.db import transaction
 
-from origin.models.chat.unified_models import Message
+from origin.models.chat.unified_models import Channel, Message
 from origin.models.common.inbox_models import ITEM_TYPE_GENOS_REPORT, InboxItems
 from origin.models.common.schedule_models import MemberSchedule
 from origin.services import inbox_ai, realtime_push, report_memory, schedule_audience
@@ -320,6 +321,31 @@ def _ai_unaccounted(schedule: MemberSchedule, report: Report) -> bool:
     return job is not None and job.ai_applies(schedule.params) and not report.get("ai_skipped")
 
 
+def _ai_part(schedule: MemberSchedule, report: Report) -> tuple[dict[str, Any] | None, str]:
+    """For a job that spends AI usage: `(cost block, "")` when the run paid for a request,
+    `(None, skipped code)` when the job says it spent nothing and why, `(None, "")` for a job that
+    uses none. Raises (`inbox_ai.require_cost`) when the job names neither, so nothing is filed or
+    posted without its cost."""
+    job = JOBS.get(schedule.job)
+    if job is None or not job.ai_applies(schedule.params):
+        return None, ""
+    if report.get("ai_request_id") or not report.get("ai_skipped"):
+        return inbox_ai.require_cost(schedule.job, report, schedule.user_id), ""
+    return None, _text(report["ai_skipped"], 40)
+
+
+def cost_line(ai: dict[str, Any]) -> str:
+    """The cost of a run as the one line a chat message carries, in the credits Plan & usage
+    shows. Built from the stored cost block only (numbers), never from text a person wrote."""
+    milli = max(int(ai.get("credits_milli") or 0), 0)
+    # As the Inbox card says it: a cost under 0.005 credits with unpriced calls is "not measured".
+    if not ai.get("metered") or (milli < 5 and ai.get("lower_bound")):
+        return "AI usage of this run was not measured."
+    credits = f"{milli / 1000:.2f}"
+    prefix = "at least " if ai.get("lower_bound") else ""
+    return f"AI usage: {prefix}{credits} credits."
+
+
 def _note_quiet(schedule: MemberSchedule, body: dict[str, Any]) -> None:
     """Remember on the schedule that a run found nothing to report, and file nothing."""
     result = {"title": body["title"], "items": 0, "quiet": True}
@@ -331,7 +357,7 @@ def _note_quiet(schedule: MemberSchedule, body: dict[str, Any]) -> None:
 CHAT_MARKER = "scheduleReport"
 
 
-def chat_blocks(body: dict[str, Any]) -> list[dict[str, Any]]:
+def chat_blocks(body: dict[str, Any], ai: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The report as the BlockNote blocks of a chat message: a heading, the summary, the
     headline counts, then each section as a bold line and its items as a bullet list (an item
     with a link is a link). Built from `clean_report`'s output only, so every string has passed
@@ -350,6 +376,8 @@ def chat_blocks(body: dict[str, Any]) -> list[dict[str, Any]]:
         return f"{base}{link}" if link.startswith("/") and base else link
 
     blocks = [block("heading", [text(body["title"])]), block("paragraph", [text(body["text"])])]
+    if ai is not None:
+        blocks.append(block("paragraph", [text(cost_line(ai), italic=True)]))
     if stats := body.get("stats"):
         line = " · ".join(f"{s['emoji']} {s['key'].replace('_', ' ')} {s['count']}" for s in stats)
         blocks.append(block("paragraph", [text(line, italic=True)]))
@@ -371,24 +399,13 @@ def _chat_key(schedule: MemberSchedule, run_at: datetime) -> str:
     return f"sched-{schedule.id.hex}-{int(run_at.timestamp())}"
 
 
-def deliver_to_chat(
-    schedule: MemberSchedule, report: Report, *, run_at: datetime | None = None
-) -> Message | None:
-    """Post the run's report into the chat the schedule points at (MIP-1420) and note it on the
-    schedule. No model, no cost.
-
-    The message has no author (`sender` is null, as for the closing line of a task) and
-    `metadata.scheduleReport = {scheduleId, job}`: the owner is not made to say it, and nobody is
-    invented. It goes through the chat funnel (per-channel `seq` under the channel lock, the
-    idempotency key), is announced to the open chat, and rings nobody: no activity, no push.
-
-    Refused, in words and before anything is written, when the report may not be read by
-    everyone who reads the chat NOW (`schedule_audience.problem`): the rule is checked at every
-    run, not only when the schedule was saved. `run_at` works as for the Inbox: a repeat of a
-    tick's run posts once; "Run now" passes none and posts every time.
-    """
+def check_chat_target(schedule: MemberSchedule) -> Channel:
+    """The chat the schedule posts in, if its owner may still post this report there: the chat
+    must still be theirs and the audience rule (`schedule_audience.problem`) must still hold for
+    everyone who reads it NOW. Raises `ScheduleRunError` in words otherwise. The runner asks it
+    BEFORE a job that spends AI usage runs (`schedules._execute`), so a person added to the chat
+    since the schedule was saved stops the run before the model is called, not after."""
     from origin.services.schedules import ScheduleRunError  # noqa: PLC0415 (import cycle)
-    from origin.views.chat.message_views import _allocate_seq_and_create_message  # noqa: PLC0415
 
     channel = schedule_audience.load_target(
         schedule.user_id, schedule.team_id, schedule.deliver_channel_id
@@ -400,13 +417,45 @@ def deliver_to_chat(
     )
     if why:
         raise ScheduleRunError(why)
+    return channel
+
+
+def deliver_to_chat(
+    schedule: MemberSchedule, report: Report, *, run_at: datetime | None = None
+) -> Message | None:
+    """Post the run's report into the chat the schedule points at (MIP-1420) and note it on the
+    schedule. No model call here; a report that already spent AI usage carries its cost line
+    (MIP-2196, `metadata.scheduleReport.ai` is the same cost block an Inbox item has).
+
+    The message has no author (`sender` is null, as for the closing line of a task) and
+    `metadata.scheduleReport = {scheduleId, job}`: the owner is not made to say it, and nobody is
+    invented. It goes through the chat funnel (per-channel `seq` under the channel lock, the
+    idempotency key), is announced to the open chat, and rings nobody: no activity, no push.
+
+    Refused, in words and before anything is written, when the report may not be read by
+    everyone who reads the chat NOW (`schedule_audience.problem`): the rule is checked at every
+    run, not only when the schedule was saved. `run_at` works as for the Inbox: a repeat of a
+    tick's run posts once; "Run now" passes none and posts every time.
+    """
+    from origin.views.chat.message_views import _allocate_seq_and_create_message  # noqa: PLC0415
+
+    channel = check_chat_target(schedule)
 
     body = clean_report(report, schedule.name)
-    if is_quiet_tick(report, run_at):
+    if is_quiet_tick(report, run_at) and not _ai_unaccounted(schedule, report):
         _note_quiet(schedule, body)
         return None
+    # A run that spent AI usage says what it cost, in the message itself (MIP-2196): the chat is
+    # one only the owner reads (`check_chat_target`), so the cost line is theirs as the Inbox
+    # card's is. `_ai_part` raises when the job names no request, and nothing is posted.
+    ai, skipped = _ai_part(schedule, report)
     delivered = sum(len(section["items"]) for section in body["sections"])
-    result = {"title": body["title"], "items": delivered}
+    result: dict[str, Any] = {"title": body["title"], "items": delivered}
+    if skipped:
+        result["ai_skipped"] = skipped
+    marker: dict[str, Any] = {"scheduleId": str(schedule.id), "job": schedule.job}
+    if ai is not None:
+        marker["ai"] = ai
     key = _chat_key(schedule, run_at) if run_at is not None else None
     with transaction.atomic():
         row = MemberSchedule.objects.select_for_update().filter(pk=schedule.pk).first()
@@ -419,10 +468,10 @@ def deliver_to_chat(
         message = _allocate_seq_and_create_message(
             channel=channel,
             sender=None,
-            body=chat_blocks(body),
+            body=chat_blocks(body, ai),
             body_text=body["title"],
             parent_id=None,
-            metadata={CHAT_MARKER: {"scheduleId": str(schedule.id), "job": schedule.job}},
+            metadata={CHAT_MARKER: marker},
             correlation_id=key,
         )
         MemberSchedule.objects.filter(pk=schedule.pk).update(last_result=result)
@@ -449,7 +498,20 @@ def deliver(
     nothing to file (a repeat of a run already delivered, or a schedule deleted mid-run).
     """
     if schedule.deliver_channel_id:
-        return deliver_to_chat(schedule, report, run_at=run_at)
+        job = JOBS.get(schedule.job)
+        if job is None or not job.ai_applies(schedule.params):
+            return deliver_to_chat(schedule, report, run_at=run_at)
+        # A run that already spent AI usage must not lose its report because the chat changed
+        # while the model ran (MIP-2196): someone joined it, or the owner left. It is filed in the
+        # Inbox with its cost instead, never posted in a chat other people read.
+        from origin.services.schedules import ScheduleRunError  # noqa: PLC0415 (import cycle)
+
+        try:
+            check_chat_target(schedule)
+        except ScheduleRunError:
+            log.info("schedule_chat_refused_after_run schedule=%s: filed in the Inbox", schedule.id)
+        else:
+            return deliver_to_chat(schedule, report, run_at=run_at)
     body = clean_report(report, schedule.name)
     if is_quiet_tick(report, run_at) and not _ai_unaccounted(schedule, report):
         _note_quiet(schedule, body)
@@ -470,17 +532,16 @@ def deliver(
     # A job that spends AI usage is filed only with what it cost (MIP-1209): `require_cost`
     # raises when the job did not say which request paid, so the run fails and nothing is filed.
     # A job that uses none says nothing about cost.
-    job = JOBS.get(schedule.job)
-    if job is not None and job.ai_applies(schedule.params):
-        if report.get("ai_request_id") or not report.get("ai_skipped"):
-            optionals["ai"] = inbox_ai.require_cost(schedule.job, report, schedule.user_id)
-        else:
-            # The job says it spent nothing this time, and why (a code, never text a person
-            # wrote): filed plain, with no cost block, and the run's result says so.
-            result["ai_skipped"] = _text(report["ai_skipped"], 40)
-            if report["ai_skipped"] == llm.SKIP_NO_CREDITS:
-                # The card says why there is no AI part, in the member's language (MIP-1960).
-                optionals["ai_skipped"] = llm.SKIP_NO_CREDITS
+    ai, skipped = _ai_part(schedule, report)
+    if ai is not None:
+        optionals["ai"] = ai
+    elif skipped:
+        # The job says it spent nothing this time, and why (a code, never text a person
+        # wrote): filed plain, with no cost block, and the run's result says so.
+        result["ai_skipped"] = skipped
+        if report["ai_skipped"] == llm.SKIP_NO_CREDITS:
+            # The card says why there is no AI part, in the member's language (MIP-1960).
+            optionals["ai_skipped"] = llm.SKIP_NO_CREDITS
 
     with transaction.atomic():
         # Lock the schedule row: of two deliveries of one run (a taken-over claim), the second

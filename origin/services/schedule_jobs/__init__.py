@@ -211,6 +211,10 @@ class Job:
     # A job about the owner's group chats (MIP-2061) may be posted into a chat whose readers are
     # in the chats it names: it reads `AUDIENCE_KEY` and names only chats every reader is in.
     share_chats: bool = False
+    # A job that uses AI may be posted into a chat ONLY THE OWNER is in (MIP-2196): the report is
+    # one message there and its cost line is in the message (`schedule_delivery.cost_line`), which
+    # nobody else reads. Never into a chat other people read, whatever the job is about.
+    ai_in_private_chat: bool = False
 
     @property
     def shareable(self) -> bool:
