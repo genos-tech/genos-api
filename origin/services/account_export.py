@@ -61,6 +61,8 @@ ROW_LIMITS = {
     "agent_calls": 50000,
     # Their Genos Skills (MIP-2040); a plan keeps at most 100 and the top plans are unlimited.
     "skills": 1000,
+    # Their skill tag catalog (MIP-2211): a skill takes at most 5, a member may keep a few dozen.
+    "skill_tags": 1000,
 }
 
 # Task-history fields whose old/new values are the person's own plain words or enum values. Any other
@@ -285,7 +287,7 @@ def _more_data(user) -> dict:
 
     skills = _capped(
         "skills",
-        Skill.objects.filter(owner=user).order_by("-created_at", "-id"),
+        Skill.objects.filter(owner=user).prefetch_related("grants").order_by("-created_at", "-id"),
         limits,
         lambda sk: {
             "skill_id": str(sk.id),
@@ -295,11 +297,40 @@ def _more_data(user) -> dict:
             "description": sk.description,
             "tags": sk.tags,
             "visibility": sk.visibility,
+            # Who a `specific` skill is shared with (MIP-2212): the kind and id of each grant.
+            "shares": [
+                {
+                    "kind": "user"
+                    if g.user_id
+                    else "mentionGroup"
+                    if g.mention_group_id
+                    else "groupChat"
+                    if g.channel_id
+                    else "project",
+                    "id": str(g.user_id or g.mention_group_id or g.channel_id or g.project_id),
+                }
+                for g in sk.grants.all()
+            ],
             "tool_level": sk.tool_level,
             "note_id": sk.note_id,
             "version": sk.current_version_no,
             "created_at": _iso(sk.created_at),
             "updated_at": _iso(sk.updated_at),
+        },
+    )
+
+    from origin.models.skills.skill_models import SkillTag  # noqa: PLC0415
+
+    skill_tags = _capped(
+        "skill_tags",
+        SkillTag.objects.filter(owner=user).order_by("sort_order", "tag_id"),
+        limits,
+        lambda t: {
+            "team_id": str(t.team_id),
+            "name": t.name,
+            "color": t.color,
+            "text_color": t.text_color,
+            "created_at": _iso(t.ts_created_at),
         },
     )
 
@@ -317,6 +348,7 @@ def _more_data(user) -> dict:
         "connected_accounts": connected_accounts,
         "agent_calls": agent_call_rows,
         "skills": skills,
+        "skill_tags": skill_tags,
     }
     data["more_counts"] = {k: len(v) for k, v in data.items()}
     data["export_limits"] = limits

@@ -9,6 +9,8 @@ anyone but the owner.
 | visibility | read, run (when running ships)             | text, details, publish    | rename, share, delete, editors |
 | private    | the owner, the co-editors                   | the owner, the co-editors | the owner |
 | team       | a member of the skill's team, NOT a guest   | the owner, the co-editors | the owner |
+| specific   | a member of the skill's team, NOT a guest,  | the owner, the co-editors | the owner |
+|            | AND named by a grant (see below)            |                           |           |
 | public     | any signed-in user (needs a version)        | the owner, the co-editors | the owner |
 
 Team sharing (MIP-2043):
@@ -24,6 +26,15 @@ Team sharing (MIP-2043):
   Owner, a co-editor its Editor, everybody else (a stray Viewer row too) has no role.
 * When a member leaves the team or deletes the account, their team skills move to the team owner
   (`hand_over_team_skills`); their private skills are deleted with the account.
+
+Sharing with chosen people (MIP-2212): a `specific` skill is read and run by the team members its
+`SkillGrant` rows name: a person, or a LIVE link to a mention group, a group chat or a project (who is
+in the group is asked at every read and run, so a person who joins gains the skill and one who leaves
+loses it). A grant never reaches outside the team: a group chat's guests from another team, or a
+person who left the team, cannot read it. It reads like a team skill (published version, a version is
+cut when it is first shared, the same status rules: hidden or taken down is a 404), and the ONE rule
+for it is `granted_skill_ids` / `shared_readers` below: `can_read`, `visible_to`, the `/name` lookup,
+the picker and the MCP tools all go through them.
 
 A stranger's id is the same "not found" as a missing one (`get_readable`), so an id never
 confirms that a private or other team's skill exists.
@@ -41,18 +52,22 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import F, OuterRef, Q, QuerySet, Subquery
+from django.db.models import Count, F, OuterRef, Q, QuerySet, Subquery
 from django.utils import timezone
 
+from origin.models.chat.unified_models import Channel, ChannelKind, ChannelMember
+from origin.models.common.mention_group_models import MentionGroupMaster, MentionGroupMembers
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.user_models import CustomUser
 from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteFolder, PersonalNoteMaster
+from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.skills.skill_models import (
     EFFORT_CHOICES,
     SOURCE_CHOICES,
@@ -65,8 +80,10 @@ from origin.models.skills.skill_models import (
     TOOL_LEVEL_READ,
     VISIBILITY_PRIVATE,
     VISIBILITY_PUBLIC,
+    VISIBILITY_SPECIFIC,
     VISIBILITY_TEAM,
     Skill,
+    SkillGrant,
     SkillInstall,
     SkillStar,
     SkillVersion,
@@ -77,7 +94,7 @@ from origin.services import collab_push
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.services.skills import guard, text
 from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, ROLE_EDITOR, ROLE_OWNER
-from origin.views.utils.scope_guards import is_team_member
+from origin.views.utils.scope_guards import is_project_member, is_team_member
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +119,16 @@ SKILLS_MAX_BY_TIER: dict[str, int | None] = {
 # cannot share it again, until an operator restores it (MIP-2044, `moderation.py`).
 MODERATED_STATUSES = frozenset({STATUS_IN_REVIEW, STATUS_REPORTED_HIDDEN, STATUS_TAKEN_DOWN})
 
-_VISIBILITIES = (VISIBILITY_PRIVATE, VISIBILITY_TEAM, VISIBILITY_PUBLIC)
+_VISIBILITIES = (VISIBILITY_PRIVATE, VISIBILITY_TEAM, VISIBILITY_SPECIFIC, VISIBILITY_PUBLIC)
+
+# How many grants one skill may carry (people and groups together).
+MAX_GRANTS = 50
+# The wire names of a grant's kind, in the order the editor lists them.
+GRANT_USER = "user"
+GRANT_MENTION_GROUP = "mentionGroup"
+GRANT_GROUP_CHAT = "groupChat"
+GRANT_PROJECT = "project"
+_GRANT_KINDS = (GRANT_USER, GRANT_MENTION_GROUP, GRANT_GROUP_CHAT, GRANT_PROJECT)
 _TOOL_LEVELS = (TOOL_LEVEL_READ, TOOL_LEVEL_ACT)
 _EFFORTS = tuple(value for value, _label in EFFORT_CHOICES)
 _SOURCES = tuple(value for value, _label in SOURCE_CHOICES)
@@ -247,8 +273,12 @@ def can_hide(skill: Skill, user_id: Any) -> bool:
     """May this member hide the skill from, or show it to, the team: the team owner, for a team
     skill someone else wrote, that no operator has taken over."""
     return (
-        skill.visibility == VISIBILITY_TEAM
-        and skill.status in (STATUS_ACTIVE, STATUS_HIDDEN_BY_TEAM)
+        (
+            # a skill shared with chosen people can be hidden by the team owner too: a group chat of
+            # the whole team would otherwise make it a team skill nobody could moderate (MIP-2212)
+            skill.visibility in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC)
+            and skill.status in (STATUS_ACTIVE, STATUS_HIDDEN_BY_TEAM)
+        )
         and not is_owner(skill, user_id)
         and is_team_owner(skill, user_id)
     )
@@ -335,6 +365,58 @@ def _note_ids(note_ids: Any) -> set[int]:
     return out
 
 
+def _grant_match(user_id: Any) -> Q:
+    """The grants (a `SkillGrant` filter) that name this person TODAY: the person, a live mention
+    group they are in, a live group chat (not a DM) they are still in, or a project they are in or own.
+    Asked at every read and run, never copied, so a membership change is felt at once."""
+    return (
+        Q(user_id=user_id)
+        | Q(
+            mention_group_id__in=MentionGroupMembers.objects.filter(
+                user_id=user_id, group__is_deleted=False
+            ).values("group_id")
+        )
+        | Q(
+            channel_id__in=ChannelMember.objects.filter(
+                user_id=user_id,
+                is_deleted=False,
+                channel__kind=ChannelKind.GM,
+                channel__is_deleted=False,
+            ).values("channel_id")
+        )
+        | Q(
+            project_id__in=ProjectMembers.objects.filter(
+                attendee_id=user_id, project__is_deleted=False
+            ).values("project_id")
+        )
+        | Q(project__owner_id=user_id, project__is_deleted=False)
+    )
+
+
+def granted_skill_ids(user_id: Any) -> QuerySet:
+    """The ids of the `specific` skills a grant names this person for: a subquery for lists, so a
+    list stays one query."""
+    return SkillGrant.objects.filter(_grant_match(user_id)).values("skill_id")
+
+
+def is_granted(skill: Skill, user_id: Any) -> bool:
+    return (
+        skill.visibility == VISIBILITY_SPECIFIC
+        and user_id is not None
+        and SkillGrant.objects.filter(skill_id=skill.pk).filter(_grant_match(user_id)).exists()
+    )
+
+
+def shared_readers(user_id: Any) -> Q:
+    """The skills a TEAMMATE reads from the team's side, as a `Skill` filter: every team skill, and
+    the `specific` skills this person is named for. The caller adds the team, the published and
+    active state, and "not mine": `visible_to`, the `/name` lookup and the picker all use this one
+    rule, so they cannot disagree about who a skill is shared with."""
+    return Q(visibility=VISIBILITY_TEAM) | Q(
+        visibility=VISIBILITY_SPECIFIC, pk__in=granted_skill_ids(user_id)
+    )
+
+
 def can_read(skill: Skill, user_id: Any) -> bool:
     """May this member see the skill (its metadata and its published text)."""
     if is_owner(skill, user_id):
@@ -342,7 +424,7 @@ def can_read(skill: Skill, user_id: Any) -> bool:
     if is_editor(skill, user_id) and skill.status != STATUS_TAKEN_DOWN:
         return True  # an invited co-editor reads the draft, private or not
     if (
-        skill.visibility == VISIBILITY_TEAM
+        skill.visibility in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC)
         and skill.status == STATUS_HIDDEN_BY_TEAM
         and skill.published_version_no > 0
         and is_team_owner(skill, user_id)
@@ -356,6 +438,9 @@ def can_read(skill: Skill, user_id: Any) -> bool:
         return public_enabled()
     if skill.visibility == VISIBILITY_TEAM:
         return is_team_member(skill.team_id, user_id)
+    if skill.visibility == VISIBILITY_SPECIFIC:
+        # Named by a grant AND still on the skill's team: a grant never reaches outside it.
+        return is_team_member(skill.team_id, user_id) and is_granted(skill, user_id)
     return False
 
 
@@ -380,7 +465,7 @@ def visible_to(user_id: Any) -> Q:
         & ~Q(status=STATUS_TAKEN_DOWN)
     )
     moderating = Q(
-        visibility=VISIBILITY_TEAM,
+        visibility__in=(VISIBILITY_TEAM, VISIBILITY_SPECIFIC),
         status=STATUS_HIDDEN_BY_TEAM,
         published_version_no__gt=0,
         team_id__in=TeamMaster.objects.filter(owner_id=user_id).values("team_id"),
@@ -389,7 +474,7 @@ def visible_to(user_id: Any) -> Q:
         Q(owner_id=user_id)
         | editing
         | moderating
-        | (published & (public | (Q(visibility=VISIBILITY_TEAM) & in_my_teams)))
+        | (published & (public | (shared_readers(user_id) & in_my_teams)))
     )
 
 
@@ -702,6 +787,9 @@ class Fields:
     accept_terms: Any = None
     handle: Any = None
     display_name: Any = None
+    # Who a `specific` skill is shared with (MIP-2212): the whole list, `[{kind, id}]`. `None` = leave
+    # the grants as they are. Kept when the skill moves to another visibility (inert there).
+    shares: Any = None
 
 
 def _clean_choice(value: Any, allowed: tuple[str, ...], what: str) -> str:
@@ -864,8 +952,12 @@ def create(
     source: str = "user",
     forked_from: Skill | None = None,
     forked_from_version_no: int | None = None,
+    tags_mode: str = "ensure",
 ) -> Skill:
-    """A new skill, private unless `fields.visibility` says otherwise (and may be set)."""
+    """A new skill, private unless `fields.visibility` says otherwise (and may be set).
+
+    `tags_mode` (MIP-2211): `"strict"` (the editor's REST write) refuses a tag that is not in the
+    owner's catalog; `"ensure"` adds a missing one with a neutral colour (a copy or a hand-over)."""
     require_enabled()
     _require_member(user, team_id)
     if source not in _SOURCES or source == "official":
@@ -892,6 +984,9 @@ def create(
         CustomUser.objects.select_for_update().filter(pk=user.pk).first()
         _require_room(user.pk)
         require_name_free(team_id, user.pk, slug, visibility)
+        _check_tags(
+            tags_mode, team_id, user.pk, tags, colors_from=_source_catalog(forked_from, user.pk)
+        )
         note = _create_note(user, team_id, title, blocks)
         try:
             with transaction.atomic():
@@ -914,9 +1009,57 @@ def create(
                 )
         except IntegrityError as exc:  # a racing create took the name
             raise _taken_after_race(slug, team_id, user.pk, VISIBILITY_PRIVATE, None) from exc
+        if fields.shares is not None:
+            set_grants(user, skill, fields.shares)
         if visibility != VISIBILITY_PRIVATE:
             _set_visibility(skill, user, visibility, fields)
     return skill
+
+
+def _lock_owner_first(skill_id: Any) -> None:
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports this module
+
+    skill_tags.lock_owner_of_skill(skill_id)
+
+
+def _lock_owner_first_of_user(user_id: Any) -> None:
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports this module
+
+    skill_tags.lock_owner(user_id)
+
+
+def _source_catalog(source: Skill | None, copier_id: Any) -> tuple[Any, Any] | None:
+    """Whose catalog a copy takes its chip colours from: the original's owner, in its team. Never
+    a PUBLIC skill's, unless the copier is its owner or an editor: a stranger who copies from the
+    Hub would otherwise read the author's palette out of their own catalog, which the grey chips
+    of a public skill exist to prevent."""
+    if source is None:
+        return None
+    if source.visibility == VISIBILITY_PUBLIC and not (
+        is_owner(source, copier_id) or can_edit(source, copier_id)
+    ):
+        return None
+    return (source.team_id, source.owner_id)
+
+
+def _check_tags(
+    mode: str,
+    team_id: Any,
+    owner_id: Any,
+    names: list[str],
+    *,
+    colors_from: tuple[Any, Any] | None = None,
+) -> None:
+    """The owner's catalog against a skill's tag names, inside the write's transaction (the owner's
+    row is already locked, or is locked here): strict refuses an unknown name, ensure adds it."""
+    from origin.services.skills import tags as skill_tags  # noqa: PLC0415 - tags imports this module
+
+    if not names:
+        return
+    if mode == "strict":
+        skill_tags.require_known(team_id, owner_id, names)
+    else:
+        skill_tags.ensure(team_id, owner_id, names, colors_from=colors_from)
 
 
 def _set_visibility(
@@ -952,6 +1095,11 @@ def _set_visibility(
             handle=getattr(fields, "handle", None),
             display_name=getattr(fields, "display_name", None),
         )
+    if visibility == VISIBILITY_SPECIFIC and not has_live_grants(skill):
+        raise SkillError(
+            "Choose at least one person, mention group, group chat or project to share this "
+            "skill with, or keep it private."
+        )
     # The name has to be free where the skill is going (MIP-2210): the team's shared names for a
     # team skill, the public names for a public one.
     require_name_free(skill.team_id, skill.owner_id, skill.slug, visibility, exclude=skill.pk)
@@ -986,6 +1134,9 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
     shares the skill and so publishes its current text (`_set_visibility`)."""
     require_enabled()
     with transaction.atomic():
+        # The owner's row first, then the skill: the order Manage tags' rename takes, and the order
+        # the public gate needs (it locks the owner) when this save also makes the skill public.
+        _lock_owner_first(skill_id)
         skill = get_editable(user.pk, skill_id, lock=True)
         if not is_owner(skill, user.pk):
             # A co-editor writes the text and the details. The name teammates type and who the
@@ -993,6 +1144,8 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
             if fields.slug is not None and fields.slug != skill.slug:
                 raise SkillForbidden("Only the owner can rename this skill.")
             if fields.visibility is not None and fields.visibility != skill.visibility:
+                raise SkillForbidden("Only the owner can change who this skill is shared with.")
+            if fields.shares is not None:
                 raise SkillForbidden("Only the owner can change who this skill is shared with.")
             fields.visibility = None
             fields.slug = None
@@ -1013,7 +1166,17 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
         if fields.description is not None:
             skill.description = _wrap(lambda: text.clean_description(fields.description))
         if fields.tags is not None:
-            skill.tags = _wrap(lambda: text.clean_tags(fields.tags))
+            new_tags = _wrap(lambda: text.clean_tags(fields.tags))
+            # The editor can only pick: a name must be in the OWNER's catalog (a co-editor's tags
+            # come from the owner's list). Names the skill already carries are kept even if the
+            # owner deleted them from the catalog since: a save of other fields must not fail.
+            _check_tags(
+                "strict",
+                skill.team_id,
+                skill.owner_id,
+                [n for n in new_tags if n not in (skill.tags or [])],
+            )
+            skill.tags = new_tags
         if fields.argument_hint is not None:
             skill.argument_hint = _wrap(lambda: text.clean_argument_hint(fields.argument_hint))
         if fields.tool_level is not None:
@@ -1042,6 +1205,16 @@ def update(user: CustomUser, skill_id: Any, fields: Fields) -> Skill:
             raise _taken_after_race(
                 skill.slug, skill.team_id, skill.owner_id, skill.visibility, skill.pk
             ) from exc
+        if fields.shares is not None and is_owner(skill, user.pk):
+            set_grants(user, skill, fields.shares)
+            target = _clean_choice(
+                fields.visibility or skill.visibility, _VISIBILITIES, "The visibility"
+            )
+            if target == VISIBILITY_SPECIFIC and not has_live_grants(skill):
+                raise SkillError(
+                    "Choose at least one person, mention group, group chat or project to share "
+                    "this skill with, or keep it private."
+                )
         if fields.visibility is not None:
             _set_visibility(
                 skill,
@@ -1061,6 +1234,7 @@ def publish(user: CustomUser, skill_id: Any, *, changelog: str = "") -> SkillVer
     again: the text may have changed since it went public."""
     require_enabled()
     with transaction.atomic():
+        _lock_owner_first(skill_id)  # before the skill: a tag rename holds the owner, then skills
         skill = get_editable(user.pk, skill_id, lock=True)
         if skill.visibility == VISIBILITY_PRIVATE:
             raise SkillError("A private skill has no readers: share it with your team first.")
@@ -1113,6 +1287,7 @@ def erase_for_user(user: CustomUser) -> None:
     ):
         hand_over_team_skills(team_id, user.pk)
     drop_editor_rows(user.pk)
+    SkillGrant.objects.filter(user=user).delete()  # the account is soft-deleted: nothing cascades
     for skill in Skill.objects.filter(owner=user):
         _delete_skill_and_note(skill)
     for star in SkillStar.objects.filter(user=user).select_related("skill"):
@@ -1125,6 +1300,232 @@ def erase_for_user(user: CustomUser) -> None:
             install_count=F("install_count") - 1
         )
     SkillInstall.objects.filter(user=user).delete()
+
+
+# -- sharing with chosen people (MIP-2212) ------------------------------------------------------------
+
+
+def _grant_target(grant: SkillGrant) -> tuple[str, str]:
+    """`(kind, id)` of a grant, as the wire names them."""
+    if grant.user_id is not None:
+        return GRANT_USER, str(grant.user_id)
+    if grant.mention_group_id is not None:
+        return GRANT_MENTION_GROUP, str(grant.mention_group_id)
+    if grant.channel_id is not None:
+        return GRANT_GROUP_CHAT, str(grant.channel_id)
+    return GRANT_PROJECT, str(grant.project_id)
+
+
+def _parse_shares(raw: Any) -> list[tuple[str, str]]:
+    """The wire list `[{kind, id}]` as unique `(kind, id)` pairs, in order. A malformed entry is a
+    refusal, never skipped: the owner must see that something they chose was not saved."""
+    if not isinstance(raw, list):
+        raise SkillError("`shares` must be a list of {kind, id}.")
+    if len(raw) > MAX_GRANTS * 2:  # before any per-item work: a huge list is refused outright
+        raise SkillError(f"A skill can be shared with up to {MAX_GRANTS} people and groups.")
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise SkillError("Each share needs a kind and an id.")
+        kind = str(item.get("kind") or "")
+        ident = str(item.get("id") if item.get("id") is not None else "").strip()
+        if kind not in _GRANT_KINDS or not ident:
+            raise SkillError(
+                f"A share's kind must be one of: {', '.join(_GRANT_KINDS)}, and it needs an id."
+            )
+        # The id as the database spells it (lower-case UUID, no leading zeros), so a chip sent back
+        # in another spelling is the grant that exists, not a new one.
+        ident = (
+            (_uuid_or_none(ident) if kind in (GRANT_USER, GRANT_GROUP_CHAT) else None)
+            or (
+                str(_int_or_none(ident))
+                if kind in (GRANT_MENTION_GROUP, GRANT_PROJECT) and _int_or_none(ident) is not None
+                else None
+            )
+            or ident
+        )
+        if (kind, ident) not in seen:
+            seen.add((kind, ident))
+            out.append((kind, ident))
+    if len(out) > MAX_GRANTS:
+        raise SkillError(f"A skill can be shared with up to {MAX_GRANTS} people and groups.")
+    return out
+
+
+def _uuid_or_none(value: str) -> str | None:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def _int_or_none(value: str) -> int | None:
+    return int(value) if value.isascii() and value.isdigit() and len(value) < 18 else None
+
+
+def _new_grant(owner: CustomUser, skill: Skill, kind: str, ident: str) -> SkillGrant:
+    """A grant the owner is ADDING, checked: the target is in the skill's team, and the owner may
+    see it themselves (a person on the team; a mention group of the team; a group chat or a project
+    the owner is in), so a skill cannot be used to learn that a hidden chat or project exists or to
+    pull its members in. The same refusal for a missing target and a forbidden one."""
+    nope = SkillError("That person or group cannot be added. Pick one from the list.")
+    row = SkillGrant(skill=skill, created_by=owner)
+    if kind == GRANT_USER:
+        uid = _uuid_or_none(ident)
+        if uid is None or uid == str(owner.pk) or not is_team_member(skill.team_id, uid):
+            raise nope
+        if not CustomUser.objects.filter(pk=uid, is_deleted=False).exists():
+            raise nope
+        row.user_id = uid
+    elif kind == GRANT_MENTION_GROUP:
+        gid = _int_or_none(ident)
+        if (
+            gid is None
+            or not MentionGroupMaster.objects.filter(
+                group_id=gid, team_id=skill.team_id, is_deleted=False
+            ).exists()
+        ):
+            raise nope
+        row.mention_group_id = gid
+    elif kind == GRANT_GROUP_CHAT:
+        cid = _uuid_or_none(ident)
+        if (
+            cid is None
+            or not Channel.objects.filter(
+                pk=cid,
+                team_id=skill.team_id,
+                kind=ChannelKind.GM,
+                is_deleted=False,
+                is_external=False,
+            ).exists()
+            or not ChannelMember.objects.filter(
+                channel_id=cid, user_id=owner.pk, is_deleted=False
+            ).exists()
+        ):
+            raise nope
+        row.channel_id = cid
+    else:
+        pid = _int_or_none(ident)
+        if (
+            pid is None
+            or not ProjectMaster.objects.filter(
+                project_id=pid, team_id=skill.team_id, is_deleted=False
+            ).exists()
+            or not is_project_member(pid, owner.pk, live_only=True)
+        ):
+            raise nope
+        row.project_id = pid
+    return row
+
+
+def has_live_grants(skill: Skill) -> bool:
+    """Does the skill name anybody who can still be named: a person, group, chat or project that
+    has not been deleted? (A grant to a deleted group is a row that reaches nobody.)"""
+    return skill.grants.filter(
+        Q(user__isnull=False, user__is_deleted=False)
+        | Q(mention_group__isnull=False, mention_group__is_deleted=False)
+        | Q(channel__isnull=False, channel__is_deleted=False)
+        | Q(project__isnull=False, project__is_deleted=False)
+    ).exists()
+
+
+def set_grants(owner: CustomUser, skill: Skill, shares: Any) -> list[SkillGrant]:
+    """Replace the skill's grants with this list (the owner only; the caller has checked, inside a
+    transaction with the skill locked). A pair that is already a grant stays as it is, whatever the
+    owner can see TODAY (they may have left that chat since); only a pair that is new is checked."""
+    wanted = _parse_shares(shares)
+    current = {_grant_target(g): g for g in skill.grants.all()}
+    new_rows = [
+        _new_grant(owner, skill, kind, ident)
+        for kind, ident in wanted
+        if (kind, ident) not in current
+    ]  # every refusal comes before anything is removed
+    for key, grant in current.items():
+        if key not in wanted:
+            grant.delete()
+    kept = [current[key] for key in wanted if key in current]
+    for row in new_rows:
+        try:
+            with transaction.atomic():
+                row.save()
+        except IntegrityError:  # the same grant added in the same moment
+            continue
+        kept.append(row)
+    return kept
+
+
+def grants_view(skill: Skill, viewer_id: Any) -> list[dict[str, Any]]:
+    """The grants as the editor shows them (the owner's page): kind, id, a name and, for a group, how
+    many people are in it now. A chat or project the viewer can no longer see has no name (the
+    editor says so): the skill must not keep telling an owner a hidden title they left. Constant
+    queries however many grants."""
+    grants = list(skill.grants.all())
+    if not grants:
+        return []
+    user_ids = [g.user_id for g in grants if g.user_id]
+    group_ids = [g.mention_group_id for g in grants if g.mention_group_id]
+    chat_ids = [g.channel_id for g in grants if g.channel_id]
+    project_ids = [g.project_id for g in grants if g.project_id]
+    names: dict[tuple[str, str], str] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for u in CustomUser.objects.filter(pk__in=user_ids):
+        names[(GRANT_USER, str(u.pk))] = u.username or ""
+    for g in MentionGroupMaster.objects.filter(group_id__in=group_ids, is_deleted=False):
+        names[(GRANT_MENTION_GROUP, str(g.group_id))] = g.group_name
+    for gid, n in (
+        MentionGroupMembers.objects.filter(group_id__in=group_ids, group__is_deleted=False)
+        .values_list("group_id")
+        .annotate(n=Count("id"))
+    ):
+        counts[(GRANT_MENTION_GROUP, str(gid))] = n
+    seen_chats = set(
+        ChannelMember.objects.filter(
+            channel_id__in=chat_ids, user_id=viewer_id, is_deleted=False
+        ).values_list("channel_id", flat=True)
+    )
+    for ch in Channel.objects.filter(pk__in=seen_chats, kind=ChannelKind.GM, is_deleted=False):
+        names[(GRANT_GROUP_CHAT, str(ch.pk))] = ch.title or ""
+    for cid, n in (
+        ChannelMember.objects.filter(
+            channel_id__in=seen_chats, is_deleted=False, channel__kind=ChannelKind.GM
+        )
+        .values_list("channel_id")
+        .annotate(n=Count("id"))
+    ):
+        counts[(GRANT_GROUP_CHAT, str(cid))] = n
+    mine_projects = set(
+        ProjectMembers.objects.filter(
+            project_id__in=project_ids, attendee_id=viewer_id
+        ).values_list("project_id", flat=True)
+    )
+    seen_projects: list[int] = []
+    for pr in ProjectMaster.objects.filter(project_id__in=project_ids, is_deleted=False):
+        if pr.project_id in mine_projects or str(pr.owner_id) == str(viewer_id):
+            names[(GRANT_PROJECT, str(pr.project_id))] = pr.project_name
+            seen_projects.append(pr.project_id)
+    for pid, n in (
+        ProjectMembers.objects.filter(project_id__in=seen_projects, project__is_deleted=False)
+        .values_list("project_id")
+        .annotate(n=Count("id"))
+    ):
+        counts[(GRANT_PROJECT, str(pid))] = n
+    out = []
+    for g in grants:
+        key = _grant_target(g)
+        out.append(
+            {
+                "kind": key[0],
+                "id": key[1],
+                "name": names.get(key, ""),
+                # `None` = a person (no count).
+                "memberCount": counts.get(key, 0) if key[0] != GRANT_USER else None,
+                "available": key in names,
+            }
+        )
+    order = {k: i for i, k in enumerate(_GRANT_KINDS)}
+    out.sort(key=lambda r: (order[r["kind"]], r["name"].lower()))
+    return out
 
 
 # -- team sharing: co-editors, hide, hand-over ------------------------------------------------------
@@ -1247,6 +1648,20 @@ def drop_editor_rows(user_id: Any, team_id: Any = None) -> int:
     return deleted
 
 
+def end_sharing_for_leaver(user_id: Any, team_id: Any) -> int:
+    """The person left a team (MIP-2212). Their `specific` skills in it stop being shared (they move
+    to private, the grants stay in case they come back: a team skill is handed to the team owner, but
+    a skill shared with chosen people was theirs, not the team's), and the grants that named them as a
+    person end. A group grant needs no change: the reader check asks the live membership and the team
+    every time. Returns how many skills stopped being shared."""
+    with transaction.atomic():
+        stopped = Skill.objects.filter(
+            owner_id=user_id, team_id=team_id, visibility=VISIBILITY_SPECIFIC
+        ).update(visibility=VISIBILITY_PRIVATE, updated_at=timezone.now())
+        SkillGrant.objects.filter(user_id=user_id, skill__team_id=team_id).delete()
+    return stopped
+
+
 def set_hidden(user: CustomUser, skill_id: Any, hidden: bool) -> Skill:
     """The team owner hides a team skill from the team, or shows it again. The status is
     `hidden_by_team`; it never overwrites an operator's (`reported_hidden`, `taken_down`) and an
@@ -1260,8 +1675,8 @@ def set_hidden(user: CustomUser, skill_id: Any, hidden: bool) -> Skill:
         if not is_team_owner(skill, user.pk):
             raise SkillForbidden("Only the team owner can hide a team skill.")
         skill = Skill.objects.select_for_update().get(pk=skill.pk)
-        if skill.visibility != VISIBILITY_TEAM:
-            raise SkillError("Only a team skill can be hidden from the team.")
+        if skill.visibility not in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC):
+            raise SkillError("Only a skill shared with the team can be hidden from the team.")
         if skill.status not in (STATUS_ACTIVE, STATUS_HIDDEN_BY_TEAM):
             raise SkillConflict("An operator is looking at this skill: it cannot be changed here.")
         wanted = STATUS_HIDDEN_BY_TEAM if hidden else STATUS_ACTIVE
@@ -1286,6 +1701,9 @@ def hand_over_team_skills(team_id: Any, leaver_id: Any) -> int:
         return 0
     moved = 0
     with transaction.atomic():
+        # The heir's row first (the order every tag write takes): a rename in the heir's catalog
+        # cannot then slip between this copy of the names and the move of the skills.
+        _lock_owner_first_of_user(heir.pk)
         skills = list(
             Skill.objects.select_for_update().filter(
                 team_id=team_id, owner_id=leaver_id, visibility=VISIBILITY_TEAM
@@ -1306,6 +1724,10 @@ def hand_over_team_skills(team_id: Any, leaver_id: Any) -> int:
                 skill.slug = _free_slug(
                     team_id, heir.pk, skill.slug, exclude=skill.pk, visibility=skill.visibility
                 )
+            # The heir's catalog gets the tags the skill carries, in the leaver's colours (MIP-2211).
+            _check_tags(
+                "ensure", team_id, heir.pk, skill.tags or [], colors_from=(team_id, leaver_id)
+            )
             skill.owner = heir
             fields = ["owner", "slug", "updated_at"]
             if skill.status == STATUS_HIDDEN_BY_TEAM:
@@ -1462,12 +1884,18 @@ def copy(user: CustomUser, skill_id: Any, team_id: Any) -> Skill:
         source
     )  # the owner reads a stopped skill, but cannot copy it around the stop
     if not is_owner(source, user.pk):
-        if source.visibility == VISIBILITY_PRIVATE:
-            # A co-editor was invited to work on it, not to take it elsewhere (design section 6).
-            raise SkillForbidden("Only the owner can copy a private skill.")
+        if source.visibility in (VISIBILITY_PRIVATE, VISIBILITY_SPECIFIC):
+            # A co-editor was invited to work on it, and a person it was shared with to use it:
+            # neither is invited to take it elsewhere, where the copy could be shared more widely
+            # than its owner chose (design section 6, MIP-2212).
+            raise SkillForbidden(
+                "Only the owner can copy a skill that is not shared with the whole team."
+            )
         if source.status != STATUS_ACTIVE:
             raise SkillForbidden("This skill is hidden from the team.")
-        if source.visibility == VISIBILITY_TEAM and str(source.team_id) != str(team_id):
+        if source.visibility in (VISIBILITY_TEAM, VISIBILITY_SPECIFIC) and str(
+            source.team_id
+        ) != str(team_id):
             # A team's skill stays in its team: cross-team sharing is the Hub's job (public skills).
             raise SkillForbidden("A team skill can only be copied into its own team.")
     version = version_for(source, user.pk) if not is_owner(source, user.pk) else None

@@ -8,6 +8,8 @@ given `--apply` (the runbook is `operations/GITHUB_APP_MIGRATION_RUNBOOK.md` in 
     deletion of exactly those (`migrate_github_hooks_to_app`).
   * `restore_hook`: the rollback of that deletion, for a hook GitHub no longer has
     (`migrate_github_hooks_to_app --restore`).
+  * `unregister_registration`: stop tracking a repo the maintainer chose, covered or not: the hook
+    at GitHub if possible, then the row (`migrate_github_hooks_to_app --unregister owner/name`).
   * `plan_grant_revocation` / `revoke_legacy_grant`: which legacy OAuth grants (the never-expiring
     `repo` token) can be revoked (`revoke_legacy_github_grants`).
 
@@ -254,6 +256,61 @@ def _delete(registration: GithubWebhookRegistration, headers: dict) -> str:
     if resp.status_code in (401, 403):
         return NO_ACCESS
     return GITHUB_ERROR
+
+
+# ---- unregistering a repo on purpose ----------------------------------------------------------
+
+# Outcomes of `unregister_registration`. The row is removed in every case but `GITHUB_ERROR`.
+HOOK_LEFT = "hook_left"  # + the reason: GitHub's hook stays, remove it by hand in the repo settings
+NOT_REGISTERED = "not_registered"  # (lookup) no registration row for that repo
+
+
+def unregister_registration(registration: GithubWebhookRegistration) -> str:
+    """Stop tracking one repo on purpose (the maintainer chose it): delete the Genos hook at GitHub
+    with the registrar's own stored connection if that is possible, then the registration row.
+    Returns an outcome word; never raises.
+
+    * `deleted`: the hook was ours and is gone; the row is removed.
+    * `already_gone`: GitHub no longer has the hook (404 and the registrar still administers the
+      repo); the row is removed.
+    * `hook_left_<why>` (`no_token`, `no_access`, `not_ours`, `invalid_repo`): the hook cannot be
+      deleted from here (the registrar has no usable connection or lost admin on a repo that is
+      not theirs any more, or the hook points elsewhere), so only the row is removed. The hook, if
+      it still exists, is for the repo's admin to delete in GitHub's settings; its deliveries are
+      then answered 200 and write nothing (an unregistered repo fails closed).
+    * `github_error` (a redirect, a 5xx, a timeout): nothing is changed; run again later.
+
+    The hook is deleted only when it is the Genos hook (host and path), exactly as in
+    `migrate_hook`. A tracked repo comes back only if a member with admin on it links one of its
+    pull requests again while they still hold a legacy connection: revoke the legacy grants after
+    this (runbook).
+    """
+    headers = hook_admin_headers(None, registration)
+    if headers is None:
+        outcome = f"{HOOK_LEFT}_{NO_TOKEN}"
+    else:
+        state = probe_hook(registration, headers)
+        if state == PRESENT:
+            state = _delete(registration, headers)
+        if state in (DELETED, ALREADY_GONE):
+            outcome = state
+        elif state in (NO_TOKEN, NO_ACCESS, NOT_OURS, INVALID_REPO):
+            outcome = f"{HOOK_LEFT}_{state}"
+        else:
+            return GITHUB_ERROR
+    GithubWebhookRegistration.objects.filter(pk=registration.pk).delete()
+    return outcome
+
+
+def registrations_for_repo(repo: str) -> list[GithubWebhookRegistration]:
+    """Every registration of `owner/name` (case-insensitive: rows differing only in casing can
+    exist, the unique constraint is case-sensitive)."""
+    owner, _, name = repo.partition("/")
+    return list(
+        GithubWebhookRegistration.objects.filter(owner__iexact=owner, repo__iexact=name).order_by(
+            "owner", "repo"
+        )
+    )
 
 
 RESTORED = "restored"

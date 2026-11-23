@@ -18,7 +18,7 @@ from django.test.utils import CaptureQueriesContext
 
 from origin.models.common.team_models import TeamMembers
 from origin.models.note.common_note_models import NotePermissionMaster
-from origin.models.skills.skill_models import STATUS_TAKEN_DOWN, Skill
+from origin.models.skills.skill_models import STATUS_TAKEN_DOWN, Skill, SkillGrant
 from origin.services.activity_surface_access import (
     SURFACE_PERSONAL_NOTE,
     _readable_notes,
@@ -70,6 +70,26 @@ class SkillBodyBatchReadTests(SharingBase):
         self.assert_batch_equals_single(skill["noteId"])
         readers = {p for p in self.people() if get_effective_role(p.pk, 1, skill["noteId"])}
         self.assertEqual(readers, {self.user2, self.editor})
+
+    def test_a_person_a_skill_is_shared_with_reads_the_published_text_not_the_body_note(self):
+        """Sharing with chosen people (MIP-2212) lets a grantee read and run the PUBLISHED version
+        through the skill API; it gives no role on the body note, so the batch checks (and the
+        single rule) must not open the live draft to them, while the owner and a co-editor still
+        read it."""
+        skill = self.skill()
+        Skill.objects.filter(pk=skill["id"]).update(visibility="specific")
+        SkillGrant.objects.create(skill_id=skill["id"], user=self.reader)
+        self.invite(skill, self.editor)
+        self.assert_batch_equals_single(skill["noteId"])
+        self.assertIsNone(get_effective_role(self.reader.pk, NOTE_TYPE_PERSONAL, skill["noteId"]))
+        self.assertNotIn(
+            skill["noteId"],
+            readable_note_ids(self.reader.pk, NOTE_TYPE_PERSONAL, {skill["noteId"]}),
+        )
+        self.assertEqual(
+            {p for p in self.people() if get_effective_role(p.pk, 1, skill["noteId"])},
+            {self.user2, self.editor},
+        )
 
     def test_a_stray_viewer_row_opens_nothing(self):
         skill = self.skill()
