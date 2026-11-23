@@ -59,6 +59,29 @@ ALLOWED_PERMISSIONS: Mapping[str, str] = {
     "issues": "read",
 }
 
+#: What the App registration on GitHub must grant, beyond the installation-token read set above:
+#: "Members: read" is the org-membership check on the person's own user token (MIP-2169).
+REGISTRATION_PERMISSIONS: Mapping[str, str] = {**ALLOWED_PERMISSIONS, "members": "read"}
+
+#: The webhook events the registration must subscribe to. GitHub only sends an event the App
+#: subscribed to (Settings -> Permissions & events), and nothing in a delivery says one is
+#: missing, so an unticked box is silent: on 2026-11-23 "Pull request" was not ticked, only
+#: check_run / status arrived, and no PR was ever linked. `origin.services.github_app_webhook`
+#: handles exactly these (a test pins the two lists together); `check_github_app_registration`
+#: compares this set with what GitHub reports for the App.
+REQUIRED_EVENTS: frozenset[str] = frozenset(
+    {
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "issue_comment",
+        "check_run",
+        "status",
+    }
+)
+
+_LEVELS = {"read": 1, "write": 2, "admin": 3}
+
 #: The JWT lives 9 minutes (GitHub's maximum is 10) and is dated 60 s in the past to absorb
 #: clock drift, as GitHub's docs advise.
 _JWT_LIFETIME_SECONDS = 540
@@ -104,6 +127,10 @@ def app_jwt(*, now: float | None = None) -> str:
     Minted on every use and never stored or logged.
     """
     _require_enabled()
+    return _sign_jwt(now)
+
+
+def _sign_jwt(now: float | None = None) -> str:
     issued = int(time.time() if now is None else now)
     claims = {
         "iat": issued - _JWT_BACKDATE_SECONDS,
@@ -255,3 +282,73 @@ def forget_installation_token(
         _checked_permissions(permissions),
     )
     cache.delete(key)
+
+
+# ---- the App's own registration ---------------------------------------------------------------
+
+
+def fetch_app_registration() -> dict:
+    """What GitHub says this App is registered for: `{"events": [...], "permissions": {...}}`.
+
+    One read-only `GET /app` as the App (the JWT). Unlike every other entry point it works with
+    `GITHUB_APP_ENABLED` off, because its job is to check a registration BEFORE the switch goes on;
+    it reads, and writes nothing anywhere. Only the two lists are returned, never the rest of
+    GitHub's answer. Raises `GithubAppError` (status code or fixed reason only) on any failure."""
+    try:
+        resp = requests.get(
+            f"{API_ROOT}/app",
+            headers={
+                "Authorization": f"Bearer {_sign_jwt()}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": API_VERSION,
+            },
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        raise GithubAppError(f"GET /app failed ({type(exc).__name__})") from None
+    except Exception as exc:  # noqa: BLE001 - a missing / malformed private key, nothing more said
+        raise GithubAppError(f"could not sign the App JWT ({type(exc).__name__})") from None
+    if resp.status_code != 200:
+        raise GithubAppError(f"GET /app answered {resp.status_code}")
+    try:
+        data = resp.json()
+    except ValueError:
+        raise GithubAppError("GET /app returned no JSON") from None
+    if not isinstance(data, dict):
+        raise GithubAppError("GET /app returned an unexpected shape")
+    events = data.get("events")
+    permissions = data.get("permissions")
+    return {
+        "events": sorted(e for e in events if isinstance(e, str))
+        if isinstance(events, list)
+        else [],
+        "permissions": {str(k): str(v) for k, v in permissions.items() if isinstance(v, str)}
+        if isinstance(permissions, dict)
+        else {},
+    }
+
+
+def registration_problems(registration: Mapping) -> dict:
+    """Compare a registration (`fetch_app_registration`) with what Genos needs.
+
+    `missing_events` and `missing_permissions` break the integration (an unsubscribed event never
+    arrives; a permission below the needed level makes a call fail). `extra_permissions` are
+    permissions beyond the design (no Contents, no write: design section 2), reported for a human to
+    look at. Extra events are harmless (answered 200 and ignored) and not listed."""
+    events = set(registration.get("events") or ())
+    granted = registration.get("permissions") or {}
+    missing_permissions: dict[str, str] = {}
+    for name, needed in REGISTRATION_PERMISSIONS.items():
+        if _LEVELS.get(granted.get(name), 0) < _LEVELS[needed]:
+            missing_permissions[name] = needed
+    extra_permissions: dict[str, str] = {}
+    for name, level in granted.items():
+        needed = REGISTRATION_PERMISSIONS.get(name)
+        if needed is None or _LEVELS.get(level, 0) > _LEVELS[needed]:
+            extra_permissions[name] = level
+    return {
+        "missing_events": sorted(REQUIRED_EVENTS - events),
+        "missing_permissions": dict(sorted(missing_permissions.items())),
+        "extra_permissions": dict(sorted(extra_permissions.items())),
+    }
