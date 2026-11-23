@@ -611,6 +611,10 @@ REGISTRY = {
     ),
     # views.note.html_note_views (MIP-2214): the saved page, under the note's own read ACL
     "origin.views.note.html_note_views.HtmlNoteView": checked("require_read_role"),
+    # (MIP-2215) the web import of a .html file: team membership, then the MCP save tool's own checks
+    "origin.views.note.html_note_views.HtmlNoteImportView": checked(
+        "require_team_member_or_response"
+    ),
     # views.note.note_folder_tag_views
     "origin.views.note.note_folder_tag_views.NoteFolderTagLinkView": checked("get_folder_role"),
     "origin.views.note.note_folder_tag_views.NoteFolderTagView": checked(

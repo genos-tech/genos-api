@@ -83,6 +83,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
                 folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsUpdated")
             .reverse()
@@ -98,6 +99,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -139,6 +141,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
                 folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsUpdated")
             .reverse()
@@ -150,6 +153,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
                 "title",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -476,6 +480,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -489,6 +494,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 

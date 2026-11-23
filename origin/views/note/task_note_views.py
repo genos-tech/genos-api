@@ -224,6 +224,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 taskId=F("task"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("-tsUpdated")
             .values(
@@ -238,6 +239,7 @@ class AllTaskNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -306,6 +308,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 milestoneId=F("task__milestone_id"),
                 milestoneTitle=F("task__milestone__title"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("-tsUpdated")
             .values(
@@ -323,6 +326,7 @@ class AllTaskNoteMetaView(AuthenticatedAPIView):
                 "milestoneTitle",
                 "title",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -382,6 +386,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsCreated")  # ASC by created at
             .values(
@@ -396,6 +401,7 @@ class TaskNoteMasterView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -648,6 +654,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -662,6 +669,7 @@ class SingleTaskNoteView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
