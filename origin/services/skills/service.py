@@ -36,7 +36,7 @@ from typing import Any
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import F, Q, QuerySet
+from django.db.models import F, OuterRef, Q, QuerySet, Subquery
 from django.utils import timezone
 
 from origin.models.common.team_models import TeamMaster, TeamMembers
@@ -751,11 +751,27 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
     require_enabled()
     if tab not in TABS:
         raise SkillError(f"`tab` must be one of: {', '.join(TABS)}.")
+    # Readers' tabs sort by when the PUBLISHED version was cut, never by `updated_at`: a draft save
+    # moves that column, and a teammate must not see a skill jump to the top for an edit they
+    # cannot read yet (MIP-2177). A skill with no published version (the owner's own) sorts last.
+    published_at = Subquery(
+        SkillVersion.objects.filter(
+            skill_id=OuterRef("pk"), version_no=OuterRef("published_version_no")
+        ).values("created_at")[:1]
+    )
     base = Skill.objects.select_related("owner")
     if tab == "installed":
-        return base.filter(visible_to(user.pk), installs__user=user).order_by("-updated_at")
+        return (
+            base.filter(visible_to(user.pk), installs__user=user)
+            .annotate(shown_at=published_at)
+            .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
+        )
     if tab == "starred":
-        return base.filter(visible_to(user.pk), stars__user=user).order_by("-updated_at")
+        return (
+            base.filter(visible_to(user.pk), stars__user=user)
+            .annotate(shown_at=published_at)
+            .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
+        )
     _require_member(user, team_id)
     if tab == "mine":
         return base.filter(owner=user, team_id=team_id).order_by("-updated_at")
@@ -767,7 +783,8 @@ def list_for(user: CustomUser, team_id: Any, tab: str) -> QuerySet[Skill]:
             status=STATUS_ACTIVE,
         )
         .exclude(owner=user)
-        .order_by("-updated_at")
+        .annotate(shown_at=published_at)
+        .order_by(F("shown_at").desc(nulls_last=True), "-updated_at")
     )
 
 

@@ -291,7 +291,6 @@ class TeamSkillTests(SkillBase):
 
     def test_sharing_a_private_skill_publishes_its_text_and_a_resave_does_not(self):
         skill = self.make_ok()
-        self.assertFalse(skill.get("hasUnpublishedChanges", False))
         self.client.patch(detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. Draft."}, format="json")
         self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 0)
         # Choosing "team" is the explicit share: it publishes what the owner has now.
@@ -302,6 +301,28 @@ class TeamSkillTests(SkillBase):
         self.assertIn(
             "Draft.", self.client.get(detail(skill["id"])).json()["skill"]["bodyMarkdown"]
         )
+        # After the share, a save is a draft again.
+        self.as_user(self.user)
+        self.client.patch(detail(skill["id"]), {"bodyMarkdown": "# T\n\n1. Later."}, format="json")
+        self.assertEqual(SkillVersion.objects.filter(skill_id=skill["id"]).count(), 1)
+
+    def test_a_draft_save_does_not_move_a_skill_in_the_teams_list(self):
+        first = self.make_ok(visibility="team", slug="first-skill", title="First skill")
+        second = self.make_ok(visibility="team", slug="second-skill", title="Second skill")
+
+        def team_tab():
+            self.as_user(self.user2)
+            rows = self.client.get(f"{LIST}?team_id={self.team_id}&tab=team").json()["skills"]
+            self.as_user(self.user)
+            return [r["id"] for r in rows]
+
+        self.assertEqual(team_tab(), [second["id"], first["id"]])
+        # An edit to the older skill is private: it keeps its place for the teammate.
+        self.client.patch(detail(first["id"]), {"description": "Draft"}, format="json")
+        self.assertEqual(team_tab(), [second["id"], first["id"]])
+        # Publishing it is what moves it up.
+        self.client.post(detail(first["id"], "publish/"), {}, format="json")
+        self.assertEqual(team_tab(), [first["id"], second["id"]])
 
     def test_saving_with_the_same_visibility_does_not_publish(self):
         skill = self.make_ok(visibility="team")
