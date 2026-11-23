@@ -51,12 +51,9 @@ def app_repos(team_ids=None) -> list[tuple[str, str]]:
 
 
 def registered_repos() -> list[tuple[str, str]]:
-    """`(owner, repo)` of every legacy hook registration, in the spelling the row stores."""
-    return list(
-        GithubWebhookRegistration.objects.order_by("owner", "repo")
-        .values_list("owner", "repo")
-        .distinct()
-    )
+    """`(owner, repo)` of every legacy hook registration, in the spelling the row stores. The same
+    query, in the same order, the scans ran before (MIP-2194): nothing here reorders their walk."""
+    return list(GithubWebhookRegistration.objects.values_list("owner", "repo").distinct())
 
 
 def merge_repos(*lists) -> list[tuple[str, str]]:
