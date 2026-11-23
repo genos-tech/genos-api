@@ -34,6 +34,9 @@ class GitHubOAuthProvider(OAuthProvider):
 
     def authorize_url(self, *, state: str, intent: FlowIntent, redirect_uri: str) -> str:
         scopes = GITHUB_CONNECT_SCOPES if intent == "connect" else GITHUB_LOGIN_SCOPES
+        if settings.GITHUB_CONNECT_REPO_SCOPE_REMOVED:
+            # Phase 4 of the GitHub App migration (MIP-2091): `repo` is never asked for again.
+            scopes = GITHUB_LOGIN_SCOPES
         params = {
             "client_id": settings.GITHUB_OAUTH_CLIENT_ID,
             "redirect_uri": redirect_uri,
@@ -72,9 +75,7 @@ class GitHubOAuthProvider(OAuthProvider):
         )
 
     def refresh(self, *, refresh_token: str) -> TokenResponse:
-        raise NotImplementedError(
-            "GitHub OAuth App tokens don't expire and don't support refresh."
-        )
+        raise NotImplementedError("GitHub OAuth App tokens don't expire and don't support refresh.")
 
     def fetch_profile(self, *, access_token: str) -> ProviderProfile:
         # Primary identity comes from /user. The `email` field there is
