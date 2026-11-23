@@ -87,13 +87,29 @@ def _installation(
 class GitHubStub:
     """What GitHub answers: the person's id, and the installations their token can see."""
 
-    def __init__(self, installations=(), github_user_id=9001):
+    def __init__(self, installations=(), github_user_id=9001, memberships=None):
         self.installations = list(installations)
         self.github_user_id = github_user_id
+        # `GET /user/memberships/orgs/{org}` (MIP-2169): org login -> a response (`_resp(...)`) or
+        # an exception to raise. An org not named here answers "active member".
+        self.memberships = dict(memberships or {})
         self.calls = []
+
+    def membership_calls(self):
+        return [c for c in self.calls if "/user/memberships/orgs/" in c[1]]
 
     def get(self, url, **kwargs):
         self.calls.append(("GET", url, kwargs))
+        if "/user/memberships/orgs/" in url:
+            org = url.rsplit("/", 1)[1]
+            answer = self.memberships.get(org)
+            if isinstance(answer, BaseException):
+                raise answer
+            if answer is not None:
+                return answer
+            return _resp(
+                {"state": "active", "role": "member", "organization": {"login": org, "id": 5000}}
+            )
         if url.endswith("/user/installations"):
             return _resp(
                 {"total_count": len(self.installations), "installations": self.installations}
@@ -669,6 +685,131 @@ class CallbackTests(_Base):
         with GitHubStub([_installation(7001, suspended_at="2026-11-23T10:00:00Z")]):
             self._callback(code="c", state=self._state(), installation_id="7001")
         self.assertIsNotNone(GithubAppInstallation.objects.get().suspended_at)
+
+
+REASON = "github_app_org_membership_unverified"
+MEMBERSHIP_URL_PART = "/user/memberships/orgs/genos-tech"
+
+
+@override_settings(**APP)
+class OrgMembershipTests(_Base):
+    """MIP-2169: an Organization installation links only for an ACTIVE member of that organization,
+    asked of GitHub with the person's own user token. Every failure refuses the link."""
+
+    def _hinted(self, memberships, installations=None):
+        with self.assertLogs("origin.services.github_app_link", level="WARNING") as logs:
+            with GitHubStub(installations or [_installation(7001)], memberships=memberships) as gh:
+                resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        return resp, gh, logs
+
+    def test_an_active_member_links_and_the_call_carries_the_persons_own_token(self):
+        with GitHubStub([_installation(7001)]) as gh:
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(GithubAppInstallation.objects.get().account_login, "genos-tech")
+        (call,) = gh.membership_calls()
+        self.assertTrue(call[1].endswith(MEMBERSHIP_URL_PART))
+        self.assertEqual(call[2]["headers"]["Authorization"], f"Bearer {USER_TOKEN}")
+        self.assertFalse(call[2]["allow_redirects"])
+
+    def test_a_pending_invitation_is_refused(self):
+        pending = _resp({"state": "pending", "role": "member", "organization": {"id": 5000}})
+        resp, _, _ = self._hinted({"genos-tech": pending})
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_a_non_member_404_is_refused(self):
+        resp, _, _ = self._hinted({"genos-tech": _resp({"message": "Not Found"}, status=404)})
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_a_403_because_the_permission_is_not_accepted_yet_is_refused(self):
+        resp, _, _ = self._hinted({"genos-tech": _resp({"message": "Forbidden"}, status=403)})
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_a_timeout_or_network_error_is_refused(self):
+        for exc in (requests.Timeout("slow"), requests.ConnectionError("down")):
+            with self.subTest(exc=type(exc).__name__):
+                resp, _, _ = self._hinted({"genos-tech": exc})
+                self.assertFailure(resp, REASON)
+                self.assertNothingStored()
+
+    def test_a_5xx_or_an_unreadable_answer_is_refused(self):
+        broken = _resp(None)
+        broken.json.side_effect = ValueError("not json")
+        for answer in (_resp({}, status=502), broken, _resp([]), _resp({"role": "admin"})):
+            with self.subTest(answer=answer.status_code):
+                resp, _, _ = self._hinted({"genos-tech": answer})
+                self.assertFailure(resp, REASON)
+                self.assertNothingStored()
+
+    def test_an_answer_about_another_organization_is_refused(self):
+        other = _resp({"state": "active", "role": "admin", "organization": {"id": 1}})
+        resp, _, _ = self._hinted({"genos-tech": other})
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_the_log_names_the_org_and_never_a_token(self):
+        resp, _, logs = self._hinted({"genos-tech": _resp({"message": "x"}, status=403)})
+        text = "\n".join(logs.output)
+        self.assertIn("genos-tech", text)
+        self.assertIn("403", text)
+        for secret in (USER_TOKEN, REFRESH, "app-secret-SECRET"):
+            self.assertNotIn(secret, text)
+
+    def test_the_authorize_path_skips_the_unverified_org_and_links_the_rest(self):
+        mine = _installation(7002, login="me", type_="User", account_id=9001)
+        refused = _resp({"message": "Not Found"}, status=404)
+        with GitHubStub([_installation(7001), mine], memberships={"genos-tech": refused}) as gh:
+            resp = self._callback(code="c", state=self._state())
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(
+            list(GithubAppInstallation.objects.values_list("installation_id", flat=True)), [7002]
+        )
+        self.assertEqual(len(gh.membership_calls()), 1)
+
+    def test_the_authorize_path_with_only_unverified_orgs_gives_the_new_reason(self):
+        refused = _resp({"message": "Not Found"}, status=404)
+        with GitHubStub([_installation(7001)], memberships={"genos-tech": refused}):
+            resp = self._callback(code="c", state=self._state())
+        self.assertFailure(resp, REASON)
+        self.assertNothingStored()
+
+    def test_the_user_account_path_makes_no_membership_call(self):
+        mine = _installation(7002, login="me", type_="User", account_id=9001)
+        with GitHubStub([mine]) as gh:
+            resp = self._callback(code="c", state=self._state(), installation_id="7002")
+        self.assertEqual(resp["Location"], "https://app.example.test/workspace/integrations")
+        self.assertEqual(gh.membership_calls(), [])
+        self.assertEqual(GithubAppInstallation.objects.get().account_type, "User")
+
+    def test_someone_elses_user_account_is_still_refused_before_any_membership_call(self):
+        theirs = _installation(7002, login="them", type_="User", account_id=1)
+        with GitHubStub([theirs]) as gh:
+            resp = self._callback(code="c", state=self._state(), installation_id="7002")
+        self.assertFailure(resp, "installation_not_confirmed")
+        self.assertEqual(gh.membership_calls(), [])
+
+    def test_an_org_held_by_another_team_is_refused_without_asking_github_about_membership(self):
+        other_owner = User.objects.create_user(
+            username="o2", email="o2@example.com", password="pw123456"
+        )
+        other_team = TeamMaster.objects.create(
+            team_name="Other", team_email="other@example.com", owner=other_owner
+        )
+        TeamMembers.objects.create(team=other_team, attendee=other_owner)
+        self._link(team=other_team)
+        with GitHubStub([_installation(7001)]) as gh:
+            resp = self._callback(code="c", state=self._state(), installation_id="7001")
+        self.assertFailure(resp, "installation_not_confirmed")
+        self.assertEqual(gh.membership_calls(), [])
+        self.assertFalse(GithubAppInstallationTeam.objects.filter(team=self.team).exists())
+
+    def test_a_team_that_already_holds_it_still_needs_the_active_membership(self):
+        self._link()
+        resp, _, _ = self._hinted({"genos-tech": _resp({"message": "x"}, status=404)})
+        self.assertFailure(resp, REASON)
 
 
 @override_settings(**APP)

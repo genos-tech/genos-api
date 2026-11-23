@@ -17,6 +17,9 @@ Security rules (genos-security, design section 8):
   * **The tenant is the signed state**, not the URL: the team id travels in the signed `state`
     (user id, team id, 10 minutes), and the person's right to link into that team (owner or
     editor) is checked again at the callback, because a role can change in between.
+  * **An Organization installation links only for an active member** (MIP-2169): the person's own
+    user token asks `GET /user/memberships/orgs/{org}` and `state` must be `active`. Any other
+    answer or failure refuses the link (`github_app_org_membership_unverified`).
   * **Nothing here holds a credential.** The user token is used for one request and dropped; the
     stored token is `ConnectedAccount`'s (encrypted) and is written by the view.
 """
@@ -53,6 +56,11 @@ TIMEOUT_SECONDS = 10
 # installations of one App is not a case worth a loop that never ends.
 _PER_PAGE = 100
 _MAX_PAGES = 5
+
+# Failure-page reason: the person's active membership of an installation's organization could not
+# be verified (not a member, invitation pending, the App's "Members: read" not accepted yet, or
+# GitHub unreachable). MIP-2169.
+MEMBERSHIP_UNVERIFIED = "github_app_org_membership_unverified"
 
 _ACCOUNT_TYPES = {value for value, _ in INSTALLATION_ACCOUNT_TYPE_CHOICES}
 _SELECTIONS = {value for value, _ in REPOSITORY_SELECTION_CHOICES}
@@ -228,6 +236,57 @@ def parse_installation_hint(raw) -> Optional[int]:
     return int(raw)
 
 
+def org_membership_active(user_token: str, item: Installation) -> bool:
+    """Whether the person is an ACTIVE member of the installation's organization (MIP-2169).
+
+    `GET /user/memberships/orgs/{org}` with the person's own user token. It needs the App's
+    organization permission "Members: read": until the organization has accepted it GitHub answers
+    403, which is refused like a 404 (not a member) or a `pending` invitation. Every failure,
+    including a timeout, is "not verified"; only `state == "active"` for the very organization of
+    the installation passes. The log carries the organization login and the HTTP status only,
+    never a token or GitHub's body.
+    """
+    org = item.account_login
+    try:
+        resp = requests.get(
+            f"{API_ROOT}/user/memberships/orgs/{quote(org, safe='')}",
+            headers={
+                "Authorization": f"Bearer {user_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": API_VERSION,
+            },
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        log.warning("GitHub App org membership check for %s failed: %s", org, type(exc).__name__)
+        return False
+    if resp.status_code != 200:
+        log.warning(
+            "GitHub App org membership check for %s returned HTTP %s", org, resp.status_code
+        )
+        return False
+    try:
+        body = resp.json()
+        state = body["state"]
+        organization = body.get("organization")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        log.warning("GitHub App org membership check for %s returned an unreadable body", org)
+        return False
+    if state != "active":
+        # `%r` of a short slice: GitHub's text can never add a line to the log.
+        log.warning(
+            "GitHub App org membership of %s is not active (state=%r)", org, str(state)[:20]
+        )
+        return False
+    # The answer must be about the installation's own organization: its id, when both are known.
+    org_id = organization.get("id") if isinstance(organization, dict) else None
+    if item.account_id is not None and org_id is not None and str(org_id) != str(item.account_id):
+        log.warning("GitHub App org membership answer for %s names another organization", org)
+        return False
+    return True
+
+
 def _may_link(item: Installation, *, user, team: TeamMaster, github_user_id: str) -> bool:
     """Whether this person may bring this (listed) installation into this team.
 
@@ -237,11 +296,11 @@ def _may_link(item: Installation, *, user, team: TeamMaster, github_user_id: str
 
       * A **User** account's installation: its `account.id` must be the person's own GitHub id.
         A collaborator on someone else's personal repository can never link it.
-      * An **Organization** installation: GitHub tells us nothing about the person's role in the
-        organization without an organization permission the App deliberately does not have. So the
-        installation is linked only if no other team holds it yet, the team already holds it, or
-        the person already belongs to a team that holds it. A person who is not in the team that
-        adopted an organization's installation cannot pull it into their own team.
+      * An **Organization** installation: the installation is linked only if no other team holds
+        it yet, the team already holds it, or the person already belongs to a team that holds it.
+        A person who is not in the team that adopted an organization's installation cannot pull it
+        into their own team. This is the local rule; the person's membership of the organization
+        itself is checked separately, over the network (`org_membership_active`, MIP-2169).
     """
     if item.account_type == "User":
         return item.account_id is not None and str(item.account_id) == str(github_user_id)
@@ -272,23 +331,35 @@ def confirmed_installations(
     * Without one (the authorize path, a second press): every listed installation that passes
       `_may_link`; the others are left out.
 
-    Raises `LinkError("installation_not_confirmed")` for a hint that does not answer and
-    `LinkError("no_installation")` when nothing passes.
+    An Organization installation also needs the person to be an active member of the organization
+    (`org_membership_active`, MIP-2169). The call runs only for installations that already passed
+    the local rules, and any failure of it leaves that installation out (with a hint: refuses it).
+
+    Raises `LinkError("installation_not_confirmed")` for a hint that does not answer,
+    `LinkError(MEMBERSHIP_UNVERIFIED)` when the only reason nothing links is a membership that
+    could not be verified, and `LinkError("no_installation")` when nothing passes.
     """
     listed = list_user_installations(user_token)
     allowed = [
         i for i in listed if _may_link(i, user=user, team=team, github_user_id=github_user_id)
     ]
+
+    def verified(item: Installation) -> bool:
+        return item.account_type != "Organization" or org_membership_active(user_token, item)
+
     if hint_present:
         if hinted_installation_id is None:
             raise LinkError("installation_not_confirmed")
         chosen = [i for i in allowed if i.installation_id == hinted_installation_id]
         if not chosen:
             raise LinkError("installation_not_confirmed")
+        if not verified(chosen[0]):
+            raise LinkError(MEMBERSHIP_UNVERIFIED)
         return chosen
-    if not allowed:
-        raise LinkError("no_installation")
-    return allowed
+    linkable = [i for i in allowed if verified(i)]
+    if not linkable:
+        raise LinkError(MEMBERSHIP_UNVERIFIED if allowed else "no_installation")
+    return linkable
 
 
 # ---- the write ------------------------------------------------------------------------------
