@@ -6,6 +6,7 @@ from origin.models.note.common_note_models import NotePermissionMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.serializers.note.note_serializers import NoteRoleMemberSerializer
 from origin.services.note_sharing import SharingRefused, share_note, unshare_note
+from origin.services.skills import service as skills_service
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.note_role import (
     ROLE_OWNER,
@@ -222,6 +223,9 @@ class SharedPersonalNoteMetaView(AuthenticatedAPIView):
             .exclude(role_id=ROLE_OWNER)
             .values_list("note_id", flat=True)
         )
+        # A skill's body (a co-editor's row, MIP-2043) belongs to the Skills page, not to this list.
+        skill_bodies = skills_service.skill_body_ids(granted_note_ids)
+        granted_note_ids = [n for n in granted_note_ids if n not in skill_bodies]
 
         if not granted_note_ids:
             return Response([], status=status.HTTP_200_OK)

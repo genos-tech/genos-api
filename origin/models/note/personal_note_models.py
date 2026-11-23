@@ -74,6 +74,16 @@ class PersonalNoteFolder(models.Model):
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
+    @classmethod
+    def skill_folder_ids(cls):
+        """The ids of every hidden Genos-Skills folder, as a subquery (MIP-2121).
+
+        The ONE definition of "this note is a skill's body": a note filed in one of these folders.
+        Every surface that lists or indexes notes excludes `folder_id__in=` this, so the skill text
+        shows up only in the Skills editor.
+        """
+        return cls.objects.filter(scope=cls.SCOPE_SKILL).values("folder_id")
+
 
 class PersonalNoteMaster(models.Model):
     team = models.ForeignKey(
@@ -104,6 +114,18 @@ class PersonalNoteMaster(models.Model):
     mentioned_user_ids = models.JSONField(blank=True, default=list)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def skill_body_ids(cls, note_ids) -> set[int]:
+        """The ids among `note_ids` that are a Genos Skill's body note (MIP-2121): one query."""
+        ids = list(note_ids)
+        if not ids:
+            return set()
+        return set(
+            cls.objects.filter(
+                note_id__in=ids, folder_id__in=PersonalNoteFolder.skill_folder_ids()
+            ).values_list("note_id", flat=True)
+        )
 
 
 def personal_note_attachment_path(instance, filename):

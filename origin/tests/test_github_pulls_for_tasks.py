@@ -6,8 +6,8 @@ per paint instead of one per row. The per-task semantics (branch-match
 sources, html_url dedupe) are shared with the single view through
 `_pulls_for_task`; what these tests pin down is the batch-specific
 behavior — CSV parsing/caps, per-id response keys, and the hoisted
-repo/branch walk (one branches fetch per repo per request, however
-many tasks are asked for).
+repo/pulls walk (one pulls fetch per repo per request, however
+many tasks are asked for; MIP-2089: no branch walk).
 """
 
 from unittest.mock import MagicMock, patch
@@ -25,6 +25,7 @@ from origin.models.common.user_models import (
 )
 from origin.models.project.prj_models import ProjectMaster, ProjectMembers
 from origin.models.task.task_models import TaskMaster
+from origin.tests.github_pull_fakes import pull, pulls_response
 
 User = get_user_model()
 
@@ -32,7 +33,7 @@ User = get_user_model()
 class TestPullsForTasksView(TestCase):
     def setUp(self):
         # Redis is a real backend; clear between tests so a cached
-        # branch list from a prior test doesn't shadow this test's mock.
+        # pulls list from a prior test doesn't shadow this test's mock.
         cache.clear()
         # The view resolves the user's GitHub token itself (once per request,
         # before any parallel fetch), and these accounts store a placeholder
@@ -93,32 +94,6 @@ class TestPullsForTasksView(TestCase):
     def tearDown(self):
         cache.clear()
 
-    # ── Mock helpers ──────────────────────────────────────────────
-
-    @staticmethod
-    def _branches_response(names):
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = [{"name": n, "commit": {"sha": f"sha-{n}"}} for n in names]
-        return resp
-
-    @staticmethod
-    def _pulls_response(items):
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = items
-        return resp
-
-    @staticmethod
-    def _empty_pulls_response():
-        resp = MagicMock(spec=requests.Response)
-        resp.ok = True
-        resp.status_code = 200
-        resp.json.return_value = []
-        return resp
-
     def _get(self, ids):
         return self.client.get(f"/api/v2/github/pulls/for-tasks/?task_ids={ids}")
 
@@ -128,32 +103,22 @@ class TestPullsForTasksView(TestCase):
     def test_resolves_pulls_per_task_in_one_request(self, mock_get):
         branch_a = "feature/GEN-42-add-thing"
         branch_b = "fix/GEN-43-hotfix"
-        pr_a = {
-            "number": 7,
-            "html_url": "https://github.com/acme/rocket/pull/7",
-            "title": "Add thing",
-            "state": "open",
-            "draft": False,
-            "merged_at": None,
-        }
-        pr_b = {
-            "number": 8,
-            "html_url": "https://github.com/acme/rocket/pull/8",
-            "title": "Hotfix",
-            "state": "closed",
-            "draft": False,
-            "merged_at": "2026-06-01T00:00:00Z",
-        }
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["main", branch_a, branch_b])
-            if path.endswith("/pulls"):
-                head = (params or {}).get("head")
-                if head == f"acme:{branch_a}":
-                    return self._pulls_response([pr_a])
-                if head == f"acme:{branch_b}":
-                    return self._pulls_response([pr_b])
+            if path == "/repos/acme/rocket/pulls":
+                return pulls_response(
+                    [
+                        pull(7, branch_a, title="Add thing"),
+                        pull(
+                            8,
+                            branch_b,
+                            title="Hotfix",
+                            state="closed",
+                            merged_at="2026-06-01T00:00:00Z",
+                        ),
+                        pull(9, "feature/OTHER-1-x"),
+                    ]
+                )
             self.fail(f"Unexpected GitHub path: {path}")
 
         mock_get.side_effect = side_effect
@@ -164,32 +129,34 @@ class TestPullsForTasksView(TestCase):
         self.assertEqual(by_task[str(self.task_a.task_id)][0]["number"], 7)
         self.assertEqual(len(by_task[str(self.task_b.task_id)]), 1)
         self.assertEqual(by_task[str(self.task_b.task_id)][0]["number"], 8)
+        self.assertEqual(mock_get.call_count, 1)  # one pulls call serves both tasks
 
     @patch("origin.views.common.github_views._github_get")
-    def test_branches_fetched_once_per_repo_regardless_of_task_count(self, mock_get):
-        # The whole point of the batch: N tasks must not mean N branch
-        # walks. One branches call per registered repo per request.
+    def test_pulls_fetched_once_per_repo_regardless_of_task_count(self, mock_get):
+        # The whole point of the batch: N tasks must not mean N walks.
+        # One pulls call per registered repo per request.
         GithubWebhookRegistration.objects.create(
             owner="acme", repo="other", hook_id=2, registered_by=self.user
         )
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                return self._branches_response(["main"])
+            if path.endswith("/pulls"):
+                return pulls_response([pull(1, "main-fix")])
             self.fail(f"Unexpected GitHub path: {path}")
 
         mock_get.side_effect = side_effect
         resp = self._get(f"{self.task_a.task_id},{self.task_b.task_id}")
         self.assertEqual(resp.status_code, 200)
-        branches_calls = [c for c in mock_get.call_args_list if c.args[1].endswith("/branches")]
-        self.assertEqual(len(branches_calls), 2)  # one per repo, not per task
+        pulls_calls = [c for c in mock_get.call_args_list if c.args[1].endswith("/pulls")]
+        self.assertEqual(len(pulls_calls), 2)  # one per repo, not per task
+        self.assertEqual(len(mock_get.call_args_list), 2)  # and no branch listing
 
     @patch("origin.views.common.github_views._github_get")
     def test_unknown_and_pull_less_ids_map_to_empty_lists(self, mock_get):
         # Unlike the single view's 404, a bad id must not fail the
         # batch — every requested id gets a key so the client can
         # cache negatives uniformly.
-        mock_get.return_value = self._branches_response(["main"])
+        mock_get.return_value = pulls_response([pull(1, "main-fix")])
         resp = self._get(f"{self.task_a.task_id},999999")
         self.assertEqual(resp.status_code, 200)
         by_task = resp.json()["pulls_by_task"]
@@ -243,12 +210,14 @@ class TestPullsForTasksView(TestCase):
     # ── Which answers are "could not look" (MIP-1412) ─────────────
     #
     # A GitHub call that fails for a reason that is not about access (a 5xx, a
-    # rate limit, a 401) used to read as "this branch has no PR": the task's list
-    # was just shorter or empty, in a 200 that looks like any other. The response
-    # now also names the tasks it could not fully look at, in `incomplete`. A
-    # REFUSAL (404, or a 403 that is not a rate limit) is not one of them: it is
-    # GitHub saying this account cannot read the thing, which the server already
-    # remembers for ten minutes, and "no PR" is the true answer for this user.
+    # rate limit, a 401) must not read as "this task has no PR": the response
+    # names the tasks it could not fully look at, in `incomplete`. With the
+    # pulls walk the call that can fail is a repo's pulls list (or a persisted
+    # link's by-number lookup); a repo that failed makes every task incomplete,
+    # because the PR we could not read may be theirs. A REFUSAL (404, or a 403
+    # that is not a rate limit) is not one of them: it is GitHub saying this
+    # account cannot read the repo, which the server already remembers for ten
+    # minutes, and "no PR" is the true answer for this user.
 
     BRANCH_A = "feature/GEN-42-add-thing"
     BRANCH_B = "fix/GEN-43-hotfix"
@@ -262,36 +231,19 @@ class TestPullsForTasksView(TestCase):
         resp.json.return_value = {"message": "boom"}
         return resp
 
-    @staticmethod
-    def _pr(number):
-        return {
-            "number": number,
-            "html_url": f"https://github.com/acme/rocket/pull/{number}",
-            "title": f"PR {number}",
-            "state": "open",
-            "draft": False,
-            "merged_at": None,
-        }
-
-    def _github(self, mock_get, *, lookup=None, branches=None, by_number=None, names=None):
-        """A fake GitHub for acme/rocket with a branch per task. `lookup` maps a
-        branch name to the response of its PR lookup (default: its PR), `branches`
-        maps a repo to the response of its branch list, `by_number` a PR number to
-        the response of a lookup by number, `names` the branches acme/rocket has."""
-        lookup, branches, by_number = lookup or {}, branches or {}, by_number or {}
-        prs = {self.BRANCH_A: self._pr(7), self.BRANCH_B: self._pr(8)}
+    def _github(self, mock_get, *, repos=None, by_number=None, items=None):
+        """A fake GitHub for acme/rocket with a PR per task. `repos` maps a repo name to
+        the response of its pulls list (default: `items`, or the PRs of tasks A and B),
+        `by_number` a PR number to the response of a lookup by number."""
+        repos, by_number = repos or {}, by_number or {}
+        default = items or [pull(7, self.BRANCH_A), pull(8, self.BRANCH_B)]
 
         def side_effect(_account, path, params=None):
-            if path.endswith("/branches"):
-                repo = path.split("/")[3]
-                if repo in branches:
-                    return branches[repo]
-                return self._branches_response(names or ["main", self.BRANCH_A, self.BRANCH_B])
             if path.endswith("/pulls"):
-                branch = (params or {})["head"].split(":", 1)[1]
-                if branch in lookup:
-                    return lookup[branch]
-                return self._pulls_response([prs[branch]] if branch in prs else [])
+                repo = path.split("/")[3]
+                if repo in repos:
+                    return repos[repo]
+                return pulls_response(default)
             number = int(path.rsplit("/", 1)[1])
             if number in by_number:
                 return by_number[number]
@@ -301,6 +253,9 @@ class TestPullsForTasksView(TestCase):
 
     def _ids(self):
         return f"{self.task_a.task_id},{self.task_b.task_id}"
+
+    def _both(self):
+        return sorted([str(self.task_a.task_id), str(self.task_b.task_id)], key=int)
 
     def _body(self, query=""):
         resp = self.client.get(f"/api/v2/github/pulls/for-tasks/?task_ids={self._ids()}{query}")
@@ -315,13 +270,11 @@ class TestPullsForTasksView(TestCase):
         self.assertEqual(len(body["pulls_by_task"][str(self.task_a.task_id)]), 1)
 
     @patch("origin.views.common.github_views._github_get")
-    def test_a_5xx_on_one_lookup_names_that_task_and_no_other(self, mock_get):
-        self._github(mock_get, lookup={self.BRANCH_A: self._failure(500)})
+    def test_a_5xx_on_the_pulls_list_makes_every_task_incomplete(self, mock_get):
+        self._github(mock_get, repos={"rocket": self._failure(500)})
         body = self._body()
-        self.assertEqual(body["incomplete"], [str(self.task_a.task_id)])
+        self.assertEqual(body["incomplete"], self._both())
         self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)], [])
-        # The healthy task is answered in the same request, and is not named.
-        self.assertEqual(body["pulls_by_task"][str(self.task_b.task_id)][0]["number"], 8)
 
     @patch("origin.views.common.github_views._github_get")
     def test_a_rate_limit_or_a_401_is_a_failed_lookup(self, mock_get):
@@ -333,8 +286,8 @@ class TestPullsForTasksView(TestCase):
         ):
             with self.subTest(failure=label):
                 cache.clear()
-                self._github(mock_get, lookup={self.BRANCH_A: failure()})
-                self.assertEqual(self._body()["incomplete"], [str(self.task_a.task_id)])
+                self._github(mock_get, repos={"rocket": failure()})
+                self.assertEqual(self._body()["incomplete"], self._both())
 
     @patch("origin.views.common.github_views._github_get")
     def test_a_refusal_is_not_incomplete_it_is_the_answer(self, mock_get):
@@ -344,16 +297,16 @@ class TestPullsForTasksView(TestCase):
         ):
             with self.subTest(failure=label):
                 cache.clear()
-                self._github(mock_get, lookup={self.BRANCH_A: failure()})
+                self._github(mock_get, repos={"rocket": failure()})
                 for _ in range(2):  # the second is the remembered refusal
                     body = self._body()
                     self.assertEqual(body["incomplete"], [])
                     self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)], [])
 
     @patch("origin.views.common.github_views._github_get")
-    def test_a_failed_lookup_is_not_cached_so_the_next_request_heals(self, mock_get):
-        self._github(mock_get, lookup={self.BRANCH_A: self._failure(502)})
-        self.assertEqual(self._body()["incomplete"], [str(self.task_a.task_id)])
+    def test_a_failed_list_is_not_cached_so_the_next_request_heals(self, mock_get):
+        self._github(mock_get, repos={"rocket": self._failure(502)})
+        self.assertEqual(self._body()["incomplete"], self._both())
 
         self._github(mock_get)  # GitHub is back
         body = self._body()
@@ -361,29 +314,15 @@ class TestPullsForTasksView(TestCase):
         self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)][0]["number"], 7)
 
     @patch("origin.views.common.github_views._github_get")
-    def test_both_failing_are_both_named_in_id_order(self, mock_get):
-        self._github(
-            mock_get,
-            lookup={self.BRANCH_A: self._failure(500), self.BRANCH_B: self._failure(500)},
-        )
-        self.assertEqual(
-            self._body()["incomplete"],
-            sorted([str(self.task_a.task_id), str(self.task_b.task_id)], key=int),
-        )
-
-    @patch("origin.views.common.github_views._github_get")
-    def test_a_repo_whose_branch_list_failed_makes_every_task_incomplete(self, mock_get):
-        # The branch we could not read may be the one that carries a task's PR, so
+    def test_a_repo_whose_pulls_list_failed_makes_every_task_incomplete(self, mock_get):
+        # The PR we could not read may be the one that carries a task's PR, so
         # no task can be called complete. The repo that did answer still counts.
         GithubWebhookRegistration.objects.create(
             owner="acme", repo="other", hook_id=2, registered_by=self.user
         )
-        self._github(mock_get, branches={"other": self._failure(503)})
+        self._github(mock_get, repos={"other": self._failure(503)})
         body = self._body()
-        self.assertEqual(
-            body["incomplete"],
-            sorted([str(self.task_a.task_id), str(self.task_b.task_id)], key=int),
-        )
+        self.assertEqual(body["incomplete"], self._both())
         self.assertEqual(body["pulls_by_task"][str(self.task_a.task_id)][0]["number"], 7)
 
     @patch("origin.views.common.github_views._github_get")
@@ -391,30 +330,22 @@ class TestPullsForTasksView(TestCase):
         GithubWebhookRegistration.objects.create(
             owner="acme", repo="other", hook_id=2, registered_by=self.user
         )
-        self._github(mock_get, branches={"other": self._failure(404)})
+        self._github(mock_get, repos={"other": self._failure(404)})
         self.assertEqual(self._body()["incomplete"], [])
 
     @patch("origin.views.common.github_views._github_get")
     def test_a_persisted_pr_that_fails_to_load_is_a_failed_lookup(self, mock_get):
-        # The PR of a deleted branch comes from the task's persisted auto-link.
+        # An old PR no longer in the newest pulls comes from the task's persisted auto-link.
         self.task_a.links = [{"url": "https://github.com/acme/rocket/pull/9", "isAutoLinked": True}]
         self.task_a.save(update_fields=["links"])
-        self._github(
-            mock_get,
-            lookup={self.BRANCH_A: self._pulls_response([])},
-            by_number={9: self._failure(500)},
-        )
+        self._github(mock_get, items=[], by_number={9: self._failure(500)})
         self.assertEqual(self._body()["incomplete"], [str(self.task_a.task_id)])
 
     @patch("origin.views.common.github_views._github_get")
     def test_a_persisted_pr_that_is_refused_is_not_incomplete(self, mock_get):
         self.task_a.links = [{"url": "https://github.com/acme/rocket/pull/9", "isAutoLinked": True}]
         self.task_a.save(update_fields=["links"])
-        self._github(
-            mock_get,
-            lookup={self.BRANCH_A: self._pulls_response([])},
-            by_number={9: self._failure(404)},
-        )
+        self._github(mock_get, items=[], by_number={9: self._failure(404)})
         self.assertEqual(self._body()["incomplete"], [])
 
     @patch("origin.views.common.github_views._github_get")
@@ -433,20 +364,15 @@ class TestPullsForTasksView(TestCase):
             )
             for task_id, number in ((1_000_000_000, 62), (900_000_001, 61))
         ]
-        branches = ["main", "feature/GEN-61-x", "feature/GEN-62-y"]
-        self._github(
-            mock_get,
-            names=branches,
-            lookup={name: self._failure(500) for name in branches[1:]},
-        )
+        self._github(mock_get, repos={"rocket": self._failure(500)})
         ids = ",".join(str(t.task_id) for t in tasks)
         resp = self.client.get(f"/api/v2/github/pulls/for-tasks/?task_ids={ids}")
         self.assertEqual(resp.json()["incomplete"], ["900000001", "1000000000"])
 
     @patch("origin.views.common.github_views._github_get")
     def test_fresh_reports_it_the_same_way(self, mock_get):
-        self._github(mock_get, lookup={self.BRANCH_A: self._failure(500)})
-        self.assertEqual(self._body("&fresh=1")["incomplete"], [str(self.task_a.task_id)])
+        self._github(mock_get, repos={"rocket": self._failure(500)})
+        self.assertEqual(self._body("&fresh=1")["incomplete"], self._both())
 
     @patch("origin.views.common.github_views._github_get")
     def test_every_answer_carries_the_key_so_a_client_can_tell_the_server_reports_it(
@@ -454,7 +380,7 @@ class TestPullsForTasksView(TestCase):
     ):
         # Present and empty means "I looked and it is complete"; absent means an
         # older server that cannot say. Every path of the route has to say it.
-        mock_get.return_value = self._branches_response(["main"])
+        mock_get.return_value = pulls_response([pull(1, "main-fix")])
         self.assertEqual(self._get("").json()["incomplete"], [])
         self.assertEqual(self._get(self._ids()).json()["incomplete"], [])
         orphan = TaskMaster.objects.create(
