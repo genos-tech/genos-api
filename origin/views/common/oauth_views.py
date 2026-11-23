@@ -814,31 +814,38 @@ class IntegrationsListView(APIView):
         accounts = ConnectedAccount.objects.filter(user=request.user).order_by(
             "provider", "-is_login_identity", "ts_created_at", "id"
         )
-        return Response(
-            {
-                "primary_auth_provider": request.user.primary_auth_provider,
-                "connections": [
-                    {
-                        # `id` is what every per-account operation keys
-                        # on (calendar reads/writes, disconnect). Without
-                        # it a client holding two Google accounts has no
-                        # way to address either one.
-                        "id": str(a.id),
-                        "provider": a.provider,
-                        "provider_email": a.provider_email,
-                        "label": a.label,
-                        "scopes": a.scopes,
-                        "connected_at": a.ts_created_at,
-                        # Read from the flag, not from a provider-string
-                        # comparison: with two Google rows the old
-                        # comparison marked both as primary and made
-                        # both undeletable.
-                        "is_primary": a.is_login_identity,
-                    }
-                    for a in accounts
-                ],
-            }
-        )
+        payload = {
+            "primary_auth_provider": request.user.primary_auth_provider,
+            "connections": [
+                {
+                    # `id` is what every per-account operation keys
+                    # on (calendar reads/writes, disconnect). Without
+                    # it a client holding two Google accounts has no
+                    # way to address either one.
+                    "id": str(a.id),
+                    "provider": a.provider,
+                    "provider_email": a.provider_email,
+                    "label": a.label,
+                    "scopes": a.scopes,
+                    "connected_at": a.ts_created_at,
+                    # Read from the flag, not from a provider-string
+                    # comparison: with two Google rows the old
+                    # comparison marked both as primary and made
+                    # both undeletable.
+                    "is_primary": a.is_login_identity,
+                }
+                for a in accounts
+            ],
+        }
+        # The GitHub App block (MIP-2090) exists only while the switch is on: off, the answer is
+        # byte for byte what it was, and a client that finds no block treats the App as off.
+        # `?team_id=` is the team the card describes (the active one); a person in several teams
+        # who names none gets an empty block, never a guess.
+        if github_app.is_enabled():
+            payload["github_app"] = github_app_link.connections_block(
+                request.user, request.query_params.get("team_id")
+            )
+        return Response(payload)
 
 
 class IntegrationsDisconnectView(ObjectBodyMixin, APIView):
