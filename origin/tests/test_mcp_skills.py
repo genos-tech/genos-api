@@ -418,12 +418,15 @@ class RunTests(McpSkillBase):
         self.assertIn("not on the person's team", data["instructions"])
         self.assertIn("send anything outside Genos", data["instructions"])
         self.assertIn("a new task, note or to-do", data["instructions"])
-        self.assertIn(run.STRANGER_LEAK_RULE, data["instructions"])
+        self.assertIn(run.STRANGER_LEAK_RULE[1:], data["instructions"])
         self.assertIn(run.CANNOT_CHANGE_RULES, data["instructions"])
         self.public_skill(slug="reader", tool_level="read", body_markdown="READER STEPS")
         _, read = self.ok("run_skill", skill="reader")
         self.assertEqual(read["tool_level"], "read")
         self.assertIn("may only read", read["instructions"])
+        # ... and the stranger sentence must not read as a licence to create anything at `read`.
+        self.assertNotIn("a new task, note or to-do", read["instructions"])
+        self.assertIn(run.STRANGER_LEAK_RULE[1:], read["instructions"])
 
     def test_a_hidden_or_taken_down_skill_does_not_run_by_id_or_name(self):
         # run_skill goes through `run.resolve`, which holds the takedown and the hidden rule of

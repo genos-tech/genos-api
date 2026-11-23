@@ -118,3 +118,9 @@ class InstructionPins(SimpleTestCase):
         self.assertNotIn("may only read", text)
         self.assertIn("a new task, note or to-do", text)
         PINS.check(self, "instructions:outside:act", _digest(text))
+
+    def test_an_outside_authors_read_skill_is_not_given_a_licence_to_create(self):
+        text = self._instructions(run.AUTHOR_OUTSIDE, "read")
+        self.assertIn("may only read", text)
+        self.assertNotIn("a new task, note or to-do", text)
+        PINS.check(self, "instructions:outside:read", _digest(text))
