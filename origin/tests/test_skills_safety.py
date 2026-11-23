@@ -626,6 +626,10 @@ class ApprovalRoundTripTests(base.ResumeBase):
         tier = mock.patch("origin.search_engine.quota.get_effective_tier", return_value="max")
         tier.start()
         self.addCleanup(tier.stop)
+        # The Hub's publish gates have their own tests (`test_skills_hub.py`).
+        gate = mock.patch("origin.services.skills.hub.require_public_gate")
+        gate.start()
+        self.addCleanup(gate.stop)
         self.delete_tool = FakeTool("delete_sprint")
         self.write_tool = FakeTool("create_task")
         for patcher in (

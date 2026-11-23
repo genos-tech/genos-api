@@ -283,6 +283,19 @@ REGISTRY = {
     # is the operator's (`is_staff`), and anyone else gets the same 404 as an unknown skill.
     "origin.views.common.skill_views.SkillReportView": checked("get_readable"),
     "origin.views.common.skill_views.SkillTakedownView": checked("require_operator"),
+    # MIP-2047, the Hub: the directory lists PUBLIC, active skills (`hub.directory` filters on both
+    # on every request), which any signed-in user may read; the profile is the caller's own; the
+    # checklist is the owner's and the co-editors'.
+    "origin.views.common.skill_views.SkillHubView": signed_in(
+        "public active skills only, filtered in `hub.directory`; throttled per account"
+    ),
+    "origin.views.common.skill_views.SkillHubTagsView": signed_in(
+        "the tags of public active skills, counts only"
+    ),
+    "origin.views.common.skill_views.SkillProfileView": self_only(
+        "the caller's own public profile (request.user)"
+    ),
+    "origin.views.common.skill_views.SkillPublishCheckView": checked("get_editable"),
     # views.common.inbox_ai_views (MIP-1209): the item is looked up by id AND receiver=request.user
     # and not deleted; anything else (someone else's, deleted, not an AI item) is the same 404
     "origin.views.common.inbox_ai_views.InboxAiSourceView": self_only(

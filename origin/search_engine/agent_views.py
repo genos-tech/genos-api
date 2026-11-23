@@ -1951,6 +1951,7 @@ class AgentAskView(AuthenticatedAPIView):
             skill_extra = skill_run.build_block(skill_to_run)
             system_extra = f"{system_extra}\n\n{skill_extra}" if system_extra else skill_extra
             disabled_tools = disabled_tools | skill_run.disabled_tools(skill_to_run)
+            skill_run.record_use(request.user, skill_to_run)  # the Hub's "uses" (MIP-2047)
 
         # What /decide/ will hand a resumed leg if this ask pauses on a write
         # (MIP-977); written by `_stream_ndjson` at the pause, not before.
