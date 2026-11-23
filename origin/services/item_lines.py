@@ -788,10 +788,14 @@ def _read_tasks(
     tasks: dict[int, TaskMaster],
     since: datetime,
     until: datetime,
+    skip: frozenset[str] = frozenset(),
 ) -> _Read:
     """Every event of every source for `tasks` (all of them already openable by the member),
     keyed by task. One query per source for the whole set. The sources are read in this order
-    and the first to claim an event keeps it."""
+    and the first to claim an event keeps it.
+
+    `skip` names readers a caller that cannot use their events leaves out, to save their
+    queries (`"deliveries"`, `"markers"`): the other sources read exactly what they always did."""
     rd = _Reader(
         ctx=ctx,
         access=access,
@@ -803,10 +807,12 @@ def _read_tasks(
     _read_history(rd)
     _read_comments(rd)
     _read_comment_reactions(rd)
-    _read_deliveries(rd)
+    if "deliveries" not in skip:
+        _read_deliveries(rd)
     _read_task_notes(rd)
     _read_messages(rd)
-    _read_task_markers(rd)
+    if "markers" not in skip:
+        _read_task_markers(rd)
     return rd.read
 
 
@@ -816,12 +822,14 @@ def read_events(
     tasks: dict[int, TaskMaster],
     since: datetime,
     until: datetime,
+    skip: frozenset[str] = frozenset(),
 ) -> tuple[dict[int, list[Ev]], bool]:
     """Every event of every source for `tasks` in `[since, until)`, by task, under the rules of
     a line (MIP-1084 counts them per day with the very same attachment and access rules, so the
     two cannot drift). `tasks` must already be ones the member may open (`access.tasks`).
-    The second value is True when a source hit its read cap: the events are then a floor."""
-    read = _read_tasks(ctx, access, tasks, since, until)
+    The second value is True when a source hit its read cap: the events are then a floor.
+    `skip`: see `_read_tasks`."""
+    read = _read_tasks(ctx, access, tasks, since, until, skip)
     return (
         {task_id: list(found.values()) for task_id, found in read.events.items()},
         read.pool_capped or read.notes_capped,
