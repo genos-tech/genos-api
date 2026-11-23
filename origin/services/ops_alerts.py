@@ -243,7 +243,11 @@ def raise_security_alert(event) -> None:
         summary = f"{summary}: {meta['command']}"
     raise_alert(
         OpsAlertKind.SECURITY,
-        f"security:{event.action}:{who}:{meta.get('command', '')}"[:128],
+        (
+            f"security:{event.action}:{who}:{meta['command']}"
+            if meta.get("command")
+            else f"security:{event.action}:{who}"
+        )[:128],
         f"{summary} ({who})",
         {
             "action": event.action,
