@@ -538,6 +538,103 @@ export default defineRailway(() => {
     },
   });
 
+  const retentionPurge = service("retention-purge", {
+    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
+    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      ALLOWED_HOSTS: preserve(),
+      BLIND_INDEX_KEYS: preserve(),
+      DATABASE_URL: preserve(),
+      DJANGO_DEBUG: preserve(),
+      DJANGO_SECRET_KEY: preserve(),
+      FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+      // The approved periods (MIP-728, MIP-1786): agent runs 180, email outbox 90, high-volume security rows 90.
+      // Ken sets the values in Railway; a period left unset keeps the rows for ever.
+      RETENTION_AGENT_RUNS_DAYS: preserve(),
+      RETENTION_EMAIL_NOTIFICATION_EVENTS_DAYS: preserve(),
+      RETENTION_SECURITY_EVENTS_HIGH_VOLUME_DAYS: preserve(),
+    },
+    deploy: {
+      // MIP-2251: 04:00 UTC. Moved here from railway-retention-purge.toml (a service created after 2026-08-28 cannot use a toml).
+      cronSchedule: "0 4 * * *",
+      startCommand: "python /app/manage.py retention_purge --apply --heartbeat retention-purge",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
+
+  const housekeepingPrune = service("housekeeping-prune", {
+    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
+    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      ALLOWED_HOSTS: preserve(),
+      BLIND_INDEX_KEYS: preserve(),
+      DATABASE_URL: preserve(),
+      DJANGO_DEBUG: preserve(),
+      DJANGO_SECRET_KEY: preserve(),
+      FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+    },
+    deploy: {
+      // MIP-2251 (MIP-1787): 03:10 UTC. Dead tokens, revoked keys and connections, done invites, idle push subscriptions, resolved alerts.
+      cronSchedule: "10 3 * * *",
+      startCommand: "python /app/manage.py prune_housekeeping --apply --heartbeat housekeeping-prune",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
+
+  const tombstonePrune = service("tombstone-prune", {
+    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
+    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      ALLOWED_HOSTS: preserve(),
+      BLIND_INDEX_KEYS: preserve(),
+      DATABASE_URL: preserve(),
+      DJANGO_DEBUG: preserve(),
+      DJANGO_SECRET_KEY: preserve(),
+      FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+    },
+    deploy: {
+      // MIP-2251: 03:20 UTC. Empty tombstone rows of deleted messages.
+      cronSchedule: "20 3 * * *",
+      startCommand: "python /app/manage.py prune_old_tombstones --apply --heartbeat tombstone-prune",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
+
+  const memberMemorySweep = service("member-memory-sweep", {
+    source: github("genos-tech/genos-api", { branch: "main", checkSuites: false }),
+    build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+    replicas: { "asia-southeast1-eqsg3a": 1 },
+    env: {
+      ALLOWED_HOSTS: preserve(),
+      BLIND_INDEX_KEYS: preserve(),
+      DATABASE_URL: preserve(),
+      DJANGO_DEBUG: preserve(),
+      DJANGO_SECRET_KEY: preserve(),
+      FIELD_ENCRYPTION_KEYS: preserve(),
+      JWT_SECRET_KEY: preserve(),
+      LOG_FORMAT: preserve(),
+    },
+    deploy: {
+      // MIP-2251: 03:25 UTC. MemberEvent (180 d) and MemberItemDay (365 d) of every member.
+      cronSchedule: "25 3 * * *",
+      startCommand: "python /app/manage.py prune_member_memory --apply --heartbeat member-memory-sweep",
+      restartPolicyType: "NEVER",
+      limitOverride: { containers: { cpu: 0.5, memoryBytes: 500000000 } },
+    },
+  });
+
   // genos-collab's orphan sweep (MIP-1823), a cron like the others here. Built from genos-collab,
   // not genos-api. DRY RUN unless the service variable COLLAB_SWEEP_DELETE is 1 or true (set by
   // hand in Railway, never in this file). Its PG_* reference backend-collab's own PG_* variables
@@ -565,5 +662,5 @@ export default defineRailway(() => {
     },
   });
 
-  return project("genos", { resources: [agentCallPrune, agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, closedTeamPurge, collabOrphanSweep, demoUserCleanup, emailNotify, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, scheduleReportPrune, scheduleTick, securityEventPrune, webhookDeliver] });
+  return project("genos", { resources: [agentCallPrune, agentJudgeSampler, aiAppNoticePrune, aiCostDashboardDaily, aiCostDashboardMonthly, aiCostDashboardWeekly, closedTeamPurge, collabOrphanSweep, demoUserCleanup, emailNotify, housekeepingPrune, memberMemorySweep, oauthClientPrune, opensearchMaintenance, opensearchReindexer, opsAlertTick, reapStaleAgentRuns, reconcilePrDeliveries, reminderTick, retentionPurge, scheduleReportPrune, scheduleTick, securityEventPrune, tombstonePrune, webhookDeliver] });
 });
