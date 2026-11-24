@@ -345,6 +345,17 @@ LOGGING = {
     "root": {"handlers": ["console"], "level": _LOG_LEVEL},
 }
 
+# Second, best-effort copy of the redacted logs in an external archive
+# (Better Stack; MIP-2261). Off until BETTERSTACK_SOURCE_TOKEN and
+# BETTERSTACK_INGEST_URL are both set. See apis/log_shipping.py.
+from apis.log_shipping import is_enabled as _log_shipping_enabled  # noqa: E402
+
+if _log_shipping_enabled():
+    LOGGING["handlers"]["betterstack"] = {"()": "apis.log_shipping.BetterStackHandler"}
+    for _logger_config in LOGGING["loggers"].values():
+        _logger_config["handlers"] = [*_logger_config["handlers"], "betterstack"]
+    LOGGING["root"]["handlers"] = [*LOGGING["root"]["handlers"], "betterstack"]
+
 # Cache backend — Redis when available; falls back transparently to
 # "no cache" on Redis outages thanks to IGNORE_EXCEPTIONS. Keep timeouts
 # tight (2s) so a slow Redis can't cascade into slow Django responses.
