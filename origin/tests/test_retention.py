@@ -542,8 +542,8 @@ class CommandTests(BaseAPITestCase):
     def test_the_cron_start_command_applies_explicitly(self):
         from pathlib import Path
 
-        toml = Path(__file__).resolve().parents[2] / "railway-retention-purge.toml"
-        self.assertIn("retention_purge --apply --heartbeat", toml.read_text())
+        ts = Path(__file__).resolve().parents[2] / ".railway" / "railway.ts"
+        self.assertIn("retention_purge --apply --heartbeat retention-purge", ts.read_text())
 
 
 @override_settings()
