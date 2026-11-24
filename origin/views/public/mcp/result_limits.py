@@ -352,6 +352,7 @@ HINTS: dict[str, str] = {
     "list_my_mentions": "Pass a smaller `limit`, or `since` to read only newer mentions.",
     "list_channel_members": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",
     "get_current_user": "Nothing narrower exists; this answer is small.",
+    "get_genos_help": "Nothing narrower exists; this answer is capped (3 sections of at most 1,200 characters).",
     "get_team_members": "Pass `cursor` (the `next_cursor` of the answer) for the next page, or ask for one project's people with list_project_members.",
     "list_project_members": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",
     "list_project_tags": "Pass `cursor` (the `next_cursor` of the answer) for the next page.",

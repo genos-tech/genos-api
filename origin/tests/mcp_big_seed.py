@@ -332,6 +332,7 @@ NOT_DRIVEN: dict[str, str] = {
     "get_milestone_summary": "one milestone's counts: a fixed small shape",
     "get_sprint_summary": "one sprint's counts: a fixed small shape",
     "find_task_by_delivery": "needs a recorded delivery; returns tasks, each a small row",
+    "get_genos_help": "manual text only: at most 3 sections of 1,200 characters, fixed by the tool",
     "get_pr": "needs a GitHub connection (the answer is GitHub's, capped by the generic guard)",
     "list_pr_reviews": "needs a GitHub connection",
     "list_pr_comments": "needs a GitHub connection",
