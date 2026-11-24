@@ -25,8 +25,8 @@ keeps its time, so it runs again when credits are back. The loop also stops itse
 balance is spent (`credit_budget_usd_micro`), and the partial answer is kept.
 
 WHERE IT GOES. The owner's Inbox (the cost is on the Inbox item), or a chat the owner is ALONE in
-(MIP-2196): one system-authored message with the cost line in it. Never a chat other people read
-(`schedule_audience.HAS_AI`), checked when the schedule is saved and again before every run, so a
+(MIP-2196): one system-authored message, the cost on a cost-only Inbox item (MIP-2351). Never a chat
+other people read (`schedule_audience.AI_NOT_ALONE`), checked when the schedule is saved and again before every run, so a
 person added to that chat since stops the run BEFORE the model is called. One who joins while the
 model runs gets nothing: the report is filed in the Inbox with its cost (`schedule_delivery.deliver`).
 
@@ -76,6 +76,9 @@ _SKIPPED = {
         "your credits are back."
     ),
 }
+_SKIPPED["demo_limit"] = (
+    "Not run: the demo's AI is at its limit for today. Create a free account to keep using Genos AI."
+)
 _SKIPPED_OTHER = "Not run: AI is not available right now. It runs again at its next time."
 # A run that called the model and then could not give an answer: one line, filed with its cost
 # (a failed request is not billed).
@@ -216,7 +219,7 @@ def _skip_code(user_id: str, run_settings: Any) -> str:
         return llm.SKIP_METER_OFF
     if not llm.configured(run_settings.provider):
         return llm.SKIP_NOT_CONFIGURED
-    return llm.credit_block(user_id)
+    return llm.credit_block(user_id) or llm.demo_block(user_id)
 
 
 def _credit_budget_usd_micro(user_id: str) -> int:

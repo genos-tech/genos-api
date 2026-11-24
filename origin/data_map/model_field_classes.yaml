@@ -480,6 +480,7 @@ origin.MemberSchedule:
   claimed_at: none
   deliver_push: none
   deliver_channel: none
+  output: none
   ts_created_at: none
   ts_updated_at: none
 origin.MemberScheduleSeed:
