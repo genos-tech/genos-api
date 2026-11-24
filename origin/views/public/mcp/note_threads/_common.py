@@ -13,6 +13,9 @@ from typing import Any
 
 from origin.middleware.current_user import get_current_source
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.html_note_guard import (
+    refuse_html_comment as _refuse_html_comment,
+)
 from origin.search_engine.agent.tools.note_access import NoteRef
 from origin.services.archive import archived_note_refusal
 from origin.services.collab_push import ThreadWriteError
@@ -49,6 +52,11 @@ def refuse_if_archived(ref: NoteRef) -> None:
     sent to collab (MIP-1693, Ken 2026-11-22). Sharing stays allowed: it is access management."""
     if why := archived_note_refusal(ref.family, ref.note_id):
         raise ToolError(f"{why} Nothing was changed.")
+
+
+def refuse_html_comment(ref: NoteRef) -> None:
+    """Every thread write refuses an HTML note, before anything is sent to collab (MIP-2218)."""
+    _refuse_html_comment(ref.note, ref.note_id)
 
 
 def actor_id(ctx: ToolContext) -> str:

@@ -265,7 +265,20 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
+    # Known-breach check (MIP-2238). A no-op unless PASSWORD_BREACH_CHECK is on; fails open.
+    {
+        "NAME": "origin.services.password_policy.PwnedPasswordValidator",
+    },
 ]
+
+# Ask Have I Been Pwned (k-anonymity: 5 hex characters of a SHA-1 leave the server) whether a
+# new password is in a known breach, at signup and reset. OFF until Ken turns it on.
+PASSWORD_BREACH_CHECK = os.environ.get("PASSWORD_BREACH_CHECK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 # Internationalization
