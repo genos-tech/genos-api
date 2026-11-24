@@ -86,7 +86,7 @@ class RefreshReuseRevokesFamilyTests(BaseAPITestCase):
     def test_a_cache_that_is_down_does_not_revoke_anyone(self):
         r1 = self.refresh(self.t0)
         t1 = r1.cookies["refresh"].value
-        with mock.patch.object(cache, "get", side_effect=RuntimeError("cache down")):
+        with mock.patch.object(cache, "get", side_effect=ConnectionError("cache down")):
             self.assertEqual(self.refresh(self.t0).status_code, 403)
         self.assertEqual(self._reuse_events().count(), 0)
         self.assertEqual(self.refresh(t1).status_code, 200)
