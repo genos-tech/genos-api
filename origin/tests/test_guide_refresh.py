@@ -59,8 +59,18 @@ class ShippedRecordTests(SimpleTestCase):
 
     def test_every_title_of_the_hand_written_guide_has_a_record(self):
         for locale, (_, notes) in guide_notes._EDITIONS.items():
+            renamed_to = set(guide_refresh.RENAMED_TITLES[locale].values())
             for title, _body in notes:
-                self.assertIn(title, guide_refresh._shipped()[locale], title)
+                # A title the manual renamed is recorded under the title it shipped with.
+                if title not in renamed_to:
+                    self.assertIn(title, guide_refresh._shipped()[locale], title)
+
+    def test_every_shipped_title_is_current_or_renamed_to_a_current_title(self):
+        for locale in ("en", "ja"):
+            current = {t for t, _ in guide_notes.current_guide_notes(locale)}
+            renames = guide_refresh.RENAMED_TITLES[locale]
+            for title in guide_refresh._shipped()[locale]:
+                self.assertIn(renames.get(title, title), current, title)
 
     def test_the_renamed_old_title_is_a_shipped_title(self):
         for locale, renames in guide_refresh.RENAMED_TITLES.items():
