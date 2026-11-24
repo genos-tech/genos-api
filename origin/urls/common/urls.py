@@ -104,6 +104,7 @@ from origin.views.common.security_event_views import (
     TeamSecurityEventListView,
 )
 from origin.views.common.skill_views import (
+    SkillConfirmView,
     SkillCopyView,
     SkillDetailView,
     SkillEditorDetailView,
@@ -121,10 +122,12 @@ from origin.views.common.skill_views import (
     SkillPublishCheckView,
     SkillPublishView,
     SkillReportView,
+    SkillRunCardView,
     SkillStarView,
     SkillTagDetailView,
     SkillTagListView,
     SkillTakedownView,
+    SkillUpdateDiffView,
     SkillVersionDetailView,
     SkillVersionListView,
 )
@@ -549,6 +552,17 @@ urlpatterns = [
     path("api/v2/skills/<uuid:skill_id>/copy/", SkillCopyView.as_view(), name="skill_copy"),
     path(
         "api/v2/skills/<uuid:skill_id>/install/", SkillInstallView.as_view(), name="skill_install"
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/update-diff/",
+        SkillUpdateDiffView.as_view(),
+        name="skill_update_diff",
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/run-card/", SkillRunCardView.as_view(), name="skill_run_card"
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/confirm/", SkillConfirmView.as_view(), name="skill_confirm"
     ),
     path("api/v2/skills/<uuid:skill_id>/star/", SkillStarView.as_view(), name="skill_star"),
     path("api/v2/skills/<uuid:skill_id>/export/", SkillExportView.as_view(), name="skill_export"),
