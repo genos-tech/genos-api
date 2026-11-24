@@ -36,6 +36,7 @@ from origin.search_engine import agent_views, credit_ledger, metered
 from origin.search_engine.agent.tool_tiers import SINGLE_WRITE_TOOLS, disabled_tools_for_level
 from origin.search_engine.models import AgentRun, AiRequestCost
 from origin.services.skills import run, service
+from origin.tests.skill_fence_helpers import strip_tag
 from origin.tests.test_base import BaseAPITestCase
 from origin.tests.test_skills_api import SkillBase
 
@@ -283,7 +284,10 @@ class VersionTests(RunBase):
 
 class BlockTests(RunBase):
     def block_of(self, **over):
-        return run.build_block(self.resolve({"id": str(self.skill(self.user, **over).id)}))
+        # The fence tag carries a random suffix per run (MIP-2192): compared here without it.
+        return strip_tag(
+            run.build_block(self.resolve({"id": str(self.skill(self.user, **over).id)}))
+        )
 
     def test_the_text_is_inside_one_fence_after_the_rules(self):
         block = self.block_of(body_markdown="STEP-ONE")
@@ -525,7 +529,7 @@ class AskTests(RunBase):
         skill = self.skill(self.user, body_markdown="STEP: read the plan")
         resp, got = self.ask({"id": str(skill.id)})
         self.assertEqual(resp.status_code, 200, getattr(resp, "content", b""))
-        extra = got["kwargs"]["system_extra"]
+        extra = strip_tag(got["kwargs"]["system_extra"])
         self.assertIn("SKILL RUN", extra)
         self.assertTrue(extra.rstrip().endswith("<skill_text>\nSTEP: read the plan\n</skill_text>"))
         self.assertIn("STEP: read the plan", extra)

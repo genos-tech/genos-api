@@ -131,6 +131,8 @@ class TestEnforceWithNoLiveValue(ApiKeyCaps):
                 "lastUsedAt",
                 "expiresAt",
                 "revokedAt",
+                "suspendedAt",
+                "suspendedReason",
                 "createdAt",
                 "key",
             },

@@ -612,6 +612,7 @@ _PUBLIC_DRF = {
     # Its single-use signed token (minted only after the note's read ACL) is the capability; header
     # CSP sandbox, `Sec-Fetch-Dest: iframe` only, per-IP throttle; 404 for everything else.
     "h/<str:token>",
+    "api/public/v1/secret-scanning/",
 }
 
 # Plain Django views never see DRF permissions at all, so each one does its

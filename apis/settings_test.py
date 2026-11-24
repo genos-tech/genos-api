@@ -139,3 +139,7 @@ BLIND_INDEX_KEYS = ["k1mN3bV5cX7zL9aS2dF4gH6jQ8wE0rT1yU3iO5pA7sD="]
 # MIP-1879: build the demo workspace inside the request so a test that signs in as a demo visitor
 # finds the content (the thread path has its own tests with the spawn captured).
 DEMO_PROVISION_IN_BACKGROUND = False
+
+# MIP-2232: the account emails (reset, verify, "you already have an account") go out after the
+# response in production. Inline here so a test can assert on the send; the timing tests turn it off.
+EMAIL_SEND_AFTER_RESPONSE = False
