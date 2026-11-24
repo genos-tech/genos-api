@@ -1798,10 +1798,13 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
         )
 
     @staticmethod
-    def _payload(project):
+    def _payload(project, user_id):
         return {
             "rules": project.task_field_rules or {},
             "ownerUserId": str(project.owner.id) if project.owner else None,
+            # The caller's own right to PUT (owner or editor), so the client shows the
+            # customize menu to exactly the people the API accepts (MIP-2336).
+            "canManage": can_manage(resolve_project_role(project, user_id)),
         }
 
     @classmethod
@@ -1880,7 +1883,7 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
         project = ProjectMaster.objects.filter(project_id=project_id).first()
         if not project:
             return Response({"error": "Project not found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(self._payload(project), status=status.HTTP_200_OK)
+        return Response(self._payload(project, request.user.id), status=status.HTTP_200_OK)
 
     def put(self, request):
         project_id = request.data.get("project_id")
@@ -1902,7 +1905,7 @@ class ProjectTaskFieldRulesView(AuthenticatedAPIView):
             return Response({"error": err}, status=status.HTTP_400_BAD_REQUEST)
         project.task_field_rules = rules
         project.save(update_fields=["task_field_rules", "ts_updated_at"])
-        return Response(self._payload(project), status=status.HTTP_200_OK)
+        return Response(self._payload(project, request.user.id), status=status.HTTP_200_OK)
 
 
 class ProjectCustomFieldsView(AuthenticatedAPIView):
