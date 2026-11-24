@@ -625,6 +625,13 @@ REGISTRY = {
     ),
     # views.note.html_note_views (MIP-2214): the saved page, under the note's own read ACL
     "origin.views.note.html_note_views.HtmlNoteView": checked("require_read_role"),
+    # (MIP-2228) the viewer's frame URL: the note's read ACL, then a signed 10-minute token
+    "origin.views.note.html_note_views.HtmlNoteFrameView": checked("require_read_role"),
+    # (MIP-2228) the page itself, in a sandboxed frame that has no credentials by design
+    "origin.views.note.html_note_views.HtmlNotePageView": public(
+        "bearer of a signed token for one note revision (10 minutes, minted only after the note's "
+        "read ACL); header CSP sandbox, no cookie; HtmlNotePageThrottle per IP"
+    ),
     # (MIP-2215) the web import of a .html file: team membership, then the MCP save tool's own checks
     "origin.views.note.html_note_views.HtmlNoteImportView": checked(
         "require_team_member_or_response"

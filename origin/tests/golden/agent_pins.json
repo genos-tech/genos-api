@@ -77,8 +77,8 @@
     },
     "test_agent_team_in_current_user": {
       "declarations": "cc46937620f94be05026eeb35ddde09aa05de97b77c87252f1a09e3c3f106011",
-      "result/member": "9a8ffecb982f1ab142da6608ff25f7f1d032911976862fc36a366b3db9caa6f9",
-      "result/owner": "91a01881c34e868d2257b1f11afb209b317007ca145186b88719b72e46e03aae"
+      "result/member": "1a691af10b63e1660567a3f26713d2c8c635701bf4e06ec58bdae4c2570daac0",
+      "result/owner": "3417294ac02371656656cec58ee9633307781a651582b0e8c80d573074865f5a"
     },
     "test_agent_tell_model_undo": {
       "edit/approve": "83cdfe2266f783b428a6b03bbb594b7493c44d2637902d6106e1e59d2ae40480",

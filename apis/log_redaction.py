@@ -75,6 +75,10 @@ _NAMED_BARE = re.compile(
 # `:` between its parts; anything up to the next `/`, query, quote or space.
 _UNSUBSCRIBE = re.compile(r"(/unsubscribe/)(?!<token>)[^/\s?#\"'<>]+")
 
+# `/h/<signed token>`: an HTML note's page URL (MIP-2228). The token is the page's
+# capability for a few minutes, so it never goes to a log; the route stays visible.
+_HTML_PAGE = re.compile(r"(/h/)(?!<token>)[^/\s?#\"'<>]+")
+
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
 
 _PREFIXED = re.compile(
@@ -128,7 +132,7 @@ def redact_line(text: str) -> str:
     genos-collab, which have no such route."""
     if not text:
         return text
-    return redact(_UNSUBSCRIBE.sub(r"\1<token>", text))
+    return redact(_HTML_PAGE.sub(r"\1<token>", _UNSUBSCRIBE.sub(r"\1<token>", text)))
 
 
 def ip_marker(address: str | None) -> str:
