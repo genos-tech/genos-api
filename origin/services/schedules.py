@@ -854,14 +854,16 @@ def _execute(sched: MemberSchedule, *, run_at: datetime | None = None) -> tuple[
             with transaction.atomic():
                 report = job.run(ctx, _run_params(sched, job))
         _check_report(report)
-        with transaction.atomic():
-            if job.delivers_note:
-                # A dashboard (MIP-2353): save its ONE living note first, then file the report
-                # with a link to it. Both in one savepoint, so a delivery that fails leaves no
-                # half-made run (the AI spend was recorded by the job's own savepoint above).
-                from origin.services.schedule_dashboard_note import deliver_note  # noqa: PLC0415
+        if job.delivers_note:
+            # A dashboard (MIP-2353): save its ONE living note first, then file the report with a
+            # link to it. The note is its own savepoint (MIP-2355): a chat that some reader cannot
+            # open the note for refuses the NOTICE, and the note must stand so its owner has
+            # something to share. A repeat is keyed (`output["run"]`) and replaces, never doubles.
+            from origin.services.schedule_dashboard_note import deliver_note  # noqa: PLC0415
 
+            with transaction.atomic():
                 report = deliver_note(sched, report, run_at=run_at)
+        with transaction.atomic():
             schedule_delivery.deliver(sched, report, run_at=run_at)
     except ScheduleRunError as exc:
         # A run that cannot go on until the member acts (a deleted dashboard note) pauses the
