@@ -113,8 +113,19 @@ class TestTheInventory(SimpleTestCase):
         # MIP-2045: it always returns the request that paid (`ai_request_id`), or says why it spent
         # nothing (`ai_skipped`: credits, the operator's switches), and a failed run is a one-line
         # report that still names its request, never a raise that would roll the record back.
+        # MIP-2350: project_updates, milestone_updates, team_activity and what_is_left name their
+        # request or their skip through `report_kit.add_narrative`. what_you_did and chat_catch_up
+        # stay without AI (Ken's D5).
         self.assertEqual(
-            sorted(k for k, j in JOBS.items() if j.uses_ai), ["run_skill", "what_to_do_today"]
+            sorted(k for k, j in JOBS.items() if j.uses_ai),
+            [
+                "milestone_updates",
+                "project_updates",
+                "run_skill",
+                "team_activity",
+                "what_is_left",
+                "what_to_do_today",
+            ],
         )
 
 

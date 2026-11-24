@@ -24,7 +24,11 @@ from origin.services import briefing
 from origin.services.milestone_rollup import milestone_work_q
 from origin.services.schedule_jobs import SHARED_KEY, Job, Report, ReportSection, register_job
 from origin.services.schedule_jobs.report_kit import (
+    AI_SUMMARY_PARAM,
+    SUMMARY_EFFORT_DEFAULT,
     Links,
+    add_narrative,
+    ai_sentences_on,
     arrange,
     clip,
     counted,
@@ -56,7 +60,7 @@ def _ref(row: dict[str, Any], links: Links) -> dict[str, Any]:
     return links.task_item(text, row.get("task_id"))
 
 
-def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     milestone_id = params.get("milestone_id")
     if milestone_id is None:
         raise _public("This report needs a milestone: choose one in the schedule.")
@@ -225,6 +229,11 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     }
 
 
+def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
+    """The report, with a written summary on top when the member turned the AI part on."""
+    return add_narrative(ctx, params, _report(ctx, params), effort_default=SUMMARY_EFFORT_DEFAULT)
+
+
 def _share_project(params: dict[str, Any], team_id: str) -> int | None:
     """The project of the milestone this report is about: a chat of its people may read it
     (MIP-1420). None when the milestone is not in this team (the run then names it)."""
@@ -254,8 +263,13 @@ register_job(
             "properties": {
                 "milestone_id": {"type": "integer", "minimum": 1},
                 "hours": {"type": "integer", "minimum": 1, "maximum": 720},
+                "ai_sentences": AI_SUMMARY_PARAM,
             },
             "required": ["milestone_id"],
         },
+        uses_ai=True,
+        ai_when=ai_sentences_on,
+        effort_default=SUMMARY_EFFORT_DEFAULT,
+        cost_basis="narrative",
     )
 )

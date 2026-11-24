@@ -34,6 +34,9 @@ from origin.services.report_ai.effort import RunSettings
 log = logging.getLogger(__name__)
 
 PURPOSE = "report_sentences"
+# The spend purpose of the written summary of a whole report (MIP-2350), so the cost reports tell it
+# from the sentence under a task.
+NARRATIVE_PURPOSE = "report_narrative"
 SURFACE = "schedule"
 
 # Why a run had no AI part (kept on the run's result and logged; never an error).
@@ -114,7 +117,14 @@ def preflight(run: RunSettings | None) -> str:
 
 
 def complete(
-    run: RunSettings, *, system: str, user: str, user_id: str, team_id: str, max_output_tokens: int
+    run: RunSettings,
+    *,
+    system: str,
+    user: str,
+    user_id: str,
+    team_id: str,
+    max_output_tokens: int,
+    purpose: str = PURPOSE,
 ) -> CallResult:
     """One metered model call. Never raises: a failure is a `CallResult` with `skipped` set, and
     with `request_id` when the request had been opened (so the cost it may have are attached)."""
@@ -144,7 +154,7 @@ def complete(
             ctx = spend.current_context()
             result.request_id = ctx.request_id if ctx is not None else ""
             chunks: list[str] = []
-            with spend.spend_purpose(PURPOSE):
+            with spend.spend_purpose(purpose):
                 for text, call in _client().generate_step(
                     messages=[AgentMessage(role="user", text=user)],
                     tools=[],

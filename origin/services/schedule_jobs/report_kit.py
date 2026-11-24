@@ -18,12 +18,15 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from django.utils import timezone
+
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.models.task.task_models import TaskMaster
 from origin.search_engine.agent.fence import unwrap
 from origin.search_engine.agent.tools.base import ToolContext
 from origin.search_engine.agent.tools.project_gone import live_tasks_q
-from origin.services.schedule_jobs import ReportItem, ReportSection
+from origin.services.schedule_jobs import AI_EFFORT_KEY, Report, ReportItem, ReportSection
+from origin.services.user_time import zone_for_user_id
 
 # A report line is a sentence, not a document: a snippet or a title is cut here.
 LINE_CHARS = 240
@@ -40,6 +43,71 @@ def plain(value: Any) -> str:
 def clip(text: str, limit: int = LINE_CHARS) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def ai_sentences_on(params: dict[str, Any]) -> bool:
+    """The AI part of a job is an OPT-IN (MIP-1969): on only when the member set
+    `ai_sentences: true`. The client shows it as the schedule's "by Genos AI" mode.
+
+    `what_to_do_today` schedules that existed before the opt-in were given an explicit `true` by
+    migration 0267, so they keep what they did."""
+    return params.get("ai_sentences") is True
+
+
+# The schema entry of the `ai_sentences` parameter of the four jobs with a written summary
+# (MIP-2350). `what_to_do_today` words its own (it writes a sentence under each task).
+AI_SUMMARY_PARAM: dict[str, Any] = {
+    "type": "boolean",
+    "description": (
+        "A short AI-written summary (2 to 4 sentences) at the top of the report, from what the "
+        "report already lists. Off by default (it spends the owner's AI credits); true turns it "
+        "on, and the plain report has no AI usage."
+    ),
+}
+# The summary reads a few dozen short lines and writes a paragraph: the cheapest rung until a
+# real-call comparison says the next one is worth its price (none is approved yet).
+SUMMARY_EFFORT_DEFAULT = "low"
+
+
+def add_narrative(
+    ctx: ToolContext, params: dict[str, Any], report: Report, *, effort_default: str
+) -> Report:
+    """The AI part of a job whose report may open with a written summary (MIP-2350).
+
+    Switched off (the default), it returns `report` as it is: no model call, nothing read, the
+    same bytes as before. Switched on, it asks `report_ai.narrative` for the summary of the
+    report ITSELF (so the prompt holds only what the card shows) and:
+
+    * puts the summary first in `summary` and in `narrative`, and names the metered request
+      that paid for it in `ai_request_id`;
+    * or, when there was no call (nothing worth saying, the operator switch off, no credits, the
+      model not reachable from this process, a failure), says why in `ai_skipped`, so the
+      delivery step files the report plain with "No AI used" and never without a reason.
+    """
+    if not ai_sentences_on(params):
+        return report
+    from origin.services.report_ai import llm, narrative  # noqa: PLC0415 (heavy)
+
+    zone = zone_for_user_id(ctx.user_id)
+    result = narrative.narrative_for(
+        ctx,
+        dict(report),
+        effort=params.get(AI_EFFORT_KEY),
+        default_effort=effort_default,
+        today_iso=timezone.now().astimezone(zone).date().isoformat(),
+    )
+    if result.text:
+        report["narrative"] = result.text
+        report["summary"] = f"{result.text} {report['summary']}"
+    if result.request_id:
+        report["ai_request_id"] = result.request_id
+    else:
+        report["ai_skipped"] = result.skipped or "cached"
+    if result.skipped == llm.SKIP_NO_CREDITS:
+        report["summary"] = clip(
+            f"{report['summary']} The AI summary was left out: you have no AI credits left this month."
+        )
+    return report
 
 
 def item(text: str, link: str | None = None, kind: str | None = None) -> ReportItem:

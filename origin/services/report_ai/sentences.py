@@ -70,7 +70,7 @@ def _cache_set_many(items: dict[str, str]) -> None:
         log.warning("report_ai: cache write failed")
 
 
-def _may_name(ctx: ToolContext):
+def may_name_checker(ctx: ToolContext):
     """`may_name(display_ids)`: whether the member can open every task those ids name, in this
     team. An id that names no task, or one they cannot open, is False."""
     from origin.models.task.task_models import TaskMaster  # noqa: PLC0415
@@ -161,7 +161,7 @@ def _run(ctx, task_ids, effort, default_effort, now, today_iso, out: Sentences) 
             out.skipped = result.skipped
         else:
             parsed = validate.parse(result.text, set(refs))
-            check = _may_name(ctx)
+            check = may_name_checker(ctx)
             fresh: dict[str, str] = {}
             for ref, task in refs.items():
                 sentence = validate.clean_sentence(parsed.get(ref), may_name=check)
