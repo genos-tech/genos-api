@@ -46,6 +46,7 @@ if _backend not in ("127.0.0.1", "localhost"):
     raise SystemExit(2)
 
 from django.contrib.auth import get_user_model  # noqa: E402
+
 from origin.models.common.team_models import TeamMaster, TeamMembers  # noqa: E402
 from origin.services import demo_seeder  # noqa: E402
 from origin.services.member_roles import VIEWER  # noqa: E402
