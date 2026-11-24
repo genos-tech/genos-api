@@ -78,6 +78,7 @@ from origin.services.task_status_scope import (
     parse_statuses,
     scope_rows,
 )
+from origin.services.task_status_values import status_value_error
 from origin.services.thread_link import (
     THREAD_NOT_FOUND,
     find_thread_link_conflict,
@@ -372,6 +373,8 @@ class TaskMasterView(AuthenticatedAPIView):
                 {"error": f"Missing required field: {absent[0]}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if message := status_value_error(body["status"]):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
         data = {
             # The project's team, whatever the payload said: a task
             # filed under one team's project and another team's id is
@@ -570,6 +573,12 @@ class TaskMasterView(AuthenticatedAPIView):
         # before anything is read or written, so a refused link changes nothing.
         if res := refuse_unsafe_link_urls(request.data.get("links")):
             return res
+
+        # MIP-2391: a status this save sets must be one of the six; restating the stored one passes.
+        if request.data.get("status") is not None and (
+            message := status_value_error(request.data.get("status"), task.status)
+        ):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         update_data = request.data.copy()
 

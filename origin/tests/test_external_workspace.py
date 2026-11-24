@@ -79,7 +79,7 @@ class GuestReadsTheSharedProjectTests(CrossTeamTestCase):
                 "title": "Guest task",
                 "priority": "medium",
                 "effort_level": "medium",
-                "status": "open",
+                "status": "Open",
                 "content": None,
                 "due_date": None,
                 "links": [],
