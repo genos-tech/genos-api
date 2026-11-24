@@ -59,6 +59,7 @@ from origin.models.common.api_key_models import ApiKey
 from origin.models.common.security_event_models import SecurityAction, SecuritySource
 from origin.models.common.team_models import TeamMaster
 from origin.services.pii_mask import mask_email
+from origin.services.realtime_push import push_user_disconnect
 from origin.services.security_events import record_security_event
 from origin.services.team_membership import revoke_team_api_keys
 
@@ -185,6 +186,8 @@ class Command(BaseCommand):
             BlacklistedToken.objects.bulk_create(
                 [BlacklistedToken(token=t) for t in tokens], ignore_conflicts=True
             )
+            # An open socket checked its token at connect only (MIP-2241): close them after commit.
+            push_user_disconnect(user_id)
             event = self._record(
                 SecurityAction.OPERATOR_USER_DEACTIVATED,
                 target_type="user",
