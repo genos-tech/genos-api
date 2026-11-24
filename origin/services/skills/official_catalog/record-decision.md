@@ -66,4 +66,4 @@ The comment that points to it:
 > Why: three clients still call the old one. Option rejected: changing it in place (breaks
 > them). Reversible: yes. Needs your OK: no.
 
-Source: [Genos skills v0.5.3](https://github.com/genos-tech/genos-claude-plugin/blob/v0.5.3/plugins/genos/skills/record-decision/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.6.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.6.0/plugins/genos/skills/record-decision/SKILL.md), the runbook this skill was made from.
