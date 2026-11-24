@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0279_skill_grants"),
+        ("origin", "0283_ops_command_audit_actions"),
     ]
 
     operations = [
@@ -52,9 +52,14 @@ class Migration(migrations.Migration):
                     ("oauth.disconnected", "Account disconnected"),
                     ("alert.export", "Alert: data exported"),
                     ("alert.forbidden_burst", "Alert: many refused requests"),
+                    ("alert.signin_spray", "Alert: failed sign-ins across many accounts"),
                     ("operator.user_deactivated", "Operator: user cut off"),
                     ("operator.api_key_revoked", "Operator: API key revoked"),
                     ("operator.team_keys_revoked", "Operator: team API keys revoked"),
+                    ("ops.command", "Operator: command run"),
+                    ("ops.shell_opened", "Operator: shell opened"),
+                    ("ops.shell_closed", "Operator: shell closed"),
+                    ("alert.ops_command_unlisted", "Alert: unlisted operator command"),
                 ],
                 max_length=40,
             ),
