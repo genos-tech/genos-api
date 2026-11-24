@@ -345,7 +345,8 @@ class SeedAndCardTests(BaseAPITestCase):
         self.assertEqual([e["id"] for e in second["events"]], ["evalhome1", "evalhome2"])
         calendars = LIST_CALENDARS.run({}, self.ctx)
         self.assertEqual(
-            {a["label"] for a in calendars["accounts"]}, set(calendar_stub.LABELS.values())
+            {a["label"] for a in calendars["accounts"]},
+            {calendar_stub.LABELS["work"], calendar_stub.LABELS["home"]},
         )
 
     def test_the_japanese_team_reads_japanese_titles(self):
