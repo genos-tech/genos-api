@@ -37,6 +37,11 @@ TEXT = "Work is moving: two tasks closed and one is still open."
 class DashboardAiBase(AiBase):
     def setUp(self):
         super().setUp()
+        # The operator switch of the dashboard summary (MIP-2355) is off by default; these tests
+        # are about what the guards do once the summary is allowed.
+        switch = mock.patch.dict("os.environ", {"REPORT_AI_DASHBOARDS": "true"})
+        switch.start()
+        self.addCleanup(switch.stop)
         self.model.reply = json.dumps({"n": TEXT})
         self.model.spend_tokens = 2000
         self.make_task("Open one")
