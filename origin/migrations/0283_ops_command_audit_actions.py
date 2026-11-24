@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0279_skill_grants"),
+        ("origin", "0282_taskmaster_title_trgm_idx"),
     ]
 
     operations = [
@@ -51,6 +51,7 @@ class Migration(migrations.Migration):
                     ("oauth.disconnected", "Account disconnected"),
                     ("alert.export", "Alert: data exported"),
                     ("alert.forbidden_burst", "Alert: many refused requests"),
+                    ("alert.signin_spray", "Alert: failed sign-ins across many accounts"),
                     ("operator.user_deactivated", "Operator: user cut off"),
                     ("operator.api_key_revoked", "Operator: API key revoked"),
                     ("operator.team_keys_revoked", "Operator: team API keys revoked"),
