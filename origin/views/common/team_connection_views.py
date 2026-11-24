@@ -297,14 +297,11 @@ class ExternalShareView(AuthenticatedAPIView):
                 guest_team_id=data["guest_team_id"],
                 object_type=data["object_type"],
                 object_id=data["object_id"],
-                # Editor unless the host says otherwise, matching the
-                # external-chat create path. Viewer was the default here
-                # and nothing in the UI could change it, so every share
-                # ever made was read-only: the guest team accepted a
-                # project they could not add a task to and a folder they
-                # could not write a note in. A share whose point is
-                # collaboration defaults to being able to collaborate.
-                role_ceiling=data.get("role_ceiling") or "editor",
+                # Viewer unless the host says otherwise (MIP-2340: least privilege
+                # outside the team). The share panel lets the host pick Editor
+                # when the guest team should write; a share already made keeps
+                # its stored ceiling.
+                role_ceiling=data.get("role_ceiling") or "viewer",
                 actor=request.user,
             )
         except ExternalGrantError as exc:
