@@ -187,35 +187,35 @@
       }
     },
     "production": {
-      "all": "55514aa4d3aaeec4ef8d2275c505ce4900b20e84675d0e96b9c0afd3d42be47f",
+      "all": "eac520c4fc5ecab629ceb0011aaed9bc2c49c8f2449a54148abc33be0661608e",
       "surfaces": {
         "prompt.level.act": {
-          "bytes": 27861,
-          "sha256": "b1f1a971b46721ef79a93532d1f3e5e8fe5bf6ec39f7d316d2b296c97e45ccfe"
+          "bytes": 28028,
+          "sha256": "b9ab39a7678dbd79cb0df7d3f4159b9ae5f839ab693328528935dcbd10380939"
         },
         "prompt.level.organize": {
-          "bytes": 27936,
-          "sha256": "2542959c427c8ce1e144de2786571ddc0213aab7c271b9fc862fc468f3f24ea9"
+          "bytes": 28103,
+          "sha256": "2eda97de92be11c8861c4bdb7d4f992047abc7b3b442653b6166cb74648454c4"
         },
         "prompt.level.read": {
-          "bytes": 27782,
-          "sha256": "5d4596962eb1c1124a08025a867e14f97ed8b6c94826ce62197d506f40e92acd"
+          "bytes": 27949,
+          "sha256": "10fccbc275921eb1872dbac31e7433697cdc16298f2bcfa74046bb16daa70346"
         },
         "prompt.mentions": {
-          "bytes": 29338,
-          "sha256": "44a89023903cf9d11a5ee19547e50c6b22068f16bd3b42037d3c47bad62fb0db"
+          "bytes": 29505,
+          "sha256": "1acf375cd6718e319825d5aae70d7fc50c090453123ca32a7751b61cb020585a"
         },
         "prompt.note_ask.template": {
           "bytes": 1080,
           "sha256": "2c1fac5ba2514815ce404a1539f45009ecb13e81148992bb63f0ae6843f96fde"
         },
         "prompt.plain": {
-          "bytes": 27936,
-          "sha256": "2542959c427c8ce1e144de2786571ddc0213aab7c271b9fc862fc468f3f24ea9"
+          "bytes": 28103,
+          "sha256": "2eda97de92be11c8861c4bdb7d4f992047abc7b3b442653b6166cb74648454c4"
         },
         "prompt.plain.ja": {
-          "bytes": 28237,
-          "sha256": "88dbd794d8e175c3b8f696d999634ea44eec8c60076c9cf673daa570610a100a"
+          "bytes": 28404,
+          "sha256": "93ca18b813a4687c2914de54f0403620d06bf33f879ab07d741b5a6364706b44"
         },
         "prompt.thread_ask.template": {
           "bytes": 1114,
@@ -338,36 +338,36 @@
           "sha256": "0f91563de066d29a0bad81904b1a05efe0a8a1637549055ebb210e6b9de27d7c"
         },
         "tools.claude.full": {
-          "bytes": 138836,
-          "sha256": "22950a86948965f1a3e6f26b4f61c631d2f4e4e24a47667177f5d2b7b19374b5"
+          "bytes": 139463,
+          "sha256": "2c8f929e01d2c24bdbd343fbb785c5a13b2bcf300006a9b063c0e16f03b18025"
         },
         "tools.claude.read": {
-          "bytes": 64085,
-          "sha256": "5cd3f488d386377b6266fff639f9227a2efeb31fab66675e9020124ae2c811cf"
+          "bytes": 64712,
+          "sha256": "f43c9eb7c8484647976f1fa4e698472339ee744c32e2459b35c82addacac1ed2"
         },
         "tools.gemini.full": {
-          "bytes": 147640,
-          "sha256": "def8592f66bf5fa96cac5a22469fc3a1b066e12f565f3c51a9ff4529718727e3"
+          "bytes": 148340,
+          "sha256": "f5778bcbd44d86cb69ca34f849069fc34219f1933076effb0be41e6437b3760c"
         },
         "tools.gemini.read": {
-          "bytes": 67622,
-          "sha256": "59ce0e0e98908b0bb131e03ab73c720d2663fc010502bb70e5361c00d6692c37"
+          "bytes": 68322,
+          "sha256": "eab20cba29d2278789b5f63cc51274e4e0573fff79bf7218fe28883bb521f464"
         },
         "tools.neutral.full": {
-          "bytes": 134996,
-          "sha256": "20f2fa2cc63c7ddc6e2e39e90c4e109444c4a323ea4c1472fa7d605d6b6551a9"
+          "bytes": 135592,
+          "sha256": "1e0cd6fa98cde911a540e74c50ef910880a0d7c71d76796b4af90350d513ba19"
         },
         "tools.neutral.read": {
-          "bytes": 62254,
-          "sha256": "74ecaf8451985694d6ce1694a280b8ce734a913f1b13ad3e8100ce4329bcf20b"
+          "bytes": 62850,
+          "sha256": "cb7a8ffe01b843d945118472de0ddb2feb025cbfb788df14142c3ceaf47ee991"
         },
         "tools.openai.full": {
-          "bytes": 145569,
-          "sha256": "7803e75c7b66b9e8f6807648811af0a79e8c46aa88fd7c0791e7b537cfe8a5a3"
+          "bytes": 146262,
+          "sha256": "93f1e33eafa4b5fce6baed897ecb37557d4e734c3f88d0c926af33fb00623b98"
         },
         "tools.openai.read": {
-          "bytes": 67479,
-          "sha256": "9e50ac3213d23afd09d7538a0e81aa9fbacabe4aa003d99fa9cad280e4a3b366"
+          "bytes": 68172,
+          "sha256": "68835c8097264304edcd75e99792ba1b69b6d44e7c283ff15bb55ae95562a65a"
         }
       }
     }

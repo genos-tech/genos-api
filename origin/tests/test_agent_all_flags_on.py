@@ -70,12 +70,14 @@ from origin.tests.test_eval_group_resume_runner import PROMPT_CHECKS, RunnerBase
 # characters are left and the constant stays.
 # THE GROUPED BATCH OF 2026-11-22 (MIP-1769 + MIP-1852): +272, so 148,184 with a Long member's block, over 148,000:
 # the constant goes up to 148,500 (316 characters left). See `test_agent_prefix_budget`.
-ALL_ON_BUDGET_CHARS = 142_500
+# MIP-2329: the arm `t2328` puts `AGENT_INAPP_HELP_TOOL` (+587 characters: the declaration and two prompt lines) into the all-on
+# union: 142,962 with a Long member's block, so 143,500 (538 left). The arm is written, not run (no paid eval, Ken 2026-11-24).
+ALL_ON_BUDGET_CHARS = 143_500
 ALL_ON = dict(harness.all_on_arm(harness.load_arms()).effective)
 # Turned on by default by MIP-1089 (grouped eval 2026-11-14; the timeline tool the same day after the
 # Japanese cases were re-read; content length 2026-11-14; the parity batch 2026-11-15 after the grouped
 # paid run; its follow-ups 2026-11-15 after the second grouped run; the task-move parity 2026-11-16 after its grouped
-# run, 18/18 on the final code). Everything else in ALL_ON is held.
+# run, 18/18 on the final code); the help tool 2026-11-24 by Ken's decision, no paid eval (MIP-2329). Everything else in ALL_ON is held.
 SHIPPED_ON = frozenset(
     {
         "AGENT_RESUME_KEEPS_BLOCKS",
@@ -93,6 +95,7 @@ SHIPPED_ON = frozenset(
         "AGENT_PARITY_TOOLS",
         "AGENT_PARITY_FOLLOWUPS",
         "AGENT_TASK_MOVE_PARITY",
+        "AGENT_INAPP_HELP_TOOL",
     }
 )
 # The neighbours that change what is declared and are not flags under test.
@@ -175,7 +178,10 @@ class AllOnDeclarationTests(SimpleTestCase):
         extra = [d.name for d in on[len(off) :]]
         # The timeline tool, then MIP-1563's write tool and MIP-1059's calendar read (both flag-gated with
         # the parity batch).
-        self.assertEqual(extra, ["get_timeline", "delete_task_attachment", "get_calendar_event"])
+        self.assertEqual(
+            extra,
+            ["get_timeline", "delete_task_attachment", "get_calendar_event", "get_genos_help"],
+        )
         self.assertEqual(len({d.name for d in on}), len(on), "a tool is declared twice")
 
     def test_schemas_only_gain_the_declared_parameters_and_descriptions_only_grow(self):
@@ -260,7 +266,7 @@ class AllOnDeclarationTests(SimpleTestCase):
             self.assertIsNotNone(_app_tool("get_timeline"))
             self.assertEqual(
                 [t.name for t in flagged_tools()],
-                ["get_timeline", "delete_task_attachment", "get_calendar_event"],
+                ["get_timeline", "delete_task_attachment", "get_calendar_event", "get_genos_help"],
             )
         self.assertNotIn("get_timeline", REGISTRY)
         self.assertNotIn("delete_task_attachment", REGISTRY)
@@ -294,6 +300,7 @@ class AllOnDeclarationTests(SimpleTestCase):
         self.assertLessEqual(on_total, BUDGET_CHARS, "all-on no longer fits the production budget")
 
     def test_only_the_reject_reason_and_parity_flags_edit_the_system_prompt(self):
+        # (+ the help flag, MIP-2329 arm: its two "how do I" lines)
         # AGENT_REJECT_REASON adds the "a user_rejected result may carry a reason" lines; the parity flag
         # adds the calendar event's citation shape (MIP-1059); every other flag edits declarations or what
         # a resume carries. So all-on == those two alone != off, and neither alone is all-on.
@@ -305,7 +312,12 @@ class AllOnDeclarationTests(SimpleTestCase):
         with settings_with({k: False for k in ALL_ON} | {"AGENT_PARITY_TOOLS": True}):
             parity_only = agent_system_prompt()
         with settings_with(
-            {k: False for k in ALL_ON} | {"AGENT_REJECT_REASON": True, "AGENT_PARITY_TOOLS": True}
+            {k: False for k in ALL_ON}
+            | {
+                "AGENT_REJECT_REASON": True,
+                "AGENT_PARITY_TOOLS": True,
+                "AGENT_INAPP_HELP_TOOL": True,
+            }
         ):
             both = agent_system_prompt()
         with settings_with(ALL_ON):
@@ -338,7 +350,8 @@ class AllOnProviderTests(SimpleTestCase):
             names = [t.get("name") or t["function"]["name"] for t in tools]
             self.assertEqual(names, [d.name for d in decls], client_cls)
             self.assertEqual(
-                names[-3:], ["get_timeline", "delete_task_attachment", "get_calendar_event"]
+                names[-4:],
+                ["get_timeline", "delete_task_attachment", "get_calendar_event", "get_genos_help"],
             )
 
 
@@ -557,7 +570,9 @@ class AllOnLoopTests(LoopBase):
     def test_the_other_flags_are_in_what_the_model_is_sent(self):
         calls = transcript(self.run_all_on("plain", "long").calls)
         system = calls[0]["system"]
-        with settings_with({"AGENT_REJECT_REASON": True, "AGENT_PARITY_TOOLS": True}):
+        with settings_with(
+            {"AGENT_REJECT_REASON": True, "AGENT_PARITY_TOOLS": True, "AGENT_INAPP_HELP_TOOL": True}
+        ):
             rule = agent_system_prompt()
         self.assertTrue(
             system.startswith(rule), "the all-on prompt is the reject-reason and parity one"

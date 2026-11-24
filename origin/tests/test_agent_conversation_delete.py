@@ -130,6 +130,13 @@ class ConversationDeleteTestCase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
         self.authenticate()
+        # New accounts do not share answers (MIP-2340); these suites exercise the
+        # team lane, so both members opt in explicitly.
+        type(self.user).objects.filter(pk__in=[self.user.pk, self.user2.pk]).update(
+            share_answers_with_team=True
+        )
+        self.user.refresh_from_db()
+        self.user2.refresh_from_db()
         quota.invalidate_effective_tier([self.user.id, self.user2.id])
         self.uid = str(self.user.id)
         self.uid2 = str(self.user2.id)

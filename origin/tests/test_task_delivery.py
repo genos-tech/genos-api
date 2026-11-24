@@ -53,6 +53,10 @@ PR = "https://github.com/genos-tech/genos-api/pull/7"
 class DeliveryBase(BaseAPITestCase):
     def setUp(self):
         super().setUp()
+        # These suites are about users who have NOT opted into auto-close
+        # (new accounts default to On since MIP-2340; opt-in tests set it True).
+        type(self.user).objects.filter(pk=self.user.pk).update(auto_close_on_pr_merge=False)
+        self.user.refresh_from_db()
         self.project = self._project(self.team, "Platform", "HK")
         self.task = self._task(42)
         self.ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
