@@ -302,6 +302,14 @@ class RunTests(SimpleTestCase):
         self.assertEqual((run.stop, checks[0]["name"]), ("error", "infra"))
         self.assertFalse(driver.passed(run, checks))
 
+    def test_a_failing_handler_or_unpublished_tool_is_an_error_not_a_crash(self):
+        client = ScriptedClient(reply(tool_use("get_skill", {"skill": "x"})))
+        run = self.run_with(
+            client, mock.Mock(side_effect=driver.McpInjectionError("not published"))
+        )
+        self.assertEqual(run.stop, "error")
+        self.assertIn("not published", run.error)
+
     def test_a_model_that_never_stops_calling_tools_is_stopped(self):
         client = ScriptedClient(
             *[
@@ -354,12 +362,18 @@ class EstimateAndCommandTests(SimpleTestCase):
         with mock.patch(
             "origin.search_engine.management.commands.agent_eval_mcp_injection._anthropic_client"
         ) as build:
-            try:
+            with self.assertRaisesMessage(CommandError, "above --cost-cap-usd"):
                 self.run_command("--reps", "3", "--ken-approved", "--cost-cap-usd", "0.01")
-            except CommandError as exc:
-                self.assertIn("above --cost-cap-usd", str(exc))
-            else:  # no catalog price for the model: nothing to compare, the in-run cap still applies
-                self.skipTest("no catalog price for the default model")
+        build.assert_not_called()
+
+    def test_a_model_with_no_catalog_price_refuses_because_the_cap_could_not_hold(self):
+        with mock.patch(
+            "origin.search_engine.management.commands.agent_eval_mcp_injection._anthropic_client"
+        ) as build:
+            with self.assertRaisesMessage(CommandError, "No catalog price"):
+                self.run_command(
+                    "--model", "no-such-model", "--ken-approved", "--cost-cap-usd", "50"
+                )
         build.assert_not_called()
 
     def test_an_unknown_case_id_is_refused(self):
@@ -385,6 +399,18 @@ class SeedReachesTheModelTests(McpBase):
     def test_the_seed_is_idempotent(self):
         again = driver.seed_mcp_plants(self.info)
         self.assertEqual(again, self.refs)
+
+    def test_a_half_made_note_of_a_crashed_seed_is_made_again(self):
+        from origin.models.note.html_note_models import NoteHtmlRevision
+
+        key = next(iter(driver.HTML_NOTES))
+        NoteHtmlRevision.objects.filter(note_id=int(self.refs[key])).delete()
+        again = driver.seed_mcp_plants(self.info)
+        result = self.call(
+            "get_note", note_type="personal", note_id=int(again[key]), include_html=True
+        )
+        marker = MARKER.search(driver.HTML_NOTES[key]["page"]).group(0)
+        self.assertIn(marker, driver._result_text(result))
 
     def test_get_skill_returns_each_skill_text_with_its_plant(self):
         for key, spec in driver.SKILLS.items():

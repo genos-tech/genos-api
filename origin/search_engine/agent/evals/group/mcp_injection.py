@@ -257,7 +257,10 @@ def seed_mcp_plants(info: dict[str, Any]) -> dict[str, str]:
     """The skill and the HTML notes, idempotently, for the viewer. Returns the refs of those two places
     (`skill_*` slugs, `html_*` note ids). The skill is created with the switch on for the duration of the call
     (it is a seed, the switch is the client's catalog's concern: see `mcp_flags`)."""
+    from django.db import transaction  # noqa: PLC0415
+
     from origin.models.note.common_note_models import NotePermissionMaster  # noqa: PLC0415
+    from origin.models.note.html_note_models import NoteHtmlRevision  # noqa: PLC0415
     from origin.models.note.personal_note_models import PersonalNoteMaster  # noqa: PLC0415
     from origin.models.skills.skill_models import Skill  # noqa: PLC0415
     from origin.services import html_notes  # noqa: PLC0415
@@ -289,20 +292,28 @@ def seed_mcp_plants(info: dict[str, Any]) -> dict[str, str]:
         note = PersonalNoteMaster.objects.filter(
             team_id=team_id, owner_id=user.pk, title=spec["title"]
         ).first()
-        if note is None:
+        has_page = (
+            note is not None
+            and NoteHtmlRevision.objects.filter(note_type=1, note_id=note.note_id).exists()
+        )
+        if note is None or not has_page:
             prepared = html_notes.prepare(spec["page"], title=spec["title"], summary="A page.")
-            note = PersonalNoteMaster.objects.create(
-                team_id=team_id, owner_id=user.pk, title=prepared.title, body=prepared.body
-            )
-            NotePermissionMaster.objects.create(
-                team_id=team_id,
-                user_id=user.pk,
-                note_id=note.note_id,
-                note_type=1,
-                role_id=ROLE_OWNER,
-            )
-            html_notes.mark_html(1, note.note_id)
-            html_notes.append_revision(1, note.note_id, str(user.pk), prepared)
+            with transaction.atomic():
+                if note is not None:  # a half-made note of an earlier crashed seed: start it again
+                    NotePermissionMaster.objects.filter(note_type=1, note_id=note.note_id).delete()
+                    note.delete()
+                note = PersonalNoteMaster.objects.create(
+                    team_id=team_id, owner_id=user.pk, title=prepared.title, body=prepared.body
+                )
+                NotePermissionMaster.objects.create(
+                    team_id=team_id,
+                    user_id=user.pk,
+                    note_id=note.note_id,
+                    note_type=1,
+                    role_id=ROLE_OWNER,
+                )
+                html_notes.mark_html(1, note.note_id)
+                html_notes.append_revision(1, note.note_id, str(user.pk), prepared)
         refs[key] = str(note.note_id)
     return refs
 
@@ -454,7 +465,11 @@ def run_case(
                 run.proposed_writes.append({"tool_name": use.name, "arguments": args})
                 run.stop, run.answer = "write_proposed", text
                 return run
-            result = call_tool(use.name, args, ctx)
+            try:
+                result = call_tool(use.name, args, ctx)
+            except Exception as exc:  # noqa: BLE001 - an unpublished name or a failing handler: infra, not a verdict
+                run.stop, run.error = "error", f"{use.name}: {type(exc).__name__}: {exc}"[:300]
+                return run
             run.tool_calls.append({"tool_name": use.name, "arguments": args, "result": result})
             results.append(
                 {

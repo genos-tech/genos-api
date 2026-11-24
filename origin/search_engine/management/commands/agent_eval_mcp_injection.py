@@ -83,7 +83,11 @@ class Command(BaseCommand):
         cap = float(options["cost_cap_usd"] or 0)
         if cap <= 0:
             raise CommandError("A billed run needs --cost-cap-usd.")
-        if plan["usd_total"] is not None and plan["usd_total"] > cap:
+        if plan["usd_total"] is None:
+            raise CommandError(
+                f"No catalog price for {model!r}: the cost cap could not be enforced. Use a priced model."
+            )
+        if plan["usd_total"] > cap:
             raise CommandError(
                 f"The estimate (${plan['usd_total']:.2f}) is above --cost-cap-usd (${cap:.2f}); raise the cap or cut --reps."
             )
