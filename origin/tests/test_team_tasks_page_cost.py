@@ -121,7 +121,6 @@ class TeamTasksPageBase(BaseAPITestCase):
             )
             # the personal fields stored encrypted, which a join used to decrypt per row
             person.phone_number = f"+8190000000{i}"
-            person.base_country = "Japan"
             person.current_location = f"Tokyo {i}"
             person.about_me = f"About person {i}"
             person.profile_image_file_name = f"avatar-{i}.png"

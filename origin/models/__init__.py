@@ -5,6 +5,7 @@ from .chat.unified_models import *
 from .common.agent_call_models import *
 from .common.briefing_models import *
 from .common.change_models import *
+from .common.erasure_models import *
 from .common.feature_models import *
 from .common.github_app_models import *
 from .common.inbox_models import *

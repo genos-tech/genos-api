@@ -153,10 +153,10 @@ class AgentRunTests(BaseAPITestCase):
 
         self.assertEqual(AgentRun.objects.count(), 0)
 
-    def test_step_results_are_blanked_and_the_step_and_run_stay(self):
+    def test_step_output_and_summary_are_blanked_and_the_step_and_run_stay(self):
         run = self._run("done")
         step = AgentStep.objects.create(
-            run=run, step_index=0, summary="kept", result_json={"secret": "tool output"}
+            run=run, step_index=0, summary="found a@example.com", result_json={"s": "tool output"}
         )
         AgentStep.objects.filter(pk=step.pk).update(created_at=OLD)
 
@@ -165,7 +165,7 @@ class AgentRunTests(BaseAPITestCase):
 
         step.refresh_from_db()
         self.assertIsNone(step.result_json)
-        self.assertEqual(step.summary, "kept")
+        self.assertEqual(step.summary, "")
         self.assertTrue(AgentRun.objects.filter(pk=run.pk).exists())
 
     def test_step_results_of_an_unfinished_run_are_kept(self):
@@ -410,11 +410,16 @@ class OnePolicyDoesNotTouchAnotherTests(BaseAPITestCase):
         self.assertFalse(NoteVersionMaster.objects.filter(pk=note.pk).exists())
         self.assertTrue(AgentRun.objects.filter(pk=run.pk).exists())
 
-    def test_the_audit_log_has_only_its_high_volume_policy(self):
+    def test_the_audit_log_only_loses_rows_through_its_high_volume_policy(self):
         """The rest of the audit log keeps its own command and floor (`prune_security_events`).
-        Only the four high-volume actions have a period here (MIP-1789)."""
-        security = [p for p in retention.POLICIES if "security" in p.name]
-        self.assertEqual([p.name for p in security], ["security_events_high_volume"])
+        Only the four high-volume actions have a DELETING period here (MIP-1789); the other
+        security policy only blanks the address and browser of a row (MIP-2252)."""
+        deleting = [
+            p.name
+            for p in retention.POLICIES
+            if "security" in p.name and p.action is retention.Action.DELETE
+        ]
+        self.assertEqual(deleting, ["security_events_high_volume"])
 
 
 class CommandTests(BaseAPITestCase):
@@ -510,7 +515,7 @@ class CommandTests(BaseAPITestCase):
         self.assertIn("[dry-run] agent_runs: would change 1 rows older than 180 days", out)
         self.assertIn("1 agent steps would go", out)
         self.assertIn("email_notification_events: would change 0 rows older than 90 days", out)
-        self.assertNotIn("note_versions", out)
+        self.assertIn("note_versions: would change 0 rows older than 90 days", out)
         self.assertEqual(AgentRun.objects.count(), 2)
         self.assertEqual(AgentStep.objects.count(), 1)
 
@@ -521,17 +526,24 @@ class CommandTests(BaseAPITestCase):
             {p.name: p.approved_days for p in retention.POLICIES if p.approved_days},
             {
                 "agent_runs": 180,
+                "agent_step_results": 30,
+                "agent_sessions": 180,
+                "webhook_deliveries": 30,
                 "email_notification_events": 90,
+                "note_versions": 90,
+                "task_activity_bodies": 30,
+                "task_activities": 365,
                 "workspace_changes": 365,
                 "security_events_high_volume": 90,
+                "security_event_network": 90,
             },
         )
 
     def test_the_cron_start_command_applies_explicitly(self):
         from pathlib import Path
 
-        toml = Path(__file__).resolve().parents[2] / "railway-retention-purge.toml"
-        self.assertIn("retention_purge --apply --heartbeat", toml.read_text())
+        ts = Path(__file__).resolve().parents[2] / ".railway" / "railway.ts"
+        self.assertIn("retention_purge --apply --heartbeat retention-purge", ts.read_text())
 
 
 @override_settings()

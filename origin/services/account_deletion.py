@@ -22,6 +22,10 @@ past work stays attributed to "Deleted user", and nothing dangles.
     holds and nothing can ever mail them again;
   * password made unusable and OAuth grants deleted (those rows hold
     live third-party refresh tokens — credentials, not just PII);
+  * every Stripe subscription of the person, and of the teams that die with them, cancelled at
+    once BEFORE anything is erased, so nothing bills a deleted person (MIP-2254). The Stripe
+    customer record is kept (MIP-874). If Stripe cannot be reached the deletion stops with
+    `BillingCancelFailed` and can be repeated;
   * `is_active=False`, which SimpleJWT re-checks against the DB on
     EVERY request (`CHECK_USER_IS_ACTIVE`), so all sessions on all
     devices die at once, with no token blacklist to maintain;
@@ -61,6 +65,7 @@ from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.chat.unified_models import ReadCursor
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
+from origin.models.common.erasure_models import ErasureObjectType
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.item_activity_models import purge_for_user as purge_item_activity
 from origin.models.common.mcp_connection_models import McpConnection
@@ -74,7 +79,7 @@ from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.trial_models import CoreTrial
 from origin.models.common.user_models import ConnectedAccount
-from origin.services import blind_index, change_feed
+from origin.services import blind_index, change_feed, erasure_log
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
 from origin.services.deleted_account_leftovers import blank_network_for
 from origin.services.deleted_account_leftovers import delete_for_user as delete_leftovers_for
@@ -96,6 +101,87 @@ class OwnershipTransferRequired(Exception):
     def __init__(self, teams):
         self.teams = teams
         super().__init__("Ownership must be transferred before deleting the account.")
+
+
+class BillingCancelFailed(Exception):
+    """Raised, before anything is erased, when a subscription could not be cancelled at Stripe.
+
+    Erasing the account first would leave a paid plan billing a person nobody can reach: the
+    retry is cheap and the person is at the screen, so the deletion stops and can be repeated."""
+
+
+def _teams_closing_with(user) -> list[TeamMaster]:
+    """The teams that die with this person: the ones they own (those with other members already
+    blocked the deletion) and the ones where they are the last live member."""
+    teams = {t.team_id: t for t in TeamMaster.objects.filter(owner=user, is_deleted=False)}
+    for membership in TeamMembers.objects.filter(attendee=user, is_deleted=False).select_related(
+        "team"
+    ):
+        team = membership.team
+        if team.team_id in teams or team.is_deleted or team.is_demo:
+            continue
+        others = (
+            TeamMembers.objects.filter(
+                team=team,
+                is_deleted=False,
+                attendee__is_deleted=False,
+                attendee__is_system_user=False,
+            )
+            .exclude(attendee=user)
+            .exists()
+        )
+        if not others:
+            teams[team.team_id] = team
+    return list(teams.values())
+
+
+def _cancel_billing(user) -> set:
+    """Cancel the person's own subscription and those of the teams that die with them (MIP-2254).
+
+    Runs BEFORE the erasure and fails closed (`BillingCancelFailed`). The Stripe customer record
+    is kept (Ken, 2026-11-02, MIP-874): only the charging stops. Returns the ids of the teams
+    whose subscription was cancelled, so the erasure can drop their plan to free.
+
+    No network call for a person who never paid: a customer id is the only thing that asks Stripe.
+
+    Two accepted limits. (1) The cancel is not locked against the erasure: if someone joins a team
+    the person was the last live member of in those few milliseconds, the team stays open with its
+    plan cancelled (the webhook then drops it to free). (2) If the erasure itself fails after the
+    cancel, the subscriptions stay cancelled and the account stays; repeating the deletion finishes it.
+    """
+    from origin.services import stripe_billing
+
+    customers = {}  # customer id -> team (None for the person's own)
+    if user.stripe_customer_id:
+        customers[user.stripe_customer_id] = None
+    for team in _teams_closing_with(user):
+        if team.stripe_customer_id:
+            customers[team.stripe_customer_id] = team
+    if not customers:
+        return set()
+    if not stripe_billing.billing_enabled():
+        # Nothing can be cancelled without a key (a dev stack). Production has one.
+        log.warning("[account] user=%s has Stripe customers but billing is off", user.pk)
+        return set()
+
+    cancelled_teams = set()
+    for customer_id, team in customers.items():
+        try:
+            count = stripe_billing.cancel_subscriptions_now(customer_id)
+        except stripe_billing.BillingError as exc:
+            # The customer id is not logged: the id of the person is enough to find it.
+            log.warning("[account] subscription not cancelled user=%s", user.pk, exc_info=True)
+            raise BillingCancelFailed from exc
+        if count:
+            log.warning(
+                "[account] cancelled %d subscription(s) user=%s team=%s",
+                count,
+                user.pk,
+                team.team_id if team else "-",
+            )
+        if team is not None:
+            cancelled_teams.add(team.team_id)
+    return cancelled_teams
 
 
 def blocking_owned_teams(user) -> list[TeamMaster]:
@@ -367,6 +453,14 @@ def _cut_off_open_sockets(user_id, left_team_ids) -> None:
         )
 
 
+def _disconnect_open_sockets(user_id) -> None:
+    """Close every open socket of the deleted person (MIP-2241): leaving the rooms is not
+    enough, the socket itself stays connected and in their own user rooms."""
+    from origin.services.realtime_push import push_user_disconnect
+
+    push_user_disconnect(user_id)
+
+
 def delete_account(user) -> dict:
     """Erase the person, keep the workspace consistent.
 
@@ -376,6 +470,10 @@ def delete_account(user) -> dict:
     blocking = blocking_owned_teams(user)
     if blocking:
         raise OwnershipTransferRequired(blocking)
+
+    # Before anything is erased, and fail closed: a person who pays must not keep being charged
+    # after they are gone (MIP-2254). Raises `BillingCancelFailed`, and the erasure has not begun.
+    cancelled_team_ids = _cancel_billing(user)
 
     user_id = str(user.id)
     original_email = user.email
@@ -410,6 +508,7 @@ def delete_account(user) -> dict:
         # joined a room, so the deleted person's tab kept receiving the team's chats and kept
         # broadcasting "online" to its roster until it reconnected (it cannot: the token dies).
         _cut_off_open_sockets(user.pk, left_team_ids)
+        _disconnect_open_sockets(user.pk)
 
         TeamMembers.objects.filter(attendee=user, is_deleted=False).update(
             is_deleted=True, ts_updated_at=timezone.now()
@@ -422,6 +521,16 @@ def delete_account(user) -> dict:
         for team_id in left_team_ids:
             if close_team_if_empty(team_id):
                 solo_team_ids.append(team_id)
+        # A closed team whose subscription was just cancelled goes to `free` here: the webhook
+        # that follows ignores a closed team, and `team_purge` holds a paid one for billing
+        # (MIP-2254).
+        if cancelled_team_ids:
+            from origin.services import stripe_billing
+
+            for closed in TeamMaster.objects.filter(
+                team_id__in=[t for t in solo_team_ids if t in cancelled_team_ids]
+            ):
+                stripe_billing.end_team_plan_after_cancel(closed)
         # The person is no longer a participant of a group or a project chat (MIP-1546). A DM
         # or multi-person DM row stays: the others keep the conversation.
         end_group_memberships(user.pk)
@@ -493,7 +602,6 @@ def delete_account(user) -> dict:
         user.phone_number = None
         user.custom_status = None
         user.role = None
-        user.base_country = None
         user.current_location = None
         # Free text the user wrote about themselves — the most identifying
         # field on this row after the ones above, and the only one where
@@ -512,6 +620,7 @@ def delete_account(user) -> dict:
         user.password_reset_token_hash = None
         user.password_reset_token_expires_at = None
         user.save()
+        erasure_log.record(ErasureObjectType.ACCOUNT, user_id)  # MIP-2249
 
     _delete_avatar_file(avatar_path, user_id)
 

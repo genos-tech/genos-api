@@ -5,7 +5,7 @@ Every period defaults to "keep forever", so this changes nothing until someone s
 (MIP-1786): it prints counts per table, never a title, name or email. See `origin/services/retention.py` for the
 policies, what each one deletes or blanks, and what is deliberately left out.
 
-Run daily via `railway-retention-purge.toml`.
+Run daily by the `retention-purge` service in `.railway/railway.ts` (MIP-2251).
 
 Usage:
     python manage.py retention_purge                  # dry run: counts for every policy that has a period

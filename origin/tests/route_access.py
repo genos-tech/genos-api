@@ -199,6 +199,9 @@ REGISTRY = {
     "origin.views.common.api_key_views.ApiKeyDetailView": self_only(
         "ApiKey filtered on user=request.user"
     ),
+    "origin.views.common.api_key_views.ApiKeyResumeView": self_only(
+        "ApiKey filtered on user=request.user (MIP-2259)"
+    ),
     "origin.views.common.api_key_views.ApiKeyListCreateView": checked("is_team_member"),
     "origin.views.common.api_key_views.TeamApiKeyDetailView": checked("_managed_team"),
     "origin.views.common.api_key_views.TeamApiKeyListView": checked("_managed_team"),
@@ -220,6 +223,9 @@ REGISTRY = {
         "_managed_team"
     ),
     "origin.views.common.mcp_connection_views.TeamMcpConnectionListView": checked("_managed_team"),
+    "origin.views.common.mcp_connection_views.McpConnectionResumeView": self_only(
+        "the caller's own connected app: looked up by id AND user=request.user (MIP-2259)"
+    ),
     "origin.views.common.mcp_connection_views.McpConnectionDetailView": self_only(
         "the caller's own connected app: looked up by id AND user=request.user, "
         "anything else is a 404"
@@ -633,6 +639,17 @@ REGISTRY = {
     ),
     # views.note.html_note_views (MIP-2214): the saved page, under the note's own read ACL
     "origin.views.note.html_note_views.HtmlNoteView": checked("require_read_role"),
+    # (MIP-2228) the viewer's frame URL: the note's read ACL, then a signed 10-minute token
+    "origin.views.note.html_note_views.HtmlNoteFrameView": checked("require_read_role"),
+    # (MIP-2228) the page itself, in a sandboxed frame that has no credentials by design
+    "origin.views.note.html_note_views.HtmlNotePageView": public(
+        "bearer of a signed token for one note revision (10 minutes, minted only after the note's "
+        "read ACL); header CSP sandbox, no cookie; HtmlNotePageThrottle per IP"
+    ),
+    # (MIP-2215) the web import of a .html file: team membership, then the MCP save tool's own checks
+    "origin.views.note.html_note_views.HtmlNoteImportView": checked(
+        "require_team_member_or_response"
+    ),
     # views.note.note_folder_tag_views
     "origin.views.note.note_folder_tag_views.NoteFolderTagLinkView": checked("get_folder_role"),
     "origin.views.note.note_folder_tag_views.NoteFolderTagView": checked(
@@ -740,6 +757,11 @@ REGISTRY = {
     "origin.views.project.prj_views.ProjectsView": checked("is_team_member"),
     # views.public.mcp.views
     "origin.views.public.mcp.views.McpView": checked("is_team_member"),
+    # views.public.secret_scanning_views
+    "origin.views.public.secret_scanning_views.SecretScanningView": public(
+        "GitHub's ECDSA signature over the raw body, verified against its published keys before "
+        "anything is parsed; per-address throttle"
+    ),
     # views.public.openapi
     "origin.views.public.openapi.OpenApiSchemaView": public(
         "the public API's schema document; no data"

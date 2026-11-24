@@ -1,0 +1,15 @@
+Hi {{ user_name }},
+
+Someone just tried to sign up for Genos with this email address, but it
+already belongs to an account.
+
+If it was you, sign in instead:
+
+{{ signin_url }}
+
+Not sure how you signed in before? The sign-in page lists every way in, and "Forgot password" is there too.
+
+If it wasn't you, you can ignore this email. Nothing about your account
+has changed.
+
+— The Genos team

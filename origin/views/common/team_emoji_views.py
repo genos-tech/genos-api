@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from origin.models.common.team_emoji_models import TeamEmojiMaster
 from origin.models.common.team_models import TeamMaster
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
+from origin.views.utils.image_sanitize import strip_image_metadata
 from origin.views.utils.upload_validation import IMAGE_SNIFFERS, read_head
 
 # Shortcode rule: lowercase, no colons (added at render time). Max 50 so
@@ -157,6 +158,7 @@ class TeamEmojiView(AuthenticatedAPIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        strip_image_metadata(file)  # MIP-2234; before the size is recorded
         emoji = TeamEmojiMaster(
             team=team, name=name, created_by=request.user, image_size_bytes=file.size
         )

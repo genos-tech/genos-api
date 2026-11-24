@@ -21,6 +21,7 @@ from origin.views.utils.chat_note_target import (
     resolve_chat_note_target,
 )
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
+from origin.views.utils.html_note_refusal import html_note_put_refusal
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import non_member_mentions
 from origin.views.utils.note_role import (
@@ -125,6 +126,7 @@ class AllChatNotesView(AuthenticatedAPIView):
                 threadId=F("thread_root_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("-tsUpdated")
             .values(
@@ -141,6 +143,7 @@ class AllChatNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -175,6 +178,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 isThread=F("is_thread"),
                 threadId=F("thread_root_id"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
                 chatTypeName=Case(
                     When(chat_type=1, then=Value("DM")),
                     When(chat_type=2, then=Value("GM")),
@@ -196,6 +200,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 "threadId",
                 "title",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -348,6 +353,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsCreated")  # ASC by created at
             .values(
@@ -364,6 +370,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -516,6 +523,10 @@ class ChatNoteMasterView(AuthenticatedAPIView):
         except ChatNoteMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # An HTML note's text is made from its page (MIP-2218): guide, write nothing.
+        if res := html_note_put_refusal(note):
+            return res
+
         # An autosave changes the title and the body, and the app sends nothing
         # else (moves have their own endpoints). The whole request used to reach
         # a partial `__all__` serializer, so a writer could also take the note's
@@ -646,6 +657,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -662,6 +674,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -791,6 +804,7 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -806,6 +820,7 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
