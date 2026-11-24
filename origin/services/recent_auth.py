@@ -19,8 +19,6 @@ factor for those accounts is MIP-2239.
 
 from __future__ import annotations
 
-import hashlib
-
 from django.core import signing
 from rest_framework import status
 from rest_framework.response import Response
@@ -31,9 +29,9 @@ CODE = "recent_auth_required"
 
 
 def _fingerprint(user) -> str:
-    """Part of a hash of the current password hash: changes when the password does, and does not
-    reveal the hash."""
-    return hashlib.sha256(f"recent-auth:{user.password}".encode()).hexdigest()[:24]
+    """Django's own session-auth hash: a keyed HMAC of the current password hash. It changes when
+    the password does, and reveals nothing about the hash."""
+    return user.get_session_auth_hash()[:24]
 
 
 def required_for(user) -> bool:
