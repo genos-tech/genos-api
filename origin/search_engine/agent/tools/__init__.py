@@ -87,6 +87,7 @@ from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
 from origin.search_engine.agent.tools.get_calendar_event import GET_CALENDAR_EVENT
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
+from origin.search_engine.agent.tools.get_genos_help import GET_GENOS_HELP_INAPP
 from origin.search_engine.agent.tools.get_milestone_assignee_counts import (
     GET_MILESTONE_ASSIGNEE_COUNTS,
 )
@@ -109,7 +110,6 @@ from origin.search_engine.agent.tools.get_task_throughput_stats import (
 )
 from origin.search_engine.agent.tools.get_team_members import GET_TEAM_MEMBERS
 from origin.search_engine.agent.tools.get_team_task_summary import GET_TEAM_TASK_SUMMARY
-from origin.search_engine.agent.tools.get_genos_help import GET_GENOS_HELP_INAPP
 from origin.search_engine.agent.tools.get_timeline import GET_TIMELINE_INAPP
 from origin.search_engine.agent.tools.get_top_task_closers import GET_TOP_TASK_CLOSERS
 from origin.search_engine.agent.tools.get_workload_distribution import (
