@@ -235,6 +235,7 @@ _SECURITY_SUMMARIES = {
     "alert.export": "Account data exported",
     "alert.forbidden_burst": "Burst of refused requests",
     "alert.signin_spray": "Password spray: failed sign-ins across many accounts",
+    "alert.write_volume": "One key or connected app rewrote many items",
     "alert.ops_command_unlisted": "Operator ran a command outside the allowlist",
     "alert.read_volume": "Unusual read volume",
 }
@@ -259,6 +260,8 @@ def raise_security_alert(event) -> None:
         summary = f"{summary}: {meta['refused']} in {meta.get('window_seconds', '?')} s"
     if "accounts" in meta:
         summary = f"{summary}: {meta['accounts']} accounts in {meta.get('window_seconds', '?')} s"
+    if "rows" in meta:
+        summary = f"{summary}: {meta['rows']} items in {meta.get('window_seconds', '?')} s"
     if meta.get("command"):
         summary = f"{summary}: {meta['command']}"
     raise_alert(

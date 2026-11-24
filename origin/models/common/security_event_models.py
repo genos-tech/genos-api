@@ -78,6 +78,7 @@ class SecurityAction(models.TextChoices):
     ALERT_EXPORT = "alert.export", "Alert: data exported"
     ALERT_FORBIDDEN_BURST = "alert.forbidden_burst", "Alert: many refused requests"
     ALERT_SIGNIN_SPRAY = "alert.signin_spray", "Alert: failed sign-ins across many accounts"
+    ALERT_WRITE_VOLUME = "alert.write_volume", "Alert: one key or app rewrote many items"
     ALERT_READ_VOLUME = "alert.read_volume", "Alert: unusual read volume"
     # A key or connected app paused by the detector, and re-enabled by its owner (MIP-2259).
     CREDENTIAL_SUSPENDED = "credential.suspended", "Key or app suspended"
