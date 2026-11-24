@@ -1,7 +1,7 @@
 {
   "release": "v0.6.0",
   "source": "https://github.com/genos-tech/genos-claude-plugin",
-  "docs_ref": "d1a502d405e03745e8ee255c8c11d256e26bc8e0",
+  "docs_ref": "80d8e99acec167d4e5a17182c4023ac4b31fc8f7",
   "skills": [
     {
       "slug": "create-task",
