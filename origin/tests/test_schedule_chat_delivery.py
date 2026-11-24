@@ -17,6 +17,7 @@ What matters, each with a test that fails when it is removed:
 from __future__ import annotations
 
 import dataclasses
+import json
 from datetime import timedelta
 from unittest import mock
 
@@ -137,12 +138,39 @@ class TestWhoMayReadIt(ChatBase):
         alone = self.gm(self.user, title="Me")
         self.assertTrue(self.save(alone, job="what_to_do_today", name="Mine"))
 
-    def test_a_report_with_an_ai_part_goes_to_the_inbox_only(self):
+    def test_a_report_with_an_ai_part_follows_the_rule_of_its_own_kind(self):
+        """MIP-2351: AI neither widens nor narrows who may read a report."""
+        ai = {"ai_sentences": True}
+        project = {"project_id": self.project.project_id, "ai_sentences": True}
         alone = self.gm(self.user, title="Me")
-        said = self.refusal(
-            alone, job="what_to_do_today", params={"ai_sentences": True}, name="With AI"
+        shared = self.gm(self.user, self.user2, title="Members")
+        mixed = self.gm(self.user, self.user2, self.outsider, title="Mixed")
+        # A report about the owner: a chat only they are in, never a chat others read.
+        self.assertTrue(self.save(alone, job="what_to_do_today", params=ai, name="Mine"))
+        self.assertEqual(
+            self.refusal(shared, job="what_to_do_today", params=ai, name="Mine 2"),
+            audience.ABOUT_YOU,
         )
-        self.assertEqual(said, audience.HAS_AI)
+        # A project report with AI reaches the project's people, and still nobody else.
+        self.assertTrue(self.save(shared, job="project_updates", params=project, name="Team"))
+        self.assertEqual(
+            self.refusal(mixed, job="project_updates", params=project, name="Team 2"),
+            audience.NOT_EVERYONE,
+        )
+
+    def test_a_chat_with_a_guest_or_a_public_chat_is_refused_for_an_ai_report_too(self):
+        project = {"project_id": self.project.project_id, "ai_sentences": True}
+        guest = CustomUser.objects.create_user(
+            username="guest", email="guest@example.com", password="pw-guest-1"
+        )
+        chat = self.gm(self.user, self.user2, guest, title="With a guest")
+        public = self.gm(self.user, self.user2, title="Open", is_private=False)
+        self.assertEqual(
+            self.refusal(chat, job="project_updates", params=project), audience.NOT_EVERYONE
+        )
+        self.assertEqual(
+            self.refusal(public, job="project_updates", params=project), audience.PUBLIC
+        )
 
     def test_only_a_chat_the_member_can_read_in_this_team_counts(self):
         elsewhere = self.gm(self.user2, title="Not mine")  # the owner is not in it
@@ -621,3 +649,92 @@ class TestRest(ChatBase):
         res = self.client.post(LIST, self.body(theirs), format="json")
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.data["error"], audience.NOT_FOUND)
+
+
+class TestAiReportInASharedChat(ChatBase):
+    """MIP-2351: an AI report may be posted in a chat other people read; the message never carries
+    a cost, and the owner alone is told what it cost."""
+
+    REQUEST = "11111111-2222-4333-8444-555555555555"
+
+    def setUp(self):
+        super().setUp()
+        self.params = {"project_id": self.project.project_id, "ai_sentences": True}
+
+    def report(self, **extra):
+        out = {
+            "title": "Project: Alpha",
+            "summary": "Two tasks are done.",
+            "sections": [{"heading": "Done", "items": [{"text": "Ship the page"}]}],
+            "ai_request_id": self.REQUEST,
+        }
+        out.update(extra)
+        return out
+
+    def deliver(self, chat, run_at=None, **extra):
+        sched = self.save(chat, params=self.params)
+        schedule_delivery.deliver(sched, self.report(**extra), run_at=run_at)
+        sched.refresh_from_db()
+        return sched
+
+    def texts(self, message):
+        return [part["text"] for b in message.body for part in b["content"] if "text" in part]
+
+    def test_other_readers_get_the_report_without_any_cost(self):
+        chat = self.gm(self.user, self.user2)
+        self.deliver(chat)
+        (message,) = self.posted(chat)
+        self.assertNotIn("ai", message.metadata["scheduleReport"])
+        blob = json.dumps([message.body, message.body_text, message.metadata])
+        for word in ("AI usage", "credit", "cost", "not measured", self.REQUEST):
+            self.assertNotIn(word, blob)
+
+    def test_the_owner_alone_is_told_the_cost_on_the_schedule_and_in_one_inbox_item(self):
+        chat = self.gm(self.user, self.user2, title="Squad")
+        sched = self.deliver(chat)
+        self.assertEqual(sched.last_result["ai"]["request_id"], self.REQUEST)
+        (item,) = InboxItems.objects.filter(item_type=ITEM_TYPE_GENOS_REPORT)
+        self.assertEqual(item.receiver_id, self.user.pk)
+        self.assertEqual(item.item_optionals["ai"]["request_id"], self.REQUEST)
+        self.assertEqual(item.item_optionals["schedule_id"], str(sched.id))
+        self.assertEqual(item.item_body["sections"], [])
+        self.assertIn("Squad", item.item_body["text"])
+        self.assertIn("AI usage", item.item_body["text"])
+        # Nobody else has an item, and the other reader has none of the cost anywhere.
+        self.assertFalse(InboxItems.objects.exclude(receiver_id=self.user.pk).exists())
+
+    def test_a_repeat_of_one_scheduled_run_posts_and_files_the_cost_once(self):
+        chat = self.gm(self.user, self.user2)
+        sched = self.save(chat, params=self.params)
+        at = timezone.now().replace(microsecond=0)
+        schedule_delivery.deliver(sched, self.report(), run_at=at)
+        schedule_delivery.deliver(sched, self.report(), run_at=at)
+        self.assertEqual(self.posted(chat).count(), 1)
+        self.assertEqual(InboxItems.objects.filter(item_type=ITEM_TYPE_GENOS_REPORT).count(), 1)
+
+    def test_a_run_that_used_no_ai_posts_with_no_cost_item(self):
+        chat = self.gm(self.user, self.user2)
+        sched = self.save(chat, params=self.params)
+        report = self.report(ai_skipped="no_credits")
+        report.pop("ai_request_id")
+        schedule_delivery.deliver(sched, report)
+        self.assertEqual(self.posted(chat).count(), 1)
+        self.assertFalse(InboxItems.objects.filter(item_type=ITEM_TYPE_GENOS_REPORT).exists())
+
+    def test_a_person_added_who_may_not_read_it_since_stops_the_post_and_the_report_is_kept(self):
+        chat = self.gm(self.user, self.user2)
+        sched = self.save(chat, params=self.params)
+        ChannelMember.objects.create(channel=chat, user=self.outsider)
+        schedule_delivery.deliver(sched, self.report())
+        self.assertEqual(self.posted(chat).count(), 0)
+        (item,) = InboxItems.objects.filter(item_type=ITEM_TYPE_GENOS_REPORT)
+        self.assertTrue(item.item_body["sections"])  # the full report, in the owner's Inbox
+
+    def test_hand_made_runs_in_a_shared_chat_count_toward_the_daily_limit(self):
+        chat = self.gm(self.user, self.user2)
+        sched = self.save(chat, params=self.params)
+        now = timezone.now()
+        for _ in range(schedules.AI_RUN_NOW_PER_DAY):
+            schedule_delivery.deliver(sched, self.report())
+        with self.assertRaises(schedules.ScheduleError):
+            schedules._require_ai_run_now_room(sched, now)

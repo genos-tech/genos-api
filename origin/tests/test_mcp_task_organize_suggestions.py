@@ -114,6 +114,15 @@ class CreateTaskSuggestionsTests(_Board):
             [("parent_task", [])],
         )
 
+    def test_a_task_with_neither_parent_nor_milestone_is_told_it_has_no_place(self):
+        # MIP-2367: a suggestion, never a refusal; the message names both ways to give it a place.
+        out = self._create(title="Zebra quokka telemetry")
+
+        self.assertTrue(TaskMaster.objects.filter(task_id=out["task_id"]).exists())
+        entry = next(s for s in out["suggestions"] if s["kind"] == "parent_task")
+        self.assertIn("no milestone", entry["message"])
+        self.assertIn("milestone_id", entry["message"])
+
     def test_a_task_with_a_parent_task_gets_no_suggestions(self):
         out = self._create(
             title="Checkout redesign: mobile layout", parent_task_id=self.epic.task_id
@@ -215,6 +224,79 @@ class CreateTaskPlanSuggestionsTests(_Board):
 
         # The first task has no parent task, so the batch still gets its one hint.
         self.assertIn("parent_task", {s["kind"] for s in out["suggestions"]})
+
+
+class NoDependenciesSuggestionTests(_Board):
+    """MIP-2367: a plan of 3+ tasks with no dependency edge gets one more hint (never a refusal)."""
+
+    def _plan(self, **arguments):
+        arguments.setdefault("project_id", self.project.project_id)
+        return self._result(self._call("create_task_plan", arguments))["structuredContent"]
+
+    @staticmethod
+    def _tasks(n, blocked_by=None):
+        tasks = [{"title": f"Zebra quokka step {i}", "content_markdown": "Step."} for i in range(n)]
+        for index, blockers in (blocked_by or {}).items():
+            tasks[index]["blocked_by_indexes"] = blockers
+        return tasks
+
+    @staticmethod
+    def _kinds(out):
+        return [s["kind"] for s in out.get("suggestions", [])]
+
+    def test_three_tasks_and_no_dependency_get_the_hint_and_are_still_created(self):
+        out = self._plan(parent_task_id=self.epic.task_id, tasks=self._tasks(3))
+
+        self.assertEqual(len(out["tasks"]), 3)
+        self.assertEqual(out["dependencies_created"], 0)
+        self.assertEqual(self._kinds(out), ["no_dependencies"])
+        entry = out["suggestions"][0]
+        self.assertEqual(entry["candidates"], [])
+        self.assertIn("update_task_dependencies", entry["message"])
+
+    def test_a_new_milestones_tree_with_no_dependency_gets_the_hint(self):
+        out = self._plan(milestone={"title": "Zebra launch"}, tasks=self._tasks(4))
+
+        self.assertEqual(self._kinds(out), ["no_dependencies"])
+
+    def test_one_dependency_is_enough_to_stay_quiet(self):
+        out = self._plan(
+            parent_task_id=self.epic.task_id, tasks=self._tasks(3, blocked_by={1: [0]})
+        )
+
+        self.assertEqual(out["dependencies_created"], 1)
+        self.assertNotIn("suggestions", out)
+
+    def test_two_tasks_are_allowed_to_be_independent(self):
+        out = self._plan(parent_task_id=self.epic.task_id, tasks=self._tasks(2))
+
+        self.assertNotIn("suggestions", out)
+
+    def test_a_standalone_batch_gets_the_parent_hint_and_the_dependency_hint(self):
+        out = self._plan(tasks=self._tasks(3))
+
+        self.assertEqual(self._kinds(out).count("parent_task"), 1)
+        self.assertEqual(self._kinds(out).count("no_dependencies"), 1)
+
+    def test_the_in_app_agents_reply_is_unchanged(self):
+        from origin.search_engine.agent.tools import create_task_plan as plan_tool
+
+        ctx = ToolContext(team_id=str(self.team.team_id), user_id=str(self.user.id))
+        result = plan_tool._run(
+            {
+                "project_id": self.project.project_id,
+                "parent_task_id": self.epic.task_id,
+                "tasks": self._tasks(3),
+            },
+            ctx,
+        )
+
+        self.assertNotIn("suggestions", result)
+
+    def test_the_helper_needs_three_tasks_and_zero_edges(self):
+        self.assertIsNone(organize.no_dependencies_suggestion(2, 0))
+        self.assertIsNone(organize.no_dependencies_suggestion(3, 1))
+        self.assertEqual(organize.no_dependencies_suggestion(3, 0)["kind"], "no_dependencies")
 
 
 class FindCandidatesTests(_Board):

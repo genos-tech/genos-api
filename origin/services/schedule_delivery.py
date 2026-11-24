@@ -363,11 +363,12 @@ def _note_quiet(schedule: MemberSchedule, body: dict[str, Any]) -> None:
 CHAT_MARKER = "scheduleReport"
 
 
-def chat_blocks(body: dict[str, Any], ai: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def chat_blocks(body: dict[str, Any]) -> list[dict[str, Any]]:
     """The report as the BlockNote blocks of a chat message: a heading, the summary, the
     headline counts, then each section as a bold line and its items as a bullet list (an item
     with a link is a link). Built from `clean_report`'s output only, so every string has passed
-    its checks, and the blocks hold no markup, mention or file."""
+    its checks, and the blocks hold no markup, mention or file. Never a cost line (MIP-2351): every
+    reader of the chat reads the message, and the cost is the owner's (`_file_cost`)."""
     from origin.services.task_card import CARD_HEADING_PROPS, PARA_PROPS  # noqa: PLC0415
 
     def text(value: str, **styles: Any) -> dict[str, Any]:
@@ -382,8 +383,6 @@ def chat_blocks(body: dict[str, Any], ai: dict[str, Any] | None = None) -> list[
         return f"{base}{link}" if link.startswith("/") and base else link
 
     blocks = [block("heading", [text(body["title"])]), block("paragraph", [text(body["text"])])]
-    if ai is not None:
-        blocks.append(block("paragraph", [text(cost_line(ai), italic=True)]))
     if stats := body.get("stats"):
         line = " · ".join(f"{s['emoji']} {s['key'].replace('_', ' ')} {s['count']}" for s in stats)
         blocks.append(block("paragraph", [text(line, italic=True)]))
@@ -426,12 +425,55 @@ def check_chat_target(schedule: MemberSchedule) -> Channel:
     return channel
 
 
+def _file_cost(
+    schedule: MemberSchedule,
+    channel: Channel,
+    body: dict[str, Any],
+    ai: dict[str, Any],
+    run_at: datetime | None,
+) -> None:
+    """File what a run posted in a chat cost on the OWNER's Inbox (MIP-2351): an item with no
+    sections, only where it was posted and the cost block, so Plan & usage, the one-click switch
+    and the daily limit on hand-made runs see it as they see any report's cost. Called inside the
+    delivery's transaction, after the message, so the two stand or fall together; a repeat of a
+    tick's run never reaches it (the message's key stops it first). No push: it is bookkeeping."""
+    where = _text(channel.title or (channel.project.project_name if channel.project_id else ""), 80)
+    cost_body = {
+        "version": REPORT_VERSION,
+        "title": body["title"],
+        "text": _text(
+            f"Posted in {where or 'a chat'}. Only you see this cost. {cost_line(ai)}",
+            MAX_SUMMARY_CHARS,
+        ),
+        "sections": [],
+    }
+    optionals: dict[str, Any] = {
+        "kind": REPORT_KIND,
+        "schedule_id": str(schedule.id),
+        "job": schedule.job,
+        "ai": ai,
+        "posted_in_chat": True,
+    }
+    if run_at is not None:
+        optionals["run_at"] = _run_key(run_at)
+    InboxItems.objects.create(
+        team_id=schedule.team_id,
+        sender=None,
+        receiver_id=schedule.user_id,
+        item_type=ITEM_TYPE_GENOS_REPORT,
+        item_body=cost_body,
+        item_optionals=optionals,
+        request_status="",
+    )
+
+
 def deliver_to_chat(
     schedule: MemberSchedule, report: Report, *, run_at: datetime | None = None
 ) -> Message | None:
     """Post the run's report into the chat the schedule points at (MIP-1420) and note it on the
-    schedule. No model call here; a report that already spent AI usage carries its cost line
-    (MIP-2196, `metadata.scheduleReport.ai` is the same cost block an Inbox item has).
+    schedule. No model call here. A report that already spent AI usage is posted WITHOUT its cost
+    (MIP-2351): everyone who reads the chat reads the message, and what a run cost is the owner's.
+    The cost goes to the owner only: `last_result["ai"]` and a cost-only Inbox item (`_file_cost`).
 
     The message has no author (`sender` is null, as for the closing line of a task) and
     `metadata.scheduleReport = {scheduleId, job}`: the owner is not made to say it, and nobody is
@@ -451,17 +493,15 @@ def deliver_to_chat(
     if is_quiet_tick(report, run_at) and not _ai_unaccounted(schedule, report):
         _note_quiet(schedule, body)
         return None
-    # A run that spent AI usage says what it cost, in the message itself (MIP-2196): the chat is
-    # one only the owner reads (`check_chat_target`), so the cost line is theirs as the Inbox
-    # card's is. `_ai_part` raises when the job names no request, and nothing is posted.
+    # `_ai_part` raises when the job names no request, and nothing is posted.
     ai, skipped = _ai_part(schedule, report)
     delivered = sum(len(section["items"]) for section in body["sections"])
     result: dict[str, Any] = {"title": body["title"], "items": delivered}
     if skipped:
         result["ai_skipped"] = skipped
-    marker: dict[str, Any] = {"scheduleId": str(schedule.id), "job": schedule.job}
     if ai is not None:
-        marker["ai"] = ai
+        result["ai"] = ai
+    marker: dict[str, Any] = {"scheduleId": str(schedule.id), "job": schedule.job}
     key = _chat_key(schedule, run_at) if run_at is not None else None
     with transaction.atomic():
         row = MemberSchedule.objects.select_for_update().filter(pk=schedule.pk).first()
@@ -474,13 +514,15 @@ def deliver_to_chat(
         message = _allocate_seq_and_create_message(
             channel=channel,
             sender=None,
-            body=chat_blocks(body, ai),
+            body=chat_blocks(body),
             body_text=body["title"],
             parent_id=None,
             metadata={CHAT_MARKER: marker},
             correlation_id=key,
         )
         MemberSchedule.objects.filter(pk=schedule.pk).update(last_result=result)
+        if ai is not None:
+            _file_cost(schedule, channel, body, ai, run_at)
     schedule.last_result = result
     realtime_push.push_message(message, realtime_push.CREATED)
     log.info(
