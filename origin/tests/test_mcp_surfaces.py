@@ -62,8 +62,9 @@ class TestTheSurfaceLists(McpBase):
     def test_core_is_small_and_has_no_duplicates(self):
         self.assertEqual(len(set(surfaces.CORE_TOOLS)), len(surfaces.CORE_TOOLS))
         # MIP-1594 design: about 20; MIP-2049 (D1, approved 2026-11-23) grew it to 34 with the tools
-        # the shipped general skills call; MIP-2327 made it 35 (get_genos_help, user-guide milestone MIP-2304).
-        self.assertLessEqual(len(surfaces.CORE_TOOLS), 35)
+        # the shipped general skills call; MIP-2327 made it 35 (get_genos_help, user-guide milestone MIP-2304);
+        # MIP-2343 made it 36 (save_html_note, Ken 2026-11-24; still gated by HTML_NOTES).
+        self.assertLessEqual(len(surfaces.CORE_TOOLS), 36)
 
     def test_the_tools_the_general_skills_call_are_on_core(self):
         for name in (
@@ -121,7 +122,15 @@ class TestWhatEachEndpointLists(McpBase):
 
     def test_core_lists_exactly_the_core_names(self):
         listed = _names(self._list(self._core_url()))
-        self.assertEqual(sorted(listed), sorted(surfaces.CORE_TOOLS))
+        # `save_html_note` is on core but published only while HTML_NOTES is on (off by default).
+        expected = [n for n in surfaces.CORE_TOOLS if n != "save_html_note"]
+        self.assertEqual(sorted(listed), sorted(expected))
+
+    def test_save_html_note_is_on_core_only_while_html_notes_is_on(self):
+        self.assertIn("save_html_note", surfaces.CORE_TOOLS)
+        self.assertNotIn("save_html_note", _names(self._list(self._core_url())))
+        with override_settings(HTML_NOTES=True):
+            self.assertIn("save_html_note", _names(self._list(self._core_url())))
 
     def test_a_domain_lists_exactly_its_names(self):
         url = f"{MCP}/github?team_id={self.team.team_id}"
@@ -140,6 +149,8 @@ class TestWhatEachEndpointLists(McpBase):
         full = {t["name"]: t for t in self._list(self._url())}
         core = {t["name"]: t for t in self._list(self._core_url())}
         for name in surfaces.CORE_TOOLS:
+            if name == "save_html_note":  # gated by HTML_NOTES: absent from both while it is off
+                continue
             self.assertEqual(full[name], core[name], name)
 
     def test_core_list_is_stable_across_calls(self):

@@ -652,11 +652,13 @@ class FlagOffTests(HtmlBase):
 
 
 class SurfaceTests(HtmlBase):
-    def test_the_tool_is_in_the_notes_endpoint_and_the_full_one_but_not_core(self):
+    def test_the_tool_is_in_the_notes_endpoint_the_full_one_and_core(self):
         self.assertIn(SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface="notes")})
         self.assertIn(SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface=None)})
-        self.assertNotIn(SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface="core")})
-        self.assertNotIn(SAVE, surfaces.CORE_TOOLS)
+        self.assertIn(
+            SAVE, {t.name for t in tools.visible_tools(SCOPE_WRITE, surface="core")}
+        )  # MIP-2343
+        self.assertIn(SAVE, surfaces.CORE_TOOLS)
 
     def test_it_is_on_exactly_one_domain_endpoint_and_that_is_notes(self):
         homes = [d for d, names in surfaces.DOMAIN_TOOLS.items() if SAVE in names]
