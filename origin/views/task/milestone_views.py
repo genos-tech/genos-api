@@ -41,6 +41,7 @@ from origin.services.task_collaborators import (
     sync_task_collaborators,
 )
 from origin.services.task_progress import progress_at
+from origin.services.task_status_values import status_value_error
 from origin.services.thread_link import (
     THREAD_NOT_FOUND,
     find_thread_link_conflict,
@@ -379,6 +380,10 @@ class MilestoneView(AuthenticatedAPIView):
         if res := archived_project_response(project.project_id):
             return res
 
+        # MIP-2391: the status has to be one of the six (the default is Open).
+        if message := status_value_error(request.data.get("status") or "Open"):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
         # After the membership gate (a stranger learns nothing), before anything
         # is written. Same rule as a task's links: a milestone's links are
         # rendered as `<a href>` too (MIP-821).
@@ -493,6 +498,12 @@ class MilestoneView(AuthenticatedAPIView):
             return _deny_not_found("Milestone")
         if res := archived_project_response(milestone.project_id):
             return res
+
+        # MIP-2391: a status this patch sets must be one of the six; restating the stored one passes.
+        if request.data.get("status") is not None and (
+            message := status_value_error(request.data.get("status"), milestone.status)
+        ):
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
         if res := refuse_unsafe_link_urls(request.data.get("links")):
             return res

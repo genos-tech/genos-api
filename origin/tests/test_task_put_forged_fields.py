@@ -89,7 +89,7 @@ class TaskPutForgedFieldTests(BaseAPITestCase):
             title="Renamed",
             priority="High",
             effort_level="M",
-            status="In Progress",
+            status="WIP",
             content=[],
             due_date="2026-12-01",
             start_date=None,
@@ -100,7 +100,7 @@ class TaskPutForgedFieldTests(BaseAPITestCase):
         self.assertEqual(res.status_code, 200, res.data)
         task = TaskMaster.objects.get(task_id=self.task.task_id)
         self.assertEqual(
-            (task.title, task.status, task.priority), ("Renamed", "In Progress", "High")
+            (task.title, task.status, task.priority), ("Renamed", "WIP", "High")
         )
         self.assertEqual(task.assignee_id, self.user2.id)
         self.assertFalse(task.is_deleted)
