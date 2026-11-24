@@ -382,6 +382,12 @@ origin.InboxItems:
   is_deleted: none
   ts_created_at: none
   ts_updated_at: none
+origin.MFARecoveryCode:
+  id: none
+  user: none
+  code_hash: none
+  used_at: none
+  ts_created_at: none
 origin.McpConnection:
   id: none
   user: none
@@ -1347,6 +1353,16 @@ origin.UserFeatureAccess:
   granted_at: none
   revoked_at: none
   note: content
+origin.UserMFA:
+  id: none
+  user: none
+  secret_encrypted: none
+  confirmed_at: none
+  last_used_step: none
+  failed_attempts: none
+  locked_until: none
+  ts_created_at: none
+  ts_updated_at: none
 origin.WebhookDelivery:
   id: none
   endpoint: none

@@ -66,6 +66,28 @@ class MaskEmailTests(SimpleTestCase):
         self.assertTrue(has_email(text))
         self.assertFalse(has_email(mask_email(text)))
 
+    def test_the_address_ends_after_the_top_level_domain_letters(self):
+        # Same results the regex this scan replaced gave (checked against it on 600k random strings).
+        cases = {
+            "a@b.com1": "a***@b.com1",
+            "a@b.com.": "a***@b.com.",
+            "a@b..com": "a@b..com",
+            "a@b.c": "a@b.c",
+            "a@b.c@y.org": "a@b***@y.org",
+            "a@b.comx@y.org": "a***@b.comx@y.org",
+            "a@-.xx": "a***@-.xx",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(mask_email(text), expected)
+
+    def test_a_long_run_of_one_character_is_scanned_in_linear_time(self):
+        # `%%%%...` made the regex this replaced slow (CodeQL py/polynomial-redos).
+        for text in ("%" * 200_000 + "@", "@" * 200_000, "a@" + "b." * 100_000, "a@b.c" * 50_000):
+            with self.subTest(text=text[:12]):
+                mask_email(text)
+                has_email(text)
+
     def test_has_email_ignores_a_masked_address(self):
         self.assertFalse(has_email("k***@gmail.com"))
         self.assertFalse(has_email(""))

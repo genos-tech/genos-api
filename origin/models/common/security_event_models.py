@@ -87,6 +87,13 @@ class SecurityAction(models.TextChoices):
     OPERATOR_USER_DEACTIVATED = "operator.user_deactivated", "Operator: user cut off"
     OPERATOR_API_KEY_REVOKED = "operator.api_key_revoked", "Operator: API key revoked"
     OPERATOR_TEAM_KEYS_REVOKED = "operator.team_keys_revoked", "Operator: team API keys revoked"
+    # Two-factor sign-in (MIP-2239). Method and counts only, never a code or a secret.
+    MFA_ENABLED = "mfa.enabled", "Two-factor sign-in turned on"
+    MFA_DISABLED = "mfa.disabled", "Two-factor sign-in turned off"
+    MFA_FAILED = "mfa.failed", "Second factor refused"
+    MFA_RECOVERY_USED = "mfa.recovery_used", "Recovery code used"
+    MFA_RECOVERY_REGENERATED = "mfa.recovery_regenerated", "Recovery codes replaced"
+    OPERATOR_MFA_RESET = "operator.mfa_reset", "Operator: two-factor reset"
     # Every management command run at a production shell (MIP-2260). Command name and redacted
     # arguments only; `shell` rows say a shell was open, never what ran in it.
     OPS_COMMAND = "ops.command", "Operator: command run"
