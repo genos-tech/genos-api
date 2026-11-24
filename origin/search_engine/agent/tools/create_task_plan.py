@@ -83,7 +83,10 @@ from origin.services.hidden_scope import project_hidden_from
 from origin.services.milestone_service import create_milestone, ensure_backing_task
 from origin.services.task_cache import invalidate_project_tasks_cache
 from origin.services.task_card_post import post_milestone_created_card, post_task_created_card
-from origin.services.task_organize_suggestions import suggestions_for_new_plan
+from origin.services.task_organize_suggestions import (
+    no_dependencies_suggestion,
+    suggestions_for_new_plan,
+)
 from origin.views.utils.scope_guards import is_team_member
 
 # Hard cap on tasks per plan. Keeps the single function-call emission
@@ -683,6 +686,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # sub-tasks of one task leaves its top-level tasks with no parent task. The plan is written; this
     # is one hint for the whole batch (what was probably forgotten), never a refusal. The bodies are
     # what the model wrote (`own_tasks`), not the template text `fill_plan_task_bodies` added.
+    suggestions: list[dict[str, Any]] = []
     if ctx.surface == "mcp" and milestone_spec is None and parent_task is None:
         parentless = [
             (
@@ -694,16 +698,22 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if spec.get("parent_index") is None
         ]
         try:
-            if suggestions := suggestions_for_new_plan(
-                project_id=project_id,
-                team_id=ctx.team_id,
-                parentless=parentless,
-                all_task_ids=[t.task_id for t in created],
-                in_milestone=existing_milestone is not None,
-            ):
-                result["suggestions"] = suggestions
+            suggestions.extend(
+                suggestions_for_new_plan(
+                    project_id=project_id,
+                    team_id=ctx.team_id,
+                    parentless=parentless,
+                    all_task_ids=[t.task_id for t in created],
+                    in_milestone=existing_milestone is not None,
+                )
+            )
         except Exception as e:  # noqa: BLE001 — the plan exists; the hint is best effort
             log_failure("create_task_plan suggestions failed", e)
+    # MIP-2367: 3+ tasks and not one dependency between them (a milestone's tree too): one more hint.
+    if ctx.surface == "mcp" and (hint := no_dependencies_suggestion(len(created), n_deps)):
+        suggestions.append(hint)
+    if suggestions:
+        result["suggestions"] = suggestions
     return result
 
 
