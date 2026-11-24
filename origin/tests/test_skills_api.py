@@ -36,10 +36,21 @@ def detail(skill_id, suffix=""):
 
 @override_settings(GENOS_SKILLS=True, GENOS_SKILLS_PUBLIC=True)
 class SkillBase(BaseAPITestCase):
+    # The confirmation before a run (MIP-2192: the first-run card of an outside author's version, the
+    # warning on a copy of a harmful skill) is tested in `test_skills_confirm.py`. Everywhere else the
+    # tests are about what a run DOES, so the person has already confirmed.
+    auto_confirm = True
+
     def setUp(self):
         super().setUp()
         cache.clear()
         self.addCleanup(cache.clear)
+        if self.auto_confirm:
+            confirm = mock.patch(
+                "origin.services.skills.service.needed_confirmations", return_value=(False, False)
+            )
+            confirm.start()
+            self.addCleanup(confirm.stop)
         # The plan's count is its own test: everywhere else the member is on an unlimited plan.
         tier = mock.patch("origin.search_engine.quota.get_effective_tier", return_value="max")
         tier.start()

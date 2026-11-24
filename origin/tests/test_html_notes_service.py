@@ -218,9 +218,14 @@ class ScanTests(SimpleTestCase):
     def test_hostile_pages_at_the_cap_are_scanned_in_linear_time(self):
         """Each input is about the 512 KB cap and aimed at one regex or parser path: a runaway
         (quadratic) scan would take minutes here, a linear one a fraction of a second."""
+        import sys
         import time
 
         n = html_notes.MAX_HTML_BYTES
+        # The report-only coverage job traces every line in one process, which makes the
+        # parser paths several times slower (4.1s on main, 2026-11-23). A quadratic scan still
+        # takes minutes, so a looser limit under a tracer keeps the test meaningful.
+        limit = 3 if sys.gettrace() is None else 15
         style, script = "<style>", "<script>"
         cases = {
             "url( then spaces": style + "url(" + " " * n,
@@ -254,7 +259,7 @@ class ScanTests(SimpleTestCase):
                 took = time.monotonic() - started
                 if took > slowest[1]:
                     slowest = (name, took)
-                self.assertLess(took, 3, f"{name} took {took:.1f}s")
+                self.assertLess(took, limit, f"{name} took {took:.1f}s")
 
     def test_a_flood_of_findings_is_counted_without_growing_the_answer(self):
         scan = html_notes.scan_html(page('<img src="https://x/a.png">' * 20_000))
