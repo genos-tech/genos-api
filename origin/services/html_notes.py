@@ -32,10 +32,24 @@ from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apis.request_id import log_failure
 from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.html_note_models import NoteHtmlRevision
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
+from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
+from origin.search_engine.agent.tools.create_note import (
+    _create_chat_note,
+    _create_personal,
+    _create_task_note,
+    _resolve_folder_id,
+)
+from origin.search_engine.agent.tools.note_access import has_write_permission, load_readable_note
+from origin.search_engine.agent.tools.note_targets import normalize_note_type
+from origin.search_engine.quota import NOTE_CREATE_KEY, check_remaining_monthly, increment_usage
+from origin.services import html_note_limits
+from origin.services.archive import archived_note_refusal
+from origin.services.collab_push import PushOutcome, push_note_body_now
 from origin.services.html_note_limits import MAX_PAGE_BYTES, PLAN_PLACE
 
 BODY_FORMAT_BLOCKNOTE = "blocknote"
@@ -681,3 +695,227 @@ def body_format_of(note_type: int, note_id: int) -> str:
 def suggestions_for(warnings: list[dict[str, Any]]) -> list[str]:
     """The fixes, one sentence each, in the order of the warnings."""
     return [w["fix"] for w in warnings if w.get("fix")]
+
+
+# ---------------------------------------------------------------------------------------------
+# `save_page` (MIP-2352): the create/replace core, shared by the MCP tool `save_html_note`, the
+# import endpoint and any other caller that saves a page for a member. It owns the plan, the
+# size and rate limits, the permission checks, the monthly note quota and the live-editor push;
+# the MCP tool is a thin wrapper (schema, description, feature switch). The refusals are
+# `ToolError` / `ToolForbidden`, worded as what to do, so every caller shows them as they are.
+# ---------------------------------------------------------------------------------------------
+
+_CODE = {
+    "personal": NOTE_TYPE_PERSONAL,
+    "task": NOTE_TYPE_TASK,
+    "chat": NOTE_TYPE_CHAT,
+}
+
+
+def _path(family: str, note) -> str | None:
+    """Where the note opens in the app, when there is a deep link for it."""
+    if family == "personal":
+        return f"/workspace/notes/my/{note.note_id}"
+    if family == "task" and getattr(note, "project_id", None) and getattr(note, "task_id", None):
+        return f"/workspace/notes/task/project/{note.project_id}/task/{note.task_id}/note/{note.note_id}"
+    return None
+
+
+def _prepare_page(args: dict[str, Any], limits: html_note_limits.HtmlNoteLimits) -> PreparedHtml:
+    try:
+        return prepare(
+            args.get("html"),
+            title=args.get("title"),
+            summary=args.get("summary"),
+            max_bytes=limits.max_bytes,
+        )
+    except HtmlNoteRefused as refused:
+        raise ToolError(str(refused)) from None
+
+
+def _count_save(ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits) -> None:
+    try:
+        check_rate(ctx.user_id, limits.saves_per_hour)
+    except HtmlNoteRefused as refused:
+        raise ToolError(str(refused)) from None
+
+
+def _answer(
+    *,
+    prepared: PreparedHtml,
+    revision,
+    family: str,
+    note,
+    created: bool,
+    space: str | None = None,
+) -> dict[str, Any]:
+    warnings = prepared.scan.warnings
+    verb = "Created" if created else "Updated"
+    out: dict[str, Any] = {
+        "note_id": note.note_id,
+        "note_type": family,
+        "title": note.title,
+        "created": created,
+        "body_format": BODY_FORMAT_HTML,
+        "html_rev": revision.rev,
+        "size_bytes": prepared.size,
+        "warnings": warnings,
+        # What the NOTE notice reads (`mcp_notice._edited_note`): the title and the page changed.
+        "changed_fields": ["title", "body"],
+        "__summary__": (
+            f'{verb} HTML note #{note.note_id}: "{note.title[:60]}"'
+            + (f" ({len(warnings)} warning{'s' if len(warnings) != 1 else ''})" if warnings else "")
+        ),
+    }
+    if space:
+        out["space"] = space
+    if (path := _path(family, note)) is not None:
+        out["path"] = path
+    if warnings:
+        out["suggestions"] = suggestions_for(warnings)
+        out["next_step"] = (
+            "The page was saved as it is. To fix these, call `save_html_note` again with "
+            f"`note_id` {note.note_id} and the corrected page."
+        )
+    else:
+        out["next_step"] = "The page was saved and the scan found nothing to fix."
+    return out
+
+
+def save_page(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """The plan first (a Free member gets a suggestion and nothing is stored, a lookup that fails
+    reads as Core), then the cheap checks, the scan last: the plan's size, then access, the count
+    of notes and the rate limit, and only then the (linear but not free) scan of up to the plan's
+    size, so a caller with no access, or past a limit, makes the server do no work on the page."""
+    try:
+        limits = html_note_limits.limits_for(ctx.user_id)
+    except html_note_limits.HtmlNotesNotOnPlan as not_on_plan:
+        return not_on_plan.reply()
+    try:
+        check_input(args.get("html"), limits.max_bytes)
+        check_title_possible(args["html"], args.get("title"))
+    except HtmlNoteRefused as refused:
+        raise ToolError(str(refused)) from None
+    if args.get("note_id") not in (None, ""):
+        return _replace_page(args, ctx, limits)
+    return _create_page(args, ctx, limits)
+
+
+def _replace_page(
+    args: dict[str, Any], ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits
+) -> dict[str, Any]:
+    ref = load_readable_note(args, ctx)
+    note = ref.note
+    if getattr(note, "body_format", BODY_FORMAT_BLOCKNOTE) != BODY_FORMAT_HTML:
+        # Never convert: a BlockNote note's blocks, comments and history would be lost.
+        raise ToolError(
+            f"Note {ref.note_id} is an ordinary note, and `save_html_note` does not convert "
+            "one, because its text, comments and history would be lost. Nothing was changed. "
+            "To make an HTML page, call `save_html_note` WITHOUT `note_id` to create a new HTML "
+            "note (same `note_type`, folder or project), and link the two in the summary."
+        )
+    if not has_write_permission(
+        owner_id=getattr(note, "owner_id", None),
+        note_id=ref.note_id,
+        note_type_code=ref.code,
+        ctx=ctx,
+    ):
+        raise ToolForbidden(
+            f"Not authorized to edit note {ref.note_id}. You must be the owner, have editor "
+            "permission on it, or be a member of the project or chat it belongs to."
+        )
+    if why := archived_note_refusal(ref.family, ref.note_id):
+        raise ToolError(f"{why} Nothing was changed.")
+    _count_save(ctx, limits)
+    prepared = _prepare_page(args, limits)
+
+    from origin.models.common.user_models import CustomUser  # noqa: PLC0415
+
+    user = CustomUser.objects.filter(id=ctx.user_id).first()
+    try:
+        revision = replace_page(
+            note_type=ref.code,
+            note=note,
+            user=user,
+            prepared=prepared,
+            keep_title=not (args.get("title") or "").strip(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        reference = log_failure("save_html_note failed", exc)
+        raise ToolError(f"Failed to save the page (ref {reference}). Nothing was changed.")
+    result = _answer(
+        prepared=prepared, revision=revision, family=ref.family, note=note, created=False
+    )
+    # A note that was ever opened has a live editor document: without this push an open editor keeps
+    # the old placeholder and its next autosave writes it back over the new one (as `update_note`).
+    live = push_note_body_now(ref.family, ref.note_id, note.body or [])
+    result["live_editor"] = live.value
+    if live == PushOutcome.FAILED:
+        result["__summary__"] += (
+            ". The page is saved, but the live editor could not be updated, so an open editor "
+            "may still show the old text"
+        )
+    return result
+
+
+def _create_page(
+    args: dict[str, Any], ctx: ToolContext, limits: html_note_limits.HtmlNoteLimits
+) -> dict[str, Any]:
+    note_type = normalize_note_type(args.get("note_type"))
+    if note_type == "shared":
+        raise ToolError(
+            "A shared note is someone else's note shared with you, so it can't be created. Use "
+            "note_type='personal' for a note private to you, or 'team' for one in a Team Notes "
+            "folder."
+        )
+    folder_id = _resolve_folder_id(args, note_type, ctx)
+    allowed, _used, note_limit = check_remaining_monthly(ctx.user_id, NOTE_CREATE_KEY)
+    if not allowed:
+        raise ToolError(
+            f"You've created all {note_limit} notes for this month. Upgrade your plan to keep going."
+        )
+    try:
+        html_note_limits.check_room_for_new_note(ctx.user_id, limits)
+    except html_note_limits.HtmlNoteLimitReached as reached:
+        raise ToolError(str(reached)) from None
+    _count_save(ctx, limits)
+    prepared = _prepare_page(args, limits)
+
+    # The note, its owner row and first version come from `create_note`'s helpers; the page is
+    # added in the same transaction, so a failure leaves no note without a page.
+    with transaction.atomic():
+        if note_type in ("personal", "team"):
+            made = _create_personal(
+                title=prepared.title,
+                body=prepared.body,
+                folder_id=folder_id,
+                space=note_type,
+                ctx=ctx,
+            )
+        elif note_type == "task":
+            made = _create_task_note(args=args, title=prepared.title, body=prepared.body, ctx=ctx)
+        else:
+            made = _create_chat_note(args=args, title=prepared.title, body=prepared.body, ctx=ctx)
+        family = made["note_type"]
+        code = _CODE[family]
+        try:
+            mark_html(code, made["note_id"])
+            revision = append_revision(code, made["note_id"], ctx.user_id, prepared)
+        except Exception as exc:  # noqa: BLE001
+            reference = log_failure("save_html_note failed", exc)
+            raise ToolError(f"Failed to save the page (ref {reference}). Nothing was created.")
+    increment_usage(ctx.user_id, NOTE_CREATE_KEY)
+
+    note = NOTE_MODELS[code].objects.get(note_id=made["note_id"])
+    result = _answer(
+        prepared=prepared,
+        revision=revision,
+        family=family,
+        note=note,
+        created=True,
+        space=made.get("space"),
+    )
+    for key in ("folder_id", "project_id", "task_id", "parent_context"):
+        if made.get(key) is not None:
+            result[key] = made[key]
+    return result
