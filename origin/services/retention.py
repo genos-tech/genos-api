@@ -30,19 +30,32 @@ Everything runs in batches, newest-first-never: oldest rows first, a bounded
 number per pass, so a first run against a big table cannot hold a long lock or
 swallow the cron's time budget. `dry_run` counts without writing.
 
+Approved periods (Ken, 2026-11-24, decision D5 on MIP-2200, task MIP-2252). They are
+`approved_days` on each policy: `retention_purge --approved-periods` counts them (always a
+dry run); the cron applies one only when its `RETENTION_<NAME>_DAYS` variable is set.
+
+  * `task_activity_bodies`  30 d: the PREVIOUS BODY an agent or API-key rewrite kept on a
+    `description_edited` row (MIP-738) is cleared, and the row stops saying it can be restored.
+  * `task_activities`       365 d: the whole history row goes.
+  * `note_versions`          90 d.
+  * `webhook_deliveries`     30 d: the payload goes with its row (settled rows only).
+  * `agent_step_results`     30 d: a step's tool output AND its summary (a summary can carry an
+    address, e.g. from `get_current_user`); the run's own question and answer keep 180 d.
+  * `agent_runs`            180 d, and `agent_sessions` 180 d: a session with no run left loses
+    its rolling summary by losing the row.
+  * `security_event_network` 90 d: `ip` and `user_agent` are blanked; the event itself keeps
+    365 d (`prune_security_events`).
+  * Stripe: `redact_deleted_stripe_customers` (service `stripe_retention`), after the 7-year
+    bookkeeping period. It calls Stripe, so it is its own command, not a policy here.
+
 Not here, on purpose:
 
-  * `SecurityEvent`: only the four high-volume actions have a period here
-    (`security_events_high_volume`, MIP-1789), with a floor of 90 days. Every
-    other audit row is kept by its own command (`prune_security_events`, 365
-    days), because an audit trail is the one thing a breach investigation
-    cannot do without.
+  * `SecurityEvent` rows themselves: only the four high-volume actions have a deleting period
+    here (`security_events_high_volume`, MIP-1789), with a floor of 90 days. Every other audit
+    row is kept by its own command (`prune_security_events`, 365 days), because an audit trail
+    is the one thing a breach investigation cannot do without.
   * `yjs_documents` is written by genos-collab (Node), not Django, so it
     cannot be purged from this process.
-  * `TaskActivity` stores a description edit as a bare "edited" event with no
-    body diff (`task_signals.py`), so there is no description text in that
-    table to blank. Its title and custom-field `old_value` / `new_value` are
-    what a period for it would remove, along with the rest of the row.
 """
 
 from __future__ import annotations
@@ -54,7 +67,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
 
-from django.db.models import Model, Q, QuerySet
+from django.db.models import Exists, Model, OuterRef, Q, QuerySet
+from django.db.models.expressions import RawSQL
 from django.utils import timezone
 
 log = logging.getLogger(__name__)
@@ -124,6 +138,10 @@ class Policy:
     # the function that deletes a batch and returns how many. None means
     # `batch.delete()`.
     remove: Callable[[QuerySet], int] | None = None
+    # For BLANK rows that the ORM refuses to update (an append-only table): the
+    # function that blanks a batch and returns how many. None means
+    # `batch.update(**blank_to)`.
+    blank: Callable[[QuerySet], int] | None = None
 
     @property
     def env_var(self) -> str:
@@ -175,6 +193,12 @@ def _agent_runs() -> QuerySet:
     from origin.search_engine.models import AgentRun
 
     return AgentRun.objects.all()
+
+
+def _agent_sessions() -> QuerySet:
+    from origin.search_engine.models import AgentSession
+
+    return AgentSession.objects.all()
 
 
 def _agent_steps() -> QuerySet:
@@ -244,7 +268,48 @@ def _finished_runs() -> Q:
 
 
 def _steps_of_finished_runs() -> Q:
-    return ~Q(run__status__in=("running", "awaiting_approval")) & Q(result_json__isnull=False)
+    # Still holding something to clear: the tool output, or a summary. A step cleared by an
+    # earlier run of the purge matches neither, so a second pass finds nothing.
+    return ~Q(run__status__in=("running", "awaiting_approval")) & (
+        Q(result_json__isnull=False) | ~Q(summary="")
+    )
+
+
+def _sessions_without_runs() -> Q:
+    """A session none of whose runs is left (the last one was purged, or it never had one that
+    stayed): its rolling summary is the last text of the conversation, so it goes with the row."""
+    from origin.search_engine.models import AgentRun
+
+    return ~Exists(AgentRun.objects.filter(session_id=OuterRef("pk")))
+
+
+def _kept_previous_body() -> Q:
+    # `previousBodyKept` is set only on a description row that holds the old text; the purge
+    # removes the key, so a cleared row is not counted again.
+    return Q(action_type="description_edited", metadata__previousBodyKept=True)
+
+
+def _history_but_not_a_deleted_tasks_clock() -> Q:
+    # `purge_deleted_tasks` dates a deletion by the task's `status_changed` row to "Deleted",
+    # and keeps some deleted tasks longer for a stated reason (sub-tasks, the project's highest
+    # number). Without that row such a task reads as "no time" and is never purged, so while
+    # the task is still Deleted its Deleted row is kept whatever its age.
+    return ~Q(
+        action_type="status_changed",
+        field_name="status",
+        new_value="Deleted",
+        task__status="Deleted",
+    )
+
+
+def _blank_network_of_security_events() -> Q:
+    return Q(ip__isnull=False) | ~Q(user_agent="")
+
+
+def _blank_security_network(qs: QuerySet) -> int:
+    from origin.services.security_events import blank_network_fields
+
+    return blank_network_fields(qs)
 
 
 def _settled_webhooks() -> Q:
@@ -287,7 +352,20 @@ POLICIES: tuple[Policy, ...] = (
         queryset=_agent_steps,
         age_field="created_at",
         eligible=_steps_of_finished_runs,
-        blank_to={"result_json": None},
+        blank_to={"result_json": None, "summary": ""},
+        approved_days=30,
+    ),
+    Policy(
+        name="agent_sessions",
+        description=(
+            "A Spotlight conversation with no run left. Its rolling summary is the last text "
+            "of it, and goes with the row."
+        ),
+        action=Action.DELETE,
+        queryset=_agent_sessions,
+        age_field="last_active_at",
+        eligible=_sessions_without_runs,
+        approved_days=180,
     ),
     Policy(
         name="webhook_deliveries",
@@ -296,6 +374,7 @@ POLICIES: tuple[Policy, ...] = (
         queryset=_webhook_deliveries,
         age_field="ts_created_at",
         eligible=_settled_webhooks,
+        approved_days=30,
     ),
     Policy(
         name="email_notification_events",
@@ -312,6 +391,24 @@ POLICIES: tuple[Policy, ...] = (
         action=Action.DELETE,
         queryset=_note_versions,
         age_field="ts_created_at",
+        approved_days=90,
+    ),
+    Policy(
+        name="task_activity_bodies",
+        description=(
+            "The previous body an agent or API-key rewrite kept on a task's history row "
+            "(MIP-738). The row stays; it stops offering a restore."
+        ),
+        action=Action.BLANK,
+        queryset=_task_activities,
+        age_field="ts_created_at",
+        eligible=_kept_previous_body,
+        blank_to={
+            "old_value": None,
+            # `jsonb - text`: every other key of the metadata (who, via what) stays.
+            "metadata": RawSQL("metadata - 'previousBodyKept'", []),
+        },
+        approved_days=30,
     ),
     Policy(
         name="task_activities",
@@ -319,6 +416,8 @@ POLICIES: tuple[Policy, ...] = (
         action=Action.DELETE,
         queryset=_task_activities,
         age_field="ts_created_at",
+        eligible=_history_but_not_a_deleted_tasks_clock,
+        approved_days=365,
     ),
     Policy(
         name="workspace_changes",
@@ -347,6 +446,21 @@ POLICIES: tuple[Policy, ...] = (
         remove=_remove_security_events,
     ),
     Policy(
+        name="security_event_network",
+        description=(
+            "The address and browser of a security event. The event (what, when, who, which "
+            "team) stays for its own 365 days; only these two columns are cleared."
+        ),
+        action=Action.BLANK,
+        queryset=_security_events,
+        age_field="ts_created_at",
+        eligible=_blank_network_of_security_events,
+        blank_to={"ip": None, "user_agent": ""},
+        approved_days=90,
+        floor_days=90,
+        blank=_blank_security_network,
+    ),
+    Policy(
         name="deleted_message_bodies",
         description=(
             "The text of a message that was deleted. The row stays as a "
@@ -372,11 +486,20 @@ def _apply(policy: Policy, qs: QuerySet, limit: int) -> int:
         if not ids:
             break
         batch = policy.queryset().filter(**{f"{pk}__in": ids})
+        if policy.eligible is not None:
+            # Eligibility is checked again at write time, not only when the ids were chosen:
+            # a row that changed in between (a session that got a new run, a step whose run
+            # started waiting for approval) is left alone, and a batch hook that loops on its
+            # own queryset (`blank`) runs out of rows once they are cleared instead of
+            # picking the same ones again.
+            batch = batch.filter(policy.eligible())
         if policy.action is Action.DELETE:
             if policy.remove is not None:
                 policy.remove(batch)
             else:
                 batch.delete()
+        elif policy.blank is not None:
+            policy.blank(batch)
         else:
             batch.update(**policy.blank_to)
         done += len(ids)

@@ -556,6 +556,16 @@ export default defineRailway(() => {
       RETENTION_AGENT_RUNS_DAYS: preserve(),
       RETENTION_EMAIL_NOTIFICATION_EVENTS_DAYS: preserve(),
       RETENTION_SECURITY_EVENTS_HIGH_VOLUME_DAYS: preserve(),
+      // MIP-2252, approved by Ken 2026-11-24 (same rule: unset = keep for ever):
+      // agent step output 30, agent sessions 180, webhook deliveries 30, note versions 90,
+      // task history bodies 30, task history 365, security event address and browser 90.
+      RETENTION_AGENT_STEP_RESULTS_DAYS: preserve(),
+      RETENTION_AGENT_SESSIONS_DAYS: preserve(),
+      RETENTION_WEBHOOK_DELIVERIES_DAYS: preserve(),
+      RETENTION_NOTE_VERSIONS_DAYS: preserve(),
+      RETENTION_TASK_ACTIVITY_BODIES_DAYS: preserve(),
+      RETENTION_TASK_ACTIVITIES_DAYS: preserve(),
+      RETENTION_SECURITY_EVENT_NETWORK_DAYS: preserve(),
     },
     deploy: {
       // MIP-2251: 04:00 UTC. Moved here from railway-retention-purge.toml (a service created after 2026-08-28 cannot use a toml).
