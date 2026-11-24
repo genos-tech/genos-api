@@ -487,7 +487,30 @@ def schedule_push_for_activities(activities) -> None:
 # the Activity feed), so they push under the `inbox` category (coarse
 # `enable_inbox`). `approved` is a synthetic key for the GM-join approval
 # notification sent back to the requester.
+def genos_inbox_lines(item) -> tuple[str, str] | None:
+    """`(title, text)` of an inbox item Genos made itself (no sender, kind 0: a PR's CI failing,
+    changes requested, ready to merge...; MIP-2317), else None.
+
+    Such an item carries its own words in `item_body` `{title, text}`, so the card must say them
+    instead of "Someone sent you a message". Whitespace is collapsed (a newline in an email
+    subject is a header error) and both lines are cut; markup is left as is, because push shows
+    plain text and the email's HTML part escapes it. An item with a sender, or without a usable
+    title, is None and keeps the wording by kind. Reads `item.sender` only: a null FK costs no query."""
+    if item.item_type != 0 or getattr(item, "sender", None) is not None:
+        return None
+    body = item.item_body if isinstance(item.item_body, dict) else {}
+    title = body.get("title")
+    title = " ".join(title.split())[:200] if isinstance(title, str) else ""
+    if not title:
+        return None
+    text = body.get("text")
+    return title, _truncate(" ".join(text.split()) if isinstance(text, str) else "")
+
+
 def _inbox_title(item, sender_name: str) -> str:
+    own = genos_inbox_lines(item)
+    if own:
+        return own[0]
     titles = {
         0: f"{sender_name} sent you a message",
         1: f"{sender_name} asked to join your team",
@@ -513,11 +536,12 @@ def dispatch_push_for_inbox_item(item, *, title: str | None = None, body: str = 
         return
     try:
         sender_name = getattr(item.sender, "username", None) or "Someone"
+        own = genos_inbox_lines(item)
         _queue_push(
             recipient_id=item.receiver_id,
             category="inbox",
             title=title or _inbox_title(item, sender_name),
-            body=body,
+            body=body or (own[1] if own else ""),
             url="/workspace/inbox",
             tag=f"inbox:{item.item_id}",
             actor=item.sender,
