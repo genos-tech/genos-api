@@ -106,12 +106,12 @@
       "declaration:edit_note_block:on": "52892fbabb1b3cd155fea0499ac9d5919811e3afdd541c1648901d4822556b67",
       "declaration:get_note:off": "bb840cc407d9e9a46a894ae26e05b7c920342ea9ef61ead832107b8fb82ec6fe",
       "declaration:get_note:on": "a05a8247ce03f4847a14e1fc4256d89225e7ff46efc43d252a55dae0213cb8d5",
-      "declaration:save_html_note": "ea70d881f3681a60ab1b40b6e8577f1c21b603a81bb4dc09be11282a568d4f4f",
+      "declaration:save_html_note": "bd71a0aa3b3dff8446217f17c04c5a5989c887c0d69ae2c759706a567c913a47",
       "declaration:update_note:off": "4714770ee5a3835cfc6d7687bf868d4f598879af719d85a38af8de868d4434e3",
       "declaration:update_note:on": "4714770ee5a3835cfc6d7687bf868d4f598879af719d85a38af8de868d4434e3",
       "guard:html_text_edit": "62391efd547d7c9c3a2f50d65152311b218151bc04181679de23d1fc8e1a98d0",
-      "prompt:make_html_note:can_save": "015d7216f7fea39101ba14e4923a96319dd77c14e3950ddff861ad2b001c28c1",
-      "prompt:make_html_note:read_only": "2321a3878330772c01bb5a2207b4c7137503f63244a0f59c0ad24d0a52df1d85",
+      "prompt:make_html_note:can_save": "64bc2a1839fe90a175aef439d5b5cd71604e242ae91ede5f3223fa3e67cbccba",
+      "prompt:make_html_note:read_only": "4c42e9d43cf0b518c0aec5795e1f6c245be0fbb01534dd687d6a3ebd492c5600",
       "prompts:list": "8eecbd4e13b52e23480cfc8dc82175c7399d643b8572d874dd712db1e037a5ff"
     },
     "test_mcp_search_rewrite": {

@@ -266,6 +266,30 @@ class InboxEnqueueTests(EnqueueTestBase):
         enqueue_email_for_inbox_item(self._item(), title="Your request was approved")
         self.assertEqual(self._rows()[0].title, "Your request was approved")
 
+    def test_senderless_pr_signal_emails_its_own_title_and_text(self):
+        item = self._item(
+            sender=None,
+            item_type=0,
+            item_body={"title": "CI failing\non PR 5", "text": " Tests  failed "},
+        )
+        enqueue_email_for_inbox_item(item)
+        row = self._rows()[0]
+        self.assertEqual(row.title, "CI failing on PR 5")
+        self.assertEqual(row.body, "Tests failed")
+        self.assertEqual(row.actor_name, "Genos")
+
+    def test_normal_message_with_sender_is_unchanged(self):
+        item = self._item(item_type=0, item_body={"title": "x", "text": "y"})
+        enqueue_email_for_inbox_item(item)
+        row = self._rows()[0]
+        self.assertEqual(row.title, "testuser sent you a message")
+        self.assertEqual(row.body, "")
+        self.assertEqual(row.actor_name, "testuser")
+
+    def test_senderless_item_without_title_keeps_the_kind_wording(self):
+        enqueue_email_for_inbox_item(self._item(sender=None, item_type=0, item_body={"text": "t"}))
+        self.assertEqual(self._rows()[0].title, "Someone sent you a message")
+
     def test_receiverless_item_is_skipped(self):
         item = self._item()
         item.receiver = None
