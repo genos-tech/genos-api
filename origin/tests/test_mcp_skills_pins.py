@@ -30,6 +30,7 @@ from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.services import agent_pins
 from origin.services.skills import mcp as skills_mcp
 from origin.services.skills import run
+from origin.tests.skill_fence_helpers import strip_tag
 from origin.views.public.mcp import surfaces, tools
 
 PINS = agent_pins.Pins(__name__)
@@ -90,7 +91,11 @@ class InstructionPins(SimpleTestCase):
     """What `run_skill` tells the client's model to do, for each shape of skill."""
 
     def _instructions(self, author, level, **kw) -> str:
-        return skills_mcp.build_instructions(_resolved(author, level, **kw), "for project WRD")
+        # The fence tag is `skill_text_` + 8 random hex digits per run (MIP-2192): the pin is of the
+        # words around it, with `skill_text` standing in for the tag, so it stays one value.
+        return strip_tag(
+            skills_mcp.build_instructions(_resolved(author, level, **kw), "for project WRD")
+        )
 
     def test_the_members_own_read_skill(self):
         PINS.check(
