@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0281_security_event_signin_spray"),
+        ("origin", "0282_taskmaster_title_trgm_idx"),
     ]
 
     operations = [
