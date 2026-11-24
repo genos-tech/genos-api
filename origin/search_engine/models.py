@@ -291,6 +291,13 @@ class AgentRun(models.Model):
     # only (never the text), so a turn reloaded from history can be retried with the same skill.
     # NULL on every plain ask and on every run before the column existed.
     skill_ref = models.JSONField(null=True, blank=True, default=None)
+    # What the run's answer was built on, kept after the 30-day retention blanks the step output
+    # (MIP-2288, Ken 2026-11-24): `{"sources": [id-only source dicts], "audience": [user ids] | null}`.
+    # IDS and flags only (no title, snippet or any tool text), written by the retention job just
+    # before it blanks the steps. `reconstruct_sources_for_run` and `audit_run` read it when the step
+    # output is gone, so History keeps its citations and a shared answer its audience for the run's
+    # 180 days. NULL on every run whose steps were never blanked. Goes with the run's row.
+    kept_sources = models.JSONField(null=True, blank=True, default=None)
     # The asker withdrew THIS answer from the team-shared `spotlight_answer`
     # lane (DELETE /api/v2/agent/shared-answers/<run_id>/). The conversation
     # itself stays, and so does the asker's private `conversation` memory;

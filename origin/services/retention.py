@@ -40,7 +40,8 @@ dry run); the cron applies one only when its `RETENTION_<NAME>_DAYS` variable is
   * `note_versions`          90 d.
   * `webhook_deliveries`     30 d: the payload goes with its row (settled rows only).
   * `agent_step_results`     30 d: a step's tool output AND its summary (a summary can carry an
-    address, e.g. from `get_current_user`); the run's own question and answer keep 180 d.
+    address, e.g. from `get_current_user`); the run's own question and answer keep 180 d, and so do its source ids and
+    audience (`AgentRun.kept_sources`, no text; MIP-2288), so History keeps its citations.
   * `agent_runs`            180 d, and `agent_sessions` 180 d: a session with no run left loses
     its rolling summary by losing the row.
   * `security_event_network` 90 d: `ip` and `user_agent` are blanked; the event itself keeps
@@ -67,6 +68,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
 
+from django.db import transaction
 from django.db.models import Exists, Model, OuterRef, Q, QuerySet
 from django.db.models.expressions import RawSQL
 from django.utils import timezone
@@ -275,6 +277,41 @@ def _steps_of_finished_runs() -> Q:
     )
 
 
+_STEP_BLANK_TO = {"result_json": None, "summary": ""}
+
+
+def _keep_sources_then_blank_steps(batch: QuerySet) -> int:
+    """Blank a batch of agent steps, after keeping what their runs' answers were built on (MIP-2288).
+
+    The tool output is what History's citations and the shared-answer audit read. Before it goes, each
+    run in the batch gets `kept_sources`: its source IDS and flags (no title, snippet or other text)
+    and the audience computed from them. Both readers fall back to it, so a run keeps its citations
+    and its shared answer for its own 180 days. The sources are written first, so a crash between the
+    two leaves a step still holding its output, which the next pass handles.
+    """
+    from origin.search_engine.agent.controller import id_only_source, reconstruct_sources_for_run
+    from origin.search_engine.agent.source_visibility import audit_run
+    from origin.search_engine.models import AgentRun
+
+    run_ids = set(batch.values_list("run_id", flat=True))
+    with transaction.atomic():
+        for run in AgentRun.objects.filter(pk__in=run_ids).prefetch_related("steps"):
+            try:
+                sources, audience = audit_run(run)
+            except Exception:  # noqa: BLE001 - a failed audit must not stop the privacy purge
+                # Fail closed: the sources stay, with no audience, so the answer is not collected.
+                log.exception("Could not audit agent run %s before blanking its steps", run.pk)
+                sources, audience = reconstruct_sources_for_run(run), None
+            if not sources:
+                continue
+            run.kept_sources = {
+                "sources": [id_only_source(s) for s in sources],
+                "audience": audience,
+            }
+            run.save(update_fields=["kept_sources"])
+        return batch.update(**_STEP_BLANK_TO)
+
+
 def _sessions_without_runs() -> Q:
     """A session none of whose runs is left (the last one was purged, or it never had one that
     stayed): its rolling summary is the last text of the conversation, so it goes with the row."""
@@ -346,13 +383,14 @@ POLICIES: tuple[Policy, ...] = (
         name="agent_step_results",
         description=(
             "Full tool output of an agent step. The step and its run stay, "
-            "with their summary, timing and cost."
+            "with their timing and cost; the run keeps its source ids and audience, no text."
         ),
         action=Action.BLANK,
         queryset=_agent_steps,
         age_field="created_at",
         eligible=_steps_of_finished_runs,
-        blank_to={"result_json": None, "summary": ""},
+        blank_to=_STEP_BLANK_TO,
+        blank=_keep_sources_then_blank_steps,
         approved_days=30,
     ),
     Policy(

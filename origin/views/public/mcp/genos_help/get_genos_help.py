@@ -6,23 +6,8 @@ Answers "where do I change X / how do I ... in Genos" from the vendored manual. 
 
 from __future__ import annotations
 
-from typing import Any
-
-from origin.search_engine.agent.tools import Tool, ToolContext, ToolError
-from origin.services import guide_help
-
-
-def _help(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    query = args.get("query")
-    if not isinstance(query, str) or not query.strip():
-        raise ToolError("`query` is required: the topic or question, in the member's words.")
-    language = args.get("language") or "auto"
-    if language not in ("auto", "en", "ja"):
-        raise ToolError("`language` is `en` or `ja`; leave it out to follow the question.")
-    payload = guide_help.answer(query, language)
-    payload["__summary__"] = f"{len(payload['matches'])} manual section(s)."
-    return payload
-
+from origin.search_engine.agent.tools import Tool
+from origin.search_engine.agent.tools.get_genos_help import run_help
 
 GET_GENOS_HELP = Tool(
     name="get_genos_help",
@@ -42,6 +27,6 @@ GET_GENOS_HELP = Tool(
         },
         "required": ["query"],
     },
-    run=_help,
+    run=run_help,
     mcp_only=True,
 )

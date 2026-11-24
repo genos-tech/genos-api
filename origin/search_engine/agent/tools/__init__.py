@@ -87,6 +87,7 @@ from origin.search_engine.agent.tools.fetch_task import FETCH_TASK
 from origin.search_engine.agent.tools.find_task_by_delivery import FIND_TASK_BY_DELIVERY
 from origin.search_engine.agent.tools.get_calendar_event import GET_CALENDAR_EVENT
 from origin.search_engine.agent.tools.get_current_user import GET_CURRENT_USER
+from origin.search_engine.agent.tools.get_genos_help import GET_GENOS_HELP_INAPP
 from origin.search_engine.agent.tools.get_milestone_assignee_counts import (
     GET_MILESTONE_ASSIGNEE_COUNTS,
 )
@@ -344,6 +345,9 @@ register_flagged_tool(DELETE_TASK_ATTACHMENT, PARITY_FLAG)
 # MIP-1059: one calendar event by id, on any of the member's connected Google accounts. A READ tool the
 # parity flag publishes, in the app and (through `McpTool.flag`) over MCP.
 register_flagged_tool(GET_CALENDAR_EVENT, PARITY_FLAG)
+# MIP-2328: "how do I ... in Genos" from the vendored manual, the in-app twin of MCP's tool of the same name
+# (`get_mcp_tool` prefers the MCP-only one). The same flag moves the prompt's "how do I" lines off `search_web`.
+register_flagged_tool(GET_GENOS_HELP_INAPP, "AGENT_INAPP_HELP_TOOL")
 
 
 __all__ = [

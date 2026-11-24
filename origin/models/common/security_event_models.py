@@ -77,6 +77,13 @@ class SecurityAction(models.TextChoices):
     OAUTH_DISCONNECTED = "oauth.disconnected", "Account disconnected"
     ALERT_EXPORT = "alert.export", "Alert: data exported"
     ALERT_FORBIDDEN_BURST = "alert.forbidden_burst", "Alert: many refused requests"
+    # A wrong password typed into the "confirm your password" step before a key, webhook or AI-app
+    # connection (MIP-2290). Written per failure, count only; never the password.
+    RECENT_AUTH_FAILED = "recent_auth.failed", "Password confirmation failed"
+    ALERT_RECENT_AUTH_GUESSING = (
+        "alert.recent_auth_guessing",
+        "Alert: repeated wrong password confirmations",
+    )
     ALERT_SIGNIN_SPRAY = "alert.signin_spray", "Alert: failed sign-ins across many accounts"
     ALERT_WRITE_VOLUME = "alert.write_volume", "Alert: one key or app rewrote many items"
     ALERT_READ_VOLUME = "alert.read_volume", "Alert: unusual read volume"

@@ -146,7 +146,7 @@ class TestFlagOffIsByteIdenticalToMain(SimpleTestCase):
         # tool's, and (MIP-1671, `AGENT_INAPP_NOTE_COMMENT_TOOL`) `comment_on_note`'s
         self.assertEqual(
             set(FLAGGED_REGISTRY) & set(MCP_ONLY_REGISTRY),
-            {"get_timeline", "comment_on_note", "edit_note_block"},
+            {"get_timeline", "comment_on_note", "edit_note_block", "get_genos_help"},
         )
         self.assertEqual(set(FLAGGED_REGISTRY) & set(REGISTRY), set())
 
