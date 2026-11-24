@@ -74,6 +74,10 @@ class PersonalNoteFolder(models.Model):
     # inheriting subfolder simply has no access definition of its own.
     # Always NULL for personal folders.
     visibility = models.CharField(max_length=16, blank=True, null=True)
+    # Genos Guide folders only (MIP-2325): the note titles this folder was given, so a refresh adds
+    # a note the folder never had but never brings back one the member deleted. NULL on a folder
+    # seeded before this existed: the refresh infers it from the folder's age (`guide_refresh`).
+    guide_titles_given = models.JSONField(blank=True, null=True)
     ts_created_at = models.DateTimeField(auto_now_add=True)
     ts_updated_at = models.DateTimeField(auto_now=True)
 
