@@ -832,6 +832,8 @@ class OperatorResetTests(MfaBase):
         with self.assertRaises(CommandError):
             self.run_cmd(str(self.user.pk), "--reason", "   ")
         with self.assertRaises(CommandError):
+            self.run_cmd(str(self.user.pk), "--reason", "asked by a@b.example")
+        with self.assertRaises(CommandError):
             self.run_cmd("not-a-uuid", "--reason", "x")
         with self.assertRaises(CommandError):
             self.run_cmd("00000000-0000-0000-0000-000000000000", "--reason", "x")

@@ -26,7 +26,6 @@ kept and an equal or earlier step is a replay.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
@@ -258,7 +257,8 @@ def issue_pending_token(user: CustomUser) -> str:
 
 
 def _password_fingerprint(user) -> str:
-    return hashlib.sha256((user.password or "").encode()).hexdigest()[:24]
+    """A keyed digest of the stored password verifier, so the token dies when it changes."""
+    return signing.salted_hmac(_PENDING_SALT, user.password or "").hexdigest()[:24]
 
 
 def read_pending_token(token) -> CustomUser | None:

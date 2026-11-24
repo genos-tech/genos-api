@@ -28,7 +28,6 @@ from django.db import transaction
 
 from origin.models.common.mfa_models import MFARecoveryCode, UserMFA
 from origin.models.common.security_event_models import SecurityAction, SecuritySource
-from origin.services.pii_mask import mask_email
 from origin.services.security_events import record_security_event
 
 User = get_user_model()
@@ -44,9 +43,12 @@ class Command(BaseCommand):
         parser.add_argument("--dry-run", action="store_true", help="Change and record nothing.")
 
     def handle(self, *args, **opts):
-        reason = mask_email((opts["reason"] or "").strip())[:_REASON_MAX]
+        reason = (opts["reason"] or "").strip()[:_REASON_MAX]
         if not reason:
             raise CommandError("--reason must not be blank.")
+        if "@" in reason:
+            # Free text typed at a shell lands in the audit row as written: no address in it.
+            raise CommandError("--reason must not contain an email address.")
         try:
             user_id = uuid.UUID(str(opts["user_id"]).strip())
         except ValueError:
