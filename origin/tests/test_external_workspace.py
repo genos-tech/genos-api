@@ -211,7 +211,7 @@ class RaisingTheCeilingTests(CrossTeamTestCase):
     be able to edit.
     """
 
-    def test_offering_defaults_to_editor(self):
+    def test_offering_defaults_to_viewer(self):
         self.connect_a_and_b()
         self.authenticate(self.a_owner)
         res = self.client.post(
@@ -221,6 +221,25 @@ class RaisingTheCeilingTests(CrossTeamTestCase):
                 "guest_team_id": str(self.team_b.team_id),
                 "object_type": "project",
                 "object_id": str(self.project.project_id),
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual(res.data["roleCeiling"], "viewer")
+
+    def test_offering_with_an_explicit_editor_ceiling_still_grants_editor(self):
+        # MIP-2340: the default is Viewer, but the share panel lets the host
+        # pick Editor and that choice is honoured.
+        self.connect_a_and_b()
+        self.authenticate(self.a_owner)
+        res = self.client.post(
+            "/api/v2/team/share/",
+            {
+                "team_id": str(self.team_a.team_id),
+                "guest_team_id": str(self.team_b.team_id),
+                "object_type": "project",
+                "object_id": str(self.project.project_id),
+                "role_ceiling": "editor",
             },
             format="json",
         )

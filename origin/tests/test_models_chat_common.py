@@ -130,7 +130,8 @@ class CustomUserManagerTests(TestCase):
         self.assertEqual(u.primary_auth_provider, "email")
         # defaults on the new-message-schema-adjacent flags
         self.assertFalse(u.is_email_verified)
-        self.assertFalse(u.auto_close_on_pr_merge)
+        # MIP-2340: a new account has auto-close on PR merge On.
+        self.assertTrue(u.auto_close_on_pr_merge)
         self.assertFalse(u.auto_sync_tasks_to_calendar)
         self.assertEqual(u.preferred_llm_provider, "")
         self.assertEqual(u.preferred_llm_model, "")

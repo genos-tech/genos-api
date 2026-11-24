@@ -296,6 +296,8 @@ class TestSweepOrphans(PurgeTestCase):
         )
 
     def test_todo_and_agent_run_liveness(self):
+        # New accounts do not share answers (MIP-2340); this run is a shared one.
+        type(self.user).objects.filter(pk=self.user.pk).update(share_answers_with_team=True)
         group = ToDoGroup.objects.create(
             team=self.team, user=self.user, local_date=dt.date(2026, 7, 17)
         )

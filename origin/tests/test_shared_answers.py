@@ -74,6 +74,13 @@ class WritableFakeIndex(FakeIndex):
 class SharedAnswersTestCase(ConversationDeleteTestCase):
     def setUp(self):
         super().setUp()
+        # New accounts default to NOT sharing (MIP-2340); these suites are about
+        # what happens once members have opted in, so opt both in explicitly.
+        type(self.user).objects.filter(pk__in=[self.user.pk, self.user2.pk]).update(
+            share_answers_with_team=True
+        )
+        self.user.refresh_from_db()
+        self.user2.refresh_from_db()
         # An index that takes writes (the base class patched `bulk` to the
         # delete-only one it built).
         self.index = WritableFakeIndex()
@@ -157,10 +164,31 @@ class SharedAnswersTestCase(ConversationDeleteTestCase):
 
 
 class PreferenceTests(SharedAnswersTestCase):
-    def test_defaults_to_on(self):
-        res = self.client.get(PREF_URL)
+    def test_new_account_defaults_to_off(self):
+        # MIP-2340: a newly created account does not share (the suite's own
+        # users were opted in in setUp, so create a fresh one).
+        fresh = type(self.user).objects.create_user(
+            username="fresh-share-default",
+            email="fresh-share-default@test.com",
+            password="testpass123",
+            is_email_verified=True,
+        )
+        self.assertFalse(fresh.share_answers_with_team)
+        client = APIClient()
+        client.force_authenticate(user=fresh)
+        res = client.get(PREF_URL)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.data, {"share_answers_with_team": True})
+        self.assertEqual(res.data, {"share_answers_with_team": False})
+
+    def test_existing_rows_keep_their_stored_value(self):
+        # The default change must not rewrite anyone: an account that chose On
+        # still reads On, one that chose Off still reads Off.
+        self.assertEqual(self.client.get(PREF_URL).data, {"share_answers_with_team": True})
+        type(self.user).objects.filter(pk=self.user2.pk).update(share_answers_with_team=False)
+        self.user2.refresh_from_db()
+        self.assertFalse(self.user2.share_answers_with_team)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.share_answers_with_team)
 
     def test_patch_round_trips(self):
         res = self.set_preference(False)

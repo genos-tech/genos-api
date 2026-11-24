@@ -22,9 +22,20 @@ class TestAutoCloseOnPrMergePreference(TestCase):
         )
         self.client.force_authenticate(user=self.user)
 
-    def test_get_returns_default_false(self):
+    def test_get_returns_default_true_for_new_account(self):
         resp = self.client.get(URL)
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"auto_close_on_pr_merge": True})
+
+    def test_new_account_model_default_is_true(self):
+        self.assertTrue(User._meta.get_field("auto_close_on_pr_merge").default)
+
+    def test_existing_row_that_chose_off_stays_off(self):
+        # MIP-2340: only new accounts get On; a stored False is never rewritten.
+        User.objects.filter(pk=self.user.pk).update(auto_close_on_pr_merge=False)
+        self.user.refresh_from_db()
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get(URL)
         self.assertEqual(resp.json(), {"auto_close_on_pr_merge": False})
 
     def test_patch_true_persists(self):
@@ -65,6 +76,8 @@ class TestAutoCloseOnPrMergePreference(TestCase):
             password="x",
             is_email_verified=True,
         )
+        # Both accounts start Off, so a change to `other` would show.
+        User.objects.filter(pk__in=[self.user.pk, other.pk]).update(auto_close_on_pr_merge=False)
         resp = self.client.patch(
             URL,
             {"auto_close_on_pr_merge": True, "user_id": other.id},
