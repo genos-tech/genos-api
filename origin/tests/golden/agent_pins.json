@@ -2,7 +2,7 @@
   "about": "sha256 pins on what the in-app agent's model is sent, one object per pin module. Do not edit by hand: re-record all of them with `python manage.py record_agent_goldens` (origin/services/agent_pins.py lists the modules).",
   "pins": {
     "test_agent_closed_ancestor_rule": {
-      "declarations": "e741d1cbc498604a4ef9355bd3003a8e189af07d130f10bb2fdc41faa6b8dc39",
+      "declarations": "cc46937620f94be05026eeb35ddde09aa05de97b77c87252f1a09e3c3f106011",
       "tool/fetch_task": "ed42299a027f7691caddc6436558e294a1facd301fd221d195ba1abce30297bf",
       "tool/get_milestone_summary": "2df239fbc82dcbb0b1fa2b014ac5f1f8f5f504aac2fb89a331e9408a31f0550f",
       "tool/get_milestone_summary_closed": "a1fcff416e4c3bb81a32a8ecdfa6b521939f32fd9dfd30c5ef556180c83039fa",
@@ -15,59 +15,59 @@
       "tool/list_tasks_overdue": "5514d527ce3f8604ce6f4b412586e7a286fa052a3987ca070bada3e776a6052c"
     },
     "test_agent_content_length_pins": {
-      "digest-like": "55c05e6f77a567670c1ab76e361b610b9e1b7f90f1af4e64f062b900791c7682",
-      "effort-low-thinking/gemini": "6bb6ad08c60b5ec95f33737ecc806cab42e0fe8d0a0e9d4b122835307d215e6f",
-      "effort-low/gemini": "04e8cb249b63074898d2fc858a03b1bd74589496bbbe442cb0e7839e4d522466",
-      "effort-medium/gemini": "3ef3316c9fbc0206c0b11466e37c2acbcced7f90169e455378a0c53b99271b9d",
-      "plain": "3ef3316c9fbc0206c0b11466e37c2acbcced7f90169e455378a0c53b99271b9d",
-      "plain-ja": "9c74bd39565924513337e770803e2a68b38f3af6cfe9d94916b03545e8fe2ae8",
-      "two-tier-write": "cd8332df6803b71b9c4bbe75d6264f783728d9c7118d4b291c02de97f71e1a25"
+      "digest-like": "f00e28e44906e76bbc959481c3e7af406d943bc397050c89cf3902e24faf9e85",
+      "effort-low-thinking/gemini": "f900af67f47b28ef845b5cf59f34ea3370bb78bc919827eb321d3db82f0459be",
+      "effort-low/gemini": "68fef9c3a4f31c093513d6b1120b971208b0aeb1e21ce07b8cfee3dd948a0b58",
+      "effort-medium/gemini": "950b49fbde397e40b5684ea9f39d0c5e6f8245b26ceb34de1f411db01075309c",
+      "plain": "950b49fbde397e40b5684ea9f39d0c5e6f8245b26ceb34de1f411db01075309c",
+      "plain-ja": "257863caac92d3d6d0f92ce6367891a96c288382a89e9783c3a5510302c0d7e0",
+      "two-tier-write": "52fdb39ed32e96a81e548b9d1676f7d0d6b5b07fc44af2f9b60720178b41e5e8"
     },
     "test_agent_fetch_task_anchors": {
-      "declarations": "e741d1cbc498604a4ef9355bd3003a8e189af07d130f10bb2fdc41faa6b8dc39",
-      "prompt/legacy": "d4a1aa03490b06e323590d951e9613e93ea13e131e8a01dea4cbe2f52191df1b",
-      "prompt/registry": "dcf9563f4ac026f0cab65e4b019178c5d47f693716a05d4db2ff3c6e419ac348",
+      "declarations": "cc46937620f94be05026eeb35ddde09aa05de97b77c87252f1a09e3c3f106011",
+      "prompt/legacy": "5c584581f941d6eaf4464bb4e5dede88bb9a0fecc149641af789ba7d7b4d2ab2",
+      "prompt/registry": "06561aa5442dd7d0c7ea7461edb8daf7172760b9a800cb10584182629bf1ecb6",
       "result/client": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
       "result/dev": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0",
       "result/pm": "ba60f8481e34decbcac4abb246c8cc6fee9b7b54a34efe469f3f011154c5aec0"
     },
     "test_agent_inbox_report_label": {
-      "declarations": "e741d1cbc498604a4ef9355bd3003a8e189af07d130f10bb2fdc41faa6b8dc39",
+      "declarations": "cc46937620f94be05026eeb35ddde09aa05de97b77c87252f1a09e3c3f106011",
       "inbox/activity": "d9e1938fa41cc6f8a4b2060bddff28612112845e0fcae08adf593b359e0fa769",
       "inbox/all": "3b8c6ad4cb42d1c9a5ce80f1116d9c572e4fe5ace60e4526d19a9c8539794e1d",
       "inbox/limit-1": "df5493ac8c0e0128c606a9a8a5144ec1a91316510075316309565c8660de0ed9",
       "inbox/requests": "ea7240167db1c3a878fcc951c7a2e5e8851bf5789a3fe000fe472821cb1e74ac"
     },
     "test_agent_note_threads_in_get_note": {
-      "declarations": "e741d1cbc498604a4ef9355bd3003a8e189af07d130f10bb2fdc41faa6b8dc39",
+      "declarations": "cc46937620f94be05026eeb35ddde09aa05de97b77c87252f1a09e3c3f106011",
       "note/chat": "b0f5d9c91710855e966508fcb8c5aca955f595242f72149169a79f4b705002d0",
       "note/personal": "aa59ecc86ceeb706c4ac5a6d9db2215a4063e497269daceeebd848212c8926fd",
       "note/task": "ad6e3e528a723ff873c8697bff048df07118f7dc7429aef14333361b9528697f"
     },
     "test_agent_reject_reason": {
-      "prompt/legacy": "d4a1aa03490b06e323590d951e9613e93ea13e131e8a01dea4cbe2f52191df1b",
-      "prompt/registry": "dcf9563f4ac026f0cab65e4b019178c5d47f693716a05d4db2ff3c6e419ac348",
-      "reject/plain": "c847c6cd44c7204516ce474e6c6ecdd691c99b1056abd57a7c9e8a9aea74d2d2",
-      "reject/twice": "357e5d935f814fa1d78c83573beb8ea29e3fab7b541fcfb7aa3cb8c7ec6d387c",
-      "reject/with-reason": "c847c6cd44c7204516ce474e6c6ecdd691c99b1056abd57a7c9e8a9aea74d2d2"
+      "prompt/legacy": "5c584581f941d6eaf4464bb4e5dede88bb9a0fecc149641af789ba7d7b4d2ab2",
+      "prompt/registry": "06561aa5442dd7d0c7ea7461edb8daf7172760b9a800cb10584182629bf1ecb6",
+      "reject/plain": "29c0f39a34bf7d76f3cb65ff8855cde676797f699e551fc955546b0f9263d547",
+      "reject/twice": "7701792ffdb983e4feaf44d6d96f7f92d37efd6b5472f2351ee21079a18d9f8c",
+      "reject/with-reason": "29c0f39a34bf7d76f3cb65ff8855cde676797f699e551fc955546b0f9263d547"
     },
     "test_agent_resume_flag_pins": {
-      "followup+recap/approve": "f5c1f5434d56d6104647fe78361995e02895ef6afa94e9b4d57cf8820b95810e",
-      "followup+recap/reject": "baf6d491d17d5e92517ec7f4a932eebdc1d36120ad7c74ecc362964b33acb2f0",
-      "followup+thread/approve": "1e3b68efc0f7d8ea58a239211189abaa2f15a2d8c5a077567f42fdaea4673a3b",
-      "followup+thread/reject": "99ce1669c3b539856582efabc9d3dacbd054c7dcd491b2d53b19e7a2004d2ed1",
-      "followup/approve": "55d7c76d948a04c69c74e8443feb0615b3e4b6c1305642805dae85d4fd6bf41b",
-      "followup/reject": "757583a3a4cb0fd25bfcd56c89f96305d9c7960f218705ddd5c24f033531c318",
-      "mention/approve": "ce8a040b3dd407273679659e9e950debb0e0c6458a5b84bc9445058170eba910",
-      "mention/reject": "9793a965c74515ff1bc50f1d8d9c97ad11060474fcfed1f6a95a2b489e6d340e",
-      "note/approve": "327402e859331be2a1aa42ad09c551106bad575b5290357908f282d7f4106dc7",
-      "note/reject": "ca7fce0d3ca35bae80d4bd8f635b1036a0b415e13b685f91cdbaaf852afe828a",
-      "plain/approve": "1b0c4d54158c5437d9887c66d423bd33e54233a9bc392822de32d2792b231428",
-      "plain/reject": "c847c6cd44c7204516ce474e6c6ecdd691c99b1056abd57a7c9e8a9aea74d2d2",
-      "thread+mention/approve": "928453ef20fc9b118032525c4b2daf1c1ea77e73e4f071bcbf31cd273c491c1b",
-      "thread+mention/reject": "44c38b577b2cebf246e61c26955314af423b20b789a2ad72f55b500228d338ba",
-      "thread/approve": "157a81aa51158daaadc8e2308713886fa17d89b01234f57d3339936224f19cac",
-      "thread/reject": "98d911b4518a789a69201007d8377a49034724a264099d87fd6bf55e090fa5fd"
+      "followup+recap/approve": "a4ed9dd91847b235ae15a74fc4ff3caf7387bdfa895718472c1033a85b8af8a9",
+      "followup+recap/reject": "7bb7c197a02c327471682fa3fa6ac966606baa754ec2aebf584a544f992939cf",
+      "followup+thread/approve": "7a9af43b5ac8203ac5edbb5a77bbc83349c4c871cc2ec51ffdd911ff16098726",
+      "followup+thread/reject": "34a4372575cd0520242dddab7418140d949c2c3570237ebc96d19fa8122c3ba8",
+      "followup/approve": "4487bbfe303ebd121d208e5e2da809d7d5d192a1a340a0ca65f2fefed489751b",
+      "followup/reject": "cca8049794014fab8756aa4e58547e8c75612f58a1f4171c7ed14107cc356484",
+      "mention/approve": "13e7933f5d1b254595f0c6585f21b293ea30e46540c8a9556ef4d5b5060f642b",
+      "mention/reject": "32c3f99a6c9c8c0dfaf11663d4e25670a89ab0f5806e9886543189b8187b8870",
+      "note/approve": "6e99a77980923af9034a72ce569d672eef819f2bef5b1f4d7a223cb33d1a6a3c",
+      "note/reject": "dac96148504abe5cba49b5d1722616944e0c2a7345df966db72d0ace48da9009",
+      "plain/approve": "83cdfe2266f783b428a6b03bbb594b7493c44d2637902d6106e1e59d2ae40480",
+      "plain/reject": "29c0f39a34bf7d76f3cb65ff8855cde676797f699e551fc955546b0f9263d547",
+      "thread+mention/approve": "38f690c20acbbbe15d2e690d134945cdd171f08830b20a2e76e95473f0d82b66",
+      "thread+mention/reject": "44b1e5f27183405a053bdd6485ea42a9947039534d0588be64a8a5c58086b770",
+      "thread/approve": "5acdf73e792bfbe46716d89c3049f2d69c10255771ee0361c88bffa906eb4a03",
+      "thread/reject": "dfae7858decfb78bfe06e7b1ea46a426b9819042da6b2bffc6fa6dfa7ef64289"
     },
     "test_agent_resume_system_extra": {
       "mention": "85d377367310a2917d0be64ef91a617323a8ea033fe5279e9e8f030dcb4d0b7f",
@@ -76,23 +76,23 @@
       "thread+mention": "35a4e6a3995cbb3e5ba314b3fbf04da3060dd9f25d844587cf6b35a552bb7ccf"
     },
     "test_agent_team_in_current_user": {
-      "declarations": "e741d1cbc498604a4ef9355bd3003a8e189af07d130f10bb2fdc41faa6b8dc39",
+      "declarations": "cc46937620f94be05026eeb35ddde09aa05de97b77c87252f1a09e3c3f106011",
       "result/member": "1a691af10b63e1660567a3f26713d2c8c635701bf4e06ec58bdae4c2570daac0",
       "result/owner": "3417294ac02371656656cec58ee9633307781a651582b0e8c80d573074865f5a"
     },
     "test_agent_tell_model_undo": {
-      "edit/approve": "1b0c4d54158c5437d9887c66d423bd33e54233a9bc392822de32d2792b231428",
-      "edit/twice": "831f967db2131393709aa99cfd05624d0172f24cb497ae5f3bf1e37ff22c120a",
-      "undo/next-turn": "8dd79dae67c7403347f4fdf5398f436e3941cc74943521d053335d5fcb6a036b"
+      "edit/approve": "83cdfe2266f783b428a6b03bbb594b7493c44d2637902d6106e1e59d2ae40480",
+      "edit/twice": "59831da9ff58745024ce557da1eecdc1cd28fb831a75f0b260260cc0ef4949ad",
+      "undo/next-turn": "11e484359bd58a2f66792280330cda44b8764e7a7487d4571141f1dceff2e1f9"
     },
     "test_agent_truncation_pins": {
-      "digest-like": "55c05e6f77a567670c1ab76e361b610b9e1b7f90f1af4e64f062b900791c7682",
-      "effort-low-thinking/gemini": "6bb6ad08c60b5ec95f33737ecc806cab42e0fe8d0a0e9d4b122835307d215e6f",
-      "effort-low/gemini": "04e8cb249b63074898d2fc858a03b1bd74589496bbbe442cb0e7839e4d522466",
-      "effort-medium/gemini": "3ef3316c9fbc0206c0b11466e37c2acbcced7f90169e455378a0c53b99271b9d",
-      "plain": "3ef3316c9fbc0206c0b11466e37c2acbcced7f90169e455378a0c53b99271b9d",
-      "plain-ja": "9c74bd39565924513337e770803e2a68b38f3af6cfe9d94916b03545e8fe2ae8",
-      "two-tier-write": "cd8332df6803b71b9c4bbe75d6264f783728d9c7118d4b291c02de97f71e1a25"
+      "digest-like": "f00e28e44906e76bbc959481c3e7af406d943bc397050c89cf3902e24faf9e85",
+      "effort-low-thinking/gemini": "f900af67f47b28ef845b5cf59f34ea3370bb78bc919827eb321d3db82f0459be",
+      "effort-low/gemini": "68fef9c3a4f31c093513d6b1120b971208b0aeb1e21ce07b8cfee3dd948a0b58",
+      "effort-medium/gemini": "950b49fbde397e40b5684ea9f39d0c5e6f8245b26ceb34de1f411db01075309c",
+      "plain": "950b49fbde397e40b5684ea9f39d0c5e6f8245b26ceb34de1f411db01075309c",
+      "plain-ja": "257863caac92d3d6d0f92ce6367891a96c288382a89e9783c3a5510302c0d7e0",
+      "two-tier-write": "52fdb39ed32e96a81e548b9d1676f7d0d6b5b07fc44af2f9b60720178b41e5e8"
     },
     "test_inapp_timeline_tool": {
       "declarations": "2133587b57d78544911a436f54cf6fd3f0d74ea77afc7733ee52a4783016fdda",
