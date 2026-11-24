@@ -24,8 +24,11 @@ GENERATION_RULES: tuple[str, ...] = (
     "Do not submit forms, call window.open, change location, or use localStorage, "
     "sessionStorage or cookies.",
     "Embed the data in the page (a JSON object in a <script> tag).",
-    "Support light and dark themes (prefers-color-scheme), work down to 360 px wide, and give "
-    "charts ARIA labels.",
+    "Support light and dark themes (prefers-color-scheme) and give charts ARIA labels.",
+    "The page may get only 360 to 600 px, so lay it out to never overlap: every <svg> has a "
+    "viewBox and style width:100%; height:auto (no fixed pixel width); sections use flex-wrap or "
+    "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); no position:absolute for boxes "
+    "or labels; long labels wrap. Check it at 360, 600 and 1200 px.",
     "Respect prefers-reduced-motion.",
     "Stay well under the plan's page limit "
     f"({_CORE.max_bytes // 1024} KB on Core); 200 KB is a better target.",
