@@ -74,6 +74,7 @@ class SecurityAction(models.TextChoices):
     OAUTH_DISCONNECTED = "oauth.disconnected", "Account disconnected"
     ALERT_EXPORT = "alert.export", "Alert: data exported"
     ALERT_FORBIDDEN_BURST = "alert.forbidden_burst", "Alert: many refused requests"
+    ALERT_SIGNIN_SPRAY = "alert.signin_spray", "Alert: failed sign-ins across many accounts"
     # Taken from a shell by an operator, `manage.py operator_cutoff`
     # (MIP-865). The reason and the operator's OS user are in the metadata.
     OPERATOR_USER_DEACTIVATED = "operator.user_deactivated", "Operator: user cut off"
