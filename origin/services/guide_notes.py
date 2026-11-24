@@ -3908,7 +3908,13 @@ def seed_guide_notes(user, team, *, force: bool = False) -> bool:
                 continue
             guide_notes = current_guide_notes(locale)
 
-            folder = PersonalNoteFolder.objects.create(team=team, owner=user, name=folder_name)
+            folder = PersonalNoteFolder.objects.create(
+                team=team,
+                owner=user,
+                name=folder_name,
+                # What this folder was given: `guide_refresh` never re-adds a note deleted later.
+                guide_titles_given=[title for title, _ in guide_notes],
+            )
             for title, body in guide_notes:
                 note = PersonalNoteMaster.objects.create(
                     team=team,

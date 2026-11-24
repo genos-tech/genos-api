@@ -753,6 +753,7 @@ origin.PersonalNoteFolder:
   name: content
   scope: none
   visibility: none
+  guide_titles_given: none
   ts_created_at: none
   ts_updated_at: none
 origin.PersonalNoteMaster:

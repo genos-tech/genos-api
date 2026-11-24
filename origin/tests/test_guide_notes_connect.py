@@ -19,8 +19,6 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from django.core.management import call_command
-from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
 
 from origin.models.note.personal_note_models import PersonalNoteMaster
@@ -448,19 +446,4 @@ class RefreshTests(BaseAPITestCase):
 
         self.assertEqual(report, guide_notes.RefreshReport())
 
-    def test_the_command_is_a_dry_run_unless_apply_is_given(self):
-        note = self._note("en", EN_CONNECTING)
-        out = mock.MagicMock()
-        call_command("refresh_guide_notes", stdout=out)
-        self.assertNotIn(HEADING["en"], _headings(self._fresh(note).body))
-        shown = "".join(c.args[0] for c in out.write.call_args_list)
-        self.assertIn("DRY RUN", shown)
-        self.assertIn("1 unedited note(s) would be replaced", shown)
-
-        call_command("refresh_guide_notes", "--apply", stdout=mock.MagicMock())
-        self.assertIn(HEADING["en"], _headings(self._fresh(note).body))
-
-    @override_settings(**OFF)
-    def test_the_command_refuses_without_the_oauth_way(self):
-        with self.assertRaises(CommandError):
-            call_command("refresh_guide_notes", "--apply", stdout=mock.MagicMock())
+    # The `refresh_guide_notes` command is now the general refresh (MIP-2325): see test_guide_refresh.py.
