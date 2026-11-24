@@ -9,7 +9,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0279_skill_grants"),
+        ("origin", "0280_skill_run_confirmations"),
     ]
 
     operations = [
