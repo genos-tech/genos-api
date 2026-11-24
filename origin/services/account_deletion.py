@@ -598,7 +598,6 @@ def delete_account(user) -> dict:
         user.phone_number = None
         user.custom_status = None
         user.role = None
-        user.base_country = None
         user.current_location = None
         # Free text the user wrote about themselves — the most identifying
         # field on this row after the ones above, and the only one where

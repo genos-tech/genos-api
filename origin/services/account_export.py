@@ -612,7 +612,6 @@ def build_export(user) -> dict:
             "phone_number": user.phone_number,
             "job_title": user.role,
             "custom_status": user.custom_status,
-            "base_country": user.base_country,
             "current_location": user.current_location,
             "about_me": user.about_me,
             "timezone": user.timezone,
