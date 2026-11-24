@@ -30,6 +30,9 @@ class SecurityAction(models.TextChoices):
     SIGNIN_SUCCEEDED = "signin.succeeded", "Signed in"
     SIGNIN_FAILED = "signin.failed", "Sign-in failed"
     SIGNOUT = "signout", "Signed out"
+    # A rotated refresh token came back after its grace window: the whole login family is revoked
+    # (MIP-2242). Count of tokens only.
+    REFRESH_REUSED = "session.refresh_reused", "Session ended: sign-in token reused"
     PASSWORD_RESET_REQUESTED = "password.reset_requested", "Password reset requested"
     PASSWORD_RESET = "password.reset", "Password reset"
     MCP_CONNECTED = "mcp.connected", "AI app connected"
@@ -75,6 +78,10 @@ class SecurityAction(models.TextChoices):
     ALERT_EXPORT = "alert.export", "Alert: data exported"
     ALERT_FORBIDDEN_BURST = "alert.forbidden_burst", "Alert: many refused requests"
     ALERT_SIGNIN_SPRAY = "alert.signin_spray", "Alert: failed sign-ins across many accounts"
+    ALERT_READ_VOLUME = "alert.read_volume", "Alert: unusual read volume"
+    # A key or connected app paused by the detector, and re-enabled by its owner (MIP-2259).
+    CREDENTIAL_SUSPENDED = "credential.suspended", "Key or app suspended"
+    CREDENTIAL_RESUMED = "credential.resumed", "Key or app re-enabled"
     # Taken from a shell by an operator, `manage.py operator_cutoff`
     # (MIP-865). The reason and the operator's OS user are in the metadata.
     OPERATOR_USER_DEACTIVATED = "operator.user_deactivated", "Operator: user cut off"

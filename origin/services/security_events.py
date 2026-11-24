@@ -469,6 +469,12 @@ def note_forbidden(request) -> None:
         },
     )
     _tell_owner_of_burst(request, count)
+    try:
+        from origin.services import credential_guard  # noqa: PLC0415
+
+        credential_guard.on_burst(_api_key(request), request, count)
+    except Exception:
+        logger.exception("security.burst suspension failed")
 
 
 def _tell_owner_of_burst(request, count: int) -> None:

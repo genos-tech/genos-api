@@ -65,6 +65,7 @@ from origin.models.chat.todo_models import ToDoCategory, ToDoGroup
 from origin.models.chat.unified_models import ReadCursor
 from origin.models.common.api_key_models import ApiKey
 from origin.models.common.briefing_models import MemberBriefingState
+from origin.models.common.erasure_models import ErasureObjectType
 from origin.models.common.invite_models import TeamInvite
 from origin.models.common.item_activity_models import purge_for_user as purge_item_activity
 from origin.models.common.mcp_connection_models import McpConnection
@@ -77,7 +78,7 @@ from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster, TeamMembers
 from origin.models.common.trial_models import CoreTrial
 from origin.models.common.user_models import ConnectedAccount
-from origin.services import blind_index, change_feed
+from origin.services import blind_index, change_feed, erasure_log
 from origin.services.deleted_account_activity import delete_for_recipient as delete_activity_for
 from origin.services.deleted_account_leftovers import blank_network_for
 from origin.services.deleted_account_leftovers import delete_for_user as delete_leftovers_for
@@ -597,7 +598,6 @@ def delete_account(user) -> dict:
         user.phone_number = None
         user.custom_status = None
         user.role = None
-        user.base_country = None
         user.current_location = None
         # Free text the user wrote about themselves — the most identifying
         # field on this row after the ones above, and the only one where
@@ -616,6 +616,7 @@ def delete_account(user) -> dict:
         user.password_reset_token_hash = None
         user.password_reset_token_expires_at = None
         user.save()
+        erasure_log.record(ErasureObjectType.ACCOUNT, user_id)  # MIP-2249
 
     _delete_avatar_file(avatar_path, user_id)
 

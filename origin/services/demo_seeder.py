@@ -1558,7 +1558,6 @@ def _create_bot_users(short: str, lang: str = "en") -> List[CustomUser]:
             email=email,
             username=f"{profile['first']} {profile['last']}",
             role=roles[idx] if idx < len(roles) else profile["role"],
-            base_country="USA",
             is_demo=True,
             language=lang,
         )

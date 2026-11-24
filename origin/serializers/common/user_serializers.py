@@ -32,7 +32,6 @@ class UserSerializer(serializers.ModelSerializer):
             "custom_status",
             "custom_status_expiry",
             "role",
-            "base_country",
             "timezone",
             "current_location",
             # Opt-out for showing the two zones above to other people. Writable

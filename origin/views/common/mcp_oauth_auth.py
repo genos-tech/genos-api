@@ -40,6 +40,9 @@ from origin.services.mcp_credential import McpOAuthCredential
 
 KEYWORD = "Bearer"
 MESSAGE = "Invalid or expired access token."
+SUSPENDED_MESSAGE = (
+    "This connection is suspended after unusual activity. Its owner can re-enable it in Settings."
+)
 
 # Tokens are url-safe random strings of a few dozen characters. Refusing anything else before
 # the database is touched keeps a pile of junk Bearer values (a JWT, a scanner's noise) cheap.
@@ -97,7 +100,9 @@ class McpOAuthAuthentication(authentication.BaseAuthentication):
         reason = self._refusal(token, connection, self._surface(request))
         if reason:
             security_events.note_mcp_rejected(django_request, reason, connection)
-            raise exceptions.AuthenticationFailed(MESSAGE)
+            raise exceptions.AuthenticationFailed(
+                SUSPENDED_MESSAGE if reason == "suspended" else MESSAGE
+            )
 
         self._touch(connection)
         credential = McpOAuthCredential(connection)
@@ -130,6 +135,8 @@ class McpOAuthAuthentication(authentication.BaseAuthentication):
             return "audience"
         if connection is None or not connection.is_active:
             return "connection_revoked"
+        if connection.suspended_at is not None:
+            return "suspended"
         user = connection.user
         if user is None or not user.is_active or getattr(user, "is_deleted", False):
             return "account_inactive"

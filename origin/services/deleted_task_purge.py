@@ -63,6 +63,7 @@ from django.db.models import Max, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from origin.models.chat.unified_models import Activity, Message
+from origin.models.common.erasure_models import ErasureObjectType
 from origin.models.common.item_activity_models import MemberItemDay
 from origin.models.common.member_importance_models import MemberImportanceMark
 from origin.models.note.task_note_models import TaskNoteAttachmentFact, TaskNoteMaster
@@ -77,7 +78,7 @@ from origin.models.task.task_models import (
     TaskMaster,
 )
 from origin.search_engine.models import AgentSession, RagChunk
-from origin.services import collab_push, message_tombstone
+from origin.services import collab_push, erasure_log, message_tombstone
 from origin.services.activity_suppression import suppress_task_activity
 from origin.services.detached_note_attachments import DetachedReport, _classify
 from origin.services.note_delete import (
@@ -341,6 +342,7 @@ def _purge_one(task_id: int, cutoff: datetime, report: PurgeReport) -> str | Non
         forget_deleted_notes(NOTE_TYPE_TASK, note_ids)
         collab_push.forget_task_bodies_after_commit([task_id])  # MIP-1937
 
+        erasure_log.record(ErasureObjectType.TASK, task_id)
         report.counts.update(removes)
         report.left.update(left)
         transaction.on_commit(lambda: _after_commit(task_id, note_ids, files, report), robust=True)
@@ -356,6 +358,16 @@ def _after_commit(task_id: int, note_ids: list[int], files: list[str], report: P
     from origin.services.project_delete import _forget_search
 
     _forget_search([task_id], [], note_ids, [])
+
+
+def purge_known_task(task_id: int) -> str | None:
+    """Purge one task whose erasure is already on record (`replay_erasures`, MIP-2249).
+
+    The 30-day grace was served before the original purge, so the clock guards are waived; every
+    other guard (still Deleted, no sub-tasks, no milestone, no live dependency, not the highest
+    number) still applies. Returns why it was NOT purged, or None."""
+    report = PurgeReport(apply=True, limit=1)
+    return _purge_one(task_id, timezone.now() + timedelta(days=1), report)
 
 
 def purge_deleted_tasks(

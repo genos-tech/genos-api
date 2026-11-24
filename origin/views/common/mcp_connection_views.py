@@ -25,7 +25,7 @@ from origin.models.common.mcp_connection_models import McpConnection
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMembers
 from origin.search_engine.quota import get_mcp_enabled
-from origin.services import agent_quiet, mcp_connections, mcp_oauth
+from origin.services import agent_quiet, credential_guard, mcp_connections, mcp_oauth
 from origin.services.member_roles import OWNER, can_remove_member, resolve_team_role
 from origin.services.security_events import record_security_event
 from origin.services.throttles import WindowRateThrottle
@@ -59,6 +59,9 @@ def _serialize(connection: McpConnection, teams: dict[str, str], *, paused: bool
         "teams": [{"id": t, "name": teams[t]} for t in live],
         "lastUsedAt": connection.last_used_at,
         "createdAt": connection.ts_created_at,
+        # Paused by the detector (MIP-2259); the member re-enables it with POST .../resume/.
+        "suspendedAt": connection.suspended_at,
+        "suspendedReason": connection.suspended_reason,
     }
 
 
@@ -162,6 +165,21 @@ class McpConnectionDetailView(_Base):
     def delete(self, request, connection_id):
         mcp_connections.revoke_connection(self._mine(request, connection_id))
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class McpConnectionResumeView(McpConnectionDetailView):
+    """POST /api/v2/mcp/connections/<id>/resume/ (MIP-2259): re-enable an app the detector paused.
+    Same ownership rule and same 404 as the detail view."""
+
+    http_method_names = ["post", "options"]
+
+    def post(self, request, connection_id):
+        connection = self._mine(request, connection_id)
+        credential_guard.resume(connection, request=request, actor=request.user)
+        teams = self._team_names(request.user)
+        return Response(
+            _serialize(connection, teams, paused=not get_mcp_enabled(str(request.user.id)))
+        )
 
 
 # --- The team's own view of the connected AI apps in it (MIP-1371) -----------------------

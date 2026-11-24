@@ -133,6 +133,8 @@ MIDDLEWARE = [
     # (MIP-725). Inside CurrentUserMiddleware so the alert row it writes
     # still sees the request.
     "origin.services.security_events.ForbiddenBurstMiddleware",
+    # Counts what a key or connected app reads per minute (MIP-2259).
+    "origin.services.credential_guard.ReadVolumeMiddleware",
 ]
 
 # CORS policy.
@@ -526,17 +528,12 @@ REQUEST_PERF_LOG = os.environ.get("REQUEST_PERF_LOG", "").strip().lower() not in
 REQUEST_PERF_CPU_STAT_PATH = os.environ.get("REQUEST_PERF_CPU_STAT_PATH", "/sys/fs/cgroup/cpu.stat")
 
 SIMPLE_JWT = {
-    # NOT shortened, deliberately. A shorter access token would be the
-    # normal hardening move, but the frontend has no proactive refresh:
-    # `AuthContext` only refreshes when `accessToken` is null, and
-    # nothing nulls it on expiry (no `exp` watcher, and the axios
-    # interceptor deliberately skips 401 because it assumes AuthContext
-    # owns that path). So an expired access token silently breaks the
-    # session until the user reloads the page. At 24h almost everyone
-    # reloads first; at 30 minutes it would happen to everyone, twice an
-    # hour. Shortening this is blocked on adding proactive refresh
-    # frontend-side — see operations/AUTH_SECURITY_PLAN.md §3.1.
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=24),
+    # 30 minutes (MIP-2242), env-tunable with ACCESS_TOKEN_LIFETIME_MINUTES. The browser renews it
+    # ahead of expiry from the refresh cookie (AuthContext), so a person stays signed in for the
+    # refresh token's 7 days; a stolen access token now dies within the half hour.
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME_MINUTES", "30"))
+    ),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
@@ -2717,6 +2714,16 @@ SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
 # and how many distinct addresses failing within an hour count as a password spray.
 SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
 SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
+# Detection that acts (MIP-2259, origin/services/credential_guard.py). Reads (calls, and response
+# bytes) one API key or connected app makes in a minute past these raise `alert.read_volume`; a
+# person's own total is judged at SECURITY_READ_USER_MULTIPLIER times them. What happens to the
+# credential is `CREDENTIAL_AUTOSUSPEND_MODE`: `off` (default, only the alert), `shadow` (the alert
+# says it would have paused it) or `enforce` (a read-volume breach or a refused-request burst pauses
+# the key or app until its owner re-enables it).
+SECURITY_READ_CALLS_PER_MINUTE = int(os.environ.get("SECURITY_READ_CALLS_PER_MINUTE", "300"))
+SECURITY_READ_CHARS_PER_MINUTE = int(os.environ.get("SECURITY_READ_CHARS_PER_MINUTE", "3000000"))
+SECURITY_READ_USER_MULTIPLIER = int(os.environ.get("SECURITY_READ_USER_MULTIPLIER", "2"))
+CREDENTIAL_AUTOSUSPEND_MODE = os.environ.get("CREDENTIAL_AUTOSUSPEND_MODE", "off").strip().lower()
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every
