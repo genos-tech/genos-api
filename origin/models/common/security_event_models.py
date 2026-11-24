@@ -77,11 +77,18 @@ class SecurityAction(models.TextChoices):
     OAUTH_DISCONNECTED = "oauth.disconnected", "Account disconnected"
     ALERT_EXPORT = "alert.export", "Alert: data exported"
     ALERT_FORBIDDEN_BURST = "alert.forbidden_burst", "Alert: many refused requests"
+    ALERT_SIGNIN_SPRAY = "alert.signin_spray", "Alert: failed sign-ins across many accounts"
     # Taken from a shell by an operator, `manage.py operator_cutoff`
     # (MIP-865). The reason and the operator's OS user are in the metadata.
     OPERATOR_USER_DEACTIVATED = "operator.user_deactivated", "Operator: user cut off"
     OPERATOR_API_KEY_REVOKED = "operator.api_key_revoked", "Operator: API key revoked"
     OPERATOR_TEAM_KEYS_REVOKED = "operator.team_keys_revoked", "Operator: team API keys revoked"
+    # Every management command run at a production shell (MIP-2260). Command name and redacted
+    # arguments only; `shell` rows say a shell was open, never what ran in it.
+    OPS_COMMAND = "ops.command", "Operator: command run"
+    OPS_SHELL_OPENED = "ops.shell_opened", "Operator: shell opened"
+    OPS_SHELL_CLOSED = "ops.shell_closed", "Operator: shell closed"
+    ALERT_OPS_COMMAND_UNLISTED = "alert.ops_command_unlisted", "Alert: unlisted operator command"
 
 
 class SecuritySource(models.TextChoices):

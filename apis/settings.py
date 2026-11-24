@@ -265,7 +265,20 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
+    # Known-breach check (MIP-2238). A no-op unless PASSWORD_BREACH_CHECK is on; fails open.
+    {
+        "NAME": "origin.services.password_policy.PwnedPasswordValidator",
+    },
 ]
+
+# Ask Have I Been Pwned (k-anonymity: 5 hex characters of a SHA-1 leave the server) whether a
+# new password is in a known breach, at signup and reset. OFF until Ken turns it on.
+PASSWORD_BREACH_CHECK = os.environ.get("PASSWORD_BREACH_CHECK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 # Internationalization
@@ -546,6 +559,27 @@ SIMPLE_JWT = {
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
 }
+
+
+# Asymmetric session tokens (MIP-2243, rollout in operations/AUTH_SECURITY_PLAN.md
+# §3.3). Everything here is inert at its default: the api signs HS256 with
+# JWT_SECRET_KEY and accepts HS256, exactly as before. See origin/services/jwt_backend.py.
+#   JWT_SIGNING_ALGORITHM  HS256 (default) | RS256 (the switch that changes what is minted)
+#   JWT_PRIVATE_KEY        PEM, api only; needed for RS256
+#   JWT_PUBLIC_KEY         PEM; derived from the private key when absent; lets the api
+#                          ACCEPT RS256 tokens even while it still signs HS256
+#   JWT_ACCEPT_HS256       true (default) | false (the end of the window: HS256 refused)
+#   JWT_KEY_ID             optional `kid` header for later key rotation
+JWT_SIGNING_ALGORITHM = os.environ.get("JWT_SIGNING_ALGORITHM", "HS256").strip().upper() or "HS256"
+JWT_PRIVATE_KEY = os.environ.get("JWT_PRIVATE_KEY", "")
+JWT_PUBLIC_KEY = os.environ.get("JWT_PUBLIC_KEY", "")
+JWT_ACCEPT_HS256 = os.environ.get("JWT_ACCEPT_HS256", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+JWT_KEY_ID = os.environ.get("JWT_KEY_ID", "").strip()
 
 
 def _validate_prod_secrets(
@@ -2674,6 +2708,10 @@ SECURITY_EVENT_RETENTION_MIN_DAYS = 90
 # raise a `security.alert`. Normal use hits a 403 rarely; walking through
 # ids that aren't yours hits one per id.
 SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
+# MIP-2237: wrong passwords for one typed address within an hour before its sign-ins back off,
+# and how many distinct addresses failing within an hour count as a password spray.
+SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
+SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every

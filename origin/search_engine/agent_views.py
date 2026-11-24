@@ -3839,6 +3839,14 @@ class AgentFeaturesView(AuthenticatedAPIView):
         block = _credits_block(user_id, resolved["tier"])
         if block is not None:
             payload["credits"] = block
+        # ADDITIVE, and present only while HTML_NOTES is on (MIP-2215): the key's presence is how the
+        # web client knows to offer `.html` import. `max_bytes` is the plan's page limit, null when
+        # the plan has no HTML notes (Free), so the dialog can say so before a file is sent.
+        if getattr(settings, "HTML_NOTES", False):
+            from origin.services import html_note_limits  # noqa: PLC0415
+
+            row = html_note_limits.limits_for_tier(resolved["tier"])
+            payload["html_notes"] = {"max_bytes": row.max_bytes if row is not None else None}
         return Response(payload)
 
 

@@ -89,6 +89,9 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     "agent-call-prune": timedelta(hours=26),
     "retention-purge": timedelta(hours=26),
     "closed-team-purge": timedelta(hours=26),
+    "housekeeping-prune": timedelta(hours=26),
+    "tombstone-prune": timedelta(hours=26),
+    "member-memory-sweep": timedelta(hours=26),
     # genos-collab's orphan sweep, reporting through ExternalCronHeartbeatView (MIP-1858).
     "collab-orphan-sweep": timedelta(hours=26),
     # weekly, monthly
@@ -98,6 +101,17 @@ CRON_SCHEDULES: dict[str, timedelta] = {
     # beating through `AlertingHealthView`. GitHub runs schedules late under
     # load and disables them after 60 days without a commit.
     PROBE_NAME: timedelta(hours=2),
+}
+
+# A cron with no `CronHeartbeat` row at all has never started. It is measured from when the
+# alert tick first ran (nothing earlier can be missed), or from the date here when a cron was
+# added to the code before its Railway service could be created (MIP-2251: the services are
+# applied by hand, so the first page waits until then).
+CRON_FIRST_EXPECTED: dict[str, datetime] = {
+    "retention-purge": datetime(2026, 12, 1, tzinfo=UTC),
+    "housekeeping-prune": datetime(2026, 12, 1, tzinfo=UTC),
+    "tombstone-prune": datetime(2026, 12, 1, tzinfo=UTC),
+    "member-memory-sweep": datetime(2026, 12, 1, tzinfo=UTC),
 }
 
 # A resolved incident that fires again this soon is the same incident.
@@ -220,6 +234,8 @@ def resolve_quiet(*, now=None) -> int:
 _SECURITY_SUMMARIES = {
     "alert.export": "Account data exported",
     "alert.forbidden_burst": "Burst of refused requests",
+    "alert.signin_spray": "Password spray: failed sign-ins across many accounts",
+    "alert.ops_command_unlisted": "Operator ran a command outside the allowlist",
 }
 
 
@@ -234,13 +250,23 @@ def raise_security_alert(event) -> None:
         if event.actor_id
         else f"ip:{event.ip or '-'}"
     )
+    if event.action == "alert.signin_spray":
+        who = "signin"  # one incident per hour for the whole service, not one per address
     meta = event.metadata or {}
     summary = _SECURITY_SUMMARIES.get(event.action, event.action)
     if "refused" in meta:
         summary = f"{summary}: {meta['refused']} in {meta.get('window_seconds', '?')} s"
+    if "accounts" in meta:
+        summary = f"{summary}: {meta['accounts']} accounts in {meta.get('window_seconds', '?')} s"
+    if meta.get("command"):
+        summary = f"{summary}: {meta['command']}"
     raise_alert(
         OpsAlertKind.SECURITY,
-        f"security:{event.action}:{who}",
+        (
+            f"security:{event.action}:{who}:{meta['command']}"
+            if meta.get("command")
+            else f"security:{event.action}:{who}"
+        )[:128],
         f"{summary} ({who})",
         {
             "action": event.action,
@@ -248,7 +274,7 @@ def raise_security_alert(event) -> None:
             "caller": who,
             "source": event.source,
             "ip": event.ip or "",
-            **{k: meta[k] for k in ("path", "method") if k in meta},
+            **{k: meta[k] for k in ("path", "method", "command") if k in meta},
         },
     )
 
@@ -346,7 +372,35 @@ def check_crons(*, now=None) -> list[str]:
             },
             now=now,
         )
+    overdue += _never_started(now)
     return overdue
+
+
+def _never_started(now) -> list[str]:
+    """Open `cron:<name>` for a watched cron that has no heartbeat row at all (MIP-2251): a
+    service that was never created, or never got `--heartbeat`, used to page nobody. Needs the
+    tick's own row for its anchor, so a database where the tick never ran stays quiet."""
+    tick = CronHeartbeat.objects.filter(name=TICK_NAME).values_list("first_seen_at", flat=True)
+    tick_since = next(iter(tick), None)
+    if tick_since is None:
+        return []
+    seen = set(CronHeartbeat.objects.filter(name__in=CRON_SCHEDULES).values_list("name", flat=True))
+    out = []
+    for name, allowed in CRON_SCHEDULES.items():
+        if name in seen:
+            continue
+        since = max(tick_since, CRON_FIRST_EXPECTED.get(name, tick_since))
+        if now - since <= allowed:
+            continue
+        out.append(name)
+        raise_alert(
+            OpsAlertKind.CRON_MISSED,
+            f"cron:{name}",
+            f"Cron {name} has never reported ({_age(now - since)} since it was expected)",
+            {"service": name, "last_succeeded_at": "", "last_started_at": "", "last_error": ""},
+            now=now,
+        )
+    return out
 
 
 def _age(delta: timedelta) -> str:

@@ -15,7 +15,11 @@ from origin.models.note.chat_note_models import ChatNoteMaster
 from origin.models.note.personal_note_models import PersonalNoteMaster
 from origin.models.note.task_note_models import TaskNoteMaster
 from origin.search_engine.agent.tools.base import ToolContext
-from origin.views.utils.note_role import NOTE_TYPE_PERSONAL, readable_note_ids
+from origin.views.utils.note_role import (
+    NOTE_TYPE_PERSONAL,
+    readable_note_ids,
+    without_skill_bodies,
+)
 
 NOTE_MODELS = {1: PersonalNoteMaster, 2: TaskNoteMaster, 3: ChatNoteMaster}
 
@@ -46,6 +50,9 @@ def readable_note_rows(ctx: ToolContext, keys) -> dict[tuple[int, int], object]:
             if note_type == NOTE_TYPE_PERSONAL
             else set()
         )
+        # A skill body's owner reads it only while on the skill's team (MIP-2190): the batch rule
+        # answers that, the owner exception does not.
+        owned = without_skill_bodies(owned) if owned else owned
         allowed = owned | readable_note_ids(me, note_type, set(rows) - owned)
         out.update({(note_type, n): rows[n] for n in allowed})
     return out

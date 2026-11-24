@@ -12,6 +12,7 @@ from origin.serializers.note.note_serializers import *
 from origin.services.note_delete import DeleteRefused, delete_note
 from origin.views.common.base_auth_api_view import AuthenticatedAPIView
 from origin.views.utils.forged_fields import refuse_forged_fields, stored_values
+from origin.views.utils.html_note_refusal import html_note_put_refusal
 from origin.views.utils.mention_handler import extractMentionedUsers, resolve_mentions
 from origin.views.utils.mention_membership import (
     is_team_folder,
@@ -83,6 +84,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
                 folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsUpdated")
             .reverse()
@@ -98,6 +100,7 @@ class AllPersonalNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -139,6 +142,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
                 folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsUpdated")
             .reverse()
@@ -150,6 +154,7 @@ class AllPersonalNoteMetaView(AuthenticatedAPIView):
                 "title",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -321,6 +326,10 @@ class PersonalNoteMasterView(AuthenticatedAPIView):
         except PersonalNoteMaster.DoesNotExist:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # An HTML note's text is made from its page (MIP-2218): guide, write nothing.
+        if res := html_note_put_refusal(note):
+            return res
+
         # An autosave changes the title and the body, and the app sends nothing
         # else (moves have their own endpoints). The whole request used to reach
         # a partial `__all__` serializer, so a writer could also take the note's
@@ -476,6 +485,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 folderId=F("folder_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -489,6 +499,7 @@ class SinglePersonalNoteView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 

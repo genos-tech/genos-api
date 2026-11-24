@@ -888,6 +888,7 @@ class AccountDeletionView(AuthenticatedAPIView):
 
     def delete(self, request):
         from origin.services.account_deletion import (
+            BillingCancelFailed,
             OwnershipTransferRequired,
             delete_account,
         )
@@ -918,6 +919,15 @@ class AccountDeletionView(AuthenticatedAPIView):
                     ],
                 },
                 status=status.HTTP_409_CONFLICT,
+            )
+        except BillingCancelFailed:
+            # Nothing was erased: the subscription is cancelled first, and it could not be.
+            return Response(
+                {
+                    "error": "We could not cancel your subscription, so your account was not "
+                    "deleted. Please try again in a minute."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(summary, status=status.HTTP_200_OK)
 
