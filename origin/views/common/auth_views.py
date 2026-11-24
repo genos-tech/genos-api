@@ -28,7 +28,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import demo_v2
+from origin.services import demo_v2, signin_backoff
 from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
@@ -326,6 +326,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         body = body_object(request)
         email = body.get("email")
         password = body.get("password")
+        # Per-account backoff (MIP-2237), keyed on the typed address, so the answer is the
+        # same for an address with no account.
+        locked = signin_backoff.check(email)
+        if locked is not None:
+            return locked
         # The serializer below reads a number as its text (`5` signs in as "5"), so the
         # gate has to check that text too: `check_password` raises (a 500) for a number,
         # and skipping the gate for one would let it past `email_not_verified`. Anything
@@ -352,9 +357,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             response = super().post(request, *args, **kwargs)
         except AuthenticationFailed:
+            signin_backoff.note_failure(email, request)
             _record_signin_failed(request, email, reason="bad_credentials")
             raise
         data = response.data
+        signin_backoff.clear(email)
         record_security_event(
             SecurityAction.SIGNIN_SUCCEEDED,
             request=request,
@@ -1134,6 +1141,7 @@ class PasswordResetConfirmView(APIView):
             # (owner decision 2026-11-14), each leaving the row an explicit disconnect or
             # revoke leaves.
             ended = end_all_credentials(user, by="password_reset", request=request)
+            signin_backoff.clear(user.email)
             record_security_event(
                 SecurityAction.PASSWORD_RESET,
                 request=request,
