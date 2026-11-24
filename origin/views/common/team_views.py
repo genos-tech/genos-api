@@ -456,7 +456,9 @@ class TeamMembersView(AuthenticatedAPIView):
                 return
             if seed_guide_notes(request.user, team):
                 # Fresh notes are only useful once searchable.
-                kick_off_demo_reindex()
+                # Guide seeding only writes notes and a folder: do not walk the busy
+                # channels of a team that already exists.
+                kick_off_demo_reindex(team.team_id, entity_types=("note", "note_folder"))
         except Exception:  # noqa: BLE001 — joining matters more than the guide
             logger.exception("guide-note seeding failed for team=%s", team_id)
 

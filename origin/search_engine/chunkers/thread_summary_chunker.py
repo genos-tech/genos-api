@@ -30,9 +30,13 @@ from origin.search_engine.models import ThreadSummary
 
 
 def iter_thread_summary_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     qs = ThreadSummary.objects.all().order_by("id")
+    if team_id is not None:
+        qs = qs.filter(team_id=str(team_id))  # a CharField here
     dirty_chat_ids = dirty.acl_channel_ids if dirty else frozenset()
     if since is not None:
         window = Q(ts_updated_at__gte=since)
@@ -68,9 +72,7 @@ def iter_thread_summary_chunks(
         # any indexed copy. The orphan sweep in `search_engine.purge`
         # applies the same rule for rows this iterator never revisits.
         if not _thread_has_live_message(summary.thread_id):
-            yield EntityChunks(
-                entity_type="thread_summary", entity_id=entity_id, chunks=[]
-            )
+            yield EntityChunks(entity_type="thread_summary", entity_id=entity_id, chunks=[])
             continue
 
         chunk = Chunk(

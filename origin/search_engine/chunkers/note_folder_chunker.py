@@ -39,11 +39,15 @@ from origin.search_engine.note_context import (
 )
 
 
-def iter_note_folder_chunks(since: Optional[datetime] = None) -> Iterator[EntityChunks]:
+def iter_note_folder_chunks(
+    since: Optional[datetime] = None, team_id: Optional[str] = None
+) -> Iterator[EntityChunks]:
     # The hidden Genos-Skills folder is not a folder the owner browses (MIP-2121).
     qs = PersonalNoteFolder.objects.exclude(team__isnull=True).exclude(
         scope=PersonalNoteFolder.SCOPE_SKILL
     )
+    if team_id is not None:
+        qs = qs.filter(team_id=team_id)
     if since is not None:
         touched = PersonalNoteFolder.objects.filter(ts_updated_at__gte=since).values_list(
             "folder_id", flat=True

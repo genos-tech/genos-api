@@ -62,7 +62,9 @@ _TITLE_CHUNK_CONTENT_HEAD = 400
 
 
 def iter_task_chunks(
-    since: Optional[datetime] = None, dirty: Optional[DirtyScopes] = None
+    since: Optional[datetime] = None,
+    dirty: Optional[DirtyScopes] = None,
+    team_id: Optional[str] = None,
 ) -> Iterator[EntityChunks]:
     """Yield one EntityChunks per task.
 
@@ -71,6 +73,8 @@ def iter_task_chunks(
     in a project whose membership changed (`dirty`).
     """
     task_qs = TaskMaster.objects.filter(is_deleted=False, is_init_task=False)
+    if team_id is not None:
+        task_qs = task_qs.filter(team_id=team_id)
 
     if since is not None:
         dirty_task_ids = set(
