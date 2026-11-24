@@ -102,6 +102,7 @@ def flag(on: bool, **more):
             "AGENT_DISABLED_TOOLS": frozenset(),
             "AGENT_CHEATSHEET_FROM_REGISTRY": False,
             "AGENT_REJECT_REASON": False,
+            "AGENT_INAPP_HELP_TOOL": False,
             **more,
         },
     )
