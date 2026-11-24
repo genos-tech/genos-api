@@ -304,6 +304,14 @@ def personal_note_acl_user_ids(*, owner_id, note_id: int, folder_id=_UNSET) -> s
     callers (the chunker) pass it explicitly to skip the query; pass
     `folder_id=None` to state that the note is genuinely unfiled.
     """
+    # A Genos Skill's body answers to its skill (MIP-2190): the owner and the live co-editors on the
+    # team, nobody else; whatever other row it holds counts for nothing.
+    from origin.services.skills.service import skill_body_acl_user_ids  # noqa: PLC0415
+
+    skill_readers = skill_body_acl_user_ids(note_id)
+    if skill_readers is not None:
+        return skill_readers
+
     out: set[str] = set()
     if owner_id:
         out.add(str(owner_id))
