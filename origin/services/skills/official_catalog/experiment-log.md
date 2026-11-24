@@ -52,4 +52,4 @@ What this does not cover: conditions not tested, data not seen, things assumed.
 
 Keep what you measured apart from what you infer. A negative result is a result.
 
-Source: [Genos skills v0.5.3](https://github.com/genos-tech/genos-claude-plugin/blob/v0.5.3/plugins/genos-research/skills/experiment-log/SKILL.md), the runbook this skill was made from.
+Source: [Genos skills v0.6.0](https://github.com/genos-tech/genos-claude-plugin/blob/v0.6.0/plugins/genos-research/skills/experiment-log/SKILL.md), the runbook this skill was made from.

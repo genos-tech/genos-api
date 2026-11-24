@@ -311,7 +311,7 @@ class ReleaseUpdateTests(SyncBase):
         self.assertEqual(new.changelog, "Genos skills v9.9.9")
         self.assertIn("v9.9.9", new.body_markdown)
         self.assertIn(
-            "v0.5.3", skill.versions.get(version_no=1).body_markdown
+            "v0.6.0", skill.versions.get(version_no=1).body_markdown
         )  # the old text stays
         self.assertEqual(skill.versions.count(), 2)
         self.assertEqual(Skill.objects.count(), self.catalog_count)

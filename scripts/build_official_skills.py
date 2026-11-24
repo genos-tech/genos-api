@@ -2,7 +2,7 @@
 """Build the catalog of OFFICIAL Genos skills from the Skills v2 runbooks (MIP-2048).
 
     python scripts/build_official_skills.py --docs ~/git/genos-split/genos-docs --ref origin/main \\
-        --release v0.5.3 --tools-dump tools.json
+        --release v0.6.0 --tools-dump tools.json
 
 The runbooks (genos-docs `plugins/<pack>/skills/<name>/SKILL.md`, released as the Genos plugin) talk
 to Claude Code and to the connector's tool names. A skill the in-app agent runs must talk to the
@@ -68,6 +68,7 @@ EXCLUDED: dict[str, str] = {
     "ready-to-merge": "reads a pull request's checks with gh on the person's machine",
     "close-out": "reads merged pull requests and checks with gh on the person's machine",
     "catchup": "built on the connector-only briefing; the in-app built-in `/catch-me-up` already is the catch-up (MIP-2203)",
+    "html-page": "writes an HTML note with `save_html_note`, a connector-only tool the in-app agent does not have",
     "design-review": "replies to and resolves note comments, which the in-app agent cannot do",
 }
 
@@ -218,7 +219,8 @@ def translate_body(slug: str, body: str, refs: dict[str, str]) -> str:
     body = re.sub(r"[ \t]+\n", "\n", body)
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
     for name in appended:
-        text = refs[name].strip("\n")
+        # the shared checklists name connector tools too: the in-app names apply to them as well
+        text = _RENAME_RE.sub(lambda m: TOOL_RENAMES[m.group(1)], refs[name].strip("\n"))
         # the reference's own H1 becomes a section of this skill
         text = re.sub(r"\A# (.+)", r"## Reference: \1", text, count=1)
         body += "\n\n" + text
@@ -388,7 +390,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--docs", required=True, type=Path, help="a genos-docs checkout")
     ap.add_argument("--ref", default="origin/main", help="the git ref of genos-docs to read")
-    ap.add_argument("--release", required=True, help="the release tag of the public plugin, v0.5.3")
+    ap.add_argument("--release", required=True, help="the release tag of the public plugin, v0.6.0")
     ap.add_argument("--tools-dump", type=Path, help="JSON from scripts/dump_in_app_tools.py")
     args = ap.parse_args()
     tools = json.loads(args.tools_dump.read_text()) if args.tools_dump else None

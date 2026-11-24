@@ -148,6 +148,9 @@ def _job(entry: dict[str, Any]) -> dict[str, Any]:
         "shareable": JOBS[entry["job"]].shareable if entry["job"] in JOBS else False,
         "effortDefault": entry["effort_default"],
         "effortCost": _camel_cost(entry["effort_cost"]),
+        # A job that saves a note on each run (a dashboard): the plan's saves-per-hour sentence the
+        # form shows beside the schedule (MIP-2359). Absent for the others.
+        **({"savesNote": entry["saves_note"]} if entry.get("saves_note") else {}),
     }
 
 
