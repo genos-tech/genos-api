@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
+from origin.search_engine.agent.model_fence import escape_user_arguments
 from origin.search_engine.agent.tools.base import ToolContext, ToolError, ToolForbidden
 from origin.services import html_note_pages, html_notes
 from origin.services.throttles import RecordedThrottleMixin, WindowRateThrottle
@@ -271,7 +272,10 @@ class HtmlNoteImportView(AuthenticatedAPIView):
         args.update({key: data[key] for key in _IMPORT_ARGS if data.get(key) not in (None, "")})
         ctx = ToolContext(team_id=str(team), user_id=str(request.user.id))
         try:
-            out = SAVE_HTML_NOTE.run(args, ctx)
+            # `run` is wrapped by `with_unfenced_arguments`, which un-escapes a fence tag the in-app
+            # MODEL copied back. An uploaded file is a person's text, nobody's copy of a fence:
+            # escape it first so the wrapper hands the tool the exact bytes (MIP-2301, as MIP-2300).
+            out = SAVE_HTML_NOTE.run(escape_user_arguments(args), ctx)
         except ToolForbidden as exc:
             return Response({"error": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except ToolError as exc:
