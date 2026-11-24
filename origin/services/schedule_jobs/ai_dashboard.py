@@ -18,6 +18,8 @@ other with a link to the note.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable
 from datetime import date, timedelta
 from typing import Any
@@ -38,6 +40,7 @@ from origin.search_engine.agent.tools.project_gone import live_tasks_q
 from origin.search_engine.agent.tools.task_closes import CLOSE_Q, CREATED_Q, THROUGHPUT_Q
 from origin.services.dashboard_page import Dashboard, DashPoint
 from origin.services.milestone_rollup import milestone_work_q
+from origin.services.report_ai.llm import DASHBOARD_PURPOSE
 from origin.services.schedule_jobs import Job, Report, register_job
 from origin.services.schedule_jobs.report_kit import (
     AI_SUMMARY_PARAM,
@@ -54,6 +57,10 @@ KINDS = ("milestone", "project", "mine")
 PERIOD_DAYS = {"week": 7, "month": 30, "quarter": 91, "year": 365}
 MAX_FOCUS_CHARS = 200
 MAX_LIST = 10
+# A member keeps at most this many dashboard schedules (MIP-2359). Each run saves a note, and an AI
+# one spends credits; a schedule runs at most once a day (the recurrence has nothing finer).
+MAX_DASHBOARD_SCHEDULES = 10
+_FINGERPRINT_KEYS = ("title", "kind", "stats", "breakdown", "series", "lists", "focus", "note")
 # A week or a month is read per day, a quarter or a year per week.
 _DAILY = ("week", "month")
 
@@ -266,9 +273,28 @@ def _report(ctx: ToolContext, params: dict[str, Any]) -> Report:
     }
 
 
+def data_fingerprint(dashboard: Dashboard) -> str:
+    """A hash of what the page SHOWS (numbers, series, lists, the focus), not of the date line.
+
+    The summary is cached on it (MIP-2359): a dashboard whose data did not move since the last run
+    reuses the last summary and makes no model call. The title is in it (another milestone is
+    another page); the subtitle is not (it holds today's date)."""
+    shown = {k: dashboard.get(k) for k in _FINGERPRINT_KEYS}
+    raw = json.dumps(shown, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     """The report and the page's data, with a written summary when the member turned AI on."""
-    report = add_narrative(ctx, params, _report(ctx, params), effort_default=SUMMARY_EFFORT_DEFAULT)
+    report = _report(ctx, params)
+    report = add_narrative(
+        ctx,
+        params,
+        report,
+        effort_default=SUMMARY_EFFORT_DEFAULT,
+        purpose=DASHBOARD_PURPOSE,
+        fingerprint=data_fingerprint(report["dashboard"]) if ai_sentences_on(params) else "",
+    )
     if report.get("narrative"):
         report["dashboard"]["narrative"] = report["narrative"]
     return report
@@ -310,6 +336,20 @@ def _check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) ->
             raise ScheduleError(f"A {kind} dashboard needs `{key}`.")
         if kind != other_kind and params.get(key) is not None:
             raise ScheduleError(f"`{key}` is only for a {other_kind} dashboard.")
+    from origin.models.common.schedule_models import MemberSchedule  # noqa: PLC0415
+
+    # Counted inside the member's row lock the caller holds, so two saves at once cannot both pass.
+    others = MemberSchedule.objects.filter(user_id=ctx.user_id, job="ai_dashboard")
+    if schedule_id is not None:
+        # An edit of a dashboard the member already has is never refused for the count.
+        if others.filter(pk=schedule_id).exists():
+            return {k: v for k, v in params.items() if v not in (None, "")}
+        others = others.exclude(pk=schedule_id)
+    if others.count() >= MAX_DASHBOARD_SCHEDULES:
+        raise ScheduleError(
+            f"You can keep {MAX_DASHBOARD_SCHEDULES} dashboard schedules, and you have that many. "
+            "Delete one you no longer need first."
+        )
     return {k: v for k, v in params.items() if v not in (None, "")}
 
 
