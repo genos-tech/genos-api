@@ -84,7 +84,7 @@ class DeclarationPins(SimpleTestCase):
         from origin.views.public.mcp.html_notes.guide import GENERATION_RULES
 
         text = tools.describe(tools.BY_NAME["save_html_note"])["description"]
-        self.assertEqual(len(GENERATION_RULES), 9)
+        self.assertEqual(len(GENERATION_RULES), 10)
         for number, rule in enumerate(GENERATION_RULES, start=1):
             self.assertIn(f"{number}. {rule}", text)
 
