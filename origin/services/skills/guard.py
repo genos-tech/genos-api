@@ -112,6 +112,13 @@ def strip_html_comments(text: str) -> str:
     return "".join(out)
 
 
+def strip_hidden(value: str) -> str:
+    """`value` without the characters a reader of the page cannot see (the first step of
+    `normalise`, alone). For a title, description or argument hint at write time (MIP-2204): no
+    escaping, so the person's own `<system>` is stored as typed, and `normalise` still runs on read."""
+    return _HIDDEN_RE.sub("", value or "")
+
+
 def normalise(markdown: str) -> str:
     """The text as the model will read it. (Not idempotent for the workspace and web fence tags: their
     escape is the reversible one of `agent/fence.py`, which escapes an escape.)"""

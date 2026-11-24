@@ -12,6 +12,7 @@ import re
 import unicodedata
 from typing import Any
 
+from origin.services.skills.guard import strip_hidden
 from origin.services.skills.official_slugs import OFFICIAL_SLUGS
 
 SLUG_MIN = 2
@@ -75,8 +76,14 @@ def slugify(title: str) -> str:
     return slug if len(slug) >= SLUG_MIN else "skill"
 
 
+def _one_line(value: Any) -> str:
+    """One line of words: the characters nobody can see removed (MIP-2204: as the body gets on a
+    run), then the whitespace folded. Used by the title, the description and the argument hint."""
+    return " ".join(strip_hidden(str(value or "")).split())
+
+
 def clean_title(value: Any) -> str:
-    title = " ".join(str(value or "").split())
+    title = _one_line(value)
     if not title:
         raise SkillTextError("A skill needs a title.")
     if len(title) > TITLE_MAX:
@@ -85,14 +92,14 @@ def clean_title(value: Any) -> str:
 
 
 def clean_description(value: Any) -> str:
-    text = " ".join(str(value or "").split())
+    text = _one_line(value)
     if len(text) > DESCRIPTION_MAX:
         raise SkillTextError(f"The description may be at most {DESCRIPTION_MAX} characters.")
     return text
 
 
 def clean_argument_hint(value: Any) -> str:
-    text = " ".join(str(value or "").split())
+    text = _one_line(value)
     if len(text) > ARGUMENT_HINT_MAX:
         raise SkillTextError(f"The argument hint may be at most {ARGUMENT_HINT_MAX} characters.")
     return text

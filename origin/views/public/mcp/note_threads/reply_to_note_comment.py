@@ -18,6 +18,7 @@ from origin.views.public.mcp.note_threads._common import (
     clean_thread_id,
     reduced_via,
     refusal,
+    refuse_html_comment,
     refuse_if_archived,
 )
 
@@ -44,6 +45,7 @@ def _run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     text = _text(args.get("text"))
     ref = load_readable_note(args, ctx)
     refuse_if_archived(ref)
+    refuse_html_comment(ref)
     try:
         done = collab_push.reply_note_thread(
             ref.family,

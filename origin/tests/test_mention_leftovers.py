@@ -435,7 +435,8 @@ class FailClosedAndCost(PrivateNotes):
                     minimal_card_activity_ids(many)
 
                 self.assertEqual(len(small), len(large))
-                self.assertLessEqual(len(large), 7)
+                # Seven, plus the one question that splits the skill bodies off (MIP-2190).
+                self.assertLessEqual(len(large), 8)
 
     def test_many_notes_cost_the_same_as_one(self):
         """The digest asks about one person's mentions of many notes at once."""
