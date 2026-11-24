@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+INAPP_DIR = ROOT / "scripts" / "official_inapp"
 CATALOG_DIR = ROOT / "origin" / "services" / "skills" / "official_catalog"
 SLUGS_FILE = ROOT / "origin" / "services" / "skills" / "official_slugs.py"
 
@@ -66,13 +67,14 @@ EXCLUDED: dict[str, str] = {
     "open-pr": "reads a pull request's checks with gh on the person's machine",
     "ready-to-merge": "reads a pull request's checks with gh on the person's machine",
     "close-out": "reads merged pull requests and checks with gh on the person's machine",
-    "catchup": "built on the connector-only briefing (the in-app built-in `/catch-me-up` covers it)",
-    "wrapup": "built on the connector-only briefing",
-    "weekly-review": "built on the connector-only briefing",
-    "weekly-priorities": "built on the connector-only briefing",
-    "study-week": "built on the connector-only briefing",
+    "catchup": "built on the connector-only briefing; the in-app built-in `/catch-me-up` already is the catch-up (MIP-2203)",
     "design-review": "replies to and resolves note comments, which the in-app agent cannot do",
 }
+
+# Runbooks built on the connector-only briefing cannot be translated by rules. Their in-app versions
+# are written by hand in `scripts/official_inapp/<slug>.md` (front matter: name, description, pack
+# folder of genos-docs) from the in-app reads, and replace the runbook's text. The runbook must still
+# exist in genos-docs: its release link closes the body, and a new release re-checks it (MIP-2203).
 
 # connector name -> in-app name (`origin/views/public/mcp/tools.py` `_RENAMES`, inverted)
 TOOL_RENAMES = {
@@ -171,7 +173,7 @@ def parse_runbook(text: str) -> tuple[dict[str, str], str]:
     meta: dict[str, str] = {}
     for line in m.group(1).split("\n"):
         k, _, v = line.partition(":")
-        if k.strip() in ("name", "description"):
+        if k.strip() in ("name", "description", "pack"):
             meta[k.strip()] = v.strip()
     return meta, text[m.end() :].strip("\n")
 
@@ -235,6 +237,7 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
     excluded: dict[str, str] = {}
     errors: list[str] = []
     seen_excluded: set[str] = set()
+    used_handwritten: set[str] = set()
     for path in sorted(listing):
         m = re.fullmatch(r"plugins/([^/]+)/skills/([^/]+)/SKILL\.md", path)
         if not m or m.group(1) not in PACKS:
@@ -248,6 +251,12 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
             excluded[name] = EXCLUDED[name]
             seen_excluded.add(name)
             continue
+        handwritten = INAPP_DIR / f"{name}.md"
+        if handwritten.exists():
+            meta, body = parse_runbook(handwritten.read_text(encoding="utf-8"))
+            if meta.get("name") != name or meta.get("pack") != pack:
+                raise BuildError(f"{handwritten}: name or pack differs from the runbook")
+            used_handwritten.add(name)
         refs = {
             Path(p).stem: _read(docs, ref, p)
             for p in listing
@@ -256,7 +265,7 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
         title_m = re.match(r"# (.+)", body)
         if not title_m:
             raise BuildError(f"{path}: no H1 title")
-        out = translate_body(name, body, refs)
+        out = body.strip("\n") if handwritten.exists() else translate_body(name, body, refs)
         problems = lint(name, out, tools)
         out += "\n\n" + source_line(release, pack_dir, name)
         if len(out) > BODY_MAX:
@@ -278,6 +287,11 @@ def build(docs: Path, ref: str, release: str, tools: dict | None) -> tuple[dict,
     missing = set(EXCLUDED) - seen_excluded
     if missing:
         raise BuildError(f"excluded runbooks not found in {ref}: {sorted(missing)}")
+    stray = {p.stem for p in INAPP_DIR.glob("*.md")} - used_handwritten
+    if stray:
+        raise BuildError(
+            f"hand-written skills with no runbook (or an excluded one): {sorted(stray)}"
+        )
     if errors:
         raise BuildError("\n".join(errors))
     slugs = [s["slug"] for s in skills]
