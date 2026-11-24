@@ -344,6 +344,23 @@ REGISTRY = {
     "origin.views.common.auth_views.CustomTokenObtainPairView": public(
         "sign-in; SignInBurstThrottle + SignInSustainedThrottle per IP"
     ),
+    "origin.views.common.mfa_views.SignInMfaView": public(
+        "second step of sign-in: a signed five-minute pending token plus a code; per-account lock "
+        "after five wrong codes, MfaSignIn{Burst,Sustained}Throttle per IP"
+    ),
+    "origin.views.common.mfa_views.MfaStatusView": self_only("the caller's own two-factor status"),
+    "origin.views.common.mfa_views.MfaSetupView": self_only(
+        "the caller's own two-factor setup; needs the password"
+    ),
+    "origin.views.common.mfa_views.MfaEnableView": self_only(
+        "confirms the caller's own two-factor setup with a code"
+    ),
+    "origin.views.common.mfa_views.MfaDisableView": self_only(
+        "turns off the caller's own two-factor; needs the password"
+    ),
+    "origin.views.common.mfa_views.MfaRecoveryCodesView": self_only(
+        "replaces the caller's own recovery codes; needs the password"
+    ),
     "origin.views.common.auth_views.DemoSignInView": public(
         "creates a throwaway demo tenant; DemoSignInThrottle per IP"
     ),

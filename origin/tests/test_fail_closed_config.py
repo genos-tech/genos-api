@@ -594,6 +594,9 @@ _PUBLIC_DRF = {
     "api/v2/user/signup/",
     "api/v2/user/signin/",
     "api/v2/user/signin/refresh/",
+    # MIP-2239: the second step of two-factor sign-in. A signed five-minute pending token plus a
+    # code; a per-account lock after five wrong codes and a per-IP throttle.
+    "api/v2/user/signin/mfa/",
     "api/v2/user/demo/",
     "api/v2/user/signout/",
     "api/v2/user/password-reset/request/",
