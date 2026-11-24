@@ -1,0 +1,662 @@
+[
+  {
+    "name": "get_task",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "comment_on_task_body",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "reply_to_task_body_comment",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "resolve_task_body_comment",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_my_tasks",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_tasks",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_projects",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_milestones",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_milestone_summary",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_sprints",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_sprint_summary",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_task_blockers",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_task_history",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "find_task_by_delivery",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "search_workspace",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_note",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_my_chats",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_chat_thread",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_my_mentions",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_channel_members",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_current_user",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_team_members",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_project_members",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_project_tags",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_task_dependencies",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_note_folders",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_note_access",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_note_history",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_uncompleted_todos",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_today_todos",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_calendar_events",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_calendars",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_calendar_event",
+    "write": false,
+    "destructive": false,
+    "switch": "AGENT_PARITY_TOOLS"
+  },
+  {
+    "name": "get_my_blockers",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_my_inbox",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_my_throughput",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_workload_distribution",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_top_task_closers",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_task_throughput_stats",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_stale_tasks",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_progress_history",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_team_task_summary",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_project_activity_ranking",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_milestone_assignee_counts",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_project_summary",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_my_task_summary",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_pr",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_pr_reviews",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_pr_comments",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_pr_files",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_pr_commits",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_task",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "add_comment",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_comment",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_comment",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "delete_task_attachment",
+    "write": true,
+    "destructive": true,
+    "switch": "AGENT_PARITY_TOOLS"
+  },
+  {
+    "name": "restore_task_body",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "add_task_delivery",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "remove_task_delivery",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_task_dependencies",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "create_task",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "assign_task",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_tasks_bulk",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "create_task_plan",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "create_note",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "save_html_note",
+    "write": true,
+    "destructive": false,
+    "switch": "HTML_NOTES"
+  },
+  {
+    "name": "update_note",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "create_todo_item",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_todo_item",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_todo_item",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "create_calendar_event",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_calendar_event",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_calendar_event",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "manage_milestone",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_milestone",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "manage_sprint",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_sprint",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "manage_project",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "manage_project_members",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "add_project_tag",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "manage_project_labels",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "approve_join_request",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "decline_join_request",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "manage_note_folder",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "favorite_note",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "comment_on_note",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "reply_to_note_comment",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "edit_note_block",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "resolve_note_comment",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_note",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "delete_note_folder",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "manage_note_sharing",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "restore_note_version",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_my_briefing",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_item_line",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_timeline",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_my_unread",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_my_importance",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "set_item_importance",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "tune_my_importance",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "get_my_memory",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "forget_my_memory",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "list_my_schedules",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "create_my_schedule",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "update_my_schedule",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "delete_my_schedule",
+    "write": true,
+    "destructive": true,
+    "switch": ""
+  },
+  {
+    "name": "run_my_schedule",
+    "write": true,
+    "destructive": false,
+    "switch": ""
+  },
+  {
+    "name": "list_my_skills",
+    "write": false,
+    "destructive": false,
+    "switch": "GENOS_SKILLS"
+  },
+  {
+    "name": "get_skill",
+    "write": false,
+    "destructive": false,
+    "switch": "GENOS_SKILLS"
+  },
+  {
+    "name": "run_skill",
+    "write": false,
+    "destructive": false,
+    "switch": "GENOS_SKILLS"
+  }
+]
