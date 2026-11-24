@@ -531,6 +531,18 @@ class LlmModelPreferenceView(AuthenticatedAPIView):
         )
 
     def patch(self, request):
+        if request.user.is_demo:
+            # A demo visitor runs on the default model whatever they save (MIP-2341: the ask
+            # resolves the pin server-side and reads none of these), so nothing is stored and the
+            # answer says what is stored: nothing.
+            return Response(
+                {
+                    "provider": request.user.preferred_llm_provider or "",
+                    "model": request.user.preferred_llm_model or "",
+                    "effort": request.user.preferred_llm_effort or "",
+                },
+                status=status.HTTP_200_OK,
+            )
         provider = request.data.get("provider", "")
         # `model` and `effort` are both OPTIONAL and independent: the
         # legacy FE PATCHes (provider, model), the effort FE PATCHes

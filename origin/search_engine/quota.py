@@ -381,13 +381,23 @@ def get_max_effort(user_id: str) -> str:
 
     Enforcement CLAMPS a saved preference down to this — it never
     rejects the request (the preference outlives the subscription).
-    Permissive default: 'high'.
+    Permissive default: 'high'. A demo visitor is held to the default effort
+    (`DEMO_AI_MAX_EFFORT`, MIP-2341) whatever their team's plan says, so every ask, skill
+    and report that clamps to this ceiling runs on the default model.
     """
+    from origin.services.demo_ai_limits import DEMO_AI_MAX_EFFORT, is_demo_user  # noqa: PLC0415
+
+    if is_demo_user(user_id):
+        return DEMO_AI_MAX_EFFORT
     return _enum_capability(user_id, "max_effort", _EFFORT_LEVELS, "high")
 
 
 def get_auto_effort(user_id: str) -> bool:
-    """Whether the tier may use the 'auto' (adaptive) effort router."""
+    """Whether the tier may use the 'auto' (adaptive) effort router. Never for a demo visitor."""
+    from origin.services.demo_ai_limits import is_demo_user  # noqa: PLC0415
+
+    if is_demo_user(user_id):
+        return False
     return bool(_capability(user_id, "auto_effort", True))
 
 
