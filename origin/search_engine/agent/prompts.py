@@ -622,6 +622,41 @@ def _with_calendar_event_citation(prompt: str) -> str:
     )
 
 
+# MIP-2328: with `AGENT_INAPP_HELP_TOOL` on, "how do I ..." about Genos itself goes to `get_genos_help`
+# (the manual) and not to `search_web`; outside and best-practice questions keep `search_web`. Two lines:
+# the cheat-sheet entry and process step 2.
+_HELP_CHEAT_SHEET = (
+    '  External / "how do I …" / best-practice questions:\n'
+    "  - search_web (Tavily). Combine with search_knowledge_base when the\n"
+)
+_HELP_CHEAT_SHEET_WITH_HELP = (
+    '  "how do I … in Genos" / where a setting is:\n'
+    "  - get_genos_help (Genos's own manual; not the web).\n\n"
+    "  External / best-practice questions:\n"
+    "  - search_web (Tavily). Combine with search_knowledge_base when the\n"
+)
+_HELP_STEP = '  2. For "how do I …" or best-practice questions, use search_web.\n'
+_HELP_STEP_WITH_HELP = (
+    '  2. For "how do I …" about Genos itself, use get_genos_help. For outside or\n'
+    "     best-practice questions, use search_web.\n"
+)
+
+
+def _with_help_routing(prompt: str) -> str:
+    prompt = _splice(
+        prompt,
+        _HELP_CHEAT_SHEET,
+        _HELP_CHEAT_SHEET_WITH_HELP,
+        what="the how-do-I cheat-sheet entry (_HELP_CHEAT_SHEET, MIP-2328)",
+    )
+    return _splice(
+        prompt,
+        _HELP_STEP,
+        _HELP_STEP_WITH_HELP,
+        what="process step 2 (_HELP_STEP, MIP-2328)",
+    )
+
+
 def agent_system_prompt() -> str:
     """The active system prompt — flag-gated, model-visible.
 
@@ -642,6 +677,8 @@ def agent_system_prompt() -> str:
         prompt = _with_reject_reason_rule(prompt)
     if settings.SEARCH_ENGINE.get("AGENT_PARITY_TOOLS", False):
         prompt = _with_calendar_event_citation(prompt)
+    if settings.SEARCH_ENGINE.get("AGENT_INAPP_HELP_TOOL", False):
+        prompt = _with_help_routing(prompt)
     return prompt
 
 

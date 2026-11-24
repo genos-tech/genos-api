@@ -1,0 +1,125 @@
+# MIP-2328: which tool does the in-app agent reach for FIRST on "how do I ... in Genos" (flag
+# AGENT_INAPP_HELP_TOOL, arm t2328)? One cheap model call per case (kind: routing); no tool runs.
+# WRITTEN, NOT RUN (Ken 2026-11-24, user-guide milestone MIP-2304: no paid eval; MIP-2329 runs it).
+# Positives `requires_arm: t2328` (they cannot pass without the tool). Negatives run on arm0 too, so the
+# baseline shows whether the new tool steals a question the old tools should keep: outside advice stays on
+# search_web, the member's own data stays on search_knowledge_base / the structured reads.
+
+- id: t2328-en-two-step
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Where do I turn on two-step verification in Genos?"
+  note: "Positive: a setting in Genos itself. Today this goes to the web."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-ja-two-step
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Genos で二段階認証はどこでオンにできますか?"
+  note: "Positive: a setting in Genos itself. Today this goes to the web."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-en-invite
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "How do I invite a teammate to my Genos workspace?"
+  note: "Positive: a how-to about the product."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-ja-invite
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Genos のワークスペースにチームメイトを招待するにはどうすればいいですか?"
+  note: "Positive: a how-to about the product."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-en-schedule
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "How does a Genos schedule work, and how do I make one?"
+  note: "Positive: how a feature works."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-ja-schedule
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Genos のスケジュールはどういう仕組みで、どうやって作りますか?"
+  note: "Positive: how a feature works."
+  ok: [get_genos_help]
+  requires_arm: t2328
+- id: t2328-en-web-practice
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "What are best practices for running a sprint retrospective?"
+  note: "Negative: outside advice, not about Genos. Stays on search_web."
+  ok: [search_web]
+- id: t2328-ja-web-practice
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "スプリントのふりかえりを進めるベストプラクティスを教えて"
+  note: "Negative: outside advice, not about Genos. Stays on search_web."
+  ok: [search_web]
+- id: t2328-en-web-latest
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "How do I set up SSO with Okta in general?"
+  note: "Negative: an external product. Stays on search_web."
+  ok: [search_web]
+- id: t2328-ja-web-latest
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "一般的に Okta で SSO を設定する方法は?"
+  note: "Negative: an external product. Stays on search_web."
+  ok: [search_web]
+- id: t2328-en-find-task
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Find the task about responsive navigation."
+  note: "Negative: the member's own data."
+  ok: [search_knowledge_base, list_tasks]
+- id: t2328-ja-find-task
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "レスポンシブナビゲーションに関するタスクを探して"
+  note: "Negative: the member's own data."
+  ok: [search_knowledge_base, list_tasks]
+- id: t2328-en-show-task
+  kind: routing
+  lang: en
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "Show me WRD-5."
+  note: "Negative: one task by id."
+  ok: [fetch_task]
+- id: t2328-ja-show-task
+  kind: routing
+  lang: ja
+  tags: [eval-group, t2328]
+  fixture: false
+  query: "WRD-5 を見せて"
+  note: "Negative: one task by id."
+  ok: [fetch_task]

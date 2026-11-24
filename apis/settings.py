@@ -1995,6 +1995,15 @@ SEARCH_ENGINE["AGENT_INAPP_TIMELINE_TOOL"] = (
 # is chosen after `fetch_note`; the ambiguous and not-found answers are relayed, not papered over; no case is taken
 # from `add_comment` (a TASK comment) or `update_note` that they should keep (`agent_eval_routing` with this env
 # var set).
+# MIP-2328 (model-visible, dark-shipped OFF): `get_genos_help` for the in-app agent, the manual lookup MCP publishes
+# (MIP-2327), and the two prompt lines that send "how do I ... in Genos" to it instead of `search_web` (outside and
+# best-practice questions keep `search_web`). OFF = the tool is neither declared nor runnable and the prompt and the
+# declarations are byte-identical to before. NOT in any arm file and NOT run: the paid eval and the flip are MIP-2329
+# (the cases are written in `evals/group/t2328-help.yaml`).
+SEARCH_ENGINE["AGENT_INAPP_HELP_TOOL"] = (
+    os.environ.get("AGENT_INAPP_HELP_TOOL", "false").lower() == "true"
+)
+
 SEARCH_ENGINE["AGENT_INAPP_NOTE_COMMENT_TOOL"] = (
     os.environ.get("AGENT_INAPP_NOTE_COMMENT_TOOL", "false").lower() == "true"
 )

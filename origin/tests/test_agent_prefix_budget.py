@@ -115,7 +115,11 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # house templates) is said once in the system prompt (REFS, +558 characters) and the in-app declarations point at it
 # (`references._WORDING`; MCP's `tools/list` keeps its full text), and the five largest tools lose the sentences their own
 # properties or the prompt already say. The constant goes DOWN to the next 500 over the measurement.# Merge with main (2026-11-22, genos-api PR 1089 edit_note_block / manage_project wording and the other merges): production re-measured 140,451 (+962 over the 139,489 above, all of it main's). The constants stay: 141,000 (549 left) and ALL_ON 142,500 (142,142 with a Long member's block, 358 left).
-BUDGET_CHARS = 141_000
+# MIP-2328 (`AGENT_INAPP_HELP_TOOL`, default OFF): `get_genos_help` for the in-app agent, +587 characters (444 in the declaration,
+# 143 in the two "how do I" prompt lines). Production with the flag off is 140,920 (80 left); with it on 141,507. The constant goes
+# up to 142,000 (493 left with the flag on). The routing numbers are NOT measured here (no paid eval, Ken 2026-11-24): MIP-2329
+# measures and flips; `ALL_ON_BUDGET_CHARS` is untouched because the flag is in no arm file.
+BUDGET_CHARS = 142_000
 
 
 def _declared_chars() -> int:
