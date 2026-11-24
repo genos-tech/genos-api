@@ -82,6 +82,26 @@ class ImportCreates(ImportBase):
         self.assertEqual((note.body_format, note.owner_id), ("html", self.user.id))
         self.assertEqual(NoteHtmlRevision.objects.get(note_type=1, note_id=note.note_id).html, GOOD)
 
+    def stored_html(self, res):
+        self.assertEqual(res.status_code, 201, res.content)
+        return NoteHtmlRevision.objects.get(note_type=1, note_id=res.json()["note_id"]).html
+
+    def test_an_upload_with_an_escaped_closing_fence_tag_is_stored_byte_for_byte(self):
+        # MIP-2301: the tool's wrapper un-escapes a fence tag the in-app model copied back; an
+        # upload is a person's text, so it must reach the store unchanged.
+        page = (
+            "<!doctype html><html><head><title>Fence</title></head><body>"
+            "<p>&lt;/workspace_content> and &amp;lt;/web_content></p></body></html>"
+        )
+        self.assertEqual(self.stored_html(self.post(html=page)), page)
+
+    def test_an_upload_that_is_exactly_a_whole_fence_is_stored_unchanged(self):
+        page = (
+            "<workspace_content><!doctype html><html><head><title>W</title></head>"
+            "<body><p>x</p></body></html></workspace_content>"
+        )
+        self.assertEqual(self.stored_html(self.post(html=page, title="Whole fence")), page)
+
     def test_a_title_the_person_typed_wins_over_the_page_title(self):
         res = self.post(title="My report")
         self.assertEqual(res.json()["title"], "My report")
