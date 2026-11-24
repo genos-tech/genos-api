@@ -127,6 +127,8 @@ origin.ApiKey:
   created_by: none
   ts_created_at: none
   ts_updated_at: none
+  suspended_at: none
+  suspended_reason: none
 origin.ChangeVersion:
   id: none
   key: none
@@ -301,6 +303,11 @@ origin.EmailSuppression:
   address_hash: pii
   reason: none
   ts_created_at: none
+origin.ErasureEvent:
+  id: none
+  object_type: none
+  object_id: none
+  erased_at: none
 origin.ExternalGrant:
   id: none
   connection: none
@@ -387,6 +394,8 @@ origin.McpConnection:
   revoked_at: none
   ts_created_at: none
   ts_updated_at: none
+  suspended_at: none
+  suspended_reason: none
 origin.MemberBriefingState:
   state_id: none
   user: none
@@ -922,6 +931,8 @@ origin.Skill:
   hub_tags: none
   search_vector: none
   last_published_at: none
+  source_harmful_at: none
+  takedown_harmful: none
 origin.SkillGrant:
   id: none
   skill: none
@@ -949,6 +960,13 @@ origin.SkillReport:
   resolved_by: none
   resolved_at: none
   created_at: none
+origin.SkillRunConfirmation:
+  id: none
+  skill: none
+  user: none
+  version_no: none
+  kind: none
+  confirmed_at: none
 origin.SkillRunLog:
   id: none
   skill: none
