@@ -48,6 +48,19 @@ CASES = {
         [NASTY, LINK],
     ),
     "ai_cost_report": ({"window": NASTY, "body": NASTY}, [NASTY]),
+    "credential_created": (
+        {
+            "lang": "en",
+            "dir": "ltr",
+            "heading": NASTY,
+            "greeting": NASTY,
+            "body": NASTY,
+            "ok": NASTY,
+            "undo": NASTY,
+            "sign": NASTY,
+        },
+        [NASTY],
+    ),
     "notification_batch": (_batch_ctx(), [NASTY, LINK]),
     "ja/notification_batch": (_batch_ctx(), [NASTY, LINK]),
     "ops_alert": (
