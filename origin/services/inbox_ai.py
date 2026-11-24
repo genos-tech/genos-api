@@ -90,6 +90,7 @@ PRODUCERS: dict[str, dict[str, Any]] = {
     "origin/services/message_reminders.py": {"types": (9,), "ai": False},
     "origin/services/first_month_trial_notices.py": {"types": (0,), "ai": False},
     "origin/services/pr_needs_you.py": {"types": (0,), "ai": False},  # a GitHub webhook, MIP-2054
+    "origin/services/skills/notices.py": {"types": (0,), "ai": False},  # a skill held, MIP-2192
 }
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
