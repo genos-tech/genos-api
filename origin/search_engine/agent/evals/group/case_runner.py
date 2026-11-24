@@ -188,7 +188,7 @@ class DefaultCaseRunner:
     # -- behaviour -------------------------------------------------------------- #
 
     def _behaviour(self, case: GroupCase, arm_name: str) -> CaseResult:
-        from origin.search_engine.agent.evals import runner  # noqa: PLC0415
+        from origin.search_engine.agent.evals import runner, web_injection  # noqa: PLC0415
 
         raw = prepare_case(case)
         expect = raw.get("expect")
@@ -237,6 +237,13 @@ class DefaultCaseRunner:
         if native.infra_error:
             result["error"] = "infra: LLM-provider failure after retry"
             result["passed"] = False
+        elif "web_results" in (raw.get("setup") or {}):
+            # A planted page the model never received measured nothing: say so, do not call it a FAIL
+            # of the model (MIP-2303). `error` is what the report lists apart from the verdicts.
+            unreached = web_injection.web_stub_not_reached(native.tool_results)
+            if unreached:
+                result["error"] = f"not measured: {unreached}"
+                result["passed"] = False
         if judged:
             result["judge"] = judged
         return result

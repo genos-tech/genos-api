@@ -118,7 +118,7 @@ from origin.search_engine.agent.prompts import AGENT_SYSTEM_PROMPT, agent_system
 # MIP-2328 (`AGENT_INAPP_HELP_TOOL`, default OFF): `get_genos_help` for the in-app agent, +587 characters (444 in the declaration,
 # 143 in the two "how do I" prompt lines). Production with the flag off is 140,920 (80 left); with it on 141,507. The constant goes
 # up to 142,000 (493 left with the flag on). The routing numbers are NOT measured here (no paid eval, Ken 2026-11-24): MIP-2329
-# measures and flips; `ALL_ON_BUDGET_CHARS` is untouched because the flag is in no arm file.
+# measures and flips; the arm `t2328` (MIP-2329) puts the flag into the all-on union: `ALL_ON_BUDGET_CHARS` goes to 143,500.
 BUDGET_CHARS = 142_000
 
 

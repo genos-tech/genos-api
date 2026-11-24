@@ -46,8 +46,9 @@ def flag(on: bool, **more):
 
 
 class FlagOff(SimpleTestCase):
-    def test_the_flag_defaults_to_off(self):
-        self.assertIs(production.SEARCH_ENGINE[FLAG], False)
+    def test_the_flag_defaults_to_on_since_mip_2329(self):
+        # on by default (MIP-2329, no paid eval); `AGENT_INAPP_HELP_TOOL=false` is the rollback
+        self.assertIs(production.SEARCH_ENGINE[FLAG], True)
 
     def test_not_declared_not_runnable_prompt_unchanged(self):
         with flag(False):

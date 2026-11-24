@@ -258,9 +258,11 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # When True, the GitHub PR-merge webhook will auto-close tasks
     # assigned to this user that this PR head branch references via the
     # task's display ID (e.g. branch `feature/GEN-42-foo` closes task
-    # `GEN-42` for its assignee when the PR merges). OFF by default —
-    # opt-in per user from Settings → Tasks.
-    auto_close_on_pr_merge = models.BooleanField(default=False)
+    # `GEN-42` for its assignee when the PR merges). ON by default for NEW
+    # accounts since MIP-2340 (connecting GitHub is already the opt-in; the
+    # close waits for every linked PR). Existing rows keep their stored value:
+    # changing a Django default never rewrites rows. Toggle: Settings → Tasks.
+    auto_close_on_pr_merge = models.BooleanField(default=True)
 
     # When True, tasks assigned to this user with a `due_date` are
     # auto-synced to their Google Calendar as all-day events. Toggled
@@ -379,7 +381,9 @@ class CustomUser(blind_index.BlindIndexMixin, AbstractBaseUser, PermissionsMixin
     # (shared_answers.reshare_team_lane_for_user, bounded); runs beyond that
     # bound come back on the next full reindex, since an incremental pass only
     # sees recent runs.
-    share_answers_with_team = models.BooleanField(default=True)
+    # OFF by default for NEW accounts since MIP-2340 (the asker's intent is
+    # visible to teammates, so sharing is opt-in); existing rows keep their value.
+    share_answers_with_team = models.BooleanField(default=False)
 
     # Genos notes WHICH items (task, note, project, ...) the member's connected AI apps
     # open or change over MCP (`MemberEvent`, MIP-1143), and the changes of their own that
