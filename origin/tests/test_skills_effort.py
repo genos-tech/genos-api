@@ -35,6 +35,7 @@ from origin.search_engine.llm.choice import active_effort_profile, get_llm_choic
 from origin.search_engine.llm.types import CallUsage
 from origin.search_engine.models import AiCreditEntry, AiRequestCost
 from origin.services.skills import effort, run, service
+from origin.tests.skill_fence_helpers import strip_tag
 from origin.tests.test_skills_run import ASK_URL, RunBase, authoritative
 
 EFFORT_ON = override_settings(SEARCH_ENGINE={**settings.SEARCH_ENGINE, "AGENT_EFFORT_LEVELS": True})
@@ -219,7 +220,8 @@ class RunUsesTheLevelTests(AskBase):
         extras = {}
         for level in ("", "low", "high"):
             _resp, got = self.ask(self.skill_at(level, slug=f"p-{level or 'none'}"))
-            extras[level] = got["kwargs"]["system_extra"].replace(f"p-{level or 'none'}", "NAME")
+            extra = strip_tag(got["kwargs"]["system_extra"])  # the fence tag is random per run
+            extras[level] = extra.replace(f"p-{level or 'none'}", "NAME")
         self.assertEqual(len(set(extras.values())), 1)
         self.assertNotIn("effort", extras["high"].lower())
 

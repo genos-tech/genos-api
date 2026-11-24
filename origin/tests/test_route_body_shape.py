@@ -72,6 +72,8 @@ EXEMPT = {
     "origin.views.common.billing_views.StripeWebhookView": "Stripe signature",
     "origin.views.common.github_views.GithubWebhookView": "GitHub signature",
     "origin.views.common.github_app_webhook_views.GithubAppWebhookView": "GitHub signature",
+    # MIP-2271: GitHub secret scanning; signature over the raw body, a signed non-array is a 400.
+    "origin.views.public.secret_scanning_views.SecretScanningView": "GitHub signature",
     # JSON-RPC answers in its own words (-32600).
     "origin.views.public.mcp.views.McpView": "JSON-RPC error",
 }

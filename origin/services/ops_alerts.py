@@ -220,6 +220,7 @@ def resolve_quiet(*, now=None) -> int:
 _SECURITY_SUMMARIES = {
     "alert.export": "Account data exported",
     "alert.forbidden_burst": "Burst of refused requests",
+    "alert.signin_spray": "Password spray: failed sign-ins across many accounts",
 }
 
 
@@ -234,10 +235,14 @@ def raise_security_alert(event) -> None:
         if event.actor_id
         else f"ip:{event.ip or '-'}"
     )
+    if event.action == "alert.signin_spray":
+        who = "signin"  # one incident per hour for the whole service, not one per address
     meta = event.metadata or {}
     summary = _SECURITY_SUMMARIES.get(event.action, event.action)
     if "refused" in meta:
         summary = f"{summary}: {meta['refused']} in {meta.get('window_seconds', '?')} s"
+    if "accounts" in meta:
+        summary = f"{summary}: {meta['accounts']} accounts in {meta.get('window_seconds', '?')} s"
     raise_alert(
         OpsAlertKind.SECURITY,
         f"security:{event.action}:{who}",

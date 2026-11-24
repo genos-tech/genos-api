@@ -32,11 +32,15 @@ OFFICIAL_SLUGS = frozenset(
         "research-update",
         "status-report",
         "study-plan",
+        "study-week",
         "support-digest",
         "ticket-to-task",
         "tidy-board",
         "triage",
         "ui-check",
+        "weekly-priorities",
+        "weekly-review",
+        "wrapup",
         "write-spec",
     }
 )
