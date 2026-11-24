@@ -340,18 +340,7 @@ class SkillListView(_Base):
             for s in rows
         ]
         if tab == "installed" and rows:
-            # The pinned version of each row, in one query: the page marks the rows a newer
-            # published version has left behind (MIP-2226), as the detail page already does.
-            pinned = dict(
-                SkillInstall.objects.filter(user=user, skill__in=rows).values_list(
-                    "skill_id", "version_no"
-                )
-            )
-            for s, out in zip(rows, out_rows, strict=True):
-                installed = pinned.get(s.id)
-                if installed is not None:
-                    out["installedVersionNo"] = installed
-                    out["updateAvailable"] = installed < s.published_version_no
+            _add_installed_state(rows, out_rows, user.pk)
         return Response(
             {
                 "skills": out_rows,
@@ -730,9 +719,25 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
+def _add_installed_state(rows: list[Skill], out_rows: list[dict[str, Any]], user_id: Any) -> None:
+    """The version the caller pinned of each row, in one query: the page marks the rows a newer
+    published version has left behind (MIP-2226), and the Hub rows say Install or Uninstall
+    (MIP-2293), as the detail page already does."""
+    pinned = dict(
+        SkillInstall.objects.filter(user_id=user_id, skill__in=rows).values_list(
+            "skill_id", "version_no"
+        )
+    )
+    for s, out in zip(rows, out_rows, strict=True):
+        installed = pinned.get(s.id)
+        if installed is not None:
+            out["installedVersionNo"] = installed
+            out["updateAvailable"] = installed < s.published_version_no
+
+
 class SkillHubView(_Base):
     """The public directory. 404 until `GENOS_SKILLS_PUBLIC` is on. Three queries however many
-    rows: the page, the page's published versions, the caller's stars."""
+    rows: the page, the page's published versions, the caller's stars, the caller's installs."""
 
     throttle_classes = [SkillsThrottle, SkillsHubThrottle]
 
@@ -758,23 +763,21 @@ class SkillHubView(_Base):
         starred = hub.starred_ids(user.pk, rows)
         # Only the caller's own public skills carry a colour; everyone else's are grey.
         hub_colors = skill_tags.color_map(rows, user.pk)
-        return Response(
-            {
-                "skills": [
-                    _row(
-                        s,
-                        user.pk,
-                        starred=str(s.id) in starred,
-                        editing=False,
-                        team_owner=False,
-                        version_hint=versions.get(s.pk),
-                        tag_colors=hub_colors,
-                    )
-                    for s in rows
-                ],
-                "hasMore": has_more,
-            }
-        )
+        out_rows = [
+            _row(
+                s,
+                user.pk,
+                starred=str(s.id) in starred,
+                editing=False,
+                team_owner=False,
+                version_hint=versions.get(s.pk),
+                tag_colors=hub_colors,
+            )
+            for s in rows
+        ]
+        if rows:
+            _add_installed_state(rows, out_rows, user.pk)
+        return Response({"skills": out_rows, "hasMore": has_more})
 
 
 class SkillHubTagsView(_Base):
