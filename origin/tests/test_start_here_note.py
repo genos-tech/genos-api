@@ -226,6 +226,23 @@ class ContentTests(TestCase):
         self.assertEqual(len(titles), 7)
         self.assertEqual(set(start_here_note.LOCALES), {"ar", "en", "es", "fr", "hi", "ja", "zh"})
 
+    def test_spanish_and_chinese_menu_paths_match_the_app_labels(self):
+        # MIP-2333: the app shows "Desarrolladores" (es) and "开发者" (zh) in
+        # Settings; the note used "Revelador" and "开发商".
+        self.assertEqual(
+            start_here_note._COPY["es"]["menu"],
+            "Ajustes > Desarrolladores > Apps conectadas",
+        )
+        self.assertEqual(
+            start_here_note._COPY["zh"]["menu"],
+            "设置 > 开发者 > 已连接的应用",
+        )
+        with override_settings(**ON):
+            _, es_text = self._text_for("es")
+            _, zh_text = self._text_for("zh")
+        self.assertNotIn("Revelador", es_text)
+        self.assertNotIn("开发商", zh_text)
+
     @override_settings(**ON)
     def test_an_unknown_language_falls_back_to_english(self):
         title, _ = self._text_for("xx")
