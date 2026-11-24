@@ -1,7 +1,7 @@
 {
   "release": "v0.5.3",
   "source": "https://github.com/genos-tech/genos-claude-plugin",
-  "docs_ref": "162e1c2ad0dd4d637a9e58bf5ecad0921f83cb96",
+  "docs_ref": "079081567b1d28c1f374cc41c5278a0963d3d016",
   "skills": [
     {
       "slug": "handoff",
@@ -76,6 +76,30 @@
       "source_path": "plugins/genos/skills/triage/SKILL.md"
     },
     {
+      "slug": "weekly-review",
+      "title": "Weekly review",
+      "description": "Weekly review and plan from Genos: what got done, what slipped, what is stuck, and the top five for next week, with an optional personal note to keep it.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/weekly-review/SKILL.md"
+    },
+    {
+      "slug": "wrapup",
+      "title": "Wrap up the day",
+      "description": "Wrap up the working day in Genos: what you did today, statuses that are no longer true, a short comment on each task you moved, and tomorrow's first step. Reads first, then writes only the fixes you accept.",
+      "tags": [
+        "general"
+      ],
+      "icon": "✨",
+      "tool_level": "act",
+      "pack": "general",
+      "source_path": "plugins/genos/skills/wrapup/SKILL.md"
+    },
+    {
       "slug": "design-handoff",
       "title": "Design handoff",
       "description": "Hand a finished design to the people who build it: a spec note with what to build, states and edge cases, a link to it on every build task, and the open questions as comments. Shows the note and the list of tasks first; writes only after a yes.",
@@ -134,6 +158,18 @@
       "tool_level": "act",
       "pack": "founder",
       "source_path": "plugins/genos-founder/skills/investor-update/SKILL.md"
+    },
+    {
+      "slug": "weekly-priorities",
+      "title": "Weekly priorities",
+      "description": "Set the team's priorities for the week from the data: the top five things that matter, what is blocked, who is carrying too much, and what to stop, saved as a note after a yes.",
+      "tags": [
+        "founder"
+      ],
+      "icon": "🚀",
+      "tool_level": "act",
+      "pack": "founder",
+      "source_path": "plugins/genos-founder/skills/weekly-priorities/SKILL.md"
     },
     {
       "slug": "campaign-plan",
@@ -340,6 +376,18 @@
       "source_path": "plugins/genos-student/skills/exam-prep/SKILL.md"
     },
     {
+      "slug": "study-week",
+      "title": "Study week",
+      "description": "Lay out the study week: the deadlines in the next seven days, the classes and events in the calendar, the to-dos already planned, and where the free blocks are, so the heaviest day is visible before it arrives. Reads only.",
+      "tags": [
+        "student"
+      ],
+      "icon": "🎓",
+      "tool_level": "read",
+      "pack": "student",
+      "source_path": "plugins/genos-student/skills/study-week/SKILL.md"
+    },
+    {
       "slug": "escalate",
       "title": "Escalate",
       "description": "Escalate a customer issue that is stuck: read the task, write one comment with the facts (impact, since when, what was tried, what is needed and by when) that mentions the owner, and, if you say so, raise the priority. Shows the comment first; posts only after a yes.",
@@ -413,16 +461,12 @@
     }
   ],
   "excluded": {
-    "catchup": "built on the connector-only briefing (the in-app built-in `/catch-me-up` covers it)",
+    "catchup": "built on the connector-only briefing; the in-app built-in `/catch-me-up` already is the catch-up (MIP-2203)",
     "close-out": "reads merged pull requests and checks with gh on the person's machine",
     "design-review": "replies to and resolves note comments, which the in-app agent cannot do",
     "open-pr": "reads a pull request's checks with gh on the person's machine",
     "ready-to-merge": "reads a pull request's checks with gh on the person's machine",
     "setup": "writes the Genos rules into Claude's memory file and installs plugins: Claude Code only",
-    "start-task": "branches and reads the code with git on the person's machine",
-    "study-week": "built on the connector-only briefing",
-    "weekly-priorities": "built on the connector-only briefing",
-    "weekly-review": "built on the connector-only briefing",
-    "wrapup": "built on the connector-only briefing"
+    "start-task": "branches and reads the code with git on the person's machine"
   }
 }

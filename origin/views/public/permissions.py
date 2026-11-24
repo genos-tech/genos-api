@@ -18,11 +18,15 @@ have to be legible in one place.
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+
 from rest_framework import throttling
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from origin.models.common.api_key_models import SCOPE_WRITE, ApiKey
-from origin.services.throttles import RecordedThrottleMixin
+from origin.services.throttles import CacheDown, RecordedThrottleMixin, _trip_breaker
 from origin.views.public.credentials import credential_of
 
 
@@ -66,6 +70,28 @@ class HasRequiredScope(BasePermission):
         return isinstance(key, ApiKey) and key.scope == SCOPE_WRITE
 
 
+logger = logging.getLogger(__name__)
+
+_local_lock = threading.Lock()
+_local_counts: dict[str, tuple[float, int]] = {}
+_LOCAL_PRUNE_AT = 5_000
+
+
+def _local_hit(key: str, window: int) -> int:
+    """Count one request in this process for `window` seconds and return the count."""
+    now = time.monotonic()
+    with _local_lock:
+        expires, count = _local_counts.get(key, (0.0, 0))
+        if expires <= now:
+            expires, count = now + window, 0
+        count += 1
+        _local_counts[key] = (expires, count)
+        if len(_local_counts) > _LOCAL_PRUNE_AT:
+            for stale in [k for k, (exp, _n) in _local_counts.items() if exp <= now]:
+                del _local_counts[stale]
+        return count
+
+
 class PublicApiThrottle(RecordedThrottleMixin, throttling.SimpleRateThrottle):
     """Per-KEY rate limiting.
 
@@ -74,16 +100,30 @@ class PublicApiThrottle(RecordedThrottleMixin, throttling.SimpleRateThrottle):
     the others. The key is the unit an integrator actually controls, so
     it is the unit that gets the budget — and revoking a key frees it.
 
-    ⚠️ **This fails OPEN.** A Redis outage means *unlimited*, not zero
-    (`fail_closed` is off; since MIP-724 it at least logs each allow).
-    That is the deliberate house policy for quota
-    (`search_engine/quota.py` states it), and it is the right trade for
-    the app — but it is worth knowing that the public API's rate limit is
-    an availability measure, not a security control. Anything that must
-    hold under Redis loss needs enforcing somewhere else.
+    **With Redis down it counts in this process** (MIP-2266), against the same rate, instead of
+    allowing everything. The count is per worker, so it can only UNDER-count (N workers allow up to
+    N times the rate), but a leaked key can no longer read without any ceiling while the store is
+    out. A request over the in-process count is refused with a 429, and each fallback is logged.
     """
 
     scope = "public_api"
+
+    def on_cache_down(self, request, exc) -> bool:
+        if not isinstance(exc, CacheDown):
+            _trip_breaker()
+        self._cache_was_down = True
+        key = self.get_cache_key(request, None)
+        if key is None:
+            return True  # no credential: the permission class rejects it anyway
+        count = _local_hit(key, self.duration)
+        allowed = count <= self.num_requests
+        logger.warning(
+            "throttle.cache_unavailable scope=%s action=%s count=%s",
+            self.scope,
+            "count_in_process" if allowed else "refuse",
+            count,
+        )
+        return allowed
 
     def get_cache_key(self, request, view):
         credential = credential_of(request)

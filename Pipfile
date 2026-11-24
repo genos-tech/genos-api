@@ -42,6 +42,9 @@ openai = "==2.5.0"
 google-genai = "==2.3.0"
 anthropic = "==0.102.0"
 tavily-python = "==0.7.26"
+# --- Image re-encode on upload: strips EXIF/XMP/IPTC (MIP-2234) ---
+pillow = "==13.0.0"
+pillow-heif = "==1.8.1"                     # HEIC/HEIF decode; registers an opener with Pillow
 # --- Billing ---
 stripe = "==15.3.1"
 # --- Security floors for transitive deps (pip-audit, MIP-750) ---
