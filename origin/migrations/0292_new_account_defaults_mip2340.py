@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     """
 
     dependencies = [
-        ("origin", "0290_personalnotefolder_guide_titles_given"),
+        ("origin", "0291_security_event_recent_auth_actions"),
     ]
 
     operations = [
