@@ -57,9 +57,9 @@ _STOP = frozenset(
 )
 
 PARENT_MESSAGE = (
-    "No parent task: set `parent_task_id` with `update_task` (a sub-task keeps the board "
-    "organized), or say in your reply why this one has none. Candidates are guesses from the "
-    "title; use one only if it really is the parent."
+    "No parent task and no milestone: set `parent_task_id` (or `milestone_id`, never both) with "
+    "`update_task` (a task with a place keeps the board organized), or say in your reply why "
+    "this one has none. Candidates are guesses from the title; use one only if it really is the parent."
 )
 #: For a task filed directly under a milestone: it HAS a place, so the hint must not read as if it
 #: had none, and must say that a parent moves it.
@@ -68,6 +68,16 @@ PARENT_MESSAGE_IN_MILESTONE = (
     "`parent_task_id` with `update_task` (it then moves to that task's milestone), or say in "
     "your reply why it has none. Candidates are guesses from the title."
 )
+#: A plan of this many tasks or more with no dependency between any two reads as a list, not an order
+#: of work. Two tasks can honestly be independent; three or more rarely are.
+NO_DEPENDENCIES_MIN_TASKS = 3
+NO_DEPENDENCIES_MESSAGE = (
+    "These tasks have no dependencies between them: if one must be done before another, link it "
+    "with `update_task_dependencies` (blocker, blocked); read the graph back with "
+    "`list_task_dependencies`. Tasks that really can all start at once need nothing; say so in "
+    "your reply."
+)
+
 PARENT_MESSAGE_PLAN = (
     "Some of these tasks have no parent task: set `parent_task_id` with `update_task`, or "
     "say in your reply why they have none. Candidates are guesses from the titles."
@@ -304,3 +314,11 @@ def suggestions_for_new_plan(
             {"kind": "dependencies", "message": DEPENDENCIES_MESSAGE_PLAN, "candidates": related}
         )
     return out
+
+
+def no_dependencies_suggestion(task_count: int, dependency_count: int) -> dict[str, Any] | None:
+    """The hint for a plan of `NO_DEPENDENCIES_MIN_TASKS` tasks or more that created no dependency
+    edge at all, else None. A suggestion only: the plan is written either way."""
+    if task_count < NO_DEPENDENCIES_MIN_TASKS or dependency_count > 0:
+        return None
+    return {"kind": "no_dependencies", "message": NO_DEPENDENCIES_MESSAGE, "candidates": []}
