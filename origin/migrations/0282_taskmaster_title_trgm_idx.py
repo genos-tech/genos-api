@@ -18,7 +18,7 @@ class Migration(migrations.Migration):
     atomic = False
 
     dependencies = [
-        ("origin", "0279_skill_grants"),
+        ("origin", "0281_security_event_signin_spray"),
     ]
 
     operations = [
