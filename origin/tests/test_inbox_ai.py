@@ -119,6 +119,7 @@ class TestTheInventory(SimpleTestCase):
         self.assertEqual(
             sorted(k for k, j in JOBS.items() if j.uses_ai),
             [
+                "ai_dashboard",  # MIP-2353: names its request or skip through `add_narrative`
                 "milestone_updates",
                 "project_updates",
                 "run_skill",
