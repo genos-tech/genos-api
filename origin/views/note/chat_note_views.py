@@ -126,6 +126,7 @@ class AllChatNotesView(AuthenticatedAPIView):
                 threadId=F("thread_root_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("-tsUpdated")
             .values(
@@ -142,6 +143,7 @@ class AllChatNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -176,6 +178,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 isThread=F("is_thread"),
                 threadId=F("thread_root_id"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
                 chatTypeName=Case(
                     When(chat_type=1, then=Value("DM")),
                     When(chat_type=2, then=Value("GM")),
@@ -197,6 +200,7 @@ class AllChatNoteMetaView(AuthenticatedAPIView):
                 "threadId",
                 "title",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -349,6 +353,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .order_by("tsCreated")  # ASC by created at
             .values(
@@ -365,6 +370,7 @@ class ChatNoteMasterView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -651,6 +657,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -667,6 +674,7 @@ class SingleChatNoteView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
@@ -796,6 +804,7 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 parentNoteId=F("parent_note_id"),
                 tsCreated=F("ts_created_at"),
                 tsUpdated=F("ts_updated_at"),
+                bodyFormat=F("body_format"),
             )
             .values(
                 "noteType",
@@ -811,6 +820,7 @@ class ChatSubNotesView(AuthenticatedAPIView):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                "bodyFormat",
             )
         )
 
