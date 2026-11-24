@@ -3447,8 +3447,8 @@ JAPANESE_GUIDE_NOTES: list[tuple[str, list]] = [
                 "会社全体で使う",
                 [
                     "たくさんの部署がある会社でGenosを使い始めるときは、このフォルダの最後の2つのノート"
-                    "「大きな組織でGenosを整える：ひとつのチーム、たくさんの部署」と"
-                    "「会社でGenosを使い始める：オーナー向けチェックリスト」を読んでください。",
+                    "「大きなワークスペースの整え方: 1 つのチームに多くの部署」と"
+                    "「会社で Genos を始める: オーナー向けチェックリスト」を読んでください。",
                 ],
             ),
         ),
@@ -3908,7 +3908,13 @@ def seed_guide_notes(user, team, *, force: bool = False) -> bool:
                 continue
             guide_notes = current_guide_notes(locale)
 
-            folder = PersonalNoteFolder.objects.create(team=team, owner=user, name=folder_name)
+            folder = PersonalNoteFolder.objects.create(
+                team=team,
+                owner=user,
+                name=folder_name,
+                # What this folder was given: `guide_refresh` never re-adds a note deleted later.
+                guide_titles_given=[title for title, _ in guide_notes],
+            )
             for title, body in guide_notes:
                 note = PersonalNoteMaster.objects.create(
                     team=team,

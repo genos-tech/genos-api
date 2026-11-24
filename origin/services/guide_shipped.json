@@ -1,0 +1,254 @@
+{
+ "en": {
+  "API keys and webhooks, step by step": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "0304c2e8dbd04d9e62e8a13c44be716c7e4c56ef0e523f6307aafb4058836c20",
+    "5beb8dd7454262c7a9b1c1d67ac37fb83cc7b785945db52876b744a71dd2aedf",
+    "f814e36a187670ebd069a5e8363278ca8d2effec4a472b15b396b41662a87ac2"
+   ]
+  },
+  "Chat: messages, threads, and mentions": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "2591c0cc979ff1b621235e34a2b61bf75383d83af6a42acf5f170f9fee0a8911"
+   ]
+  },
+  "Connecting Genos to other tools: API, MCP, and realtime": {
+   "first_shipped": "2026-08-02",
+   "sha256": [
+    "b1a57876feef411031d8152e7b26162db0524277eaa5c28141f03feb14efec64",
+    "58c348f6d3812148fe28f10f1fc005f4b0b885d24a8f24c6195656f164ba327d"
+   ]
+  },
+  "Fixes for specific problems": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "301005bbb8d501e0cbb4b9a34b8f63800b745b7c028d060263de1500de6bdea2"
+   ]
+  },
+  "Genos AI (Spotlight): ask, act, and stay ahead": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "04871edbddc7ca3be7df978cb2fdea1c908136ca71b78a17e8b44132a2299942"
+   ]
+  },
+  "Genos basics: layout and navigation": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "35dd8daaadc0800cf946569f22f5de89abe2182a261901ae84a4cc070088ff21"
+   ]
+  },
+  "Keyboard shortcuts, in full": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "4e38c9443be51c2851e8da163d74115767a7845dda06618c98b98da6d660120a"
+   ]
+  },
+  "Notes: personal, team, and shared": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "a731ce10a642436e9a0a617c3080f3451c7184741077baf27924160bbe85ebe0"
+   ]
+  },
+  "Notifications: in-app, push, and email": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "13ca148a1750d25b8af505f69f7bf526a65267d847cb8d68bd51d03480ba4e60"
+   ]
+  },
+  "Organising a large workspace: one team, many departments": {
+   "first_shipped": "2026-11-18",
+   "sha256": [
+    "6a25283452bffe2b98f977683bbda9b703cfe03f37bae211481c95b46f97bdae",
+    "95017e0e01a71ecc0eb2ea55e5947bac9ab6e22280a5e0d324a1d35ea2d09813",
+    "9fce49a31d15e2c0550f8b3980808d64fb0be45aa7fc150c9cc890de2b3b4677"
+   ]
+  },
+  "Plans, limits, and what happens when you hit one": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "d3dee3977a658bd4fa9d1188bde06838e2dd4d88c3687f6f1ca4591f3a962d1b"
+   ]
+  },
+  "Playbooks: how different kinds of work fit Genos": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "8fbce1b03aeaecf5a79314e209f088a8cd47a025e0e3d1a2b460b0ad0602f0c7",
+    "8e61207a076620f839a854e53512ca2718d7c6813747a95ad1052e555cc7ac65"
+   ]
+  },
+  "Searching and asking: how to get better answers": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "62c1477b233f9dc81007bc956ef6951afe19b00995f6e2f4394e8a347ab8f33c",
+    "46178cb8bea8660864f60d7f8c470ccfde9444bb50ed5720191606807ebd29df"
+   ]
+  },
+  "Setting up Genos for your company: an owner's checklist": {
+   "first_shipped": "2026-11-18",
+   "sha256": [
+    "13430b94a4c6f79c7e56e4e3581e525e81114a5ec29ee7cc0d13151937070a22",
+    "5ffe28d16dd854e5e1fe466278456f646e549c199f89f174a0cf33dac390a3be",
+    "6cf4893642163bea50d16f5433de13ff6db17988c3e76f68e8fdaf8f63fad3ea"
+   ]
+  },
+  "Settings: every option, and where to find it": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "20bc5f74ba7a47354a4fea53f1aa0d65c5fdfb20f67158656101495d040391b2"
+   ]
+  },
+  "Tasks and projects": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "f70b4465629d538d707272d7c782921a1a298aae08af2520da36b97c0965ae0c"
+   ]
+  },
+  "Teams, members, and roles": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "a206d0ccc37ec5f604ffeb6ac9c3f1b045795566dc81ced6feffeb443d836e62",
+    "f2e2c54cbb489a410561c64defdc5d1049c27a7e9b1b398432c928ba552019b3"
+   ]
+  },
+  "Tips, shortcuts, and getting unstuck": {
+   "first_shipped": "2026-08-01",
+   "sha256": [
+    "2fa5ca245c64eb655c694ce78b929938e17be92f3c2e55ab48e8d835a9f5e369"
+   ]
+  },
+  "Working with another company: cross-team sharing": {
+   "first_shipped": "2026-08-04",
+   "sha256": [
+    "4ce1e341f08534a52d23a20de6adf64f93032cee91b318095418bdc66a198d96",
+    "d0f5915dee7e076ba8edc1adc9bc7f2d428f3a4405d1f2a50f2c32675f3cf533",
+    "2b8622ebd4e21a402c86947d1b22caac51774ec8e2eddad648e4952f8b990225"
+   ]
+  }
+ },
+ "ja": {
+  "APIキーとWebhook：手順ガイド": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "1f6c0cc8306c0505eb6b13906a6588bec45178b6bda3f166dbed2a323f417e26",
+    "56eb165a2f1c5fc20b3a8a1c19f649cf7986b258204ce849c8c9db7c2453ceee",
+    "b967e96c55ebfc99f831b08f3997e1fe90fe62987102e852327414e9e02b7a10"
+   ]
+  },
+  "Genos AI（Spotlight）：質問、操作、先回り": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "41e6e4645f37fa3059ef99780a4c23c3cd4db34a07c3eed280441fc718f80103"
+   ]
+  },
+  "Genosと他のツールを接続する：API、MCP、リアルタイム": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "ffa3b0f12f8c855a07ebf6afdaf8af00138de4eab8f282b0dffc2cfd9f61c1df",
+    "91beb5257caf4e325b8f2330cd3b9e2067748fc1081b883e2103a56eba85c876"
+   ]
+  },
+  "Genosの基本：画面構成とナビゲーション": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "d3ee0793adba8d1c586e4c96e5a88cc60b4a6597f137732ea4c3802f6eb18b62"
+   ]
+  },
+  "よくある問題の解決方法": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "b9c199e078e4b4e1057644854cad3f258104c068eb5159fda06d5c9e7d06d95a"
+   ]
+  },
+  "キーボードショートカット一覧": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "14d340117e67cc4f707236760a2633bb7732e4efe1df52550f9d68d25e2a4b32"
+   ]
+  },
+  "タスクとプロジェクト": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "b8a7173ca57e3e1639b05e174b4f8c79e1ef590a71544a8dffe14fb934eec1a4"
+   ]
+  },
+  "チャット：メッセージ、スレッド、メンション": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "8bbd3f42aa68538b5c4e1f3f45a4b6ebe49a9a167d3356d7d737c22d2612250e"
+   ]
+  },
+  "チーム、メンバー、役割": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "947d93fe299edac28129aad6e80edfa47cf8c03ca9380152e1d920e2549ac465"
+   ]
+  },
+  "ノート：個人、チーム、共有": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "08ea0d706b5dd782c1921818691c9a6dd9fa4352a095d6649ca6b3fb7f58ef9a"
+   ]
+  },
+  "ヒント、ショートカット、困ったときの対処": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "a483c3e8331fbf28bf8abba629cc4cf398d473f92c7cb669d5ddfee49fbf112a"
+   ]
+  },
+  "プラン、利用上限、上限に達したときの動作": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "d94b8392047d197aa95dbbab5668f59e4c56733531b4d314be04308ffab1efcd"
+   ]
+  },
+  "プレイブック：仕事別のGenos活用方法": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "5241f4e8d6c094d739dd68c0f6676a17ad0a230bed3937095986934531784cde",
+    "64df2181484de8507e8c8c08d8604fc7f634fbcca8cc4899c4402d300397a45b"
+   ]
+  },
+  "他の会社との連携：チーム間共有": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "aa7e9e1809bc7ed5431b05484832944dabb70d535e625312f716007873baea63"
+   ]
+  },
+  "会社でGenosを使い始める：オーナー向けチェックリスト": {
+   "first_shipped": "2026-11-18",
+   "sha256": [
+    "fb310666fd2f7a54b343db15b577f91ab325cf611596cfebe35b15db754c6844",
+    "cd2184b643cfbd43cd657385561f98fb35a3dd9bcdb376b7078d38f47300a410",
+    "7bca2ea7c201c2f5c93530c5e94d619d9751b2a114fb5ad218291ee3aceaff43"
+   ]
+  },
+  "大きな組織でGenosを整える：ひとつのチーム、たくさんの部署": {
+   "first_shipped": "2026-11-18",
+   "sha256": [
+    "95790a040f38af05a67a4708702425d69613f35f3e2f5d0a61616319853f0757",
+    "d93bf854ff41abe0f8c9daa359313ab920ac6ddd2d9ea125bc62d88bc5105b4d",
+    "e4fec67046fe4c77f248d03f876458f523c6009246e0c8e3ef0ba2eacae3bb4f"
+   ]
+  },
+  "検索と質問：より良い答えを得る方法": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "50dd832a07e96ff67d68fd439caeded4257873c79322e413cfea1590fcd1e56f"
+   ]
+  },
+  "設定：すべての項目と場所": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "7f4a9769b009eb5f1edd7f5462e06ed9e3993e8719af903aac87abeb09120cfd"
+   ]
+  },
+  "通知：アプリ内、プッシュ、メール": {
+   "first_shipped": "2026-08-09",
+   "sha256": [
+    "5fea0134d5470e368f319ce6046996f8b1dda01846bfe7cc14b0916d0f9ad56b"
+   ]
+  }
+ }
+}

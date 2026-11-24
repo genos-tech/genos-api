@@ -121,6 +121,30 @@ class SeedingFromTheManualTests(BaseAPITestCase):
         )
 
 
+class JapaneseManualTests(BaseAPITestCase):
+    def test_the_japanese_manual_is_vendored_and_has_the_same_topics_as_english(self):
+        ja = guide_manual.manual_topics("ja")
+        self.assertTrue(ja)
+        self.assertEqual([t["id"] for t in ja], [t["id"] for t in guide_manual.manual_topics("en")])
+
+    def test_the_japanese_guide_notes_render_from_the_manual(self):
+        notes = guide_notes.current_guide_notes("ja")
+        manual_titles = [title for title, _ in guide_manual.manual_notes("ja")]
+        self.assertEqual([title for title, _ in notes], manual_titles)
+
+    def test_seeding_writes_the_japanese_folder_from_the_japanese_manual(self):
+        with mock.patch("origin.services.demo_seeder.kick_off_demo_reindex"):
+            guide_notes.seed_guide_notes(self.user, self.team)
+        folder_name = guide_notes._EDITIONS["ja"][0]
+        folder = PersonalNoteFolder.objects.get(team=self.team, owner=self.user, name=folder_name)
+        titles = set(
+            PersonalNoteMaster.objects.filter(folder_id=folder.folder_id).values_list(
+                "title", flat=True
+            )
+        )
+        self.assertEqual(titles, {t["title"] for t in guide_manual.manual_topics("ja")})
+
+
 class SyncScriptTests(SimpleTestCase):
     def _manual(self, lang="en", **over):
         data = {"language": lang, "topics": [{"id": "a", "title": "A", "markdown": "## A\n\nx"}]}

@@ -53,6 +53,7 @@ from origin.services.realtime_push import announced_by_sockets, push_membership_
 from origin.services.security_events import record_security_event, user_label
 from origin.services.team_membership import (
     InviteAcceptError,
+    TeamBillingCancelFailed,
     TeamMembershipInvalid,
     accept_invite,
     join_team,
@@ -561,6 +562,18 @@ class TeamMembersView(AuthenticatedAPIView):
         return Response(body, status=status.HTTP_201_CREATED)
 
 
+def _billing_cancel_refused() -> Response:
+    """The team would close with this departure and its subscription could not be cancelled: nothing
+    changed (MIP-2285). Retryable."""
+    return Response(
+        {
+            "error": "We could not cancel the team's subscription, so nothing was changed. "
+            "Please try again in a minute."
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 class LeaveTeamView(AuthenticatedAPIView):
     """Soft-delete the requester's membership in a team.
 
@@ -612,7 +625,10 @@ class LeaveTeamView(AuthenticatedAPIView):
         # whatever this team's cross-team shares granted this person in
         # OTHER teams. See `remove_team_member` for why that cascade
         # cannot be skipped.
-        remove_team_member(team_id, attendee_id)
+        try:
+            remove_team_member(team_id, attendee_id)
+        except TeamBillingCancelFailed:
+            return _billing_cancel_refused()
         record_security_event(
             SecurityAction.MEMBER_REMOVED,
             request=request,
@@ -1883,32 +1899,35 @@ class RemoveTeamMemberView(AuthenticatedAPIView):
         unassign = request.data.get("unassign_open_tasks") is True
         removed_role = row.member_role
         lost_projects, lost_channels = memberships_in_team(team.team_id, user_id)
-        with transaction.atomic():
-            remove_team_member(team.team_id, user_id)
-            unassigned = clean_up_after_removal(team.team_id, user_id, unassign=unassign)
-            # After commit, and in the transaction so a rollback never pushes: their open
-            # browser leaves the team's rooms now, not when it reconnects.
-            push_membership_removed(
-                user_id=user_id,
-                team_id=team.team_id,
-                scope="team",
-                project_ids=lost_projects,
-                channels=lost_channels,
-            )
-            record_security_event(
-                SecurityAction.MEMBER_REMOVED,
-                request=request,
-                team_id=team.team_id,
-                target_type="user",
-                target_id=user_id,
-                target_label=user_label(user_id),
-                metadata={
-                    "via": "removed",
-                    "scope": "team",
-                    "role": removed_role,
-                    "unassigned": unassigned,
-                },
-            )
+        try:
+            with transaction.atomic():
+                remove_team_member(team.team_id, user_id)
+                unassigned = clean_up_after_removal(team.team_id, user_id, unassign=unassign)
+                # After commit, and in the transaction so a rollback never pushes: their open
+                # browser leaves the team's rooms now, not when it reconnects.
+                push_membership_removed(
+                    user_id=user_id,
+                    team_id=team.team_id,
+                    scope="team",
+                    project_ids=lost_projects,
+                    channels=lost_channels,
+                )
+                record_security_event(
+                    SecurityAction.MEMBER_REMOVED,
+                    request=request,
+                    team_id=team.team_id,
+                    target_type="user",
+                    target_id=user_id,
+                    target_label=user_label(user_id),
+                    metadata={
+                        "via": "removed",
+                        "scope": "team",
+                        "role": removed_role,
+                        "unassigned": unassigned,
+                    },
+                )
+        except TeamBillingCancelFailed:
+            return _billing_cancel_refused()
         return Response(
             {"teamId": str(team.team_id), "userId": str(user_id), "unassigned": unassigned},
             status=status.HTTP_200_OK,

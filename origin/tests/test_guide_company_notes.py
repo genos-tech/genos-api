@@ -49,7 +49,7 @@ REFERENCES = {
         "他の会社との連携：チーム間共有",
     ],
     SETUP_TITLE["ja"]: [
-        ORGANISING_TITLE["ja"].split("：")[0],
+        ORGANISING_TITLE["ja"].split(":")[0],
         "チーム、メンバー、役割",
         "Genosと他のツールを接続する：API、MCP、リアルタイム",
     ],

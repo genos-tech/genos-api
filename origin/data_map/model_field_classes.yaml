@@ -753,6 +753,7 @@ origin.PersonalNoteFolder:
   name: content
   scope: none
   visibility: none
+  guide_titles_given: none
   ts_created_at: none
   ts_updated_at: none
 origin.PersonalNoteMaster:
@@ -1436,6 +1437,7 @@ search_engine.AgentRun:
   locale: none
   resume_context: content
   skill_ref: none
+  kept_sources: none
   withheld_from_team_answers: none
   started_at: none
   finished_at: none
