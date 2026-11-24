@@ -8,7 +8,8 @@ one message, at most once every five minutes. The sources:
 - a cron that failed or stopped succeeding (`CronHeartbeat`, written by
   `HeartbeatCommand`; `check_crons` finds the silent ones);
 - a burst of server errors (`ServerErrorBurstMiddleware`);
-- the OpenSearch certificates nearing expiry (`check_opensearch_certs`).
+- the OpenSearch certificates nearing expiry (`check_opensearch_certs`);
+- OpenSearch running short of disk, heap or room in the index (`check_opensearch_capacity`).
 
 Uptime, the public certificates and the domain are checked from outside
 Railway by genos-frontend's `uptime.yml`, which also watches this pipeline
@@ -129,6 +130,7 @@ RUNBOOK_ANCHORS = {
     OpsAlertKind.CRON_MISSED: "cron-failed-or-missed",
     OpsAlertKind.SERVER_ERRORS: "server-errors",
     OpsAlertKind.CERT_EXPIRY: "certificate-expiring",
+    OpsAlertKind.OPENSEARCH_CAPACITY: "opensearch-capacity",
 }
 
 _SUMMARY_MAX = 255
@@ -567,4 +569,115 @@ def check_opensearch_certs(*, now=None) -> list[str]:
         skipped.append(f"OpenSearch node certificate: {describe_exception(exc)}")
     else:
         _check_expiry("cert:opensearch-node", "OpenSearch node certificate", node_expiry, now)
+    return skipped
+
+
+# ── OpenSearch capacity (MIP-2385) ──────────────────────────────────────
+#
+# 1536-dimension float vectors take about 6 KB each, so the index grows with the
+# corpus. The fix when this fires (fp16 quantization, or a bigger node) needs a
+# reindex and an eval, so it wants lead time: the alert is the lead time.
+
+
+def _setting(name: str, default: int) -> int:
+    return int(getattr(settings, name, default))
+
+
+def _heap_streak(over: bool) -> int:
+    """Consecutive ticks the heap has been over its limit (0 when it isn't). Counted in
+    the shared cache; with the cache down nothing is counted, so heap never alerts then."""
+    key = "ops:opensearch-heap-streak"
+    try:
+        cache = throttles.throttle_cache()
+        if not over:
+            cache.delete(key)
+            return 0
+        if cache.add(key, 1, 3600):
+            return 1
+        return cache.incr(key)
+    except Exception:
+        return 0
+
+
+def _capacity_alert(key: str, summary: str, detail: dict, now) -> None:
+    raise_alert(
+        OpsAlertKind.OPENSEARCH_CAPACITY,
+        key,
+        summary,
+        {"resource": key.split(":", 1)[1], **detail},
+        now=now,
+    )
+
+
+def check_opensearch_capacity(*, now=None) -> list[str]:
+    """Alert when OpenSearch's disk is over `OPS_OPENSEARCH_DISK_PERCENT`, its JVM heap has
+    stayed over `OPS_OPENSEARCH_HEAP_PERCENT` for `OPS_OPENSEARCH_HEAP_TICKS` ticks in a row,
+    or the index holds more than `OPS_OPENSEARCH_DOC_LIMIT` documents. Quiet when healthy; a
+    reading back under its limit resolves the alert.
+
+    Returns what it couldn't check, for the run's output. An unreachable node isn't an
+    alert here: the reindexer's failures already say so.
+    """
+    from origin.search_engine.opensearch_client import (  # noqa: PLC0415
+        get_client,
+        get_index_alias,
+    )
+
+    now = now or timezone.now()
+    disk_limit = _setting("OPS_OPENSEARCH_DISK_PERCENT", 70)
+    heap_limit = _setting("OPS_OPENSEARCH_HEAP_PERCENT", 80)
+    heap_ticks = max(1, _setting("OPS_OPENSEARCH_HEAP_TICKS", 3))
+    doc_limit = _setting("OPS_OPENSEARCH_DOC_LIMIT", 150_000)
+    skipped = []
+    try:
+        client = get_client()
+        node = next(iter(client.nodes.stats(metric="jvm,fs")["nodes"].values()))
+    except Exception as exc:
+        return [f"OpenSearch capacity: {describe_exception(exc)}"]
+
+    total = (node.get("fs") or {}).get("total") or {}
+    size, free = total.get("total_in_bytes") or 0, total.get("available_in_bytes")
+    if size and free is not None:
+        used = round(100 * (size - free) / size)
+        if used > disk_limit:
+            _capacity_alert(
+                "capacity:disk",
+                f"OpenSearch disk is {used}% full (limit {disk_limit}%)",
+                {"percent": used, "threshold": disk_limit, "free_mb": free // 2**20},
+                now,
+            )
+        else:
+            resolve_alert("capacity:disk", now=now)
+    else:
+        skipped.append("OpenSearch disk: the node reported no filesystem size")
+
+    heap = ((node.get("jvm") or {}).get("mem") or {}).get("heap_used_percent")
+    if heap is not None:
+        streak = _heap_streak(heap > heap_limit)
+        if streak >= heap_ticks:
+            _capacity_alert(
+                "capacity:heap",
+                f"OpenSearch heap has been over {heap_limit}% for {streak} checks (now {heap}%)",
+                {"percent": heap, "threshold": heap_limit, "checks": streak},
+                now,
+            )
+        elif heap <= heap_limit:
+            resolve_alert("capacity:heap", now=now)
+    else:
+        skipped.append("OpenSearch heap: the node reported no JVM memory")
+
+    try:
+        docs = int(client.count(index=get_index_alias())["count"])
+    except Exception as exc:
+        skipped.append(f"OpenSearch documents: {describe_exception(exc)}")
+    else:
+        if docs > doc_limit:
+            _capacity_alert(
+                "capacity:docs",
+                f"OpenSearch index holds {docs:,} documents (limit {doc_limit:,})",
+                {"documents": docs, "threshold": doc_limit},
+                now,
+            )
+        else:
+            resolve_alert("capacity:docs", now=now)
     return skipped

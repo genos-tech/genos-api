@@ -8,8 +8,9 @@ Each run:
 1. opens an alert for every cron that has gone too long without succeeding
    (`ops_alerts.check_crons`);
 2. checks the OpenSearch certificates for expiry (one TLS handshake);
-3. closes the security and server-error alerts that have gone quiet;
-4. mails every alert not yet sent, in ONE message, to `OPS_ALERT_EMAIL`.
+3. checks OpenSearch disk, heap and document count against their limits;
+4. closes the security and server-error alerts that have gone quiet;
+5. mails every alert not yet sent, in ONE message, to `OPS_ALERT_EMAIL`.
 
 Runs every 5 minutes (railway-ops-alert-tick.toml). A failed send fails
 the run and leaves the rows unsent, so the next tick tries again and the
@@ -52,6 +53,9 @@ _FACTS = (
     ("certificate", "Certificate"),
     ("not_after", "Expires"),
     ("days_left", "Days left"),
+    ("resource", "Resource"),
+    ("percent", "Percent used"),
+    ("documents", "Documents"),
 )
 
 
@@ -81,6 +85,9 @@ class Command(CronCommand):
             self.stdout.write(f"Overdue crons: {', '.join(overdue)}")
 
         for skipped in ops_alerts.check_opensearch_certs(now=now):
+            self.stdout.write(f"Not checked: {skipped}")
+
+        for skipped in ops_alerts.check_opensearch_capacity(now=now):
             self.stdout.write(f"Not checked: {skipped}")
 
         if not dry_run:

@@ -2771,6 +2771,12 @@ OPS_RUNBOOK_URL = os.environ.get(
 OPS_5XX_BURST = int(os.environ.get("OPS_5XX_BURST") or "10")
 # Days before an OpenSearch certificate expires that it starts alerting.
 OPS_CERT_WARN_DAYS = int(os.environ.get("OPS_CERT_WARN_DAYS") or "30")
+# OpenSearch capacity alerts (MIP-2385): disk percent used, JVM heap percent used for this
+# many 5-minute checks in a row, and documents in the index.
+OPS_OPENSEARCH_DISK_PERCENT = int(os.environ.get("OPS_OPENSEARCH_DISK_PERCENT") or "70")
+OPS_OPENSEARCH_HEAP_PERCENT = int(os.environ.get("OPS_OPENSEARCH_HEAP_PERCENT") or "80")
+OPS_OPENSEARCH_HEAP_TICKS = int(os.environ.get("OPS_OPENSEARCH_HEAP_TICKS") or "3")
+OPS_OPENSEARCH_DOC_LIMIT = int(os.environ.get("OPS_OPENSEARCH_DOC_LIMIT") or "150000")
 # Bearer token the outside uptime probe sends to `api/v2/health/alerting/`
 # (genos-frontend's uptime workflow holds the same value as a secret). Empty
 # disables that endpoint: it answers 404.
