@@ -68,6 +68,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     parentNoteId=F("parent_note_id"),
                     tsCreated=F("ts_created_at"),
                     tsUpdated=F("ts_updated_at"),
+                    bodyFormat=F("body_format"),
                 )
                 .values(
                     "noteType",
@@ -76,6 +77,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     "title",
                     "tsCreated",
                     "tsUpdated",
+                    "bodyFormat",
                 )
             )
             result["personalNotes"] = list(personal_notes)
@@ -114,6 +116,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                         output_field=CharField(),
                     ),
                     tsUpdated=F("ts_updated_at"),
+                    bodyFormat=F("body_format"),
                 )
                 .values(
                     "noteType",
@@ -126,6 +129,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     "displayId",
                     "title",
                     "tsUpdated",
+                    "bodyFormat",
                 )
             )
             result["taskNotes"] = list(task_notes)
@@ -143,6 +147,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     isThread=F("is_thread"),
                     threadId=F("thread_root_id"),
                     tsUpdated=F("ts_updated_at"),
+                    bodyFormat=F("body_format"),
                 )
                 .values(
                     "noteType",
@@ -154,6 +159,7 @@ class AllFavoriteNotesMetaView(AuthenticatedAPIView):
                     "threadId",
                     "title",
                     "tsUpdated",
+                    "bodyFormat",
                 )
             )
             result["chatNotes"] = list(chat_notes)

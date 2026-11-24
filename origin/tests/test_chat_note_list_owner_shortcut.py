@@ -255,5 +255,7 @@ class ListShape(ChatNoteListFixtures):
                 "body",
                 "tsCreated",
                 "tsUpdated",
+                # MIP-2215: how the note is shown, "html" for an HTML page.
+                "bodyFormat",
             },
         )

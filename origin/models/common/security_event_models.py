@@ -80,6 +80,12 @@ class SecurityAction(models.TextChoices):
     OPERATOR_USER_DEACTIVATED = "operator.user_deactivated", "Operator: user cut off"
     OPERATOR_API_KEY_REVOKED = "operator.api_key_revoked", "Operator: API key revoked"
     OPERATOR_TEAM_KEYS_REVOKED = "operator.team_keys_revoked", "Operator: team API keys revoked"
+    # Every management command run at a production shell (MIP-2260). Command name and redacted
+    # arguments only; `shell` rows say a shell was open, never what ran in it.
+    OPS_COMMAND = "ops.command", "Operator: command run"
+    OPS_SHELL_OPENED = "ops.shell_opened", "Operator: shell opened"
+    OPS_SHELL_CLOSED = "ops.shell_closed", "Operator: shell closed"
+    ALERT_OPS_COMMAND_UNLISTED = "alert.ops_command_unlisted", "Alert: unlisted operator command"
 
 
 class SecuritySource(models.TextChoices):
