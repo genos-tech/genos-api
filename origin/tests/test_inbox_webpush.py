@@ -92,6 +92,37 @@ class InboxDispatchTests(BaseAPITestCase):
         send = self._run(self._item(item_type=1), title="Your request was approved")
         self.assertEqual(send.call_args.kwargs["payload"]["title"], "Your request was approved")
 
+    def _genos_item(self, **body):
+        return SimpleNamespace(
+            item_id=100,
+            item_type=0,
+            receiver_id=self.user2.id,
+            sender=None,
+            item_body=body,
+        )
+
+    def test_senderless_pr_signal_pushes_its_own_title_and_text(self):
+        self._sub(self.user2)
+        send = self._run(
+            self._genos_item(title="  CI failing\non PR 5 ", text="  Tests\n failed  here ")
+        )
+        payload = send.call_args.kwargs["payload"]
+        self.assertEqual(payload["title"], "CI failing on PR 5")
+        self.assertEqual(payload["body"], "Tests failed here")
+
+    def test_senderless_item_without_title_keeps_the_kind_wording(self):
+        self._sub(self.user2)
+        send = self._run(self._genos_item(text="no title"))
+        self.assertEqual(send.call_args.kwargs["payload"]["title"], "Someone sent you a message")
+
+    def test_normal_message_with_sender_is_unchanged(self):
+        self._sub(self.user2)
+        item = self._item(item_type=0)
+        item.item_body = {"title": "ignored", "text": "ignored"}
+        payload = self._run(item).call_args.kwargs["payload"]
+        self.assertEqual(payload["title"], "Alice sent you a message")
+        self.assertEqual(payload["body"], "")
+
     def test_visible_tab_suppresses(self):
         self._sub(self.user2)
         presence.mark_visible(self.user2.id)

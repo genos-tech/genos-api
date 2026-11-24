@@ -41,6 +41,7 @@ from origin.services.webpush_dispatch import (
     _push_spec,
     _task_url,
     _truncate,
+    genos_inbox_lines,
 )
 from origin.services.webpush_gating import is_activity_muted, is_chat_muted
 
@@ -134,13 +135,14 @@ def enqueue_email_for_inbox_item(item, *, title: str | None = None) -> None:
         if not should_email(recipient_id, "inbox"):
             return
         sender_name = getattr(item.sender, "username", None) or "Someone"
+        own = genos_inbox_lines(item)
         EmailNotificationEvent.objects.create(
             user_id=recipient_id,
             category="inbox",
             title=title or _inbox_title(item, sender_name),
-            body="",
+            body=own[1] if own else "",
             url="/workspace/inbox",
-            actor_name=sender_name if item.sender_id else "",
+            actor_name="Genos" if own else (sender_name if item.sender_id else ""),
             inbox_item=item,
         )
     except Exception as exc:  # noqa: BLE001 — never break the caller
