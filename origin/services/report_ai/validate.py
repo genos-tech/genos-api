@@ -57,6 +57,47 @@ def parse(raw: str, refs: set[str]) -> dict[str, str | None]:
     }
 
 
+NARRATIVE_CHARS = 500
+NARRATIVE_SENTENCES = 4
+
+
+def task_ids(text: str) -> list[str]:
+    """The task ids (`ABC-12`) a text names."""
+    return TASK_ID.findall(text or "")
+
+
+def _plain(value: Any) -> str:
+    """`value` as one line of text with invisible and control characters out, or "" when it is
+    not a string, is empty or is the word null."""
+    if not isinstance(value, str):
+        return ""
+    text = "".join(c for c in value if unicodedata.category(c) != "Cf")
+    text = " ".join(_CONTROL.sub(" ", text).split())
+    return "" if text.lower() == "null" else text
+
+
+def clean_narrative(
+    value: Any, *, may_name: Callable[[set[str]], bool], allowed_ids: set[str] | None = None
+) -> str:
+    """A report's written summary as it may be shown, or "" for none (MIP-2350): the same rules as
+    `clean_sentence` (no link, no markup character, no `<` `>`), over up to `NARRATIVE_SENTENCES`
+    sentences and at most `NARRATIVE_CHARS` characters in all (a longer answer is dropped, not cut:
+    it is the shape of an injection that talks a model into a speech). A task id in it must be one
+    the report itself names (`allowed_ids`, when given) and one the member can open (`may_name`)."""
+    text = _plain(value)
+    if not text or _FORBIDDEN.search(text) or _LINK.search(text):
+        return ""
+    text = " ".join(_MARKUP.sub("", text).split())
+    sentences = [s.strip() for s in _SENTENCE_END.split(text) if s.strip()]
+    text = " ".join(sentences[:NARRATIVE_SENTENCES])
+    if not text or len(text) > NARRATIVE_CHARS:
+        return ""
+    ids = set(TASK_ID.findall(text))
+    if ids and ((allowed_ids is not None and not ids <= allowed_ids) or not may_name(ids)):
+        return ""
+    return text
+
+
 def clean_sentence(value: Any, *, may_name: Callable[[set[str]], bool]) -> str:
     """The sentence as it may be shown, or "" for none. `may_name(display_ids)` says whether the
     member can open every task id the sentence names."""

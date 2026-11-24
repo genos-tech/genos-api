@@ -115,9 +115,10 @@ def _effort_cost(job) -> dict[str, Any] | None:
     from origin.services.report_ai import effort as effort_mod  # noqa: PLC0415
     from origin.services.report_ai import estimate  # noqa: PLC0415
 
+    narrative = job.cost_basis == "narrative"
     levels = {}
     for level in effort_mod.EFFORTS:
-        row = estimate.estimate(level)
+        row = estimate.narrative_estimate(level) if narrative else estimate.estimate(level)
         if row is not None:
             levels[level] = {
                 "model": row["model"],
@@ -126,7 +127,12 @@ def _effort_cost(job) -> dict[str, Any] | None:
             }
     return {
         "estimate": True,
-        "basis": "a report listing 10 tasks with comments, nothing cached; each range is [fewest, most]",
+        "basis": (
+            "a report of 24 lines in 4 sections, summarised in a short paragraph, nothing cached; "
+            "each range is [fewest, most]"
+            if narrative
+            else "a report listing 10 tasks with comments, nothing cached; each range is [fewest, most]"
+        ),
         "levels": levels,
     }
 

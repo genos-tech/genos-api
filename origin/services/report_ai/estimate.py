@@ -22,7 +22,7 @@ from typing import Any
 from django.conf import settings
 
 from origin.services.report_ai import effort as effort_mod
-from origin.services.report_ai import prompt, sentences, validate
+from origin.services.report_ai import narrative, prompt, sentences, validate
 from origin.services.report_ai.context import TaskContext
 
 CHARS_PER_TOKEN_LOW, CHARS_PER_TOKEN_HIGH = 4.5, 3.0  # fewest and most tokens
@@ -67,15 +67,42 @@ def estimate(level: str, n_tasks: int = sentences.MAX_TASKS) -> dict[str, Any] |
     """`{effort, model, input_tokens: [low, high], output_tokens: [low, high], usd_micro: [low,
     high], credits_milli: [low, high], estimate: True}` for one run at `level`, or None when the
     catalog has no price for the level's model."""
+    n_sentences = min(sentences.MAX_SENTENCES, n_tasks)
+    answer_chars = n_tasks * 8 + n_sentences * validate.SENTENCE_CHARS
+    return _priced(level, prompt_chars(n_tasks), answer_chars)
+
+
+def typical_report() -> dict[str, Any]:
+    """A report of the size the four summary jobs really make: a title, a counts line and 4
+    sections of 6 lines (a task's id, title and what happened, the length a line really has)."""
+    line = "MIP-1234 \u00b7 Export the monthly usage report to CSV for finance: blocked, waiting on MIP-1200"
+    return {
+        "title": "Project: Billing and invoices",
+        "summary": "3 done, 6 moved, 4 slipped, 5 blocked in the last 7 days.",
+        "sections": [
+            {"heading": heading, "items": [{"text": line}] * 6}
+            for heading in ("Blocked", "Slipped", "Done", "Moved")
+        ],
+    }
+
+
+def narrative_estimate(level: str) -> dict[str, Any] | None:
+    """`estimate` for the report summary of `narrative.py`: the real prompt for `typical_report`,
+    and an answer of up to `validate.NARRATIVE_CHARS` characters."""
+    chars = len(narrative.SYSTEM) + len(
+        narrative.build_user_message(typical_report(), "2026-11-08")
+    )
+    return _priced(level, chars, validate.NARRATIVE_CHARS + 10)
+
+
+def _priced(level: str, prompt_chars_: int, answer_chars: int) -> dict[str, Any] | None:
     run = effort_mod.resolve(level, level, "", clamp=False)
     if run is None:
         return None
     price = settings.LLM_CATALOG.price_for(run.model)
     if price is None:
         return None
-    n_sentences = min(sentences.MAX_SENTENCES, n_tasks)
-    answer_chars = n_tasks * 8 + n_sentences * validate.SENTENCE_CHARS
-    in_low, in_high = _tokens(prompt_chars(n_tasks))
+    in_low, in_high = _tokens(prompt_chars_)
     out_low, out_high = (
         round(answer_chars / CHARS_PER_TOKEN_LOW) + 20,
         round(answer_chars / CHARS_PER_TOKEN_HIGH) + 20 + run.thinking_budget,

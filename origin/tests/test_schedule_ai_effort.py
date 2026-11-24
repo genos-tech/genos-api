@@ -121,7 +121,7 @@ class TestTheCatalog(Base):
         self.assertEqual(lows, sorted(lows))
 
     def test_a_job_with_no_ai_says_so_and_has_no_default_or_cost(self):
-        for job in ("what_you_did", "what_is_left", "milestone_updates", "project_updates"):
+        for job in ("what_you_did", "chat_catch_up"):
             row = self.entry(job)
             self.assertEqual(
                 (row["uses_ai"], row["effort_default"], row["effort_cost"]), (False, None, None)
@@ -199,7 +199,7 @@ class TestOverRest(Base):
         self.assertEqual(set(ai["effortCost"]["levels"]), {"low", "medium", "high"})
         low = ai["effortCost"]["levels"]["low"]
         self.assertEqual(set(low), {"model", "creditsMilli", "usdMicro"})
-        for job in (PLAIN_JOB, "what_is_left"):
+        for job in (PLAIN_JOB, "chat_catch_up"):
             self.assertEqual(
                 (jobs[job]["usesAi"], jobs[job]["effortDefault"], jobs[job]["effortCost"]),
                 (False, None, None),

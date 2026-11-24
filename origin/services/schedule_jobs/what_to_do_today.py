@@ -48,6 +48,7 @@ from origin.services.schedule_jobs import (
 )
 from origin.services.schedule_jobs.report_kit import (
     Links,
+    ai_sentences_on,
     arrange,
     clip,
     dedupe_tasks,
@@ -62,14 +63,6 @@ DEFAULT_CHANGED_HOURS = 24
 # fact read off a few comments, the "flash-lite class" the task asked for). A job declares its own
 # default; this one is `low` until a real-call comparison says the next rung is worth its price.
 EFFORT_DEFAULT = "low"
-
-
-def ai_sentences_on(params: dict[str, Any]) -> bool:
-    """The AI sentences are an OPT-IN (MIP-1969): on only when the member set `ai_sentences: true`.
-
-    Schedules that existed before the opt-in were given an explicit `true` by migration 0267, so
-    they keep what they did."""
-    return params.get("ai_sentences") is True
 
 
 # What each section is, for the card (MIP-1208). "Changed in the last N hours" carries N.
