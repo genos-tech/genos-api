@@ -174,7 +174,7 @@ _COPY: dict[str, dict] = {
             "Para terminar el acceso de una app, abre {menu} y revócala. "
             "Deja de funcionar en su siguiente solicitud."
         ),
-        "menu": "Ajustes > Revelador > Apps conectadas",
+        "menu": "Ajustes > Desarrolladores > Apps conectadas",
     },
     "fr": {
         "title": "Commencer ici",
@@ -286,7 +286,7 @@ _COPY: dict[str, dict] = {
         "code_signin": "然后在 Claude Code 中打开 /mcp，登录 genos。",
         "plan": "连接 AI 应用需要 Genos Core 或更高版本。",
         "revoke": "要结束某个应用的访问权限，请打开 {menu} 并撤销它。它在下一次请求时就会失效。",
-        "menu": "设置 > 开发商 > 已连接的应用",
+        "menu": "设置 > 开发者 > 已连接的应用",
     },
     "ar": {
         "title": "ابدأ من هنا",

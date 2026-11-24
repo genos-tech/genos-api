@@ -29,6 +29,19 @@ from origin.services import guide_notes, start_here_note
 from origin.services.collab_push import PushOutcome
 from origin.tests.test_base import BaseAPITestCase
 
+
+def setUpModule():
+    # These tests pin the hand-written guide and its OAuth section (MIP-1558). The vendored manual
+    # (MIP-2324) carries that section in its own words, so for this module the manual is "not there".
+    global _manual_off
+    _manual_off = mock.patch("origin.services.guide_manual.load_manual", return_value=None)
+    _manual_off.start()
+
+
+def tearDownModule():
+    _manual_off.stop()
+
+
 BASE = "https://api.example.com"
 MCP = f"{BASE}/api/public/v1/mcp"
 ON = {"MCP_OAUTH_ENABLED": True, "API_PUBLIC_BASE_URL": BASE}

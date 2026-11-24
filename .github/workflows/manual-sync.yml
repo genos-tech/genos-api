@@ -1,0 +1,42 @@
+name: manual-sync
+
+# Fails when the api's vendored copy of the user manual (origin/services/manual/) is behind the
+# frontend's `main` (MIP-2324). Free: it makes no AI call and runs no test suite. The manual is written
+# in genos-frontend (src/manual/) and copied here by `python scripts/sync_manual.py`; this job is the
+# reminder that the copy needs a sync PR. Not a required check.
+#
+# Reading another repo needs a token: the repository secret FRONTEND_READ_TOKEN (a fine-grained token
+# with Contents: read on genos-tech/genos-frontend). The default GITHUB_TOKEN cannot read it. Without the
+# secret the job fails with a message saying so, instead of passing without having checked.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17 UTC
+  pull_request:
+    paths:
+      - ".github/workflows/manual-sync.yml"
+      - "scripts/sync_manual.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manual-copy-current:
+    name: manual copy is current with frontend main
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.FRONTEND_READ_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Fail clearly when the token is missing
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Repository secret FRONTEND_READ_TOKEN is not set, so the frontend's manual cannot be read. Add it (Contents: read on genos-tech/genos-frontend)."
+            exit 1
+          fi
+      - name: Compare the copy with frontend main
+        run: python scripts/sync_manual.py --github main --check
