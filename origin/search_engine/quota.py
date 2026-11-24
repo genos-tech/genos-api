@@ -101,20 +101,23 @@ def get_user_tier(user_id: str) -> str:
 
 
 def _personal_tier_and_trial_end(user_id: str):
-    """`(tier, trial_ends_at)` for the user in ONE query (the trial row is a LEFT JOIN).
+    """`(tier, trial_ends_at, is_demo)` for the user in ONE query (the trial row is a LEFT JOIN).
 
-    Same contract as `get_user_tier`: never raises, 'free' and no trial when the user cannot be
-    loaded."""
+    Same contract as `get_user_tier`: never raises, 'free', no trial and not demo when the user
+    cannot be loaded. `is_demo` rides on the same row so telling a demo visitor apart (MIP-2341)
+    costs no query of its own."""
     try:
         row = (
-            CustomUser.objects.filter(id=user_id).values_list("tier", "core_trial__ends_at").first()
+            CustomUser.objects.filter(id=user_id)
+            .values_list("tier", "core_trial__ends_at", "is_demo")
+            .first()
         )
     except Exception:  # noqa: BLE001
         log.exception("personal tier lookup failed for user_id=%s", user_id)
-        return "free", None
+        return "free", None, False
     if not row:
-        return "free", None
-    return row[0] or "free", row[1]
+        return "free", None, False
+    return row[0] or "free", row[1], bool(row[2])
 
 
 def resolve_effective_tier(user_id: str) -> dict:
@@ -136,10 +139,12 @@ def resolve_effective_tier(user_id: str) -> dict:
     """
     cache_key = f"{_EFFECTIVE_TIER_CACHE_PREFIX}{user_id}"
     cached = cache.get(cache_key)
-    if isinstance(cached, dict) and "tier" in cached:
+    # `is_demo` is part of a valid entry: an entry cached by the release before it was added is
+    # read again rather than trusted as "not a demo user".
+    if isinstance(cached, dict) and "tier" in cached and "is_demo" in cached:
         return cached
 
-    best, trial_ends_at = _personal_tier_and_trial_end(user_id)
+    best, trial_ends_at, is_demo = _personal_tier_and_trial_end(user_id)
     resolved = {"tier": best, "source": "personal", "team_name": None, "trial_ends_at": None}
     try:
         team_plans = TeamMaster.objects.filter(
@@ -174,6 +179,7 @@ def resolve_effective_tier(user_id: str) -> dict:
             # Never keep an answer past the moment it stops being true.
             ttl = max(1, min(ttl, int(left)))
 
+    resolved = {**resolved, "is_demo": is_demo}
     cache.set(cache_key, resolved, ttl)
     return resolved
 
@@ -381,13 +387,23 @@ def get_max_effort(user_id: str) -> str:
 
     Enforcement CLAMPS a saved preference down to this — it never
     rejects the request (the preference outlives the subscription).
-    Permissive default: 'high'.
+    Permissive default: 'high'. A demo visitor is held to the default effort
+    (`DEMO_AI_MAX_EFFORT`, MIP-2341) whatever their team's plan says, so every ask, skill
+    and report that clamps to this ceiling runs on the default model.
     """
+    from origin.services.demo_ai_limits import DEMO_AI_MAX_EFFORT, is_demo_user  # noqa: PLC0415
+
+    if is_demo_user(user_id):
+        return DEMO_AI_MAX_EFFORT
     return _enum_capability(user_id, "max_effort", _EFFORT_LEVELS, "high")
 
 
 def get_auto_effort(user_id: str) -> bool:
-    """Whether the tier may use the 'auto' (adaptive) effort router."""
+    """Whether the tier may use the 'auto' (adaptive) effort router. Never for a demo visitor."""
+    from origin.services.demo_ai_limits import is_demo_user  # noqa: PLC0415
+
+    if is_demo_user(user_id):
+        return False
     return bool(_capability(user_id, "auto_effort", True))
 
 

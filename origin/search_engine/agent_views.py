@@ -195,6 +195,12 @@ from origin.search_engine.quota import (
     increment_usage,
     resolve_effective_tier,
 )
+from origin.services.demo_ai_limits import (
+    DEMO_AI_MAX_EFFORT,
+    DEMO_AI_PROVIDER,
+    check_demo_ask,
+    is_demo_user,
+)
 from origin.services.skills import effort as skill_effort
 from origin.services.skills import run as skill_run
 from origin.services.skills import service as skill_service
@@ -629,7 +635,17 @@ def _resolve_choice_for(user) -> LlmChoice:
     rung the ask degrades to if routing fails. That skew (a routed-high
     ask pre-flights and counts against the medium model) is accepted
     and only reachable behind the default-off flag.
+
+    A DEMO visitor (MIP-2341) is pinned to the default Gemini model at the default effort and
+    nothing they saved (`preferred_llm_*`) is read: a visitor is a fresh Pro user in a fresh
+    Pro team, and the open picker let them run Claude Opus on our bill.
     """
+    if getattr(user, "is_demo", False):
+        if settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
+            return resolve_user_effort(
+                DEMO_AI_PROVIDER, DEMO_AI_MAX_EFFORT, "", max_effort=DEMO_AI_MAX_EFFORT
+            )
+        return resolve_user_choice(DEMO_AI_PROVIDER, "")
     if settings.SEARCH_ENGINE.get("AGENT_EFFORT_LEVELS"):
         preferred_effort = (user.preferred_llm_effort or "").strip().lower()
         wants_auto = (
@@ -768,14 +784,24 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
     try:
         from origin.search_engine import credit_ledger  # noqa: PLC0415
 
-        policy = settings.CREDIT_POLICY
         balance = credit_ledger.balance_milli(str(user_id), plan)
         if balance is None:  # unlimited plan (enterprise)
             return None
         if balance > 0:
             return None
 
-        entitlement = policy.entitlements_milli.get(plan) or 0
+        entitlement = credit_ledger.entitlement_for(str(user_id), plan) or 0
+        # A demo visitor has nothing to buy or reset: the way on is an account (MIP-2341).
+        copy = (
+            f"You've used the {entitlement / 1000:,.0f} AI credits the demo includes. "
+            f"Create a free account to keep using Genos AI."
+            if is_demo_user(str(user_id))
+            else (
+                f"You've used your {entitlement / 1000:,.0f} AI credits for this "
+                f"month, and any credits you'd bought. The monthly ones reset on "
+                f"the 1st — or buy more credits, or upgrade your plan, to keep going."
+            )
+        )
         return Response(
             {
                 # Customer-facing copy in CREDITS, never yen: credits are
@@ -788,11 +814,7 @@ def _credit_gate(user_id: str, plan: str) -> Response | None:
                 # bought credits knows perfectly well that some of theirs
                 # do not reset, and being told otherwise reads as the
                 # meter being broken rather than as advice.
-                "error": (
-                    f"You've used your {entitlement / 1000:,.0f} AI credits for this "
-                    f"month, and any credits you'd bought. The monthly ones reset on "
-                    f"the 1st — or buy more credits, or upgrade your plan, to keep going."
-                ),
+                "error": copy,
                 "limit_reached": True,
                 # Of the MONTHLY allowance. `balance` is 0 here by
                 # definition, so this is the whole entitlement — spelled
@@ -855,7 +877,7 @@ def _credits_block(user_id: str, plan: str) -> dict | None:
         from origin.search_engine import credit_ledger, credits  # noqa: PLC0415
 
         policy = settings.CREDIT_POLICY
-        entitlement = policy.entitlements_milli.get(plan)
+        entitlement = credit_ledger.entitlement_for(str(user_id), plan)
         breakdown = credit_ledger.balance_breakdown(str(user_id), plan)
         balance = None if breakdown is None else breakdown.total_milli
         if entitlement is None or breakdown is None:
@@ -1388,6 +1410,13 @@ class AgentAskView(AuthenticatedAPIView):
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+
+        # A demo visitor's daily caps (MIP-2341): all demo asks together, and one caller address.
+        # Independent of credits, so they hold while credits are not authoritative too. A no-op for
+        # everyone else.
+        demo_block = check_demo_ask(request, request.user)
+        if demo_block is not None:
+            return demo_block
 
         plan = get_effective_tier(str(user_id))
 
