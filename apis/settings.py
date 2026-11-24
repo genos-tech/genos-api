@@ -107,6 +107,10 @@ MIDDLEWARE = [
     # First, so every log line and error answer of the request shares
     # its reference (apis/request_id.py, MIP-622).
     "apis.request_id.RequestIdMiddleware",
+    # Behind Cloudflare, puts the visitor's address (CF-Connecting-IP, trusted only when the
+    # peer Railway saw is a Cloudflare range) where NUM_PROXIES=1 reads it (MIP-2235). Before
+    # anything that reads the client address; a no-op without Cloudflare.
+    "origin.middleware.real_client_ip.RealClientIPMiddleware",
     # One `perf.request` log line per API request: wall time, thread CPU,
     # queries, requests in flight (MIP-956). Right after the request id so
     # it times every layer below and its line carries the reference.
