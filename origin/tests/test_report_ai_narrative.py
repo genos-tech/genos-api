@@ -164,14 +164,21 @@ class TestSkipPaths(NarrativeBase):
         return report
 
     def test_nothing_to_say_makes_no_call(self):
-        # A project with nothing in it still has its standing counts, but a report with no line
-        # of its own (empty sections) has nothing to summarise.
-        empty = {"title": "T", "summary": "Nothing.", "sections": [], "quiet": True}
+        # A report with no line of its own has nothing to summarise.
+        empty = {"title": "T", "summary": "Nothing.", "sections": []}
         module = __import__(JOBS["project_updates"].run.__module__, fromlist=["_report"])
         with mock.patch.object(module, "_report", return_value=empty):
             report = self.run_pu(ai_sentences=True)
         self.assertEqual(self.model.calls, [])
         self.assertEqual(report["ai_skipped"], "nothing_to_say")
+
+    def test_a_quiet_report_costs_nothing_and_a_quiet_tick_still_posts_nothing(self):
+        # project_updates marks a day with no news `quiet` but still lists "Where it stands": that
+        # must not buy a summary, nor make the tick post (a request id makes a quiet report post).
+        report = self.skipped("quiet")
+        self.assertIs(report["quiet"], True)
+        self.assertTrue(report["sections"], "the standing counts are there, as the review found")
+        self.assertTrue(schedule_delivery.is_quiet_tick(report, self.now))
 
     def test_operator_switch_meter_and_credentials(self):
         self.seed()
@@ -273,6 +280,11 @@ class TestWhatTheModelSees(NarrativeBase):
         self.assertEqual(sum(len(t) for _, t in lines), narrative.MAX_LINES)
         message = narrative.build_user_message(report, "2026-11-08")
         self.assertLessEqual(len(message), narrative.MAX_PROMPT_CHARS + 60)
+        # Whole lines only: the cut never leaves a fence open.
+        self.assertEqual(
+            message.count("<workspace_content>"), message.count("</workspace_content>")
+        )
+        self.assertTrue(message.endswith("Answer with the JSON object only."))
 
 
 class TestDelivery(NarrativeBase):

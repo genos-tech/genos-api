@@ -105,10 +105,17 @@ def build_user_message(report: dict[str, Any], today_iso: str) -> str:
         f"title: {wrap_workspace_content(str(report.get('title') or '')) or '(none)'}",
         f"counts: {wrap_workspace_content(str(report.get('summary') or '')) or '(none)'}",
     ]
+    size = sum(len(p) for p in parts)
     for heading, texts in report_lines(report):
-        parts.append(f"section: {wrap_workspace_content(heading) or '(none)'}")
-        parts.extend(f"- {wrap_workspace_content(t)}" for t in texts)
-    return "\n".join(parts)[:MAX_PROMPT_CHARS] + "\n\nAnswer with the JSON object only."
+        block = [f"section: {wrap_workspace_content(heading) or '(none)'}"]
+        block.extend(f"- {wrap_workspace_content(t)}" for t in texts)
+        for line in block:
+            # Whole lines only: a cut string could leave a fence open.
+            if size + len(line) + 1 > MAX_PROMPT_CHARS:
+                return "\n".join(parts) + "\n\nAnswer with the JSON object only."
+            parts.append(line)
+            size += len(line) + 1
+    return "\n".join(parts) + "\n\nAnswer with the JSON object only."
 
 
 def _key(user_id: str, level: str, user_message: str) -> str:
@@ -142,6 +149,11 @@ def narrative_for(
 
 
 def _run(ctx, report, effort, default_effort, today_iso, out: Narrative) -> Narrative:
+    if report.get("quiet") is True:
+        # The job found nothing worth the member's attention (a quiet tick files nothing). Asking
+        # for a summary would charge for it and, with a request id, make the tick post (MIP-1417).
+        out.skipped = "quiet"
+        return out
     if not report_lines(report):
         out.skipped = "nothing_to_say"
         return out
