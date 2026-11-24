@@ -583,20 +583,28 @@ def _setting(name: str, default: int) -> int:
     return int(getattr(settings, name, default))
 
 
+HEAP_STREAK_ROW = "opensearch-heap-streak"
+
+
 def _heap_streak(over: bool) -> int:
-    """Consecutive ticks the heap has been over its limit (0 when it isn't). Counted in
-    the shared cache; with the cache down nothing is counted, so heap never alerts then."""
-    key = "ops:opensearch-heap-streak"
-    try:
-        cache = throttles.throttle_cache()
-        if not over:
-            cache.delete(key)
-            return 0
-        if cache.add(key, 1, 3600):
-            return 1
-        return cache.incr(key)
-    except Exception:
-        return 0
+    """Consecutive ticks the heap has been over its limit (0 when it isn't).
+
+    Kept in the database, not a cache: every tick is a fresh process, and `ops-alert-tick`
+    has no `REDIS_URL`. The count lives in `last_error` of a `CronHeartbeat` row of its own
+    (not in `CRON_SCHEDULES`, so nothing reads it as a cron). Raises when it can't be counted;
+    the caller reports that as "Not checked".
+    """
+    with transaction.atomic():
+        row, _ = CronHeartbeat.objects.select_for_update().get_or_create(name=HEAP_STREAK_ROW)
+        try:
+            before = int(row.last_error or 0)
+        except ValueError:
+            before = 0
+        streak = before + 1 if over else 0
+        if streak != before:
+            row.last_error = str(streak) if streak else ""
+            row.save(update_fields=["last_error"])
+    return streak
 
 
 def _capacity_alert(key: str, summary: str, detail: dict, now) -> None:
@@ -653,8 +661,16 @@ def check_opensearch_capacity(*, now=None) -> list[str]:
 
     heap = ((node.get("jvm") or {}).get("mem") or {}).get("heap_used_percent")
     if heap is not None:
-        streak = _heap_streak(heap > heap_limit)
-        if streak >= heap_ticks:
+        try:
+            streak = _heap_streak(heap > heap_limit)
+        except Exception as exc:
+            streak = None
+            skipped.append(
+                f"OpenSearch heap: the streak could not be counted ({describe_exception(exc)})"
+            )
+        if streak is None:
+            pass
+        elif streak >= heap_ticks:
             _capacity_alert(
                 "capacity:heap",
                 f"OpenSearch heap has been over {heap_limit}% for {streak} checks (now {heap}%)",

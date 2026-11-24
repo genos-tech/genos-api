@@ -3,7 +3,6 @@
 from datetime import UTC, datetime
 from unittest import mock
 
-from django.core.cache import caches
 from django.test import TestCase, override_settings
 
 from origin.models.common.ops_models import OpsAlert, OpsAlertKind
@@ -47,15 +46,6 @@ class FakeClient:
 class TestCapacity(TestCase):
     now = datetime(2027, 1, 1, tzinfo=UTC)
 
-    def setUp(self):
-        caches["default"].clear()
-        try:
-            from origin.services import throttles
-
-            throttles.throttle_cache().delete("ops:opensearch-heap-streak")
-        except Exception:
-            pass
-
     def run_check(self, stats=None, docs=21_973):
         client = FakeClient(stats or _stats(), docs)
         with mock.patch("origin.search_engine.opensearch_client.get_client", return_value=client):
@@ -86,6 +76,23 @@ class TestCapacity(TestCase):
         self.assertFalse(OpsAlert.objects.exists())
         self.run_check(_stats(heap=90))
         self.assertEqual(self.keys(), {"capacity:heap"})
+
+    def test_heap_streak_survives_an_unreachable_cache(self):
+        # ops-alert-tick has no REDIS_URL: the cache raises on every call (MIP-2385 review).
+        # The streak must not depend on it, and each tick is a fresh process (DB only).
+        with mock.patch(
+            "origin.services.throttles.throttle_cache", side_effect=ConnectionError("redis")
+        ):
+            for _ in range(3):
+                skipped = self.run_check(_stats(heap=90))
+        self.assertEqual(skipped, [])
+        self.assertEqual(self.keys(), {"capacity:heap"})
+
+    def test_uncountable_streak_shows_as_not_checked(self):
+        with mock.patch.object(ops_alerts, "_heap_streak", side_effect=RuntimeError("db down")):
+            skipped = self.run_check(_stats(heap=90))
+        self.assertTrue(any("streak could not be counted" in line for line in skipped))
+        self.assertEqual(self.keys(), set())
 
     def test_a_heap_dip_resets_the_streak(self):
         for heap in (90, 90, 50, 90, 90):
