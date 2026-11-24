@@ -162,6 +162,11 @@ def check_params(ctx: ToolContext, params: dict[str, Any], schedule_id: Any) -> 
         )
     except service.SkillNotFound:
         raise ScheduleError("That skill was not found, or you may not run it.") from None
+    except service.SkillNeedsConfirmation:
+        raise ScheduleError(
+            "Run this skill once in Genos and confirm it before you schedule it: nobody is there "
+            "to confirm it when the schedule runs."
+        ) from None
     except service.SkillError as exc:
         raise ScheduleError(str(exc)[:200]) from None
 
@@ -279,6 +284,12 @@ def run(ctx: ToolContext, params: dict[str, Any]) -> Report:
     except service.SkillNotFound:
         raise _fail(
             "That skill is no longer available to you, so this schedule did not run."
+        ) from None
+    except service.SkillNeedsConfirmation:
+        raise _fail(
+            "This skill needs your confirmation first (a new version by an outside author, or a "
+            "copy of a skill that was removed as harmful), so this schedule did not run. Open the "
+            "skill in Genos, read it and confirm it."
         ) from None
     except service.SkillError as exc:
         raise _fail(str(exc)[:200]) from None

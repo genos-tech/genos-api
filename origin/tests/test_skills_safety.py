@@ -630,6 +630,12 @@ class ApprovalRoundTripTests(base.ResumeBase):
         gate = mock.patch("origin.services.skills.hub.require_public_gate")
         gate.start()
         self.addCleanup(gate.stop)
+        # The first-run card has its own tests (`test_skills_confirm.py`): here the person confirmed.
+        confirm = mock.patch(
+            "origin.services.skills.service.needed_confirmations", return_value=(False, False)
+        )
+        confirm.start()
+        self.addCleanup(confirm.stop)
         self.delete_tool = FakeTool("delete_sprint")
         self.write_tool = FakeTool("create_task")
         for patcher in (
