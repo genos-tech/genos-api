@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("origin", "0279_skill_grants"),
+        ("origin", "0284_security_event_refresh_reused"),
     ]
 
     operations = [
@@ -37,6 +37,7 @@ class Migration(migrations.Migration):
                     ("signin.succeeded", "Signed in"),
                     ("signin.failed", "Sign-in failed"),
                     ("signout", "Signed out"),
+                    ("session.refresh_reused", "Session ended: sign-in token reused"),
                     ("password.reset_requested", "Password reset requested"),
                     ("password.reset", "Password reset"),
                     ("mcp.connected", "AI app connected"),
@@ -71,12 +72,17 @@ class Migration(migrations.Migration):
                     ("oauth.disconnected", "Account disconnected"),
                     ("alert.export", "Alert: data exported"),
                     ("alert.forbidden_burst", "Alert: many refused requests"),
+                    ("alert.signin_spray", "Alert: failed sign-ins across many accounts"),
                     ("alert.read_volume", "Alert: unusual read volume"),
                     ("credential.suspended", "Key or app suspended"),
                     ("credential.resumed", "Key or app re-enabled"),
                     ("operator.user_deactivated", "Operator: user cut off"),
                     ("operator.api_key_revoked", "Operator: API key revoked"),
                     ("operator.team_keys_revoked", "Operator: team API keys revoked"),
+                    ("ops.command", "Operator: command run"),
+                    ("ops.shell_opened", "Operator: shell opened"),
+                    ("ops.shell_closed", "Operator: shell closed"),
+                    ("alert.ops_command_unlisted", "Alert: unlisted operator command"),
                 ],
                 max_length=40,
             ),
