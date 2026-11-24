@@ -78,6 +78,8 @@ def present(sched: MemberSchedule, zone) -> dict[str, Any]:
         out["month_day"] = sched.month_day
     if sched.frequency == FREQ_ONCE and sched.run_date:
         out["run_date"] = sched.run_date.isoformat()
+    if sched.deliver_channel_id:
+        out["deliver_chat_id"] = str(sched.deliver_channel_id)
     if not sched.enabled and sched.paused_reason:
         out["paused_reason"] = sched.get_paused_reason_display()
     if job is not None and job.uses_ai:
