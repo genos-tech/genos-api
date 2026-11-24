@@ -319,6 +319,7 @@ def _delete_personal_data(user, closing_team_ids=()) -> None:
     # (no cascade), so notes and folders go explicitly.
     from origin.models.note.common_note_models import NoteFolderPermission, NotePermissionMaster
     from origin.models.note.favorite_note_models import NoteFavoriteMaster
+    from origin.models.note.note_template_models import NoteTemplate
     from origin.models.note.personal_note_models import (
         PersonalNoteFolder,
         PersonalNoteMaster,
@@ -358,6 +359,8 @@ def _delete_personal_data(user, closing_team_ids=()) -> None:
     # the user FK (SET_NULL) never fires and the rows would stay, pointing at their id.
     NoteRecentMaster.objects.filter(user=user).delete()
     NoteFavoriteMaster.objects.filter(user=user).delete()
+    # Personal note templates (MIP-2337) have no team: nothing would ever remove them.
+    NoteTemplate.objects.filter(team__isnull=True, created_by=user).delete()
 
 
 def _drop_from_search_after_commit(note_ids, folder_ids) -> None:
