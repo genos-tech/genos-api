@@ -62,8 +62,8 @@ class TestTheSurfaceLists(McpBase):
     def test_core_is_small_and_has_no_duplicates(self):
         self.assertEqual(len(set(surfaces.CORE_TOOLS)), len(surfaces.CORE_TOOLS))
         # MIP-1594 design: about 20; MIP-2049 (D1, approved 2026-11-23) grew it to 34 with the tools
-        # the shipped general skills call. A bigger core needs a decision, so it fails here.
-        self.assertLessEqual(len(surfaces.CORE_TOOLS), 34)
+        # the shipped general skills call; MIP-2327 made it 35 (get_genos_help, user-guide milestone MIP-2304).
+        self.assertLessEqual(len(surfaces.CORE_TOOLS), 35)
 
     def test_the_tools_the_general_skills_call_are_on_core(self):
         for name in (

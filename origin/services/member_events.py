@@ -150,6 +150,7 @@ NO_SINGLE_ITEM = frozenset(
         "list_my_mentions",
         "list_channel_members",
         "get_current_user",
+        "get_genos_help",  # MIP-2327: manual text, no work item
         "get_team_members",
         "list_project_members",
         "list_project_tags",

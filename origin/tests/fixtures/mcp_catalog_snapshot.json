@@ -126,6 +126,12 @@
     "switch": ""
   },
   {
+    "name": "get_genos_help",
+    "write": false,
+    "destructive": false,
+    "switch": ""
+  },
+  {
     "name": "get_team_members",
     "write": false,
     "destructive": false,

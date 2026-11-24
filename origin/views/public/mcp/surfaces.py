@@ -53,6 +53,7 @@ CORE_TOOLS: tuple[str, ...] = (
     # MIP-2049 (D1 of the skills v2 design): every tool a shipped general skill calls.
     "get_current_user",
     "get_team_members",
+    "get_genos_help",
     "list_projects",
     "list_milestones",
     "list_my_inbox",
@@ -159,6 +160,7 @@ DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
         "run_my_schedule",
         "get_current_user",
         "get_team_members",
+        "get_genos_help",
     ),
     "calendar-chat": (
         "list_calendars",

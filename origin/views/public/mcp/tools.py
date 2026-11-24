@@ -143,6 +143,7 @@ from origin.services.security_events import (
 from origin.views.public.mcp import (  # noqa: F401  (registers the MCP-only tools)
     ancestry,
     body_paging,
+    genos_help,
     html_notes,
     note_blocks,
     note_threads,
@@ -898,6 +899,18 @@ CATALOG: tuple[McpTool, ...] = (
             "Who this API key acts as: user id, name, team. Call it when you "
             "need the caller's own id for an assignee filter, or to confirm "
             "which account is making changes."
+        ),
+    ),
+    McpTool(
+        name="get_genos_help",
+        registry_name="get_genos_help",
+        description=(
+            "Use it when the member asks how to use Genos itself: 'where do I change X', 'how "
+            "do I turn off Y', plans, limits, shortcuts, connecting an app. Matches `query` "
+            "(English or Japanese) against Genos's user manual; free, no AI is run. Returns the "
+            "best `matches` (text) and `settings` (Settings path, who can change it, the plan, "
+            "and a link that opens that Settings tab). Not for the member's own data: use "
+            "`search_workspace` for that."
         ),
     ),
     McpTool(
