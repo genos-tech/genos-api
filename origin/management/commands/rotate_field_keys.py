@@ -42,6 +42,9 @@ MANUAL_COLUMNS = [
     ("origin.ConnectedAccount", "access_token_encrypted"),
     ("origin.ConnectedAccount", "refresh_token_encrypted"),
     ("origin.WebhookEndpoint", "secret_encrypted"),
+    # The two-factor secret (MIP-2239): left out, dropping the old key would lock every
+    # person who turned two-factor on out of signing in.
+    ("origin.UserMFA", "secret_encrypted"),
 ]
 
 

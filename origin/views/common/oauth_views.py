@@ -51,6 +51,7 @@ from origin.services import (
     first_month_trial,
     github_app,
     github_app_link,
+    mfa,
     signup_consent,
     start_here_note,
 )
@@ -568,6 +569,14 @@ class OAuthCallbackView(APIView):
             if not user.is_active:
                 _record_oauth_signin_failed(provider_name, profile, "account_inactive", user)
                 return HttpResponseRedirect(_frontend_failure_url(reason="account_inactive"))
+            # A person who turned on two-factor for their password sign-in must not be
+            # able to walk round it by connecting a provider that carries their own address
+            # (MIP-2239): the provider's check is not the one they chose. Refused at the
+            # door, with the way back in named; an account that only ever signs in with a
+            # provider cannot have two-factor on, so none of those is affected.
+            if mfa.is_enabled(user):
+                _record_oauth_signin_failed(provider_name, profile, "mfa_password_only", user)
+                return HttpResponseRedirect(_frontend_failure_url(reason="mfa_password_only"))
             # Deliberately NOT storing this round trip's token. A login
             # grant carries openid/email/profile and nothing else, and we
             # never read it again — we mint our own JWT. Writing it over
