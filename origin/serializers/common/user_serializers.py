@@ -4,11 +4,12 @@ import zoneinfo
 
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from origin.models.common import user_models
 from origin.models.common.invite_models import TeamInvite
-from origin.services import crypto
+from origin.services import crypto, password_policy
 
 # Ceiling on `about_me`. Generous for a profile blurb and small enough that
 # a roster of a few hundred people stays a sensible response — this field
@@ -135,6 +136,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         extra_kwargs = {"email": {"validators": [crypto.refuse_ciphertext_lookalike]}}
 
     def validate_email(self, value):
+        # The signup view answers a registered address like a new one (MIP-2232) and says so here.
+        if self.context.get("allow_existing_email"):
+            return value
         if user_models.CustomUser.objects.with_email(value).exists():
             raise serializers.ValidationError(
                 "custom user with this email already exists.", code="unique"
@@ -150,6 +154,19 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
+        # Django's validators, as the reset flow already runs them (MIP-2238): common and
+        # numeric-only passwords, one like the username or email, and (switch on) a breached
+        # one. Each refusal keeps its code so the client can answer in the member's language.
+        refusals = password_policy.check_password_policy(
+            attrs.get("password") or "",
+            user=user_models.CustomUser(
+                username=attrs.get("username") or "", email=attrs.get("email") or ""
+            ),
+        )
+        if refusals:
+            raise serializers.ValidationError(
+                {"password": [ErrorDetail(text, code=code) for code, text in refusals]}
+            )
         token = (attrs.get("invite_token") or "").strip()
         if token:
             token_hash = hashlib.sha256(token.encode()).hexdigest()

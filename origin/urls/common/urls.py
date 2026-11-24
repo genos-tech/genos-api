@@ -4,6 +4,7 @@ from origin.views.common.agent_work_views import AgentWorkView
 from origin.views.common.api_key_views import (
     ApiKeyDetailView,
     ApiKeyListCreateView,
+    ApiKeyResumeView,
     TeamApiKeyDetailView,
     TeamApiKeyListView,
 )
@@ -61,6 +62,7 @@ from origin.views.common.mcp_connection_views import (
     McpConnectionDetailView,
     McpConnectionListView,
     McpConnectionQuietView,
+    McpConnectionResumeView,
     TeamMcpConnectionDetailView,
     TeamMcpConnectionListView,
 )
@@ -104,6 +106,7 @@ from origin.views.common.security_event_views import (
     TeamSecurityEventListView,
 )
 from origin.views.common.skill_views import (
+    SkillConfirmView,
     SkillCopyView,
     SkillDetailView,
     SkillEditorDetailView,
@@ -121,10 +124,12 @@ from origin.views.common.skill_views import (
     SkillPublishCheckView,
     SkillPublishView,
     SkillReportView,
+    SkillRunCardView,
     SkillStarView,
     SkillTagDetailView,
     SkillTagListView,
     SkillTakedownView,
+    SkillUpdateDiffView,
     SkillVersionDetailView,
     SkillVersionListView,
 )
@@ -502,6 +507,16 @@ urlpatterns = [
     ),
     path("api/v2/api-keys/", ApiKeyListCreateView.as_view(), name="api_keys"),
     path("api/v2/api-keys/<uuid:key_id>/", ApiKeyDetailView.as_view(), name="api_key_detail"),
+    path(
+        "api/v2/api-keys/<uuid:key_id>/resume/",
+        ApiKeyResumeView.as_view(),
+        name="api_key_resume",
+    ),
+    path(
+        "api/v2/mcp/connections/<uuid:connection_id>/resume/",
+        McpConnectionResumeView.as_view(),
+        name="mcp_connection_resume",
+    ),
     # Connecting an AI app over MCP (MIP-1077): the consent page's two calls.
     path(
         "api/v2/mcp/oauth/consent/context/",
@@ -549,6 +564,17 @@ urlpatterns = [
     path("api/v2/skills/<uuid:skill_id>/copy/", SkillCopyView.as_view(), name="skill_copy"),
     path(
         "api/v2/skills/<uuid:skill_id>/install/", SkillInstallView.as_view(), name="skill_install"
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/update-diff/",
+        SkillUpdateDiffView.as_view(),
+        name="skill_update_diff",
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/run-card/", SkillRunCardView.as_view(), name="skill_run_card"
+    ),
+    path(
+        "api/v2/skills/<uuid:skill_id>/confirm/", SkillConfirmView.as_view(), name="skill_confirm"
     ),
     path("api/v2/skills/<uuid:skill_id>/star/", SkillStarView.as_view(), name="skill_star"),
     path("api/v2/skills/<uuid:skill_id>/export/", SkillExportView.as_view(), name="skill_export"),
