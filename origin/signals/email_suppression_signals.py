@@ -1,8 +1,8 @@
 """Turns Anymail tracking events (Resend webhook) into suppressions.
 
 Registered from `OriginConfig.ready` like the other signal modules. The
-webhook itself is Anymail's `ResendTrackingWebhookView`, mounted under
-`api/v2/email/anymail/` in urls.py and verified with the Svix signing
+webhook itself is Anymail's `ResendTrackingWebhookView`, mounted alone at
+`api/v2/email/anymail/resend/tracking/` in urls.py (no other ESP's route is mounted) and verified with the Svix signing
 secret (`ANYMAIL_RESEND_SIGNING_SECRET`) — configure the webhook at
 resend.com to send `email.bounced` and `email.complained` events.
 
@@ -34,6 +34,10 @@ def handle_tracking_event(sender, event, esp_name, **kwargs):
     from origin.models.common.user_models import CustomUser
     from origin.services.email_suppression import suppress
 
+    # Defence in depth (MIP-2298): only Resend is configured and verified. An
+    # event from any other ESP's view is not one we asked for, so it suppresses nothing.
+    if esp_name != "Resend":
+        return
     if event.event_type not in ("bounced", "complained"):
         return
     address = (event.recipient or "").strip().lower()
