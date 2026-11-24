@@ -134,6 +134,34 @@ class CollabAccessCheckTests(BaseAPITestCase):
             with self.subTest(bad=bad):
                 self.assertEqual(self._check(bad).status_code, 400)
 
+    def test_alias_spellings_of_an_id_are_400(self):
+        """MIP-2299: genos-collab keys the Yjs document by the raw name, so every spelling that
+        Python's `int()` forgives ('+1', ' 1', '015', '1_0', fullwidth digits) would be one more
+        document row for the same note. Only the canonical spelling is a document name."""
+        for prefix in ("my-note", "task-note", "chat-note", "task-body"):
+            for alias in (
+                "+1",
+                " 1",
+                "1 ",
+                "01",
+                "001",
+                "1_0",
+                "１",  # fullwidth digit one
+                "١",  # Arabic-Indic digit one
+                "\n1",
+                "1\n",
+                "+0",
+                "-0",
+                "١٢",
+            ):
+                with self.subTest(prefix=prefix, alias=alias):
+                    self.assertEqual(self._check(f"{prefix}:{alias}").status_code, 400)
+
+    def test_canonical_name_works_and_its_zero_padded_alias_is_refused(self):
+        self.assertEqual(self._check(f"task-body:{self.task.task_id}").status_code, 200)
+        padded = f"task-body:0{self.task.task_id}"
+        self.assertEqual(self._check(padded).status_code, 400)
+
     def test_requires_authentication(self):
         self.unauthenticate()
         res = self.client.post(URL, {"document_name": "my-note:1"}, format="json")

@@ -1,4 +1,5 @@
-from django.urls import include, path
+from anymail.webhooks.resend import ResendTrackingWebhookView
+from django.urls import path
 
 from origin.views.common.agent_work_views import AgentWorkView
 from origin.views.common.api_key_views import (
@@ -474,11 +475,17 @@ urlpatterns = [
         email_unsubscribe,
         name="email_unsubscribe",
     ),
-    # Anymail ESP webhooks (Resend tracking → bounce/complaint
-    # suppression). The Resend tracking endpoint is
-    # `api/v2/email/anymail/resend/tracking/`, verified with the Svix
-    # signing secret (ANYMAIL_RESEND_SIGNING_SECRET).
-    path("api/v2/email/anymail/", include("anymail.urls")),
+    # The ONE Anymail webhook Genos uses: Resend tracking → bounce/complaint
+    # suppression, verified with the Svix signing secret
+    # (ANYMAIL_RESEND_SIGNING_SECRET). Never `include("anymail.urls")`: that
+    # mounts ~40 inbound/tracking routes for every other ESP, which check
+    # HTTP basic auth against a WEBHOOK_SECRET Genos never sets, so anyone
+    # could forge a bounce or complaint for any address (MIP-2298).
+    path(
+        "api/v2/email/anymail/resend/tracking/",
+        ResendTrackingWebhookView.as_view(),
+        name="resend_tracking_webhook",
+    ),
     path(
         "api/v2/user/preferences/llm-model/",
         LlmModelPreferenceView.as_view(),

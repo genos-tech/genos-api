@@ -454,6 +454,27 @@ class DirectoryTests(HubBase):
         self.assertEqual(few, many, "no query per row")
         self.assertLessEqual(many, 12)
 
+    def test_a_row_says_which_version_the_caller_pinned_so_the_hub_can_offer_uninstall(self):
+        """MIP-2293: Install on a row that is not installed, Uninstall on one that is."""
+        taken = self.pub(self.outsider, slug="taken", title="Taken")
+        free = self.pub(self.outsider, slug="free", title="Free")
+        self.as_user(self.user)
+        res = self.client.post(f"/api/v2/skills/{taken.id}/install/")
+        self.assertEqual(res.status_code, 201, res.content)
+        rows = {s["id"]: s for s in self.get(HUB).json()["skills"]}
+        self.assertEqual(rows[str(taken.id)]["installedVersionNo"], 1)
+        self.assertFalse(rows[str(taken.id)]["updateAvailable"])
+        self.assertNotIn("installedVersionNo", rows[str(free.id)])
+        self.assertNotIn("updateAvailable", rows[str(free.id)])
+        # Somebody else's install is not shown to this caller.
+        other = {s["id"]: s for s in self.get(HUB, self.outsider).json()["skills"]}
+        self.assertNotIn("installedVersionNo", other[str(taken.id)])
+        # Uninstalling takes the marker away.
+        self.as_user(self.user)
+        self.assertEqual(self.client.delete(f"/api/v2/skills/{taken.id}/install/").status_code, 204)
+        again = {s["id"]: s for s in self.get(HUB).json()["skills"]}
+        self.assertNotIn("installedVersionNo", again[str(taken.id)])
+
     def test_the_tags_come_with_counts(self):
         self.pub(self.outsider, slug="aa", tags=["reports", "weekly"])
         self.pub(self.outsider, slug="bb", tags=["reports"])
