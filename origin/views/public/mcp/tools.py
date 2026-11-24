@@ -126,6 +126,7 @@ from django.conf import settings
 
 from origin.models.common.api_key_models import SCOPE_WRITE
 from origin.search_engine.agent.fence import unwrap
+from origin.search_engine.agent.model_fence import escape_user_arguments
 from origin.search_engine.agent.parity import PARITY_FLAG, flag_on, parity_on
 from origin.search_engine.agent.tool_flag_params import with_flagged_params
 from origin.search_engine.agent.tool_flag_text import ADDITIONS, MCP_REPLACEMENTS
@@ -3418,7 +3419,15 @@ def call(
             # MIP-1367: a write that replaces a body this caller has only partly read.
             raise ToolError(why)
         runner = result_limits.run_override(tool.registry_name) if limits else None
-        payload = runner(args, ctx) if runner else _registered(tool).run(args, ctx)
+        # MIP-2300: every registry tool is wrapped by `with_unfenced_arguments`, which takes off a
+        # fence the in-app MODEL copied from a result. MCP output has no fence, so an MCP client
+        # has nothing to copy: what it sent is what it wants stored. Escaping first makes the
+        # wrapper's unescape an exact inverse (the way the approval card does for typed text), so
+        # the tool gets the client's bytes. Only the call into `run`; `args` stays as sent for the
+        # checks above and `augment`/`record_use` below.
+        payload = (
+            runner(args, ctx) if runner else _registered(tool).run(escape_user_arguments(args), ctx)
+        )
         if tool.augment is not None:
             payload = tool.augment(dict(payload or {}), args, mcp_args, ctx)
     except ToolError as exc:
