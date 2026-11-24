@@ -470,6 +470,7 @@ class DirectoryTests(HubBase):
         other = {s["id"]: s for s in self.get(HUB, self.outsider).json()["skills"]}
         self.assertNotIn("installedVersionNo", other[str(taken.id)])
         # Uninstalling takes the marker away.
+        self.as_user(self.user)
         self.assertEqual(self.client.delete(f"/api/v2/skills/{taken.id}/install/").status_code, 204)
         again = {s["id"]: s for s in self.get(HUB).json()["skills"]}
         self.assertNotIn("installedVersionNo", again[str(taken.id)])
