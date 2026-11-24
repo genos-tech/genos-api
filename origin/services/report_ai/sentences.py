@@ -142,6 +142,8 @@ def _run(ctx, task_ids, effort, default_effort, now, today_iso, out: Sentences) 
     if misses and not reason:
         # Out of AI credits (MIP-1960): no call, so no charge; what is cached still shows.
         reason = llm.credit_block(ctx.user_id)
+    if misses and not reason:
+        reason = llm.demo_block(ctx.user_id)  # a demo visitor's daily cap (MIP-2364)
     if misses and reason:
         # Cannot ask (switch off, no meter, no credentials, no credits): what is cached still shows.
         out.skipped = reason

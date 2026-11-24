@@ -57,6 +57,14 @@ from origin.views.utils.scope_guards import participates_in_team
 log = logging.getLogger(__name__)
 
 
+def _demo_search_capped(request: Any) -> bool:
+    """MIP-2364: a demo user's `search_workspace` call counts against the demo daily caps. When a
+    cap stops it the search still runs, plain (no rewrite, no rerank), never refused."""
+    from origin.services.demo_ai_limits import check_demo_ask  # noqa: PLC0415
+
+    return check_demo_ask(request, getattr(request, "user", None)) is not None
+
+
 def _limit_category(refusal: Any) -> str:
     """Which plan limit refused a call, from the refusal's own `limit_reached` data (the 429 body
     or the result's `_meta`), else `limit`."""
@@ -745,7 +753,7 @@ class McpView(PublicApiView):
         # plain (no model call, metered under `mcp`, never charged) and says so.
         spend_surface = "mcp"
         if name == mcp_search_credits.SEARCH_TOOL:
-            if mcp_search_credits.out_of_credits(ctx.user_id):
+            if mcp_search_credits.out_of_credits(ctx.user_id) or _demo_search_capped(request):
                 ctx = dataclasses.replace(ctx, plain_search=True)
             else:
                 spend_surface = mcp_search_credits.MCP_SEARCH_SURFACE

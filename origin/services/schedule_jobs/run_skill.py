@@ -76,6 +76,9 @@ _SKIPPED = {
         "your credits are back."
     ),
 }
+_SKIPPED["demo_limit"] = (
+    "Not run: the demo's AI is at its limit for today. Create a free account to keep using Genos AI."
+)
 _SKIPPED_OTHER = "Not run: AI is not available right now. It runs again at its next time."
 # A run that called the model and then could not give an answer: one line, filed with its cost
 # (a failed request is not billed).
@@ -216,7 +219,7 @@ def _skip_code(user_id: str, run_settings: Any) -> str:
         return llm.SKIP_METER_OFF
     if not llm.configured(run_settings.provider):
         return llm.SKIP_NOT_CONFIGURED
-    return llm.credit_block(user_id)
+    return llm.credit_block(user_id) or llm.demo_block(user_id)
 
 
 def _credit_budget_usd_micro(user_id: str) -> int:
