@@ -1,8 +1,9 @@
 # MIP-2328: which tool does the in-app agent reach for FIRST on "how do I ... in Genos" (flag
 # AGENT_INAPP_HELP_TOOL, arm t2328)? One cheap model call per case (kind: routing); no tool runs.
 # WRITTEN, NOT RUN (Ken 2026-11-24, user-guide milestone MIP-2304: no paid eval; MIP-2329 runs it).
-# Positives `requires_arm: t2328` (they cannot pass without the tool). Negatives run on arm0 too, so the
-# baseline shows whether the new tool steals a question the old tools should keep: outside advice stays on
+# NO arm file yet, on purpose (it would put the flag in the all-flags-on union and move its pins): MIP-2329 adds
+# arms/t2328.yaml and `requires_arm: t2328` on the six positives (they cannot pass without the tool). The eight
+# negatives run on arm0 too, so the baseline shows whether the new tool steals a question the old tools should keep: outside advice stays on
 # search_web, the member's own data stays on search_knowledge_base / the structured reads.
 
 - id: t2328-en-two-step
@@ -13,7 +14,6 @@
   query: "Where do I turn on two-step verification in Genos?"
   note: "Positive: a setting in Genos itself. Today this goes to the web."
   ok: [get_genos_help]
-  requires_arm: t2328
 - id: t2328-ja-two-step
   kind: routing
   lang: ja
@@ -22,7 +22,6 @@
   query: "Genos で二段階認証はどこでオンにできますか?"
   note: "Positive: a setting in Genos itself. Today this goes to the web."
   ok: [get_genos_help]
-  requires_arm: t2328
 - id: t2328-en-invite
   kind: routing
   lang: en
@@ -31,7 +30,6 @@
   query: "How do I invite a teammate to my Genos workspace?"
   note: "Positive: a how-to about the product."
   ok: [get_genos_help]
-  requires_arm: t2328
 - id: t2328-ja-invite
   kind: routing
   lang: ja
@@ -40,7 +38,6 @@
   query: "Genos のワークスペースにチームメイトを招待するにはどうすればいいですか?"
   note: "Positive: a how-to about the product."
   ok: [get_genos_help]
-  requires_arm: t2328
 - id: t2328-en-schedule
   kind: routing
   lang: en
@@ -49,7 +46,6 @@
   query: "How does a Genos schedule work, and how do I make one?"
   note: "Positive: how a feature works."
   ok: [get_genos_help]
-  requires_arm: t2328
 - id: t2328-ja-schedule
   kind: routing
   lang: ja
@@ -58,7 +54,6 @@
   query: "Genos のスケジュールはどういう仕組みで、どうやって作りますか?"
   note: "Positive: how a feature works."
   ok: [get_genos_help]
-  requires_arm: t2328
 - id: t2328-en-web-practice
   kind: routing
   lang: en
