@@ -199,7 +199,7 @@ class ScanTests(SimpleTestCase):
         self.assertEqual(scan.title, "Weekly report")
         self.assertIn("Closed 12 tasks.", scan.text)
         self.assertIn("chart label", scan.text)
-        self.assertNotIn("tooltip only", scan.text)
+        self.assertIn("tooltip only", scan.text)  # MIP-2344: an SVG <title> names the diagram
         self.assertNotIn("rows.length", scan.text)
         self.assertNotIn("font-family", scan.text)
 
