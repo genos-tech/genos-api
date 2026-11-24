@@ -43,7 +43,7 @@ from origin.models.skills.skill_models import (
     Skill,
     SkillReport,
 )
-from origin.services.skills import service
+from origin.services.skills import notices, service
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +127,20 @@ def _maybe_hide(skill: Skill) -> None:
     if skill.status != STATUS_ACTIVE:
         return
     since = timezone.now() - HIDE_WINDOW
+    # An account whose earlier report on THIS skill an operator dismissed does not count toward
+    # hiding it again (MIP-2192): three accounts could otherwise re-hide a restored skill at once.
+    # Only while the text is the one the operator judged: a report of a later version counts again.
+    # `reporter__isnull=False` matters: `NOT IN (..., NULL)` matches nothing in SQL.
+    dismissed = SkillReport.objects.filter(
+        skill=skill,
+        status=REPORT_DISMISSED,
+        reporter__isnull=False,
+        version_no__gte=skill.published_version_no,
+    ).values("reporter_id")
     reporters = (
         SkillReport.objects.filter(skill=skill, status=REPORT_OPEN, created_at__gte=since)
         .exclude(reporter__isnull=True)
+        .exclude(reporter_id__in=dismissed)
         .values("reporter_id")
         .distinct()
         .count()
@@ -140,6 +151,7 @@ def _maybe_hide(skill: Skill) -> None:
         skill.moderated_at = timezone.now()
         skill.save(update_fields=["status", "moderation_reason", "moderated_at", "updated_at"])
         logger.warning("skills: %s hidden after %d reports", skill.pk, reporters)
+        notices.notify_author(skill, notices.HIDDEN)
 
 
 # -- operator decisions ------------------------------------------------------------------------
@@ -167,16 +179,35 @@ def _decide(skill: Skill, operator: Any, status: str, reason: str, *, report_sta
     )
 
 
-def take_down(operator: Any, skill_id: Any, reason: Any) -> Skill:
-    """Stop a skill for everybody but its owner, at once. Its open reports are upheld."""
+def take_down(operator: Any, skill_id: Any, reason: Any, *, harmful: bool = False) -> Skill:
+    """Stop a skill for everybody but its owner, at once. Its open reports are upheld.
+
+    `harmful` (MIP-2192): the operator judged it harmful, not merely unwanted. Copies made earlier
+    (`forked_from`) are then marked (`source_harmful_at`): each shows a warning and its owner must
+    confirm it before it runs. Calling it again on a skill already down is allowed, so an operator
+    can add the mark later; it is not removed here, only by a restore."""
     require_operator(operator)
     reason = _clean_reason(reason, required=True)
     with transaction.atomic():
         skill = Skill.objects.select_for_update().filter(pk=pk_of(skill_id)).first()
         if skill is None:
             raise service.SkillNotFound
+        already_down = skill.status == STATUS_TAKEN_DOWN
         _decide(skill, operator, STATUS_TAKEN_DOWN, reason, report_status=REPORT_UPHELD)
-    logger.warning("skills: %s taken down by operator %s", skill.pk, operator.pk)
+        if harmful:
+            skill.takedown_harmful = True
+            skill.save(update_fields=["takedown_harmful"])
+            # A fresh moment even when the copy was marked before: a confirmation older than it
+            # no longer counts, so a second harmful takedown asks again.
+            Skill.objects.filter(pk__in=_copies_of(skill)).update(source_harmful_at=timezone.now())
+        if not already_down:  # adding the harmful mark later is not a second notice
+            notices.notify_author(skill, notices.TAKEN_DOWN)
+    logger.warning(
+        "skills: %s taken down by operator %s%s",
+        skill.pk,
+        operator.pk,
+        " (harmful)" if harmful else "",
+    )
     return skill
 
 
@@ -191,8 +222,38 @@ def restore(operator: Any, skill_id: Any, reason: Any = "") -> Skill:
         if skill.status not in service.MODERATED_STATUSES:
             raise service.SkillConflict("This skill is not held, hidden or taken down.")
         _decide(skill, operator, STATUS_ACTIVE, reason, report_status=REPORT_DISMISSED)
+        if skill.takedown_harmful:
+            # The operator un-judged it: the copies' warning goes with the mark.
+            skill.takedown_harmful = False
+            skill.save(update_fields=["takedown_harmful"])
+            Skill.objects.filter(pk__in=_copies_of(skill), source_harmful_at__isnull=False).update(
+                source_harmful_at=None
+            )
+        notices.notify_author(skill, notices.RESTORED)
     logger.warning("skills: %s restored by operator %s", skill.pk, operator.pk)
     return skill
+
+
+COPY_CHAIN_DEPTH = 50
+
+
+def _copies_of(skill: Skill) -> list[Any]:
+    """The ids of every copy of `skill`, copies of copies included (`forked_from`, one query a
+    generation, bounded). A copy of a copy carries the same text, so it must warn too."""
+    found: list[Any] = []
+    seen = {skill.pk}
+    frontier = [skill.pk]
+    for _ in range(COPY_CHAIN_DEPTH):
+        frontier = [
+            pk
+            for pk in Skill.objects.filter(forked_from_id__in=frontier).values_list("pk", flat=True)
+            if pk not in seen
+        ]
+        if not frontier:
+            break
+        seen.update(frontier)
+        found.extend(frontier)
+    return found
 
 
 def pk_of(skill_id: Any) -> Any:

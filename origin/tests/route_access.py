@@ -292,6 +292,11 @@ REGISTRY = {
     "origin.views.common.skill_views.SkillCopyView": checked("get_readable"),
     "origin.views.common.skill_views.SkillInstallView": checked("get_readable"),
     "origin.views.common.skill_views.SkillStarView": checked("get_readable"),
+    # MIP-2192: the update diff reads through `get_readable` and the caller's own install row; the
+    # run card and its confirm resolve the skill by the same rules as a run (`run.resolve`).
+    "origin.views.common.skill_views.SkillUpdateDiffView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillRunCardView": checked("get_readable"),
+    "origin.views.common.skill_views.SkillConfirmView": checked("get_readable"),
     "origin.views.common.skill_views.SkillExportView": checked("get_readable"),
     # MIP-2044: a report is filed on a skill the caller can READ (and not their own); the takedown
     # is the operator's (`is_staff`), and anyone else gets the same 404 as an unknown skill.
@@ -718,6 +723,11 @@ REGISTRY = {
     "origin.views.project.prj_views.ProjectsView": checked("is_team_member"),
     # views.public.mcp.views
     "origin.views.public.mcp.views.McpView": checked("is_team_member"),
+    # views.public.secret_scanning_views
+    "origin.views.public.secret_scanning_views.SecretScanningView": public(
+        "GitHub's ECDSA signature over the raw body, verified against its published keys before "
+        "anything is parsed; per-address throttle"
+    ),
     # views.public.openapi
     "origin.views.public.openapi.OpenApiSchemaView": public(
         "the public API's schema document; no data"

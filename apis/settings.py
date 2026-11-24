@@ -265,7 +265,20 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
+    # Known-breach check (MIP-2238). A no-op unless PASSWORD_BREACH_CHECK is on; fails open.
+    {
+        "NAME": "origin.services.password_policy.PwnedPasswordValidator",
+    },
 ]
+
+# Ask Have I Been Pwned (k-anonymity: 5 hex characters of a SHA-1 leave the server) whether a
+# new password is in a known breach, at signup and reset. OFF until Ken turns it on.
+PASSWORD_BREACH_CHECK = os.environ.get("PASSWORD_BREACH_CHECK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 # Internationalization
@@ -2679,6 +2692,10 @@ SECURITY_EVENT_RETENTION_MIN_DAYS = 90
 # raise a `security.alert`. Normal use hits a 403 rarely; walking through
 # ids that aren't yours hits one per id.
 SECURITY_FORBIDDEN_BURST = int(os.environ.get("SECURITY_FORBIDDEN_BURST", "20"))
+# MIP-2237: wrong passwords for one typed address within an hour before its sign-ins back off,
+# and how many distinct addresses failing within an hour count as a password spray.
+SIGNIN_BACKOFF_FAILURES = int(os.environ.get("SIGNIN_BACKOFF_FAILURES", "5"))
+SIGNIN_SPRAY_ACCOUNTS = int(os.environ.get("SIGNIN_SPRAY_ACCOUNTS", "50"))
 
 # --- Ops alerts (MIP-772, origin/services/ops_alerts.py) ---
 # Who `ops_alert_tick` mails, through the same Resend transport as every

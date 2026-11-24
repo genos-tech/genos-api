@@ -608,6 +608,7 @@ _PUBLIC_DRF = {
     "api/v2/billing/stripe/webhook/",
     "api/v2/team/invite/preview/",
     "api/public/v1/openapi.json",
+    "api/public/v1/secret-scanning/",
 }
 
 # Plain Django views never see DRF permissions at all, so each one does its

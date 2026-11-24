@@ -3,13 +3,12 @@ import logging
 import secrets
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
-from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
-from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import JsonResponse
 from django.utils import timezone
@@ -30,7 +29,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apis.request_id import describe_exception
 from origin.models.common.security_event_models import SecurityAction
 from origin.models.common.team_models import TeamMaster
-from origin.services import demo_v2
+from origin.services import demo_v2, signin_backoff
 from origin.services.credential_revocation import end_all_credentials
 from origin.services.demo_seeder import (
     DEMO_LANGUAGES,
@@ -109,7 +108,7 @@ from origin.serializers.common.user_serializers import (
     UserCreateSerializer,
     UserSerializer,
 )
-from origin.services import first_month_trial, signup_consent, start_here_note
+from origin.services import first_month_trial, password_policy, signup_consent, start_here_note
 from origin.services.email import run_after_response, send_templated_email
 
 User = get_user_model()
@@ -249,10 +248,12 @@ class UserViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             context={**self.get_serializer_context(), "allow_existing_email": existing is not None},
         )
         if not serializer.is_valid():
-            return Response(
-                {"message": serializer.errors.items()},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            body_out = {"message": serializer.errors.items()}
+            # A refused password carries a stable code so the client can say why in the
+            # member's language (MIP-2238); other 400s keep their old shape.
+            if "password" in serializer.errors:
+                body_out.update(password_policy.rejection_payload(serializer.errors["password"]))
+            return Response(body_out, status=status.HTTP_400_BAD_REQUEST)
 
         if existing is not None:
             # The new path pays for a password hash; so does this one, so the two take alike.
@@ -378,6 +379,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         body = body_object(request)
         email = body.get("email")
         password = body.get("password")
+        # Per-account backoff (MIP-2237), keyed on the typed address, so the answer is the
+        # same for an address with no account.
+        locked = signin_backoff.check(email)
+        if locked is not None:
+            return locked
         # The serializer below reads a number as its text (`5` signs in as "5"), so the
         # gate has to check that text too: `check_password` raises (a 500) for a number,
         # and skipping the gate for one would let it past `email_not_verified`. Anything
@@ -404,9 +410,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             response = super().post(request, *args, **kwargs)
         except AuthenticationFailed:
+            signin_backoff.note_failure(email, request)
             _record_signin_failed(request, email, reason="bad_credentials")
             raise
         data = response.data
+        signin_backoff.clear(email)
         record_security_event(
             SecurityAction.SIGNIN_SUCCEEDED,
             request=request,
@@ -1159,11 +1167,15 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            validate_password(new_password, user=user)
-        except DjangoValidationError as exc:
+        refusals = password_policy.check_password_policy(new_password, user=user)
+        if refusals:
             return Response(
-                {"detail": " ".join(exc.messages)},
+                {
+                    "detail": " ".join(text for _, text in refusals),
+                    **password_policy.rejection_payload(
+                        [SimpleNamespace(code=code) for code, _ in refusals]
+                    ),
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1186,6 +1198,7 @@ class PasswordResetConfirmView(APIView):
             # (owner decision 2026-11-14), each leaving the row an explicit disconnect or
             # revoke leaves.
             ended = end_all_credentials(user, by="password_reset", request=request)
+            signin_backoff.clear(user.email)
             record_security_event(
                 SecurityAction.PASSWORD_RESET,
                 request=request,

@@ -7,7 +7,7 @@ makes the two decisions, through `services/skills/moderation.py` (the same funct
 
     python manage.py skills_moderate                                 # the queue (reads only)
     python manage.py skills_moderate --show <skill-id>               # the text readers get, the scan, the reports
-    python manage.py skills_moderate --takedown <skill-id> --reason "..." --operator <staff username>
+    python manage.py skills_moderate --takedown <skill-id> --reason "..." --operator <staff username> [--harmful]
     python manage.py skills_moderate --restore  <skill-id> [--reason "..."] --operator <staff username>
 
 Dry-run by default: a decision is written only with `--apply`. A takedown stops installs, team runs
@@ -40,6 +40,12 @@ class Command(BaseCommand):
         parser.add_argument("--show", metavar="SKILL_ID", help="Show one skill in full.")
         parser.add_argument("--takedown", metavar="SKILL_ID", help="Stop this skill for everybody.")
         parser.add_argument("--restore", metavar="SKILL_ID", help="Put a held skill back.")
+        parser.add_argument(
+            "--harmful",
+            action="store_true",
+            help="With --takedown: the skill is harmful. Copies made earlier show a warning and "
+            "their owners must confirm them before they run.",
+        )
         parser.add_argument("--reason", default="", help="The sentence the author is shown.")
         parser.add_argument("--operator", default="", help="The staff account taking the decision.")
         parser.add_argument("--apply", action="store_true", help="Write the decision.")
@@ -73,6 +79,8 @@ class Command(BaseCommand):
         self.stdout.write(f"/{skill.slug}  {skill.title}  [{skill.visibility}, {skill.status}]")
         if skill.moderation_reason:
             self.stdout.write(f"Last decision: {skill.moderation_reason}")
+        if skill.takedown_harmful:
+            self.stdout.write("Taken down as HARMFUL: copies need their owner's confirmation.")
         version = skill.versions.order_by("-version_no").first()
         if version is not None:
             self.stdout.write(f"Newest version {version.version_no}, scan: {version.scan_result}")
@@ -88,7 +96,13 @@ class Command(BaseCommand):
     def _decide(self, options):
         takedown = bool(options["takedown"])
         raw_id = options["takedown"] or options["restore"]
-        verb = "take down" if takedown else "restore"
+        if options["harmful"] and not takedown:
+            raise CommandError("--harmful goes with --takedown.")
+        verb = (
+            ("take down (harmful)" if options["harmful"] else "take down")
+            if takedown
+            else "restore"
+        )
         if not options["apply"]:
             self.stdout.write(f"Dry run: would {verb} {raw_id}. Pass --apply and --operator.")
             return
@@ -99,7 +113,9 @@ class Command(BaseCommand):
             raise CommandError("--operator must be the username of a staff account.")
         try:
             skill = (
-                moderation.take_down(operator, raw_id, options["reason"])
+                moderation.take_down(
+                    operator, raw_id, options["reason"], harmful=options["harmful"]
+                )
                 if takedown
                 else moderation.restore(operator, raw_id, options["reason"])
             )
