@@ -51,8 +51,8 @@ class PublicOpenApiTests(BaseAPITestCase):
     def test_every_public_route_is_documented(self):
         documented = set(OPENAPI["paths"])
         for path in _public_routes():
-            if path.endswith("openapi.json"):
-                continue  # the spec does not describe itself
+            if path.endswith(("openapi.json", "secret-scanning/")):
+                continue  # the spec does not describe itself; GitHub-only callback, not a customer API
             self.assertIn(
                 path,
                 documented,
@@ -62,7 +62,7 @@ class PublicOpenApiTests(BaseAPITestCase):
 
     def test_every_method_on_every_route_is_documented(self):
         for path, methods in _public_routes().items():
-            if path.endswith("openapi.json"):
+            if path.endswith(("openapi.json", "secret-scanning/")):
                 continue
             spec = OPENAPI["paths"].get(path, {})
             for method in methods:
