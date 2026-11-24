@@ -27,6 +27,7 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from origin.models.task.task_models import TaskMaster
+from origin.services import html_notes
 from origin.services.archive import (
     archived_chat_note_response,
     archived_task_note_response,
@@ -93,6 +94,21 @@ def _archived_answer() -> Response:
     return Response({"role_id": ROLE_VIEWER, "archived": True}, status=status.HTTP_200_OK)
 
 
+def _is_html_note(note_type, note_id) -> bool:
+    return html_notes.body_format_of(note_type, note_id) == html_notes.BODY_FORMAT_HTML
+
+
+def _html_answer() -> Response:
+    """An HTML note's body is a placeholder made from its page (MIP-2218): the editor must not
+    persist a Yjs update into it, comments included (their anchors would be lost at the next page
+    replace). Same shape as an archived document, which genos-collab already holds read-only for
+    everyone, so no collab change is needed; `html_note` says why."""
+    return Response(
+        {"role_id": ROLE_VIEWER, "archived": True, "html_note": True},
+        status=status.HTTP_200_OK,
+    )
+
+
 class CollabAccessCheckView(AuthenticatedAPIView):
     """`POST {"document_name": "task-note:12"}` -> 200 / 403 / 404.
 
@@ -137,6 +153,8 @@ class CollabAccessCheckView(AuthenticatedAPIView):
             return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         if _archived_note(note_type, note_id):
             return _archived_answer()
+        if _is_html_note(note_type, note_id):
+            return _html_answer()
         return Response({"role_id": role}, status=status.HTTP_200_OK)
 
     @staticmethod

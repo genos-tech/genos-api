@@ -1,0 +1,44 @@
+name: SBOM
+
+# CycloneDX software bill of materials (MIP-2269): the exact list of packages
+# in the production image, as a build artifact, so "are we affected by CVE-X?"
+# is a search through one file instead of an investigation.
+#
+# Built from Pipfile.lock (hashed requirements, the same input as pip-audit and
+# the image's `pipenv sync`), so it needs no database and installs nothing of
+# ours. Runs on every push to main, and on a PR only when this workflow itself
+# changes, so an edit here is proven before it merges. Not a required check.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: [".github/workflows/sbom.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: sbom (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - run: pip install pipenv==2026.7.1 cyclonedx-bom==7.5.0
+      - name: Generate the SBOM from the lock
+        run: |
+          pipenv requirements --hash > "$RUNNER_TEMP/requirements.txt"
+          cyclonedx-py requirements "$RUNNER_TEMP/requirements.txt" \
+            --of JSON -o "$RUNNER_TEMP/sbom.cdx.json"
+          cp "$RUNNER_TEMP/sbom.cdx.json" sbom.cdx.json
+          python -c "import json; d = json.load(open('sbom.cdx.json')); print(d['bomFormat'], d['specVersion'], len(d['components']), 'components')"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-genos-api-${{ github.sha }}
+          path: sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90
