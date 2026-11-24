@@ -32,6 +32,7 @@ from origin.services import (
     mcp_oauth,
     member_events,
     security_events,
+    write_volume,
 )
 from origin.views.common.api_key_auth import ApiKeyAuthentication
 from origin.views.common.mcp_oauth_auth import McpOAuthAuthentication
@@ -708,6 +709,15 @@ class McpView(PublicApiView):
                 args=resolved_args,
                 credential=credential,
             )
+            if tool.write:
+                # The rewrite-volume alert (MIP-2265): counts rows changed per key or app.
+                write_volume.note_write(
+                    request,
+                    credential,
+                    team_id=ctx.team_id,
+                    tool_name=tool.name,
+                    args=resolved_args,
+                )
 
         def notify(tool, resolved_args: dict[str, Any], payload: dict[str, Any]) -> None:
             # What the member's AI app just did, as a notice to the member (MIP-1432).
