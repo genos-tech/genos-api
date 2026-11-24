@@ -222,9 +222,9 @@ class Job:
     # A job about the owner's group chats (MIP-2061) may be posted into a chat whose readers are
     # in the chats it names: it reads `AUDIENCE_KEY` and names only chats every reader is in.
     share_chats: bool = False
-    # A job that uses AI may be posted into a chat ONLY THE OWNER is in (MIP-2196): the report is
-    # one message there and its cost line is in the message (`schedule_delivery.cost_line`), which
-    # nobody else reads. Never into a chat other people read, whatever the job is about.
+    # A job that runs on the owner's own skills and data (a scheduled skill, MIP-2196) may be posted
+    # ONLY into a chat the owner is in alone. Any other job with AI follows the audience rule of its
+    # own kind (MIP-2351); the cost never goes into a chat message, only to the owner.
     ai_in_private_chat: bool = False
     # True for a job whose report carries a `dashboard` that the runner saves as ONE living HTML
     # note, replaced on every run (MIP-2353, `schedule_dashboard_note.deliver_note`). The note is
